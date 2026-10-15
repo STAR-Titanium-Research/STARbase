@@ -3,7 +3,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { buildToolingModel } from '@d1/ui';
 import {
 	AZIMUTH_RANGE, easeInOutCubic, easeStep, frameBox, frameEdge, frameInsert, FramingTween, framingAt, framingFromCamera,
-	boundsContaining, framingsClose, hardBounds, interpolateFraming, MAX_OVERSHOOT, MIN_ELEVATION, RECENTRE_DELAY_MS, rubberBand,
+	boundsContaining, framingsClose, hardBounds, orbitLimitsAround, overshootRoom, recentreFraming, SPRING_MAX_DT_MS, withinBounds, interpolateFraming, MAX_OVERSHOOT, MIN_ELEVATION, RECENTRE_DELAY_MS, rubberBand,
 	rubberBandInverse, rubberStep, rubberView, SPRING_OMEGA, SPRING_ZETA, springStep, springToBounds, moveDuration, MOVE_MS, orbitLimits, POLAR_FLOOR, POLAR_MAX, POLAR_MIN,
 	POLAR_RANGE, prefersReducedMotion, rotationBounds, ZOOM_IN, ZOOM_OUT,
 	type Vec3,
@@ -394,12 +394,28 @@ describe('limited rotation', () => {
 			const two = springStep(half.x, half.v, 8);
 			expect(two.x).toBeCloseTo(one.x, 12);
 			expect(two.v).toBeCloseTo(one.v, 12);
-			// and 1 / 60 s of steps against 1 / 30 s
+			// and 16 ms steps against 32 ms ones
 			let a = { x: 0.1, v: 0 };
 			let b = { x: 0.1, v: 0 };
-			for (let i = 0; i < 30; i++) a = springStep(a.x, a.v, 1000 / 60);
-			for (let i = 0; i < 15; i++) b = springStep(b.x, b.v, 1000 / 30);
+			for (let i = 0; i < 30; i++) a = springStep(a.x, a.v, 16);
+			for (let i = 0; i < 15; i++) b = springStep(b.x, b.v, 32);
 			expect(a.x).toBeCloseTo(b.x, 6);
+		});
+
+		it('caps a step at about two frames, so the first frame after the loop slept (a held, still pointer) does not leap', () => {
+			expect(SPRING_MAX_DT_MS).toBeLessThanOrEqual(34);
+			const gap = springStep(0.1, 0, 1000);
+			const capped = springStep(0.1, 0, SPRING_MAX_DT_MS);
+			expect(gap.x).toBeCloseTo(capped.x, 12);
+			expect(0.1 - gap.x).toBeLessThan(0.1 * 0.4); // under half the way in one frame, not most of it
+			// through springToBounds too: a release after a long hold takes one short step
+			const home = framingAt([0, 0, 0], 40, 0.6, 0.3);
+			const b = rotationBounds(home);
+			const view = framingAt(home.target, 40, home.polar, b.maxAzimuth + 0.03);
+			const afterGap = springToBounds(view, b, { azimuth: 0, polar: 0 }, 4000)!;
+			const afterFrame = springToBounds(view, b, { azimuth: 0, polar: 0 }, SPRING_MAX_DT_MS)!;
+			expect(afterGap.view.azimuth).toBeCloseTo(afterFrame.view.azimuth, 12);
+			expect(afterGap.view.azimuth - b.maxAzimuth).toBeGreaterThan(0.03 * 0.5); // still most of the way out
 		});
 
 		it('stays put at rest, and a stalled frame does not leap', () => {
@@ -460,11 +476,11 @@ describe('limited rotation', () => {
 			}
 		});
 
-		it('lands on the bound at once under reduced motion', () => {
-			const r = springToBounds(framingAt(home.target, 40, b.maxPolar + 0.1, b.maxAzimuth + 0.1), b, still, 16, true)!;
-			expect(r.view.polar).toBeCloseTo(b.maxPolar, 9);
-			expect(r.view.azimuth).toBeCloseTo(b.maxAzimuth, 9);
-			expect(springToBounds(r.view, b, r.vel, 16, true)).toBeNull();
+		it('springs under reduced motion too: it takes no argument for it, and a first step is a partial one', () => {
+			expect(springToBounds.length).toBe(4);
+			const r = springToBounds(framingAt(home.target, 40, b.maxPolar + 0.1, b.maxAzimuth + 0.1), b, still, 16)!;
+			expect(r.view.polar).toBeGreaterThan(b.maxPolar + 0.01);
+			expect(r.view.azimuth).toBeGreaterThan(b.maxAzimuth + 0.01);
 		});
 
 		it('takes the short way across the +-pi seam for a view that looks from behind', () => {
@@ -493,6 +509,116 @@ describe('limited rotation', () => {
 			const out = springToBounds(tilted, b, still, 16)!;
 			expect(out.view.polar).toBeCloseTo(tilted.polar, 9);
 			expect(out.view.azimuth).toBeLessThan(tilted.azimuth);
+		});
+	});
+
+	describe('a drag that starts mid-move (the limits are widened only where they must be)', () => {
+		const home = framingAt([1, 2, 3], 40, 0.6, 0.3);
+		const hard = hardBounds(home);
+		const soft = rotationBounds(home);
+
+		it('keeps the plain limits, and so the rubber band, for a view inside the hard limits (a recentre or flight that is nearly there)', () => {
+			for (const around of [
+				home,
+				framingAt(home.target, 40, home.polar, soft.maxAzimuth + 0.05), // in the band
+				framingAt(home.target, 40, soft.minPolar - 0.05, home.azimuth),
+				framingAt(home.target, 50, home.polar, home.azimuth), // zoomed, inside the zoom limits
+			]) {
+				const r = orbitLimitsAround(home, around);
+				expect(r.widened).toBe(false);
+				expect(r.limits).toEqual(orbitLimitsAround(home, null).limits);
+			}
+		});
+
+		it('widens only the side the view is out on, and says so, for a view outside the hard limits', () => {
+			const far = framingAt(home.target, 40, home.polar, hard.maxAzimuth + 0.4);
+			const r = orbitLimitsAround(home, far);
+			expect(r.widened).toBe(true);
+			expect(r.limits.maxAzimuth).toBeGreaterThanOrEqual(far.azimuth);
+			expect(r.limits.minAzimuth).toBeCloseTo(hard.minAzimuth, 9);
+			expect(r.limits.minPolar).toBeCloseTo(hard.minPolar, 9);
+			expect(r.limits.maxPolar).toBeCloseTo(hard.maxPolar, 9);
+			expect(r.limits.minDistance).toBeCloseTo(home.distance * ZOOM_IN, 9);
+			const down = orbitLimitsAround(home, framingAt(home.target, 40, hard.maxPolar + 0.3, home.azimuth));
+			expect(down.widened).toBe(true);
+			expect(down.limits.maxPolar).toBeGreaterThan(hard.maxPolar);
+			expect(down.limits.maxAzimuth).toBeCloseTo(hard.maxAzimuth, 9);
+		});
+
+		it('widens the zoom limits for a view outside them, and says so', () => {
+			const r = orbitLimitsAround(home, framingAt(home.target, home.distance * ZOOM_OUT * 1.5, home.polar, home.azimuth));
+			expect(r.widened).toBe(true);
+			expect(r.limits.maxDistance).toBeCloseTo(home.distance * ZOOM_OUT * 1.5, 9);
+			expect(r.limits.maxAzimuth).toBeCloseTo(hard.maxAzimuth, 9); // the rotation limits stay plain
+		});
+
+		it('is back to normal once the view is back inside the soft bounds, even mid-drag', () => {
+			const far = framingAt(home.target, 40, home.polar, hard.maxAzimuth + 0.4);
+			expect(orbitLimitsAround(home, far).widened).toBe(true);
+			expect(withinBounds(far, soft)).toBe(false);
+			const back = framingAt(home.target, 40, home.polar + 0.01, home.azimuth + 0.02);
+			expect(withinBounds(back, soft)).toBe(true);
+			expect(orbitLimitsAround(home, back).widened).toBe(false);
+		});
+
+		it('withinBounds is inclusive of a hair past a bound, and uses the short way round the seam', () => {
+			expect(withinBounds(framingAt(home.target, 40, soft.maxPolar, soft.maxAzimuth), soft)).toBe(true);
+			expect(withinBounds(framingAt(home.target, 40, soft.maxPolar + 0.01, home.azimuth), soft)).toBe(false);
+			const behind = framingAt([0, 0, 0], 20, 1, 179 * RAD);
+			const bb = rotationBounds(behind);
+			const raw = framingAt([0, 0, 0], 20, 1, behind.azimuth + 5 * RAD);
+			expect(withinBounds(framingFromCamera(raw.position, raw.target), bb)).toBe(true); // wrapped to -176, still 5 degrees off
+		});
+	});
+
+	describe('the band at a view that looks along the plane', () => {
+		it('has as much room above a bottom-edge view as there is before the cap, and the band ends there', () => {
+			const bottom = framingAt([0, 0, 0], 20, 80 * RAD, 0);
+			const b = rotationBounds(bottom);
+			const room = overshootRoom(b);
+			expect(room.maxPolar).toBeCloseTo(5 * RAD, 9); // 85 degrees is the cap, so 5 of the 6 degrees are there
+			expect(room.minPolar).toBeCloseTo(MAX_OVERSHOOT, 9);
+			expect(hardBounds(bottom).maxPolar).toBeCloseTo(85 * RAD, 9);
+			// A long drag down eases up to the cap and no further.
+			let view = bottom;
+			for (let i = 0; i < 400; i++) {
+				const next = framingAt(view.target, 20, view.polar + 0.01, view.azimuth);
+				view = rubberView(view, next, b) ?? next;
+			}
+			expect(view.polar).toBeLessThan(85 * RAD);
+			expect(view.polar).toBeGreaterThan(84.5 * RAD); // it reached the cap's neighbourhood: the band was not cut short
+		});
+
+		it('has the full band either side for an ordinary view, and none above a view already at the cap', () => {
+			const room = overshootRoom(rotationBounds(framingAt([0, 0, 0], 20, 42 * RAD, 0)));
+			expect(room).toEqual({ azimuth: MAX_OVERSHOOT, minPolar: MAX_OVERSHOOT, maxPolar: MAX_OVERSHOOT });
+			const none = overshootRoom({ minAzimuth: -0.1, maxAzimuth: 0.1, minPolar: 1.2, maxPolar: 90 * RAD });
+			expect(none.maxPolar).toBe(0);
+			expect(rubberStep(0, 0.1, 0)).toBe(0); // a hard stop where there is no room
+		});
+	});
+
+	describe('recentring keeps the zoom', () => {
+		const base = framingAt([1, 2, 3], 40, 0.6, 0.3);
+
+		it('takes the focus\'s rotation and target at the user\'s zoom distance', () => {
+			const now = framingAt([4, 4, 4], 25, 0.9, 0.5);
+			const to = recentreFraming(base, now);
+			expect(to.distance).toBe(25);
+			expect(to.target).toEqual(base.target);
+			expect(to.polar).toBeCloseTo(base.polar, 9);
+			expect(to.azimuth).toBeCloseTo(base.azimuth, 9);
+		});
+
+		it('clamps the zoom to the framing\'s own limits', () => {
+			expect(recentreFraming(base, framingAt(base.target, 1, 0.9, 0.5)).distance).toBeCloseTo(40 * ZOOM_IN, 9);
+			expect(recentreFraming(base, framingAt(base.target, 4000, 0.9, 0.5)).distance).toBeCloseTo(40 * ZOOM_OUT, 9);
+		});
+
+		it('is already there (nothing to recentre) for a view that was only zoomed', () => {
+			const zoomed = framingAt(base.target, 25, base.polar, base.azimuth);
+			expect(framingsClose(zoomed, recentreFraming(base, zoomed))).toBe(true);
+			expect(framingsClose(zoomed, base)).toBe(false);
 		});
 	});
 
@@ -641,10 +767,11 @@ describe('FramingTween', () => {
 describe('prefers-reduced-motion', () => {
 	afterEach(() => vi.unstubAllGlobals());
 
-	it('moves instantly when the media query matches, and eases otherwise', () => {
+	it('flies a little shorter (never instant) when the media query matches, and for 400 ms otherwise', () => {
 		vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('prefers-reduced-motion') }));
 		expect(prefersReducedMotion()).toBe(true);
-		expect(moveDuration()).toBe(0);
+		expect(moveDuration()).toBe(300);
+		expect(moveDuration()).toBeGreaterThan(0);
 		vi.stubGlobal('matchMedia', () => ({ matches: false }));
 		expect(prefersReducedMotion()).toBe(false);
 		expect(moveDuration()).toBe(400);

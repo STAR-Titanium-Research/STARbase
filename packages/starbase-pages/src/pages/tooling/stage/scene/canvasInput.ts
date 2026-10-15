@@ -34,6 +34,7 @@ export function wireCanvasInput(canvas: HTMLCanvasElement, h: CanvasInputHandler
 	on('pointercancel', () => { down = null; });
 	on('pointermove', (e) => {
 		if (e.buttons !== 0) return; // dragging: the orbit owns it
+		if (e.pointerType === 'touch') return; // a finger has no hover: nothing rises under it
 		h.hover(e.clientX, e.clientY);
 	});
 	on('pointerleave', () => h.leave());
@@ -42,4 +43,24 @@ export function wireCanvasInput(canvas: HTMLCanvasElement, h: CanvasInputHandler
 	cleanups.push(() => canvas.removeEventListener('webglcontextlost', onLost));
 
 	return () => { for (const c of cleanups) c(); cleanups.length = 0; };
+}
+
+// How many pointers are down on the canvas: an orbit (a drag or a pinch) has some, a wheel zoom has none. The count goes
+// up in the capture phase, before the orbit controls' own handler runs, and down in a later task, after it has handled
+// the pointer up (a microtask would run between the two listeners).
+export function trackPointers(canvas: EventTarget): { count(): number; dispose(): void } {
+	const down = new Set<number>();
+	const onDown = (e: Event) => { down.add((e as PointerEvent).pointerId); };
+	const onUp = (e: Event) => { const id = (e as PointerEvent).pointerId; setTimeout(() => down.delete(id), 0); };
+	canvas.addEventListener('pointerdown', onDown, { capture: true });
+	canvas.addEventListener('pointerup', onUp);
+	canvas.addEventListener('pointercancel', onUp);
+	return {
+		count: () => down.size,
+		dispose: () => {
+			canvas.removeEventListener('pointerdown', onDown, { capture: true });
+			canvas.removeEventListener('pointerup', onUp);
+			canvas.removeEventListener('pointercancel', onUp);
+		},
+	};
 }

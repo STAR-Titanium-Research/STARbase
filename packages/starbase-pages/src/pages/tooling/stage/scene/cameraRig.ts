@@ -3,6 +3,9 @@
 // the target, `polar` from straight up and `azimuth` around y (0 = on the +z side, toward the viewer).
 
 import type { EdgePlacement, InsertGeometry, InsertOutline } from '@d1/ui';
+import { easeInOutCubic, easeOutCubic, FLIGHT_MS, motionMs, prefersReducedMotion, type Ease } from './motion';
+
+export { easeInOutCubic, easeOutCubic, prefersReducedMotion };
 
 export type Vec3 = [number, number, number];
 
@@ -15,7 +18,7 @@ export interface Framing {
 }
 
 export const FOV_DEG = 32;
-export const MOVE_MS = 400;
+export const MOVE_MS = FLIGHT_MS;
 export const POLAR_MIN = (15 * Math.PI) / 180;
 export const POLAR_MAX = (80 * Math.PI) / 180;
 export const ZOOM_IN = 0.5; // closest the user may orbit in, times the framing distance
@@ -190,6 +193,7 @@ export const POLAR_FLOOR = 3 * RAD; // the most top-down: just short of straight
 export const MAX_OVERSHOOT = 6 * RAD; // the most a drag can take the view past a soft bound
 export const SPRING_OMEGA = 18; // rad/s: the spring-back settles in about 300 ms
 export const SPRING_ZETA = 0.85; // a little under critical: a bounce of about 0.6 % of the overshoot, which is invisible
+export const SPRING_MAX_DT_MS = 33; // a frame after a long gap (the loop sleeps while the view is still) steps this far at most
 export const RECENTRE_DELAY_MS = 1500; // after the user stops: recentre on the focus's own framing
 const SNAP = 0.0005; // radians; closer than this to a bound counts as on it
 
@@ -208,23 +212,45 @@ export function rotationBounds(f: Framing): Rotation {
 // The bounds plus the most a drag may overshoot into (what OrbitControls enforces as its hard limits).
 export function hardBounds(f: Framing): Rotation {
 	const b = rotationBounds(f);
+	const room = overshootRoom(b);
 	return {
-		minAzimuth: b.minAzimuth - MAX_OVERSHOOT,
-		maxAzimuth: b.maxAzimuth + MAX_OVERSHOOT,
-		minPolar: Math.max(0.01, b.minPolar - MAX_OVERSHOOT),
-		maxPolar: Math.max(b.maxPolar, Math.min(Math.PI / 2 - 5 * RAD, b.maxPolar + MAX_OVERSHOOT)),
+		minAzimuth: b.minAzimuth - room.azimuth,
+		maxAzimuth: b.maxAzimuth + room.azimuth,
+		minPolar: b.minPolar - room.minPolar,
+		maxPolar: b.maxPolar + room.maxPolar,
 	};
+}
+
+const POLAR_CAP = Math.PI / 2 - 5 * RAD; // the camera never gets closer than 5 degrees to the tray plane
+const POLAR_TOP = 0.01; // ... nor to straight down
+
+// How far past each soft bound the view can go: MAX_OVERSHOOT, or the room there is before the polar cap (a view that
+// already looks along the plane, like a bottom edge's, has less room above it), so the band always ends at the cap.
+export function overshootRoom(b: Rotation): { azimuth: number; minPolar: number; maxPolar: number } {
+	return {
+		azimuth: MAX_OVERSHOOT,
+		minPolar: Math.min(MAX_OVERSHOOT, Math.max(0, b.minPolar - POLAR_TOP)),
+		maxPolar: Math.min(MAX_OVERSHOOT, Math.max(0, POLAR_CAP - b.maxPolar)),
+	};
+}
+
+// Whether a view lies inside the soft bounds (to within a hair).
+export function withinBounds(view: Framing, b: Rotation): boolean {
+	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
+	const half = (b.maxAzimuth - b.minAzimuth) / 2;
+	return Math.abs(shortestArc(centre, view.azimuth)) <= half + SNAP && view.polar >= b.minPolar - SNAP && view.polar <= b.maxPolar + SNAP;
 }
 
 // The rubber band: how far past a bound the view sits when dragged `x` past it (radians). One to one at first, then less
 // and less, never past `max`: the further out, the harder the pull.
 export function rubberBand(x: number, max = MAX_OVERSHOOT): number {
+	if (max <= 0) return Math.min(0, x); // no room: a hard stop at the bound
 	return x <= 0 ? x : max * (1 - Math.exp(-x / max));
 }
 
 // The drag it takes to be `overshoot` past a bound (the inverse of `rubberBand`).
 export function rubberBandInverse(overshoot: number, max = MAX_OVERSHOOT): number {
-	if (overshoot <= 0) return overshoot;
+	if (overshoot <= 0 || max <= 0) return Math.min(0, overshoot);
 	return -max * Math.log(1 - Math.min(overshoot / max, 1 - 1e-9));
 }
 
@@ -237,30 +263,33 @@ export function rubberStep(excess: number, delta: number, max = MAX_OVERSHOOT): 
 }
 
 // An angle `p` taken by `delta` between two bounds, with the band at either one.
-function rubberAxis(p: number, delta: number, lo: number, hi: number, max: number): number {
-	if (p > hi || p + delta > hi) return hi + rubberStep(p - hi, delta, max);
-	if (p < lo || p + delta < lo) return lo - rubberStep(lo - p, -delta, max);
+function rubberAxis(p: number, delta: number, lo: number, hi: number, maxLo: number, maxHi: number): number {
+	if (p > hi || p + delta > hi) return hi + rubberStep(p - hi, delta, maxHi);
+	if (p < lo || p + delta < lo) return lo - rubberStep(lo - p, -delta, maxLo);
 	return p + delta;
 }
 
 // The view `next` that the orbit controls just produced from `prev`, with the step's azimuth and polar run through the
-// rubber band at the soft bounds `b` (distance and target as `next` has them), or null when the step is not past one.
+// rubber band at the soft bounds `b` (distance and target as `next` has them), or null when the step is not past one. The
+// band ends at the cap where there is less than `max` of room (`overshootRoom`).
 export function rubberView(prev: Framing, next: Framing, b: Rotation, max = MAX_OVERSHOOT): Framing | null {
 	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
 	const half = (b.maxAzimuth - b.minAzimuth) / 2;
 	const offPrev = shortestArc(centre, prev.azimuth);
 	const dAz = shortestArc(prev.azimuth, next.azimuth);
 	const dPolar = next.polar - prev.polar;
-	const off = rubberAxis(offPrev, dAz, -half, half, max);
-	const polar = rubberAxis(prev.polar, dPolar, b.minPolar, b.maxPolar, max);
+	const room = overshootRoom(b);
+	const off = rubberAxis(offPrev, dAz, -half, half, Math.min(max, room.azimuth), Math.min(max, room.azimuth));
+	const polar = rubberAxis(prev.polar, dPolar, b.minPolar, b.maxPolar, Math.min(max, room.minPolar), Math.min(max, room.maxPolar));
 	if (Math.abs(off - (offPrev + dAz)) < 1e-9 && Math.abs(polar - next.polar) < 1e-9) return null;
 	return framingAt(next.target, next.distance, polar, centre + off);
 }
 
 // One step of a spring settling `x` to 0 from the state (x, v), the exact solution for a damped spring, so it is the
-// same at any frame rate (two half steps are one whole step). `dtMs` is capped so a stalled frame does not leap.
+// same at any frame rate (two half steps are one whole step). `dtMs` is capped at about two frames, so a frame after
+// a gap does not leap.
 export function springStep(x: number, v: number, dtMs: number, omega = SPRING_OMEGA, zeta = SPRING_ZETA): { x: number; v: number } {
-	const t = Math.min(100, Math.max(0, dtMs)) / 1000;
+	const t = Math.min(SPRING_MAX_DT_MS, Math.max(0, dtMs)) / 1000;
 	const wd = omega * Math.sqrt(1 - zeta * zeta);
 	const e = Math.exp(-zeta * omega * t);
 	const c = Math.cos(wd * t);
@@ -275,9 +304,9 @@ export interface SpringVelocity { azimuth: number; polar: number } // rad/s, alo
 
 // A view outside the soft bounds, sprung back toward them for a frame of `dtMs`: the new view and the new velocity, or
 // null when the view is inside (or within a hair of) the bounds. Distance and target are kept. Azimuth is measured from
-// the bounds' middle, the short way round. `reduced` lands on the bound at once (reduced motion).
+// the bounds' middle, the short way round.
 export function springToBounds(
-	view: Framing, b: Rotation, vel: SpringVelocity, dtMs: number, reduced = false,
+	view: Framing, b: Rotation, vel: SpringVelocity, dtMs: number,
 ): { view: Framing; vel: SpringVelocity } | null {
 	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
 	const half = (b.maxAzimuth - b.minAzimuth) / 2;
@@ -290,7 +319,6 @@ export function springToBounds(
 	if (exAz < SNAP && exPolar < SNAP) return null;
 	const axis = (ex: number, v: number): { ex: number; v: number } => {
 		if (ex < SNAP) return { ex: 0, v: 0 };
-		if (reduced) return { ex: 0, v: 0 };
 		const n = springStep(ex, v, dtMs);
 		return n.x < SNAP && Math.abs(n.v) < 0.01 ? { ex: 0, v: 0 } : { ex: Math.max(0, n.x), v: n.v };
 	};
@@ -327,28 +355,44 @@ export function orbitLimits(f: Framing): OrbitLimits {
 	return { minDistance: f.distance * ZOOM_IN, maxDistance: f.distance * ZOOM_OUT, ...hardBounds(f) };
 }
 
+// The orbit limits of a framing, widened only where `around` (the camera, grabbed mid-move) lies outside them, so that
+// grabbing it does not make it jump. `widened` says whether anything was: a view inside the limits (in the rubber band, or
+// not past a bound at all) keeps the plain limits and the band; a view outside has none until it is back inside.
+export function orbitLimitsAround(f: Framing, around: Framing | null): { limits: OrbitLimits; widened: boolean } {
+	const plain = orbitLimits(f);
+	if (!around) return { limits: plain, widened: false };
+	const rotationOut = !withinBounds(around, hardBounds(f));
+	const distanceOut = around.distance < plain.minDistance || around.distance > plain.maxDistance;
+	if (!rotationOut && !distanceOut) return { limits: plain, widened: false };
+	const rotation = rotationOut ? boundsContaining(plain, around) : plain;
+	return {
+		limits: {
+			...rotation,
+			minDistance: distanceOut ? Math.min(plain.minDistance, around.distance) : plain.minDistance,
+			maxDistance: distanceOut ? Math.max(plain.maxDistance, around.distance) : plain.maxDistance,
+		},
+		widened: true,
+	};
+}
+
+// Where a recentre takes the camera: the focus's own rotation and target, at the user's zoom distance if they had zoomed
+// (kept within the framing's own zoom limits), so zooming in to look at something is not undone.
+export function recentreFraming(base: Framing, now: Framing): Framing {
+	const distance = Math.min(base.distance * ZOOM_OUT, Math.max(base.distance * ZOOM_IN, now.distance));
+	return framingAt(base.target, distance, base.polar, base.azimuth);
+}
+
 // --- the ease ------------------------------------------------------------------------------------------
 
-export function easeInOutCubic(t: number): number {
-	const x = Math.min(1, Math.max(0, t));
-	return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+// Eased progress after `elapsedMs` of a `durationMs` move (in-out cubic unless another ease is given); a zero duration
+// is already there.
+export function easeStep(elapsedMs: number, durationMs: number, ease: Ease = easeInOutCubic): number {
+	return durationMs <= 0 ? 1 : ease(elapsedMs / durationMs);
 }
 
-// Eased progress after `elapsedMs` of a `durationMs` move; a zero duration is already there.
-export function easeStep(elapsedMs: number, durationMs: number): number {
-	return durationMs <= 0 ? 1 : easeInOutCubic(elapsedMs / durationMs);
-}
-
-export function prefersReducedMotion(): boolean {
-	try {
-		return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-	} catch {
-		return false;
-	}
-}
-
+// How long a camera flight between focuses takes: about 400 ms, a little shorter under reduced motion, never instant.
 export function moveDuration(reduced = prefersReducedMotion()): number {
-	return reduced ? 0 : MOVE_MS;
+	return motionMs(MOVE_MS, reduced);
 }
 
 const TAU = Math.PI * 2;
@@ -370,17 +414,19 @@ export class FramingTween {
 	private to: Framing | null = null;
 	private t0 = 0;
 	private duration = 0;
+	private ease: Ease = easeInOutCubic;
 
-	start(from: Framing, to: Framing, now: number, durationMs: number): void {
+	start(from: Framing, to: Framing, now: number, durationMs: number, ease: Ease = easeInOutCubic): void {
 		this.from = from;
 		this.to = to;
 		this.t0 = now;
 		this.duration = durationMs;
+		this.ease = ease;
 	}
 
 	get active(): boolean { return this.to !== null; }
 
-	eased(now: number): number { return easeStep(now - this.t0, this.duration); }
+	eased(now: number): number { return easeStep(now - this.t0, this.duration, this.ease); }
 
 	// The framing for this instant, and whether the move is over (the tween then clears itself).
 	sample(now: number): { framing: Framing; done: boolean } | null {
