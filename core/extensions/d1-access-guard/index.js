@@ -45,6 +45,12 @@
 // straight from the database in the request's transaction (`restricted` is hidden in Directus and the
 // parent may not be readable to the caller).
 //
+// A fourth check (ADR-0019, planned work) covers the work state of operations and tests: an update that sets `work_state` to
+// 'planned' on a record that is 'done' must pass the record's DELETE rule (its owner), else 403 ("Only the owner can set a done
+// record back to planned."). When the move is allowed, the same payload also clears operation_date / session_date,
+// done_by_person_id and done_at (a planned record has none). Admins and internal calls are not checked. Marking a record done is not guarded: whoever may edit it
+// may do that (the d1-build endpoint).
+//
 // Two more writes could be used to read what a restriction hides, so they are guarded here (the readers
 // tables recompute correctly from them; the question is who may write them):
 //   * a campaign_samples row (create or repoint) needs the caller to be a READER of the sample
@@ -191,6 +197,10 @@ const REMOVE_FROM_RESTRICTED_CAMPAIGN = "Only the campaign's owner can remove sa
 const CAMPAIGN_MOVE = "Only the campaign's owner can move it to another project.";
 const CAMPAIGN_CONTENT =
   'This campaign holds restricted records you do not own, so only an administrator can move it to another project.';
+// Operations and tests carry a work state (migration 189, ADR-0019): done -> planned is the owner's call.
+const WORK_STATE_COLLECTIONS = new Set(['manufacturing_operations', 'test_sessions']);
+const DONE_DATE_FIELD = { manufacturing_operations: 'operation_date', test_sessions: 'session_date' };
+const BACK_TO_PLANNED = 'Only the owner can set a done record back to planned.';
 const OWNER_NOUNS = {
   physical_samples: 'sample',
   manufacturing_operations: 'operation',
@@ -439,6 +449,30 @@ export default ({ filter }, { services }) => {
     return null;
   }
 
+  // Setting a DONE operation or test back to planned (ADR-0019, spec 4.1) needs the record's delete rule: its owner (the
+  // owning team's managers where team ownership puts them in that rule). Anyone who may edit the record may mark it done
+  // (d1-build), but taking a done record back to planned rewrites what the owner and the people reading the record were told,
+  // so only the owner may. Only the move done -> planned is checked: a record that is planned already, or any other payload,
+  // passes. A key the database does not know is treated as a change (the write fails on its own, not on a guess). The read of
+  // work_state only happens for a payload that sets 'planned', so every other update costs nothing.
+  async function enforceBackToPlanned(collection, payload, keys, context) {
+    if (!WORK_STATE_COLLECTIONS.has(collection) || payload.work_state !== 'planned') return;
+    const guard = OWNER_GUARDS[collection];
+    const stored = await context.database(collection).whereIn(guard.key, keys).select(guard.key, 'work_state');
+    const rows = new Map(stored.map((row) => [String(row[guard.key]), row]));
+    let movedBack = false;
+    for (const key of keys) {
+      if (rows.get(String(key))?.work_state === 'planned') continue;
+      if (!(await canPass(deleteCheck(collection), [key], context))) {
+        throw forbidden(BACK_TO_PLANNED, { kind: 'owner', collection, id: String(key) });
+      }
+      movedBack = true;
+    }
+    // A planned record has no date it happened on and nobody who marked it done: when the move back is allowed, the same
+    // update clears them (d1-build's mark-planned does the same; this is the safety net for a direct write).
+    if (movedBack) Object.assign(payload, { [DONE_DATE_FIELD[collection]]: null, done_by_person_id: null, done_at: null });
+  }
+
   // The update checks of the four record types: the owner column and `restricted`, and moves.
   async function enforceRecord(collection, payload, keys, context) {
     const guard = OWNER_GUARDS[collection];
@@ -648,7 +682,10 @@ export default ({ filter }, { services }) => {
     }
     if (OWNER_GUARDS[collection]) {
       const keys = Array.isArray(meta.keys) ? meta.keys.filter((key) => !isBlank(key)) : [];
-      if (keys.length) await enforceRecord(collection, payload, keys, context);
+      if (keys.length) {
+        await enforceBackToPlanned(collection, payload, keys, context);
+        await enforceRecord(collection, payload, keys, context);
+      }
       return payload;
     }
     if (!applies(collection, context)) return payload;
