@@ -29,7 +29,8 @@ used by many people.
    `d1-inbox` extension, which links as the person (ItemsService, caller's accountability) and refuses unless
    the person can edit the target record.
 5. **Nothing links itself unless the person opted in**, and then only on an exact short-ID match to one record
-   they can edit, for images and scans only, with an undo and an audit trail.
+   they can edit, for SEM images and other images only (never documents, never surface scans, never team
+   folders), with an undo and an audit trail.
 6. **Recognition looks for a short ID or an exact record code anywhere in the path**, never for a naming
    convention, and an ambiguous match is never flagged.
 

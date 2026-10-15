@@ -278,7 +278,7 @@ CREATE TABLE d1_private.inbox_crawler_state (
 INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('00000000-0000-0000-0000-000000000001')
 ON CONFLICT (id) DO NOTHING;
 
-COMMENT ON TABLE d1_private.inbox_crawler_state IS 'Singleton control and status row for the inbox crawler daemon (scripts/inbox_crawler/, compose service inbox-crawler), in the shape of force_crawler_state (migration 77), migration 193. An administrator sets desired_state, the interval and the read throttle through the d1-inbox admin routes; the daemon reads the row each loop and writes its heartbeat, activity and counters back so the admin tab can show it is alive.';
+COMMENT ON TABLE d1_private.inbox_crawler_state IS 'Singleton control and status row for the inbox crawler daemon (scripts/inbox_crawler/, compose service inbox-crawler), in the shape of force_crawler_state (migration 77), migration 193. An administrator sets desired_state, the interval and the read throttle with an UPDATE on d1_private.inbox_crawler_state (the d1-inbox admin routes only read this row and queue Scan all); the daemon reads the row each loop and writes its heartbeat, activity and counters back so the admin tab can show it is alive.';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.id IS 'Always 00000000-0000-0000-0000-000000000001: the table holds exactly one row (inbox_crawler_state_singleton).';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.desired_state IS 'running or paused: what the administrator wants. A paused daemon keeps its heartbeat but scans nothing. Default running.';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.interval_minutes IS 'Minutes between scheduled scans of every owner''s folder. At least 1; default 30.';
@@ -306,7 +306,7 @@ CREATE TABLE d1_private.inbox_prefs (
 
 COMMENT ON TABLE d1_private.inbox_prefs IS 'Per-person Inbox preferences, today only the auto-link opt-in (migration 193; separate from user_prefs of migration 170, whose JSON is owned and validated by the d1-usage endpoint). Read and written by the d1-inbox endpoint for the caller''s own row, never through the items API (d1_private is outside the Directus schema scan). No audit trigger: updated_at records when the person last changed it.';
 COMMENT ON COLUMN d1_private.inbox_prefs.user_id IS 'The directus_users.id these preferences belong to. The row goes with the user (ON DELETE CASCADE).';
-COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agreed to auto-linking: files in their personal folder that name exactly one record by an exact short ID, that the person can edit, and that are images or surface scans (never documents) are linked for them after each scan, listed under Recently auto-linked, with an undo. Default false (off).';
+COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agreed to auto-linking: files in their personal folder that name exactly one record by an exact short ID, that the person can edit, and that are SEM images or other images (never documents, never surface scans, never team folders) are linked for them after each scan, listed under Recently auto-linked, with an undo. Default false (off).';
 COMMENT ON COLUMN d1_private.inbox_prefs.updated_at IS 'When auto_link last changed (the time of the consent). Set by the endpoint on write.';
 COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 
