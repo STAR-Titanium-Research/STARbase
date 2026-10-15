@@ -56,10 +56,13 @@ export interface AcceptPlan {
 	mayRead: boolean;
 }
 
-/** The confirm's text: names the count, what is linked, what is read and that it can be undone. */
+/**
+ * The confirm's text: names the count, what is linked, what is read and that it can be undone. With more files than one run takes it says so:
+ * the server (d1-inbox accept-all) reads 500 candidates at a time and stops once it has 500 or more to link, so one call links at most 999.
+ */
 export function acceptConfirmText(p: AcceptPlan): string {
 	const reads = p.mayRead ? ' Any documents or other files among them are read once to fingerprint them.' : '';
-	const more = p.hasMore ? ' More files match than one run takes: this links the first 500, and you can run it again afterwards.' : '';
+	const more = p.hasMore ? ' More files match than one run takes: it links about 500 at a time (never more than 999), and you can run it again afterwards for the rest.' : '';
 	return `Link ${files(p.count)} to the record that ${p.count === 1 ? 'its' : 'each'} short ID names? Only exact short-ID matches to a record you can edit are linked.${reads}${more} You can undo the whole batch afterwards.`;
 }
 
