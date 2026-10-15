@@ -79,13 +79,24 @@ show a viewer everything with no special case:
   manage rules of decision 3 are Directus filters the policy has no row for, and the endpoints that write with knex or as the system after their own check
   (`d1-record-access`, `d1-teams`, `d1-people-admin`) refuse a viewer first on every route that changes anything (`403 READ_ONLY_ROLE`), because a viewer who owns a
   record or is a project's PI would otherwise pass their manage check.
+- **Comments are refused.** Directus gives every `app_access` policy a built-in right to create comments and to update and delete its own (`appAccessMinimalPermissions` of
+  `@directus/system-data`); it is not a row of `directus_permissions`, so a policy without write rows cannot lack it. `d1-access-guard` carries three filter hooks
+  (`comments.create`, `comments.update`, `comments.delete`) that refuse a caller whose **role id** is the Lab Viewer role with `403 READ_ONLY_ROLE`, whatever the login's status
+  or other policies (an administrator has another role and is unaffected). The policy keeps `app_access`: the viewer needs the app.
+- **What a viewer can still write, on purpose** (none of it is lab data): their own presets and bookmarks (`directus_presets`, a Directus built-in), the status of their own
+  notifications (read / archived), their own preferences, pins and usage through the `d1-usage` endpoints, and bug reports through the bug-report relay. Every item write on a lab
+  collection, every comment, and every route of `d1-record-access`, `d1-teams` and `d1-people-admin` that changes something is refused.
+- The role is recognised by **one rule everywhere, fail closed**: the caller's role id is the Lab Viewer role id (`scripts/access_rules.json` `viewer.role`, the same id in
+  migration 185, the extensions and `@d1/ui`; a test keeps them equal), whatever the status. There is no environment override. The *read* side is not a second rule: a viewer's lists
+  are filtered by the readers rows as that viewer (an active viewer is a reader of everything, so it sees the same as an administrator; a suspended one reads nothing Restricted);
+  only an administrator takes the unfiltered path.
 - Not changed, so still true for a viewer: **Ask-the-database** hides Restricted records from every asker (its role-level row security is the table above), and
   files and octrees stay open until A1b.
 - `project_rollup` and the five `*_access` tables are about the caller for a Lab Member (a project's PI and investigators; the person an access row lists). For the
   viewer that rule is no filter (`scripts/access_rules.json` `viewer.read_all`, generated like the rest, `--check` covers it): it reads every row, as it reads every record.
   The `*_team_access` and `*_team_pending` tables have no Directus permission for anyone; the endpoints read them.
 - The People page for a viewer (Task B): `d1-people-admin` (`/people`, `/attention`, `/people/:id/access`), `d1-teams` and `d1-record-access` (`GET`) answer a viewer what they answer
-  an administrator (every person, every record of every list: a viewer reads every record), and still refuse its writes. A viewer's `can_manage` is always `false`, and
+  an administrator (every person, every record of every list, because a viewer's readers rows cover every record), and still refuse its writes. A viewer's `can_manage` is always `false`, and
   `GET /d1-teams/pending` is empty (nothing waits for someone who decides nothing). The host contract (`@d1/ui`) carries `canViewAllAccess` (the account role id, the
   same id rule as the endpoints); the People and Teams pages show an administrator's reads for `isAdmin || canViewAllAccess` and keep every control that changes something
   off for a viewer.

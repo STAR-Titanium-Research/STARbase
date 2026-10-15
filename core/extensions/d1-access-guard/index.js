@@ -76,6 +76,13 @@
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
 //
+// Lab Viewer (migration 185, ADR-0014 amendment): the role reads everything and changes nothing. Its policy has no create, update or delete
+// permission row, so Directus refuses every item write. But Directus gives EVERY app_access policy a built-in right to create comments (and to
+// update and delete its own), and that right is not a row in directus_permissions, so no policy can take it away. The three hooks at the end of
+// this file (comments.create, comments.update, comments.delete) refuse a caller whose ROLE is the Lab Viewer role with 403 READ_ONLY_ROLE, whatever
+// the login's status (fail closed) and whatever else the login holds. Only the role decides, so an administrator (another role) is unaffected.
+// What a viewer can still write on purpose is listed in docs/adr/0014-record-access.md (the Lab Viewer amendment).
+//
 // Creating a parent and its junction rows in one request (a project with investigators, a sample with
 // co-owners, a campaign with samples) is allowed. The parent has just been inserted, in the request's
 // transaction, so its update rule may not hold for the creator (they named someone else as owner or
@@ -91,6 +98,8 @@
 // A payload that nests a brand-new parent (no key) is allowed: the caller is creating that record.
 
 import { readFileSync } from 'node:fs';
+
+import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE } from '../d1-record-access/index.js';
 
 const RULES = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8'));
 const GUARDS = RULES.guards;
@@ -142,6 +151,26 @@ function conflict(code, reason, details = {}) {
   err.extensions = { code, reason, source: SOURCE, ...details };
   return err;
 }
+
+// The refusal of a Lab Viewer's comment: status 403 like the other guards, with the code the People, Teams and access endpoints answer a viewer with.
+function readOnlyRole() {
+  const err = new Error(READ_ONLY_ROLE_MESSAGE);
+  err.name = 'DirectusError';
+  err.status = 403;
+  err.code = 'READ_ONLY_ROLE';
+  err.extensions = { code: 'READ_ONLY_ROLE', reason: READ_ONLY_ROLE_MESSAGE, source: SOURCE };
+  return err;
+}
+
+// Is this caller a Lab Viewer? By ROLE ID only (the one id of scripts/access_rules.json "viewer.role"), whatever the status. A call with no
+// accountability (a flow, a script, another extension) is not a person and is not refused. The roles list is read too (Directus fills it with the
+// role and its parents), so a role that inherits the viewer's would be refused as well.
+const isViewerCaller = (context) => {
+  const acc = context?.accountability;
+  if (!acc) return false;
+  const ids = [acc.role, ...(Array.isArray(acc.roles) ? acc.roles : [])].filter((id) => typeof id === 'string');
+  return ids.some((id) => id.toLowerCase() === LAB_VIEWER_ROLE_ID);
+};
 
 // What a refused junction row says, by junction and parent column (physical_samples is the parent of
 // two junctions, so the text follows the junction, not the parent).
@@ -651,4 +680,13 @@ export default ({ filter }, { services }) => {
     for (const row of rows) await enforce(collection, { ...row, ...payload }, null, context);
     return payload;
   });
+
+  // Comments: Directus's built-in comment rights come with every app_access policy and are not rows of directus_permissions, so the Lab Viewer
+  // policy (no write rows at all) cannot lack them. A viewer reads comments (the policy's read row) and writes none.
+  for (const event of ['comments.create', 'comments.update', 'comments.delete']) {
+    filter(event, async (payload, meta, context) => {
+      if (isViewerCaller(context)) throw readOnlyRole();
+      return payload;
+    });
+  }
 };

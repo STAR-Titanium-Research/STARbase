@@ -414,7 +414,7 @@ sample and a team-shared project, and removes them afterwards).
 
 A read-only account role for the lab's PI: it **reads every record (Restricted included) and changes nothing**. It is migration 185 (the role, its
 policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`), a change to the `d1-record-access`,
-`d1-teams` and `d1-people-admin` extensions (they refuse a viewer on every route that changes anything, and answer its reads like an administrator's) and to the People
+`d1-teams`, `d1-people-admin` and `d1-access-guard` extensions (they refuse a viewer on every route that changes anything, and a comment too; a viewer's lists are filtered by its readers rows, an administrator's are not) and to the People
 and Teams pages of STARbase and of the Directus Explorer module. **No new `.env` keys**: the role has one fixed id
 (`10000001-0000-0000-0000-000000000003`, `scripts/access_rules.json` `viewer.role`) that the migration, the extensions and the front end all use; there is no environment override. Needs the People and Teams migrations (180 to 184) applied first.
 
@@ -433,6 +433,11 @@ and Teams pages of STARbase and of the Directus Explorer module. **No new `.env`
    person, Edit, role select, Suspend, Resend, Link to a person, Remove, New team, Edit team, Add member, Make manager or Leave. The viewer's own login sits under Users, not Admins.
    The project rollup of other people's projects is readable too (the viewer reads every row of `project_rollup` and of the five `*_access` tables). **Not for a viewer**:
    Ask-the-database of Restricted records (it hides them from everyone).
+6. Comments: as the viewer, write a comment on a record (the comments sidebar of the Directus app): it answers 403 `READ_ONLY_ROLE`. Directus gives every app-access policy a
+   built-in right to comment that no permission row can remove, so `d1-access-guard` refuses it by role (`comments.create`, `comments.update`, `comments.delete`).
+
+**What a viewer can still write, on purpose** (none of it is lab data): their own presets and bookmarks, the status of their own notifications, their own preferences, pins and
+usage (`d1-usage`), and bug reports (the bug-report relay). Everything else, comments included, is refused.
 
 Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer (or deleting one), runs a full `readers_rebuild()`, which takes the
 global readers lock: every record write in the lab waits while it runs. `docs/runbooks/a1-record-access-cutover.md` measured a rebuild at 0.73 s on the seeded
