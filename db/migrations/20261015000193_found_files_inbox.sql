@@ -30,7 +30,8 @@
 --
 -- Differences from the spec's section 4 (the spec is updated in the same commit):
 --   * teams are keyed by team_id, not id: FKs are teams (team_id);
---   * extra CHECKs the spec did not list: an alias or folder made only of dots ('..' would walk out of Users/ or Shared/),
+--   * extra CHECKs the spec did not list: an alias that starts with a dot and a folder made only of dots ('..' would walk out
+--     of Users/ or Shared/, '.snapshot' is a hidden system folder), a folder with leading or trailing blanks,
 --     kind_confidence between 0 and 1, matches a JSON array, extracted a JSON object, a suggestion names both a collection and
 --     a record, size not negative, a candidate is not its own duplicate, a person-scope request names a person;
 --   * extra columns: file_candidates.adopted_at (the "linking a document sets a flag the crawler reads to hash it once" of
@@ -46,21 +47,42 @@ SET LOCAL lock_timeout = '10s';
 ALTER TABLE people
     ADD COLUMN uni_alias TEXT,
     ADD COLUMN scan_while_former BOOLEAN NOT NULL DEFAULT false,
-    ADD CONSTRAINT people_uni_alias_format_check CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$'),
-    ADD CONSTRAINT people_uni_alias_not_dots_check CHECK (uni_alias !~ '^[.]+$');
+    ADD CONSTRAINT people_uni_alias_format_check CHECK (uni_alias ~ '^[A-Za-z0-9_-][A-Za-z0-9._-]{1,63}$');
 CREATE UNIQUE INDEX people_uni_alias_key ON people (lower(uni_alias)) WHERE uni_alias IS NOT NULL;
 
 ALTER TABLE teams
     ADD COLUMN share_folder TEXT,
     ADD CONSTRAINT teams_share_folder_format_check CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> ''),
-    ADD CONSTRAINT teams_share_folder_not_dots_check CHECK (btrim(share_folder) !~ '^[.]+$');
+    ADD CONSTRAINT teams_share_folder_trim_check CHECK (share_folder = btrim(share_folder)),
+    ADD CONSTRAINT teams_share_folder_not_dots_check CHECK (share_folder !~ '^[.]+$');
 CREATE UNIQUE INDEX teams_share_folder_key ON teams (lower(share_folder)) WHERE share_folder IS NOT NULL;
 
-COMMENT ON COLUMN people.uni_alias IS 'The name of this person''s personal folder on the lab share (Users/<uni alias>), which the inbox crawler scans for found files. 2 to 64 characters from letters, digits, dot, underscore and hyphen, never only dots. Unique ignoring case. Set by an administrator; NULL means the person has no folder to scan. migration 193.';
+COMMENT ON COLUMN people.uni_alias IS 'The name of this person''s personal folder on the lab share (Users/<uni alias>), which the inbox crawler scans for found files. 2 to 64 characters from letters, digits, dot, underscore and hyphen, not starting with a dot (so neither ''..'' nor a hidden folder such as ''.snapshot''). Unique ignoring case. Set by an administrator; NULL means the person has no folder to scan. migration 193.';
 COMMENT ON COLUMN people.scan_while_former IS 'True when the inbox crawler should keep scanning this person''s folder after they are marked inactive (a Former person). Default false: a Former person''s folder is not scanned. Set by an administrator. migration 193.';
-COMMENT ON COLUMN teams.share_folder IS 'The name of this team''s folder on the lab share (Shared/<share folder>), which the inbox crawler scans for found files. A single folder name: no slash or backslash, not blank, not only dots. Unique ignoring case. NULL means the team has no folder to scan. migration 193.';
+COMMENT ON COLUMN teams.share_folder IS 'The name of this team''s folder on the lab share (Shared/<share folder>), which the inbox crawler scans for found files. A single folder name: no slash or backslash, not blank, no leading or trailing blanks, not only dots. Unique ignoring case. NULL means the team has no folder to scan. migration 193.';
 COMMENT ON INDEX people_uni_alias_key IS 'Two people cannot share a uni alias, ignoring case; people without an alias are not constrained.';
 COMMENT ON INDEX teams_share_folder_key IS 'Two teams cannot share a share folder, ignoring case; teams without a folder are not constrained.';
+
+-- A new person row cannot carry an alias or the Former switch. The Lab Member create permission on people lists no fields
+-- (everything is allowed), so without this guard any Lab Member could create a login-less person that squats on a folder
+-- name before an administrator assigns it. An administrator sets both columns afterwards with an UPDATE, which Lab Members
+-- cannot do (their people update field list leaves these columns out).
+CREATE FUNCTION d1_private.people_inbox_columns_insert_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    IF NEW.uni_alias IS NOT NULL OR NEW.scan_while_former THEN
+        RAISE EXCEPTION 'uni_alias and scan_while_former can only be set by an update'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END
+$$;
+COMMENT ON FUNCTION d1_private.people_inbox_columns_insert_guard() IS 'Trigger function (migration 193): refuses a new people row that sets uni_alias or scan_while_former, so only an update (an administrator; Lab Members cannot update these columns) can give a person an inbox folder.';
+CREATE TRIGGER people_inbox_columns_insert BEFORE INSERT ON people
+    FOR EACH ROW EXECUTE FUNCTION d1_private.people_inbox_columns_insert_guard();
 
 -- 2. Found files.
 CREATE TABLE d1_private.file_candidates (
@@ -107,7 +129,11 @@ CREATE TABLE d1_private.file_candidates (
     CONSTRAINT file_candidates_suggestion_pair_check CHECK ((suggested_collection IS NULL) = (suggested_record_id IS NULL)),
     CONSTRAINT file_candidates_not_own_duplicate_check CHECK (duplicate_of IS DISTINCT FROM candidate_id),
     CONSTRAINT file_candidates_size_bytes_check CHECK (size_bytes >= 0),
-    CONSTRAINT file_candidates_link_kind_check CHECK (link_kind IN ('manual', 'bulk', 'auto'))
+    CONSTRAINT file_candidates_link_kind_check CHECK (link_kind IN ('manual', 'bulk', 'auto')),
+    CONSTRAINT file_candidates_linked_bookkeeping_check CHECK (state <> 'linked' OR (link_kind IS NOT NULL AND linked_collection IS NOT NULL
+        AND linked_junction_id IS NOT NULL AND link_batch_id IS NOT NULL)),
+    CONSTRAINT file_candidates_unlinked_bookkeeping_check CHECK (state = 'linked' OR (link_kind IS NULL AND linked_collection IS NULL
+        AND linked_junction_id IS NULL AND link_batch_id IS NULL))
 );
 CREATE INDEX idx_file_candidates_owner_person_state ON d1_private.file_candidates (owner_person_id, state);
 CREATE INDEX idx_file_candidates_owner_team_state ON d1_private.file_candidates (owner_team_id, state);
@@ -115,6 +141,7 @@ CREATE INDEX idx_file_candidates_link_batch ON d1_private.file_candidates (link_
 CREATE INDEX idx_file_candidates_suggested_record ON d1_private.file_candidates (suggested_record_id) WHERE suggested_record_id IS NOT NULL;
 CREATE INDEX idx_file_candidates_duplicate_of ON d1_private.file_candidates (duplicate_of) WHERE duplicate_of IS NOT NULL;
 CREATE INDEX idx_file_candidates_adopted ON d1_private.file_candidates (adopted_at) WHERE adopted_at IS NOT NULL;
+CREATE INDEX idx_file_candidates_decided_by ON d1_private.file_candidates (decided_by) WHERE decided_by IS NOT NULL;
 
 COMMENT ON TABLE d1_private.file_candidates IS 'One row per file the inbox crawler found in a person''s or a team''s folder on the lab share, until a person links, dismisses or loses it (migration 193; spec 2026-10-15-found-files-inbox-design.md section 4). Written by the crawler (database role) and by the d1-inbox endpoint, which is the only reader for people: d1_private is outside the Directus schema scan, so candidates are never readable through its REST API. Derived bookkeeping: no audit trigger (the link itself is audited on its junction row). The file bytes stay on the share; the directus_files row is only a pointer.';
 COMMENT ON COLUMN d1_private.file_candidates.candidate_id IS 'Surrogate key of the found file.';
@@ -137,7 +164,7 @@ COMMENT ON COLUMN d1_private.file_candidates.source_mtime IS 'The file''s modifi
 COMMENT ON COLUMN d1_private.file_candidates.first_seen_at IS 'When the crawler first saw the file.';
 COMMENT ON COLUMN d1_private.file_candidates.decided_at IS 'When a person linked or dismissed the file (or when it was linked automatically); NULL while undecided. Cleared by an undo or a restore.';
 COMMENT ON COLUMN d1_private.file_candidates.decided_by IS 'The directus_users.id of the person who linked or dismissed it (the opted-in person for an auto-link); NULL while undecided or when that user was deleted (ON DELETE SET NULL).';
-COMMENT ON COLUMN d1_private.file_candidates.link_kind IS 'How it was linked: manual (one file), bulk (Accept all or a batch of several) or auto (by the opted-in auto-link). NULL unless state is linked. Undo bookkeeping.';
+COMMENT ON COLUMN d1_private.file_candidates.link_kind IS 'How it was linked: manual (one file), bulk (Accept all or a batch of several) or auto (by the opted-in auto-link). The four link_* columns are all set when state is linked and all NULL otherwise (two CHECKs), so an undo must clear all four together with the state. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.linked_collection IS 'The record collection it was linked to (physical_samples, manufacturing_operations or test_sessions); NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.linked_junction_id IS 'The id of the junction row the link created (sample_data_files, operation_data_files or session_data_files), so an undo removes exactly that row; NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.link_batch_id IS 'Shared by every file linked in one Link, Accept all or auto-link run; one Undo per batch removes exactly the junction rows of the batch. NULL unless state is linked.';
@@ -149,6 +176,7 @@ COMMENT ON INDEX d1_private.idx_file_candidates_owner_team_state IS 'A team''s i
 COMMENT ON INDEX d1_private.idx_file_candidates_link_batch IS 'Undo: finds the candidates of one link batch. Partial: only linked rows have a batch.';
 COMMENT ON INDEX d1_private.idx_file_candidates_suggested_record IS 'Finds the candidates that suggest a given record (for example to refresh them when a record is deleted). Partial: only rows with a suggestion.';
 COMMENT ON INDEX d1_private.idx_file_candidates_duplicate_of IS 'Finds the copies of a candidate (when the original is linked, dismissed or deleted). Partial: only copies.';
+COMMENT ON INDEX d1_private.idx_file_candidates_decided_by IS 'The foreign key to directus_users: finds what a user decided (the Recently linked and auto-linked lists), and keeps deleting a user cheap (ON DELETE SET NULL). Partial: only decided rows.';
 COMMENT ON INDEX d1_private.idx_file_candidates_adopted IS 'The crawler''s hash-after-adoption loop: documents a person linked and that still need hashing. Partial: only adopted rows.';
 
 -- 3. The folder cache.
@@ -198,6 +226,11 @@ CREATE TABLE d1_private.inbox_scan_requests (
 );
 CREATE INDEX idx_inbox_scan_requests_status ON d1_private.inbox_scan_requests (status, requested_at);
 CREATE INDEX idx_inbox_scan_requests_person ON d1_private.inbox_scan_requests (person_id, requested_at DESC) WHERE person_id IS NOT NULL;
+CREATE INDEX idx_inbox_scan_requests_requested_by ON d1_private.inbox_scan_requests (requested_by) WHERE requested_by IS NOT NULL;
+-- At most one open request per person: the endpoint's "refused if one is queued" check is a read followed by an insert, so
+-- two concurrent clicks could both pass it; this index makes the second insert fail (the endpoint turns that into a 429).
+CREATE UNIQUE INDEX inbox_scan_requests_one_open_per_person_key ON d1_private.inbox_scan_requests (person_id)
+    WHERE scope = 'person' AND status IN ('queued', 'running');
 
 COMMENT ON TABLE d1_private.inbox_scan_requests IS 'The queue behind "Rescan my folder" (scope person) and the administrator''s "Scan all" (scope all), migration 193. The d1-inbox endpoint inserts a row (and refuses a person who has one queued or finished in the last 10 minutes); the crawler daemon claims queued rows about every 30 seconds with FOR UPDATE SKIP LOCKED, runs the scan and sets the status. Not audited: operational bookkeeping.';
 COMMENT ON COLUMN d1_private.inbox_scan_requests.request_id IS 'Surrogate key of the request.';
@@ -211,6 +244,8 @@ COMMENT ON COLUMN d1_private.inbox_scan_requests.status IS 'queued: waiting for 
 COMMENT ON COLUMN d1_private.inbox_scan_requests.error IS 'Why a failed request failed (for example the share was unreachable); NULL otherwise.';
 COMMENT ON INDEX d1_private.inbox_scan_requests_pkey IS 'One row per request.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_status IS 'The daemon''s claim: queued requests, oldest first.';
+COMMENT ON INDEX d1_private.idx_inbox_scan_requests_requested_by IS 'The foreign key to directus_users: keeps deleting a user cheap (ON DELETE SET NULL). Partial: only requests whose user is still known.';
+COMMENT ON INDEX d1_private.inbox_scan_requests_one_open_per_person_key IS 'A person has at most one open (queued or running) person-scope request. Closes the race between the rate-limit read and the insert in the d1-inbox endpoint: the second of two concurrent requests fails with a unique violation, which the endpoint reports as 429. Partial: finished requests do not count.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_person IS 'The per-person rate limit: a person''s latest request. Partial: only person-scope requests.';
 
 -- 5. The crawler's control and status row.
@@ -272,8 +307,53 @@ COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agr
 COMMENT ON COLUMN d1_private.inbox_prefs.updated_at IS 'When auto_link last changed (the time of the consent). Set by the endpoint on write.';
 COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 
+-- 7. A changed alias or share folder starts that owner's folder over.
+-- The crawler's folder cache (inbox_dirs) and the undecided candidates describe the OLD folder. Left alone they would
+-- strand: the cache says "already listed" for paths the new folder does not have, and new / gone / dismissed files of the
+-- old folder would sit in the Inbox for a folder that is no longer theirs. So when the value really changes (IS DISTINCT
+-- FROM, not on every UPDATE of the row) the owner's cache rows and their candidates in state new, gone or dismissed are
+-- deleted; linked candidates are kept (the link is a decision and its undo bookkeeping must survive). The owner's next
+-- scan is then a first scan of the new folder: everything in it is backlog, and baselined_at is set again.
+CREATE FUNCTION d1_private.inbox_person_alias_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    DELETE FROM d1_private.inbox_dirs WHERE owner_person_id = OLD.person_id;
+    DELETE FROM d1_private.file_candidates
+     WHERE owner_person_id = OLD.person_id AND state IN ('new', 'gone', 'dismissed');
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes, deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+CREATE TRIGGER people_inbox_alias_changed AFTER UPDATE OF uni_alias ON people
+    FOR EACH ROW WHEN (OLD.uni_alias IS DISTINCT FROM NEW.uni_alias)
+    EXECUTE FUNCTION d1_private.inbox_person_alias_changed();
+
+CREATE FUNCTION d1_private.inbox_team_folder_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    DELETE FROM d1_private.inbox_dirs WHERE owner_team_id = OLD.team_id;
+    DELETE FROM d1_private.file_candidates
+     WHERE owner_team_id = OLD.team_id AND state IN ('new', 'gone', 'dismissed');
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes, deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+CREATE TRIGGER teams_inbox_folder_changed AFTER UPDATE OF share_folder ON teams
+    FOR EACH ROW WHEN (OLD.share_folder IS DISTINCT FROM NEW.share_folder)
+    EXECUTE FUNCTION d1_private.inbox_team_folder_changed();
+
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
+DROP TRIGGER IF EXISTS teams_inbox_folder_changed ON teams;
+DROP TRIGGER IF EXISTS people_inbox_alias_changed ON people;
+DROP FUNCTION IF EXISTS d1_private.inbox_team_folder_changed();
+DROP FUNCTION IF EXISTS d1_private.inbox_person_alias_changed();
 -- The five tables go with their rows (found files, folder cache, requests, state, opt-ins: all derived or recomputable;
 -- a person's auto-link opt-in is lost, and they must agree again). A candidate's directus_files pointer row stays,
 -- as it is an ordinary file row. The new people and teams columns go with their data (aliases and share folders are
@@ -287,12 +367,14 @@ DROP TABLE IF EXISTS d1_private.file_candidates;
 DROP INDEX IF EXISTS teams_share_folder_key;
 ALTER TABLE teams
     DROP CONSTRAINT IF EXISTS teams_share_folder_not_dots_check,
+    DROP CONSTRAINT IF EXISTS teams_share_folder_trim_check,
     DROP CONSTRAINT IF EXISTS teams_share_folder_format_check,
     DROP COLUMN IF EXISTS share_folder;
 
+DROP TRIGGER IF EXISTS people_inbox_columns_insert ON people;
+DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard();
 DROP INDEX IF EXISTS people_uni_alias_key;
 ALTER TABLE people
-    DROP CONSTRAINT IF EXISTS people_uni_alias_not_dots_check,
     DROP CONSTRAINT IF EXISTS people_uni_alias_format_check,
     DROP COLUMN IF EXISTS scan_while_former,
     DROP COLUMN IF EXISTS uni_alias;
