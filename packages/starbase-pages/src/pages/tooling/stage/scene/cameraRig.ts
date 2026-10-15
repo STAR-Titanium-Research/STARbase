@@ -177,15 +177,20 @@ export function frameEdge(
 // The view can be turned a little each way from a framing's own view, not all the way round: about 10 degrees left or
 // right, and about 8 degrees up or down, never lower than 15 degrees above the tray plane and never past straight
 // down. The bounds are relative to the framing, so the box, an insert and an edge each turn around their own default.
-// They are soft: OrbitControls is given the bounds plus a little slack, so a drag can overshoot a few degrees, and
-// `easeToBounds` then eases the view back to the bound once it is let go (no hard stop, no jitter).
+// They are soft, like a spring: dragging past a bound meets rising resistance (`rubberStep`: the view moves less and
+// less per pixel and can never pass the bound by more than about 6 degrees), and on release it springs back to the
+// bound (`springToBounds`: short, slightly damped, no visible bounce). OrbitControls is given the bounds plus that
+// maximum overshoot as its hard limits, and re-reads the camera every frame, so the resistance is applied to each
+// frame's step (`rubberView`). Once the user lets go and stays still, the view recentres (RECENTRE_DELAY_MS).
 
 export const AZIMUTH_RANGE = 10 * RAD;
 export const POLAR_RANGE = 8 * RAD;
 export const MIN_ELEVATION = 15 * RAD; // the lowest the camera goes, above the tray's plane
 export const POLAR_FLOOR = 3 * RAD; // the most top-down: just short of straight down, where the orbit is degenerate
-const AZIMUTH_SLACK = 2 * RAD;
-const POLAR_SLACK = 2 * RAD;
+export const MAX_OVERSHOOT = 6 * RAD; // the most a drag can take the view past a soft bound
+export const SPRING_OMEGA = 18; // rad/s: the spring-back settles in about 300 ms
+export const SPRING_ZETA = 0.85; // a little under critical: a bounce of about 0.6 % of the overshoot, which is invisible
+export const RECENTRE_DELAY_MS = 1500; // after the user stops: recentre on the focus's own framing
 const SNAP = 0.0005; // radians; closer than this to a bound counts as on it
 
 export interface Rotation { minAzimuth: number; maxAzimuth: number; minPolar: number; maxPolar: number }
@@ -200,32 +205,111 @@ export function rotationBounds(f: Framing): Rotation {
 	};
 }
 
-// The bounds plus the slack the drag may overshoot into (what OrbitControls enforces).
+// The bounds plus the most a drag may overshoot into (what OrbitControls enforces as its hard limits).
 export function hardBounds(f: Framing): Rotation {
 	const b = rotationBounds(f);
 	return {
-		minAzimuth: b.minAzimuth - AZIMUTH_SLACK,
-		maxAzimuth: b.maxAzimuth + AZIMUTH_SLACK,
-		minPolar: Math.max(0.01, b.minPolar - POLAR_SLACK),
-		maxPolar: Math.max(b.maxPolar, Math.min(Math.PI / 2 - 5 * RAD, b.maxPolar + POLAR_SLACK)),
+		minAzimuth: b.minAzimuth - MAX_OVERSHOOT,
+		maxAzimuth: b.maxAzimuth + MAX_OVERSHOOT,
+		minPolar: Math.max(0.01, b.minPolar - MAX_OVERSHOOT),
+		maxPolar: Math.max(b.maxPolar, Math.min(Math.PI / 2 - 5 * RAD, b.maxPolar + MAX_OVERSHOOT)),
 	};
 }
 
-// A view outside the soft bounds, eased toward them by the fraction `k` (0 to 1; 1 lands on them), or null when it is
-// already inside. Distance and target are kept. Azimuth is measured from the bounds' middle, the short way round.
-export function easeToBounds(view: Framing, b: Rotation, k: number): Framing | null {
+// The rubber band: how far past a bound the view sits when dragged `x` past it (radians). One to one at first, then less
+// and less, never past `max`: the further out, the harder the pull.
+export function rubberBand(x: number, max = MAX_OVERSHOOT): number {
+	return x <= 0 ? x : max * (1 - Math.exp(-x / max));
+}
+
+// The drag it takes to be `overshoot` past a bound (the inverse of `rubberBand`).
+export function rubberBandInverse(overshoot: number, max = MAX_OVERSHOOT): number {
+	if (overshoot <= 0) return overshoot;
+	return -max * Math.log(1 - Math.min(overshoot / max, 1 - 1e-9));
+}
+
+// One step of a drag on a bound. `excess` is how far past it the view is (negative: inside it, short of the bound) and
+// `delta` the step the drag asked for: back to how far the drag has gone, add the step, and map it through the band.
+// Inside the bound steps are free; past it each step is damped by how far past it already is.
+export function rubberStep(excess: number, delta: number, max = MAX_OVERSHOOT): number {
+	const dragged = rubberBandInverse(excess, max) + delta;
+	return rubberBand(dragged, max);
+}
+
+// An angle `p` taken by `delta` between two bounds, with the band at either one.
+function rubberAxis(p: number, delta: number, lo: number, hi: number, max: number): number {
+	if (p > hi || p + delta > hi) return hi + rubberStep(p - hi, delta, max);
+	if (p < lo || p + delta < lo) return lo - rubberStep(lo - p, -delta, max);
+	return p + delta;
+}
+
+// The view `next` that the orbit controls just produced from `prev`, with the step's azimuth and polar run through the
+// rubber band at the soft bounds `b` (distance and target as `next` has them), or null when the step is not past one.
+export function rubberView(prev: Framing, next: Framing, b: Rotation, max = MAX_OVERSHOOT): Framing | null {
+	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
+	const half = (b.maxAzimuth - b.minAzimuth) / 2;
+	const offPrev = shortestArc(centre, prev.azimuth);
+	const dAz = shortestArc(prev.azimuth, next.azimuth);
+	const dPolar = next.polar - prev.polar;
+	const off = rubberAxis(offPrev, dAz, -half, half, max);
+	const polar = rubberAxis(prev.polar, dPolar, b.minPolar, b.maxPolar, max);
+	if (Math.abs(off - (offPrev + dAz)) < 1e-9 && Math.abs(polar - next.polar) < 1e-9) return null;
+	return framingAt(next.target, next.distance, polar, centre + off);
+}
+
+// One step of a spring settling `x` to 0 from the state (x, v), the exact solution for a damped spring, so it is the
+// same at any frame rate (two half steps are one whole step). `dtMs` is capped so a stalled frame does not leap.
+export function springStep(x: number, v: number, dtMs: number, omega = SPRING_OMEGA, zeta = SPRING_ZETA): { x: number; v: number } {
+	const t = Math.min(100, Math.max(0, dtMs)) / 1000;
+	const wd = omega * Math.sqrt(1 - zeta * zeta);
+	const e = Math.exp(-zeta * omega * t);
+	const c = Math.cos(wd * t);
+	const s = Math.sin(wd * t);
+	return {
+		x: e * (x * c + ((v + zeta * omega * x) / wd) * s),
+		v: e * (v * c - ((zeta * omega * v + omega * omega * x) / wd) * s),
+	};
+}
+
+export interface SpringVelocity { azimuth: number; polar: number } // rad/s, along the way back to the bound
+
+// A view outside the soft bounds, sprung back toward them for a frame of `dtMs`: the new view and the new velocity, or
+// null when the view is inside (or within a hair of) the bounds. Distance and target are kept. Azimuth is measured from
+// the bounds' middle, the short way round. `reduced` lands on the bound at once (reduced motion).
+export function springToBounds(
+	view: Framing, b: Rotation, vel: SpringVelocity, dtMs: number, reduced = false,
+): { view: Framing; vel: SpringVelocity } | null {
 	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
 	const half = (b.maxAzimuth - b.minAzimuth) / 2;
 	const off = shortestArc(centre, view.azimuth);
-	const offInside = Math.min(half, Math.max(-half, off));
-	const polarInside = Math.min(b.maxPolar, Math.max(b.minPolar, view.polar));
-	if (Math.abs(off - offInside) < SNAP && Math.abs(view.polar - polarInside) < SNAP) return null;
-	const kk = Math.min(1, Math.max(0, k));
-	return framingAt(view.target, view.distance, view.polar + (polarInside - view.polar) * kk, centre + off + (offInside - off) * kk);
+	// Past which bound (+1 the upper, -1 the lower, 0 neither), and by how much.
+	const sideAz = off > half ? 1 : off < -half ? -1 : 0;
+	const sidePolar = view.polar > b.maxPolar ? 1 : view.polar < b.minPolar ? -1 : 0;
+	const exAz = sideAz === 0 ? 0 : sideAz * off - half;
+	const exPolar = sidePolar === 0 ? 0 : sidePolar * (view.polar - (sidePolar > 0 ? b.maxPolar : b.minPolar));
+	if (exAz < SNAP && exPolar < SNAP) return null;
+	const axis = (ex: number, v: number): { ex: number; v: number } => {
+		if (ex < SNAP) return { ex: 0, v: 0 };
+		if (reduced) return { ex: 0, v: 0 };
+		const n = springStep(ex, v, dtMs);
+		return n.x < SNAP && Math.abs(n.v) < 0.01 ? { ex: 0, v: 0 } : { ex: Math.max(0, n.x), v: n.v };
+	};
+	const az = axis(exAz, vel.azimuth);
+	const po = axis(exPolar, vel.polar);
+	const nextOff = sideAz === 0 ? off : sideAz * (half + az.ex);
+	const nextPolar = sidePolar === 0 ? view.polar : sidePolar > 0 ? b.maxPolar + po.ex : b.minPolar - po.ex;
+	return { view: framingAt(view.target, view.distance, nextPolar, centre + nextOff), vel: { azimuth: az.v, polar: po.v } };
+}
+
+// Whether two framings are the same view (to within a hair): a view already on its focus's framing is not recentred.
+export function framingsClose(a: Framing, b: Framing): boolean {
+	const dist = Math.hypot(a.target[0] - b.target[0], a.target[1] - b.target[1], a.target[2] - b.target[2]);
+	return dist < 0.05 && Math.abs(a.distance / b.distance - 1) < 0.002 && Math.abs(a.polar - b.polar) < 0.002
+		&& Math.abs(shortestArc(a.azimuth, b.azimuth)) < 0.002;
 }
 
 // The bounds widened, if need be, to take in a view that lies outside them (the camera was grabbed mid-move, far from
-// where it is going): so grabbing the camera never makes it jump, and `easeToBounds` then eases it back in.
+// where it is going): so grabbing the camera never makes it jump, and `springToBounds` then draws it back in.
 export function boundsContaining(b: Rotation, view: Framing): Rotation {
 	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
 	const off = shortestArc(centre, view.azimuth);
@@ -236,12 +320,6 @@ export function boundsContaining(b: Rotation, view: Framing): Rotation {
 		minPolar: Math.min(b.minPolar, view.polar - SNAP),
 		maxPolar: Math.max(b.maxPolar, view.polar + SNAP),
 	};
-}
-
-// The fraction of the way back to a bound to take in a frame of `dtMs`: the same feel at any frame rate.
-export const BOUND_EASE_MS = 90;
-export function easeFraction(dtMs: number, reduced = false): number {
-	return reduced ? 1 : 1 - Math.exp(-Math.min(100, Math.max(0, dtMs)) / BOUND_EASE_MS);
 }
 
 export interface OrbitLimits extends Rotation { minDistance: number; maxDistance: number }
