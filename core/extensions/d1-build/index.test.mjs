@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, cleanValues, dayOf, describeFailure, editValues, parseRequired, realColumns, summarise, templateVisibleTo, validateDraftBody, validateName,
+  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, cleanValues, dayOf, describeFailure, editValues, parseRequired, projectItem, realColumns, rolesOf, summarise, summariseProjected, templateVisibleTo, validateDraftBody, validateName,
   validateTemplateValues,
 } from './index.js';
 
@@ -58,7 +58,7 @@ function fakeWorld() {
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
     people: [], // { person_id, user_id, is_researcher }
-    templates: [],
+    templates: [], roles: [ROLE_A, ROLE_B, ID(83)],
   };
 }
 // Transactions: the fake keeps a copy of what a transaction may change and puts it back when the transaction throws.
@@ -146,7 +146,9 @@ function fakeDatabase(world) {
   const raw = async (sql, b = []) => {
     switch (sql) {
       case SQL.listDrafts:
-        return { rows: world.drafts.filter((d) => d.user_id === b[0]).sort((x, y) => y.updated_at - x.updated_at).map(pick) };
+        world.listed = true;
+        return { rows: world.drafts.filter((d) => d.user_id === b[0]).sort((x, y) => y.updated_at - x.updated_at)
+          .map((d) => ({ draft_id: d.draft_id, name: d.name, updated_at: d.updated_at, items: d.body.items.map(projectItem) })) };
       case SQL.getDraft: {
         const d = draft(b[0], b[1]);
         return { rows: d ? [pick(d)] : [] };
@@ -181,7 +183,7 @@ function fakeDatabase(world) {
       case SQL.setActor:
         return { rows: [] };
       case SQL.listTemplates:
-        return { rows: world.templates.filter((t) => t.user_id === b[0] || t.scope === 'global' || (t.scope === 'role' && t.role_id === b[1]))
+        return { rows: world.templates.filter((t) => t.user_id === b[0] || t.scope === 'global' || (t.scope === 'role' && String(b[1]).split(',').includes(t.role_id)))
           .sort((x, y) => x.name.toLowerCase().localeCompare(y.name.toLowerCase()) || x.template_id.localeCompare(y.template_id)).map((t) => ({ ...t })) };
       case SQL.getTemplate:
         return { rows: world.templates.filter((t) => t.template_id === b[0]).map((t) => ({ ...t })) };
@@ -203,6 +205,8 @@ function fakeDatabase(world) {
       case SQL.deleteTemplate:
         world.templates = world.templates.filter((t) => t.template_id !== b[0]);
         return { rows: [] };
+      case SQL.roleExists:
+        return { rows: world.roles.filter((r) => r === b[0]).map((id) => ({ id })) };
       case SQL.personExists:
         return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
       case SQL.personOfUser:
@@ -268,11 +272,11 @@ function setup({ env = {} } = {}) {
   const logger = { error: (m) => logged.push(m), warn: (m) => logged.push(m) };
   const fake = fakeServices(world);
   mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService, UtilsService }, getSchema: async () => SCHEMA, env }, () => NOW);
-  const call = async (method, path, { user = ALICE, params = {}, body, admin = false, role = ROLE_A } = {}) => {
+  const call = async (method, path, { user = ALICE, params = {}, body, admin = false, role = ROLE_A, roles } = {}) => {
     const handler = router.routes.get(`${method} ${path}`);
     assert.ok(handler, `no route ${method} ${path}`);
     const res = fakeRes();
-    await handler({ accountability: user ? { user, admin, role } : null, params, body }, res);
+    await handler({ accountability: user ? { user, admin, role, ...(roles ? { roles } : {}) } : null, params, body }, res);
     return res;
   };
   return { world, router, call, logged, log: fake.log, cleared };
@@ -2331,4 +2335,93 @@ test('mark-planned: the guard decides who may: a refusal is a 403 with its reaso
     assert.equal((await markPlanned(planned, body)).statusCode, 400, JSON.stringify(body));
   }
   assert.equal((await markPlanned(planned, { collection: OPS, ids: [ID(99)] })).statusCode, 404);
+});
+
+// ---- failures, nested roles, summaries from a projection -------------------------------------------------------------
+
+test('describeFailure: a trigger\'s own message is a 400, a deadlock or serialization failure is a 409 "Try again"', () => {
+  assert.deepEqual(describeFailure({ code: 'P0001', message: 'A sample cannot be its own parent.' }), { status: 400, message: 'A sample cannot be its own parent.' });
+  assert.equal(describeFailure({ code: 'P0001' }).status, 500, 'a P0001 with no message is not guessed at');
+  for (const code of ['40P01', '40001']) {
+    const out = describeFailure({ code, message: 'deadlock detected, process 4321 waits for ShareLock on relation 16384' });
+    assert.equal(out.status, 409);
+    assert.match(out.message, /Try again/);
+    assert.doesNotMatch(out.message, /4321|relation/);
+  }
+});
+
+test('create: a trigger refusal is a 400 WRITE_FAILED naming the card, a deadlock is a 409', async () => {
+  for (const [error, status, message] of [
+    [{ code: 'P0001', message: 'That code is reserved.' }, 400, /That code is reserved/],
+    [{ code: '40P01', message: 'deadlock detected' }, 409, /Try again/],
+  ]) {
+    const env = setup();
+    const id = await keep(env, draft([sample('n1', { values: { ...code(), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })]));
+    env.world.failOn = () => { throw Object.assign(new Error(error.message), { code: error.code }); };
+    const res = await createCall(env, id);
+    assert.equal(res.statusCode, status);
+    assert.equal(res.body.errors[0].extensions.code, 'WRITE_FAILED');
+    assert.equal(res.body.errors[0].extensions.key, 'n1');
+    assert.match(res.body.errors[0].message, message);
+  }
+});
+
+test('rolesOf and templates with nested roles: accountability.roles when present, role as the fallback', async () => {
+  assert.deepEqual(rolesOf({ role: ROLE_A }), [ROLE_A]);
+  assert.deepEqual(rolesOf({ role: ROLE_A, roles: [ROLE_B.toUpperCase(), ROLE_A, ROLE_A] }), [ROLE_B, ROLE_A]);
+  assert.deepEqual(rolesOf({ role: ROLE_A, roles: [] }), [ROLE_A]);
+  assert.deepEqual(rolesOf({}), []);
+  const env = setup();
+  const t = (await tpl(env, hardTemplate({ name: 'for role B', scope: 'role', role_id: ROLE_B }), { admin: true })).body.data;
+  const names = async (opts) => (await env.call('GET', '/templates', opts)).body.data.map((x) => x.name);
+  // role A with role B as a parent role sees it; role A alone does not
+  assert.deepEqual(await names({ user: BOB, role: ROLE_A, roles: [ROLE_A, ROLE_B] }), ['for role B']);
+  assert.deepEqual(await names({ user: BOB, role: ROLE_A }), []);
+  assert.equal((await env.call('GET', '/templates/:id', { user: BOB, role: ROLE_A, roles: [ROLE_A, ROLE_B], params: { id: t.id } })).statusCode, 200);
+  assert.equal((await env.call('GET', '/templates/:id', { user: BOB, role: ROLE_A, params: { id: t.id } })).statusCode, 404);
+  // a non-admin may share with any of their roles, but not with a role they do not have
+  const own = await tpl(env, cutTemplate({ scope: 'role', role_id: ROLE_B }), { user: BOB, role: ROLE_A, roles: [ROLE_A, ROLE_B] });
+  assert.equal(own.statusCode, 201);
+  const foreign = await tpl(env, cutTemplate({ scope: 'role', role_id: ID(83) }), { user: BOB, role: ROLE_A, roles: [ROLE_A, ROLE_B] });
+  assert.equal(foreign.statusCode, 400);
+  assert.match(foreign.body.errors[0].message, /your own account role/);
+  // and without a role of the first kind, the first of roles is the default
+  const dflt = await tpl(env, cutTemplate({ scope: 'role' }), { user: BOB, role: null, roles: [ROLE_B] });
+  assert.equal(dflt.body.data.role_id, ROLE_B);
+});
+
+test('a role template for a role that does not exist is a 400', async () => {
+  const env = setup();
+  const ghost = ID(99);
+  const made = await tpl(env, cutTemplate({ scope: 'role', role_id: ghost }), { admin: true });
+  assert.equal(made.statusCode, 400);
+  assert.match(made.body.errors[0].message, /role does not exist/);
+  assert.equal(env.world.templates.length, 0);
+  const ok = (await tpl(env, cutTemplate())).body.data;
+  const patch = await env.call('PATCH', '/templates/:id', { admin: true, params: { id: ok.id }, body: { scope: 'role', role_id: ghost, version: 1 } });
+  assert.equal(patch.statusCode, 400);
+  assert.match(patch.body.errors[0].message, /role does not exist/);
+  assert.equal(env.world.templates[0].scope, 'private');
+});
+
+test('the drafts list carries no bodies: a summary comes from a small projection of the cards', async () => {
+  const env = setup();
+  const body = {
+    ...emptyBody(),
+    items: [
+      sample('s1'), sample('s2', { existing: { id: ID(10), version: 1 } }), mop('o1', {}, { rows: [{ key: 'a' }, { key: 'b' }] }),
+      op('o2', { existing: { id: ID(11), version: 1 }, attach: true }), op('o3', { existing: { id: ID(12), version: 1 }, values: { notes: 'x' } }),
+      test_('t1', { existing: { id: ID(13), version: 1 }, remove: true }), test_('t2'),
+    ],
+  };
+  await env.call('POST', '/drafts', { body: { name: 'x', body } });
+  const list = (await env.call('GET', '/drafts')).body.data;
+  assert.equal(env.world.listed, true);
+  assert.deepEqual(list.map((d) => d.summary), [summarise(body)]);
+  assert.equal(summarise(body), '2 operations, 1 sample, 1 test, 2 changes to existing records, 1 removal');
+  assert.deepEqual(projectItem(body.items[2]), { kind: 'operation', existing: false, remove: false, attach: false, edits: true, rows: 2 });
+  assert.deepEqual(projectItem(body.items[3]), { kind: 'operation', existing: true, remove: false, attach: true, edits: false, rows: 1 });
+  assert.deepEqual(projectItem(body.items[4]), { kind: 'operation', existing: true, remove: false, attach: false, edits: true, rows: 1 });
+  assert.equal(summariseProjected(body.items.map(projectItem)), summarise(body));
+  assert.equal(summariseProjected(undefined), 'Empty');
 });

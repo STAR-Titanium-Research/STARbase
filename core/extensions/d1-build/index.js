@@ -224,19 +224,35 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // What Create would make or change, in words: "2 operations, 4 samples". New records only count as records (an operation with
 // four rows is four operations); existing records count when they carry edits or a removal. An empty draft says so.
 export function summarise(body) {
-  const items = Array.isArray(body?.items) ? body.items : [];
+  return summariseProjected((Array.isArray(body?.items) ? body.items : []).map(projectItem));
+}
+
+// What the summary reads of a card: its kind, whether it is an existing record, a removal, an attach or carries edits, and how
+// many rows an operation has. The list route has the database project exactly this (SQL.listDrafts), so it never loads bodies.
+export function projectItem(item) {
+  return {
+    kind: item?.kind,
+    existing: !!item?.existing,
+    remove: !!item?.remove,
+    attach: !!item?.attach,
+    edits: isObject(item?.values) && Object.keys(item.values).length > 0,
+    rows: Array.isArray(item?.rows) ? item.rows.length : 0,
+  };
+}
+
+export function summariseProjected(items) {
   let operations = 0;
   let samples = 0;
   let tests = 0;
   let edits = 0;
   let removals = 0;
-  for (const item of items) {
+  for (const item of items ?? []) {
     if (item?.remove) {
       removals += 1;
     } else if (item?.existing) {
-      if (item.attach || (isObject(item.values) && Object.keys(item.values).length > 0)) edits += 1;
+      if (item.attach || item.edits) edits += 1;
     } else if (item?.kind === 'operation') {
-      operations += Array.isArray(item.rows) && item.rows.length > 0 ? item.rows.length : 1;
+      operations += item.rows > 0 ? item.rows : 1;
     } else if (item?.kind === 'sample') {
       samples += 1;
     } else if (item?.kind === 'test') {
@@ -256,9 +272,17 @@ export function summarise(body) {
 
 export const SQL = {
   setActor: "SELECT set_config('d1.actor_identity', ?, true)",
+  // The list does not carry bodies: each draft comes with the small projection of its cards that the summary line reads
+  // (projectItem, in SQL; jsonb_exists because a bare ? is a placeholder here).
   listDrafts:
-    'SELECT draft_id, name, body, updated_at FROM d1_private.process_drafts'
-    + ' WHERE user_id = ? ORDER BY updated_at DESC, draft_id LIMIT 200',
+    'SELECT d.draft_id, d.name, d.updated_at, ('
+    + ' SELECT coalesce(jsonb_agg(jsonb_build_object('
+    + "'kind', i ->> 'kind', 'existing', jsonb_exists(i, 'existing'), 'remove', jsonb_exists(i, 'remove'),"
+    + " 'attach', jsonb_exists(i, 'attach'),"
+    + " 'edits', CASE WHEN jsonb_typeof(i -> 'values') = 'object' THEN (i -> 'values') <> '{}'::jsonb ELSE false END,"
+    + " 'rows', CASE WHEN jsonb_typeof(i -> 'rows') = 'array' THEN jsonb_array_length(i -> 'rows') ELSE 0 END)), '[]'::jsonb)"
+    + " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.body -> 'items') = 'array' THEN d.body -> 'items' ELSE '[]'::jsonb END) AS i"
+    + ' ) AS items FROM d1_private.process_drafts d WHERE d.user_id = ? ORDER BY d.updated_at DESC, d.draft_id LIMIT 200',
   getDraft:
     'SELECT draft_id, name, body, version, updated_at FROM d1_private.process_drafts WHERE draft_id = ? AND user_id = ?',
   lockDraft:
@@ -305,10 +329,12 @@ export const SQL = {
     test_sessions: 'SELECT version, work_state AS state, NULL AS sample_id FROM test_sessions WHERE session_id = ? FOR UPDATE',
   },
   // Templates. A template is visible to its creator, to callers with its role (scope role) and to everyone (scope global).
-  // Bindings of listTemplates: the caller, the caller's role (or null).
+  // Bindings of listTemplates: the caller, the caller's roles as one comma-separated text (empty: none).
   listTemplates:
     'SELECT template_id, user_id, scope, role_id, name, collection, values, version, updated_at FROM d1_private.process_templates'
-    + " WHERE user_id = ? OR scope = 'global' OR (scope = 'role' AND role_id = ?::uuid) ORDER BY lower(name), template_id",
+    + " WHERE user_id = ? OR scope = 'global' OR (scope = 'role' AND role_id = ANY(string_to_array(?, ',')::uuid[]))"
+    + ' ORDER BY lower(name), template_id',
+  roleExists: 'SELECT id FROM directus_roles WHERE id = ?',
   getTemplate:
     'SELECT template_id, user_id, scope, role_id, name, collection, values, version, updated_at'
     + ' FROM d1_private.process_templates WHERE template_id = ?',
@@ -813,7 +839,14 @@ export function validateTemplateValues(collection, values, columns) {
 export function templateVisibleTo(t, acc) {
   return String(t.user_id) === String(acc.user)
     || t.scope === 'global'
-    || (t.scope === 'role' && !!acc.role && String(t.role_id) === String(acc.role));
+    || (t.scope === 'role' && rolesOf(acc).includes(String(t.role_id).toLowerCase()));
+}
+
+// The account roles of a caller, lower-case: Directus 11 puts the role and its parents in accountability.roles (nested roles),
+// older accountability has only `role`.
+export function rolesOf(acc) {
+  const list = Array.isArray(acc?.roles) && acc.roles.length ? acc.roles : (acc?.role ? [acc.role] : []);
+  return [...new Set(list.filter(Boolean).map((r) => String(r).toLowerCase()))];
 }
 
 // ---- writing: values and failures (pure) ---------------------------------------------------------------------------------
@@ -851,6 +884,10 @@ export function describeFailure(err) {
   if (code === 'INVALID_FOREIGN_KEY' || code === '23503') return { status: 409, message: 'It points at a record that does not exist, or is still in use.' };
   if (code === 'NOT_NULL_VIOLATION' || code === '23502') return { status: 400, message: 'A required value is missing.' };
   if (code === '23514') return { status: 400, message: 'A value is not allowed here.' };
+  // a trigger's own RAISE EXCEPTION: its message was written for people
+  if (code === 'P0001' && typeof err?.message === 'string' && err.message) return { status: 400, message: err.message };
+  // deadlock, serialization failure: nothing was wrong with the draft
+  if (code === '40P01' || code === '40001') return { status: 409, message: 'The database was busy with something else. Try again.' };
   if (/^22/.test(code) || code === 'VALUE_OUT_OF_RANGE' || code === 'VALUE_TOO_LONG') return { status: 400, message: 'A value has the wrong format or is too large.' };
   if (Number.isInteger(err?.status) && err.status >= 400 && err.status < 500 && typeof err.message === 'string' && err.message) {
     return { status: err.status, message: err.message };
@@ -991,7 +1028,7 @@ export function mount(router, context, clock = () => new Date()) {
         id: r.draft_id,
         name: r.name,
         updated_at: toIso(r.updated_at),
-        summary: summarise(typeof r.body === 'string' ? JSON.parse(r.body) : r.body),
+        summary: summariseProjected(typeof r.items === 'string' ? JSON.parse(r.items) : r.items),
       })),
     });
   }));
@@ -1105,16 +1142,18 @@ export function mount(router, context, clock = () => new Date()) {
     version: Number(r.version),
   });
   // The role a template of this scope is shared with: the caller's own, except that an administrator may name any role.
-  const roleFor = (scope, requested, acc) => {
+  const roleFor = async (scope, requested, acc) => {
     if (scope !== 'role') return null;
     if (requested !== undefined && requested !== null && !(typeof requested === 'string' && UUID.test(requested))) {
       throw new HttpError(400, 'INVALID_PAYLOAD', 'role_id must be a role id.');
     }
-    const role = requested ? requested.toLowerCase() : (acc.role ? String(acc.role).toLowerCase() : null);
+    const mine = rolesOf(acc);
+    const role = requested ? requested.toLowerCase() : (acc.role ? String(acc.role).toLowerCase() : (mine[0] ?? null));
     if (!role) throw new HttpError(400, 'INVALID_PAYLOAD', 'You have no account role to share this with.');
-    if (requested && acc.admin !== true && role !== String(acc.role ?? '').toLowerCase()) {
+    if (requested && acc.admin !== true && !mine.includes(role)) {
       throw new HttpError(400, 'INVALID_PAYLOAD', 'A template can only be shared with your own account role.');
     }
+    if (!rowsOf(await database.raw(SQL.roleExists, [role]))[0]) throw new HttpError(400, 'INVALID_PAYLOAD', 'That role does not exist.');
     return role;
   };
   const scopeOf = (v) => {
@@ -1137,7 +1176,7 @@ export function mount(router, context, clock = () => new Date()) {
   };
 
   router.get('/templates', route(async ({ res, acc }) => {
-    const rows = rowsOf(await database.raw(SQL.listTemplates, [acc.user, acc.role ?? null]));
+    const rows = rowsOf(await database.raw(SQL.listTemplates, [acc.user, rolesOf(acc).join(',')]));
     res.json({ data: rows.map(templateOut) });
   }));
 
@@ -1154,7 +1193,7 @@ export function mount(router, context, clock = () => new Date()) {
       throw new HttpError(400, 'INVALID_PAYLOAD', 'collection must be manufacturing_operations or test_sessions.');
     }
     const scope = b.scope === undefined || b.scope === null ? 'private' : scopeOf(b.scope);
-    const role = roleFor(scope, b.role_id, acc);
+    const role = await roleFor(scope, b.role_id, acc);
     const values = validateTemplateValues(b.collection, b.values, realColumns(await schemaOf(req)));
     if (!values.ok) throw new HttpError(400, 'INVALID_PAYLOAD', values.message);
     const [row] = rowsOf(await database.raw(SQL.insertTemplate, [acc.user, scope, role, name.name, b.collection, JSON.stringify(values.values)]));
@@ -1178,7 +1217,7 @@ export function mount(router, context, clock = () => new Date()) {
     }
     const scope = b.scope === undefined ? row.scope : scopeOf(b.scope);
     // Keeping the role scope keeps the role unless a new one is named.
-    const role = scope === 'role' && b.role_id === undefined && row.scope === 'role' ? row.role_id : roleFor(scope, b.role_id, acc);
+    const role = scope === 'role' && b.role_id === undefined && row.scope === 'role' ? row.role_id : await roleFor(scope, b.role_id, acc);
     let values = typeof row.values === 'string' ? JSON.parse(row.values) : row.values;
     if (b.values !== undefined) {
       const v = validateTemplateValues(row.collection, b.values, realColumns(await schemaOf(req)));
