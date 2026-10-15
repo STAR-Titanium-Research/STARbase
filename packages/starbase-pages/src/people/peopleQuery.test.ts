@@ -158,7 +158,7 @@ describe('Former people go last', () => {
 describe('groupPeople', () => {
 	const admin = (id: string, over: Over = {}) => ({ ...person(id, { signedIn: null, ...over }), login: { status: 'active', role_id: 'r-a', role_name: 'Administrator', last_access: null, email: null } });
 	const labAdmin = (id: string) => ({ ...admin(id), login: { ...admin(id).login!, role_name: 'Lab Admin' } });
-	const operator = (id: string, over: Partial<PeopleRow> = {}) => person(id, { is_researcher: false, is_operator: true, ...over });
+	const operator = (id: string, over: Over = {}) => person(id, { is_researcher: false, is_operator: true, ...over });
 
 	it('puts each person in the first group that matches: Admins, Users, Operators, then Former', () => {
 		const groups = groupPeople([
