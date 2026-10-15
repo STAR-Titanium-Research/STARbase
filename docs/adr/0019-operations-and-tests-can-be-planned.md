@@ -59,6 +59,9 @@ who drew it can see.
   samples ghosted.
 - Directus forms show the work state read-only; changing it goes through Mark done (or the owner's
   back-to-planned), so the date, the person and the outputs change together.
+  Read-only is a form setting only: an editor can still set `work_state`, `done_by_person_id` and `done_at` directly through
+  the REST API (the access guard refuses only done to planned for a non-owner). Mark done and mark planned in `d1-build` are
+  the supported path, and the only one that keeps the date, the person and the output samples in step.
 - Sample lifecycle readers (`current_status`) see a fourth live-ish value. A planned sample is not
   consumed, destroyed or archived; filters that mean "exists physically" must use `active`.
 - Operation codes and test codes are assigned at insert as before, so a planned record has its final code.

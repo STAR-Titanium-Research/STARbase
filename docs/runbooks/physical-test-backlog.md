@@ -1183,6 +1183,12 @@ checks can be run from `/map?edit=new`.
   for everyone. Lab Member B (same role) sees the role and global ones but not the private one; a user with another role sees
   only the global one. B cannot edit or delete A's templates (403); an administrator can. A template whose `method_id` is not
   a method is refused (400). Since: edit-mode stream A (PR pending).
+- [ ] **PM5-10 — Form conditions of migration 187.** Open a **new** sample, a **new** operation and a **new** test in Data
+  Studio (Create item). Expect: the **Related records** group is not shown on any of the three until the record is saved; after
+  saving it appears (closed). On an operation form, the six legacy and capture fields (Legacy insert edge, Legacy machining UID,
+  File storage pointer, Capture software, Capture frequency, NC program text) show only when they hold a value, and stay hidden
+  when empty, including after you clear one and save. `dbmate down` once, reload the forms: the 174 behaviour is back (the group
+  shows on new records, the six fields always show). Since: edit-mode stream A (PR pending).
 - [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
