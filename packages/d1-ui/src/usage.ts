@@ -38,6 +38,7 @@ export const PAGE_KEYS: readonly string[] = [
 	'people',
 	'force-dashboard',
 	'fast-dashboard',
+	'build-process',
 	'action:register-sample',
 	'action:log-operation',
 	'action:print-labels',
@@ -70,6 +71,7 @@ const EXTRA_PAGES: PageInfo[] = [
 	{ key: 'people', label: 'People', to: '/home/people' },
 	{ key: 'force-dashboard', label: 'Force dashboard', to: '/d1-force-dashboard' },
 	{ key: 'fast-dashboard', label: 'FAST dashboard', to: '/d1-fast-dashboard' },
+	{ key: 'build-process', label: 'Build a process', to: '/map?edit=new' },
 	{ key: 'action:register-sample', label: 'Register a sample', to: '/content/physical_samples/+' },
 	{ key: 'action:log-operation', label: 'Log an operation', to: '/content/manufacturing_operations/+' },
 	{ key: 'action:print-labels', label: 'Print labels', to: '/home/labels' },
@@ -83,7 +85,9 @@ export const PAGES: Record<string, PageInfo> = Object.fromEntries(
 // saved view (a bookmark) of the samples page, so the plain Samples page stands in for it.
 export const SUGGESTED_PAGES: readonly string[] = ['samples', 'action:log-operation', 'action:register-sample', 'operations'];
 
-const SLUG_PAGES = new Set(PAGE_KEYS.filter((k) => !k.includes(':') && !k.endsWith('-dashboard')));
+// Build a process is the Process map in edit mode: it has no /home/<slug> page (see pageTarget).
+const BUILD_PROCESS = 'build-process';
+const SLUG_PAGES = new Set(PAGE_KEYS.filter((k) => !k.includes(':') && !k.endsWith('-dashboard') && k !== BUILD_PROCESS));
 const DASHBOARD_PATHS: Record<string, string> = { '/d1-force-dashboard': 'force-dashboard', '/d1-fast-dashboard': 'fast-dashboard' };
 const ACTION_PATHS: Record<string, string> = {
 	'/content/physical_samples/+': 'action:register-sample',
@@ -114,6 +118,8 @@ export function pageTarget(path: string): string | null {
 	const p = cleanPath(path);
 	const direct = DASHBOARD_PATHS[p] ?? ACTION_PATHS[p];
 	if (direct) return direct;
+	// The Process map in edit mode (?edit=new on a blank canvas, ?edit=<draft> on a draft) is Build a process; the map itself has no key.
+	if (p === '/map') return new URLSearchParams(path.split('#')[0].split('?')[1] ?? '').get('edit') ? BUILD_PROCESS : null;
 	const m = /^\/home\/([^/]+)$/.exec(p);
 	return m && SLUG_PAGES.has(m[1]) ? m[1] : null;
 }

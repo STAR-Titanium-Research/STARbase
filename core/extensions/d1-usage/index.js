@@ -84,7 +84,7 @@ export const RECORD_COLLECTIONS = [
 // quoted key per line and add keys here only (then in usage.ts: its test says what is missing).
 // Each key is a real destination the Explorer pings: an index page's slug (/home/<slug>, every
 // INDEX_DEFS entry plus the bespoke projects and people pages), a dashboard module's id (without its
-// d1- prefix), or a quick action (action:*, weight 3). Saved views ("My samples") are bookmarks of the
+// d1- prefix), the Process map in edit mode (build-process), or a quick action (action:*, weight 3). Saved views ("My samples") are bookmarks of the
 // samples page, not pages of their own, so they have no key.
 export const PAGE_KEYS = new Set([
     'campaigns',
@@ -111,6 +111,7 @@ export const PAGE_KEYS = new Set([
     'people',
     'force-dashboard',
     'fast-dashboard',
+    'build-process',
     'action:register-sample',
     'action:log-operation',
     'action:print-labels',

@@ -6,6 +6,7 @@ import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
 import MyWork from './home/MyWork.vue';
 import WaitingForYou from './home/WaitingForYou.vue';
+import MyDrafts from './home/MyDrafts.vue';
 import LabStats from './home/LabStats.vue';
 import RecentActivity from './home/RecentActivity.vue';
 import AdminPanels from './home/AdminPanels.vue';
@@ -49,6 +50,7 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<div class="home-grid">
 					<div class="home-main">
 						<WaitingForYou />
+						<MyDrafts />
 						<FrequentlyUsed />
 						<LabStats />
 						<div class="row">

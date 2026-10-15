@@ -24,6 +24,8 @@ export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 // Building on the process map: the draft body, the d1-build answers, the sample code template (edit mode)
 export { sampleCodeTemplate, SEQ_PLACEHOLDER } from './build/sampleCode';
 export type { SampleCodeParts } from './build/sampleCode';
+export { RESERVED_FIELDS, isReserved } from './build/reserved';
+export type { DraftKind } from './build/reserved';
 export type {
 	Check, CheckResponse, CreatedRecord, CreateRefusal, CreateResponse, DraftBase, DraftBody, DraftItem, DraftKey, DraftListEntry, DraftOperation,
 	DraftRecord, DraftSample, DraftTest, DraftWire, MarkDoneBody, MarkDoneResponse, MarkPlannedBody, MarkPlannedResponse, TemplateRecord, WriteFailure,
