@@ -106,7 +106,7 @@ function staleChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	}
 	if (loaded.version !== item.existing.version) {
 		// Edits (or an attach) were made against the version the card was added at: Create would refuse them (OCC), so they block.
-		const editing = !item.remove && (item.attach === true || Object.keys(item.values).length > 0);
+		const editing = !item.remove && ((item.kind === 'operation' && item.attach === true) || Object.keys(item.values).length > 0);
 		if (editing) out.push(block(item.key, 'Changed since you added it. Your edits were made against an older version, so review it first.'));
 		else out.push(warn(item.key, 'Changed since you added it. Review it before you create.'));
 	}
