@@ -5,25 +5,35 @@
 // folder (Shared/<share folder>) and writes one candidate row per file to d1_private.file_candidates. This endpoint is the only way people
 // reach those rows: they are never a Directus collection, so Directus's REST cannot read them.
 //
-//   GET  /d1-inbox/summary          -> { data: { person: {person_id, new, older_matching} | null, teams: [{team_id, name, new, older_matching}],
-//                                                total_new, total_older_matching } }     new = origin 'new' (not backlog), older_matching =
-//                                                backlog files that name exactly one record by short ID or code; copies of a file that was
-//                                                already linked or dismissed are not counted
-//   GET  /d1-inbox/files?tab=new|older|linked|dismissed|open&kind=a,b&folder=&date_from=&date_to=&strength=any|short_id|code|edge_code|none
-//        &owner_person_id=&owner_team_id=&link_kind=manual|bulk|auto&limit=&offset=    -> { data: Row[], meta: { total, limit, offset } }
+// The shapes are the ones STARbase's typed client reads (packages/starbase-pages/src/inbox/inboxApi.ts, packages/d1-ui/src/inbox/inboxSummary.ts);
+// every answer is { data: ... }.
+//
+//   GET  /d1-inbox/summary          -> { data: { person: {person_id, new, older_matches, has_alias} | null, teams: [{team_id, name, new,
+//                                                older_matches}] (teams with a share folder), new, older_matches } }
+//                                                new = origin 'new' (not backlog); older_matches = backlog files that name exactly one record by
+//                                                short ID or code; a copy of a file already linked or dismissed is not counted
+//   GET  /d1-inbox/files?tab=new|older|linked|dismissed&kind=a,b&strength=a,b&folder=&from=&to=&owner=me|team:<id>&link_kind=&limit=&offset=
+//                                   -> { data: FoundFile[], meta: { total, limit, offset, acceptable } }   FoundFile = the file_candidates columns
+//                                      plus name, suggested_label, suggested_can_edit, duplicate_of_owner, linked_record_id, linked_label,
+//                                      decided_by_name and owner {kind, id, name}. A record is named (suggestion, matches, linked record) only
+//                                      to a caller who can READ it. meta.acceptable = how many rows Accept all would link for the same filter.
 //   POST /d1-inbox/link             { items: [{ candidate_id, collection, record_id }] }  (1 to 200, one transaction)
-//                                   -> { data: { link_batch_id, count, linked: [{ candidate_id, collection, record_id, junction_id, adopted,
-//                                                already_linked? }] } }
-//   POST /d1-inbox/accept-all       { filter?, dry_run? }   links the exact short-ID suggestions the caller can edit -> { data: { link_batch_id,
-//                                                count, linked, skipped: [{ candidate_id, reason }], has_more } }
-//   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed, unchanged } }
-//   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created, candidates go back to new
-//   POST /d1-inbox/rescan           queue a person-scope scan; 429 within 10 minutes of the last request, or while one is queued or running
+//                                   -> { data: { link_batch_id, linked: <count>, items: [{ candidate_id, collection, record_id, junction_id,
+//                                                adopted, already_linked? }] } }
+//   POST /d1-inbox/accept-all       { filter?, dry_run? }   links the exact short-ID suggestions the caller can edit (images, and documents or
+//                                   other files, never surface scans) -> { data: { link_batch_id, linked: <count>, items, skipped: [{
+//                                   candidate_id, reason }], has_more } }
+//   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
+//   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created -> { data: { undone: <count> } }
+//   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
+//                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
 //   POST /d1-inbox/auto-link        MACHINE ONLY (the crawler): header X-Inbox-Crawler-Secret = env D1_INBOX_CRAWLER_SECRET
 //                                   { candidate_ids: [...] } (or candidate_id) -> { data: { results: [{ candidate_id, status: 'linked' | 'skipped'
-//                                   | 'error', reason?, link_batch_id? }] } }
-//   GET  /d1-inbox/admin, POST /d1-inbox/admin/scan-all     administrators only
+//                                   | 'error', reason?, link_batch_id? }] } }. Images only (sem_image, image): never a surface scan.
+//   GET  /d1-inbox/admin            administrators only -> { data: { status: {...}, errors: [{at, message}], unmatched_folders: [...],
+//                                   people_without_alias: [{person_id, full_name, active, has_login}], queued_requests, queue, candidates } }
+//   POST /d1-inbox/admin/scan-all   administrators only -> 202 { data: { queued: true, ... } }; 409 ALREADY_QUEUED while one waits
 //
 // Errors have the Directus shape { errors: [{ message, extensions: { code, source: 'd1-inbox', ... } }] }: 401 no user, 403 not allowed,
 // 404 unknown (or not yours to see), 409 refused state, 400 bad input, 429 rate limit.
@@ -71,7 +81,8 @@ const CRAWLER_STATE_ID = '00000000-0000-0000-0000-000000000001';
 // What a candidate can be: the kinds the crawler reads before a person links (images and scans) and the rest (read once, after the link).
 const IMAGE_KINDS = ['sem_image', 'image', 'surface_scan'];
 const ALL_KINDS = ['sem_image', 'surface_scan', 'image', 'document', 'other'];
-// Kinds accept-all and auto-link may link in v1: images. A surface scan is ADDED to an insert or edge (stream F1), not linked to a sample.
+// Kinds auto-link may link in v1: images. A surface scan is ADDED to an insert or edge with a condition a person chooses (stream F1), so it is
+// never linked in bulk or automatically; documents and other files may be accepted in bulk (the link adopts them) but never automatically.
 const AUTO_KINDS = ['sem_image', 'image'];
 const STRENGTHS = ['short_id', 'code', 'edge_code', 'none'];
 const LINK_KINDS = ['manual', 'bulk', 'auto'];
@@ -79,9 +90,9 @@ const TABS = ['new', 'older', 'linked', 'dismissed', 'open'];
 
 // Link targets in v1: the record collection -> its data-files junction and the junction's column for the record.
 export const LINK_TARGETS = {
-  physical_samples: { junction: 'sample_data_files', fk: 'sample_id', pk: 'sample_id' },
-  manufacturing_operations: { junction: 'operation_data_files', fk: 'operation_id', pk: 'operation_id' },
-  test_sessions: { junction: 'session_data_files', fk: 'session_id', pk: 'session_id' },
+  physical_samples: { junction: 'sample_data_files', fk: 'sample_id', pk: 'sample_id', code: 'sample_code' },
+  manufacturing_operations: { junction: 'operation_data_files', fk: 'operation_id', pk: 'operation_id', code: 'pass_code' },
+  test_sessions: { junction: 'session_data_files', fk: 'session_id', pk: 'session_id', code: 'test_code' },
 };
 const isTarget = (name) => typeof name === 'string' && Object.hasOwn(LINK_TARGETS, name);
 
@@ -146,6 +157,8 @@ export const SQL = {
     + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact',
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
   candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
+  // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
+  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
   batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
@@ -196,7 +209,9 @@ export const SQL = {
     + ' last_scan_finished_at, files_registered, error_count, last_error, unmatched_folders'
     + ` FROM d1_private.inbox_crawler_state WHERE id = '${CRAWLER_STATE_ID}'`,
   adminPeopleWithoutAlias:
-    'SELECT person_id, full_name, (user_id IS NOT NULL) AS has_login FROM people WHERE active AND uni_alias IS NULL ORDER BY full_name, person_id LIMIT 500',
+    'SELECT person_id, full_name, active, (user_id IS NOT NULL) AS has_login FROM people WHERE active AND uni_alias IS NULL ORDER BY full_name, person_id LIMIT 500',
+  adminFailedRequests:
+    "SELECT coalesce(finished_at, requested_at) AS at, error FROM d1_private.inbox_scan_requests WHERE status = 'failed' ORDER BY coalesce(finished_at, requested_at) DESC LIMIT 10",
   adminTotals: 'SELECT state, count(*)::int AS n FROM d1_private.file_candidates GROUP BY state',
   adminQueue:
     "SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE status = 'running')::int AS running"
@@ -245,48 +260,59 @@ const intParam = (v, what, { min, max, fallback }) => {
   return Math.min(n, max);
 };
 
-// The filters of a list (query string) or of accept-all (an object). Returns a clean object or throws 400.
+// The filters of a list (query string) or of accept-all (an object), in the names STARbase's inboxApi.ts sends: tab, kind (comma list),
+// strength (comma list), folder (text the folder part of rel_path contains), from and to (YYYY-MM-DD), owner ('me', 'team:<id>', and for an
+// administrator 'person:<id>'), link_kind, limit and offset. Returns a clean object or throws 400.
 export function parseFileFilters(source, { defaultTab = 'new' } = {}) {
   const q = source ?? {};
   if (!isObject(q)) throw badInput('The filter is not valid.');
   const tab = text(q.tab, 'tab') ?? defaultTab;
   if (!TABS.includes(tab)) throw badInput('Unknown tab.');
-  const kindText = text(q.kind, 'kind');
-  const kinds = kindText === null ? null : kindText.split(',').map((k) => k.trim()).filter(Boolean);
-  if (kinds && (!kinds.length || kinds.some((k) => !ALL_KINDS.includes(k)))) throw badInput('Unknown kind.');
-  let folder = text(q.folder, 'folder');
-  if (folder !== null) folder = `${folder.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')}/`;
-  if (folder === '/') folder = null;
-  const dateFrom = text(q.date_from, 'date_from');
-  const dateTo = text(q.date_to, 'date_to');
-  for (const [d, what] of [[dateFrom, 'date_from'], [dateTo, 'date_to']]) if (d !== null && !isRealDay(d)) throw badInput(`${what} must be a day, YYYY-MM-DD.`);
-  const strength = text(q.strength, 'strength');
-  if (strength !== null && strength !== 'any' && !STRENGTHS.includes(strength)) throw badInput('Unknown match strength.');
-  const ownerPerson = text(q.owner_person_id, 'owner_person_id');
-  const ownerTeam = text(q.owner_team_id, 'owner_team_id');
-  if (ownerPerson !== null && !isUuid(ownerPerson)) throw badInput('owner_person_id is not valid.');
-  if (ownerTeam !== null && !isUuid(ownerTeam)) throw badInput('owner_team_id is not valid.');
+  const list = (v, what, allowed) => {
+    const t = text(v, what);
+    if (t === null) return null;
+    const items = t.split(',').map((k) => k.trim()).filter(Boolean);
+    if (!items.length || items.some((k) => !allowed.includes(k))) throw badInput(`Unknown ${what}.`);
+    return [...new Set(items)];
+  };
+  const kinds = list(q.kind, 'kind', ALL_KINDS);
+  const strengths = list(q.strength, 'match strength', STRENGTHS);
+  const folder = text(q.folder, 'folder');
+  const dateFrom = text(q.from, 'from');
+  const dateTo = text(q.to, 'to');
+  for (const [d, what] of [[dateFrom, 'from'], [dateTo, 'to']]) if (d !== null && !isRealDay(d)) throw badInput(`${what} must be a day, YYYY-MM-DD.`);
+  let owner = null;
+  const ownerText = text(q.owner, 'owner');
+  if (ownerText !== null) {
+    const m = /^(me|team|person)(?::(.+))?$/.exec(ownerText);
+    if (!m || (m[1] === 'me') !== (m[2] === undefined) || (m[2] !== undefined && !isUuid(m[2]))) throw badInput('owner must be me, team:<id> or person:<id>.');
+    owner = { kind: m[1], id: m[2]?.toLowerCase() ?? null };
+  }
   const linkKind = text(q.link_kind, 'link_kind');
   if (linkKind !== null && !LINK_KINDS.includes(linkKind)) throw badInput('Unknown link kind.');
   return {
-    tab, kinds, folder, date_from: dateFrom, date_to: dateTo, strength, link_kind: linkKind,
-    owner_person_id: ownerPerson?.toLowerCase() ?? null, owner_team_id: ownerTeam?.toLowerCase() ?? null,
+    tab, kinds, strengths, folder, date_from: dateFrom, date_to: dateTo, owner, link_kind: linkKind,
     limit: intParam(q.limit, 'limit', { min: 1, max: MAX_PAGE, fallback: DEFAULT_PAGE }),
     offset: intParam(q.offset, 'offset', { min: 0, max: 1_000_000, fallback: 0 }),
   };
 }
 
-const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id AS file_id, f.filename_download AS name, f.type AS mime_type, c.kind, c.kind_confidence,'
+const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_download AS name, f.type AS mime_type, c.kind, c.kind_confidence,'
   + ' c.extracted, c.origin, c.state, c.match_strength, c.matches, c.suggested_collection, c.suggested_record_id, c.duplicate_of,'
-  + " coalesce(cp.full_name, ct.name) AS copy_owner_name,"
-  + " CASE WHEN o.candidate_id IS NULL THEN NULL WHEN o.owner_person_id IS NOT NULL THEN 'person' ELSE 'team' END AS copy_owner_kind,"
+  + ' coalesce(cp.full_name, ct.name) AS duplicate_of_owner,'
   + ' c.rel_path, c.size_bytes, c.source_mtime, c.first_seen_at, c.decided_at, c.link_kind, c.linked_collection, c.link_batch_id,'
+  + ' coalesce(sj.sample_id, oj.operation_id, tj.session_id) AS linked_record_id,'
+  + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
   + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at';
 const LIST_FROM = ' FROM d1_private.file_candidates c'
   + ' LEFT JOIN directus_files f ON f.id = c.directus_files_id'
   + ' LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ' LEFT JOIN people op ON op.person_id = c.owner_person_id LEFT JOIN teams ot ON ot.team_id = c.owner_team_id'
-  + ' LEFT JOIN people cp ON cp.person_id = o.owner_person_id LEFT JOIN teams ct ON ct.team_id = o.owner_team_id';
+  + ' LEFT JOIN people cp ON cp.person_id = o.owner_person_id LEFT JOIN teams ct ON ct.team_id = o.owner_team_id'
+  + ' LEFT JOIN directus_users du ON du.id = c.decided_by'
+  + " LEFT JOIN sample_data_files sj ON c.linked_collection = 'physical_samples' AND sj.id = c.linked_junction_id"
+  + " LEFT JOIN operation_data_files oj ON c.linked_collection = 'manufacturing_operations' AND oj.id = c.linked_junction_id"
+  + " LEFT JOIN session_data_files tj ON c.linked_collection = 'test_sessions' AND tj.id = c.linked_junction_id";
 const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of';
 
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers). Everything a client chose is a binding.
@@ -294,12 +320,10 @@ export function buildListQuery(scope, f, { count = false, accept = false } = {})
   const where = [];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
-  if (f.owner_person_id || f.owner_team_id) {
-    const parts = [];
-    if (f.owner_person_id) { parts.push('c.owner_person_id = ?'); bindings.push(f.owner_person_id); }
-    if (f.owner_team_id) { parts.push('c.owner_team_id = ?'); bindings.push(f.owner_team_id); }
-    where.push(`(${parts.join(' OR ')})`);
-  } else {
+  if (f.owner?.kind === 'me') { where.push('c.owner_person_id = ?'); bindings.push(mine ? scope.personId : null); }
+  else if (f.owner?.kind === 'person') { where.push('c.owner_person_id = ?'); bindings.push(f.owner.id); }
+  else if (f.owner?.kind === 'team') { where.push('c.owner_team_id = ?'); bindings.push(f.owner.id); }
+  else {
     where.push(`(c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`);
     bindings.push(mine ? scope.personId : null, scope.teamIds.join(','));
   }
@@ -308,11 +332,10 @@ export function buildListQuery(scope, f, { count = false, accept = false } = {})
   else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN);
   else where.push(`c.state = '${f.tab}'`); // linked or dismissed (validated by parseFileFilters)
   if (f.kinds) { where.push("c.kind = ANY(string_to_array(?, ','))"); bindings.push(f.kinds.join(',')); }
-  if (f.folder) { where.push('starts_with(c.rel_path, ?)'); bindings.push(f.folder); }
+  if (f.strengths) { where.push("c.match_strength = ANY(string_to_array(?, ','))"); bindings.push(f.strengths.join(',')); }
+  if (f.folder) { where.push("strpos(lower(regexp_replace(c.rel_path, '[^/]*$', '')), lower(?)) > 0"); bindings.push(f.folder); }
   if (f.date_from) { where.push('coalesce(c.source_mtime, c.first_seen_at) >= ?::date'); bindings.push(f.date_from); }
   if (f.date_to) { where.push('coalesce(c.source_mtime, c.first_seen_at) < (?::date + 1)'); bindings.push(f.date_to); }
-  if (f.strength === 'any') where.push("c.match_strength <> 'none'");
-  else if (f.strength) { where.push('c.match_strength = ?'); bindings.push(f.strength); }
   if (f.link_kind) { where.push('c.link_kind = ?'); bindings.push(f.link_kind); }
   if (accept) {
     where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL');
@@ -325,21 +348,25 @@ export function buildListQuery(scope, f, { count = false, accept = false } = {})
   return { sql: `${LIST_SELECT}${LIST_FROM} WHERE ${where.join(' AND ')} ${order} LIMIT ? OFFSET ?`, bindings: [...bindings, f.limit, f.offset] };
 }
 
-// The grouped counts of the summary query as the answer: the person's, and each team's (a team with nothing is still listed).
-export function shapeSummary(rows, scope, teams, _person) {
+// The grouped counts of the summary query as the answer, in the shape STARbase's inboxSummary.ts reads: the person's (with has_alias), and each
+// team's that has a share folder. `older_matches` = backlog files that name exactly one record by short ID or code.
+export function shapeSummary(rows, scope, teams, person) {
   const sum = (match, want) => rows.filter(match).reduce((total, r) => total + (want(r) ? Number(r.n) : 0), 0);
   const counts = (match) => ({
     new: sum(match, (r) => r.origin === 'new'),
-    older_matching: sum(match, (r) => r.origin === 'backlog' && r.exact === true),
+    older_matches: sum(match, (r) => r.origin === 'backlog' && r.exact === true),
   });
-  const person = scope.personId ? { person_id: scope.personId, ...counts((r) => r.owner_person_id === scope.personId) } : null;
-  const teamOut = teams.map((t) => ({ team_id: t.team_id, name: t.name, ...counts((r) => r.owner_team_id === t.team_id) }));
-  const all = [person, ...teamOut].filter(Boolean);
+  const mine = scope.personId
+    ? { person_id: scope.personId, ...counts((r) => r.owner_person_id === scope.personId), has_alias: !isBlank(person?.uni_alias) }
+    : null;
+  const teamOut = teams.filter((t) => !('share_folder' in t) || !isBlank(t.share_folder))
+    .map((t) => ({ team_id: t.team_id, name: t.name, ...counts((r) => r.owner_team_id === t.team_id) }));
+  const all = [mine, ...teamOut].filter(Boolean);
   return {
-    person,
+    person: mine,
     teams: teamOut,
-    total_new: all.reduce((total, c) => total + c.new, 0),
-    total_older_matching: all.reduce((total, c) => total + c.older_matching, 0),
+    new: all.reduce((total, c) => total + c.new, 0),
+    older_matches: all.reduce((total, c) => total + c.older_matches, 0),
   };
 }
 
@@ -351,20 +378,19 @@ function substitute(node, user) {
   return node;
 }
 
-// What the Home panel and the Inbox page need of a candidate row. The record a suggestion names is shown only when the caller may edit it
-// (`editable` is the set of "collection:id" the edit check passed): a record the caller cannot edit is not named, so no id leaks.
-function fileOut(row, editable) {
+// One row of the list as STARbase's FoundFile (inboxApi.ts): the file_candidates columns it uses plus resolved labels. A record is named only to
+// a caller who can READ it (`info.readable`, a set of "collection:id"; its code is in `info.labels`); for any other the suggestion, the matches
+// and the linked record are left empty, so no id of a Restricted record leaks. `suggested_can_edit` says whether Link would pass.
+function fileOut(row, info) {
   const matches = Array.isArray(asJson(row.matches)) ? asJson(row.matches) : [];
-  const key = `${row.suggested_collection}:${row.suggested_record_id}`;
-  const hit = row.suggested_record_id ? matches.find((m) => m.record_id === row.suggested_record_id && m.collection === row.suggested_collection) : null;
-  const suggestion = row.suggested_record_id && editable.has(key)
-    ? { collection: row.suggested_collection, record_id: row.suggested_record_id, via: hit?.via ?? null, token: hit?.token ?? null }
-    : null;
-  const slash = String(row.rel_path ?? '').lastIndexOf('/');
-  return {
-    id: row.candidate_id,
-    file_id: row.file_id,
-    name: row.name ?? String(row.rel_path ?? '').slice(slash + 1),
+  const key = (collection, id) => `${collection}:${id}`;
+  const seen = (collection, id) => Boolean(id) && info.readable.has(key(collection, id));
+  const suggested = seen(row.suggested_collection, row.suggested_record_id);
+  const linked = seen(row.linked_collection, row.linked_record_id);
+  const out = {
+    candidate_id: row.candidate_id,
+    directus_files_id: row.directus_files_id,
+    name: row.name ?? String(row.rel_path ?? '').split('/').pop(),
     mime_type: row.mime_type ?? null,
     kind: row.kind,
     kind_confidence: num(row.kind_confidence),
@@ -372,22 +398,30 @@ function fileOut(row, editable) {
     origin: row.origin,
     state: row.state,
     match_strength: row.match_strength,
-    match_count: matches.length,
-    suggestion,
-    is_copy: Boolean(row.duplicate_of),
-    copy_of: row.duplicate_of ? { owner_kind: row.copy_owner_kind ?? null, owner_name: row.copy_owner_name ?? null } : null,
+    matches: matches.filter((m) => seen(m.collection, m.record_id)),
+    suggested_collection: suggested ? row.suggested_collection : null,
+    suggested_record_id: suggested ? row.suggested_record_id : null,
+    suggested_label: suggested ? (info.labels.get(key(row.suggested_collection, row.suggested_record_id)) ?? null) : null,
+    duplicate_of: row.duplicate_of ?? null,
+    duplicate_of_owner: row.duplicate_of ? (row.duplicate_of_owner ?? null) : null,
     rel_path: row.rel_path,
-    folder: slash >= 0 ? row.rel_path.slice(0, slash + 1) : '',
     size_bytes: num(row.size_bytes),
     source_mtime: toIso(row.source_mtime),
     first_seen_at: toIso(row.first_seen_at),
     decided_at: toIso(row.decided_at),
-    link: row.state === 'linked' ? { kind: row.link_kind, collection: row.linked_collection, batch_id: row.link_batch_id } : null,
+    link_kind: row.link_kind ?? null,
+    link_batch_id: row.link_batch_id ?? null,
+    linked_collection: linked ? row.linked_collection : null,
+    linked_record_id: linked ? row.linked_record_id : null,
+    linked_label: linked ? (info.labels.get(key(row.linked_collection, row.linked_record_id)) ?? null) : null,
+    decided_by_name: row.decided_by_name ?? null,
     owner: row.owner_person_id
-      ? { kind: 'person', id: row.owner_person_id, name: row.owner_name ?? null }
-      : { kind: 'team', id: row.owner_team_id, name: row.owner_name ?? null },
+      ? { kind: 'person', id: row.owner_person_id, name: row.owner_name ?? '' }
+      : { kind: 'team', id: row.owner_team_id, name: row.owner_name ?? '' },
     adopted: row.adopted_at !== null && row.adopted_at !== undefined,
   };
+  if (suggested) out.suggested_can_edit = info.editable.has(key(row.suggested_collection, row.suggested_record_id));
+  return out;
 }
 
 // ---- the endpoint ----------------------------------------------------------------------------------------------------------
@@ -467,8 +501,8 @@ export function mount(router, context, deps = {}) {
   }
   const requireOwnerVisible = (scope, f) => {
     if (scope.admin) return;
-    if (f.owner_person_id && f.owner_person_id !== scope.personId) throw new HttpError(403, 'FORBIDDEN', 'That folder is not yours.');
-    if (f.owner_team_id && !scope.teamIds.includes(f.owner_team_id)) throw new HttpError(403, 'FORBIDDEN', 'That folder is not your team\'s.');
+    if (f.owner?.kind === 'person' && f.owner.id !== scope.personId) throw new HttpError(403, 'FORBIDDEN', 'That folder is not yours.');
+    if (f.owner?.kind === 'team' && !scope.teamIds.includes(f.owner.id)) throw new HttpError(403, 'FORBIDDEN', 'That folder is not your team\'s.');
   };
   const requireIds = (v, what) => {
     if (!Array.isArray(v) || v.length < 1 || v.length > MAX_BATCH || v.some((id) => !isUuid(id))) {
@@ -509,6 +543,29 @@ export function mount(router, context, deps = {}) {
     const out = new Set();
     for (const [collection, ids] of by) for (const id of await canEditMany(db, acc, schema, collection, [...ids])) out.add(`${collection}:${id}`);
     return out;
+  }
+  // What the page may NAME of the records its rows point at: which the caller can READ (the real read rule, as the caller) and their codes
+  // ("S-0042"), and which of those they can edit. Nothing is read for a record the caller cannot read, so nothing of it is returned.
+  async function recordInfo(db, acc, schema, pairs, editPairs) {
+    const by = new Map();
+    for (const [collection, id] of pairs) if (isTarget(collection) && isUuid(id)) (by.get(collection) ?? by.set(collection, new Set()).get(collection)).add(String(id));
+    const readable = new Set();
+    const labels = new Map();
+    for (const [collection, ids] of by) {
+      const target = LINK_TARGETS[collection];
+      try {
+        const rows = await itemsFor(schema, acc, collection).readByQuery({ fields: [target.pk, target.code], filter: { [target.pk]: { _in: [...ids] } }, limit: ids.size });
+        for (const r of rows) {
+          readable.add(`${collection}:${r[target.pk]}`);
+          labels.set(`${collection}:${r[target.pk]}`, r[target.code] ?? null);
+        }
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+      }
+    }
+    // the edit check only for the records a row SUGGESTS (a linked record or a lesser match needs none)
+    const editable = await editableSet(db, acc, schema, editPairs.filter(([c, id]) => readable.has(`${c}:${id}`)));
+    return { readable, labels, editable };
   }
   const notEditable = (candidateId, collection, recordId) =>
     new HttpError(403, 'FORBIDDEN', 'You can only link a file to a record you can edit.', { candidate_id: candidateId, collection, record_id: recordId });
@@ -584,10 +641,10 @@ export function mount(router, context, deps = {}) {
       }
       const batchId = fresh.length ? newId() : (again[0]?.link_batch_id ?? null);
       const linked = fresh.length ? await performLink(trx, { acc, schema, entries: fresh, linkKind, batchId }) : [];
-      return { schema, link_batch_id: batchId, linked: [...linked, ...again.map(({ link_batch_id: _b, ...rest }) => rest)], wrote: fresh.length > 0 };
+      return { schema, link_batch_id: batchId, items: [...linked, ...again.map(({ link_batch_id: _b, ...rest }) => rest)], wrote: fresh.length > 0 };
     });
     if (out.wrote) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.link_batch_id, count: out.linked.length, linked: out.linked } });
+    res.json({ data: { link_batch_id: out.link_batch_id, linked: out.items.length, items: out.items } });
   }));
 
   // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
@@ -596,8 +653,9 @@ export function mount(router, context, deps = {}) {
     if (auto && cand.owner_team_id) return 'TEAM_FILE';
     if (cand.duplicate_of) return 'COPY';
     if (auto && cand.origin === 'backlog') return 'BACKLOG';
-    if (cand.kind === 'surface_scan') return 'SURFACE_SCAN_NOT_AVAILABLE';
-    if (!AUTO_KINDS.includes(cand.kind)) return auto ? 'KIND_NOT_ALLOWED' : 'DOCUMENT';
+    // a surface scan is ADDED to an insert or edge with a condition only a person chooses (stream F1): never accepted in bulk, never automatic
+    if (cand.kind === 'surface_scan') return 'SURFACE_SCAN';
+    if (auto && !AUTO_KINDS.includes(cand.kind)) return 'KIND_NOT_ALLOWED';
     if (cand.match_strength !== 'short_id') return 'NOT_EXACT';
     const matches = asJson(cand.matches);
     // two or more records named: never a suggestion (the crawler leaves suggested_* null, but a row that says otherwise is still refused)
@@ -608,6 +666,31 @@ export function mount(router, context, deps = {}) {
     return null;
   };
 
+  // What accept-all would do for `f`: the candidates it links (`entries`) and the ones it leaves (`skipped`, with a reason). `lock` takes the row
+  // locks of a real run; a dry run and the list's "acceptable" count read without them. Candidates the caller cannot see are dropped silently.
+  async function planAccept(db, { acc, schema, scope, f, lock }) {
+    const query = buildListQuery(scope, f, { accept: true });
+    const ids = rowsOf(await db.raw(query.sql, query.bindings)).map((r) => r.candidate_id);
+    const skipped = [];
+    const fit = [];
+    if (ids.length) {
+      for (const cand of rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [ids.join(',')]))) {
+        if (!canSee(scope, cand)) continue;
+        const why = unfit(cand, { auto: false });
+        if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
+        else fit.push(cand);
+      }
+    }
+    const editable = await editableSet(db, acc, schema, fit.map((c) => [c.suggested_collection, c.suggested_record_id]));
+    const entries = [];
+    for (const cand of fit) {
+      if (!editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_EDITABLE' }); continue; }
+      if (await junctionExists(db, cand.suggested_collection, cand.suggested_record_id, cand.directus_files_id)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'ALREADY_ON_RECORD' }); continue; }
+      entries.push({ cand, collection: cand.suggested_collection, recordId: cand.suggested_record_id });
+    }
+    return { entries, skipped, has_more: ids.length >= ACCEPT_LIMIT };
+  }
+
   router.post('/accept-all', route(async ({ req, res, acc }) => {
     const body = req.body === undefined || req.body === null ? {} : bodyOf(req);
     if (!body) throw badInput('The request is not valid.');
@@ -616,42 +699,19 @@ export function mount(router, context, deps = {}) {
     const schema = await schemaOf(req);
     const scope = await scopeOf(acc);
     requireOwnerVisible(scope, f);
-    const dry = body.dry_run === true;
-    const work = async (db) => {
-      const query = buildListQuery(scope, f, { accept: true });
-      const ids = rowsOf(await db.raw(query.sql, query.bindings)).map((r) => r.candidate_id);
-      const skipped = [];
-      const fit = [];
-      if (ids.length) {
-        for (const cand of rowsOf(await db.raw(SQL.candidatesForUpdate, [ids.join(',')]))) {
-          if (!canSee(scope, cand)) continue;
-          const why = unfit(cand, { auto: false });
-          if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
-          else fit.push(cand);
-        }
-      }
-      const editable = await editableSet(db, acc, schema, fit.map((c) => [c.suggested_collection, c.suggested_record_id]));
-      const entries = [];
-      for (const cand of fit) {
-        if (!editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_EDITABLE' }); continue; }
-        if (await junctionExists(db, cand.suggested_collection, cand.suggested_record_id, cand.directus_files_id)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'ALREADY_ON_RECORD' }); continue; }
-        entries.push({ cand, collection: cand.suggested_collection, recordId: cand.suggested_record_id });
-      }
-      return { entries, skipped, has_more: ids.length >= ACCEPT_LIMIT };
-    };
-    if (dry) {
-      const found = await work(database);
-      res.json({ data: { link_batch_id: null, count: found.entries.length, linked: [], skipped: found.skipped, has_more: found.has_more, dry_run: true } });
+    if (body.dry_run === true) {
+      const found = await planAccept(database, { acc, schema, scope, f, lock: false });
+      res.json({ data: { link_batch_id: null, linked: 0, acceptable: found.entries.length, items: [], skipped: found.skipped, has_more: found.has_more, dry_run: true } });
       return;
     }
     const out = await inTransaction(acc.user, async (trx) => {
-      const found = await work(trx);
-      if (!found.entries.length) return { ...found, batchId: null, linked: [] };
+      const found = await planAccept(trx, { acc, schema, scope, f, lock: true });
+      if (!found.entries.length) return { ...found, batchId: null, items: [] };
       const batchId = newId();
-      return { ...found, batchId, linked: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
+      return { ...found, batchId, items: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
     });
     if (out.batchId) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.batchId, count: out.linked.length, linked: out.linked, skipped: out.skipped, has_more: out.has_more } });
+    res.json({ data: { link_batch_id: out.batchId, linked: out.items.length, items: out.items, skipped: out.skipped, has_more: out.has_more } });
   }));
 
   // -- dismiss, restore, undo ---------------------------------------------------------------------------------------------
@@ -673,7 +733,7 @@ export function mount(router, context, deps = {}) {
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
       }
       const done = change.length ? rowsOf(await trx.raw(SQL[name], name === 'dismiss' ? [acc.user, change.join(',')] : [change.join(',')])).map((r) => r.candidate_id) : [];
-      return { changed: done, unchanged: [...unchanged, ...change.filter((id) => !done.includes(id))] };
+      return { changed: done.length, changed_ids: done, unchanged_ids: [...unchanged, ...change.filter((id) => !done.includes(id))] };
     });
     res.json({ data: out });
   });
@@ -720,15 +780,20 @@ export function mount(router, context, deps = {}) {
     const f = parseFileFilters(req.query);
     const scope = await scopeOf(acc);
     requireOwnerVisible(scope, f);
+    const schema = await schemaOf(req);
     const page = buildListQuery(scope, f);
     const total = buildListQuery(scope, f, { count: true });
-    const rows = rowsOf(await database.raw(page.sql, page.bindings));
+    const rows = (rowsOf(await database.raw(page.sql, page.bindings)));
     const [{ total: count } = { total: 0 }] = rowsOf(await database.raw(total.sql, total.bindings));
+    const pairs = rows.flatMap((r) => [
+      [r.suggested_collection, r.suggested_record_id], [r.linked_collection, r.linked_record_id],
+      ...(Array.isArray(asJson(r.matches)) ? asJson(r.matches) : []).map((m) => [m.collection, m.record_id]),
+    ]);
+    const info = await recordInfo(database, acc, schema, pairs, rows.filter((r) => r.state === 'new').map((r) => [r.suggested_collection, r.suggested_record_id]));
+    // how many of the rows this filter matches Accept all would link (the same plan, nothing locked or written)
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
-    const editable = open
-      ? await editableSet(database, acc, await schemaOf(req), rows.map((r) => [r.suggested_collection, r.suggested_record_id]))
-      : new Set();
-    res.json({ data: rows.map((r) => fileOut(r, editable)), meta: { total: Number(count), limit: f.limit, offset: f.offset } });
+    const acceptable = open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
+    res.json({ data: rows.map((r) => fileOut(r, info)), meta: { total: Number(count), limit: f.limit, offset: f.offset, acceptable } });
   }));
 
   // -- rescan, prefs ----------------------------------------------------------------------------------------------------------
@@ -758,7 +823,7 @@ export function mount(router, context, deps = {}) {
         throw err;
       }
     });
-    res.status(202).json({ data: { request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
+    res.status(202).json({ data: { queued: true, request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
   }));
 
   router.get('/prefs', route(async ({ res, acc }) => {
@@ -833,22 +898,30 @@ export function mount(router, context, deps = {}) {
     const [state] = rowsOf(await database.raw(SQL.adminState, []));
     const people = rowsOf(await database.raw(SQL.adminPeopleWithoutAlias, []));
     const totals = rowsOf(await database.raw(SQL.adminTotals, []));
+    const failed = rowsOf(await database.raw(SQL.adminFailedRequests, []));
     const [queue] = rowsOf(await database.raw(SQL.adminQueue, []));
     const s = state ?? {};
     const beat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
     const daemon = beat === null ? 'never' : s.desired_state === 'paused' ? 'paused' : clock().getTime() - beat > DAEMON_STALE_MS ? 'stale' : 'alive';
     const unmatched = asJson(s.unmatched_folders);
+    // recent failures: the daemon's last error (its time is when the last scan ended) and the failed scan requests
+    const errors = [
+      ...(s.last_error ? [{ at: toIso(s.last_scan_finished_at ?? s.last_heartbeat_at), message: s.last_error }] : []),
+      ...failed.filter((r) => r.error).map((r) => ({ at: toIso(r.at), message: r.error })),
+    ];
+    const waiting = (num(queue?.queued) ?? 0) + (num(queue?.running) ?? 0);
     res.json({
       data: {
         status: {
           desired_state: s.desired_state ?? null, interval_minutes: num(s.interval_minutes), read_mb_per_s: num(s.read_mb_per_s), daemon,
           last_heartbeat_at: toIso(s.last_heartbeat_at), daemon_started_at: toIso(s.daemon_started_at), current_activity: s.current_activity ?? null,
-          files_registered: num(s.files_registered) ?? 0,
+          last_scan_started_at: toIso(s.last_scan_started_at), last_scan_finished_at: toIso(s.last_scan_finished_at),
+          files_registered: num(s.files_registered) ?? 0, error_count: num(s.error_count) ?? 0, last_error: s.last_error ?? null,
         },
-        last_scan: { started_at: toIso(s.last_scan_started_at), finished_at: toIso(s.last_scan_finished_at) },
-        errors: { count: num(s.error_count) ?? 0, last_error: s.last_error ?? null },
+        errors,
         unmatched_folders: Array.isArray(unmatched) ? unmatched : [],
-        people_without_alias: people.map((p) => ({ person_id: p.person_id, full_name: p.full_name, has_login: p.has_login === true })),
+        people_without_alias: people.map((p) => ({ person_id: p.person_id, full_name: p.full_name, active: p.active !== false, has_login: p.has_login === true })),
+        queued_requests: waiting,
         queue: { queued: num(queue?.queued) ?? 0, running: num(queue?.running) ?? 0 },
         candidates: Object.fromEntries(totals.map((t) => [t.state, Number(t.n)])),
       },
@@ -862,7 +935,7 @@ export function mount(router, context, deps = {}) {
       if (waiting) throw new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: waiting.request_id });
       return rowsOf(await trx.raw(SQL.scanAllInsert, [acc.user]))[0];
     });
-    res.status(202).json({ data: { request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
+    res.status(202).json({ data: { queued: true, request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
   }));
 }
 

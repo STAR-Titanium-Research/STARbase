@@ -77,6 +77,8 @@ function newWorld() {
       [U.dave]: { physical_samples: new Set([S3]), manufacturing_operations: new Set(), test_sessions: new Set() },
       [U.viewer]: { physical_samples: new Set([S1]), manufacturing_operations: new Set(), test_sessions: new Set() },
     },
+    // records a person may read but not edit (a view-only person on a visible record)
+    viewable: { [U.carol]: { physical_samples: new Set([S3]), manufacturing_operations: new Set(), test_sessions: new Set() } },
     prefs: new Map(),
     scanRequests: [],
     crawlerState: {
@@ -133,7 +135,7 @@ function statement(w, sql, b, txId) {
       const ids = w.teamMembers.filter((m) => m.person_id === b[0]).map((m) => m.team_id);
       return copy(w.teams.filter((t) => ids.includes(t.team_id)));
     }
-    case 'candidatesForUpdate': return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter(Boolean).map(copy);
+    case 'candidatesById': case 'candidatesForUpdate': return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter(Boolean).map(copy);
     case 'batchForUpdate': return [...w.candidates.values()].filter((c) => c.link_batch_id === b[0]).sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map(copy);
     case 'markLinked': {
       const [decidedBy, linkKind, collection, junctionId, batchId, adopt, id] = b;
@@ -201,6 +203,7 @@ function statement(w, sql, b, txId) {
     }
     case 'adminState': return [copy(w.crawlerState)];
     case 'adminPeopleWithoutAlias': return copy(w.people.filter((p) => p.active && !p.uni_alias).map((p) => ({ person_id: p.person_id, full_name: p.full_name, has_login: p.user_id !== null })));
+    case 'adminFailedRequests': return copy(w.scanRequests.filter((r) => r.status === 'failed').map((r) => ({ at: r.finished_at ?? r.requested_at, error: r.error })));
     case 'adminTotals': return copy(w.totals);
     case 'adminQueue': return [{ queued: w.scanRequests.filter((r) => r.status === 'queued').length, running: w.scanRequests.filter((r) => r.status === 'running').length }];
     case 'scanAllBlocking': return copy(w.scanRequests.filter((r) => r.scope === 'all' && ['queued', 'running'].includes(r.status) && true).slice(0, 1));
@@ -269,9 +272,16 @@ function fakeServices(w) {
       // a mirror of d1-access-guard's canPass read: { _and: [ {pk: _eq|_in}, <update rule> ] }
       w.items.push({ op: 'read', collection: this.collection, query, accountability: this.options.accountability, knex: this.options.knex });
       const pk = LINK_TARGETS[this.collection]?.pk;
+      const user = this.options.accountability.user;
+      if (!query.filter._and) {
+        // a label read: { fields: [pk, code], filter: { pk: { _in } } }, answered with what the caller may READ (what they can edit, and what they can view)
+        const allowed = new Set([...(w.editable[user]?.[this.collection] ?? []), ...(w.viewable[user]?.[this.collection] ?? [])]);
+        const asAdmin = this.options.accountability.admin === true;
+        return query.filter[pk]._in.filter((id) => (asAdmin ? w.records[this.collection].has(id) : allowed.has(id)))
+          .map((id) => ({ [pk]: id, [query.fields[1]]: `CODE-${id.slice(-4)}` }));
+      }
       const first = query.filter._and[0][pk];
       const ids = first._eq !== undefined ? [first._eq] : first._in;
-      const user = this.options.accountability.user;
       const allowed = w.editable[user]?.[this.collection] ?? new Set();
       return ids.filter((id) => allowed.has(id)).map((id) => ({ [pk]: id }));
     }
@@ -395,19 +405,27 @@ test('canSee: the owner person, an active member of the owner team, an administr
   assert.equal(canSee(scope({ personId: null, teamIds: [] }), own), false, 'a login with no person sees nothing');
 });
 
-test('parseFileFilters: tab, kind, folder, dates, owner, strength, paging; bad values are 400', () => {
-  const ok = parseFileFilters({ tab: 'older', kind: 'sem_image,image', folder: '/Users/ali1/run 1//', date_from: '2026-10-01', date_to: '2026-10-15', strength: 'any', limit: '20', offset: '40' });
+test('parseFileFilters: the names STARbase sends: tab, kind, strength, folder, from, to, owner, link_kind, paging; bad values are 400', () => {
+  const ok = parseFileFilters({ tab: 'older', kind: 'sem_image,image', strength: 'short_id,code', folder: ' Run 1 ', from: '2026-10-01', to: '2026-10-15', owner: 'me', link_kind: 'auto', limit: '20', offset: '40' });
   assert.equal(ok.tab, 'older');
   assert.deepEqual(ok.kinds, ['sem_image', 'image']);
-  assert.equal(ok.folder, 'Users/ali1/run 1/');
-  assert.equal(ok.strength, 'any');
+  assert.deepEqual(ok.strengths, ['short_id', 'code']);
+  assert.equal(ok.folder, 'Run 1');
+  assert.equal(ok.date_from, '2026-10-01');
+  assert.equal(ok.date_to, '2026-10-15');
+  assert.deepEqual(ok.owner, { kind: 'me', id: null });
+  assert.equal(ok.link_kind, 'auto');
   assert.equal(ok.limit, 20);
   assert.equal(ok.offset, 40);
+  assert.deepEqual(parseFileFilters({ owner: `team:${TEAM}` }).owner, { kind: 'team', id: TEAM });
+  assert.deepEqual(parseFileFilters({ owner: `person:${P.bob}` }).owner, { kind: 'person', id: P.bob });
   assert.equal(parseFileFilters({}).tab, 'new');
+  assert.equal(parseFileFilters({}, { defaultTab: 'open' }).tab, 'open');
   assert.equal(parseFileFilters({}).limit, 50);
   assert.equal(parseFileFilters({ limit: '9999' }).limit, 200, 'paging is clamped');
-  for (const bad of [{ tab: 'everything' }, { kind: 'movie' }, { date_from: 'yesterday' }, { date_to: '2026-13-40' }, { strength: 'maybe' },
-    { owner_person_id: 'nope' }, { owner_team_id: 'nope' }, { limit: '-1' }, { limit: 'x' }, { offset: '-5' }, { link_kind: 'telepathy' }, { folder: 'x'.repeat(600) }]) {
+  assert.equal(parseFileFilters({ kind: '', folder: '', owner: '' }).kinds, null, 'empty values are left out');
+  for (const bad of [{ tab: 'everything' }, { kind: 'movie' }, { strength: 'maybe' }, { from: 'yesterday' }, { to: '2026-13-40' }, { owner: 'nobody' },
+    { owner: 'team:nope' }, { owner: 'team' }, { owner: `me:${TEAM}` }, { limit: '-1' }, { limit: 'x' }, { offset: '-5' }, { link_kind: 'telepathy' }, { folder: 'x'.repeat(600) }]) {
     assert.throws(() => parseFileFilters(bad), (e) => e instanceof HttpError && e.status === 400, JSON.stringify(bad));
   }
 });
@@ -417,6 +435,7 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   const tabs = {
     new: [/c\.state = 'new'/, /c\.origin = 'new'/],
     older: [/c\.state = 'new'/, /c\.origin = 'backlog'/],
+    open: [/c\.state = 'new'/],
     linked: [/c\.state = 'linked'/],
     dismissed: [/c\.state = 'dismissed'/],
   };
@@ -427,20 +446,23 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
     assert.ok(bindings.includes(`${TEAM},${OTHER_TEAM}`), 'the team ids are one csv binding');
     assert.doesNotMatch(sql, new RegExp(P.alice), 'no id in the text');
   }
-  // a copy drops out of the new and older tabs once its original is linked or dismissed
-  for (const tab of ['new', 'older']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, /o\.state IN \('linked', 'dismissed'\)/);
+  // a copy drops out of the new, older and open lists once its original was linked or dismissed
+  for (const tab of ['new', 'older', 'open']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, /o\.state IN \('linked', 'dismissed'\)/);
   assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'linked' })).sql, /o\.state IN/);
   // filters
-  const f = parseFileFilters({ kind: 'sem_image', folder: 'Users/ali1/run1', strength: 'short_id', date_from: '2026-10-01', date_to: '2026-10-15', link_kind: 'auto', tab: 'linked' });
+  const f = parseFileFilters({ kind: 'sem_image', folder: 'Run1', strength: 'short_id,code', from: '2026-10-01', to: '2026-10-15', link_kind: 'auto', tab: 'linked' });
   const q = buildListQuery(scope, f);
   assert.match(q.sql, /c\.kind = ANY\(/);
-  assert.match(q.sql, /starts_with\(c\.rel_path, \?\)/);
-  assert.match(q.sql, /c\.match_strength = \?/);
+  assert.match(q.sql, /c\.match_strength = ANY\(/);
+  assert.match(q.sql, /strpos\(lower\(regexp_replace\(c\.rel_path, '\[\^\/\]\*\$', ''\)\), lower\(\?\)\) > 0/, 'the folder part of the path contains the text, any case');
   assert.match(q.sql, /c\.link_kind = \?/);
-  assert.ok(q.bindings.includes('Users/ali1/run1/'));
-  assert.ok(q.bindings.includes('short_id') && q.bindings.includes('auto'));
-  // an explicit owner replaces the default scope
-  const one = buildListQuery(scope, parseFileFilters({ owner_team_id: TEAM }));
+  for (const b of ['sem_image', 'Run1', 'short_id,code', '2026-10-01', '2026-10-15', 'auto']) assert.ok(q.bindings.includes(b), b);
+  // an owner replaces the default scope
+  const me = buildListQuery(scope, parseFileFilters({ owner: 'me' }));
+  assert.match(me.sql, /c\.owner_person_id = \?/);
+  assert.doesNotMatch(me.sql, /owner_team_id = ANY/);
+  assert.ok(me.bindings.includes(P.alice));
+  const one = buildListQuery(scope, parseFileFilters({ owner: `team:${TEAM}` }));
   assert.match(one.sql, /c\.owner_team_id = \?/);
   assert.ok(one.bindings.includes(TEAM));
   // paging and order
@@ -457,9 +479,9 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   assert.match(accept.sql, /c\.suggested_record_id IS NOT NULL/);
 });
 
-test('shapeSummary: new count and older-with-exact-match, per person and per team', () => {
+test('shapeSummary: new count and older-with-exact-match, per person and per team, in the shape inboxSummary.ts reads', () => {
   const scope = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
-  const teams = [{ team_id: TEAM, name: 'SEM team' }, { team_id: OTHER_TEAM, name: 'Other team' }];
+  const teams = [{ team_id: TEAM, name: 'SEM team', share_folder: 'SEM' }, { team_id: OTHER_TEAM, name: 'Other team', share_folder: 'Other' }, { team_id: ID(23), name: 'No folder', share_folder: null }];
   const rows = [
     { owner_person_id: P.alice, owner_team_id: null, origin: 'new', exact: false, n: 3 },
     { owner_person_id: P.alice, owner_team_id: null, origin: 'new', exact: true, n: 1 },
@@ -468,14 +490,15 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
     { owner_person_id: null, owner_team_id: TEAM, origin: 'new', exact: false, n: 5 },
     { owner_person_id: null, owner_team_id: TEAM, origin: 'backlog', exact: true, n: 4 },
   ];
-  const out = shapeSummary(rows, scope, teams, { name: 'Alice A' });
-  assert.deepEqual(out.person, { person_id: P.alice, new: 4, older_matching: 2 });
+  const out = shapeSummary(rows, scope, teams, { uni_alias: 'ali1' });
+  assert.deepEqual(out.person, { person_id: P.alice, new: 4, older_matches: 2, has_alias: true });
   assert.deepEqual(out.teams, [
-    { team_id: TEAM, name: 'SEM team', new: 5, older_matching: 4 },
-    { team_id: OTHER_TEAM, name: 'Other team', new: 0, older_matching: 0 },
-  ]);
-  assert.equal(out.total_new, 9);
-  assert.equal(out.total_older_matching, 6);
+    { team_id: TEAM, name: 'SEM team', new: 5, older_matches: 4 },
+    { team_id: OTHER_TEAM, name: 'Other team', new: 0, older_matches: 0 },
+  ], 'a team with a share folder, with nothing in it, is still listed; one with no folder is not');
+  assert.equal(out.new, 9);
+  assert.equal(out.older_matches, 6);
+  assert.equal(shapeSummary([], scope, [], { uni_alias: null }).person.has_alias, false);
   assert.equal(shapeSummary([], { personId: null, teamIds: [], admin: false }, [], null).person, null);
 });
 
@@ -543,13 +566,16 @@ test('GET /summary: the person and each of their teams, new vs older with a matc
   const { call } = setup(w);
   const res = await call('GET /summary', { user: U.alice });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.data.person, { person_id: P.alice, new: 2, older_matching: 3 });
-  assert.deepEqual(res.body.data.teams, [{ team_id: TEAM, name: 'SEM team', new: 1, older_matching: 0 }]);
-  assert.equal(res.body.data.total_new, 3);
-  assert.equal(res.body.data.total_older_matching, 3);
+  assert.deepEqual(res.body.data.person, { person_id: P.alice, new: 2, older_matches: 3, has_alias: true });
+  assert.deepEqual(res.body.data.teams, [{ team_id: TEAM, name: 'SEM team', new: 1, older_matches: 0 }]);
+  assert.equal(res.body.data.new, 3);
+  assert.equal(res.body.data.older_matches, 3);
   const q = w.log.find((l) => l.name === 'summary');
   assert.equal(q.bindings[0], P.alice, 'the person');
   assert.equal(q.bindings[1], TEAM, 'only the teams Alice is an active member of');
+  // a person with no alias yet says so (the UI shows "ask an administrator")
+  const dave = await call('GET /summary', { user: U.dave });
+  assert.equal(dave.body.data.person.has_alias, false);
 });
 
 test('GET /summary: a Former (inactive) person is a member of no team; a login with no person sees zeros; an administrator sees only their own', async () => {
@@ -563,7 +589,7 @@ test('GET /summary: a Former (inactive) person is a member of no team; a login w
   assert.equal(nobody.statusCode, 200);
   assert.equal(nobody.body.data.person, null);
   assert.deepEqual(nobody.body.data.teams, []);
-  assert.equal(nobody.body.data.total_new, 0);
+  assert.equal(nobody.body.data.new, 0);
   assert.equal(w.log.some((l) => l.name === 'summary'), false, 'no scope, no query');
   w.log.length = 0;
   await call('GET /summary', { user: U.admin, admin: true });
@@ -574,72 +600,125 @@ test('GET /summary: a Former (inactive) person is a member of no team; a login w
 // ---- files -----------------------------------------------------------------------------------------------------------------
 
 const listRow = (c, over = {}) => ({
-  candidate_id: c.candidate_id, file_id: c.directus_files_id, name: 'a.tif', mime_type: 'image/tiff', kind: c.kind, kind_confidence: c.kind_confidence,
+  candidate_id: c.candidate_id, directus_files_id: c.directus_files_id, name: 'a.tif', mime_type: 'image/tiff', kind: c.kind, kind_confidence: c.kind_confidence,
   extracted: c.extracted, origin: c.origin, state: c.state, match_strength: c.match_strength, matches: c.matches,
-  suggested_collection: c.suggested_collection, suggested_record_id: c.suggested_record_id, duplicate_of: null, copy_owner_name: null, copy_owner_kind: null,
+  suggested_collection: c.suggested_collection, suggested_record_id: c.suggested_record_id, duplicate_of: null, duplicate_of_owner: null,
   rel_path: c.rel_path, size_bytes: c.size_bytes, source_mtime: null, first_seen_at: c.first_seen_at, decided_at: null, link_kind: null,
-  linked_collection: null, link_batch_id: null, owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, owner_name: 'Alice A', adopted_at: null,
+  linked_collection: null, link_batch_id: null, linked_record_id: null, decided_by_name: null,
+  owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, owner_name: 'Alice A', adopted_at: null,
   ...over,
 });
 
-test('GET /files: a page of rows with the file, the owner and the suggestion and why; total in meta', async () => {
+test('GET /files: a page of FoundFile rows (the columns STARbase reads plus labels), total and acceptable in meta', async () => {
   const w = newWorld();
   const a = cand();
   w.listRows = [listRow(a)];
   w.listTotal = 41;
+  w.acceptIds = [];
   const { call } = setup(w);
   const res = await call('GET /files', { user: U.alice, query: { tab: 'new', limit: '10' } });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.meta, { total: 41, limit: 10, offset: 0 });
+  assert.deepEqual(res.body.meta, { total: 41, limit: 10, offset: 0, acceptable: 0 });
   const [row] = res.body.data;
-  assert.equal(row.id, a.candidate_id);
-  assert.equal(row.file_id, a.directus_files_id);
+  assert.equal(row.candidate_id, a.candidate_id);
+  assert.equal(row.directus_files_id, a.directus_files_id);
   assert.equal(row.name, 'a.tif');
   assert.equal(row.kind, 'sem_image');
-  assert.deepEqual(row.suggestion, { collection: 'physical_samples', record_id: S1, via: 'short_id', token: '3fa9c1d2' });
+  assert.equal(row.suggested_collection, 'physical_samples');
+  assert.equal(row.suggested_record_id, S1);
+  assert.equal(row.suggested_label, `CODE-${S1.slice(-4)}`, 'the record code, read as the caller');
+  assert.equal(row.suggested_can_edit, true);
+  assert.deepEqual(row.matches, [{ collection: 'physical_samples', record_id: S1, via: 'short_id', token: '3fa9c1d2' }]);
   assert.deepEqual(row.owner, { kind: 'person', id: P.alice, name: 'Alice A' });
   assert.equal(row.rel_path, a.rel_path);
-  assert.equal(row.is_copy, false);
+  assert.equal(row.duplicate_of, null);
+  assert.equal(row.duplicate_of_owner, null);
+  for (const key of ['kind_confidence', 'extracted', 'origin', 'state', 'match_strength', 'size_bytes', 'source_mtime', 'first_seen_at', 'decided_at', 'link_kind', 'link_batch_id', 'linked_collection', 'linked_record_id', 'linked_label', 'decided_by_name']) {
+    assert.ok(key in row, key);
+  }
 });
 
-test('GET /files: a suggestion the caller cannot edit is not shown (no record id leaks), and neither are the other matches', async () => {
+test('GET /files: meta.acceptable is what Accept all would link for the same filter (server-computed); not for linked or dismissed', async () => {
+  const w = newWorld();
+  const ok = add(w, cand());
+  const noEdit = add(w, cand({ suggested_record_id: S3 }));
+  const doc = add(w, cand({ kind: 'document' }));
+  const scan = add(w, cand({ kind: 'surface_scan' }));
+  w.acceptIds = [ok, noEdit, doc, scan].map((c) => c.candidate_id);
+  w.listRows = [];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice, query: { tab: 'older' } });
+  assert.equal(res.body.meta.acceptable, 2, 'the image and the document; not the record Alice cannot edit, not the surface scan');
+  assert.equal(w.candidates.get(ok.candidate_id).state, 'new', 'nothing was written');
+  assert.equal(w.log.some((l) => l.name === 'candidatesForUpdate'), false, 'and nothing was locked');
+  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.meta.acceptable, null);
+  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'dismissed' } })).body.meta.acceptable, null);
+});
+
+test('GET /files: a record the caller cannot READ is named nowhere (no id, no label, no match); one they can read but not edit says so', async () => {
   const w = newWorld();
   const mine = cand();
   const restricted = cand({ suggested_record_id: S2, matches: [{ collection: 'physical_samples', record_id: S2, via: 'short_id', token: 'bbbbbbbb' }] });
-  const ambiguous = cand({ match_strength: 'short_id', suggested_collection: null, suggested_record_id: null, matches: [{ collection: 'physical_samples', record_id: S1, via: 'short_id', token: 'cccccccc' }, { collection: 'physical_samples', record_id: S2, via: 'short_id', token: 'cccccccc' }] });
+  const ambiguous = cand({ suggested_collection: null, suggested_record_id: null, matches: [{ collection: 'physical_samples', record_id: S1, via: 'short_id', token: 'cccccccc' }, { collection: 'physical_samples', record_id: S2, via: 'short_id', token: 'cccccccc' }] });
+  const viewOnly = cand({ owner_person_id: P.carol, suggested_record_id: S3, matches: [{ collection: 'physical_samples', record_id: S3, via: 'short_id', token: 'dddddddd' }] });
   w.listRows = [listRow(mine), listRow(restricted), listRow(ambiguous)];
-  w.listTotal = 3;
   const { call } = setup(w);
   const res = await call('GET /files', { user: U.alice });
   const [a, b, c] = res.body.data;
-  assert.equal(a.suggestion.record_id, S1);
-  assert.equal(b.suggestion, null);
-  assert.equal(b.match_count, 1);
-  assert.equal(c.suggestion, null);
-  assert.equal(c.match_count, 2);
+  assert.equal(a.suggested_record_id, S1);
+  assert.equal(b.suggested_record_id, null);
+  assert.equal(b.suggested_collection, null);
+  assert.equal(b.suggested_label, null);
+  assert.deepEqual(b.matches, []);
+  assert.ok(!('suggested_can_edit' in b));
+  assert.equal(b.match_strength, 'short_id', 'the strength is kept');
+  assert.deepEqual(c.matches.map((m) => m.record_id), [S1], 'only the readable match of an ambiguous file');
   assert.equal(JSON.stringify(res.body).includes(S2), false, 'a Restricted record id appears nowhere in the answer');
-  // the edit check ran as the caller, in one read per collection
-  const reads = w.items.filter((i) => i.op === 'read');
-  assert.equal(reads.length, 1);
-  assert.equal(reads[0].accountability.user, U.alice);
+  // Carol can read S3 but not edit it
+  w.listRows = [listRow(viewOnly, { owner_name: 'Carol C' })];
+  const carol = await call('GET /files', { user: U.carol });
+  assert.equal(carol.body.data[0].suggested_record_id, S3);
+  assert.equal(carol.body.data[0].suggested_can_edit, false);
+  // an administrator reads everything
+  w.listRows = [listRow(restricted)];
+  const admin = await call('GET /files', { user: U.admin, admin: true });
+  assert.equal(admin.body.data[0].suggested_record_id, S2);
+  // the reads ran as the caller
+  for (const r of w.items.filter((i) => i.op === 'read' && !i.accountability.admin)) assert.ok([U.alice, U.carol].includes(r.accountability.user));
+});
+
+test('GET /files: a linked row names the record it was linked to and who linked it (readable records only)', async () => {
+  const w = newWorld();
+  const c = cand({ state: 'linked' });
+  w.listRows = [listRow(c, { state: 'linked', link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77), decided_by_name: 'Alice A', decided_at: '2026-10-15T10:00:00.000Z' }),
+    listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S2 })];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice, query: { tab: 'linked', link_kind: 'auto' } });
+  const [a, b] = res.body.data;
+  assert.equal(a.linked_record_id, S1);
+  assert.equal(a.linked_label, `CODE-${S1.slice(-4)}`);
+  assert.equal(a.link_kind, 'auto');
+  assert.equal(a.link_batch_id, ID(77));
+  assert.equal(a.decided_by_name, 'Alice A');
+  assert.equal(b.linked_record_id, null, 'a record the caller cannot read');
+  assert.equal(b.linked_label, null);
+  assert.equal(w.items.filter((i) => i.op === 'read' && i.query.filter._and).length, 0, 'no edit check for a linked row');
 });
 
 test('GET /files: a copy says whose folder holds the original; an owner filter on someone else is 403 unless administrator', async () => {
   const w = newWorld();
   const a = cand();
-  w.listRows = [listRow(a, { duplicate_of: ID(1), copy_owner_name: 'Bob B', copy_owner_kind: 'person' })];
-  w.listTotal = 1;
+  w.listRows = [listRow(a, { duplicate_of: ID(1), duplicate_of_owner: 'Bob B' })];
   const { call } = setup(w);
   const res = await call('GET /files', { user: U.alice });
-  assert.equal(res.body.data[0].is_copy, true);
-  assert.deepEqual(res.body.data[0].copy_of, { owner_kind: 'person', owner_name: 'Bob B' });
-  const other = await call('GET /files', { user: U.alice, query: { owner_person_id: P.bob } });
-  assert.equal(other.statusCode, 403);
-  const otherTeam = await call('GET /files', { user: U.alice, query: { owner_team_id: OTHER_TEAM } });
-  assert.equal(otherTeam.statusCode, 403);
-  assert.equal((await call('GET /files', { user: U.alice, query: { owner_team_id: TEAM } })).statusCode, 200);
-  assert.equal((await call('GET /files', { user: U.alice, query: { owner_person_id: P.alice } })).statusCode, 200);
-  assert.equal((await call('GET /files', { user: U.admin, admin: true, query: { owner_person_id: P.bob } })).statusCode, 200);
+  assert.equal(res.body.data[0].duplicate_of, ID(1));
+  assert.equal(res.body.data[0].duplicate_of_owner, 'Bob B');
+  assert.equal((await call('GET /files', { user: U.alice, query: { owner: `person:${P.bob}` } })).statusCode, 403);
+  assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${OTHER_TEAM}` } })).statusCode, 403);
+  assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${TEAM}` } })).statusCode, 200);
+  assert.equal((await call('GET /files', { user: U.alice, query: { owner: 'me' } })).statusCode, 200);
+  assert.equal((await call('GET /files', { user: U.alice, query: { owner: `person:${P.alice}` } })).statusCode, 200);
+  assert.equal((await call('GET /files', { user: U.admin, admin: true, query: { owner: `person:${P.bob}` } })).statusCode, 200);
   assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'nope' } })).statusCode, 400);
 });
 
@@ -691,8 +770,8 @@ test('POST /link: one candidate, one record, as the caller: junction row through
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const batch = res.body.data.link_batch_id;
   assert.match(batch, /^[0-9a-f-]{36}$/);
-  assert.equal(res.body.data.count, 1);
-  assert.equal(res.body.data.linked[0].candidate_id, c.candidate_id);
+  assert.equal(res.body.data.linked, 1, 'a count, as STARbase reads it');
+  assert.equal(res.body.data.items[0].candidate_id, c.candidate_id);
   const created = writesTo(w, SAMPLE_JUNCTION);
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].data, { sample_id: S1, directus_files_id: c.directus_files_id });
@@ -706,7 +785,7 @@ test('POST /link: one candidate, one record, as the caller: junction row through
   assert.equal(c.linked_junction_id, created[0].id);
   assert.equal(c.link_batch_id, batch);
   assert.equal(c.adopted_at, null, 'an image is not adopted: the crawler already read it');
-  assert.equal(res.body.data.linked[0].junction_id, created[0].id);
+  assert.equal(res.body.data.items[0].junction_id, created[0].id);
 });
 
 test('POST /link: every write transaction starts with set_config d1.actor_identity for the caller', async () => {
@@ -858,7 +937,7 @@ test('POST /link: the same person repeating the same link is idempotent (same ba
   const again = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
   assert.equal(again.statusCode, 200);
   assert.equal(again.body.data.link_batch_id, first.body.data.link_batch_id);
-  assert.equal(again.body.data.linked[0].already_linked, true);
+  assert.equal(again.body.data.items[0].already_linked, true);
   assert.equal(w.junctions.sample_data_files.length, 1);
   // a different record for an already linked file
   w.editable[U.alice].physical_samples.add(ID(106));
@@ -905,7 +984,7 @@ test('POST /link: a document or other file is adopted (the crawler hashes it onc
   assert.equal(doc.adopted_at, NOW.toISOString());
   assert.equal(other.adopted_at, NOW.toISOString());
   assert.equal(scan.adopted_at, null);
-  assert.equal(res.body.data.linked.find((l) => l.candidate_id === doc.candidate_id).adopted, true);
+  assert.equal(res.body.data.items.find((l) => l.candidate_id === doc.candidate_id).adopted, true);
 });
 
 test('POST /link: an administrator may link any visible file to any record that exists; a record that does not is 403', async () => {
@@ -936,38 +1015,44 @@ test('POST /link: the data cache is cleared after the commit when CACHE_ENABLED,
 
 // ---- accept-all ------------------------------------------------------------------------------------------------------------
 
-test('POST /accept-all links only exact short-ID suggestions to one record the caller can edit, and reports what it skipped', async () => {
+test('POST /accept-all links only exact short-ID suggestions to one record the caller can edit (images, documents and other files; never surface scans), and reports what it skipped', async () => {
   const w = newWorld();
   const ok1 = add(w, cand());
   const ok2 = add(w, cand({ suggested_collection: 'test_sessions', suggested_record_id: T1 }));
+  const doc = add(w, cand({ kind: 'document' }));
+  const other = add(w, cand({ kind: 'other' }));
+  const scan = add(w, cand({ kind: 'surface_scan' }));
   const notEditable = add(w, cand({ suggested_record_id: S3 }));
   const code = add(w, cand({ match_strength: 'code' }));
   const noSuggestion = add(w, cand({ suggested_collection: null, suggested_record_id: null, matches: [] }));
-  const doc = add(w, cand({ kind: 'document' }));
   const copy = add(w, cand({ duplicate_of: ok1.candidate_id }));
   const done = add(w, cand({ state: 'linked' }));
   const onRecord = add(w, cand());
   w.junctions.sample_data_files.push({ id: ID(4902), sample_id: S1, directus_files_id: onRecord.directus_files_id });
-  w.acceptIds = [ok1, ok2, notEditable, code, noSuggestion, doc, copy, done, onRecord].map((c) => c.candidate_id);
+  w.acceptIds = [ok1, ok2, doc, other, scan, notEditable, code, noSuggestion, copy, done, onRecord].map((c) => c.candidate_id);
   const { call } = setup(w);
   const res = await call('POST /accept-all', { user: U.alice, body: { filter: { tab: 'new' } } });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const data = res.body.data;
-  assert.equal(data.count, 2);
+  assert.equal(data.linked, 4, 'a count');
   assert.match(data.link_batch_id, /^[0-9a-f-]{36}$/);
-  assert.deepEqual(data.linked.map((l) => l.candidate_id).sort(), [ok1.candidate_id, ok2.candidate_id].sort());
+  assert.deepEqual(data.items.map((l) => l.candidate_id).sort(), [ok1, ok2, doc, other].map((c) => c.candidate_id).sort());
   const reasons = Object.fromEntries(data.skipped.map((s) => [s.candidate_id, s.reason]));
+  assert.equal(reasons[scan.candidate_id], 'SURFACE_SCAN');
   assert.equal(reasons[notEditable.candidate_id], 'NOT_EDITABLE');
   assert.equal(reasons[code.candidate_id], 'NOT_EXACT');
   assert.equal(reasons[noSuggestion.candidate_id], 'NO_SUGGESTION');
-  assert.equal(reasons[doc.candidate_id], 'DOCUMENT');
   assert.equal(reasons[copy.candidate_id], 'COPY');
   assert.equal(reasons[done.candidate_id], 'NOT_NEW');
   assert.equal(reasons[onRecord.candidate_id], 'ALREADY_ON_RECORD');
-  assert.equal(w.junctions.sample_data_files.length, 2, 'the Data Studio row and one new row');
+  assert.equal(w.junctions.sample_data_files.length, 4, 'the Data Studio row, ok1, the document and the other file');
   assert.equal(w.junctions.session_data_files.length, 1);
   assert.equal(ok1.link_kind, 'bulk');
   assert.equal(ok1.link_batch_id, ok2.link_batch_id);
+  assert.equal(doc.adopted_at, NOW.toISOString(), 'a document is adopted: the crawler hashes it once');
+  assert.equal(other.adopted_at, NOW.toISOString());
+  assert.equal(ok1.adopted_at, null);
+  assert.equal(scan.state, 'new');
   assert.equal(notEditable.state, 'new');
 });
 
@@ -978,14 +1063,15 @@ test('POST /accept-all: dry_run counts without writing; nothing to do is 200 wit
   const { call } = setup(w);
   const dry = await call('POST /accept-all', { user: U.alice, body: { filter: {}, dry_run: true } });
   assert.equal(dry.statusCode, 200);
-  assert.equal(dry.body.data.count, 1);
+  assert.equal(dry.body.data.acceptable, 1);
+  assert.equal(dry.body.data.linked, 0);
   assert.equal(dry.body.data.link_batch_id, null);
   assert.equal(ok.state, 'new');
   assert.equal(w.junctions.sample_data_files.length, 0);
   w.acceptIds = [];
   const none = await call('POST /accept-all', { user: U.alice, body: { filter: {} } });
   assert.equal(none.statusCode, 200);
-  assert.equal(none.body.data.count, 0);
+  assert.equal(none.body.data.linked, 0);
   assert.equal(none.body.data.link_batch_id, null);
   assert.equal((await call('POST /accept-all', { user: U.alice, body: { filter: { tab: 'bogus' } } })).statusCode, 400);
   assert.equal((await call('POST /accept-all', { user: U.alice, body: { filter: 'x' } })).statusCode, 400);
@@ -998,7 +1084,7 @@ test('POST /accept-all: a file the caller cannot see is never touched, even when
   w.acceptIds = [bobs.candidate_id];
   const { call } = setup(w);
   const res = await call('POST /accept-all', { user: U.alice, body: { filter: {} } });
-  assert.equal(res.body.data.count, 0);
+  assert.equal(res.body.data.linked, 0);
   assert.equal(bobs.state, 'new');
   assert.equal(w.junctions.sample_data_files.length, 0);
 });
@@ -1012,15 +1098,16 @@ test('POST /dismiss then /restore: state changes, decided_by recorded, a team fi
   const { call } = setup(w);
   const res = await call('POST /dismiss', { user: U.alice, body: { candidate_ids: [mine.candidate_id, team.candidate_id] } });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.data.changed.sort(), [mine.candidate_id, team.candidate_id].sort());
+  assert.equal(res.body.data.changed, 2, 'a count');
+  assert.deepEqual(res.body.data.changed_ids.sort(), [mine.candidate_id, team.candidate_id].sort());
   assert.equal(mine.state, 'dismissed');
   assert.equal(mine.decided_by, U.alice);
   assert.equal(team.state, 'dismissed');
   // dismissing twice changes nothing and is not an error
   const again = await call('POST /dismiss', { user: U.bob, body: { candidate_ids: [team.candidate_id] } });
   assert.equal(again.statusCode, 200);
-  assert.deepEqual(again.body.data.changed, []);
-  assert.deepEqual(again.body.data.unchanged, [team.candidate_id]);
+  assert.equal(again.body.data.changed, 0);
+  assert.deepEqual(again.body.data.unchanged_ids, [team.candidate_id]);
   assert.equal(team.decided_by, U.alice, 'the first to resolve it');
   // restore (a teammate may)
   const back = await call('POST /restore', { user: U.bob, body: { candidate_ids: [team.candidate_id] } });
@@ -1049,7 +1136,8 @@ test('POST /dismiss: a linked file is 409; an unknown or someone else\'s is 404;
   assert.equal(bobs.state, 'new');
   // restore of a file that is not dismissed is a no-op reported as unchanged
   const r = await call('POST /restore', { user: U.alice, body: { candidate_ids: [mine.candidate_id] } });
-  assert.deepEqual(r.body.data.unchanged, [mine.candidate_id]);
+  assert.equal(r.body.data.changed, 0);
+  assert.deepEqual(r.body.data.unchanged_ids, [mine.candidate_id]);
 });
 
 // ---- undo ------------------------------------------------------------------------------------------------------------------
@@ -1132,6 +1220,7 @@ test('POST /rescan queues one person-scope request; a second within 10 minutes i
   const { call } = setup(w);
   const first = await call('POST /rescan', { user: U.alice });
   assert.equal(first.statusCode, 202);
+  assert.equal(first.body.data.queued, true);
   assert.equal(first.body.data.status, 'queued');
   assert.equal(w.scanRequests.length, 1);
   assert.equal(w.scanRequests[0].person_id, P.alice);
@@ -1310,7 +1399,7 @@ test('POST /auto-link never links a document, an ambiguous match, a code match, 
   const reasons = res.body.data.results.map((r) => `${r.status}:${r.reason}`);
   assert.deepEqual(reasons, [
     'skipped:KIND_NOT_ALLOWED', 'skipped:KIND_NOT_ALLOWED', 'skipped:AMBIGUOUS', 'skipped:AMBIGUOUS', 'skipped:NOT_EXACT', 'skipped:NOT_EXACT', 'skipped:NOT_EXACT',
-    'skipped:BACKLOG', 'skipped:TEAM_FILE', 'skipped:COPY', 'skipped:SURFACE_SCAN_NOT_AVAILABLE', 'skipped:NOT_NEW',
+    'skipped:BACKLOG', 'skipped:TEAM_FILE', 'skipped:COPY', 'skipped:SURFACE_SCAN', 'skipped:NOT_NEW',
   ]);
   assert.equal(w.junctions.sample_data_files.length, 0);
   assert.equal(w.junctions.operation_data_files.length + w.junctions.session_data_files.length, 0);
@@ -1386,8 +1475,9 @@ test('POST /auto-link validates its body: 1 to 200 candidate ids', async () => {
 
 // ---- admin -----------------------------------------------------------------------------------------------------------------
 
-test('GET /admin: administrators only; status, last scan, errors, unmatched folders, people without an alias, queue and totals', async () => {
+test('GET /admin: administrators only; the shape STARbase reads (status, errors, unmatched folders, people without an alias, queued requests)', async () => {
   const w = newWorld();
+  w.scanRequests.push({ request_id: ID(7001), scope: 'person', person_id: P.bob, requested_by: U.bob, requested_at: '2026-10-15T09:00:00.000Z', finished_at: '2026-10-15T09:01:00.000Z', status: 'failed', error: 'share unreachable' });
   const { call } = setup(w);
   const denied = await call('GET /admin', { user: U.alice });
   assert.equal(denied.statusCode, 403);
@@ -1395,15 +1485,19 @@ test('GET /admin: administrators only; status, last scan, errors, unmatched fold
   const res = await call('GET /admin', { user: U.admin, admin: true });
   assert.equal(res.statusCode, 200);
   const d = res.body.data;
-  assert.equal(d.status.desired_state, 'running');
-  assert.equal(d.status.interval_minutes, 30);
-  assert.equal(d.status.daemon, 'alive', 'a heartbeat 30 s ago');
-  assert.equal(d.status.files_registered, 42);
-  assert.deepEqual(d.last_scan, { started_at: '2026-10-15T11:30:00.000Z', finished_at: '2026-10-15T11:45:00.000Z' });
-  assert.deepEqual(d.errors, { count: 1, last_error: 'share briefly unreachable' });
+  assert.deepEqual(d.status, {
+    desired_state: 'running', interval_minutes: 30, read_mb_per_s: 60, daemon: 'alive',
+    last_heartbeat_at: '2026-10-15T11:59:30.000Z', daemon_started_at: '2026-10-15T08:00:00.000Z', current_activity: 'idle',
+    last_scan_started_at: '2026-10-15T11:30:00.000Z', last_scan_finished_at: '2026-10-15T11:45:00.000Z',
+    files_registered: 42, error_count: 1, last_error: 'share briefly unreachable',
+  });
+  assert.deepEqual(d.errors, [
+    { at: '2026-10-15T11:45:00.000Z', message: 'share briefly unreachable' },
+    { at: '2026-10-15T09:01:00.000Z', message: 'share unreachable' },
+  ]);
   assert.deepEqual(d.unmatched_folders, ['Users/zz9', 'Shared/Old project']);
-  assert.deepEqual(d.people_without_alias.map((p) => p.full_name), ['Dave D']);
-  assert.deepEqual(d.queue, { queued: 0, running: 0 });
+  assert.deepEqual(d.people_without_alias, [{ person_id: P.dave, full_name: 'Dave D', active: true, has_login: true }]);
+  assert.equal(d.queued_requests, 0);
   assert.deepEqual(d.candidates, { new: 5, linked: 2 });
 });
 
@@ -1428,6 +1522,7 @@ test('POST /admin/scan-all: administrators only; queues an all-scope request onc
   assert.equal(w.scanRequests.length, 0);
   const res = await call('POST /admin/scan-all', { user: U.admin, admin: true });
   assert.equal(res.statusCode, 202);
+  assert.equal(res.body.data.queued, true);
   assert.equal(w.scanRequests.length, 1);
   assert.equal(w.scanRequests[0].scope, 'all');
   assert.equal(w.scanRequests[0].person_id, null);

@@ -238,8 +238,10 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 
 *As built (stream B):* a file already linked to the chosen record (for example in Data Studio) is refused 409
 `ALREADY_ON_RECORD`: the table's CHECK needs a junction id the batch itself made, and undo must never delete a row it
-did not create. Accept-all skips such rows and also documents (a bulk link would read them without the person
-having seen the notice); auto-link also skips backlog, team-folder, copy and surface-scan files.
+did not create. Accept-all skips such rows and surface scans (a scan needs a person-chosen condition) but may link
+documents and other files with an exact short-ID match (the link adopts them, the confirm says so); auto-link links
+images only (`sem_image`, `image`) and also skips backlog, team-folder and copy files. Payload shapes are the ones
+STARbase's `inboxApi.ts` reads; a record is named in a list row only to a caller who can read it.
 
 Visibility of a candidate: its owner person's login; any active member of its owner team (the first member to
 link or dismiss resolves it for everyone); administrators (all). Candidates are never readable through
