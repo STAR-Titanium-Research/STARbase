@@ -1,5 +1,5 @@
-import { ref, watch, type Ref } from 'vue';
-import { itemPermissionsUrl, updateAccess } from '../canUpdate';
+import { computed, ref, watch, type Ref } from 'vue';
+import { itemPermissionsUrl, offerWrite, updateAccess } from '../canUpdate';
 import { useRequestGate } from './useRequestGate';
 
 interface Api {
@@ -11,23 +11,25 @@ interface Api {
 // the answer failed). `refresh` forgets the old answer first, so a new route id never shows the
 // previous record's answer while its own is on the way, then asks again; a late answer for an
 // older id is dropped (latest request wins).
-export function createCanUpdate(api: Api, collection: string, id: Ref<string | null | undefined>) {
+// `readOnly` (host.canViewAllAccess, a Lab Viewer): canUpdate is false from the first frame and nothing is asked.
+export function createCanUpdate(api: Api, collection: string, id: Ref<string | null | undefined>, readOnly?: Ref<boolean> | null) {
 	const gate = useRequestGate();
-	const canUpdate = ref<boolean | null>(null);
+	const asked = ref<boolean | null>(null);
+	const canUpdate = computed(() => offerWrite(readOnly?.value, asked.value));
 
 	async function refresh() {
 		const token = gate.begin();
-		canUpdate.value = null;
+		asked.value = null;
 		const pk = id.value;
-		if (!pk) return;
+		if (!pk || readOnly?.value) return;
 		try {
 			const res = await api.get(itemPermissionsUrl(collection, pk));
-			if (gate.isCurrent(token)) canUpdate.value = updateAccess(res.data);
+			if (gate.isCurrent(token)) asked.value = updateAccess(res.data);
 		} catch {
-			if (gate.isCurrent(token)) canUpdate.value = null;
+			if (gate.isCurrent(token)) asked.value = null;
 		}
 	}
 
-	watch(id, refresh, { immediate: true });
+	watch([id, () => readOnly?.value], refresh, { immediate: true });
 	return { canUpdate, refresh };
 }

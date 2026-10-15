@@ -192,7 +192,7 @@ user. Everything else in the tables above follows from the same four involvement
 now `co_owners_legacy`, so a filter on `co_owners` can only mean the *Co-owners* field. The
 `projects.samples`, `projects.operations` and `projects.sessions` fields (hidden) exist only so the
 project rule can say "owns a sample, operation or test in it"; restart Directus right after applying
-migration 141 (flush Redis, `docker restart`; [upgrade runbook](../../runbooks/upgrade-2026-10-row-level-visibility.md))
+migration 141 (`docker compose restart directus`; [upgrade runbook](../../runbooks/upgrade-2026-10-row-level-visibility.md))
 so it picks them up, and so the `d1-access-guard` hook is loaded. Every path in the rules needs its Directus relation, so the
 `configure_*.sql` scripts keep them and `tests/phase1_schema.sh` checks that after migrations and
 after the scripts all of them resolve.

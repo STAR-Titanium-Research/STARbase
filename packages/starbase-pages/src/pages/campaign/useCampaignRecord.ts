@@ -10,6 +10,8 @@ const CAMPAIGN_FIELDS = [
 	'created_at', 'updated_at', 'version',
 	'project_id.project_id', 'project_id.project_code', 'project_id.project_name',
 	'owner_person_id.person_id', 'owner_person_id.full_name',
+	// the owning team, when a team owns the record (its managers act as the owner)
+	'owner_team_id.team_id', 'owner_team_id.name', 'owner_team_id.color', 'owner_team_id.logo',
 	'default_equipment_id.equipment_id', 'default_equipment_id.equipment_name',
 	'default_material_id.material_id', 'default_material_id.common_name',
 ];

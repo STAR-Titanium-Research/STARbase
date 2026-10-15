@@ -1,14 +1,17 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { STAR_BASE, adminApi, signInStarbase, watchErrors } from '../starbase/target';
+import { STAR_BASE, account, adminApi, signInStarbase, watchErrors } from '../starbase/target';
 
 // The Process map (/map) end to end on the preview copy of live, as an admin and as a Lab Member: the map draws
 // from a real family, a wire's tooltip and Ctrl+click, ＋ on a slot, hover / drag / ＋ leave the viewport alone,
 // the rail, the Sample page's button, keyboard focus, the data thumbnail, a campaign's fan, the phone's bottom
 // sheet. Data comes from admin API queries, so each scenario skips (with its reason) when the copy has none.
-//   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials-<name>.txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
-//      npx playwright test specs/19-process-map.spec.ts --retries=0)
+// A fresh copy gives the Lab Member no readable sample, so the member run lists a few family samples as "Can view"
+// for the member's person (sample_access, role view: the supported way to share, ADR-0014) and removes exactly the
+// rows it added afterwards.
+//   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials[-<name>].txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
+//      npx playwright test specs/21-process-map.spec.ts --retries=0)
 // Needs the d1-starbase preview and STARbase under vite preview running (tests/ui/README.md, spec 14 section).
 // Origins come from the credentials file (`url`) and D1_ROUTES_STARBASE, like spec 13, so a preview under another
 // name or port works the same.
@@ -56,6 +59,63 @@ async function familySamples(api: APIRequestContext, readable?: APIRequestContex
 	return found;
 }
 const familySample = async (api: APIRequestContext, readable?: APIRequestContext) => (await familySamples(api, readable))[0] ?? null;
+
+/**
+ * Refuse to write unless this run is plainly against a throwaway preview copy. All three must hold:
+ * the Directus host is loopback (127.0.0.1, localhost or [::1]); its port is neither 8055 (the live Directus' port) nor
+ * $DIRECTUS_PORT when that is set; and the credentials file is a `preview-credentials.txt` or `preview-credentials-<name>.txt` (what the preview scripts write).
+ */
+function assertPreviewWrites(what: string): void {
+	const u = new URL(SERVER);
+	const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+	const problems: string[] = [];
+	if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) problems.push(`host ${u.hostname} is not loopback`);
+	if (port === '8055' || (process.env.DIRECTUS_PORT && port === process.env.DIRECTUS_PORT)) problems.push(`port ${port} is a live Directus port`);
+	if (!/(^|[\\/])preview-credentials(-[^\\/]+)?\.txt$/.test(credsFile)) problems.push(`credentials file ${credsFile} is not preview-credentials[-<name>].txt`);
+	if (problems.length) throw new Error(`refusing to ${what} on ${SERVER}: ${problems.join('; ')}`);
+}
+
+/**
+ * Make up to `max` family samples readable to the preview's Lab Member by listing the member's person as "Can view" on them
+ * (sample_access, role view; the readers tables follow by trigger). Each access row it creates is pushed onto `created` at once
+ * (the caller owns the array, so a failure half-way still cleans up what exists); a sample the member can already read through
+ * an existing row is left alone. Returns how many family samples the member may now read through such a row.
+ * The direct insert is a deliberate test shortcut: the d1-record-access endpoint would email the member and set added_by.
+ * It writes only to the preview copy: assertPreviewWrites refuses anything else.
+ */
+async function grantMemberView(api: APIRequestContext, created: string[], max = 4): Promise<number> {
+	assertPreviewWrites('write test access rows');
+	const [email] = account('member');
+	const user = (await rows(api, `/users?limit=1&fields=id&filter[email][_eq]=${encodeURIComponent(email)}`))[0];
+	const person = user && (await rows(api, `/items/people?limit=1&fields=person_id&filter[user_id][_eq]=${user.id}`))[0];
+	if (!person) return 0;
+	let readable = 0;
+	for (const s of await familySamples(api, undefined, max)) {
+		const existing = await rows(api, `/items/sample_access?limit=1&fields=access_id&filter[sample_id][_eq]=${s.id}&filter[person_id][_eq]=${person.person_id}`);
+		if (existing.length) {
+			readable++;
+			continue;
+		}
+		const res = await api.post(`${SERVER}/items/sample_access`, { data: { sample_id: s.id, person_id: person.person_id, role: 'view' } });
+		if (!res.ok()) continue;
+		created.push(String(((await res.json()).data as Json).access_id));
+		readable++;
+	}
+	return readable;
+}
+/** Delete the access rows the run created; one failed delete does not stop the rest, and the leftovers are named. */
+async function revokeAccess(api: APIRequestContext, ids: string[]): Promise<void> {
+	const left: string[] = [];
+	for (const id of ids) {
+		try {
+			const res = await api.delete(`${SERVER}/items/sample_access/${id}`);
+			if (!res.ok()) left.push(id);
+		} catch {
+			left.push(id);
+		}
+	}
+	if (left.length) throw new Error(`could not remove ${left.length} test sample_access row(s): ${left.join(', ')}`);
+}
 
 const mapUrl = (collection: string, id: string) => `${STARBASE}/map?focus=${collection}:${encodeURIComponent(id)}`;
 const nodes = (page: Page) => page.locator('.vue-flow__node');
@@ -129,13 +189,23 @@ for (const who of ['admin', 'member'] as const) {
 
 		let admin: APIRequestContext;
 		let sample: { id: string; code: string } | null = null;
+		const granted: string[] = [];
 		test.beforeAll(async ({ playwright }) => {
 			admin = await adminApi(playwright, SERVER);
-			// The admin reads every sample; the Lab Member's own sample is found in its own session in the first test.
+			// The admin reads every sample; the Lab Member reads none on a fresh copy, so it is given a few to view (put
+			// back in afterAll) and finds its own sample in its own session in the first test.
 			if (who === 'admin') sample = await familySample(admin);
+			else if (await familySample(admin)) {
+				// The copy has family samples, so a member with none to read means the setup broke: fail, do not skip.
+				expect(await grantMemberView(admin, granted), 'the Lab Member can read a family sample after the grant').toBeGreaterThan(0);
+			}
 		});
 		test.afterAll(async () => {
-			await admin.dispose();
+			try {
+				if (admin) await revokeAccess(admin, granted);
+			} finally {
+				await admin?.dispose();
+			}
 		});
 
 		// A member reads only some samples (on a fresh copy it may read none): look through its own session.
@@ -512,6 +582,7 @@ test.describe('Process map recorded batch (admin)', () => {
 			test.skip(!pick, 'the copy has no sample with two unbatched operations');
 			const [sampleId, opIds] = pick!;
 
+			assertPreviewWrites('create a test batch');
 			const made = await admin.post(`${SERVER}/items/batches`, { data: { notes: 'E2E process map scenario' } });
 			expect(made.ok(), 'create a batch with the code left out').toBeTruthy();
 			const batch = (await made.json()).data as { batch_id: string; code: string };

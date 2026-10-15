@@ -919,6 +919,479 @@ BEGIN
 END $$;
 SQL
 
+# ------------------------------------------------------------------------------------------------------------------------------
+# Team ownership (migration 183, People 3 Task 1): owner_team_id, the owner grant (role own) and the manage rows. The shared team fixture:
+# team T has the manager A and the member B; C and D are outside; the samples S and R are owned by O.
+# ------------------------------------------------------------------------------------------------------------------------------
+echo "== Team ownership: owner_team_id, the owner grant, manage rows =="
+
+# helpers on top of the team fixture: a record of each ownable type (Restricted, so only its list reads it), the table and key of a type,
+# and the access rows of a record as "label:role" ordered by label (a b c = the fixture's people A B C)
+read -r -d '' OWN_RECORDS <<'SQL'
+CREATE FUNCTION pg_temp.tbl(kind text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+    SELECT CASE kind WHEN 'sample' THEN 'physical_samples' WHEN 'operation' THEN 'manufacturing_operations' WHEN 'test' THEN 'test_sessions' ELSE 'campaigns' END $f$;
+CREATE FUNCTION pg_temp.col(kind text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+    SELECT CASE kind WHEN 'sample' THEN 'sample_id' WHEN 'operation' THEN 'operation_id' WHEN 'test' THEN 'session_id' ELSE 'campaign_id' END $f$;
+CREATE FUNCTION pg_temp.mk(kind text, owner_team uuid DEFAULT NULL, owner_person uuid DEFAULT NULL) RETURNS uuid LANGUAGE plpgsql AS $f$
+DECLARE v uuid; tag text := left(gen_random_uuid()::text, 8);
+BEGIN
+    IF kind = 'sample' THEN
+        INSERT INTO physical_samples (sample_code, owner_team_id, owner_person_id, restricted) VALUES ('TF-OWN-' || tag, owner_team, owner_person, true) RETURNING sample_id INTO v;
+    ELSIF kind = 'campaign' THEN
+        INSERT INTO campaigns (campaign_type, name, owner_team_id, owner_person_id, restricted) VALUES ('testing_campaign', 'TF own ' || tag, owner_team, owner_person, true) RETURNING campaign_id INTO v;
+    ELSIF kind = 'operation' THEN
+        INSERT INTO manufacturing_operations (method_id, source_system, owner_team_id, owner_person_id, restricted)
+        VALUES ((SELECT method_id FROM manufacturing_methods ORDER BY method_id LIMIT 1), 'tf_test', owner_team, owner_person, true) RETURNING operation_id INTO v;
+    ELSE
+        INSERT INTO test_sessions (test_type, owner_team_id, owner_person_id, restricted) VALUES ('hardness', owner_team, owner_person, true) RETURNING session_id INTO v;
+    END IF;
+    RETURN v;
+END $f$;
+CREATE FUNCTION pg_temp.rows(kind text, rec uuid) RETURNS text LANGUAGE plpgsql AS $f$
+DECLARE v text;
+BEGIN
+    EXECUTE format('SELECT coalesce(string_agg(l, '','' ORDER BY l), '''') FROM (
+                      SELECT CASE person_id WHEN %L THEN ''a'' WHEN %L THEN ''b'' WHEN %L THEN ''c'' WHEN %L THEN ''d'' ELSE ''?'' END || '':'' || role AS l
+                        FROM public.%I WHERE %I = $1) x', pg_temp.tf('pa'), pg_temp.tf('pb'), pg_temp.tf('pc'), pg_temp.tf('pd'), kind || '_access', pg_temp.col(kind))
+        INTO v USING rec;
+    RETURN v;
+END $f$;
+SQL
+run_case_own() { local rest; rest=$(cat); run_case "$1" <<<"$TEAM_FIXTURE"$'\n'"$OWN_RECORDS"$'\n'"$rest"; }
+
+run_case_own owner_check_one_owner <<'SQL'
+DO $$
+DECLARE kind text; rec uuid; con text;
+BEGIN
+    FOREACH kind IN ARRAY ARRAY['sample', 'campaign', 'operation', 'test'] LOOP
+        BEGIN
+            PERFORM pg_temp.mk(kind, pg_temp.tf('team'), pg_temp.tf('po'));
+            RAISE EXCEPTION '% accepted a person owner and a team owner', pg_temp.tbl(kind);
+        EXCEPTION WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS con = CONSTRAINT_NAME;
+            ASSERT con = pg_temp.tbl(kind) || '_one_owner_check', format('%s: the check is %s_one_owner_check, got %s', kind, pg_temp.tbl(kind), con);
+        END;
+        rec := pg_temp.mk(kind, NULL, pg_temp.tf('po'));
+        BEGIN
+            EXECUTE format('UPDATE public.%I SET owner_team_id = $1 WHERE %I = $2', pg_temp.tbl(kind), pg_temp.col(kind)) USING pg_temp.tf('team'), rec;
+            RAISE EXCEPTION '% accepted a team owner next to a person owner (update)', pg_temp.tbl(kind);
+        EXCEPTION WHEN check_violation THEN NULL;
+        END;
+        -- a team owner alone, and none: fine
+        PERFORM pg_temp.mk(kind, pg_temp.tf('team'), NULL);
+        PERFORM pg_temp.mk(kind, NULL, NULL);
+    END LOOP;
+    ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'projects' AND column_name = 'owner_team_id'), 'projects have no team owner';
+    BEGIN
+        UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = gen_random_uuid() WHERE sample_id = pg_temp.tf('s');
+        RAISE EXCEPTION 'an unknown team was accepted as owner';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+END $$;
+SQL
+
+run_case_own set_owner_team_creates_grant_and_rows <<'SQL'
+DO $$
+DECLARE kind text; rec uuid; g record; t uuid := pg_temp.tf('team'); s uuid := pg_temp.tf('s'); t2 uuid; r2 uuid; r3 uuid; n int;
+BEGIN
+    PERFORM set_config('d1.actor_identity', pg_temp.tf('uo')::text, true);
+    -- a sample owned by a person becomes team-owned: the person owner is cleared in the same statement
+    ASSERT NOT pg_temp.rd(pg_temp.tf('ua'), s) AND NOT pg_temp.rd(pg_temp.tf('ub'), s), 'before: the members do not read the sample';
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT * INTO g FROM sample_team_access WHERE sample_id = s;
+    ASSERT g.team_id = t AND g.role = 'own' AND g.trust_new_members AND g.added_by_person_id = pg_temp.tf('po'),
+        format('one owner grant: team, role own, trusted, added by the actor: %s', to_jsonb(g));
+    ASSERT (SELECT count(*) FROM sample_team_access WHERE sample_id = s) = 1, 'exactly one grant';
+    ASSERT pg_temp.rows('sample', s) = 'a:manage,b:edit', format('the manager has manage, the member edit: %s', pg_temp.rows('sample', s));
+    ASSERT (SELECT bool_and(team_access_id = g.team_access_id AND added_by_person_id = pg_temp.tf('po')) FROM sample_access WHERE sample_id = s), 'derived rows point at the owner grant and carry its adder';
+    ASSERT pg_temp.rd(pg_temp.tf('ua'), s) AND pg_temp.rd(pg_temp.tf('ub'), s), 'readers rows for both members';
+    ASSERT d1_private.s_editor(s, pg_temp.tf('ua')) AND d1_private.s_editor(s, pg_temp.tf('ub')), 'both are editors (manage counts as edit)';
+    ASSERT NOT pg_temp.rd(pg_temp.tf('uc'), s) AND NOT pg_temp.rd(pg_temp.tf('uo'), s), 'C and the former owner O read nothing now (a Restricted sample)';
+    ASSERT NOT EXISTS (SELECT 1 FROM team_events e WHERE e.team_id = t AND e.kind IN ('shared', 'unshared')), 'an owner grant logs no sharing event';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+    -- every ownable type, set at insert: the same rows
+    FOREACH kind IN ARRAY ARRAY['sample', 'campaign', 'operation', 'test'] LOOP
+        rec := pg_temp.mk(kind, t, NULL);
+        ASSERT pg_temp.rows(kind, rec) = 'a:manage,b:edit', format('%s: %s', kind, pg_temp.rows(kind, rec));
+        EXECUTE format('SELECT count(*) FROM public.%I WHERE %I = $1 AND role = ''own'' AND team_id = $2 AND trust_new_members', kind || '_team_access', pg_temp.col(kind)) INTO n USING rec, t;
+        ASSERT n = 1, format('%s: one owner grant', kind);
+    END LOOP;
+    -- the owner moves to another team: the old owner grant and its rows go, the new one comes
+    r2 := pg_temp.mk('sample', t, NULL);
+    INSERT INTO teams (name) VALUES ('TF Team 2 ' || left(r2::text, 8)) RETURNING team_id INTO t2;
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t2, pg_temp.tf('pc'), true), (t2, pg_temp.tf('pb'), false);
+    UPDATE physical_samples SET owner_team_id = t2 WHERE sample_id = r2;
+    ASSERT (SELECT string_agg(team_id::text || ':' || role, ',') FROM sample_team_access WHERE sample_id = r2) = t2::text || ':own', 'one owner grant, of the new team';
+    ASSERT pg_temp.rows('sample', r2) = 'b:edit,c:manage', format('the new team''s rows only: %s', pg_temp.rows('sample', r2));
+    -- a team that already had a Can edit share on the record: the share is replaced by the owner grant
+    r3 := pg_temp.mk('sample', NULL, NULL);
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (r3, t, 'edit');
+    ASSERT pg_temp.rows('sample', r3) = 'a:edit,b:edit', 'the share gives edit rows';
+    UPDATE physical_samples SET owner_team_id = t WHERE sample_id = r3;
+    ASSERT (SELECT string_agg(role, ',') FROM sample_team_access WHERE sample_id = r3) = 'own', 'the share became the owner grant';
+    ASSERT pg_temp.rows('sample', r3) = 'a:manage,b:edit', format('and its rows follow: %s', pg_temp.rows('sample', r3));
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift after every type and the move';
+END $$;
+SQL
+
+run_case_own owner_grant_and_manage_rows_are_guarded <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); g uuid; st text;
+BEGIN
+    -- an owner grant cannot be made by hand (not even for the team that owns the record), nor a manage row
+    BEGIN
+        INSERT INTO sample_team_access (sample_id, team_id, role, trust_new_members) VALUES (s, t, 'own', true);
+        RAISE EXCEPTION 'an owner grant was made by hand';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO sample_access (sample_id, person_id, role) VALUES (s, pg_temp.tf('pc'), 'manage');
+        RAISE EXCEPTION 'a manage row was written outside an owner grant';
+    EXCEPTION WHEN check_violation THEN
+        GET STACKED DIAGNOSTICS st = CONSTRAINT_NAME;
+        ASSERT st = 'sample_access_manage_derived_check', format('manage needs a derived row: %s', st);
+    END;
+    BEGIN
+        INSERT INTO project_access (project_id, person_id, role) VALUES (gen_random_uuid(), pg_temp.tf('pc'), 'manage');
+        RAISE EXCEPTION 'project_access accepted manage';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO project_team_access (project_id, team_id, role) VALUES (gen_random_uuid(), t, 'own');
+        RAISE EXCEPTION 'project_team_access accepted own';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    -- the bookkeeping itself (flag on) writes an owner grant only for the record's owner team
+    PERFORM set_config('d1.team_sync', 'on', true);
+    BEGIN
+        INSERT INTO sample_team_access (sample_id, team_id, role, trust_new_members) VALUES (s, t, 'own', true);
+        RAISE EXCEPTION 'an owner grant for a team that does not own the record was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    PERFORM set_config('d1.team_sync', '', true);
+    -- an owner grant cannot be turned into another level, deleted by hand, or made untrusting
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT team_access_id INTO g FROM sample_team_access WHERE sample_id = s;
+    BEGIN
+        UPDATE sample_team_access SET role = 'edit' WHERE team_access_id = g;
+        RAISE EXCEPTION 'the owner grant was turned into an edit grant';
+    EXCEPTION WHEN feature_not_supported THEN NULL;
+    END;
+    BEGIN
+        DELETE FROM sample_team_access WHERE team_access_id = g;
+        RAISE EXCEPTION 'the owner grant was deleted by hand';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    PERFORM set_config('d1.team_sync', 'on', true);
+    BEGIN
+        UPDATE sample_team_access SET trust_new_members = false WHERE team_access_id = g;
+        RAISE EXCEPTION 'an owner grant was made untrusting';
+    EXCEPTION WHEN check_violation THEN
+        GET STACKED DIAGNOSTICS st = CONSTRAINT_NAME;
+        ASSERT st = 'sample_team_access_own_trusted_check', format('owner grants trust: %s', st);
+    END;
+    PERFORM set_config('d1.team_sync', '', true);
+    -- the guard and the lock-first triggers exist on each ownable type
+    ASSERT (SELECT count(*) FROM pg_trigger WHERE tgname IN ('sample_team_access_own_guard', 'operation_team_access_own_guard', 'test_team_access_own_guard', 'campaign_team_access_own_guard') AND NOT tgisinternal) = 4, 'four own guards';
+    ASSERT (SELECT count(*) FROM pg_trigger WHERE tgname IN ('physical_samples_owner_team_lock', 'manufacturing_operations_owner_team_lock', 'test_sessions_owner_team_lock', 'campaigns_owner_team_lock')
+                AND NOT tgisinternal) = 4, 'four readers-lock triggers on the record tables (campaigns and test_sessions had none)';
+END $$;
+SQL
+
+run_case_own manager_flag_changes_derived_role <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); c uuid; t uuid := pg_temp.tf('team');
+BEGIN
+    c := pg_temp.mk('campaign', t, NULL);
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    ASSERT pg_temp.rows('sample', s) = 'a:manage,b:edit', 'start: A manage, B edit';
+    -- B is made a manager: manage on every record the team owns
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = pg_temp.tf('pb');
+    ASSERT pg_temp.rows('sample', s) = 'a:manage,b:manage', format('B promoted (sample): %s', pg_temp.rows('sample', s));
+    ASSERT pg_temp.rows('campaign', c) = 'a:manage,b:manage', format('B promoted (campaign): %s', pg_temp.rows('campaign', c));
+    -- A is demoted: edit at once
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = pg_temp.tf('pa');
+    ASSERT pg_temp.rows('sample', s) = 'a:edit,b:manage', format('A demoted (sample): %s', pg_temp.rows('sample', s));
+    ASSERT pg_temp.rows('campaign', c) = 'a:edit,b:manage', format('A demoted (campaign): %s', pg_temp.rows('campaign', c));
+    ASSERT d1_private.s_editor(s, pg_temp.tf('ua')), 'A still edits';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_own clear_owner_team_removes_grant_and_rows <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); c uuid; kind text; rec uuid;
+BEGIN
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    c := pg_temp.mk('campaign', t, NULL);
+    ASSERT pg_temp.rd(pg_temp.tf('ua'), s), 'before: A reads the sample';
+    -- transferred back to a person
+    UPDATE physical_samples SET owner_team_id = NULL, owner_person_id = pg_temp.tf('pc') WHERE sample_id = s;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_access WHERE sample_id = s), 'the owner grant is gone';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE sample_id = s), 'and every derived row with it';
+    ASSERT NOT pg_temp.rd(pg_temp.tf('ua'), s) AND NOT pg_temp.rd(pg_temp.tf('ub'), s) AND pg_temp.rd(pg_temp.tf('uc'), s), 'readers: the team lost it, the new owner reads it';
+    -- cleared to no owner
+    UPDATE campaigns SET owner_team_id = NULL WHERE campaign_id = c;
+    ASSERT NOT EXISTS (SELECT 1 FROM campaign_team_access WHERE campaign_id = c) AND NOT EXISTS (SELECT 1 FROM campaign_access WHERE campaign_id = c), 'campaign: nothing left';
+    -- the record deleted while team-owned: the grant and rows go with it
+    FOREACH kind IN ARRAY ARRAY['sample', 'operation', 'test', 'campaign'] LOOP
+        rec := pg_temp.mk(kind, t, NULL);
+        EXECUTE format('DELETE FROM public.%I WHERE %I = $1', pg_temp.tbl(kind), pg_temp.col(kind)) USING rec;
+    END LOOP;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_access WHERE role = 'own') AND NOT EXISTS (SELECT 1 FROM operation_team_access WHERE role = 'own')
+       AND NOT EXISTS (SELECT 1 FROM test_team_access WHERE role = 'own') AND NOT EXISTS (SELECT 1 FROM campaign_team_access WHERE role = 'own'), 'no owner grant survives a deleted record';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_own delete_team_owning_records_refused <<'SQL'
+DO $$
+DECLARE kind text; rec uuid; t uuid; st text;
+BEGIN
+    FOREACH kind IN ARRAY ARRAY['sample', 'campaign', 'operation', 'test'] LOOP
+        INSERT INTO teams (name) VALUES ('TF Doomed ' || kind || left(gen_random_uuid()::text, 8)) RETURNING team_id INTO t;
+        INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t, pg_temp.tf('pc'), true);
+        rec := pg_temp.mk(kind, t, NULL);
+        BEGIN
+            DELETE FROM teams WHERE team_id = t;
+            RAISE EXCEPTION 'a team that owns a % was deleted', kind;
+        EXCEPTION WHEN foreign_key_violation THEN
+            GET STACKED DIAGNOSTICS st = CONSTRAINT_NAME;
+            ASSERT st = pg_temp.tbl(kind) || '_owner_team_id_fkey', format('%s: refused by %s_owner_team_id_fkey, got %s', kind, pg_temp.tbl(kind), st);
+        END;
+        ASSERT EXISTS (SELECT 1 FROM teams WHERE team_id = t) AND EXISTS (SELECT 1 FROM team_members WHERE team_id = t), 'the refused delete changed nothing';
+        EXECUTE format('UPDATE public.%I SET owner_team_id = NULL WHERE %I = $1', pg_temp.tbl(kind), pg_temp.col(kind)) USING rec;
+        DELETE FROM teams WHERE team_id = t;
+        ASSERT NOT EXISTS (SELECT 1 FROM teams WHERE team_id = t), 'once nothing is owned the team can go';
+    END LOOP;
+END $$;
+SQL
+
+run_case_own own_grant_has_no_pending <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); t3 uuid; g uuid; pc uuid := pg_temp.tf('pc'); pd uuid := pg_temp.tf('pd');
+BEGIN
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT team_access_id INTO g FROM sample_team_access WHERE sample_id = s;
+    -- a joiner has Can edit at once; a joining manager has manage
+    INSERT INTO team_members (team_id, person_id) VALUES (t, pc);
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t, pd, true);
+    ASSERT (SELECT role FROM sample_access WHERE team_access_id = g AND person_id = pc) = 'edit', 'a joiner gets edit at once';
+    ASSERT (SELECT role FROM sample_access WHERE team_access_id = g AND person_id = pd) = 'manage', 'a joining manager gets manage';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE team_access_id = g), 'no pending row ever';
+    ASSERT pg_temp.rd(pg_temp.tf('uc'), s) AND d1_private.s_editor(s, pg_temp.tf('uc')), 'the joiner reads and edits';
+    ASSERT NOT d1_private.team_pending_actionable('physical_samples', g, pc), 'nothing pending: not actionable';
+    -- a member who leaves loses it
+    DELETE FROM team_members WHERE team_id = t AND person_id = pc;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE person_id = pc AND sample_id = s), 'the leaver loses the derived row';
+    -- a member moved to another team (an UPDATE of team_id) leaves the owning team's grant
+    INSERT INTO teams (name) VALUES ('TF Other ' || left(g::text, 8)) RETURNING team_id INTO t3;
+    UPDATE team_members SET team_id = t3 WHERE team_id = t AND person_id = pd;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE person_id = pd AND sample_id = s), 'the moved member left the owning team';
+    ASSERT d1_private.team_drift_count() = 0 AND d1_private.readers_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_own manage_counts_as_editor_in_readers <<'SQL'
+DO $$
+DECLARE pj uuid; pj2 uuid; sp uuid; sm uuid; sm2 uuid; op uuid; om uuid; cm uuid; t uuid := pg_temp.tf('team'); t2 uuid; ge uuid; tag text := left(gen_random_uuid()::text, 8);
+        ua uuid := pg_temp.tf('ua'); ub uuid := pg_temp.tf('ub'); uc uuid := pg_temp.tf('uc'); mth uuid;
+BEGIN
+    SELECT method_id INTO mth FROM manufacturing_methods ORDER BY method_id LIMIT 1;
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-MP-' || tag, 'TF manage project') RETURNING project_id INTO pj;
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-MQ-' || tag, 'TF manage project 2') RETURNING project_id INTO pj2;
+    -- the same shape twice: a sample in an unrestricted project, owned by the person A / by the team A manages, with an unrestricted child operation
+    INSERT INTO physical_samples (sample_code, owner_person_id, project_id, restricted) VALUES ('TF-MS1-' || tag, pg_temp.tf('pa'), pj, true) RETURNING sample_id INTO sp;
+    INSERT INTO physical_samples (sample_code, owner_team_id, project_id, restricted) VALUES ('TF-MS2-' || tag, t, pj2, true) RETURNING sample_id INTO sm;
+    INSERT INTO manufacturing_operations (method_id, sample_id, source_system) VALUES (mth, sp, 'tf_test') RETURNING operation_id INTO op;
+    INSERT INTO manufacturing_operations (method_id, sample_id, source_system) VALUES (mth, sm, 'tf_test') RETURNING operation_id INTO om;
+    ASSERT pg_temp.rows('sample', sm) = 'a:manage,b:edit', 'A holds only a manage row on the team-owned sample';
+    -- A: owner of one, manager of the team that owns the other: reads the sample, the child operation and (as its editor) the project, edits the sample
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = sp AND user_id = ua) AND EXISTS (SELECT 1 FROM sample_readers WHERE record_id = sm AND user_id = ua), 'A reads both samples';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = op AND user_id = ua) AND EXISTS (SELECT 1 FROM operation_readers WHERE record_id = om AND user_id = ua), 'A reads both child operations';
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ua) AND EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ua),
+        'A reads both projects as an editor of a sample in them (a manage row is an editor)';
+    ASSERT d1_private.s_editor(sp, ua) AND d1_private.s_editor(sm, ua), 'A edits both samples';
+    -- B (a plain member, edit) is an editor like a person with a Can edit entry: reads the sample, its child operation and the project; C reads none
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = sm AND user_id = ub) AND d1_private.s_editor(sm, ub), 'B reads and edits the team-owned sample';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = om AND user_id = ub), 'B reads its child operation';
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'B reads the project as an editor of the sample';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = sm AND user_id = uc) AND NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = uc), 'C reads neither';
+    -- a campaign (unrestricted) with the team-owned sample in it: the sample's editors read it (campaign_candidates)
+    INSERT INTO campaigns (campaign_type, name) VALUES ('testing_campaign', 'TF manage campaign ' || tag) RETURNING campaign_id INTO cm;
+    INSERT INTO campaign_samples (campaign_id, sample_id) VALUES (cm, sm);
+    ASSERT EXISTS (SELECT 1 FROM campaign_readers WHERE record_id = cm AND user_id = ua) AND EXISTS (SELECT 1 FROM campaign_readers WHERE record_id = cm AND user_id = ub)
+       AND NOT EXISTS (SELECT 1 FROM campaign_readers WHERE record_id = cm AND user_id = uc), 'the editors (manage and edit) read the unrestricted campaign the sample is in; C does not';
+    -- demote A and make B the manager: still editors, nothing lost
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = pg_temp.tf('pb');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = pg_temp.tf('pa');
+    ASSERT d1_private.s_editor(sm, ua) AND d1_private.s_editor(sm, ub) AND EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'both still edit';
+    -- leave the team: the access goes at once
+    DELETE FROM team_members WHERE team_id = t AND person_id = pg_temp.tf('pa');
+    ASSERT NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ua) AND NOT d1_private.s_editor(sm, ua), 'A left: no longer an editor or a reader of the project';
+    ASSERT d1_private.readers_drift_count() = 0, 'readers = functions = specs: no drift';
+    -- the pending rule: an edit grant to a manager of the owning team (a manage row) gains nothing; to a stranger it does
+    INSERT INTO teams (name) VALUES ('TF Team 3 ' || tag) RETURNING team_id INTO t2;
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t2, pg_temp.tf('pd'), true);
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (sm, t2, 'edit') RETURNING team_access_id INTO ge;
+    INSERT INTO team_members (team_id, person_id) VALUES (t2, pg_temp.tf('pb')), (t2, pg_temp.tf('pc'));
+    ASSERT NOT d1_private.team_pending_actionable('physical_samples', ge, pg_temp.tf('pb')), 'an edit grant to B, who holds a manage row: not actionable';
+    ASSERT d1_private.team_pending_actionable('physical_samples', ge, pg_temp.tf('pc')), 'to a stranger: actionable';
+    ASSERT d1_private.team_drift_count() = 0, 'no team drift';
+END $$;
+SQL
+
+run_case_own drift_covers_owner_grants <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); g uuid; probs text; r2 uuid;
+BEGIN
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT team_access_id INTO g FROM sample_team_access WHERE sample_id = s;
+    ASSERT d1_private.team_drift_count() = 0, 'healthy: empty';
+    -- behind the bookkeeping: A's derived row says edit although A manages, B's is missing, D has a stray row
+    PERFORM set_config('d1.team_sync', 'on', true);
+    UPDATE sample_access SET role = 'edit' WHERE team_access_id = g AND person_id = pg_temp.tf('pa');
+    DELETE FROM sample_access WHERE team_access_id = g AND person_id = pg_temp.tf('pb');
+    INSERT INTO sample_access (sample_id, person_id, role, team_access_id) VALUES (s, pg_temp.tf('pd'), 'manage', g);
+    PERFORM set_config('d1.team_sync', '', true);
+    SELECT string_agg((CASE person_id WHEN pg_temp.tf('pa') THEN 'a' WHEN pg_temp.tf('pb') THEN 'b' WHEN pg_temp.tf('pd') THEN 'd' ELSE '?' END) || '/' || problem, ',' ORDER BY problem)
+      INTO probs FROM d1_private.team_drift();
+    ASSERT probs = 'd/extra,b/missing,a/role', format('extra, missing and role found: %s', probs);
+    PERFORM set_config('d1.team_sync', 'on', true);
+    UPDATE sample_access SET role = 'manage' WHERE team_access_id = g AND person_id = pg_temp.tf('pa');
+    INSERT INTO sample_access (sample_id, person_id, role, team_access_id) VALUES (s, pg_temp.tf('pb'), 'edit', g);
+    DELETE FROM sample_access WHERE team_access_id = g AND person_id = pg_temp.tf('pd');
+    PERFORM set_config('d1.team_sync', '', true);
+    ASSERT d1_private.team_drift_count() = 0, 'repaired: empty';
+    -- a team-owned record with no owner grant
+    r2 := pg_temp.mk('campaign', t, NULL);
+    PERFORM set_config('d1.team_sync', 'on', true);
+    DELETE FROM campaign_team_access WHERE campaign_id = r2;
+    PERFORM set_config('d1.team_sync', '', true);
+    ASSERT (SELECT string_agg(collection || '/' || problem, ',') FROM d1_private.team_drift()) = 'campaigns/own_missing', 'an owner team and no owner grant: own_missing';
+    -- an owner grant of a team that no longer owns the record (owner_team_id cleared behind the triggers)
+    SET LOCAL session_replication_role = replica;
+    UPDATE campaigns SET owner_team_id = NULL WHERE campaign_id = r2;
+    UPDATE physical_samples SET owner_team_id = NULL WHERE sample_id = s;
+    RESET session_replication_role;
+    ASSERT (SELECT string_agg(collection || '/' || problem, ',') FROM d1_private.team_drift() WHERE problem LIKE 'own%') = 'physical_samples/own_extra',
+        'an owner grant whose team no longer owns the record: own_extra (the campaign is clean again)';
+    SET LOCAL session_replication_role = replica;
+    UPDATE physical_samples SET owner_team_id = t WHERE sample_id = s;
+    RESET session_replication_role;
+    -- a pending row on an owner grant
+    PERFORM set_config('d1.team_sync', 'on', true);
+    INSERT INTO sample_team_pending (team_access_id, person_id, state) VALUES (g, pg_temp.tf('pc'), 'pending');
+    PERFORM set_config('d1.team_sync', '', true);
+    ASSERT (SELECT string_agg(collection || '/' || problem, ',') FROM d1_private.team_drift()) = 'physical_samples/own_pending', 'a pending row on an owner grant: own_pending';
+END $$;
+SQL
+
+run_case_own person_access_owns_team_owned <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); c uuid; tname text; r record; pa uuid := pg_temp.tf('pa'); pb uuid := pg_temp.tf('pb');
+BEGIN
+    SELECT name INTO tname FROM teams WHERE team_id = t;
+    ASSERT (SELECT owns FROM d1_private.person_access(pa)) = 0, 'before: A owns nothing';
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    c := pg_temp.mk('campaign', t, NULL);
+    SELECT * INTO r FROM d1_private.person_access(pa);
+    ASSERT r.owns = 2 AND r.shared = 0, format('the manager A owns the two team-owned records: %s', to_jsonb(r));
+    SELECT * INTO r FROM d1_private.person_access_list(pa, 'owns') WHERE record_id = s;
+    ASSERT r.collection = 'physical_samples' AND r.level = 'owner' AND r.source = 'team_owner' AND r.granted_by = tname, format('the team_owner row: %s', to_jsonb(r));
+    SELECT * INTO r FROM d1_private.person_access(pb);
+    ASSERT r.owns = 0 AND r.teams = 2, format('the plain member B owns none, and the team gives him two rows: %s', to_jsonb(r));
+    SELECT * INTO r FROM d1_private.person_access_list(pb, 'teams') WHERE record_id = s;
+    ASSERT r.level = 'edit' AND r.source = 'team', format('B has edit through the team: %s', to_jsonb(r));
+    SELECT * INTO r FROM d1_private.person_access_list(pa, 'teams') WHERE record_id = s;
+    ASSERT r.level = 'manage' AND r.source = 'team', format('A has manage through the team: %s', to_jsonb(r));
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.person_access_list(pa, 'shared') WHERE record_id IN (s, c)), 'derived rows are not shared rows';
+    -- B manager, A demoted: the owner's powers move with the flag
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = pb;
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = pa;
+    ASSERT (SELECT owns FROM d1_private.person_access(pa)) = 0 AND (SELECT owns FROM d1_private.person_access(pb)) = 2, 'the demoted manager owns nothing, the new manager two records';
+    -- a person owner as well: both count
+    UPDATE physical_samples SET owner_person_id = pb, owner_team_id = NULL WHERE sample_id = s;
+    ASSERT (SELECT owns FROM d1_private.person_access(pb)) = 2, 'the person-owned sample counts once, the team-owned campaign once';
+END $$;
+SQL
+
+run_case_own owner_elevation_for_managers <<'SQL'
+DO $$
+DECLARE t uuid := pg_temp.tf('team'); cm uuid; s uuid; o uuid; ts uuid; pj uuid; pj2 uuid; oo uuid; mth uuid; tag text := left(gen_random_uuid()::text, 8);
+        ua uuid := pg_temp.tf('ua'); ub uuid := pg_temp.tf('ub');
+BEGIN
+    SELECT method_id INTO mth FROM manufacturing_methods ORDER BY method_id LIMIT 1;
+    -- a Restricted campaign owned by the team, with an unrestricted sample, operation and test in it
+    cm := pg_temp.mk('campaign', t, NULL);
+    INSERT INTO physical_samples (sample_code) VALUES ('TF-EL-' || tag) RETURNING sample_id INTO s;
+    INSERT INTO campaign_samples (campaign_id, sample_id) VALUES (cm, s);
+    INSERT INTO manufacturing_operations (method_id, campaign_id, source_system) VALUES (mth, cm, 'tf_test') RETURNING operation_id INTO o;
+    INSERT INTO test_sessions (test_type, campaign_id) VALUES ('hardness', cm) RETURNING session_id INTO ts;
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ua), 'the manager acts as the campaign''s owner: reads its sample';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ua) AND EXISTS (SELECT 1 FROM test_readers WHERE record_id = ts AND user_id = ua), 'and its operation and test';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ub) AND NOT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ub)
+       AND NOT EXISTS (SELECT 1 FROM test_readers WHERE record_id = ts AND user_id = ub), 'a plain member reads none of them';
+    ASSERT d1_private.can_read_sample(s, ua) AND NOT d1_private.can_read_sample(s, ub) AND d1_private.can_read_operation(o, ua) AND NOT d1_private.can_read_operation(o, ub), 'the predicates agree';
+    -- a team-owned operation in an unrestricted project: its manager reads the project
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-EL-' || tag, 'TF elevation project') RETURNING project_id INTO pj;
+    INSERT INTO manufacturing_operations (method_id, project_id, source_system, owner_team_id, restricted) VALUES (mth, pj, 'tf_test', t, true) RETURNING operation_id INTO oo;
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ua), 'the manager of a team-owned operation reads its project';
+    ASSERT NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ub), 'a plain member does not';
+    ASSERT d1_private.can_read_project(pj, ua) AND NOT d1_private.can_read_project(pj, ub), 'the project predicate agrees';
+    -- a test, in another project
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-EM-' || tag, 'TF elevation project 2') RETURNING project_id INTO pj2;
+    INSERT INTO test_sessions (test_type, project_id, owner_team_id, restricted) VALUES ('hardness', pj2, t, true);
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'a team-owned test: manager yes, member no';
+    -- demoted: the elevations go at once
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = pg_temp.tf('pb');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = pg_temp.tf('pa');
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ua), 'the demoted manager lost them';
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ub) AND EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'the new manager has them';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_own suspended_manager_of_owning_team_is_flagged <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); got record;
+BEGIN
+    UPDATE directus_users SET status = 'suspended' WHERE id IN (pg_temp.tf('ua'), pg_temp.tf('ub'));
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'suspended_owns_records' AND pg_temp.tf('pa') = ANY (person_ids)), 'before: A owns nothing';
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT * INTO got FROM d1_private.people_attention() WHERE key = 'suspended_owns_records';
+    ASSERT pg_temp.tf('pa') = ANY (got.person_ids) AND pg_temp.tf('ua') = ANY (got.user_ids), format('the suspended manager of a team that owns a record is flagged: %s', to_jsonb(got));
+    ASSERT NOT (pg_temp.tf('pb') = ANY (got.person_ids)), 'the suspended plain member is not';
+    UPDATE physical_samples SET owner_team_id = NULL WHERE sample_id = s;
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'suspended_owns_records' AND pg_temp.tf('pa') = ANY (person_ids)), 'cleared: not flagged';
+END $$;
+SQL
+
+run_case_own team_owned_orphan_operation_is_not_open_to_all <<'SQL'
+DO $$
+DECLARE o uuid; t uuid := pg_temp.tf('team'); e uuid; mth uuid; ua uuid := pg_temp.tf('ua'); uc uuid := pg_temp.tf('uc');
+BEGIN
+    SELECT method_id INTO mth FROM manufacturing_methods ORDER BY method_id LIMIT 1;
+    -- an ownerless, unrestricted operation with no project, campaign or sample: the orphan amnesty, open to every member
+    INSERT INTO manufacturing_operations (method_id, source_system) VALUES (mth, 'tf_test') RETURNING operation_id INTO o;
+    ASSERT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'an ownerless orphan operation is open to all';
+    -- team-owned: it has an owner, so it is not an orphan; only the team reads it
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'a team-owned orphan operation is not open to all';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = uc), 'the team reads it, a stranger does not';
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.operation_open_of(ARRAY[o])), 'operation_open_of agrees';
+    -- inserted team-owned, and owned by a team with no members (no access row is written: only the update trigger sees owner_team_id)
+    INSERT INTO manufacturing_operations (method_id, source_system, owner_team_id) VALUES (mth, 'tf_test', t) RETURNING operation_id INTO e;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = e), 'inserted team-owned: not open to all';
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id IN (o, e);
+    ASSERT (SELECT count(*) FROM operation_open_to_all WHERE record_id IN (o, e)) = 2, 'cleared (no person owner): open to all again';
+    INSERT INTO teams (name) VALUES ('TF empty ' || left(o::text, 8)) RETURNING team_id INTO t;
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'owned by a team with no members: still not open to all (the update trigger compares owner_team_id)';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
 # --- two sessions: a team grant added while a member joins. Each side's trigger reads what the other writes (the grant reads the members,
 # the joiner the grants); without a common lock each misses the other's uncommitted row and the joiner ends with neither a derived nor a
 # pending row (team_drift: missing). Session 1 holds its transaction open for 3 s, session 2 starts 1 s later. Both orders.
@@ -1002,6 +1475,33 @@ team_delete_lock_order_case() {
 }
 team_delete_lock_order_case
 
+# --- two sessions: owner_team_id written on a campaign while a team is deleted (migration 183). Session 2 holds the readers lock (a write to
+# physical_samples takes it first) and 2 s later deletes the team; session 1, one second in, makes the team the owner of a campaign (the foreign key
+# takes KEY SHARE on the team row). campaigns has no readers lock before its rows are locked, so without the BEFORE STATEMENT trigger
+# campaigns_owner_team_lock session 1 locks the campaign and the team row and then waits for the readers lock (in the owner-grant trigger) while
+# session 2 waits for the team row: a deadlock (40P01). With it, session 1 waits for the lock before it touches any row; session 2 deletes the
+# team and commits; session 1's update then fails on the foreign key (23503), not with a deadlock.
+owner_lock_order_case() {
+  local d=7 team m c f1 f2 o1 o2 got
+  team="${d}b000000-0000-4000-8000-0000000000f1"; m="${d}a000000-0000-4000-8000-0000000000f1"; c="${d}c000000-0000-4000-8000-0000000000f1"
+  psql "$TM_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -c "
+    INSERT INTO people (person_id, full_name) VALUES ('$m', 'TM F1');
+    INSERT INTO teams (team_id, name) VALUES ('$team', 'TM Owner lock order');
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('$team', '$m', true);
+    INSERT INTO campaigns (campaign_id, campaign_type, name) VALUES ('$c', 'testing_campaign', 'TM owner lock order');" >/dev/null 2>&1 \
+    || { bad "owner lock order (two sessions): setup failed"; return; }
+  f1=$(mktemp); f2=$(mktemp)
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -c "BEGIN; UPDATE physical_samples SET restricted = restricted WHERE false; SELECT pg_sleep(2); DELETE FROM teams WHERE team_id = '$team'; COMMIT;" >"$f2" 2>&1 ) &
+  sleep 1
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -c "BEGIN; UPDATE campaigns SET owner_team_id = '$team' WHERE campaign_id = '$c'; COMMIT;" >"$f1" 2>&1 ) &
+  wait
+  o1=$(cat "$f1"); o2=$(cat "$f2"); rm -f "$f1" "$f2"
+  got=$(psql "$TM_URL" --no-psqlrc -X -t -A -q -c "SELECT (SELECT count(*) FROM teams WHERE team_id = '$team') || '/' || (SELECT count(*) FROM campaigns WHERE campaign_id = '$c' AND owner_team_id IS NULL) || '/' || (SELECT count(*) FROM campaign_team_access WHERE campaign_id = '$c')")
+  if [[ "$got" == "0/1/0" ]] && ! grep -qi 'deadlock' <<<"$o1$o2" && grep -q 'foreign key' <<<"$o1"; then ok "owner lock order (two sessions): a team deleted while it is made the owner of a campaign: no deadlock, the owner update is refused by the foreign key"
+  else bad "owner lock order (two sessions): teams/campaign/grants $got (expected 0/1/0); session 1: $o1; session 2: $o2"; fi
+}
+owner_lock_order_case
+
 run_case not_granted_to_llm_role <<'SQL'
 DO $$
 DECLARE t text; f text;
@@ -1015,7 +1515,9 @@ BEGIN
     FOREACH f IN ARRAY ARRAY['d1_private.team_actor_person()', 'd1_private.team_has_manager()', 'd1_private.teams_history()', 'd1_private.team_members_history()',
                              'd1_private.team_decide(text, uuid, uuid, text)', 'd1_private.team_pending_actionable(text, uuid, uuid)', 'd1_private.team_drift()',
                              'd1_private.team_drift_count()', 'd1_private.team_grant_sync()', 'd1_private.team_member_sync()', 'd1_private.team_access_guard()',
-                             'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()', 'd1_private.team_pending_guard()'] LOOP
+                             'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()', 'd1_private.team_pending_guard()',
+                             'd1_private.team_derived_role(text, boolean)', 'd1_private.team_grant_guard()', 'd1_private.team_owner_sync()', 'd1_private.team_manager_sync()',
+                             'd1_private.c_owner(uuid, uuid)', 'd1_private.o_owner(uuid, uuid)', 'd1_private.t_owner(uuid, uuid)'] LOOP
         ASSERT NOT has_function_privilege('d1_llm_readonly', f, 'EXECUTE'), format('%s must not be executable by d1_llm_readonly', f);
     END LOOP;
 END $$;

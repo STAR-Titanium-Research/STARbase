@@ -1,7 +1,7 @@
 -- Directus metadata for the campaigns layer (machining trials + testing campaigns).
 -- Idempotent: safe to re-run. Apply after migration 20260628000047_campaigns.sql.
 --   docker exec -i d1-database-postgres-1 sh -c "PGPASSWORD=change_me psql -h localhost -U d1 -d d1_database" < scripts/configure_campaigns.sql
--- then flush Redis + restart Directus.
+-- then restart Directus (it caches metadata in memory; do not flush Redis, which holds the worker job queues).
 
 -- ─── 1. COLLECTION ────────────────────────────────────────────────────────────
 BEGIN;
@@ -92,6 +92,7 @@ WHERE one_collection='campaigns'
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
 ('campaigns','project_id','projects','campaigns','nullify'),
 ('campaigns','owner_person_id','people',NULL,'nullify'),
+('campaigns','owner_team_id','teams',NULL,'nullify'),
 ('campaigns','owner','directus_users',NULL,'nullify'),
 ('campaigns','default_equipment_id','equipment',NULL,'nullify'),
 ('campaigns','default_material_id','materials',NULL,'nullify'),

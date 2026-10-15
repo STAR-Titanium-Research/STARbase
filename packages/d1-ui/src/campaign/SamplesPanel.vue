@@ -25,6 +25,8 @@ const props = defineProps<{
 	cannotAdd?: boolean;
 	/** Sample-list entries whose sample the user may not see (`overview.counts.hiddenSamples`). */
 	hiddenCount?: number;
+	/** A Lab Viewer (host.canViewAllAccess): looks at the list and changes nothing, so no picker and no remove or add button. */
+	readOnly?: boolean;
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
@@ -142,8 +144,8 @@ async function remove(id: string, code?: string | null) {
 						<td class="n">{{ s.operations }}</td>
 						<td class="n">{{ s.tests }}</td>
 						<td class="act">
-							<button v-if="s.member" class="x" title="Remove from the campaign's sample list" :disabled="!!busy" @click="remove(s.sample_id, s.sample_code)"><v-icon name="close" x-small /></button>
-							<button v-else-if="!cannotAdd" class="x add" title="Add to the campaign's sample list" :disabled="!!busy" @click="add(s.sample_id, s.sample_code)"><v-icon name="add" x-small /></button>
+							<button v-if="s.member && !readOnly" class="x" title="Remove from the campaign's sample list" :disabled="!!busy" @click="remove(s.sample_id, s.sample_code)"><v-icon name="close" x-small /></button>
+							<button v-else-if="!s.member && !cannotAdd && !readOnly" class="x add" title="Add to the campaign's sample list" :disabled="!!busy" @click="add(s.sample_id, s.sample_code)"><v-icon name="add" x-small /></button>
 						</td>
 					</tr>
 				</tbody>
@@ -154,7 +156,7 @@ async function remove(id: string, code?: string | null) {
 			</p>
 			<p v-if="rows.length > LIST_CAP" class="d1-ccap">Showing the first {{ LIST_CAP }} of {{ rows.length }} samples. The matrix above has them all.</p>
 		</LoadState>
-		<PickerBox v-if="!cannotAdd" v-model="search" placeholder="Add samples by code or nickname…" :searching="searching" :no-results="searched && !results.length" empty-text="No other samples match.">
+		<PickerBox v-if="!cannotAdd && !readOnly" v-model="search" placeholder="Add samples by code or nickname…" :searching="searching" :no-results="searched && !results.length" empty-text="No other samples match.">
 			<button v-for="r in results" :key="r.sample_id" type="button" class="pick" :disabled="!!busy" @click="add(r.sample_id, r.sample_code)">
 				<span class="code">{{ r.sample_code }}</span>
 				<span class="sub">{{ r.nickname || r.material_id?.common_name || '' }}</span>

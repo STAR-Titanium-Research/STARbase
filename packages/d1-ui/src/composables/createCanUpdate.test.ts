@@ -63,3 +63,28 @@ describe('createCanUpdate', () => {
 		expect(canUpdate.value).toBeNull();
 	});
 });
+
+describe('createCanUpdate for a Lab Viewer (readOnly)', () => {
+	it('is false from the first frame and asks nothing, even though Directus would say yes', async () => {
+		const api = { get: vi.fn().mockResolvedValue(answer(true)) };
+		const { canUpdate, refresh } = createCanUpdate(api, 'physical_samples', ref('s1'), ref(true));
+		expect(canUpdate.value).toBe(false); // not null: no flash of an Edit button while a request is on its way
+		await refresh();
+		await nextTick();
+		expect(api.get).not.toHaveBeenCalled();
+		expect(canUpdate.value).toBe(false);
+	});
+
+	it('is unchanged for anyone else, and follows the flag when it changes', async () => {
+		const api = { get: vi.fn().mockResolvedValue(answer(true)) };
+		const readOnly = ref(false);
+		const { canUpdate } = createCanUpdate(api, 'physical_samples', ref('s1'), readOnly);
+		await nextTick();
+		await nextTick();
+		expect(api.get).toHaveBeenCalledTimes(1);
+		expect(canUpdate.value).toBe(true);
+		readOnly.value = true;
+		await nextTick();
+		expect(canUpdate.value).toBe(false);
+	});
+});

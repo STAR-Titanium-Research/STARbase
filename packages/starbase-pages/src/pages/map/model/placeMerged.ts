@@ -1,13 +1,17 @@
-// Where the nodes go after an expand or a merge (spec §6.7): cards already on the map keep their places
-// (a dragged card stays where it was dropped), and only the new cards are laid out, so that they do not
-// overlap anything. Pure: ELK's positions for the whole graph come in, final positions of the cards that
+// Where the nodes go after an expand or a merge (spec §6.7): only the new cards are laid out, so that they do
+// not overlap anything; a dragged card stays where it was dropped, and the other cards on the map keep their
+// places unless a card that grew must push them. Pure: ELK's positions for the whole graph come in, final positions of the cards that
 // move go out. A full Re-layout does not come through here.
 //
 // New cards keep ELK's arrangement among themselves. A group of new cards wired to a card that is already
 // placed is shifted so that it lines up with that card; a group wired to nothing placed (the used-in fan of
 // a record in an Inside tray) is put beside the card the person expanded. A card that grew (a collapsed
-// container that was opened) keeps its place and pushes the placed cards it now overlaps along the cross
-// axis, instead of lying on top of them.
+// container that was opened) pushes the placed cards it now overlaps along the cross axis, instead of lying
+// on top of them. Only DRAGGED cards are guaranteed to stay where they are, so a grown card may itself be
+// pushed to keep the gap.
+//
+// Accepted limit: a card that grows onto a DRAGGED card is not helped. The dragged card does not move (the person's
+// drop wins), so the two overlap until Re-layout tidies the map.
 
 import type { Dir } from './elkInput';
 
@@ -33,6 +37,8 @@ export interface PlaceInput {
   dir: Dir;
   /** The cards the person expanded (on the map before and after); usually one, more when two expands share a layout. */
   anchors?: string[];
+  /** Cards the person dragged: a card that grew never pushes these aside (they stay where they were dropped). */
+  pinned?: ReadonlySet<string>;
 }
 
 /** Room kept between cards the layout moves. */
@@ -73,13 +79,25 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
     const was = placed[id];
     if (Math.abs(box.width - was.width) > GROWN || Math.abs(box.height - was.height) > GROWN) queue.push(id);
   }
+  const pinned = (id: string) => !!input.pinned?.has(id);
+  const pinnedBoxes = [...fixed].filter(([id]) => pinned(id)).map(([, b]) => b);
   const moved = new Set<string>();
-  for (let guard = 0; queue.length && guard < fixed.size * fixed.size + 8; guard++) {
+  // Every move is queued again, so a card that was pushed (or hopped past a dragged one) is checked against everything placed.
+  // The loop is bounded: if the bound is hit it just stops, and what is placed so far is returned (no hang).
+  for (let guard = 0; queue.length && guard < fixed.size ** 2 * 4 + 8; guard++) {
     const id = queue.shift()!;
     const box = fixed.get(id)!;
     for (const [otherId, other] of fixed) {
-      if (otherId === id || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
+      if (otherId === id || pinned(otherId) || !overlaps(box, other)) continue;
+      // A card that grew leaves what lies above it alone; a card that was moved clears everything it landed on.
+      if (!moved.has(id) && axis.start(other) < axis.start(box)) continue;
       axis.set(other, axis.end(box) + GAP);
+      // ...but never onto a card the person dragged there: on past it.
+      for (let guard2 = 0; guard2 <= pinnedBoxes.length; guard2++) {
+        const hit = pinnedBoxes.filter((p) => overlaps(other, p)).sort((a, b) => axis.end(b) - axis.end(a))[0];
+        if (!hit) break;
+        axis.set(other, axis.end(hit) + GAP);
+      }
       moved.add(otherId);
       queue.push(otherId);
     }
@@ -101,10 +119,10 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
   const groups = new Map<string, string[]>();
   for (const id of fresh) groups.set(find(id), [...(groups.get(find(id)) ?? []), id]);
 
-  /** How far ELK is from where the placed cards are, over all placed cards ELK also laid out. */
+  /** How far ELK is from where the placed cards are, over all placed cards ELK also laid out (dragged ones say nothing about it). */
   const global: Point = {
-    x: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.x - elk[id].x)),
-    y: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.y - elk[id].y)),
+    x: median([...fixed].filter(([id]) => elk[id] && !pinned(id)).map(([id, b]) => b.x - elk[id].x)),
+    y: median([...fixed].filter(([id]) => elk[id] && !pinned(id)).map(([id, b]) => b.y - elk[id].y)),
   };
   const anchorIds = (input.anchors ?? []).filter((id) => fixed.has(id));
 

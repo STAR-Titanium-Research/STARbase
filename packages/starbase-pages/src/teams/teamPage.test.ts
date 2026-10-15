@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PendingItem, TeamEvent, TeamSummary } from '@d1/ui';
 import {
-	LOGO_MAX_BYTES, addedLines, canManage, hiddenLine, historyLabel, levelCounts, logoProblem, managersLine, membersAndRecords, pendingLine, plural,
+	LOGO_MAX_BYTES, addedLines, canManage, deleteRefusal, ownedCountsText, hiddenLine, historyLabel, levelCounts, logoProblem, managersLine, membersAndRecords, pendingLine, plural,
 	teamsShown, tileOf,
 } from './teamPage';
 
@@ -26,6 +26,43 @@ describe('membersAndRecords', () => {
 		expect(membersAndRecords(6, { view: 3, edit: 2, investigator: 1 })).toBe('6 members · 6 records');
 		expect(membersAndRecords(1, { view: 1, edit: 0, investigator: 0 })).toBe('1 member · 1 record');
 		expect(membersAndRecords(0, { view: 0, edit: 0, investigator: 0 })).toBe('0 members · 0 records');
+	});
+});
+
+describe('records a team owns', () => {
+	it('count as records of the team', () => {
+		expect(membersAndRecords(6, { view: 3, edit: 2, investigator: 1, owns: 4 })).toBe('6 members · 10 records');
+		expect(membersAndRecords(2, { view: 0, edit: 0, investigator: 0, owns: 1 })).toBe('2 members · 1 record');
+	});
+	it('are listed first as Owns, only when the team owns any', () => {
+		expect(levelCounts({ view: 4, edit: 2, investigator: 0, owns: 3 })[0]).toEqual({ key: 'owns', label: 'Owns', n: 3 });
+		expect(levelCounts({ view: 4, edit: 2, investigator: 0, owns: 0 })).toHaveLength(3);
+		expect(levelCounts({ view: 4, edit: 2, investigator: 0 })).toHaveLength(3);
+	});
+});
+
+describe('ownedCountsText', () => {
+	it('lists the collections the team owns records in, with the right nouns', () => {
+		expect(ownedCountsText({ physical_samples: 2, manufacturing_operations: 0, test_sessions: 0, campaigns: 1 })).toBe('2 samples and 1 campaign');
+		expect(ownedCountsText({ physical_samples: 1, manufacturing_operations: 3, test_sessions: 2, campaigns: 1 })).toBe('1 sample, 3 operations, 2 tests and 1 campaign');
+		expect(ownedCountsText({ campaigns: 5 })).toBe('5 campaigns');
+		expect(ownedCountsText({})).toBe('records');
+		expect(ownedCountsText(null)).toBe('records');
+	});
+});
+
+describe('deleteRefusal', () => {
+	const counts = { physical_samples: 2, manufacturing_operations: 0, test_sessions: 0, campaigns: 1 };
+	it('says what the team owns, from the counts the endpoint sent', () => {
+		const err = Object.assign(new Error('Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or another team before deleting the team.'), {
+			status: 409, code: 'TEAM_OWNS_RECORDS', extensions: { code: 'TEAM_OWNS_RECORDS', counts },
+		});
+		expect(deleteRefusal('Beta', err)).toBe('Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or another team before deleting the team.');
+	});
+	it("falls back to the endpoint's own words, and to a plain sentence", () => {
+		expect(deleteRefusal('Beta', Object.assign(new Error('Server says no'), { code: 'LAST_MANAGER' }))).toBe('Server says no');
+		expect(deleteRefusal('Beta', Object.assign(new Error('This team owns records.'), { code: 'TEAM_OWNS_RECORDS', extensions: {} }))).toBe('This team owns records.');
+		expect(deleteRefusal('Beta', null)).toBe('That did not work.');
 	});
 });
 
@@ -112,6 +149,13 @@ describe('addedLines', () => {
 	});
 	it('adds the records the team owns once teams can own records', () => {
 		expect(addedLines('Femi Noor', 'Additive', { pending: 0, owners_asked: 0, owned_edit: 12 })[1]).toBe('Femi Noor gets Can edit on the 12 records Additive owns.');
+		expect(addedLines('Femi Noor', 'Additive', { pending: 0, owners_asked: 0, owned_edit: 1 })[1]).toBe('Femi Noor gets Can edit on the 1 record Additive owns.');
+	});
+	it('says a new manager can also share, transfer and delete the records the team owns', () => {
+		expect(addedLines('Femi Noor', 'Additive', { pending: 0, owners_asked: 0, owned_edit: 12 }, true)[1]).toBe(
+			'Femi Noor gets Can edit on the 12 records Additive owns, and as a manager can share, transfer and delete them.',
+		);
+		expect(addedLines('Femi Noor', 'Additive', { pending: 0, owners_asked: 0, owned_edit: 0 }, true)).toHaveLength(1);
 	});
 });
 
@@ -121,6 +165,11 @@ describe('canManage', () => {
 		expect(canManage(team({ is_member: true }), false)).toBe(false);
 		expect(canManage(team({}), true)).toBe(true);
 		expect(canManage(null, true)).toBe(false);
+	});
+	it('never lets a read-only viewer (a Lab Viewer) manage, even one who manages the team or is flagged an administrator', () => {
+		expect(canManage(team({ is_manager: true }), false, true)).toBe(false);
+		expect(canManage(team({}), true, true)).toBe(false);
+		expect(canManage(team({ is_manager: true }), false, false)).toBe(true);
 	});
 });
 

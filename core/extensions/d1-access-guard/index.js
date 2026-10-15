@@ -35,6 +35,9 @@
 // covers: the owner column and `restricted` (A1a). Only the owner switches a record to or from
 // Restricted; a Can edit person may not, even though they may edit every other field.
 //
+// Ruling O4 (People 3) holds on this direct path too: an update that sets `owner_team_id` to a team with no manager (no is_manager row in
+// team_members) is refused 409 TEAM_HAS_NO_MANAGER, after the owner check above; administrators and internal calls are exempt.
+//
 // A third check (A1a, `restrictedKeys`) covers moving a record. Moving a sample, operation, test or
 // campaign to another project, campaign or sample changes who can see it, which is managing its access
 // by another name. When the record, its current sample, or the old or new project, campaign or sample
@@ -79,6 +82,13 @@
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
 //
+// Lab Viewer (migration 185, ADR-0014 amendment): the role reads everything and changes nothing. Its policy has no create, update or delete
+// permission row, so Directus refuses every item write. But Directus gives EVERY app_access policy a built-in right to create comments (and to
+// update and delete its own), and that right is not a row in directus_permissions, so no policy can take it away. The three hooks at the end of
+// this file (comments.create, comments.update, comments.delete) refuse a caller whose ROLE is the Lab Viewer role with 403 READ_ONLY_ROLE, whatever
+// the login's status (fail closed) and whatever else the login holds. Only the role decides, so an administrator (another role) is unaffected.
+// What a viewer can still write on purpose is listed in docs/adr/0014-record-access.md (the Lab Viewer amendment).
+//
 // Creating a parent and its junction rows in one request (a project with investigators, a sample with
 // co-owners, a campaign with samples) is allowed. The parent has just been inserted, in the request's
 // transaction, so its update rule may not hold for the creator (they named someone else as owner or
@@ -94,6 +104,8 @@
 // A payload that nests a brand-new parent (no key) is allowed: the caller is creating that record.
 
 import { readFileSync } from 'node:fs';
+
+import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE } from '../d1-record-access/index.js';
 
 const RULES = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8'));
 const GUARDS = RULES.guards;
@@ -111,6 +123,11 @@ const restrictAdminOnly = () => RESTRICT_ADMIN_ONLY && process.env.D1_A1B_RESTRI
 // the four record types and projects (a project's PI can restrict it, which hides its whole contents)
 const restrictable = (collection) => collection === 'projects' || OWNER_GUARDS[collection] !== undefined;
 const RESTRICT_REFUSED = 'Restricting a record is not available yet. Ask an administrator.';
+// Ruling O3 (People 3): a record becomes team-owned only through Transfer ownership (d1-record-access), never by a create payload.
+const TEAM_OWN_REFUSED = 'A record becomes team-owned through Transfer ownership';
+// Ruling O4 (also on this direct path): a record owned by a team nobody manages could be changed by administrators only. The same words and
+// code as the Transfer ownership endpoint (d1-record-access); like it, any is_manager row counts (spec E27).
+const TEAM_NO_MANAGER = 'That team has no manager to look after the record — add a manager first';
 
 // The shape of a Directus ForbiddenError (status 403, code FORBIDDEN), without importing the package.
 // `reason` is shown to the person who made the request, so it is plain words (no table names, ids or
@@ -130,6 +147,36 @@ function forbidden(reason, details = {}) {
   err.extensions = { code: 'FORBIDDEN', reason, source: SOURCE, ...details };
   return err;
 }
+
+// The shape of a Directus error with status 409 (a conflict with the state of the data, not a permission refusal).
+function conflict(code, reason, details = {}) {
+  const err = new Error(reason);
+  err.name = 'DirectusError';
+  err.status = 409;
+  err.code = code;
+  err.extensions = { code, reason, source: SOURCE, ...details };
+  return err;
+}
+
+// The refusal of a Lab Viewer's comment: status 403 like the other guards, with the code the People, Teams and access endpoints answer a viewer with.
+function readOnlyRole() {
+  const err = new Error(READ_ONLY_ROLE_MESSAGE);
+  err.name = 'DirectusError';
+  err.status = 403;
+  err.code = 'READ_ONLY_ROLE';
+  err.extensions = { code: 'READ_ONLY_ROLE', reason: READ_ONLY_ROLE_MESSAGE, source: SOURCE };
+  return err;
+}
+
+// Is this caller a Lab Viewer? By ROLE ID only (the one id of scripts/access_rules.json "viewer.role"), whatever the status. A call with no
+// accountability (a flow, a script, another extension) is not a person and is not refused. The roles list is read too (Directus fills it with the
+// role and its parents), so a role that inherits the viewer's would be refused as well.
+const isViewerCaller = (context) => {
+  const acc = context?.accountability;
+  if (!acc) return false;
+  const ids = [acc.role, ...(Array.isArray(acc.roles) ? acc.roles : [])].filter((id) => typeof id === 'string');
+  return ids.some((id) => id.toLowerCase() === LAB_VIEWER_ROLE_ID);
+};
 
 // What a refused junction row says, by junction and parent column (physical_samples is the parent of
 // two junctions, so the text follows the junction, not the parent).
@@ -444,6 +491,7 @@ export default ({ filter }, { services }) => {
     // Which records need the delete rule, and why (the first reason wins).
     const need = new Map();
     const movedKeys = new Map(); // record key -> the move fields whose value changes
+    const newTeams = new Map(); // team id -> the first record key an update sets it on (Ruling O4)
     for (const key of keys) {
       const row = rows.get(String(key));
       if (restrictAdminOnly() && touched.some((f) => f.field === 'restricted' && fieldChanged(f, row, payload.restricted))) {
@@ -451,6 +499,11 @@ export default ({ filter }, { services }) => {
       }
       const changedField = touched.find((f) => fieldChanged(f, row, payload[f.field]));
       if (changedField) need.set(key, changedField.field === 'restricted' ? 'restricted' : 'owner');
+      const teamSpec = touched.find((f) => f.field === 'owner_team_id');
+      if (teamSpec && fieldChanged(teamSpec, row, payload.owner_team_id)) {
+        const team = parentKey(payload.owner_team_id, teamSpec.valueKey);
+        if (!isBlank(team) && !newTeams.has(String(team))) newTeams.set(String(team), key); // clearing the team needs no manager
+      }
       const moved = moves.filter((f) => {
         const next = parentKey(payload[f], f);
         if (!row) return true;
@@ -516,6 +569,15 @@ export default ({ filter }, { services }) => {
       // Whoever owns a record may delete it, which is why only the owner may hand it over or restrict it.
       if (!(await canPass(deleteCheck(collection), [key], context))) throw refuse(key, ...reasons[why]);
     }
+    // Ruling O4: the caller may hand the record over; not to a team that has no manager (after the owner check, so a non-owner learns nothing
+    // about the team). Administrators and internal calls never get here (checked()).
+    if (newTeams.size) {
+      const managed = await db('team_members').whereIn('team_id', [...newTeams.keys()]).select('team_id', 'is_manager');
+      const withManager = new Set(managed.filter((m) => toBool(m.is_manager)).map((m) => String(m.team_id)));
+      for (const [team, key] of newTeams) {
+        if (!withManager.has(team)) throw conflict('TEAM_HAS_NO_MANAGER', TEAM_NO_MANAGER, { kind: 'owner', collection, id: String(key) });
+      }
+    }
   }
 
   // Removing a sample from a Restricted campaign can unhide what the campaign shielded (its operations and tests), so it needs
@@ -580,6 +642,15 @@ export default ({ filter }, { services }) => {
   }
 
   filter('items.create', async (payload, meta, context) => {
+    // Ruling O3: a non-admin cannot create a record that is already owned by a team (the owner grant and its manage rows would be made
+    // with nobody having agreed to it); Transfer ownership is the only way a record becomes team-owned. A blank value is fine.
+    if (OWNER_GUARDS[meta?.collection] !== undefined && checked(context) && payload) {
+      for (const item of Array.isArray(payload) ? payload : [payload]) {
+        if (item && typeof item === 'object' && !isBlank(item.owner_team_id)) {
+          throw forbidden(TEAM_OWN_REFUSED, { kind: 'owner', collection: meta.collection, id: '' });
+        }
+      }
+    }
     // Until A1b, a non-admin cannot create a record already restricted (an explicit false, or no value, is fine)
     if (restrictable(meta?.collection) && checked(context) && payload && restrictAdminOnly()) {
       for (const item of Array.isArray(payload) ? payload : [payload]) {
@@ -646,4 +717,13 @@ export default ({ filter }, { services }) => {
     for (const row of rows) await enforce(collection, { ...row, ...payload }, null, context);
     return payload;
   });
+
+  // Comments: Directus's built-in comment rights come with every app_access policy and are not rows of directus_permissions, so the Lab Viewer
+  // policy (no write rows at all) cannot lack them. A viewer reads comments (the policy's read row) and writes none.
+  for (const event of ['comments.create', 'comments.update', 'comments.delete']) {
+    filter(event, async (payload, meta, context) => {
+      if (isViewerCaller(context)) throw readOnlyRole();
+      return payload;
+    });
+  }
 };

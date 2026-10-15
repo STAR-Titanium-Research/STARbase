@@ -1497,13 +1497,13 @@ run_eq "campaign_type CHECK restricts to the known kinds" \
     "1"
 # owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
 # project_id link and the two campaign_id links of operations and tests that migration 141 registers
-# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`).
-run_eq "Directus relations for campaigns are registered (8)" \
+# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`) and the owner_team_id link to teams (migration 183).
+run_eq "Directus relations for campaigns are registered (9)" \
     "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
      FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
+    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.owner_team_id->teams,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -3489,7 +3489,7 @@ SELECT 'params_tables_present:' || count(*) FROM information_schema.tables WHERE
    'hardness_test_params','charpy_test_params','compression_test_params','sem_params','xrd_params');
 SELECT 'co_owner_rows_owner_only:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'sample_co_owners' AND action IN ('update','delete')
-   AND permissions::jsonb = '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
+   AND permissions::jsonb = '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["manage"]}}}}]}]}'::jsonb;
 SELECT 'rollup_read:' || permissions::text FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
 SELECT 'people_update_own_row:' || count(*) FROM directus_permissions
@@ -3506,7 +3506,7 @@ rl_check "unlisted:0" "every Lab Member (collection, action) row in the database
 rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
-rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
+rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only (the person owner, or a manager of the owning team)"
 rl_check "reference_filtered:0" "reference data, people (but its own-row update) and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -3750,6 +3750,24 @@ tm_down=$(awk '/-- migrate:down/{f=1;next}f' "$TM")
 # functions (its down puts them back), so its down goes first of all, before 181's.
 TA=db/migrations/20261014000182_team_access.sql
 ta_down=$(awk '/-- migrate:down/{f=1;next}f' "$TA")
+# 20261014000183 (team ownership) replaces functions of 182 and 166 and adds functions in d1_private; its down puts them back, so it goes first of all, before 182's.
+TO=db/migrations/20261014000183_team_ownership.sql
+to_down=$(awk '/-- migrate:down/{f=1;next}f' "$TO")
+# 20261014000184 (team ownership rules) only changes Lab Member rows (its backup table lives in d1_private); its down goes before 183's. The up is replayed wherever
+# the rows are compared with the generator (the temp table it creates lives until commit, so a second replay drops it first).
+TR=db/migrations/20261014000184_team_ownership_rules.sql
+tr_down=$(awk '/-- migrate:down/{f=1;next}f' "$TR")
+tr_up="DROP TABLE IF EXISTS _lm_team_ownership_rules;
+$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$TR")"
+# 20261015000185 (Lab Viewer) replaces the readers_of_* functions of 183, adds a view, a function and triggers in d1_private and the Lab Viewer role, policy and rows;
+# its down goes before 184's, in every chain that starts with 184's (it does nothing when the view is already gone, so a second replay is harmless). The up is replayed
+# where it is compared with the generator (its temp table lives until commit, so a second replay drops it first).
+LV=db/migrations/20261015000185_lab_viewer.sql
+lv_down=$(awk '/-- migrate:down/{f=1;next}f' "$LV")
+lv_up="DROP TABLE IF EXISTS _lv_rules;
+$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LV")"
+tr_down="$lv_down
+$tr_down"
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3792,6 +3810,8 @@ DROP TABLE IF EXISTS d1_private.process_drafts;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$tr_down
+$to_down
 $ta_down
 $tm_down
 $pa_down
@@ -3826,6 +3846,7 @@ $jr_up
 $la_up
 $rr_up
 $ll_up
+$tr_up
 -- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
   SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
@@ -3833,6 +3854,7 @@ SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$tr_down
 $ll_down
 $rr_down
 $la_down
@@ -4091,6 +4113,7 @@ RD_TRIG_TABLES="physical_samples manufacturing_operations test_sessions campaign
 rd_trig_expect=""
 for t in $RD_TRIG_TABLES; do for ev in ins upd del; do rd_trig_expect+="${t}_readers_${ev}|$t "; done; done
 rd_trig_expect+="people_readers_upd|people "
+rd_trig_expect+="directus_users_readers_ins|directus_users directus_users_readers_upd|directus_users directus_users_readers_del|directus_users "  # migration 185: the viewer set
 rd_trunc_expect=""
 for t in physical_samples manufacturing_operations test_sessions campaigns projects sample_access operation_access test_access campaign_access project_access campaign_samples sample_co_owners project_investigators people directus_users; do
     rd_trunc_expect+="${t}_readers_trunc|$t "
@@ -4126,7 +4149,7 @@ for pair in $rd_trig_expect $rd_trunc_expect manufacturing_operations_readers_lo
     n=$($PSQL -c "SELECT count(*) FROM pg_trigger WHERE tgname = '$name' AND tgrelid = 'public.$tbl'::regclass AND NOT tgisinternal")
     [[ "$n" == 1 ]] && ok "trigger $name exists on $tbl" || bad "trigger $name is missing on $tbl"
 done
-trig_check "row_triggers:40" "40 insert, update and delete triggers (13 tables x 3, plus people update)"
+trig_check "row_triggers:43" "43 insert, update and delete triggers (13 tables x 3, plus people update, plus the three of directus_users of migration 185)"
 trig_check "bad_shape:" "every insert, update and delete trigger is a statement-level AFTER trigger with transition tables and no column list"
 trig_check "trunc_bad:" "every TRUNCATE trigger is a statement-level AFTER TRUNCATE trigger"
 trig_check "lock_bad:" "the lock triggers are BEFORE STATEMENT on insert, update and delete"
@@ -4140,6 +4163,8 @@ rd_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 RDK=d0000000-0000-4000-8000-0000000000
 rd_dangling=$($PSQL -v ON_ERROR_STOP=0 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4161,6 +4186,8 @@ grep -q "^applied" <<<"$rd_clean_apply" && ok "scripts/a1_clean_dangling_legacy_
 # the same two DELETEs, then 166 applies and adds both foreign keys
 rd_after=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4187,6 +4214,8 @@ SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
   UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
 -- down removes everything it created
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4239,6 +4268,7 @@ CREATE TEMP TABLE _main AS
   SELECT * FROM json_to_recordset(\$m\$$rules_main_json\$m\$::json) AS x(collection text, action text, permissions jsonb);
 CREATE TEMP TABLE head_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 SELECT 'head_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+$tr_down
 $ll_down
 $rr_down
 $la_down
@@ -4249,6 +4279,8 @@ SELECT 'dn_matches_main:' || count(*) FROM _main m JOIN directus_permissions p
 SELECT 'dn_access_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection LIKE '%\_access';
 CREATE TEMP TABLE old_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 $la_up
+-- 184 (team ownership rules) only rewrites rows 166 wrote: 166 + 184 give the generated rules
+$tr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -4260,13 +4292,16 @@ SELECT 'up_backup_commented:' || (obj_description('d1_private.lab_member_access_
 SELECT 'up_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.lab_member_access_rules_backup', 'SELECT');
 SELECT 'up_in_dictionary:' || count(*) FROM v_schema_dictionary WHERE object_name LIKE 'lab\_member\_access%';
 CREATE TEMP TABLE up_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+$tr_down
 DROP TABLE _lm_access_rules;
 $la_up
+$tr_up
 SELECT 'up2_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
 SELECT 'up2_unchanged:' || count(*) FROM ((SELECT to_jsonb(r) FROM up_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
   UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM up_rows r)) x;
 SELECT 'up2_backup_still_old:' || count(*) FROM d1_private.lab_member_access_rules_backup b JOIN old_rows o ON o.id = b.id
  WHERE b.permissions::jsonb IS DISTINCT FROM o.permissions::jsonb;
+$tr_down
 $la_down
 SELECT 'dn2_exact:' || count(*) FROM ((SELECT to_jsonb(r) FROM old_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
   UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM old_rows r)) x;
@@ -4275,6 +4310,7 @@ DROP TABLE _lm_access_rules;
 $la_up
 $rr_up
 $ll_up
+$tr_up
 SELECT 'up3_exact_as_head:' || count(*) FROM ((SELECT permissions::jsonb, collection, action FROM head_rows EXCEPT SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM')
   UNION ALL (SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM' EXCEPT SELECT permissions::jsonb, collection, action FROM head_rows)) x;
 SELECT 'final_exact:' || count(*) FROM _gen g JOIN directus_permissions p
@@ -4292,7 +4328,7 @@ la_check "dn_access_rows:0" "down: the five access table rows it inserted are go
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
 [[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
-    && ok "166 alone: every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
@@ -5339,6 +5375,8 @@ live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"
 live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
 sm_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+-- 185 (Lab Viewer) hangs a trigger on 166's lock function: its down goes first
+$lv_down
 $ll_down
 $rr_down
 $la_down
@@ -5591,6 +5629,8 @@ ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 -- 167 and 166 depend on 165's columns and tables, so they go down first (as on a real rollback)
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -5615,6 +5655,8 @@ grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus 
 grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -5627,6 +5669,8 @@ SQL
 grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -5978,6 +6022,119 @@ fv_check "up_new_row_item_type:sample" "175 up: a new row without item_type gets
 fv_check "down_default2:0" "175 down (after up): default dropped again"
 fv_check "down_restored:13" "175 down: every seeded row has its original item_type, form and surface_finish back"
 fv_check "down_backup_gone:0" "175 down (after up): backup table dropped"
+
+echo "== Lab Viewer (migration 185): a read-only account role that reads every record =="
+VW=20000002-0000-0000-0000-000000000003
+VROLE=10000001-0000-0000-0000-000000000003
+python3 scripts/gen_access_rules.py --check >/dev/null 2>&1 \
+    && ok "configure_users_and_policies.sql carries the generated Lab Member and Lab Viewer blocks (no drift from access_rules.json)" \
+    || bad "configure_users_and_policies.sql differs from access_rules.json (run gen_access_rules.py --write)"
+lv_rules_json=$(python3 scripts/gen_access_rules.py --viewer-json)
+# the collections whose Lab Member read rule is about the caller; the viewer reads every row of them (access_rules.json "viewer.read_all")
+lv_all=$(python3 -c "import json; print(','.join(chr(39) + c + chr(39) for c in json.load(open('scripts/access_rules.json'))['viewer']['read_all']))")
+lm_rules_json=$(python3 scripts/gen_access_rules.py --json)
+lvx_out=$($PSQL 2>&1 <<SQL
+CREATE TEMP TABLE _vgen AS
+  SELECT * FROM json_to_recordset(\$vr\$$lv_rules_json\$vr\$::json)
+    AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, policy uuid, ruled boolean);
+CREATE TEMP TABLE _lmgen AS
+  SELECT * FROM json_to_recordset(\$lr\$$lm_rules_json\$lr\$::json)
+    AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, policy uuid, ruled boolean);
+SELECT 'generated:' || count(*) FROM _vgen;
+SELECT 'stored:' || count(*) FROM directus_permissions WHERE policy = '$VW';
+SELECT 'exact:' || count(*) FROM _vgen g JOIN directus_permissions p
+  ON p.policy = '$VW' AND p.collection = g.collection AND p.action = g.action
+ AND p.permissions::jsonb = g.permissions AND p.validation::jsonb = g.validation AND p.fields = g.fields;
+SELECT 'writes:' || count(*) FROM directus_permissions WHERE policy = '$VW' AND action <> 'read';
+SELECT 'generated_writes:' || count(*) FROM _vgen WHERE action <> 'read';
+-- the rows are the read rows of Lab Member as the generator makes them: same collections, filters, validation and fields
+SELECT 'lm_read_only_in_lm:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _lmgen WHERE action = 'read' AND collection NOT IN ($lv_all)
+    EXCEPT SELECT collection, permissions, validation, fields FROM _vgen) x;
+SELECT 'lm_read_only_in_viewer:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _vgen WHERE collection NOT IN ($lv_all)
+    EXCEPT SELECT collection, permissions, validation, fields FROM _lmgen WHERE action = 'read') x;
+-- Task B: project_rollup and the five *_access tables are about the caller for a Lab Member (own rows only) and open for the viewer (every row)
+SELECT 'read_all_n:' || count(*) FROM _vgen WHERE collection IN ($lv_all);
+SELECT 'read_all_viewer_open:' || count(*) FROM directus_permissions WHERE policy = '$VW' AND action = 'read' AND collection IN ($lv_all) AND permissions::jsonb = '{}'::jsonb AND fields = '*';
+SELECT 'read_all_member_scoped:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND action = 'read' AND collection IN ($lv_all) AND permissions::jsonb <> '{}'::jsonb;
+SELECT 'read_all_same_cols:' || count(*) FROM _lmgen l JOIN _vgen v USING (collection, action, validation, fields) WHERE l.action = 'read' AND l.collection IN ($lv_all);
+SELECT 'role:' || count(*) FROM directus_roles WHERE id = '$VROLE' AND name = 'Lab Viewer';
+SELECT 'policy:' || count(*) FROM directus_policies WHERE id = '$VW' AND name = 'Lab Viewer' AND NOT admin_access AND app_access;
+SELECT 'access:' || count(*) FROM directus_access WHERE role = '$VROLE' AND policy = '$VW';
+SELECT 'access_other_policies:' || count(*) FROM directus_access WHERE role = '$VROLE' AND policy <> '$VW';
+SELECT 'records_read_through_readers:' || count(*) FROM directus_permissions
+ WHERE policy = '$VW' AND action = 'read' AND collection IN ('physical_samples','test_sessions','campaigns','projects','campaign_samples')
+   AND permissions::jsonb = '{"readers":{"_some":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
+-- the functions and triggers
+SELECT 'viewer_view:' || (to_regclass('d1_private.v_viewers') IS NOT NULL);
+SELECT 'viewer_view_not_granted:' || (NOT has_table_privilege('d1_llm_readonly', 'd1_private.v_viewers', 'SELECT'));
+SELECT 'triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.directus_users'::regclass AND tgname LIKE 'directus\_users\_readers\_%';
+SELECT 'trigger_functions_definer:' || count(*) FILTER (WHERE p.prosecdef AND p.proconfig::text LIKE '%search_path=pg_catalog, public%') || '/' || count(*)
+  FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND p.proname LIKE 'trg\_readers\_directus\_users\_%';
+SELECT 'lock_trigger_update_of:' || (position('UPDATE OF role, status' IN pg_get_triggerdef(t.oid)) > 0) FROM pg_trigger t WHERE t.tgname = 'directus_users_readers_lock';
+SELECT 'every_readers_fn_has_viewers:' || count(*) FILTER (WHERE position('v_viewers' IN p.prosrc) > 0) || '/' || count(*)
+  FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace
+   AND p.proname IN ('readers_of_sample','readers_of_operation','readers_of_test','readers_of_campaign','readers_of_project','readers_of_campaign_sample',
+                     'readers_of_sample_spec','readers_of_operation_spec','readers_of_test_spec','readers_of_campaign_spec','readers_of_project_spec','readers_of_campaign_sample_spec');
+SELECT 'drift:' || d1_private.readers_drift_count();
+-- up, down, up (all rolled back): the down takes the role, policy, rows, view, triggers and the viewer branches away; the up brings them back exactly
+BEGIN;
+$lv_down
+SELECT 'dn_rows:' || (SELECT count(*) FROM directus_permissions WHERE policy = '$VW') || '/' || (SELECT count(*) FROM directus_roles WHERE id = '$VROLE')
+    || '/' || (SELECT count(*) FROM directus_policies WHERE id = '$VW') || '/' || (SELECT count(*) FROM directus_access WHERE role = '$VROLE' OR policy = '$VW');
+SELECT 'dn_objects:' || coalesce(to_regclass('d1_private.v_viewers')::text, 'gone') || '/' || coalesce(to_regprocedure('d1_private.lab_viewer_role()')::text, 'gone')
+    || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('directus_users_readers_lock','directus_users_readers_ins','directus_users_readers_upd','directus_users_readers_del'))
+    || '/' || (SELECT count(*) FROM pg_proc WHERE proname LIKE 'trg\_readers\_directus\_users\_%');
+SELECT 'dn_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
+SELECT 'dn_drift:' || d1_private.readers_drift_count();
+SELECT 'dn_comment_restored:' || (obj_description('d1_private.readers_of_sample(uuid[])'::regprocedure, 'pg_proc') NOT LIKE '%Lab Viewer%');
+$lv_down
+SELECT 'dn_twice_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
+$lv_up
+SELECT 'up2_exact:' || count(*) FROM _vgen g JOIN directus_permissions p
+  ON p.policy = '$VW' AND p.collection = g.collection AND p.action = g.action
+ AND p.permissions::jsonb = g.permissions AND p.validation::jsonb = g.validation AND p.fields = g.fields;
+SELECT 'up2_stored:' || count(*) FROM directus_permissions WHERE policy = '$VW';
+SELECT 'up2_objects:' || (to_regclass('d1_private.v_viewers') IS NOT NULL) || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('directus_users_readers_lock','directus_users_readers_ins','directus_users_readers_upd','directus_users_readers_del'));
+SELECT 'up2_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
+SELECT 'up2_drift:' || d1_private.readers_drift_count();
+ROLLBACK;
+SQL
+)
+lvx_check() { grep -qxF -- "$1" <<<"$lvx_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$lvx_out" | head -40 | tr '\n' ' ' | cut -c1-700))"; }
+lvx_n=$(grep '^generated:' <<<"$lvx_out" | cut -d: -f2)
+lvx_check "stored:$lvx_n" "the Lab Viewer policy holds exactly the $lvx_n generated rows"
+lvx_check "exact:$lvx_n" "every generated Lab Viewer row is stored with the same filter, validation and fields"
+lvx_check "writes:0" "the Lab Viewer policy has no create, update or delete row"
+lvx_check "generated_writes:0" "the generator makes no create, update or delete row for Lab Viewer"
+lvx_check "lm_read_only_in_lm:0" "every read row of Lab Member (as generated) is a Lab Viewer row, but the rows about the caller (viewer.read_all)"
+lvx_check "lm_read_only_in_viewer:0" "every Lab Viewer row is a read row of Lab Member (same collection, filter, validation, fields), but the rows about the caller"
+lvx_check "read_all_n:6" "the viewer reads every row of project_rollup and the five *_access tables (six rows)"
+lvx_check "read_all_viewer_open:6" "those six viewer rows have no filter and every field, as stored"
+lvx_check "read_all_member_scoped:6" "Lab Member keeps its own-person filter on the same six collections, as stored"
+lvx_check "read_all_same_cols:6" "the six rows differ from Lab Member's only in the filter"
+lvx_check "role:1" "the role Lab Viewer exists"
+lvx_check "policy:1" "the policy Lab Viewer has app access and no admin access"
+lvx_check "access:1" "the role is bound to the policy"
+lvx_check "access_other_policies:0" "the role has no other policy"
+lvx_check "records_read_through_readers:5" "samples, tests, campaigns, projects and campaign samples are read through the readers tables, like Lab Member"
+lvx_check "viewer_view:true" "d1_private.v_viewers exists"
+lvx_check "viewer_view_not_granted:true" "the Ask-DB role has no grant on v_viewers"
+lvx_check "triggers:directus_users_readers_del,directus_users_readers_ins,directus_users_readers_lock,directus_users_readers_trunc,directus_users_readers_upd" "directus_users has the lock, insert, update, delete and truncate readers triggers"
+lvx_check "trigger_functions_definer:3/3" "the three viewer trigger functions are SECURITY DEFINER with a pinned search_path"
+lvx_check "lock_trigger_update_of:true" "the lock trigger fires on UPDATE OF role, status only (Directus updates last_access on every request)"
+lvx_check "every_readers_fn_has_viewers:12/12" "all six readers_of_* functions and their six _spec functions list the viewers"
+lvx_check "drift:0" "readers_drift() is empty"
+lvx_check "dn_rows:0/0/0/0" "down: no permission row, role, policy or binding is left"
+lvx_check "dn_objects:gone/gone/0/0" "down: the view, the role function, the triggers and their functions are gone"
+lvx_check "dn_functions_with_viewers:0" "down: no readers function lists the viewers any more (the heads of 183 are back)"
+lvx_check "dn_drift:0" "down: readers_drift() is empty"
+lvx_check "dn_comment_restored:true" "down: the function comments are the old ones"
+lvx_check "dn_twice_functions_with_viewers:0" "down twice does nothing the second time"
+lvx_check "up2_exact:$lvx_n" "up again: every generated row is back, exact"
+lvx_check "up2_stored:$lvx_n" "up again: no more and no fewer rows"
+lvx_check "up2_objects:true/4" "up again: the view and four triggers are back"
+lvx_check "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
+lvx_check "up2_drift:0" "up again: readers_drift() is empty"
 
 echo "== Cleanup test rows =="
 $PSQL -c "

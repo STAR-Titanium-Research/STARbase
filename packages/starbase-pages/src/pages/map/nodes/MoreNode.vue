@@ -8,7 +8,8 @@ import { stopping, useMapActions } from './actions';
 const props = defineProps<{ id: string; data: MoreNode }>();
 defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
-const label = computed(() => `+${props.data.remaining} more`);
+// No count where it would include records the person may not read (spec D21).
+const label = computed(() => (props.data.remaining === null ? 'More' : `+${props.data.remaining} more`));
 const load = stopping(() => actions.expand(props.id));
 </script>
 

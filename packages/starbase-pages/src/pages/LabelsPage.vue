@@ -23,6 +23,8 @@ import '../labels/form.css';
 // Design: docs/superpowers/specs/2026-10-12-label-printing-design.md.
 const host = useExplorerHost();
 const route = useRoute();
+// A Lab Viewer (migration 185) prints with any template and creates, changes and deletes none: the template buttons and the editor are not offered.
+const readOnly = computed(() => host.canViewAllAccess?.value === true);
 
 const templates = useLabelTemplates();
 const samples = useLabelSamples();
@@ -228,7 +230,7 @@ onMounted(() => {
 
 			<div class="cols">
 				<div class="col">
-					<Section v-if="draft" :title="draft.id ? `Edit template` : 'New template'">
+					<Section v-if="draft && !readOnly" :title="draft.id ? `Edit template` : 'New template'">
 						<TemplateEditor
 							:key="draftKey"
 							:model-value="draft"
@@ -260,9 +262,11 @@ onMounted(() => {
 								</label>
 							</div>
 							<div class="lf-row tools">
-								<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="toggleEditor">{{ editLabel }}</button>
-								<button type="button" class="lf-btn" @click="newTemplate">New template</button>
-								<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="copyTemplate">Copy template</button>
+								<template v-if="!readOnly">
+									<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="toggleEditor">{{ editLabel }}</button>
+									<button type="button" class="lf-btn" @click="newTemplate">New template</button>
+									<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="copyTemplate">Copy template</button>
+								</template>
 							</div>
 							<ContactSetting :settings="settings" :is-admin="host.isAdmin.value" />
 							<p v-if="templates.broken.value.length" class="d1-note warn">{{ templates.broken.value.length }} template{{ templates.broken.value.length === 1 ? ' is' : 's are' }} unreadable and shown greyed out above.</p>

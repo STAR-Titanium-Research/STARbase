@@ -173,14 +173,14 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, upd
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {}, body } = {}) {
+function call(h, { acc, params = {}, query = {}, body, method } = {}) {
   return new Promise((resolve) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    h({ accountability: acc, params, query, body, schema: {} }, res);
+    h({ accountability: acc, params, query, body, schema: {}, ...(method ? { method } : {}) }, res);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -293,6 +293,58 @@ test('GET /people joins login status, role name and last_access, and lists login
   });
   assert.equal(r.body.logins_without_person[1].role_id, null);
   assert.equal(r.body.logins_without_person[1].role_name, null);
+});
+
+test('a login merged into another (login_aliases) is not a login without a person, and is not counted', async () => {
+  const merged = ID(260);
+  const tables = baseTables();
+  tables.directus_users.push({ id: merged, email: 'old@login.example', first_name: 'Old', last_name: 'Alias', status: 'suspended', role: R.member, last_access: null });
+  tables.login_aliases = [{ alias_user_id: merged, canonical_user_id: U.ann }];
+  const rows = [{ key: 'login_without_person', person_ids: [], user_ids: [U.superAdmin, U.orphan, merged] }];
+  const { handlers } = mount({ tables, raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(people.body.logins_without_person.map((l) => l.user_id), [U.orphan, U.previewAdmin, U.superAdmin]);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body, { items: [{ key: 'login_without_person', count: 2 }] });
+  // and a lone alias leaves the item out altogether
+  const only = mount({ tables, raw: { 'SELECT key': [{ key: 'login_without_person', person_ids: [], user_ids: [merged] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
+});
+
+test('login_aliases is read once per /people request, and an unreadable one only logs a warning', async () => {
+  let reads = 0;
+  const tables = baseTables();
+  tables.login_aliases = [];
+  const ok = mount({ tables, raw: { 'SELECT key': ATTENTION } });
+  const real = tables.login_aliases;
+  Object.defineProperty(tables, 'login_aliases', { get() { reads += 1; return real; }, configurable: true });
+  assert.equal((await call(ok.handlers['GET /people'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.equal(reads, 1);
+
+  const broken = baseTables();
+  Object.defineProperty(broken, 'login_aliases', { get() { throw new Error('relation "login_aliases" does not exist'); } });
+  const m = mount({ tables: broken, raw: { 'SELECT key': ATTENTION } });
+  const r = await call(m.handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.logins_without_person.length, 3); // nothing is hidden when the aliases cannot be read
+  assert.equal((await call(m.handlers['GET /attention'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.ok(m.warnings.some((w) => /login_aliases/.test(w)));
+  assert.deepEqual(m.errors, []);
+});
+
+test('a Former person is never missing an email: not on their row, not in the /attention count', async () => {
+  // Cy (active: false) and Bob (active) both have no email on the people row
+  const rows = [{ key: 'missing_email', person_ids: [P.bob, P.cy], user_ids: [U.bob] }, ...ATTENTION.filter((a) => a.key === 'possible_duplicate')];
+  const { handlers } = mount({ raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  const byName = Object.fromEntries(people.body.people.map((p) => [p.full_name, p]));
+  assert.ok(byName['Bob Member'].attention.includes('missing_email'));
+  assert.deepEqual(byName['Cy Nologin'].attention, []);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body.items.find((i) => i.key === 'missing_email'), { key: 'missing_email', count: 1 });
+  // a missing_email whose only person is Former leaves the item out altogether
+  const only = mount({ raw: { 'SELECT key': [{ key: 'missing_email', person_ids: [P.cy], user_ids: [] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
 });
 
 test('GET /people gives each person their teams (one query: team_members joined with teams)', async () => {
@@ -923,4 +975,148 @@ test('header invite: no person with the e-mail inserts a new one (is_researcher)
   assert.equal(r2.status, 200);
   assert.equal(r2.body.person_id, P.cy);
   assert.equal(t2.people.find((p) => p.person_id === P.cy).user_id, ID(261));
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+test('Lab Viewer: no role change, no invite, no resend (403 READ_ONLY_ROLE), even for a viewer who also holds an admin policy on the user', async () => {
+  const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+  const tables = baseTables();
+  tables.directus_users.push({ id: ID(262), email: 'pi@login.example', status: 'active', role: VIEWER_ROLE });
+  tables.directus_access.push({ role: null, user: ID(262), policy: POLICY.admin }); // an administrator by a user policy, whose account role is Lab Viewer
+  const { handlers, db, invites } = mount({ tables, env: ENV });
+  const viewer = { user: ID(262), admin: true, app: true };
+  for (const [route, body, params] of [
+    ['PATCH /logins/:user_id', { role: R.member }, { user_id: U.ann }],
+    ['POST /invite', { email: 'new@people.example' }, {}],
+    ['POST /invite/resend', { user_id: U.bob }, {}],
+  ]) {
+    const r = await call(handlers[route], { acc: viewer, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-people-admin');
+  }
+  assert.deepEqual(db.log.tx, []);
+  assert.equal(invites.length, 0);
+  // a plain viewer is no administrator either: the role decides, whatever the policy says
+  const plain = baseTables();
+  plain.directus_users.find((u) => u.id === U.ann).role = VIEWER_ROLE;
+  const m2 = mount({ tables: plain, env: ENV });
+  const r2 = await call(m2.handlers['PATCH /logins/:user_id'], { acc: { user: U.ann, admin: false, app: true }, body: { role: R.member }, params: { user_id: U.bob }, method: 'PATCH' });
+  assert.equal(errorOf(r2).extensions.code, 'READ_ONLY_ROLE');
+});
+
+// ---- Lab Viewer, Task B: the read routes of the People page are open to a viewer, the write routes stay closed -------------
+
+const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const VIEWER_USER = ID(262);
+const viewerTables = () => {
+  const t = baseTables();
+  t.directus_users.push({ id: VIEWER_USER, email: 'pi@login.example', first_name: 'Pi', last_name: 'Viewer', status: 'active', role: VIEWER_ROLE, last_access: null });
+  t.directus_roles.push({ id: VIEWER_ROLE, name: 'Lab Viewer' });
+  t.directus_access.push({ role: VIEWER_ROLE, user: null, policy: POLICY.member }); // no admin policy: the viewer is not an administrator
+  // what the readers triggers do for an ACTIVE viewer: a row for every record of every type (a viewer's lists are filtered by these rows, like a member's)
+  t.sample_readers.push({ record_id: SAMPLE, user_id: VIEWER_USER }, { record_id: SAMPLE_GONE, user_id: VIEWER_USER });
+  t.project_readers.push({ record_id: PROJECT, user_id: VIEWER_USER });
+  return t;
+};
+// role still Lab Viewer, status suspended, readers rows removed (a live token of a suspended login)
+const suspendedViewerTables = () => {
+  const t = viewerTables();
+  t.directus_users.find((u) => u.id === VIEWER_USER).status = 'suspended';
+  t.sample_readers = t.sample_readers.filter((r) => r.user_id !== VIEWER_USER);
+  t.project_readers = t.project_readers.filter((r) => r.user_id !== VIEWER_USER);
+  return t;
+};
+const viewer = { user: VIEWER_USER, admin: false, app: true };
+
+test('Lab Viewer: GET /people and GET /attention give the same body an administrator gets, and can_administer_accounts is false', async () => {
+  const mk = () => mount({ tables: viewerTables(), raw: { 'SELECT key': ATTENTION } });
+  const seen = await call(mk().handlers['GET /people'], { method: 'GET', acc: viewer });
+  const asAdmin = await call(mk().handlers['GET /people'], { method: 'GET', acc: admin(U.labAdmin) });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body, asAdmin.body); // a Lab Admin is no account administrator either, so the bodies are the same
+  assert.equal(seen.body.can_administer_accounts, false);
+  assert.ok(seen.body.people.length >= 4);
+  assert.ok(seen.body.logins_without_person.some((l) => l.user_id === VIEWER_USER)); // the viewer's own login is listed (as role Lab Viewer)
+  const att = await call(mk().handlers['GET /attention'], { method: 'GET', acc: viewer });
+  assert.equal(att.status, 200);
+  assert.deepEqual(att.body, (await call(mk().handlers['GET /attention'], { method: 'GET', acc: admin(U.labAdmin) })).body);
+  assert.ok(att.body.items.length > 0);
+});
+
+test('Lab Viewer: GET /people/:id/access reads the counts of any person and lists every record (an active viewer has a readers row on each)', async () => {
+  const { handlers } = mount({ tables: viewerTables(), raw: accessRaw() });
+  const counts = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.bob } });
+  assert.equal(counts.status, 200);
+  assert.deepEqual(counts.body, { owns: 3, shared: 2, investigator: 1, teams: 4, waiting: 2, waiting_owners: 1 });
+  const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.equal(list.status, 200);
+  // the same list an administrator gets: all three records (the viewer's readers rows cover them all)
+  const asAdmin = await call(mount({ tables: viewerTables(), raw: accessRaw() }).handlers['GET /people/:person_id/access'], { method: 'GET', acc: admin(U.labAdmin), params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.deepEqual(list.body, asAdmin.body);
+  assert.deepEqual(list.body.records.map((r) => r.id), [SAMPLE, SAMPLE_GONE, PROJECT]);
+  // an unknown person is still a 404
+  assert.equal((await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: ID(555) } })).status, 404);
+});
+
+test('Lab Viewer: the writes stay closed (403 READ_ONLY_ROLE) and a Lab Member is still refused the reads (403 FORBIDDEN)', async () => {
+  const { handlers, db } = mount({ tables: viewerTables(), raw: accessRaw() });
+  for (const [route, body, params] of [
+    ['PATCH /logins/:user_id', { status: 'suspended' }, { user_id: U.ann }],
+    ['POST /invite', { email: 'new@people.example' }, {}],
+    ['POST /invite/resend', { user_id: U.bob }, {}],
+  ]) {
+    const r = await call(handlers[route], { acc: viewer, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+  }
+  assert.deepEqual(db.log.tx, []);
+  const m = mount({ tables: viewerTables(), raw: accessRaw() });
+  for (const route of ['GET /people', 'GET /attention']) {
+    const r = await call(m.handlers[route], { acc: member(U.ann), method: 'GET' });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'FORBIDDEN', route);
+  }
+  // a Lab Member still sees only their own access
+  assert.equal((await call(m.handlers['GET /people/:person_id/access'], { acc: member(U.ann), params: { person_id: P.bob } })).status, 403);
+});
+
+test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) is counted but listed nothing, and is still refused every write', async () => {
+  const { handlers, db } = mount({ tables: suspendedViewerTables(), raw: accessRaw() });
+  const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.records, []); // counted above, none listed: the unfiltered path is the administrator's alone
+  assert.ok(list.body.shared > 0);
+  const r = await call(handlers['PATCH /logins/:user_id'], { acc: viewer, body: { status: 'active' }, params: { user_id: VIEWER_USER }, method: 'PATCH' });
+  assert.equal(r.status, 403);
+  assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE');
+  assert.deepEqual(db.log.tx, []);
+});
+
+test('Lab Viewer: a viewer who ALSO holds an admin policy is still listed only what its readers rows allow, and still refused writes', async () => {
+  const t = suspendedViewerTables();
+  t.directus_access.push({ role: null, user: VIEWER_USER, policy: POLICY.admin }); // an administrator by a user policy
+  const { handlers } = mount({ tables: t, raw: accessRaw() });
+  const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.records, []);
+  const r = await call(handlers['PATCH /logins/:user_id'], { acc: viewer, body: { status: 'active' }, params: { user_id: VIEWER_USER }, method: 'PATCH' });
+  assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE');
+  // the same admin policy on a Lab Member is the unfiltered path: every record listed
+  const m = viewerTables();
+  m.directus_users.find((u) => u.id === VIEWER_USER).role = '10000001-0000-0000-0000-000000000002';
+  m.directus_access.push({ role: null, user: VIEWER_USER, policy: POLICY.admin });
+  const adm = await call(mount({ tables: m, raw: accessRaw() }).handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.deepEqual(adm.body.records.map((r) => r.id), [SAMPLE, SAMPLE_GONE, PROJECT]);
+});
+
+test('Lab Viewer: no environment override: another D1_LAB_VIEWER_ROLE_ID changes nothing', async () => {
+  const other = ID(778);
+  const t = viewerTables();
+  t.directus_users.find((u) => u.id === VIEWER_USER).role = other;
+  const swapped = mount({ tables: t, env: { ...ENV, D1_LAB_VIEWER_ROLE_ID: other } });
+  assert.equal((await call(swapped.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 403); // the other role is no viewer
+  const same = mount({ tables: viewerTables(), env: { ...ENV, D1_LAB_VIEWER_ROLE_ID: other } });
+  assert.equal((await call(same.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 200); // the one role id is the viewer
 });

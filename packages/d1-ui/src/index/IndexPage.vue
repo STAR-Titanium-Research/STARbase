@@ -21,7 +21,7 @@ import '../components/tokens.css';
 import { useExplorerHost } from '../host';
 import type { ExplorerHost } from '../host';
 import { linkHref } from '../links';
-import { recordRoute } from '../recordRoute';
+import { dataStudioRoute, recordRoute } from '../recordRoute';
 import AppLink from '../components/AppLink.vue';
 import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
@@ -40,7 +40,7 @@ import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
 import { plotKind } from './plotData';
-import { SELECT_MAX, cellText, hasNextPage, plotCode, rangeText } from './indexView';
+import { SELECT_MAX, cellText, hasNextPage, plotCode, rangeText, rowOpen } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
 import { useRowSelection } from './useRowSelection';
@@ -71,7 +71,7 @@ const router: RouterLike & { resolve(to: string): { href: string } } = memory
 	: (useRouter() as unknown as RouterLike & { resolve(to: string): { href: string } });
 
 const {
-	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
+	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
 
@@ -105,10 +105,14 @@ const sortable = (c: ColumnDef) => !c.relation || relationSortable(c.relation.co
 const drawerOpen = ref(false);
 const drawerKey = ref('');
 
+// A Lab Viewer is never given the edit drawer (an editable form): its row opens the record in Data Studio, read-only (see rowOpen).
+const viewer = computed(() => host.canViewAllAccess?.value === true);
 function openRow(row: Record<string, unknown>): void {
 	if (props.pick) return pickState.toggle(row);
 	const pk = rowKey(row);
-	if (props.def.rowTarget === 'record') host.navigate(recordRoute(props.def.collection, pk));
+	const open = rowOpen(props.def.rowTarget, viewer.value, props.def.collection, pk);
+	if (open.kind === 'navigate') host.navigate(open.to);
+	else if (open.kind === 'studio') host.openDataStudio(open.to);
 	else {
 		drawerKey.value = pk;
 		drawerOpen.value = true;
@@ -120,6 +124,11 @@ watch(
 	() => state.value.open,
 	(pk) => {
 		if (pk && props.def.rowTarget === 'drawer') {
+			if (viewer.value) {
+				host.openDataStudio(dataStudioRoute(props.def.collection, pk));
+				closeOpen();
+				return;
+			}
 			drawerKey.value = pk;
 			drawerOpen.value = true;
 		}
@@ -239,6 +248,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				@filter="setFilter"
 				@clear="clearFilters"
 			/>
+			<p v-if="teamNote" class="d1-note" role="status">{{ teamNote }}</p>
 
 			<div v-if="error" class="state-row">
 				<LoadState :error="error" />
@@ -322,7 +332,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 			</div>
 
 			<EditDrawer
-				v-if="def.rowTarget === 'drawer' && !pick"
+				v-if="def.rowTarget === 'drawer' && !pick && !viewer"
 				:model-value="drawerOpen"
 				:collection="def.collection"
 				:primary-key="drawerKey"

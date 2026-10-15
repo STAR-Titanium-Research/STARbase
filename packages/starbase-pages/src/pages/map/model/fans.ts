@@ -1,31 +1,10 @@
 // Used-in fans and merging more data into what the Process map already shows (spec D20, §7 "Expand").
-// Pure: no Vue, no I/O. `loadFamily.ts` reads; this turns a read into ProcessData and merges it.
+// Pure: no Vue, no I/O. `loadFans.ts` reads; this turns a read into ProcessData and merges it.
 
-import { kindOfCollection } from '../nodes/kinds';
-import { FAN_PAGE, type UsedIn } from './loadFamily';
+import { COLLECTION, isSampleFan } from './collections';
+import { FAN_PAGE, type UsedIn } from './loadFans';
 import { fanRootId, moreNodeId } from './buildGraph';
 import type { Fan, Kind, LineageRow, OpRow, ProcessData, ProcessGraph, Ref, SampleRec, SideFan, StockOrigin, TestRow } from './types';
-
-export const COLLECTION = { sample: 'physical_samples', operation: 'manufacturing_operations', test: 'test_sessions' } as const;
-
-/** How a focus opens (spec D20): a sample's family; an operation or test through its sample; a used-in fan; not at all. */
-export type FocusPlan = 'sample' | 'step' | 'fan';
-
-const FAN_COLLECTIONS = new Set(['tools', 'equipment', 'insert_edges', 'fast_recipes', 'prep_recipes', 'raw_stock_lots', 'materials', 'projects', 'campaigns']);
-/** Fans of samples (cards); the others are fans of operations and tests (collapsed containers). */
-const SAMPLE_FAN_COLLECTIONS = new Set(['materials', 'projects', 'campaigns']);
-
-export function focusPlan(collection: string): FocusPlan | null {
-  if (collection === COLLECTION.sample) return 'sample';
-  if (collection === COLLECTION.operation || collection === COLLECTION.test) return 'step';
-  return FAN_COLLECTIONS.has(collection) ? 'fan' : null;
-}
-
-/** Has a used-in fan: what ＋ on a record inside the map can open. */
-export const hasFan = (collection: string): boolean => FAN_COLLECTIONS.has(collection);
-
-/** The kind a fan's root card is drawn as. */
-export const fanKindOf = (collection: string): Kind => kindOfCollection(collection) ?? 'data_file';
 
 const rowRef = (collection: string, row: { id: string; code: string }): Ref => ({ collection, id: row.id, code: row.code });
 const when = (d: string | null): number => (d ? Date.parse(d) || 0 : 0);
@@ -36,21 +15,26 @@ export interface FanPage {
   tests: TestRow[];
   samples: SampleRec[];
   items: Ref[];
-  total: number;
-  remaining: number;
+  total: number | null;
+  /** Null: more to load, no number to show (spec D21). */
+  remaining: number | null;
+  /** The page skipped a sample the person may not read (spec D21). */
+  hidden: boolean;
 }
 
 /**
  * A `loadUsedIn` result as a page of the fan of `collection` (`page` is 1-based). "+N more" is counted from the
  * server's total and the pages read, never from the rows drawn: a stock lot page can hold fewer operations than
- * it has samples, and a page with none is not the end.
+ * it has samples, and a page with none is not the end. A null total (a campaign or stock lot: their junction counts
+ * include records the person may not read, spec D21) gives a null count, shown as "More".
  */
 export function fanPage(collection: string, used: UsedIn, page: number): FanPage {
-  const total = Math.max(used.total, used.testsTotal ?? 0);
-  const remaining = Math.max(0, total - FAN_PAGE * Math.max(1, page));
-  if (SAMPLE_FAN_COLLECTIONS.has(collection)) {
+  // A null total (campaign, stock lot) never becomes a number: paging goes on while pages come back full (D21).
+  const total = used.total === null ? null : Math.max(used.total, used.testsTotal ?? 0);
+  const remaining = total === null ? (used.more ? null : 0) : Math.max(0, total - FAN_PAGE * Math.max(1, page));
+  if (isSampleFan(collection)) {
     const samples = used.items as SampleRec[];
-    return { operations: [], tests: [], samples, items: samples.map((s) => rowRef(COLLECTION.sample, s)), total, remaining };
+    return { operations: [], tests: [], samples, items: samples.map((s) => rowRef(COLLECTION.sample, s)), total, remaining, hidden: !!used.hidden };
   }
   const operations = used.items as OpRow[];
   const tests = used.tests ?? [];
@@ -60,7 +44,7 @@ export function fanPage(collection: string, used: UsedIn, page: number): FanPage
     ...tests.map((t) => ({ ref: rowRef(COLLECTION.test, t), t: when(t.date) })),
   ];
   rows.sort((a, b) => b.t - a.t);
-  return { operations, tests, samples: [], items: rows.map((r) => r.ref), total, remaining };
+  return { operations, tests, samples: [], items: rows.map((r) => r.ref), total, remaining, hidden: !!used.hidden };
 }
 
 const emptyData = (focus: ProcessData['focus']): ProcessData => ({
@@ -104,6 +88,8 @@ export function withFanPage(data: ProcessData, rootKey: string, page: FanPage, r
     items: replace || !fan ? items : [...fan.items, ...items.filter((i) => !fan.items.some((f) => f.id === i.id && f.collection === i.collection))],
     total: page.total,
     remaining: page.remaining,
+    // Once a fan has skipped an unreadable sample it stays marked, whichever page that was.
+    ...(page.hidden || (!replace && fan?.hidden) ? { hidden: true } : {}),
   });
   const next: ProcessData = {
     ...data,
@@ -113,7 +99,7 @@ export function withFanPage(data: ProcessData, rootKey: string, page: FanPage, r
   };
   const sideIndex = (data.sideFans ?? []).findIndex((f) => `${f.root.collection}:${f.root.id}` === rootKey);
   if (`${data.focus.collection}:${data.focus.id}` === rootKey && sideIndex < 0) next.fan = grow(data.fan);
-  else if (sideIndex >= 0) next.sideFans = (data.sideFans ?? []).map((f, i) => (i === sideIndex ? { ...f, ...grow(f) } : f));
+  else if (sideIndex >= 0) next.sideFans = (data.sideFans ?? []).map((f, i) => (i === sideIndex ? { root: f.root, ...grow(f) } : f));
   return next;
 }
 
@@ -193,23 +179,3 @@ export function fanNodeIds(data: ProcessData, graph: ProcessGraph): Set<string> 
   }
   return out;
 }
-
-/** What a record is called in the page's words: "this tool does not exist", and the crumb that leads back to its list. */
-const WORDS: Record<string, [string, string]> = {
-  physical_samples: ['sample', 'Samples'],
-  manufacturing_operations: ['operation', 'Operations'],
-  test_sessions: ['test', 'Tests'],
-  tools: ['tool', 'Tools'],
-  equipment: ['machine', 'Machines'],
-  insert_edges: ['insert edge', 'Insert edges'],
-  fast_recipes: ['recipe', 'Recipes'],
-  prep_recipes: ['recipe', 'Recipes'],
-  raw_stock_lots: ['stock lot', 'Stock lots'],
-  materials: ['material', 'Materials'],
-  projects: ['project', 'Projects'],
-  campaigns: ['campaign', 'Campaigns'],
-};
-export const recordWord = (collection: string): { one: string; many: string } => {
-  const [one, many] = WORDS[collection] ?? ['record', 'Records'];
-  return { one, many };
-};

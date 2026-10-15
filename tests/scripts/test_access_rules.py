@@ -38,6 +38,7 @@ spec.loader.exec_module(gen)
 
 DOC = gen.load()
 ROWS = gen.build_rows(DOC)
+VIEWER_ROWS = gen.viewer_rows(DOC, ROWS)
 BY_KEY = {(r["collection"], r["action"]): r for r in ROWS}
 RULES = {k: r["permissions"] for k, r in BY_KEY.items()}
 # Lab Member filters of main before A1 (generator output on 2026-10-12, frozen so no git history is needed).
@@ -443,7 +444,7 @@ def base_people(w):
 def test_generated_script_block_is_current():
     script = SCRIPTS / "configure_users_and_policies.sql"
     assert gen.render_script(
-        script.read_text(encoding="utf-8"), ROWS
+        script.read_text(encoding="utf-8"), ROWS, VIEWER_ROWS
     ) == script.read_text(
         encoding="utf-8"
     ), "run `python3 scripts/gen_access_rules.py --write`"
@@ -459,11 +460,161 @@ def test_check_command_detects_a_hand_edit(tmp_path):
 
 
 def test_script_has_no_ungenerated_lab_member_rows():
-    """The only INSERT INTO directus_permissions in the script is the generated one."""
+    """The only INSERT INTO directus_permissions in the script are the two generated ones (Lab Member, Lab Viewer)."""
     text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
-    assert text.count("INSERT INTO directus_permissions") == 1
+    assert text.count("INSERT INTO directus_permissions") == 2
     start, end = gen.script_block(text)
     assert "INSERT INTO directus_permissions" in text[start:end]
+    start, end = gen.script_block(text, gen.VIEWER_BEGIN, gen.VIEWER_END)
+    assert "INSERT INTO directus_permissions" in text[start:end]
+
+
+# =================================================================================================
+# Lab Viewer (migration 185): the read rows of Lab Member under another policy, and nothing else
+# =================================================================================================
+
+VIEWER = DOC["viewer"]
+READ_ALL = set(VIEWER["read_all"])
+NL = chr(10)
+
+
+def test_viewer_rows_are_the_lab_member_read_rows_unchanged():
+    reads = [r for r in ROWS if r["action"] == "read"]
+    assert len(VIEWER_ROWS) == len(reads) > 50
+    for lm, v in zip(reads, VIEWER_ROWS):
+        assert v["policy"] == VIEWER["policy"] != lm["policy"]
+        skip = {"policy", "permissions"} if lm["collection"] in READ_ALL else {"policy"}
+        assert {k: x for k, x in v.items() if k not in skip} == {
+            k: x for k, x in lm.items() if k not in skip
+        }, f"{lm['collection']} read differs between Lab Member and Lab Viewer"
+
+
+def test_viewer_has_no_create_update_or_delete_row_at_all():
+    assert {r["action"] for r in VIEWER_ROWS} == {"read"}
+    assert not [r for r in VIEWER_ROWS if r["action"] in ("create", "update", "delete")]
+
+
+def test_viewer_reads_every_collection_lab_member_reads_and_no_other():
+    lm_read = {r["collection"] for r in ROWS if r["action"] == "read"}
+    assert {r["collection"] for r in VIEWER_ROWS} == lm_read
+    assert len({r["collection"] for r in VIEWER_ROWS}) == len(
+        VIEWER_ROWS
+    )  # one read row each
+
+
+def test_viewer_reads_records_through_the_readers_tables_like_lab_member():
+    for collection in (
+        "physical_samples", "manufacturing_operations", "test_sessions", "campaigns", "projects",
+    ):  # fmt: skip
+        row = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert "readers" in json.dumps(row["permissions"]), collection
+
+
+def test_viewer_ids_are_distinct_and_follow_the_existing_pattern():
+    assert VIEWER["role"].startswith("10000001-0000-0000-0000-")
+    assert VIEWER["policy"].startswith("20000002-0000-0000-0000-")
+    assert VIEWER["access"].startswith("30000003-0000-0000-0000-")
+    assert len({VIEWER["role"], VIEWER["policy"], VIEWER["access"], DOC["policy"]}) == 4
+    assert VIEWER["role"] not in (
+        "10000001-0000-0000-0000-000000000001",
+        "10000001-0000-0000-0000-000000000002",
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        {},
+        {"role": "a", "policy": "b"},
+        {"role": "a", "policy": "b", "access": "c", "extra": "d"},
+        {"role": "a", "policy": "a", "access": "c"},
+    ],
+)
+def test_viewer_config_is_validated(bad):
+    doc = {**DOC, "viewer": bad}
+    if bad is None:
+        del doc["viewer"]
+    with pytest.raises(gen.RulesError):
+        gen.viewer_rows(doc, ROWS)
+
+
+def test_viewer_policy_must_not_be_the_lab_member_policy():
+    doc = {**DOC, "viewer": {**VIEWER, "policy": DOC["policy"]}}
+    with pytest.raises(gen.RulesError):
+        gen.viewer_rows(doc, ROWS)
+
+
+def test_check_command_detects_a_hand_edit_of_the_viewer_block(tmp_path):
+    script = tmp_path / "configure_users_and_policies.sql"
+    text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
+    start, end = gen.script_block(text, gen.VIEWER_BEGIN, gen.VIEWER_END)
+    block = text[start:end]
+    assert "'update'" not in block and "'delete'" not in block
+    # a write row added by hand is drift, and so is a changed filter
+    for edited in (
+        block.replace(
+            "VALUES" + NL,
+            "VALUES"
+            + NL
+            + "('people', 'delete', '{}', '{}', '*', '"
+            + VIEWER["policy"]
+            + "'),"
+            + NL,
+            1,
+        ),
+        block.replace('"readers"', '"owner_person_id"', 1),
+    ):
+        assert edited != block
+        script.write_text(text.replace(block, edited), encoding="utf-8")
+        assert gen.main(["--check", "--script", str(script)]) == 1
+    script.write_text(text, encoding="utf-8")
+    assert gen.main(["--check", "--script", str(script)]) == 0
+
+
+def test_script_creates_the_viewer_role_policy_and_binding():
+    text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
+    assert f"('{VIEWER['role']}', 'Lab Viewer'" in text
+    assert f"('{VIEWER['policy']}', 'Lab Viewer'" in text
+    assert (
+        f"('{VIEWER['access']}', '{VIEWER['role']}', '{VIEWER['policy']}', 1)" in text
+    )
+    # the viewer rows are replaced as a block, like Lab Member's
+    assert (
+        f"DELETE FROM directus_permissions WHERE policy = '{VIEWER['policy']}'" in text
+    )
+
+
+def test_viewer_json_and_values_cover_every_row(capsys):
+    assert gen.main(["--viewer-json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["collection"], r["action"]) for r in rows] == [
+        (r["collection"], r["action"]) for r in VIEWER_ROWS
+    ]
+    assert {r["policy"] for r in rows} == {VIEWER["policy"]}
+    assert gen.main(["--viewer-values"]) == 0
+    values = capsys.readouterr().out.strip().splitlines()
+    assert len(values) == len(VIEWER_ROWS)
+    assert all("'read'" in v for v in values)
+
+
+def test_migration_185_inserts_read_rows_only():
+    """The migration is an immutable snapshot of the rules on the day it was written, so it is NOT compared with the current
+    generator output (a later change to a Lab Member read rule must not make an applied migration look stale: tests/phase1_schema.sh
+    compares the STORED viewer rows with the generator instead). What must hold for ever: it grants no create, update or delete."""
+    migration = (
+        SCRIPTS.parent / "db" / "migrations" / "20261015000185_lab_viewer.sql"
+    ).read_text(encoding="utf-8")
+    up = migration.split("-- migrate:down")[0]
+    start = up.index("INSERT INTO _lv_rules")
+    values = up[start : up.index(";" + NL, start)]
+    actions = {
+        line.split(",")[1].strip().strip("'")
+        for line in values.splitlines()
+        if line.lstrip().startswith("('")
+    }
+    assert actions == {"read"}
+    assert len(values.splitlines()) > 50
 
 
 def test_create_is_never_filtered():
@@ -1128,6 +1279,7 @@ def test_owner_guards_cover_every_record_whose_update_is_wider_than_delete():
     for collection, g in guards.items():
         assert g["fields"] == [
             {"field": "owner_person_id", "valueKey": "person_id"},
+            {"field": "owner_team_id", "valueKey": "team_id"},
             {"field": "restricted"},
         ]
         # hooks that predate the list read the first field
@@ -1222,11 +1374,21 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
             f = RULES[(collection, action)]
             assert f["_and"][0] == READER_TERM, (collection, action)
             assert "_some" not in json.dumps(f), (collection, action)
-        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, OWN]}, collection
+    # a team-owned record (migration 183): the team's managers hold a derived `manage` row and act as the owner,
+    # its other members hold `edit` and act as editors (Ruling O1)
     edit_role = [
         {"access": {"person_id": {"user_id": U}}},
-        {"access": {"role": {"_in": ["edit"]}}},
+        {"access": {"role": {"_in": ["edit", "manage"]}}},
     ]
+    manage_role = [
+        {"access": {"person_id": {"user_id": U}}},
+        {"access": {"role": {"_in": ["manage"]}}},
+    ]
+    owner_term = {"_or": [OWN, {"_and": manage_role}]}
+    for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
+        assert RULES[(collection, "delete")] == {
+            "_and": [READER_TERM, owner_term]
+        }, collection
     assert RULES[("campaigns", "update")] == {
         "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
@@ -1235,7 +1397,7 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
         {"_and": edit_role},
     ]
     # samples and projects need no reader term: the editors and the PI are on the list, hence readers
-    assert RULES[("physical_samples", "delete")] == OWN
+    assert RULES[("physical_samples", "delete")] == owner_term
     assert (
         RULES[("projects", "update")]
         == RULES[("projects", "delete")]
@@ -1459,6 +1621,7 @@ def _directus(drop=(), restricted=True):
         "campaigns",
     ):
         m2o(t, "owner_person_id", "people")
+        m2o(t, "owner_team_id", "teams")
     m2o("projects", "principal_investigator_person", "people")
     m2o("physical_samples", "project_id", "projects", "samples")
     m2o("manufacturing_operations", "project_id", "projects", "operations")
@@ -1517,6 +1680,7 @@ def _directus(drop=(), restricted=True):
         "campaigns.campaign_id",
         "projects.project_id",
         "people.person_id",
+        "teams.team_id",
     }
     if restricted:
         cols |= {f"{t}.restricted" for t in RECORDS}
@@ -1539,6 +1703,7 @@ def test_resolver_accepts_a_complete_database():
     [
         (("physical_samples", "owner_person_id"), "physical_samples.owner_person_id"),
         (("campaigns", "owner_person_id"), "campaigns.owner_person_id"),
+        (("test_sessions", "owner_team_id"), "test_sessions.owner_team_id"),
         (("campaign_samples", "campaign_id"), "campaign_samples.campaign_id"),
         (("project_investigators", "project_id"), "projects.secondary_investigators"),
         (("sample_access", "sample_id"), "access"),
@@ -1770,3 +1935,146 @@ def test_no_update_delete_or_manage_filter_contains_a_some():
         assert "_some" not in json.dumps(g["filter"]), collection
     for collection, rec in gen.record_rules(DOC)["records"].items():
         assert "_some" not in json.dumps(rec["manage"]), collection
+
+
+# =================================================================================================
+# Team ownership (migration 183, Ruling O1): a team-owned record has no owner_person_id; the team's managers hold a
+# derived `manage` row and act as the owner, its other members hold `edit` and act as editors
+# =================================================================================================
+
+
+def _team_owned_world():
+    """Records with no person owner. `mgr` has a derived manage row, `member` an edit row, `viewer` a view row."""
+    w = World()
+    base_people(w)
+    for name in ("mgr", "member"):
+        if f"p_{name}" not in {r["person_id"] for r in w.t["people"]}:
+            w.person(name)
+    w.sample("S")
+    w.campaign("C")
+    w.op("O", sample="S")
+    w.test("T", sample="S")
+    w.add("sample_co_owners", sample_id="S", user_id="u_coowner")
+    for kind, key in (
+        ("sample", "S"),
+        ("campaign", "C"),
+        ("operation", "O"),
+        ("test", "T"),
+    ):
+        w.grant(kind, key, "mgr", "manage")
+        w.grant(kind, key, "member", "edit")
+        w.grant(kind, key, "viewer", "view")
+    for table, key in (
+        ("physical_samples", "S"), ("campaigns", "C"), ("manufacturing_operations", "O"), ("test_sessions", "T"),
+    ):  # fmt: skip
+        w.readers(table, key, "mgr", "member", "viewer", "coowner")
+    return w
+
+
+TEAM_OWNED = (
+    ("physical_samples", "S"),
+    ("campaigns", "C"),
+    ("manufacturing_operations", "O"),
+    ("test_sessions", "T"),
+)
+
+
+def test_a_manager_of_the_owning_team_updates_and_deletes_a_team_owned_record():
+    w = _team_owned_world()
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_mgr", table, "update") == {key}, table
+        assert _can(w, "u_mgr", table, "delete") == {key}, table
+
+
+def test_a_plain_member_of_the_owning_team_updates_but_does_not_delete_or_manage():
+    w = _team_owned_world()
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_member", table, "update") == {key}, table
+        assert _can(w, "u_member", table, "delete") == set(), table
+        assert _can(w, "u_viewer", table, "update") == set(), table
+        assert _can(w, "u_viewer", table, "delete") == set(), table
+        assert _can(w, "u_stranger", table, "delete") == set(), table
+    # the manage rule the endpoint ships is the delete rule: a member cannot share, transfer or restrict
+    for table, rec in gen.record_rules(DOC)["records"].items():
+        if table in dict(TEAM_OWNED):
+            assert rec["manage"] == RULES[(table, "delete")], table
+
+
+def test_a_manager_owns_the_children_a_sample_owner_would():
+    """sample_co_owners rows are owner-only (link.sample.owner); a manager of the owning team counts as the owner."""
+    w = _team_owned_world()
+    row = {w.t["sample_co_owners"][0]["_n"]}
+    assert _can(w, "u_mgr", "sample_co_owners", "update") == row
+    assert _can(w, "u_member", "sample_co_owners", "update") == set()
+
+
+def test_a_demoted_manager_loses_the_owner_powers_at_once():
+    """Demotion rewrites the derived role from manage to edit (migration 183): the same rules then refuse delete."""
+    w = _team_owned_world()
+    for row in (
+        w.t["sample_access"]
+        + w.t["operation_access"]
+        + w.t["test_access"]
+        + w.t["campaign_access"]
+    ):
+        if row["person_id"] == "p_mgr":
+            row["role"] = "edit"
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_mgr", table, "update") == {key}, table
+        assert _can(w, "u_mgr", table, "delete") == set(), table
+
+
+def test_manage_is_never_a_project_role():
+    """project_access has no manage level (Ruling O1): the project rules do not name it."""
+    text = json.dumps([RULES[("projects", a)] for a in ("update", "delete")])
+    assert "manage" not in text
+    assert "access" not in text
+
+
+# ---- Lab Viewer, Task B: the rules that are about the caller are open for a viewer ----------------------
+
+
+def test_viewer_read_all_is_the_rollup_and_the_five_access_tables():
+    assert READ_ALL == {
+        "project_rollup",
+        "sample_access",
+        "operation_access",
+        "test_access",
+        "campaign_access",
+        "project_access",
+    }
+
+
+def test_viewer_reads_every_row_of_the_caller_scoped_tables_and_lab_member_does_not():
+    for collection in READ_ALL:
+        member = BY_KEY[(collection, "read")]["permissions"]
+        viewer = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert member != {}, f"{collection}: Lab Member must stay scoped to the caller"
+        assert "$CURRENT_USER" in json.dumps(member), collection
+        assert viewer["permissions"] == {}, collection
+        assert viewer["action"] == "read" and viewer["fields"] == "*"
+
+
+def test_viewer_read_all_changes_nothing_else():
+    ruled_as_member = [
+        r["collection"] for r in VIEWER_ROWS if r["collection"] not in READ_ALL
+    ]
+    for collection in ruled_as_member:
+        viewer = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert viewer["permissions"] == BY_KEY[(collection, "read")]["permissions"]
+
+
+def test_viewer_read_all_is_validated():
+    base = {k: v for k, v in VIEWER.items() if k != "read_all"}
+    for bad in (
+        {**base, "read_all": "project_rollup"},
+        {**base, "read_all": ["people", "people"]},
+        {**base, "read_all": ["not_a_collection"]},
+    ):
+        with pytest.raises(gen.RulesError):
+            gen.viewer_rows({**DOC, "viewer": bad}, ROWS)
+    # no read_all at all is the old behaviour: every viewer row is the Lab Member row
+    plain = gen.viewer_rows({**DOC, "viewer": base}, ROWS)
+    assert [r["permissions"] for r in plain] == [
+        r["permissions"] for r in ROWS if r["action"] == "read"
+    ]

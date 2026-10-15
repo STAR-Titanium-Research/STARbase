@@ -72,6 +72,25 @@ describe('the STARbase host', () => {
 	});
 });
 
+describe('canViewAllAccess (the Lab Viewer role)', () => {
+	const VIEWER = '10000001-0000-0000-0000-000000000003';
+	it("is true for a session whose role is Lab Viewer, false for a member, an administrator and a login with no role, and follows the session's user", () => {
+		const d = deps();
+		const host = createStarbaseHost(d);
+		expect(host.canViewAllAccess.value).toBe(false); // role r1
+		d.session.user.value = { id: 'u1', role: VIEWER };
+		expect(host.canViewAllAccess.value).toBe(true);
+		expect(host.isAdmin.value).toBe(false);
+		d.session.user.value = { id: 'u1', role: VIEWER.toUpperCase() };
+		expect(host.canViewAllAccess.value).toBe(true);
+		d.session.user.value = { id: 'u1', role: null };
+		expect(host.canViewAllAccess.value).toBe(false);
+		d.session.isAdmin.value = true;
+		d.session.user.value = { id: 'u1', role: 'r1' };
+		expect(host.canViewAllAccess.value).toBe(false); // an administrator is not flagged by it: pages use isAdmin || canViewAllAccess
+	});
+});
+
 describe('installStarbaseHost', () => {
 	it('before anyone signed in, the pages are told so', () => {
 		expect(() => useExplorerHost()).toThrow(/no Explorer host/);

@@ -1,15 +1,30 @@
-// The Process map's only module that talks to the API (spec §7). Through `HostApi` only, so the
-// signed-in person's permissions apply and no Directus SDK is imported (`hostNeutral` guard).
+// The Process map's loader of a sample's family, through `HostApi` only, so the signed-in person's permissions
+// apply and no Directus SDK is imported (`hostNeutral` guard). The other loaders: `loadFans.ts` (used-in fans, the
+// record a fan or a step starts from); `requests.ts` and `rows.ts` are what both are made of.
 //
-//   loadFamily      a sample's whole family: trace, operations, tests, genealogy, samples
+//   loadFamily       a sample's whole family: trace, operations, tests, genealogy, samples
 //   loadRelationDefs the relations of a form, read at runtime for the Inside tray (null when refused)
-//   loadUsedIn      the used-in fan of a tool, machine, edge, recipe, stock lot, material, project, campaign
-//
-// Filters go as a JSON string (`filter: JSON.stringify(...)`), like indexQuery and plotData do: a list of
-// 150 ids as bracketed query keys would run into the 20-element array limit of the query parser.
 
-import { isNotVisible, operationLabel, type HostApi, type TraceResponse } from '@d1/ui';
-import { KEY_SETTING_FIELDS, type RelationDef } from './formSlots';
+import { isNotVisible, type HostApi, type TraceResponse } from '@d1/ui';
+import { type RelationDef } from './formSlots';
+import { chunkByBudget, extrasOf, fieldsWith, getList, hasBatch, listedWork, readList, rootsOf, type Json, type Optional } from './requests';
+export { WORK_FIELDS } from './requests';
+import {
+  OPERATION_FIELDS,
+  SAMPLE_FIELDS,
+  SUBJECT_ALIAS,
+  SUBJECT_FIELDS,
+  TEST_FIELDS,
+  collectBatchCodes,
+  idOf,
+  mapOperation,
+  mapSample,
+  mapTest,
+  num,
+  str,
+  unique,
+} from './rows';
+import type { LineageRow, OpRow, ProcessData, SampleRec, StockOrigin, TestRow } from './types';
 
 /** The relations of the two forms, as `loadRelationDefs` read them at runtime. */
 export interface FormDefs {
@@ -22,454 +37,13 @@ export interface FormDefs {
    */
   workFields?: { operation: string[]; test: string[] };
 }
-import type { LineageRow, OpRow, ProcessCategory, ProcessData, Ref, SampleRec, StockOrigin, TestRow } from './types';
-
-// ---- constants -------------------------------------------------------------------------------
-
-/** Most ids in one request, whatever the budget says. */
-const CHUNK = 150;
-/** Encoded query string of one request, in bytes: filter + fields + sort + limit (typical request-line limit 8 KB). */
-const QUERY_BUDGET = 6000;
-/** Rows per used-in page (spec D20). */
-export const FAN_PAGE = 20;
-
-interface RelSpec {
-  collection: string;
-  /** Primary key of the target collection. */
-  id: string;
-  /** First non-empty wins as the Ref's `code`. */
-  code: string[];
-  /** Shown as the Ref's `label` when it differs from the code. */
-  label?: string;
-}
-
-const RELATIONS = {
-  equipment_id: { collection: 'equipment', id: 'equipment_id', code: ['equipment_code'], label: 'equipment_name' },
-  tool_id: { collection: 'tools', id: 'tool_id', code: ['tool_code'], label: 'tool_name' },
-  insert_edge_id: { collection: 'insert_edges', id: 'edge_id', code: ['edge_code'] },
-  project_id: { collection: 'projects', id: 'project_id', code: ['project_code'], label: 'project_name' },
-  campaign_id: { collection: 'campaigns', id: 'campaign_id', code: ['campaign_code'], label: 'name' },
-  material_id: { collection: 'materials', id: 'material_id', code: ['alloy_code', 'common_name'], label: 'common_name' },
-  source_recipe_id: { collection: 'prep_recipes', id: 'recipe_id', code: ['name'] },
-  fast_recipe_id: { collection: 'fast_recipes', id: 'id', code: ['name'] },
-  operator_person_id: { collection: 'people', id: 'person_id', code: ['full_name'] },
-  owner_person_id: { collection: 'people', id: 'person_id', code: ['full_name'] },
-} satisfies Record<string, RelSpec>;
-
-type RelField = keyof typeof RELATIONS;
-
-const OPERATION_RELATIONS: RelField[] = [
-  'equipment_id',
-  'tool_id',
-  'insert_edge_id',
-  'project_id',
-  'campaign_id',
-  'material_id',
-  'source_recipe_id',
-  'fast_recipe_id',
-  'operator_person_id',
-  'owner_person_id',
-];
-const TEST_RELATIONS: RelField[] = [
-  'equipment_id',
-  'insert_edge_id',
-  'project_id',
-  'campaign_id',
-  'operator_person_id',
-  'owner_person_id',
-];
-
-const relationFields = (fields: RelField[]): string[] =>
-  fields.flatMap((f) => {
-    const spec: RelSpec = RELATIONS[f];
-    return [`${f}.${spec.id}`, ...spec.code.map((c) => `${f}.${c}`), ...(spec.label ? [`${f}.${spec.label}`] : [])];
-  });
-
-const unique = (xs: string[]): string[] => [...new Set(xs)];
-
-/** Inline setting fields of the key settings (formSlots.KEY_SETTING_FIELDS); `test_type` is its own column. */
-const settingFields = (categories: (keyof typeof KEY_SETTING_FIELDS)[]): string[] =>
-  unique(
-    categories.flatMap((c) => KEY_SETTING_FIELDS[c].flatMap((d) => d.fields.map((f) => f.field))).filter((f) => f !== 'test_type'),
-  );
-
-const OPERATION_SETTING_FIELDS = settingFields(['sintering', 'machining', 'heat_treatment', 'additive', 'deformation']);
-const TEST_SETTING_FIELDS = settingFields(['test']);
-
-const OPERATION_FIELDS = [
-  'operation_id',
-  'pass_code',
-  'operation_sequence',
-  'operation_date',
-  'process_category',
-  'sample_id',
-  'output_sample_id',
-  'source_run_uid',
-  'sintering_batch_number',
-  // FAST recipe: `fast_recipe_id` (relation, above) where set; the typed number stays as the recipe key.
-  'sintering_recipe_number',
-  // TEXT column holding a file path or name, not a relation (mapped to a Ref by hand).
-  'force_file_id',
-  'method_id.method_id',
-  'method_id.method_name',
-  ...relationFields(OPERATION_RELATIONS),
-  ...OPERATION_SETTING_FIELDS,
-];
-
-const TEST_FIELDS = [
-  'session_id',
-  'sample_id',
-  'test_code',
-  'test_type',
-  'test_category',
-  'session_date',
-  'status',
-  ...relationFields(TEST_RELATIONS),
-  'session_data_files.directus_files_id.id',
-  'session_data_files.directus_files_id.title',
-  'session_data_files.directus_files_id.filename_download',
-  ...TEST_SETTING_FIELDS,
-];
-
-// The recorded batch of an operation or test (spec D14). `batch_id` is only asked for when the runtime field defs of
-// the collection list it (a database not yet migrated has no such column, and asking would refuse the whole read).
-const BATCH_FIELDS = ['batch_id.batch_id', 'batch_id.code'];
-/** Planned work (ADR-0019): whether an operation or test is planned or done, and when it is meant to happen. */
-export const WORK_FIELDS = ['work_state', 'planned_date'];
-const listedWork = (names: string[] | undefined): string[] => WORK_FIELDS.filter((f) => names?.includes(f));
-const hasBatch = (defs: RelationDef[] | undefined): boolean => !!defs?.some((d) => d.field === 'batch_id' && !d.alias);
-
-/** What a read adds to the fixed field list: the extra relations, and the batch and work state when the defs list them. */
-interface Optional {
-  extras: Extra[];
-  batch: boolean;
-  /** Work-state fields the defs list (`WORK_FIELDS`). */
-  work: string[];
-}
-
-/**
- * The batch of a row as Directus returns it: an object (`batch_id` and `code`), a bare id when the person may not read
- * the batch itself, or null. A bare id is still a batch (the rows group on it) but has no code; null is no batch.
- */
-function batchOf(value: unknown): { id: string; code: string | null } | null {
-  if (value && typeof value === 'object') {
-    const id = idOf((value as Json).batch_id);
-    return id ? { id, code: str((value as Json).code) } : null;
-  }
-  const id = idOf(value);
-  return id ? { id, code: null } : null;
-}
-
-/** Header codes of the batches seen on `rows`, added to `codes`. */
-function collectBatchCodes(rows: Json[], codes: Record<string, string>): void {
-  for (const row of rows) {
-    const batch = batchOf(row.batch_id);
-    if (batch?.code) codes[batch.id] = batch.code;
-  }
-}
-
-// Subjects of a test: the M2A junction `test_sessions_subject(test_sessions_id, collection, item)`, whose
-// alias on `test_sessions` is `subject` (db/migrations/20260703000064_test_subject_directus_meta.sql:
-// `directus_fields` row, collection test_sessions, field `subject`, special m2a).
-const SUBJECT_ALIAS = 'subject';
-const SUBJECT_FIELDS = [`${SUBJECT_ALIAS}.collection`, `${SUBJECT_ALIAS}.item`];
-
-const SAMPLE_FIELDS = [
-  'sample_id',
-  'sample_code',
-  'form',
-  'current_status',
-  'mass_grams',
-  'diameter_mm',
-  'thickness_mm',
-  'length_mm',
-  'project_id.project_id',
-  'material_id.material_id',
-  'material_id.common_name',
-  'material_id.alloy_code',
-];
-
-/** Facts shown on a sample card, in order: column and unit. */
-const SAMPLE_FACTS: { label: string; field: string; unit: string }[] = [
-  { label: 'Mass', field: 'mass_grams', unit: 'g' },
-  { label: 'Diameter', field: 'diameter_mm', unit: 'mm' },
-  { label: 'Thickness', field: 'thickness_mm', unit: 'mm' },
-  { label: 'Length', field: 'length_mm', unit: 'mm' },
-];
 
 const GENEALOGY_FIELDS = ['child_sample_id', 'parent_sample_id', 'relationship_type', 'fraction'];
-
-const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
-const TEST_CATEGORIES = ['nde', 'destructive', 'dynamic', 'other'] as const;
 const LINEAGE_TYPES: LineageRow['type'][] = ['derived_from', 'cut_from', 'sintered_from', 'powder_from'];
 
-// ---- small helpers ---------------------------------------------------------------------------
-
-type Json = Record<string, any>;
-
-/**
- * Size of the query string a request would carry, serialised the way axios does it: an array is one
- * `key[]=value` pair per element, everything percent-encoded. Conservative on purpose (the brackets are
- * encoded too), so a request under the budget is under it for any client.
- */
-export function encodedQuerySize(params: Record<string, unknown>): number {
-  const sp = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null) continue;
-    if (Array.isArray(value)) for (const v of value) sp.append(`${key}[]`, String(v));
-    else sp.append(key, String(value));
-  }
-  return sp.toString().length;
-}
-
-/**
- * Splits `ids` so that each chunk's request (`build(chunk)` = its params) stays within `budget` encoded
- * bytes (spec §7 step 2; typical servers refuse a request line over 8 KB). The cost of an id is
- * measured, not assumed, so ids of any length work. At most `CHUNK` ids per request; a single id that
- * alone exceeds the budget still goes out on its own.
- */
-export function chunkByBudget(ids: string[], build: (chunk: string[]) => Record<string, unknown>, budget = QUERY_BUDGET): string[][] {
-  const base = encodedQuerySize(build([]));
-  const out: string[][] = [];
-  let current: string[] = [];
-  let size = base;
-  for (const id of ids) {
-    // The second copy of an id costs its quotes, its separator and its encoding: the marginal cost.
-    const cost = encodedQuerySize(build([id, id])) - encodedQuerySize(build([id]));
-    if (current.length && (size + cost > budget || current.length >= CHUNK)) {
-      out.push(current);
-      current = [];
-      size = base;
-    }
-    current.push(id);
-    size += cost;
-  }
-  if (current.length) out.push(current);
-  return out;
-}
-
-const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
-const idOf = (v: unknown): string | null => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
-const num = (v: unknown): number | null => {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
-/** A record the person cannot read comes back as null or a bare id: neither is a Ref. */
-function refOf(field: RelField, value: unknown): Ref | null {
-  if (!value || typeof value !== 'object') return null;
-  const spec: RelSpec = RELATIONS[field];
-  const row = value as Json;
-  const id = idOf(row[spec.id]);
-  if (!id) return null;
-  const code = spec.code.map((c) => str(row[c])).find((c) => c) ?? id;
-  const label = spec.label ? str(row[spec.label]) : null;
-  const ref: Ref = { collection: spec.collection, id, code };
-  if (label && label !== code) ref.label = label;
-  return ref;
-}
-
-function relationsOf(row: Json, fields: RelField[]): Record<string, Ref | null> {
-  const out: Record<string, Ref | null> = {};
-  for (const f of fields) out[f] = refOf(f, row[f]);
-  return out;
-}
-
-function settingsOf(row: Json, fields: string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const f of fields) if (row[f] !== null && row[f] !== undefined) out[f] = row[f];
-  return out;
-}
-
-/** `force_file_id` holds a path or name as text: the Ref names the file part. */
-function forceFileRef(value: unknown): Ref | null {
-  const text = str(value);
-  if (!text) return null;
-  const name = text.split(/[\\/]/).filter(Boolean).pop() ?? text;
-  return { collection: 'force_file', id: text, code: name };
-}
-
-async function getList(api: HostApi, collection: string, params: Record<string, unknown>): Promise<{ rows: Json[]; total: number | null }> {
-  const { data } = await api.get(`/items/${collection}`, { params });
-  const rows = (data?.data ?? []) as Json[];
-  const count = data?.meta?.filter_count;
-  return { rows, total: count === undefined || count === null ? null : Number(count) };
-}
-
-/** Most encoded bytes the extra relation fields may add to a request (the rest of the budget is for the ids). */
-const EXTRA_BUDGET = 2500;
-
-/** A many-to-one relation of a form that the fixed field list does not read. */
-interface Extra {
-  field: string;
-  collection: string;
-  key?: string;
-}
-
 /** What the fixed field lists already read, by root field. */
-const rootsOf = (fields: string[]): Set<string> => new Set(fields.map((f) => f.split('.')[0]));
 const OPERATION_ROOTS = rootsOf([...OPERATION_FIELDS, 'batch_id']);
 const TEST_ROOTS = rootsOf([...TEST_FIELDS, ...SUBJECT_FIELDS, 'batch_id']);
-
-/** The relations of a form the map has no named field for, as far as the byte budget allows (spec D6: every relation on the form). */
-function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): Extra[] {
-  const out: Extra[] = [];
-  for (const d of defs ?? []) {
-    if (d.alias || roots.has(d.field) || out.some((e) => e.field === d.field)) continue;
-    const next = [...out, { field: d.field, collection: d.collection, key: d.key }];
-    if (encodedQuerySize({ fields: next.map((e) => `${e.field}.*`) }) > EXTRA_BUDGET) break;
-    out.push(next[next.length - 1]);
-  }
-  return out;
-}
-const extraFields = (extras: Extra[]): string[] => extras.map((e) => `${e.field}.*`);
-
-/** `fields` of a read with the optional ones: the fixed list, then the batch, the work state, then the extra relations. */
-function fieldsWith(fields: string[], { extras, batch, work }: Optional): string[] {
-  return [...fields, ...(batch ? BATCH_FIELDS : []), ...work, ...extraFields(extras)];
-}
-
-/** Directus saying no to the request (a field the role may not read, a relation it cannot expand): 400, 403, 404. Not a 5xx or a network failure. */
-const isRefusal = (e: any): boolean => [400, 403, 404].includes(e?.response?.status);
-
-/**
- * A list read that also asks for the batch, the work state and the extra relation fields. Directus refusing them is not the map's
- * problem: the read is made again with less. First with the extras and no batch, then with the batch and no extras
- * (each optional part can be the refused one), then with the fixed fields only. Only a refusal is retried; a server
- * or network error is thrown at once.
- */
-async function readList(api: HostApi, collection: string, params: Record<string, unknown>, optional: Optional): Promise<{ rows: Json[]; total: number | null }> {
-  const fixed = params.fields as string[];
-  const { extras, batch, work } = optional;
-  // The batch and the work state are the "light" optional fields: a refusal drops them together, then the extras.
-  const light = batch || work.length > 0;
-  const tiers: string[][] = [fieldsWith(fixed, optional)];
-  if (light && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false, work: [] }), fieldsWith(fixed, { extras: [], batch, work }));
-  if (light || extras.length) tiers.push(fixed);
-  for (const fields of tiers.slice(0, -1)) {
-    try {
-      return await getList(api, collection, { ...params, fields });
-    } catch (e) {
-      if (!isRefusal(e)) throw e;
-    }
-  }
-  return getList(api, collection, { ...params, fields: tiers[tiers.length - 1] });
-}
-
-const CODE_KEYS = ['code', 'name', 'title', 'label', 'full_name', 'common_name', 'filename_download'];
-/** A record of a relation the loader has no spec for: its key, and the first column that reads like a code or a name. */
-function genericRef(extra: Extra, value: unknown): Ref | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const row = value as Json;
-  const id = idOf(row[extra.key ?? 'id']);
-  if (!id) return null;
-  const codeKey = Object.keys(row).find((k) => (k === 'code' || k.endsWith('_code')) && str(row[k])) ?? CODE_KEYS.find((k) => str(row[k]));
-  return { collection: extra.collection, id, code: (codeKey && str(row[codeKey])) || id };
-}
-
-// ---- row mappers -----------------------------------------------------------------------------
-
-/**
- * Planned work (ADR-0019) of a row as read. Only a row that says `planned` is planned: without the field (not asked for,
- * or a database without the migration) a record is done, which is what every record was before the column existed.
- */
-function workOf(r: Json): { workState?: 'planned'; plannedDate?: string | null } {
-  if (r.work_state !== 'planned') return {};
-  return { workState: 'planned', plannedDate: str(r.planned_date) };
-}
-
-function mapOperation(r: Json, extras: Extra[] = []): OpRow {
-  const id = String(r.operation_id);
-  const fast = refOf('fast_recipe_id', r.fast_recipe_id);
-  const prep = refOf('source_recipe_id', r.source_recipe_id);
-  const relations = relationsOf(r, OPERATION_RELATIONS);
-  relations.force_file_id = forceFileRef(r.force_file_id);
-  for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
-  const category = CATEGORIES.includes(r.process_category) ? (r.process_category as ProcessCategory) : null;
-  const work = workOf(r);
-  return {
-    id,
-    code: operationLabel({ pass_code: str(r.pass_code), operation_sequence: num(r.operation_sequence) }),
-    methodId: idOf(r.method_id?.method_id) ?? '',
-    methodName: str(r.method_id?.method_name) ?? '',
-    category,
-    // A planned operation has no operation date: the day it is meant to happen stands in, so it sorts and reads as one.
-    date: str(r.operation_date) ?? (work.plannedDate ?? null),
-    sequence: num(r.operation_sequence),
-    // manufacturing_operations has no status column
-    status: null,
-    sampleId: idOf(r.sample_id),
-    outputSampleId: idOf(r.output_sample_id),
-    equipmentId: relations.equipment_id?.id ?? null,
-    recipeKey: fast?.id ?? str(r.sintering_recipe_number) ?? prep?.id ?? null,
-    batchId: batchOf(r.batch_id)?.id ?? null,
-    sourceRunUid: str(r.source_run_uid),
-    powderBatch: str(r.sintering_batch_number),
-    relations,
-    settings: settingsOf(r, OPERATION_SETTING_FIELDS),
-    projectId: relations.project_id?.id ?? null,
-    ...work,
-  };
-}
-
-function mapTest(r: Json, extras: Extra[] = []): TestRow {
-  const id = String(r.session_id);
-  const relations = relationsOf(r, TEST_RELATIONS);
-  for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
-  const file = Array.isArray(r.session_data_files) ? r.session_data_files.map((j: Json) => j?.directus_files_id).find((f: Json) => f?.id) : null;
-  // A test has several data files but one slot: the first is the Ref.
-  relations.session_data_files = file
-    ? { collection: 'directus_files', id: String(file.id), code: str(file.title) ?? str(file.filename_download) ?? String(file.id) }
-    : null;
-
-  const subjects = Array.isArray(r[SUBJECT_ALIAS])
-    ? (r[SUBJECT_ALIAS] as Json[])
-        .filter((s) => s?.collection === 'physical_samples')
-        .map((s) => idOf(s.item && typeof s.item === 'object' ? s.item.sample_id : s.item))
-        .filter((s): s is string => !!s)
-    : [];
-  // No junction rows (or no read of them): the primary subject is `sample_id`.
-  const primary = idOf(r.sample_id);
-  const subjectSampleIds = subjects.length ? subjects : primary ? [primary] : [];
-
-  const category = (TEST_CATEGORIES as readonly string[]).includes(r.test_category) ? (r.test_category as TestRow['category']) : null;
-  const work = workOf(r);
-  return {
-    id,
-    code: str(r.test_code) ?? str(r.test_type) ?? 'Test',
-    testType: str(r.test_type),
-    category,
-    date: str(r.session_date) ?? (work.plannedDate ?? null),
-    status: str(r.status),
-    subjectSampleIds,
-    equipmentId: relations.equipment_id?.id ?? null,
-    batchId: batchOf(r.batch_id)?.id ?? null,
-    relations,
-    settings: settingsOf(r, TEST_SETTING_FIELDS),
-    projectId: relations.project_id?.id ?? null,
-    ...work,
-  };
-}
-
-function mapSample(r: Json): SampleRec {
-  const facts: Record<string, string> = {};
-  for (const { label, field, unit } of SAMPLE_FACTS) {
-    const n = num(r[field]);
-    if (n !== null) facts[label] = `${n} ${unit}`;
-  }
-  const id = String(r.sample_id);
-  const materialRef = refOf('material_id', r.material_id);
-  return {
-    id,
-    code: str(r.sample_code) ?? id,
-    form: str(r.form),
-    status: str(r.current_status),
-    projectId: idOf(r.project_id && typeof r.project_id === 'object' ? r.project_id.project_id : r.project_id),
-    materialRef,
-    facts,
-  };
-}
 
 // ---- focus -----------------------------------------------------------------------------------
 
@@ -517,8 +91,10 @@ async function loadTests(
   batchCodes: Record<string, string>,
 ): Promise<{ tests: TestRow[]; refused: boolean; partial: boolean }> {
   const buildJunction = (chunk: string[]) => ({
+    // The M2A `item:<collection>` path, not `_and: [collection, item]`: Directus 11.17 keeps only the first key of a
+    // `_some` body, so the `_and` form matched every test with any sample subject.
     filter: JSON.stringify({
-      [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
+      [SUBJECT_ALIAS]: { _some: { 'item:physical_samples': { sample_id: { _in: chunk } } } },
     }),
     fields: [...TEST_FIELDS, ...SUBJECT_FIELDS],
     sort: ['session_date'],
@@ -685,14 +261,6 @@ function humanise(field: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : field;
 }
 
-/** The relations of a form and the work-state fields it lists, from `/relations/<c>` and `/fields/<c>`. */
-export interface FormRead {
-  /** `null` when the role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left. */
-  defs: RelationDef[] | null;
-  /** Which of `WORK_FIELDS` the collection's fields list. */
-  work: string[];
-}
-
 /**
  * The relations of a collection's form, read from `/relations/<c>` and `/fields/<c>`: many-to-one
  * fields and file-style many-to-many aliases, in form order, without hidden fields. `null` when the
@@ -700,6 +268,14 @@ export interface FormRead {
  */
 export async function loadRelationDefs(api: HostApi, collection: string): Promise<RelationDef[] | null> {
   return (await loadFormRead(api, collection)).defs;
+}
+
+/** The relations of a form and the work-state fields it lists, from `/relations/<c>` and `/fields/<c>`. */
+export interface FormRead {
+  /** `null` when the role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left. */
+  defs: RelationDef[] | null;
+  /** Which of `WORK_FIELDS` the collection's fields list. */
+  work: string[];
 }
 
 /** `loadRelationDefs` and, from the same `/fields` answer, the work-state fields the collection lists (planned work, ADR-0019). */
@@ -746,155 +322,4 @@ export async function loadFormRead(api: HostApi, collection: string): Promise<Fo
   }
   if (!defs.length) return { defs: null, work };
   return { defs: defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def), work };
-}
-
-// ---- used-in fans (spec D20) -----------------------------------------------------------------
-
-export interface UsedIn {
-  items: OpRow[] | TestRow[] | SampleRec[];
-  /** `meta.filter_count` of the main list: "+N more" is `total - 20 * page`. */
-  total: number;
-  /** Equipment and insert edges: the tests that used them (same page), and how many there are. */
-  tests?: TestRow[];
-  testsTotal?: number;
-}
-
-/** Collections that fan into operations (and tests) through one column. */
-const OPERATION_FAN: Record<string, { column: string; tests: boolean }> = {
-  tools: { column: 'tool_id', tests: false },
-  equipment: { column: 'equipment_id', tests: true },
-  insert_edges: { column: 'insert_edge_id', tests: true },
-  fast_recipes: { column: 'fast_recipe_id', tests: false },
-  prep_recipes: { column: 'source_recipe_id', tests: false },
-};
-
-/** Collections that fan into samples through a filter on `physical_samples`. */
-const SAMPLE_FAN: Record<string, (id: string) => Json> = {
-  materials: (id) => ({ material_id: { _eq: id } }),
-  projects: (id) => ({ project_id: { _eq: id } }),
-};
-
-/**
- * One page (`page` is 1-based, 20 rows) of what used a record. Operations and tests come newest first;
- * a stock lot is read through `sample_stock_provenance`: one page of its samples, then the operations that
- * made them (`output_sample_id`), so `total` counts samples and a page may hold fewer operations.
- */
-export async function loadUsedIn(api: HostApi, ref: { collection: string; id: string }, page: number): Promise<UsedIn> {
-  const p = Math.max(1, Math.floor(page) || 1);
-  const paged = { limit: FAN_PAGE, page: p, meta: 'filter_count' };
-  const opParams = (filter: Json) => ({ filter: JSON.stringify(filter), fields: OPERATION_FIELDS, sort: ['-operation_date'], ...paged });
-
-  const fan = OPERATION_FAN[ref.collection];
-  if (fan) {
-    const filter = { [fan.column]: { _eq: ref.id } };
-    const [ops, tests] = await Promise.all([
-      getList(api, 'manufacturing_operations', opParams(filter)),
-      fan.tests
-        ? getList(api, 'test_sessions', { filter: JSON.stringify(filter), fields: TEST_FIELDS, sort: ['-session_date'], ...paged })
-        : Promise.resolve(null),
-    ]);
-    const result: UsedIn = { items: ops.rows.map((r) => mapOperation(r)), total: ops.total ?? ops.rows.length };
-    if (tests) {
-      result.tests = tests.rows.map((r) => mapTest(r));
-      result.testsTotal = tests.total ?? tests.rows.length;
-    }
-    return result;
-  }
-
-  if (ref.collection === 'campaigns') {
-    // Through the campaign_samples junction (as the Sample page reads it), not an alias filter on samples.
-    const res = await getList(api, 'campaign_samples', {
-      filter: JSON.stringify({ campaign_id: { _eq: ref.id } }),
-      fields: SAMPLE_FIELDS.map((f) => `sample_id.${f}`),
-      sort: ['sample_id.sample_code'],
-      ...paged,
-    });
-    // A sample the person may not read comes back null: no card, and no count of them.
-    const items = res.rows.map((r) => r.sample_id).filter((s): s is Json => !!s && typeof s === 'object').map(mapSample);
-    return { items, total: res.total ?? items.length };
-  }
-
-  const sampleFilter = SAMPLE_FAN[ref.collection];
-  if (sampleFilter) {
-    const res = await getList(api, 'physical_samples', {
-      filter: JSON.stringify(sampleFilter(ref.id)),
-      fields: SAMPLE_FIELDS,
-      sort: ['-created_at'],
-      ...paged,
-    });
-    return { items: res.rows.map(mapSample), total: res.total ?? res.rows.length };
-  }
-
-  if (ref.collection === 'raw_stock_lots') {
-    const prov = await getList(api, 'sample_stock_provenance', {
-      filter: JSON.stringify({ lot_id: { _eq: ref.id } }),
-      fields: ['sample_id'],
-      sort: ['-created_at'],
-      ...paged,
-    });
-    const sampleIds = unique(prov.rows.map((r) => idOf(r.sample_id)).filter((s): s is string => !!s));
-    const total = prov.total ?? sampleIds.length;
-    if (!sampleIds.length) return { items: [], total };
-    const ops = await getList(api, 'manufacturing_operations', {
-      filter: JSON.stringify({ output_sample_id: { _in: sampleIds } }),
-      fields: OPERATION_FIELDS,
-      sort: ['-operation_date'],
-      limit: -1,
-    });
-    return { items: ops.rows.map((r) => mapOperation(r)), total };
-  }
-
-  throw new Error(`No used-in fan for ${ref.collection}`);
-}
-
-// ---- the record a fan or a focused step starts from (spec D20) -----------------------------------
-
-/** What names a record that has no page of its own: table key, code columns, label column. */
-const RECORD_SPECS: Record<string, RelSpec> = {
-  ...Object.fromEntries(Object.values(RELATIONS).map((spec) => [spec.collection, spec as RelSpec])),
-  raw_stock_lots: { collection: 'raw_stock_lots', id: 'lot_id', code: ['lot_code'], label: 'supplier_name' },
-};
-
-/**
- * The code (and name) of a record, for the card a used-in fan hangs from. Throws what the API threw, so
- * a 403 / 404 reads as "not visible" to the caller (`isNotVisible`).
- */
-export async function loadRecordRef(api: HostApi, ref: { collection: string; id: string }): Promise<Ref> {
-  const spec = RECORD_SPECS[ref.collection];
-  if (!spec) throw new Error(`The Process map cannot name ${ref.collection}`);
-  const fields = unique([spec.id, ...spec.code, ...(spec.label ? [spec.label] : [])]);
-  const { data } = await api.get(`/items/${ref.collection}/${encodeURIComponent(ref.id)}`, { params: { fields } });
-  const row = (data?.data ?? null) as Json | null;
-  const id = row ? idOf(row[spec.id]) : null;
-  if (!row || !id) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
-  const code = spec.code.map((c) => str(row[c])).find((c) => c) ?? id;
-  const label = spec.label ? str(row[spec.label]) : null;
-  return label && label !== code ? { collection: ref.collection, id, code, label } : { collection: ref.collection, id, code };
-}
-
-/** The sample whose family stands for an operation or test: an operation's input (else its output), a test's first subject. */
-export const sampleOfRow = (row: OpRow | TestRow): string | null =>
-  'subjectSampleIds' in row ? (row.subjectSampleIds[0] ?? null) : (row.sampleId ?? row.outputSampleId);
-
-/** Reads the operation or test an Operation / Test focus names, as the loader maps it. Throws like `loadRecordRef`. */
-export async function loadStepRow(api: HostApi, ref: { collection: string; id: string }): Promise<OpRow | TestRow> {
-  const id = encodeURIComponent(ref.id);
-  if (ref.collection === 'manufacturing_operations') {
-    const { data } = await api.get(`/items/manufacturing_operations/${id}`, { params: { fields: OPERATION_FIELDS } });
-    if (!data?.data) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
-    return mapOperation(data.data as Json);
-  }
-  if (ref.collection === 'test_sessions') {
-    let res;
-    try {
-      res = await api.get(`/items/test_sessions/${id}`, { params: { fields: [...TEST_FIELDS, ...SUBJECT_FIELDS] } });
-    } catch (e) {
-      // A role that may not read the subject junction still reads the test's own sample.
-      if (!isNotVisible(e)) throw e;
-      res = await api.get(`/items/test_sessions/${id}`, { params: { fields: TEST_FIELDS } });
-    }
-    if (!res.data?.data) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
-    return mapTest(res.data.data as Json);
-  }
-  throw new Error(`${ref.collection} is not an operation or a test`);
 }

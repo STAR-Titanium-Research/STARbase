@@ -15,6 +15,8 @@ const TEST_FIELDS = [
 	'project_id.project_id', 'project_id.project_code', 'project_id.project_name',
 	'campaign_id.campaign_id', 'campaign_id.campaign_code', 'campaign_id.name',
 	'owner_person_id.person_id', 'owner_person_id.full_name',
+	// the owning team, when a team owns the record (its managers act as the owner)
+	'owner_team_id.team_id', 'owner_team_id.name', 'owner_team_id.color', 'owner_team_id.logo',
 	'operator_person_id.person_id', 'operator_person_id.full_name',
 	// The primary sample. A test made through the form records its targets in the subject junction
 	// (test_sessions_subject); since migration 139 a trigger keeps this column equal to the junction's

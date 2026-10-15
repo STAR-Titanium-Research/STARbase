@@ -208,6 +208,15 @@ export function mergeWithSuggestions<T extends { target: string }>(items: T[], s
 	return out;
 }
 
+// The quick actions that create a record. A Lab Viewer (migration 185) changes nothing, so none of them is offered to it: not as a Home
+// button, not as a suggestion, not in its history.
+export const WRITE_ACTION_KEYS: ReadonlySet<string> = new Set(['action:register-sample', 'action:log-operation']);
+
+// `entries` without the create actions when `viewer` (host.canViewAllAccess); the same list otherwise.
+export function withoutWriteActions<T extends { target: string }>(entries: readonly T[], viewer: boolean | null | undefined): T[] {
+	return viewer ? entries.filter((e) => !WRITE_ACTION_KEYS.has(e.target)) : [...entries];
+}
+
 // The suggested pages as entries, for mergeWithSuggestions.
 export function suggestedPageEntries(): UsageEntry[] {
 	return SUGGESTED_PAGES.flatMap((key) => {
@@ -288,6 +297,37 @@ export function splitRecordTarget(target: string): { collection: string; id: str
 	if (i < 1) return null;
 	const collection = target.slice(0, i);
 	return RECORD_COLLECTIONS.includes(collection) ? { collection, id: target.slice(i + 1) } : null;
+}
+
+// The GET the label loader needs (HostApi.get fits): host-free, so the Home panel and the Process map's quick picks share it.
+export type RecordGet = (path: string, config: { params: any }) => Promise<{ data?: any }>;
+
+// The entries of the records a usage list names, read through the normal items API as the user, one request per
+// collection: a record that is gone or that the user may not read simply does not come back and is dropped
+// without a word. Targets that are not one of the seven collections are skipped. The result keeps the order of
+// `items` (the endpoint's), whichever request answered first.
+export async function loadRecordLabels(get: RecordGet, items: ReadonlyArray<{ target: string }>): Promise<UsageEntry[]> {
+	const byCollection = new Map<string, Array<{ target: string; pinned: boolean; id: string }>>();
+	for (const it of items) {
+		const parts = splitRecordTarget(it.target);
+		if (!parts) continue;
+		const list = byCollection.get(parts.collection) ?? [];
+		list.push({ pinned: false, target: it.target, id: parts.id });
+		byCollection.set(parts.collection, list);
+	}
+	const found = new Map<string, UsageEntry>();
+	await Promise.all([...byCollection].map(async ([collection, used]) => {
+		const params = recordRequest(collection, used.map((u) => u.id));
+		if (!params) return;
+		let rows: any[] = [];
+		try {
+			rows = (await get(`/items/${collection}`, { params })).data?.data ?? [];
+		} catch {
+			// Forbidden, or the collection is not there for this user: those records are left out.
+		}
+		for (const e of recordEntries(collection, rows, used)) found.set(e.target, e);
+	}));
+	return items.flatMap((it) => found.get(it.target) ?? []);
 }
 
 // -- List changes (pure, so the panel's optimistic updates and their reverts are tested) -------------

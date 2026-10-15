@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The panel beside the People list (a bottom sheet on a narrow screen): who the person is (Edit opens the person dialog), their Account
-// (an administrator's view: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
+// The panel beside the People list (a full-height sheet below the wide layout, see PeopleView and panelSheet.ts): who the person is (Edit opens the person dialog), their Account
+// (an administrator's view, which a Lab Viewer shares read-only: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
 // records their teams give them; a count opens its records, and a line says what they are still waiting to be approved on). A member sees their own
 // panel without the Account section. Words follow CONTEXT.md: account role, login, Suspended, Former; Researcher / Operator are kinds of work.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -24,6 +24,8 @@ const props = defineProps<{
 	rows: PeopleRow[];
 	canAdministerAccounts: boolean;
 	roles: { id: string; name: string }[];
+	/** In PeopleView's sheet: the header is a bar that stays put and the body below it scrolls. Beside the list it is the plain card. */
+	sheet?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'close'): void;
@@ -32,7 +34,11 @@ const emit = defineEmits<{
 }>();
 
 const host = useExplorerHost();
-const { api, isAdmin } = host;
+const { api, isAdmin, canViewAllAccess } = host;
+// Who looks at everyone's account and access: an administrator, or a Lab Viewer. A Lab Viewer sees all of it and changes none of it: every
+// control below that changes something (Edit, the role, Suspend, Resend, Invite, Remove) is behind `!readOnly`.
+const readOnly = computed(() => canViewAllAccess.value);
+const seeAll = computed(() => isAdmin.value || canViewAllAccess.value);
 
 const listed = computed(() => props.rows.find((r) => r.person_id === props.personId) ?? null);
 // What a change just did to the login, shown until the reloaded list says the same (so the select and the line never flick back).
@@ -57,10 +63,10 @@ const initials = computed(
 
 // ---- Edit: an administrator edits anyone; a member only their own row (the dialog keeps the same rule) ----
 const editOpen = ref(false);
-const canEdit = computed(() => isAdmin.value || (!!person.value?.user_id && person.value.user_id === host.user.value?.id));
+const canEdit = computed(() => !readOnly.value && (isAdmin.value || (!!person.value?.user_id && person.value.user_id === host.user.value?.id)));
 
 // ---- Account (administrators) ----
-const viewer = computed(() => ({ admin: isAdmin.value, accounts: props.canAdministerAccounts }));
+const viewer = computed(() => ({ admin: seeAll.value, accounts: props.canAdministerAccounts && !readOnly.value, readOnly: readOnly.value }));
 const line = computed(() => (person.value ? loginLine(person.value, viewer.value) : null));
 const roleEditable = computed(() => !!person.value && canEditRole(person.value, viewer.value));
 const roleItems = computed(() => props.roles.map((r) => ({ text: r.name, value: r.id })));
@@ -178,8 +184,12 @@ async function remove(r: AccessRecord) {
 // The listener is in the CAPTURE phase on purpose: it reads which overlay is open before any overlay's own Esc handler has run. In the bubble
 // phase a select, dialog or menu that handled Esc first could already be gone from the DOM, and the panel would close under it too.
 // It never stops propagation, so those handlers (and PeopleView's attention-menu one) still run; the menu is covered by its data-open-menu marker.
+// The sheet this panel sits in is an aria-modal dialog itself (it holds the panel): that one is not "something over the panel".
+const root = ref<HTMLElement | null>(null);
 const overlayOpen = () =>
-	Array.from(document.querySelectorAll<HTMLElement>(ESC_OWNER_SELECTOR)).some((el) => !el.matches('.v-menu-content') || el.getClientRects().length > 0);
+	Array.from(document.querySelectorAll<HTMLElement>(ESC_OWNER_SELECTOR)).some(
+		(el) => !el.contains(root.value) && (!el.matches('.v-menu-content') || el.getClientRects().length > 0),
+	);
 const onKey = (e: KeyboardEvent) => {
 	if (escapeClosesPanel(e, (document.activeElement as HTMLElement | null)?.tagName, overlayOpen())) emit('close');
 };
@@ -188,7 +198,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 </script>
 
 <template>
-	<section v-if="person" class="person-panel" :aria-label="person.full_name">
+	<section v-if="person" ref="root" class="person-panel" :class="{ sheet }" :aria-label="person.full_name">
 		<header class="head">
 			<span class="av" aria-hidden="true">{{ initials }}</span>
 			<div class="who">
@@ -199,12 +209,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 			<button class="x" type="button" aria-label="Close" @click="emit('close')">&times;</button>
 		</header>
 
-		<section v-if="isAdmin && line" class="sec" aria-label="Account">
+		<div class="body">
+		<section v-if="seeAll && line" class="sec" aria-label="Account">
 			<h3>Account</h3>
 			<div class="f">
 				<span>Role</span>
+				<span v-if="person.login && readOnly">{{ person.login.role_name ?? 'No account role' }}</span>
 				<v-select
-					v-if="person.login"
+					v-else-if="person.login"
 					class="role"
 					:model-value="person.login.role_id"
 					:items="roleItems"
@@ -267,7 +279,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 								{{ levelLabel(r.level) }}<template v-if="r.granted_by"> · granted by {{ r.granted_by }}</template>
 							</span>
 						</span>
-						<template v-for="n in [sourceNote(r, isAdmin)]" :key="'n'">
+						<template v-for="n in [sourceNote(r, seeAll, readOnly)]" :key="'n'">
 							<button
 								v-if="n && n.remove"
 								type="button"
@@ -284,6 +296,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 				</ul>
 			</div>
 		</section>
+
+		</div>
 
 		<PersonEditDialog v-model="editOpen" :person="person" @saved="emit('changed')" />
 	</section>
@@ -306,12 +320,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 	font-size: 20px; line-height: 1; cursor: pointer; }
 .x:hover { background: var(--d1-tile); color: var(--theme--foreground); }
 
+/* In the sheet: the header is a bar that stays put and the body scrolls under it (the sheet is the viewport's height). Insets keep both clear of
+   a phone's notch and home bar. */
+.person-panel.sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+.sheet .head { flex: none; padding: calc(10px + env(safe-area-inset-top)) 8px 10px 16px; border-bottom: 1px solid var(--d1-line); background: var(--d1-surface); }
+.sheet .edit { height: 36px; padding: 0 14px; }
+.sheet .x { width: 40px; height: 40px; font-size: 24px; }
+.sheet .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+
 .sec { padding: 4px 16px 14px; }
 h3 { margin: 12px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); }
 .f { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--d1-line); font-size: var(--fs-md); }
 .f:first-of-type { border-top: 0; }
 .f > span:first-child { color: var(--d1-dim); flex: 0 0 auto; }
-.role { width: auto; min-width: 0; flex: 0 1 180px; min-height: 28px; font-size: var(--fs-sm); }
+.f .role { width: auto; min-width: 0; flex: 0 1 180px; min-height: 28px; font-size: var(--fs-sm); }
 
 .link { border: 0; background: transparent; padding: 0; font: inherit; font-weight: 600; color: var(--d1-accent, var(--theme--primary)); cursor: pointer; }
 .link:hover:not(:disabled) { text-decoration: underline; }

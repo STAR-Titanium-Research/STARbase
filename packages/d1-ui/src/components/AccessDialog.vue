@@ -5,7 +5,8 @@ import { EXPLORER_HOST } from '../host';
 import { useAccess } from '../access/useAccess';
 import {
 	LOGINLESS_NOTE, RESTRICT_UI, ROLE_LABELS, blockedText, canChangeRole, entryLabel, initials, isLoginless, noManagerText, ownerWord, piNote,
-	recordWord, sortEntries, sortTeams, teamMembersLabel, isTeamHit, transferConfirmText, type AccessEntry, type PersonHit, type TeamHit,
+	recordWord, sortEntries, sortTeams, teamMembersLabel, isTeamHit, transferConfirmText, hitName, isTeamOwner, ownerManagersText, ownerRowText,
+	transferOffersTeams, type AccessEntry, type PersonHit, type TeamHit,
 } from '../access/accessModel';
 import AccessPersonPicker from './AccessPersonPicker.vue';
 import AccessTeamRow from './AccessTeamRow.vue';
@@ -49,7 +50,8 @@ const addBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 const transferBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 let opener: HTMLElement | null = null;
 
-const canManage = computed(() => list.value?.can_manage === true);
+// A Lab Viewer (migration 185) changes nothing: the server answers can_manage false, and the controls stay off here whatever it says.
+const canManage = computed(() => list.value?.can_manage === true && !host?.canViewAllAccess?.value);
 const word = computed(() => recordWord(props.collection));
 const roles = computed(() => ROLE_LABELS(props.collection));
 const entries = computed(() => sortEntries(list.value?.entries ?? []));
@@ -64,12 +66,19 @@ const pickedTeam = computed(() => (picked.value && isTeamHit(picked.value) ? pic
 const pickedRole = ref('view');
 // Transfer: choose the new owner, read the confirm text, Confirm.
 const transferring = ref(false);
-const transferTarget = ref<PersonHit | null>(null);
+const transferTarget = ref<PersonHit | TeamHit | null>(null);
+const transferPerson = computed(() => (transferTarget.value && !isTeamHit(transferTarget.value) ? transferTarget.value : null));
+// A team owner is not kept as Can edit and its managers lose access unless added back (Ruling O5): the text warns before Confirm.
 const confirmText = computed(() =>
 	transferTarget.value
-		? transferConfirmText(list.value?.owner?.name ?? null, transferTarget.value.full_name, props.collection, !host.isAdmin.value)
+		? transferConfirmText(list.value?.owner?.name ?? null, hitName(transferTarget.value), props.collection, !host.isAdmin.value, {
+				fromTeam: isTeamOwner(list.value?.owner),
+				toTeam: isTeamHit(transferTarget.value),
+			})
 		: '',
 );
+const teamOwner = computed(() => (isTeamOwner(list.value?.owner) ? list.value!.owner : null));
+const managersText = computed(() => ownerManagersText(list.value?.owner ?? null));
 
 function reset() {
 	picked.value = null;
@@ -130,7 +139,8 @@ async function removeTeam(teamId: string) {
 }
 async function confirmTransfer() {
 	if (!transferTarget.value || busy.value) return;
-	if (await access.transferTo(transferTarget.value.person_id)) reset();
+	const to = transferTarget.value;
+	if (await access.transferTo(isTeamHit(to) ? { team_id: to.team_id } : { person_id: to.person_id })) reset();
 	await refocus();
 }
 async function removeEntry(entry: AccessEntry) {
@@ -216,11 +226,13 @@ function onKeydown(e: KeyboardEvent) {
 						<p v-else-if="note" class="hint quiet" role="status" aria-live="polite">{{ note }}</p>
 
 						<ul class="rows" :aria-label="`People with access to this ${word}`">
-							<li class="row owner">
-								<span class="av" aria-hidden="true">{{ list.owner ? initials(list.owner.name) : '?' }}</span>
+							<li class="row owner" :data-owner-kind="teamOwner ? 'team' : 'person'">
+								<TeamTile v-if="teamOwner" :team="teamOwner" size="md" />
+								<span v-else class="av" aria-hidden="true">{{ list.owner ? initials(list.owner.name) : '?' }}</span>
 								<span class="who">
-									<span class="name">{{ list.owner ? list.owner.name : 'No owner' }}</span>
-									<span v-if="list.owner && !list.owner.can_sign_in" class="tag">{{ LOGINLESS_NOTE }}</span>
+									<span class="name">{{ ownerRowText(list.owner) }}</span>
+									<span v-if="list.owner && !isTeamOwner(list.owner) && !list.owner.can_sign_in" class="tag">{{ LOGINLESS_NOTE }}</span>
+									<span v-if="managersText" class="hint full">Managers: {{ managersText }}</span>
 								</span>
 								<span class="role">{{ ownerWord(collection) }}</span>
 							</li>
@@ -263,8 +275,9 @@ function onKeydown(e: KeyboardEvent) {
 							<p class="hint">The people listed on the sample can see this {{ word }} too, unless a campaign or project hides it from them. Change it on the sample.</p>
 							<ul class="rows" :aria-label="`People with access through the sample`">
 								<li v-if="parentList.owner" class="row">
-									<span class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
-									<span class="who"><span class="name">{{ parentList.owner.name }}</span></span>
+									<TeamTile v-if="isTeamOwner(parentList.owner)" :team="parentList.owner" size="md" />
+									<span v-else class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
+									<span class="who"><span class="name">{{ ownerRowText(parentList.owner) }}</span></span>
 									<span class="role">Owner</span>
 								</li>
 								<li v-for="e in parentEntries" :key="e.person_id ?? `plogin-${e.name}`" class="row">
@@ -280,12 +293,12 @@ function onKeydown(e: KeyboardEvent) {
 						<section v-if="canManage && transferring" class="transfer">
 							<h3>Transfer ownership</h3>
 							<template v-if="!transferTarget">
-								<p class="hint">Choose the new {{ collection === 'projects' ? 'principal investigator' : 'owner' }}.</p>
-								<AccessPersonPicker ref="transferBox" :list="list" :entries="false" label="New owner, by name" placeholder="Search by name…" :disabled="busy" @pick="(p: PersonHit | TeamHit) => { if (!isTeamHit(p)) transferTarget = p; }" />
+								<p class="hint">Choose the new {{ collection === 'projects' ? 'principal investigator' : 'owner' }}{{ transferOffersTeams(collection) ? ', a person or a team' : '' }}.</p>
+								<AccessPersonPicker ref="transferBox" :list="list" :entries="false" :teams="transferOffersTeams(collection)" label="New owner, by name" :placeholder="transferOffersTeams(collection) ? 'Search people or teams…' : 'Search by name…'" :disabled="busy" @pick="(p: PersonHit | TeamHit) => (transferTarget = p)" />
 							</template>
 							<template v-else>
 								<p class="confirm" role="status">{{ confirmText }}</p>
-								<span v-if="transferTarget && isLoginless(transferTarget)" class="hint">{{ transferTarget.full_name }} {{ LOGINLESS_NOTE }}, so nobody can act as the owner until an admin links their login.</span>
+								<span v-if="transferPerson && isLoginless(transferPerson)" class="hint">{{ transferPerson.full_name }} {{ LOGINLESS_NOTE }}, so nobody can act as the owner until an admin links their login.</span>
 							</template>
 							<div class="actions">
 								<button v-if="transferTarget" type="button" class="btn primary" :disabled="busy" @click="confirmTransfer">Confirm transfer</button>

@@ -158,6 +158,14 @@ function makeDb(tables, rawAnswers) {
       del: async () => {
         const hit = rows();
         log.statements.push({ op: 'delete', table });
+        // owner_team_id of the four record tables is a foreign key ON DELETE RESTRICT (migration 183): a team that owns a record stays
+        if (table === 'teams') {
+          for (const t of hit) {
+            for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']) {
+              if ((tables[collection] ?? []).some((r) => same(r.owner_team_id, t.team_id))) throw pgError('23503', collection + '_owner_team_id_fkey', 'violates foreign key constraint');
+            }
+          }
+        }
         tables[table] = (tables[table] ?? []).filter((r) => !hit.includes(r));
         if (table === 'teams') {
           for (const t of hit) {
@@ -281,14 +289,14 @@ function mount({ tables = baseTables(), env = {}, mailFail = false, notActionabl
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {}, body } = {}) {
+function call(h, { acc, params = {}, query = {}, body, method } = {}) {
   return new Promise((resolve, reject) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    Promise.resolve(h({ accountability: acc, params, query, body, schema: {} }, res)).catch(reject);
+    Promise.resolve(h({ accountability: acc, params, query, body, schema: {}, ...(method ? { method } : {}) }, res)).catch(reject);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -299,7 +307,7 @@ const names = (list) => list.map((x) => x.full_name ?? x.name);
 test('401 without a user, on every route', async () => {
   const { handlers } = mount();
   const routes = ['GET /', 'GET /pending', 'GET /:id', 'POST /', 'PATCH /:id', 'DELETE /:id', 'POST /:id/members', 'PATCH /:id/members/:person_id',
-    'DELETE /:id/members/:person_id', 'POST /pending/decide'];
+    'DELETE /:id/members/:person_id', 'POST /pending/decide', 'GET /mine/recent', 'GET /:id/records'];
   for (const route of routes) {
     const r = await call(handlers[route], { acc: { user: null }, params: { id: T.additive, person_id: P.bob } });
     assert.equal(r.status, 401, route);
@@ -357,7 +365,7 @@ test('GET /:id returns the team, its members, counts and only the records the ca
   assert.equal(r.body.team.name, 'Additive');
   assert.deepEqual(r.body.members.map((m) => [m.full_name, m.is_manager, m.can_sign_in]), [['Ann Manager', true, true], ['Bob Member', false, true]]);
   assert.equal(r.body.members[1].joined_at, '2026-10-03T00:00:00.000Z');
-  assert.deepEqual(r.body.counts, { view: 2, edit: 1, investigator: 1 }); // counted over every grant, readable or not
+  assert.deepEqual(r.body.counts, { view: 2, edit: 1, investigator: 1, owns: 0 }); // counted over every grant, readable or not
   // Ann reads SM-001 and SM-003; SM-002 (edit) and the project are hidden
   assert.deepEqual(r.body.records.map((x) => [x.collection, x.id, x.kind, x.code, x.title, x.role]), [
     ['physical_samples', S.one, 'sample', 'SM-001', 'Bar A', 'view'],
@@ -373,7 +381,7 @@ test('GET /:id: a member with no person in the team still sees counts, members a
   assert.equal(stranger.status, 200);
   assert.deepEqual(stranger.body.records, []);
   assert.equal(stranger.body.hidden_count, 4);
-  assert.deepEqual(stranger.body.counts, { view: 2, edit: 1, investigator: 1 });
+  assert.deepEqual(stranger.body.counts, { view: 2, edit: 1, investigator: 1, owns: 0 });
   const adm = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive } });
   assert.equal(adm.body.records.length, 4);
   assert.equal(adm.body.hidden_count, 0);
@@ -657,7 +665,7 @@ test('POST /:id/members adds the person, answers the pending counts and mails ea
   const { handlers, tables, mails, cleared, db } = mount({ env: { CACHE_ENABLED: 'true' } });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.deepEqual(tables.team_members.filter((m) => m.person_id === P.gus).map((m) => [m.team_id, m.is_manager]), [[T.additive, false]]);
   assert.match(db.log.tx[0].raw[0].sql, /set_config\('d1\.actor_identity'/);
   // Eve owns SM-001 and the project: one mail with both; Fay owns SM-002; Ann (the adder) owns SM-003 and is not mailed
@@ -695,7 +703,7 @@ test('POST /:id/members: a failure after the commit (reading the owners for the 
   const { handlers, tables, mails, errors } = mount({ breakAfterCommit: ['people'] });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.equal(tables.team_members.some((m) => m.person_id === P.gus), true);
   assert.equal(mails.length, 0);
   assert.equal(errors.length, 1);
@@ -734,7 +742,7 @@ test('POST /:id/members: a mail failure never undoes the add', async () => {
   const { handlers, tables } = mount({ mailFail: true });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.equal(tables.team_members.some((m) => m.person_id === P.gus), true);
 });
 
@@ -1011,4 +1019,415 @@ test('decide: a mail failure never undoes the approval', async () => {
   assert.equal(r.body.decided, 2);
   assert.equal(decided.length, 2);
   assert.ok(warnings.length >= 1);
+});
+
+// ---- team ownership (migration 183, People 3 Task 3) ---------------------------------------------------------------------
+// Beta (manager Fay, member Bob) owns SM-004 and SM-005. Additive has a view grant on SM-004; Cy waits on it. The owner grant (role own)
+// is the database's: it is in the world so the endpoint's reads can skip it.
+
+const S4 = ID(4);
+const S5 = ID(5);
+const OWN = { s4: ID(411), s5: ID(412) };
+const teamOwnedWorld = () => {
+  const t = baseTables();
+  t.team_members.push({ member_id: ID(604), team_id: T.beta, person_id: P.bob, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  t.physical_samples.push(
+    { sample_id: S4, sample_code: 'SM-004', nickname: 'Team bar', owner_person_id: null, owner_team_id: T.beta },
+    { sample_id: S5, sample_code: 'SM-005', nickname: null, owner_person_id: null, owner_team_id: T.beta },
+  );
+  t.sample_readers.push({ record_id: S4, user_id: U.fay }, { record_id: S5, user_id: U.fay }, { record_id: S4, user_id: U.ann });
+  t.sample_team_access.push(
+    { team_access_id: OWN.s4, sample_id: S4, team_id: T.beta, role: 'own', trust_new_members: true },
+    { team_access_id: OWN.s5, sample_id: S5, team_id: T.beta, role: 'own', trust_new_members: true },
+    { team_access_id: ID(413), sample_id: S4, team_id: T.additive, role: 'view', trust_new_members: false },
+  );
+  t.sample_team_pending.push({ team_access_id: ID(413), person_id: P.cy, state: 'pending' });
+  return t;
+};
+
+test('DELETE /:id: a team that owns records is refused 409 TEAM_OWNS_RECORDS with counts per collection; nothing is deleted or mailed', async () => {
+  const tables = teamOwnedWorld();
+  tables.campaigns = [{ campaign_id: ID(7), campaign_code: 'CMP-1', owner_person_id: null, owner_team_id: T.beta }];
+  tables.manufacturing_operations = [];
+  tables.test_sessions = [];
+  const { handlers, mails, cleared } = mount({ tables, env: { CACHE_ENABLED: 'true' } });
+  const r = await call(handlers['DELETE /:id'], { acc: member(U.fay), params: { id: T.beta } });
+  assert.equal(r.status, 409);
+  const e = errorOf(r);
+  assert.equal(e.extensions.code, 'TEAM_OWNS_RECORDS');
+  assert.equal(e.extensions.source, 'd1-teams');
+  assert.deepEqual(e.extensions.counts, { physical_samples: 2, manufacturing_operations: 0, test_sessions: 0, campaigns: 1 });
+  assert.equal(e.message, 'Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or another team before deleting the team.');
+  assert.ok(tables.teams.some((t) => t.team_id === T.beta), 'the team stays');
+  assert.ok(tables.team_members.some((m) => m.team_id === T.beta), 'its members stay');
+  assert.equal(tables.sample_team_access.filter((g) => g.team_id === T.beta).length, 2, 'its grants stay');
+  assert.equal(mails.length, 0);
+  assert.equal(cleared.length, 0, 'nothing changed, so no cache clear');
+  // an administrator is refused the same way; the singular reads "1 sample"
+  const one = teamOwnedWorld();
+  one.physical_samples = one.physical_samples.filter((s) => s.sample_id !== S5);
+  const adm = mount({ tables: one });
+  const a = await call(adm.handlers['DELETE /:id'], { acc: admin(U.admin), params: { id: T.beta } });
+  assert.deepEqual([a.status, errorOf(a).extensions.code], [409, 'TEAM_OWNS_RECORDS']);
+  assert.match(errorOf(a).message, /^Beta owns 1 sample\./);
+});
+
+test('DELETE /:id: a team that only has a share on records (no owner_team_id) is deleted as before; a non-manager is refused before anything is read', async () => {
+  const { handlers, tables } = mount({ tables: teamOwnedWorld() });
+  assert.equal((await call(handlers['DELETE /:id'], { acc: member(U.ann), params: { id: T.additive } })).status, 200);
+  assert.ok(!tables.teams.some((t) => t.team_id === T.additive));
+  const plain = await call(handlers['DELETE /:id'], { acc: member(U.bob), params: { id: T.beta } });
+  assert.equal(plain.status, 403, 'a plain member of the owning team cannot delete it');
+});
+
+test('DELETE /:id: the managers of an owning team are mailed (once) when a team that has a share on its record is deleted', async () => {
+  const { handlers, mails } = mount({ tables: teamOwnedWorld() });
+  const r = await call(handlers['DELETE /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  assert.equal(r.status, 200);
+  // Eve, Fay (SM-002 and the managers of Beta, which owns SM-004) are the owners; Ann deleted it herself
+  const fay = mails.filter((m) => m.to === 'fay@login.example');
+  assert.equal(fay.length, 1);
+  assert.match(fay[0].text, /sample SM-002/i);
+  assert.match(fay[0].text, /sample SM-004/i);
+  assert.equal(mails.filter((m) => m.to === 'bob@login.example').length, 0, 'a plain member of the owning team is not an owner');
+});
+
+test('GET /:id: counts gain owns (the records the team owns), the owner grant shows as a record with role own', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const beta = await call(handlers['GET /:id'], { acc: member(U.fay), params: { id: T.beta } });
+  assert.equal(beta.status, 200);
+  assert.deepEqual(beta.body.counts, { view: 0, edit: 0, investigator: 0, owns: 2 });
+  assert.deepEqual(beta.body.records.map((r) => [r.code, r.role]), [['SM-004', 'own'], ['SM-005', 'own']]);
+  const additive = await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  assert.deepEqual(additive.body.counts, { view: 3, edit: 1, investigator: 1, owns: 0 });
+});
+
+test('POST /:id/members: owned_edit is the number of records the team owns; a team that owns none answers 0', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const owning = await call(handlers['POST /:id/members'], { acc: member(U.fay), params: { id: T.beta }, body: { person_id: P.gus } });
+  assert.equal(owning.status, 201);
+  assert.deepEqual(owning.body, { pending: 0, owners_asked: 0, owned_edit: 2 });
+  const none = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
+  assert.equal(none.body.owned_edit, 0);
+});
+
+test('POST /:id/members: a joiner waiting on a record a team owns asks the owning team\'s managers (not the caller), once', async () => {
+  const tables = teamOwnedWorld();
+  // Gus joins Additive, which has a (not trusting) view grant on SM-004, owned by Beta
+  const { handlers, mails } = mount({ tables });
+  const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
+  assert.equal(r.status, 201);
+  const fay = mails.filter((m) => m.to === 'fay@login.example');
+  assert.equal(fay.length, 1, 'one mail for all of Fay\'s records');
+  assert.match(fay[0].text, /sample SM-004/i);
+  assert.match(fay[0].text, /sample SM-002/i);
+  assert.equal(mails.filter((m) => m.to === 'bob@login.example').length, 0, 'a plain member of Beta is not asked');
+});
+
+test('GET /pending: a manager of the owning team sees the waiting joiners on records the team owns; a plain member and the other team\'s manager do not', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const fay = await call(handlers['GET /pending'], { acc: member(U.fay) });
+  assert.deepEqual(keyed(fay.body.items[0].records), ['sample:SM-002:edit', 'sample:SM-004:view'], 'her own SM-002 and the team-owned SM-004');
+  assert.deepEqual(fay.body.items.map((i) => [i.team_name, i.full_name]), [['Additive', 'Cy Nologin']]);
+  for (const user of [U.bob, U.ann]) {
+    const body = (await call(handlers['GET /pending'], { acc: member(user) })).body;
+    assert.ok(!JSON.stringify(body).includes('SM-004'), `${user} does not own SM-004`);
+  }
+  // demoted manager: no longer the owner
+  const demoted = teamOwnedWorld();
+  demoted.team_members.find((m) => m.team_id === T.beta && m.person_id === P.fay).is_manager = false;
+  demoted.team_members.find((m) => m.team_id === T.beta && m.person_id === P.bob).is_manager = true;
+  const after = mount({ tables: demoted });
+  assert.ok(!JSON.stringify((await call(after.handlers['GET /pending'], { acc: member(U.fay) })).body).includes('SM-004'));
+  assert.ok(JSON.stringify((await call(after.handlers['GET /pending'], { acc: member(U.bob) })).body).includes('SM-004'));
+});
+
+test('decide: a manager of the owning team decides the records the team owns; a plain member is refused (403, nothing applied)', async () => {
+  const { handlers, decided, tables } = mount({ tables: teamOwnedWorld() });
+  const plain = await call(handlers['POST /pending/decide'], { acc: member(U.bob), body: { team_id: T.additive, person_id: P.cy, decision: 'approve', records: [{ collection: 'physical_samples', id: S4 }] } });
+  assert.deepEqual([plain.status, errorOf(plain).extensions.code], [403, 'FORBIDDEN']);
+  assert.equal(decided.length, 0);
+  const one = await call(handlers['POST /pending/decide'], { acc: member(U.fay), body: { team_id: T.additive, person_id: P.cy, decision: 'approve', records: [{ collection: 'physical_samples', id: S4 }] } });
+  assert.equal(one.status, 200);
+  assert.deepEqual(decided.map((d) => d.team_access_id), [ID(413)]);
+  assert.ok(!tables.sample_team_pending.some((p) => p.team_access_id === ID(413) && p.person_id === P.cy));
+  // without `records`: the whole queue of the caller, which now includes SM-002 (hers) and nothing of Eve's
+  const all = await call(handlers['POST /pending/decide'], { acc: member(U.fay), body: { team_id: T.additive, person_id: P.cy, decision: 'decline' } });
+  assert.deepEqual([all.status, all.body.decided], [200, 1]);
+});
+
+// ---- the records of a team and the recent ones (People 4, Ruling M1) ------------------------------------------
+
+const S_OWNED = ID(11);
+const OP = ID(21);
+const sampleStamps = { [S.one]: '2026-10-05T10:00:00Z', [S.two]: '2026-10-02T10:00:00Z', [S.three]: '2026-10-07T10:00:00Z' };
+
+// baseTables plus: Additive OWNS sample SM-010 (with its hidden 'own' grant row) and operation OP-1; every record has updated_at.
+// Ann reads SM-001, SM-003, SM-010 and OP-1; she does not read SM-002 or the project.
+function recordsWorld() {
+  const tables = baseTables();
+  for (const s of tables.physical_samples) s.updated_at = sampleStamps[s.sample_id];
+  tables.projects[0].updated_at = '2026-10-01T10:00:00Z';
+  tables.physical_samples.push({ sample_id: S_OWNED, sample_code: 'SM-010', nickname: 'Team bar', owner_person_id: null, owner_team_id: T.additive, updated_at: '2026-10-09T10:00:00Z' });
+  tables.sample_team_access.push({ team_access_id: ID(410), sample_id: S_OWNED, team_id: T.additive, role: 'own', trust_new_members: true });
+  tables.sample_readers.push({ record_id: S_OWNED, user_id: U.ann });
+  tables.manufacturing_operations = [{ operation_id: OP, pass_code: 'OP-1', owner_person_id: null, owner_team_id: T.additive, updated_at: '2026-10-08T10:00:00Z' }];
+  tables.operation_readers = [{ record_id: OP, user_id: U.ann }];
+  return tables;
+}
+const idsOf = (r) => r.body.ids;
+
+test('GET /mine/recent and GET /:id/records are registered before GET /:id', () => {
+  const { order } = mount();
+  assert.ok(order.indexOf('GET /mine/recent') < order.indexOf('GET /:id'));
+  assert.ok(order.indexOf('GET /:id/records') < order.indexOf('GET /:id'));
+});
+
+test('GET /:id/records: the owned and the granted records, once each, only those the caller reads, newest first', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const r = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples' } });
+  assert.equal(r.status, 200);
+  // SM-010 is owned AND has an 'own' grant row: once. SM-002 (not readable by Ann) never appears.
+  assert.deepEqual(idsOf(r), [S_OWNED, S.three, S.one]);
+  assert.equal(r.body.truncated, false);
+  const ops = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'manufacturing_operations' } });
+  assert.deepEqual(idsOf(ops), [OP]);
+  const none = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'campaigns' } });
+  assert.deepEqual(none.body, { ids: [], truncated: false });
+});
+
+test('GET /:id/records: a hidden team record is absent for a viewer who cannot read it, present for one who can and for an administrator', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const query = { collection: 'physical_samples' };
+  const stranger = await call(handlers['GET /:id/records'], { acc: member(U.stranger), params: { id: T.additive }, query });
+  assert.deepEqual(stranger.body, { ids: [], truncated: false }); // a non-member who reads nothing learns nothing
+  const fay = await call(handlers['GET /:id/records'], { acc: member(U.fay), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(fay), [S.two]); // Fay reads only SM-002
+  const adm = await call(handlers['GET /:id/records'], { acc: admin(U.admin), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(adm), [S_OWNED, S.three, S.one, S.two]);
+});
+
+test('GET /:id/records: a project has grants only (no owner team); the investigator grant counts', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const query = { collection: 'projects' };
+  const eve = await call(handlers['GET /:id/records'], { acc: member(U.eve), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(eve), [PROJECT]);
+  const ann = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(ann), []);
+});
+
+test('GET /:id/records: limit truncates the newest first and says so; the cap is 300 with a truncated flag', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const base = { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '2' } };
+  const two = await call(handlers['GET /:id/records'], base);
+  assert.deepEqual([idsOf(two), two.body.truncated], [[S_OWNED, S.three], true]);
+  const three = await call(handlers['GET /:id/records'], { ...base, query: { ...base.query, limit: '3' } });
+  assert.deepEqual([idsOf(three).length, three.body.truncated], [3, false]);
+
+  const big = recordsWorld();
+  for (let i = 0; i < 600; i += 1) {
+    const id = ID(10000 + i);
+    big.physical_samples.push({ sample_id: id, sample_code: `BIG-${i}`, nickname: null, owner_person_id: null, owner_team_id: T.additive, updated_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() });
+    big.sample_readers.push({ record_id: id, user_id: U.ann });
+  }
+  const h = mount({ tables: big }).handlers['GET /:id/records'];
+  const dflt = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples' } });
+  assert.equal(idsOf(dflt).length, 300);
+  assert.equal(dflt.body.truncated, true);
+  assert.equal(idsOf(dflt)[0], S_OWNED); // newest first (2026-10-09 beats the January stamps)
+  const huge = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '9999' } });
+  assert.equal(idsOf(huge).length, 300);
+});
+
+test('GET /:id/records: a bad collection or limit is 400, an unknown team 404, a malformed id 400', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const get = (id, query) => call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id }, query });
+  for (const query of [{}, { collection: 'people' }, { collection: 'constructor' }, { collection: 'physical_samples', limit: '0' }, { collection: 'physical_samples', limit: 'x' }, { collection: 'physical_samples', limit: '1.5' }]) {
+    const r = await get(T.additive, query);
+    assert.deepEqual([r.status, errorOf(r).extensions.code], [400, 'INVALID_PAYLOAD'], JSON.stringify(query));
+  }
+  assert.equal((await get(ID(999), { collection: 'physical_samples' })).status, 404);
+  assert.equal((await get('nope', { collection: 'physical_samples' })).status, 400);
+  const anon = await call(handlers['GET /:id/records'], { acc: { user: null }, params: { id: T.additive }, query: { collection: 'campaigns' } });
+  assert.equal(anon.status, 401);
+});
+
+test('GET /mine/recent: the readable records of the caller\'s teams, newest first, with team name and colour', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const r = await call(handlers['GET /mine/recent'], { acc: member(U.ann) });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.items.map((i) => [i.collection, i.id, i.kind, i.code, i.title, i.team_id, i.team_name, i.team_color, i.changed_at]), [
+    ['physical_samples', S_OWNED, 'sample', 'SM-010', 'Team bar', T.additive, 'Additive', 'teal', '2026-10-09T10:00:00.000Z'],
+    ['manufacturing_operations', OP, 'operation', 'OP-1', null, T.additive, 'Additive', 'teal', '2026-10-08T10:00:00.000Z'],
+    ['physical_samples', S.three, 'sample', 'SM-003', 'Disc', T.additive, 'Additive', 'teal', '2026-10-07T10:00:00.000Z'],
+    ['physical_samples', S.one, 'sample', 'SM-001', 'Bar A', T.additive, 'Additive', 'teal', '2026-10-05T10:00:00.000Z'],
+  ]);
+  const two = await call(handlers['GET /mine/recent'], { acc: member(U.ann), query: { limit: '2' } });
+  assert.deepEqual(two.body.items.map((i) => i.code), ['SM-010', 'OP-1']);
+});
+
+test('GET /mine/recent: only the caller\'s own teams and only what they read; nothing for no team or no person', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const bob = await call(handlers['GET /mine/recent'], { acc: member(U.bob) }); // in Additive, reads none of its records
+  assert.deepEqual(bob.body, { items: [] });
+  const fay = await call(handlers['GET /mine/recent'], { acc: member(U.fay) }); // manages Beta (no records); not in Additive
+  assert.deepEqual(fay.body, { items: [] });
+  for (const user of [U.stranger, U.noperson]) assert.deepEqual((await call(handlers['GET /mine/recent'], { acc: member(user) })).body, { items: [] });
+  const bad = await call(handlers['GET /mine/recent'], { acc: member(U.ann), query: { limit: '0' } });
+  assert.equal(bad.status, 400);
+});
+
+test('GET /mine/recent: a record granted to two of the caller\'s teams is listed once (the first team by name); an administrator in a team reads all of its records', async () => {
+  const tables = recordsWorld();
+  tables.team_members.push({ member_id: ID(690), team_id: T.beta, person_id: P.ann, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  tables.sample_team_access.push({ team_access_id: ID(411), sample_id: S.three, team_id: T.beta, role: 'view', trust_new_members: false });
+  const { handlers } = mount({ tables });
+  const r = await call(handlers['GET /mine/recent'], { acc: member(U.ann) });
+  const three = r.body.items.filter((i) => i.id === S.three);
+  assert.deepEqual(three.map((i) => i.team_name), ['Additive']);
+  assert.equal(r.body.items.length, 4);
+
+  const adminTables = recordsWorld();
+  adminTables.team_members.push({ member_id: ID(691), team_id: T.additive, person_id: P.adm, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  adminTables.people.push({ person_id: P.adm, full_name: 'Adm In', email: null, user_id: U.admin });
+  const adm = await call(mount({ tables: adminTables }).handlers['GET /mine/recent'], { acc: admin(U.admin) });
+  assert.deepEqual(adm.body.items.map((i) => i.code), ['SM-010', 'OP-1', 'SM-003', 'SM-001', 'SM-002', 'PRJ1']);
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+test('Lab Viewer: a viewer who MANAGES a team and owns records is refused on every route that changes anything, and may read', async () => {
+  const tables = baseTables();
+  tables.directus_users.find((u) => u.id === U.ann).role = '10000001-0000-0000-0000-000000000003'; // Ann manages Additive
+  const { handlers, db, decided, mails, cleared } = mount({ tables });
+  const writes = [
+    ['POST /', { name: 'Viewers team' }, {}],
+    ['PATCH /:id', { name: 'Renamed' }, { id: T.additive }],
+    ['DELETE /:id', undefined, { id: T.additive }],
+    ['POST /:id/members', { person_id: P.cy }, { id: T.additive }],
+    ['PATCH /:id/members/:person_id', { is_manager: true }, { id: T.additive, person_id: P.bob }],
+    ['DELETE /:id/members/:person_id', undefined, { id: T.additive, person_id: P.bob }],
+    ['POST /pending/decide', { collection: 'physical_samples', team_access_id: ID(900), person_id: P.bob, decision: 'approve' }, {}],
+  ];
+  for (const [route, body, params] of writes) {
+    assert.ok(handlers[route], route);
+    const r = await call(handlers[route], { acc: member(U.ann), body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-teams');
+  }
+  assert.deepEqual(db.log.tx, []); // refused before any transaction opened
+  assert.deepEqual(decided, []);
+  assert.equal(mails.length, 0);
+  assert.equal(cleared.length, 0);
+  // reading is not refused
+  assert.equal((await call(handlers['GET /'], { acc: member(U.ann), method: 'GET' })).status, 200);
+  assert.equal((await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive }, method: 'GET' })).status, 200);
+  // the same manager as a Lab Member is not refused
+  const ok = mount();
+  const created = await call(ok.handlers['POST /'], { acc: member(U.ann), body: { name: 'Fresh team' }, method: 'POST' });
+  assert.notEqual(errorOf(created)?.extensions?.code, 'READ_ONLY_ROLE');
+});
+
+// ---- Lab Viewer, Task B: the read routes show a viewer every record of a team, as an administrator sees them ------------
+// A viewer's lists are NOT an unfiltered path: they are filtered by the readers rows as that viewer, like a member's. An active viewer is a reader of
+// every record (migration 185 puts a row in every readers table), so the answer equals an administrator's; a suspended viewer has no rows.
+
+const LAB_VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const VIEWER = ID(208);
+const SUSPENDED_VIEWER = ID(209);
+const viewerWorld = () => {
+  const tables = recordsWorld();
+  tables.directus_users.push({ id: VIEWER, email: 'pi@login.example', status: 'active', role: LAB_VIEWER_ROLE });
+  tables.directus_access.push({ role: LAB_VIEWER_ROLE, user: null, policy: POLICY.member }); // not an administrator
+  // what the readers triggers do for an active viewer: a row for every record of every type
+  for (const s of tables.physical_samples) tables.sample_readers.push({ record_id: s.sample_id, user_id: VIEWER });
+  for (const p of tables.projects) tables.project_readers.push({ record_id: p.project_id, user_id: VIEWER });
+  for (const o of tables.manufacturing_operations) tables.operation_readers.push({ record_id: o.operation_id, user_id: VIEWER });
+  return tables;
+};
+// role still Lab Viewer, status suspended: the readers triggers removed every row
+const suspendedViewerWorld = () => {
+  const tables = recordsWorld();
+  tables.directus_users.push({ id: SUSPENDED_VIEWER, email: 'gone@login.example', status: 'suspended', role: LAB_VIEWER_ROLE });
+  return tables;
+};
+const viewing = (user) => ({ user, admin: false, app: true });
+
+test('Lab Viewer: an active viewer (a reader of everything) sees every record of the team, as an administrator does', async () => {
+  const { handlers } = mount({ tables: viewerWorld() });
+  const seen = await call(handlers['GET /:id'], { acc: viewing(VIEWER), params: { id: T.additive }, method: 'GET' });
+  const asAdmin = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, asAdmin.body.records);
+  assert.equal(seen.body.hidden_count, 0);
+  assert.deepEqual(seen.body.members, asAdmin.body.members);
+  assert.deepEqual(seen.body.counts, asAdmin.body.counts);
+  assert.ok(seen.body.records.some((x) => x.kind === 'project' && x.code === 'PRJ1'));
+  const query = { collection: 'physical_samples' };
+  const list = await call(handlers['GET /:id/records'], { acc: viewing(VIEWER), params: { id: T.additive }, query, method: 'GET' });
+  assert.deepEqual(list.body, (await call(handlers['GET /:id/records'], { acc: admin(U.admin), params: { id: T.additive }, query, method: 'GET' })).body);
+  assert.deepEqual(idsOf(list), [S_OWNED, S.three, S.one, S.two]);
+  // a Lab Member who is no viewer is unchanged
+  const stranger = await call(handlers['GET /:id'], { acc: member(U.stranger), params: { id: T.additive }, method: 'GET' });
+  assert.equal(stranger.body.hidden_count, 5); // every grant is hidden from a member who reads none of them
+  assert.deepEqual(stranger.body.records, []);
+});
+
+test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) sees no record of a team, on every read route, and is still refused writes', async () => {
+  const { handlers } = mount({ tables: suspendedViewerWorld() });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  const recent = await call(handlers['GET /mine/recent'], { acc, method: 'GET' });
+  assert.deepEqual(recent.body.items, []);
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(write.status, 403);
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+});
+
+test('Lab Viewer: GET /mine/recent lists the records of the teams of a viewer the readers rows allow; GET /pending is empty even for a viewer who owns a record somebody waits on', async () => {
+  const tables = viewerWorld();
+  tables.directus_users.find((u) => u.id === U.eve).role = LAB_VIEWER_ROLE; // Eve owns SM-001 and the project, and Cy waits on both
+  const { handlers } = mount({ tables });
+  assert.equal((await call(handlers['GET /pending'], { acc: member(U.eve), method: 'GET' })).body.items.length, 0);
+  // the same Eve as a Lab Member sees what is waiting for her
+  const plain = mount({ tables: recordsWorld() });
+  assert.equal((await call(plain.handlers['GET /pending'], { acc: member(U.eve), method: 'GET' })).body.items.length, 1);
+  // Bob (member of Additive) is a viewer with a readers row on every record: his recent list holds more than he reads as a member (who reads none)
+  const t2 = viewerWorld();
+  t2.directus_users.find((u) => u.id === U.bob).role = LAB_VIEWER_ROLE;
+  for (const s of t2.physical_samples) t2.sample_readers.push({ record_id: s.sample_id, user_id: U.bob });
+  t2.project_readers.push({ record_id: PROJECT, user_id: U.bob });
+  const recent = await call(mount({ tables: t2 }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
+  const asMember = await call(mount({ tables: viewerWorld() }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
+  assert.equal(recent.status, 200);
+  assert.ok(recent.body.items.length > asMember.body.items.length);
+});
+
+test('Lab Viewer: a viewer who ALSO holds an admin policy is still filtered by its readers rows (no unfiltered administrator read path)', async () => {
+  const tables = suspendedViewerWorld(); // role Lab Viewer, no readers rows
+  tables.directus_access.push({ role: null, user: SUSPENDED_VIEWER, policy: POLICY.admin }); // an administrator by a user policy
+  const { handlers } = mount({ tables });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  assert.deepEqual((await call(handlers['GET /mine/recent'], { acc, method: 'GET' })).body.items, []);
+  // the write rule still refuses it by role
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+  // the same admin policy on a plain Lab Member is the unfiltered administrator path
+  const plain = recordsWorld();
+  plain.directus_access.push({ role: null, user: U.stranger, policy: POLICY.admin });
+  const adm = await call(mount({ tables: plain }).handlers['GET /:id'], { acc: member(U.stranger), params: { id: T.additive }, method: 'GET' });
+  assert.equal(adm.body.hidden_count, 0);
+  assert.ok(adm.body.records.length > 0);
 });

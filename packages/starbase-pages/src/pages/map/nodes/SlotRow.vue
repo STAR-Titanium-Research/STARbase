@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { hasFan } from '../model/fans';
+import { hasFan, slotKindOf } from '../model/collections';
 import type { Ref as RecordRef, Slot } from '../model/types';
 import { recordHandlers, refKey, stopping, useMapActions, useMapView } from './actions';
-import { KINDS, kindOfCollection, kindVar, slotText } from './kinds';
+import { KINDS, kindVar, slotText } from './kinds';
 
 // One slot of a container's Inside tray (spec D6): a chip with the role and the record in it. The whole chip
 // is the record: hovering anywhere on it asks the page for its hover card, clicking selects it in the rail.
@@ -20,7 +20,7 @@ const many = computed(() => !props.item.ref && values.value.length > 1);
 const single = computed(() => props.item.ref ?? (values.value.length === 1 ? values.value[0] : null));
 const summary = computed(() => (props.item.partial ? `${values.value.length} values` : `${values.value.length} different`));
 
-const kind = computed(() => kindOfCollection((single.value ?? values.value[0])?.collection ?? ''));
+const kind = computed(() => slotKindOf((single.value ?? values.value[0])?.collection ?? ''));
 const color = computed(() => (kind.value ? kindVar(KINDS[kind.value]) : 'var(--k-file)'));
 const icon = computed(() => (kind.value ? KINDS[kind.value].icon : 'link'));
 

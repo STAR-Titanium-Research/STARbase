@@ -29,10 +29,11 @@ cp .env.example .env           # fill in the secrets
 make up                        # Postgres, Directus, Redis, MinIO, proxy, plugins
 make migrate                   # DATABASE_URL must point at the stack's Postgres
 make seed                      # dev reference data
-bash scripts/configure_all.sh  # Directus metadata, then flush Redis + restart Directus
+bash scripts/configure_all.sh  # Directus metadata, then restart Directus
 ```
 
-Restart Directus (or clear its schema cache) after `make migrate` whenever a migration touches
+Restart Directus (`docker compose restart directus`; it caches schema and permissions in memory, not in
+Redis, so never `FLUSHALL`: Redis holds the worker job queues) after `make migrate` whenever a migration touches
 Directus metadata, as migration 141 does (hidden relation aliases, the Lab Member row filters):
 `configure_all.sh` does it for a fresh stack; on an existing one use
 [`upgrade-2026-10-row-level-visibility.md`](../../runbooks/upgrade-2026-10-row-level-visibility.md).

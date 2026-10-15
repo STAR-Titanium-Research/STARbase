@@ -17,6 +17,8 @@ const props = defineProps<{
 	campaignId: string;
 	rows: any[];
 	section: SectionState<any[]>;
+	/** A Lab Viewer (host.canViewAllAccess): looks at the list and changes nothing, so no picker and no remove or add button. */
+	readOnly?: boolean;
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
@@ -116,14 +118,14 @@ async function setCampaign(id: string, campaign: string | null, label: string) {
 						<td><RecordLink collection="physical_samples" :id="t.sample_id" class="mono">{{ t.sample_code || '—' }}</RecordLink></td>
 						<td>{{ formatDate(t.session_date, '—') }}</td>
 						<td><StatusBadge kind="test" :value="t.status" /></td>
-						<td class="act"><button class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(t.session_id, null, t.test_type || 'the test session')"><v-icon name="close" x-small /></button></td>
+						<td class="act"><button v-if="!readOnly" class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(t.session_id, null, t.test_type || 'the test session')"><v-icon name="close" x-small /></button></td>
 					</tr>
 				</tbody>
 			</table>
 			<p v-else class="d1-cempty">No test sessions yet.</p>
 			<p v-if="rows.length > LIST_CAP" class="d1-ccap">Showing the first {{ LIST_CAP }} of {{ rows.length }} test sessions.</p>
 		</LoadState>
-		<PickerBox v-model="search" placeholder="Add test sessions by type or sample code…" filter-label="not in a campaign" :searching="searching" :no-results="searched && !results.length" empty-text="No unassigned test sessions match.">
+		<PickerBox v-if="!readOnly" v-model="search" placeholder="Add test sessions by type or sample code…" filter-label="not in a campaign" :searching="searching" :no-results="searched && !results.length" empty-text="No unassigned test sessions match.">
 			<button v-for="r in results" :key="r.session_id" type="button" class="pick" :disabled="!!busy" @click="setCampaign(r.session_id, campaignId, r.test_type || 'the test session')">
 				<span class="code">{{ r.test_type || '—' }}</span>
 				<span class="sub">{{ r.sample_id?.sample_code || '' }} · {{ formatDate(r.session_date, 'undated') }} · {{ r.status }}</span>
