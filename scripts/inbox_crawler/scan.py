@@ -99,6 +99,10 @@ class ShareUnavailable(Exception):  # noqa: N818 (a condition, not a bug)
     """The share is not there (or going away): abort, mark nothing gone."""
 
 
+class OwnerUnavailable(Exception):  # noqa: N818
+    """One owner's folder cannot be read while the share itself answers: record it, skip that owner."""
+
+
 @dataclass
 class ScanStats:
     registered: int = 0
@@ -160,11 +164,11 @@ class Scanner:
 
     # ---- the share is there ----------------------------------------------------------
 
-    def verify_share(self, bases=(), owner: owners.Owner | None = None) -> None:
-        """Raise ShareUnavailable unless the share root, the base folders in use and the owner's folder
-        all answer as directories. An empty mount point (the share not mounted) fails here."""
-        paths = ["", *bases] + ([owner.root] if owner is not None else [])
-        for path in paths:
+    def verify_share(self, bases=()) -> None:
+        """Raise ShareUnavailable unless the share root and the base folders in use (Users, Shared) answer
+        as directories. An empty mount point (the share not mounted) fails here. An owner's own folder is
+        not part of this check: see _owner_ok."""
+        for path in ["", *bases]:
             try:
                 is_dir = self.share.stat(path).is_dir
             except OSError as exc:
@@ -173,6 +177,21 @@ class Scanner:
                 ) from exc
             if not is_dir:
                 raise ShareUnavailable(f"{path or 'the share root'} is not a directory")
+
+    def _owner_ok(self, owner: owners.Owner, bases) -> None:
+        """The owner's folder answers as a directory, or OwnerUnavailable (the share is checked first, so a
+        dropped share is never mistaken for one missing folder)."""
+        try:
+            is_dir = self.share.stat(owner.root).is_dir
+        except OSError as exc:
+            self.verify_share(bases)
+            self._note_failure(exc)
+            raise OwnerUnavailable(
+                f"{owner.root}: cannot be read ({type(exc).__name__})"
+            ) from exc
+        if not is_dir:
+            self.verify_share(bases)
+            raise OwnerUnavailable(f"{owner.root}: is not a directory")
 
     def _note_failure(self, exc: OSError) -> None:
         if isinstance(exc, PermissionError):
@@ -240,7 +259,13 @@ class Scanner:
             if self.stop():
                 stats.interrupted = True
                 return
-            self.scan_owner(owner, bases, stats)
+            try:
+                self.scan_owner(owner, bases, stats)
+            except OwnerUnavailable as exc:
+                self.store.rollback()  # this owner's unfinished work; folders already committed stand
+                stats.error(str(exc))
+                log.warning("skipping %s: %s", owner.root, exc)
+                continue
             if stats.interrupted:
                 return
 
@@ -254,7 +279,9 @@ class Scanner:
 
     def scan_owner(self, owner: owners.Owner, bases, stats: ScanStats) -> None:
         self._tell(f"scanning {owner.root}", force=True)
-        self.verify_share(bases, owner)
+        self.verify_share(bases)
+        self._owner_ok(owner, bases)
+        self._bases = bases
         store = self.store
         dirs = store.load_dirs(owner)
         cands = store.load_candidates(owner)
@@ -290,7 +317,8 @@ class Scanner:
                 self._failures = 0
             except FileNotFoundError:
                 if d == owner.root:
-                    raise ShareUnavailable(f"{owner.root} is gone") from None
+                    self.verify_share(bases)
+                    raise OwnerUnavailable(f"{owner.root}: is gone") from None
                 vanished_dirs.append(d)
                 self._failures += 1
                 if self._failures >= MAX_CONSECUTIVE_FAILURES:
@@ -337,7 +365,8 @@ class Scanner:
 
         # Marking things gone is the dangerous step: only after the share has answered again.
         if gone or vanished_dirs:
-            self.verify_share(bases, owner)
+            self.verify_share(bases)
+            self._owner_ok(owner, bases)
             lost = {c.candidate_id: c for c in gone if c.state == "new"}
             for v in (
                 vanished_dirs
@@ -382,7 +411,8 @@ class Scanner:
             self._failures = 0
         except FileNotFoundError:
             if d == owner.root:
-                raise ShareUnavailable(f"{owner.root} is gone") from None
+                self.verify_share(self._bases)
+                raise OwnerUnavailable(f"{owner.root}: is gone") from None
             vanished_dirs.append(d)
             return False
         except OSError as exc:

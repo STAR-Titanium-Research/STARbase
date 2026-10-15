@@ -674,7 +674,6 @@ def test_a_run_of_failed_reads_means_the_share_is_going(world):
     sc, spy, _ = make(world)
     for i in range(4):
         spy.fail[("stat", f"Users/abc12de/d{i}")] = OSError(errno.EIO, "I/O error")
-    spy.fail[("stat", "Users/abc12de")] = OSError(errno.EIO, "I/O error")
     scan.MAX_CONSECUTIVE_FAILURES, saved = 3, scan.MAX_CONSECUTIVE_FAILURES
     try:
         stats = sc.scan()
