@@ -539,7 +539,7 @@ services:
       - ./scripts:/scripts:ro
       - archive_share:/mnt/archive:ro
     working_dir: /scripts
-    command: ["sh", "-c", "pip install -q psycopg2-binary Pillow && exec python -m inbox_crawler --daemon"]
+    command: ["sh", "-c", "pip install -q 'psycopg2-binary>=2.9' 'Pillow>=10.1' && exec python -m inbox_crawler --daemon"]
     networks: [d1net]
 
 volumes:

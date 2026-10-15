@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,9 @@ log = logging.getLogger("inbox_crawler.autolink")
 
 PATH = "/d1-inbox/auto-link"
 BATCH = 20
+# A candidate the extension has answered for (linked, or skipped: not editable, opted out ...) is not
+# offered again by this process for this long, then it is: the person may have got edit rights since.
+ATTEMPT_TTL_S = 3600
 
 
 class AutoLinkUnavailable(Exception):  # noqa: N818
@@ -28,16 +32,24 @@ class AutoLinkRefused(Exception):  # noqa: N818
     """The extension refused the crawler (wrong or missing secret): asking again will not help."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the secret must go to the configured URL and nowhere else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # the 3xx then surfaces as an HTTPError
+
+
 class AutoLinker:
-    def __init__(
-        self, base_url: str, secret: str, *, timeout: float = 30.0, urlopen=None
-    ):
+    def __init__(self, base_url: str, secret: str, *, timeout: float = 30.0):
         self.url = base_url.rstrip("/") + PATH
         if not self.url.startswith(("http://", "https://")):
             raise ValueError("D1_INBOX_URL must be an http(s) URL")
         self._secret = secret
         self.timeout = timeout
-        self._urlopen = urlopen or urllib.request.urlopen
+        # No proxy from the environment (the secret must not go through one), no redirects.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect
+        )
 
     @property
     def enabled(self) -> bool:
@@ -57,7 +69,7 @@ class AutoLinker:
             },
         )
         try:
-            with self._urlopen(req, timeout=self.timeout) as resp:
+            with self._opener.open(req, timeout=self.timeout) as resp:
                 payload = json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
@@ -75,11 +87,17 @@ class AutoLinker:
         return [r for r in results if isinstance(r, dict)]
 
 
-def run_auto_link(store, linker: AutoLinker | None, attempted: set[str]) -> dict:
-    """Offer the eligible candidates to the extension. `attempted` holds candidates that already got a
-    definite answer (linked or skipped) from this process; an 'error' or an unreachable extension leaves
-    them out so the next scan tries again. Returns counts for the log."""
+def run_auto_link(
+    store, linker: AutoLinker | None, attempted: dict, now=time.time
+) -> dict:
+    """Offer the eligible candidates to the extension. `attempted` maps candidates that already got a
+    definite answer (linked or skipped) from this process to when; they are not offered again for
+    ATTEMPT_TTL_S. An 'error' or an unreachable extension leaves them out so the next scan tries again.
+    Returns counts for the log."""
     out = {"offered": 0, "linked": 0, "skipped": 0, "errors": 0}
+    t = now()
+    for cid in [c for c, at in attempted.items() if t - at >= ATTEMPT_TTL_S]:
+        del attempted[cid]
     if linker is None or not linker.enabled:
         return out
     people = store.autolink_person_ids()
@@ -107,7 +125,7 @@ def run_auto_link(store, linker: AutoLinker | None, attempted: set[str]) -> dict
         for r in results:
             cid, status = r.get("candidate_id"), r.get("status")
             if status in ("linked", "skipped") and cid in chunk:
-                attempted.add(cid)
+                attempted[cid] = t
             if status == "linked":
                 out["linked"] += 1
             elif status == "skipped":

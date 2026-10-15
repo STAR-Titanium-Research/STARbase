@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 DSN = os.environ.get("DATABASE_URL")
 FINGERPRINTS = ROOT / "db/migrations/20261010000159_file_fingerprints.sql"
 INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
+FILE_MTIME = 1_500_000_000  # the default modification time of a file the tests put on the fake share
 
 
 def migration_up(path: Path, schema: str | None = None) -> str:
@@ -120,8 +121,10 @@ class World:
         p = Path(self.root, *rel.split("/"))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(content)
-        if mtime is not None:
-            os.utime(p, (mtime, mtime))
+        # An aged file, as one found on a share usually is: the crawler skips a file modified in the last few
+        # seconds (it may still be being written). Pass mtime=time.time() to test exactly that.
+        stamp = FILE_MTIME if mtime is None else mtime
+        os.utime(p, (stamp, stamp))
         return p
 
 

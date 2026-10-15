@@ -666,7 +666,8 @@ class Store:
         )
         changed = 0
         for cid, rel, strength, matches, coll, rec in rows:
-            r = recognise.recognise(rel, lookup)
+            # an owner's folder is always Users/<alias> or Shared/<folder>: look only below it
+            r = recognise.recognise(rel, lookup, below="/".join(rel.split("/")[:2]))
             if (
                 r.match_strength == strength
                 and r.suggested_collection == coll
@@ -728,7 +729,7 @@ class Store:
             " suggested_record_id::text, kind FROM file_candidates "
             "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
             "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
-            "  AND kind IN ('sem_image', 'image', 'surface_scan') "
+            "  AND kind IN ('sem_image', 'image') "
             "  AND owner_person_id = ANY(%s::uuid[]) "
             "ORDER BY first_seen_at, candidate_id LIMIT %s",
             (sorted(person_ids), limit),

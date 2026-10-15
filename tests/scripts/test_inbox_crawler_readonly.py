@@ -139,7 +139,9 @@ NEVER_IMPORT = frozenset(
 ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "__init__": frozenset(),
     "__main__": frozenset({"argparse", "logging", "os", "signal", "sys", "threading"}),
-    "autolink": frozenset({"json", "logging", "urllib.error", "urllib.request"}),
+    "autolink": frozenset(
+        {"json", "logging", "time", "urllib.error", "urllib.request"}
+    ),
     "classify_scan": frozenset(),
     "classify_sem": frozenset(
         {
@@ -361,6 +363,15 @@ def violations(source: str, module: str) -> list[str]:
             )
             if image_open and id(node) in classify_image_nodes and guarded:
                 ok_funcs.add(id(f))
+            elif (
+                module == "autolink"
+                and isinstance(f.value, ast.Attribute)
+                and f.value.attr == "_opener"
+                and _dotted(f.value) == "self._opener"
+            ):
+                ok_funcs.add(
+                    id(f)
+                )  # the no-redirect, no-proxy opener autolink built (a URL, never a path)
             elif (
                 is_fs
                 and isinstance(f.value, ast.Name)
@@ -590,6 +601,8 @@ BYPASSES = [
 ]
 # Snippets that are only bad in the module they are checked as.
 BYPASSES_AS = [
+    ("opener.open(url)", "autolink"),  # only self._opener.open
+    ("self._opener.open(url)", "scan"),
     ("import io", "hashing"),  # `io` is on the table for scan only
     ("import index_archive\nindex_archive.main()", "identity"),
     ("import index_archive\nindex_archive.fingerprint(p, 1)", "identity"),
@@ -645,6 +658,14 @@ def test_imports_outside_the_table_are_refused_even_if_harmless():
 
 
 CLEAN = [
+    (
+        "class A:\n    def f(self, req):\n        return self._opener.open(req, timeout=1)",
+        "autolink",
+    ),
+    (
+        "import urllib.request\no = urllib.request.build_opener(urllib.request.ProxyHandler({}))",
+        "autolink",
+    ),
     ("import re\nre.compile('x')", "recognise"),
     ("import logging\nlog = logging.getLogger('x')", "scan"),
     ("import os\nos.environ.get('A')", "__main__"),

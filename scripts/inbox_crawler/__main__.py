@@ -26,6 +26,20 @@ from . import autolink, daemon, db, fs_readonly, hashing
 log = logging.getLogger("inbox_crawler")
 
 
+_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def _log_level(name: str | None) -> int:
+    """INBOX_LOG_LEVEL as a logging level; anything that is not one falls back to INFO."""
+    return _LEVELS.get((name or "").strip().upper(), logging.INFO)
+
+
 def _parse(argv):
     ap = argparse.ArgumentParser(
         prog="inbox_crawler", description=__doc__.split("\n")[0]
@@ -47,10 +61,16 @@ def _parse(argv):
 
 def main(argv=None) -> int:
     args = _parse(argv)
+    raw_level = os.environ.get("INBOX_LOG_LEVEL")
     logging.basicConfig(
-        level=os.environ.get("INBOX_LOG_LEVEL", "INFO").upper(),
+        level=_log_level(raw_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if raw_level and raw_level.strip().upper() not in _LEVELS:
+        log.warning(
+            "INBOX_LOG_LEVEL=%r is not a log level (use DEBUG, INFO, WARNING, ERROR); using INFO",
+            raw_level,
+        )
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         log.error("DATABASE_URL is required")

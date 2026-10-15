@@ -56,7 +56,9 @@ class Daemon:
         self._now = now
         self.stop_event = stop or threading.Event()
         self.throttle = hashing.Throttle(None)
-        self.attempted: set[str] = set()  # candidates the extension has answered for
+        self.attempted: dict[
+            str, float
+        ] = {}  # candidates the extension answered for, and when
         self._scanner_options = scanner_options or {}
 
     # ---- one tick ----------------------------------------------------------------------

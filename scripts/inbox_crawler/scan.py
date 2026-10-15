@@ -34,6 +34,9 @@ RACY_WINDOW_S = 2.0
 # New files are committed in batches of this many inside a folder, so a kill loses at most one batch of
 # work in a big one. The folder's cache row is still written last, so an unfinished folder is listed again.
 COMMIT_EVERY = 50
+# A file modified this recently (or dated this far ahead: a clock a little off) may still be being written:
+# it is left for the next scan rather than registered with a partial size and hash.
+RECENT_FILE_S = 5.0
 
 _IGNORED_NAMES = frozenset({"thumbs.db", "desktop.ini", ".ds_store"})
 _IGNORED_PREFIXES = (".", "~$")
@@ -100,6 +103,10 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
 
 class ShareUnavailable(Exception):  # noqa: N818 (a condition, not a bug)
     """The share is not there (or going away): abort, mark nothing gone."""
+
+
+class _TooNew(Exception):  # noqa: N818
+    """A file changed a moment ago: not registered this scan, its folder is listed again next time."""
 
 
 class OwnerUnavailable(Exception):  # noqa: N818
@@ -425,7 +432,7 @@ class Scanner:
         stats,
         deferred,
     ) -> bool:
-        """List one changed directory and register its new files. True when it was listed completely
+        """List one changed directory and register its new files. True when it was listed (scandir answered)
         (the cache row is then updated); False leaves the cache as it was so the next scan lists it again."""
         store = self.store
         try:
@@ -480,6 +487,11 @@ class Scanner:
                 continue
             try:
                 f = self._new_file(owner, rel, e.name, origin, stats)
+            except _TooNew:
+                complete = (
+                    False  # no error: the folder is simply listed again next scan
+                )
+                continue
             except OSError as exc:
                 self._note_failure(exc)
                 stats.error(
@@ -519,9 +531,12 @@ class Scanner:
             else:
                 if not store.upsert_dir(owner, d, self._cacheable(mtime), listed=True):
                     raise OwnerChanged(f"{d}: another owner has this folder")
+        elif not store.upsert_dir(owner, d, None, listed=False):
+            # not done (a file to look at again): keep a row, so the folder is "seen, not listed yet"
+            raise OwnerChanged(f"{d}: another owner has this folder")
         self._commit(owner)
         stack.extend((f"{d}/{n}", depth + 1) for n in reversed(subdirs))
-        return complete
+        return True  # listed; `complete` only decided whether the folder's cache row was written
 
     def _commit(self, owner: owners.Owner) -> None:
         """Commit the owner's work, but only while the owner still holds the folder the scan started with.
@@ -547,6 +562,8 @@ class Scanner:
         self._failures = 0
         if not st.is_file:
             return None  # a link, a FIFO or a directory swapped in since the listing: not a found file
+        if abs(self._wall() - st.mtime_ns / 1e9) < RECENT_FILE_S:
+            raise _TooNew(rel)
         cls = kinds.kind_by_name(name)
         hashed = None
         if cls.kind in ("image", "surface_scan"):
@@ -576,7 +593,7 @@ class Scanner:
                 )
                 if cls.reason.startswith("not decoded"):
                     log.info("%s is registered as a plain image: %s", rel, cls.reason)
-        rec = recognise.recognise(rel, self.lookup)
+        rec = recognise.recognise(rel, self.lookup, below=owner.root)
         result = self.store.register_file(
             owner=owner,
             rel=rel,

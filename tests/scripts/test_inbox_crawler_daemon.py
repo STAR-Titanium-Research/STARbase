@@ -517,7 +517,7 @@ def eligible(world, pid, sid, rel="Users/abc12de/3fa9c1d2.png", **kw):
 def run_autolink(world, inbox, attempted=None, secret=SECRET):
     store = db.Store(world.conn)
     linker = autolink.AutoLinker(inbox.url, secret, timeout=5)
-    attempted = set() if attempted is None else attempted
+    attempted = {} if attempted is None else attempted
     return autolink.run_auto_link(store, linker, attempted), attempted
 
 
@@ -530,11 +530,11 @@ def test_an_exact_short_id_image_of_an_opted_in_person_is_offered(linkable, inbo
     assert req["path"] == "/d1-inbox/auto-link"
     assert req["headers"]["X-Inbox-Crawler-Secret"] == SECRET
     assert req["body"] == {"candidate_ids": [cid]}
-    assert attempted == {cid}
+    assert set(attempted) == {cid}
 
 
-@pytest.mark.parametrize("kind", ["sem_image", "image", "surface_scan"])
-def test_the_three_kinds_are_offered(linkable, inbox, kind):
+@pytest.mark.parametrize("kind", ["sem_image", "image"])
+def test_the_two_image_kinds_are_offered(linkable, inbox, kind):
     world, pid, _, sid = linkable
     eligible(world, pid, sid, kind=kind)
     assert run_autolink(world, inbox)[0]["offered"] == 1
@@ -545,6 +545,9 @@ def test_the_three_kinds_are_offered(linkable, inbox, kind):
     [
         {"kind": "document"},
         {"kind": "other"},
+        {
+            "kind": "surface_scan"
+        },  # adding a scan needs a condition only a person can choose
         {"origin": "backlog"},
         {"state": "dismissed"},
         {"state": "linked"},
@@ -619,7 +622,7 @@ def test_a_definite_answer_is_not_asked_again_but_an_error_is(linkable, inbox):
         {"candidate_id": i, "status": status[i], "reason": "X"} for i in ids
     ]
     _, attempted = run_autolink(world, inbox)
-    assert attempted == {done, skipped}
+    assert set(attempted) == {done, skipped}
     inbox.requests.clear()
     run_autolink(world, inbox, attempted)
     assert [r["body"]["candidate_ids"] for r in inbox.requests] == [[failed]]
@@ -642,7 +645,7 @@ def test_a_failing_extension_leaves_the_candidates_for_next_time(
     inbox.status = status
     with caplog.at_level(logging.INFO):
         counts, attempted = run_autolink(world, inbox)
-    assert attempted == set() and counts["linked"] == 0
+    assert attempted == {} and counts["linked"] == 0
     assert SECRET not in caplog.text
 
 
@@ -656,7 +659,7 @@ def test_a_refused_secret_is_reported_without_the_secret(
     inbox.status = status
     with caplog.at_level(logging.INFO):
         counts, attempted = run_autolink(world, inbox)
-    assert attempted == set() and len(inbox.requests) == 1  # it stops asking
+    assert attempted == {} and len(inbox.requests) == 1  # it stops asking
     assert "D1_INBOX_CRAWLER_SECRET" in caplog.text and SECRET not in caplog.text
 
 
@@ -666,7 +669,7 @@ def test_an_unreachable_extension_does_not_stop_the_crawler(linkable, caplog):
     store = db.Store(world.conn)
     linker = autolink.AutoLinker("http://127.0.0.1:9", SECRET, timeout=1)
     with caplog.at_level(logging.INFO):
-        counts = autolink.run_auto_link(store, linker, set())
+        counts = autolink.run_auto_link(store, linker, {})
     assert counts["linked"] == 0 and SECRET not in caplog.text
 
 

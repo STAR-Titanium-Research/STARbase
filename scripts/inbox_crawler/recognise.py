@@ -146,8 +146,13 @@ def _distinct(hits: list[tuple[Ref, str]], via: str) -> list[dict]:
     return [seen[r] for r in sorted(seen)]
 
 
-def recognise(rel_path: str, lookup: Lookup) -> Recognition:
-    """The strongest record(s) the path names, and a suggestion when exactly one record is named."""
+def recognise(rel_path: str, lookup: Lookup, below: str = "") -> Recognition:
+    """The strongest record(s) the path names, and a suggestion when exactly one record is named.
+
+    `below` is the owner's folder ("Users/3fa9c1d2"): only the part of the path under it is looked at, so a
+    folder named like a short ID or a record code is not taken for a record."""
+    if below and rel_path.startswith(below + "/"):
+        rel_path = rel_path[len(below) + 1 :]
     if not rel_path:
         return NO_MATCH
     low = _lower(rel_path)
