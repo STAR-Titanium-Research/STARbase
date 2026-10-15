@@ -147,6 +147,17 @@ def violations(source: str, module: str) -> list[str]:
                     and isinstance(node.args[0], ast.Name)
                 ):
                     pass  # Pillow reading a handle that open_rb gave us (never a path)
+                elif (
+                    is_fs
+                    and isinstance(f.value, ast.Name)
+                    and f.value.id == "os"
+                    and len(node.args) == 2
+                    and any(
+                        isinstance(n, ast.Attribute) and n.attr == "O_NOFOLLOW"
+                        for n in ast.walk(node.args[1])
+                    )
+                ):
+                    pass  # fs_readonly's opener: os.open(path, flags | extra) with O_NOFOLLOW in `extra`
                 else:
                     bad(node, "a .open() call")
     return found
@@ -408,6 +419,91 @@ def test_reading_leaves_the_tree_exactly_as_it_was(share):
     with sh.open_rb("Users/abc12de/sem/a.tif") as fh:
         fh.read()
     assert snapshot() == before
+
+
+# ---- links, FIFOs and swaps: open_rb reads a regular file and nothing else ----------------------
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symbolic links")
+def test_a_link_named_like_an_image_that_points_at_a_document_is_refused(share):
+    sh, root, _ = share
+    os.symlink(root / "Users/abc12de/notes.pdf", root / "Users/abc12de/photo.tif")
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/photo.tif")
+    with pytest.raises(fsr.ReadRefused):  # also straight through the module function
+        fsr.open_rb(str(root / "Users/abc12de/photo.tif"))
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symbolic links")
+def test_adopted_does_not_open_a_link_either(share):
+    sh, root, _ = share
+    os.symlink(root / "Users/abc12de/notes.pdf", root / "Users/abc12de/linked.pdf")
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/linked.pdf", adopted=True)
+    with pytest.raises(fsr.ReadRefused):
+        fsr.open_rb(str(root / "Users/abc12de/linked.pdf"), adopted=True)
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symbolic links")
+def test_a_link_swapped_in_after_the_path_was_checked_is_refused(share, monkeypatch):
+    sh, root, tmp = share
+    target = root / "Users/abc12de/sem/a.tif"
+    expected = os.path.join(os.path.realpath(root), "Users", "abc12de", "sem", "a.tif")
+    # the checks passed while the file was still a file ...
+    monkeypatch.setattr(
+        fsr.os.path,
+        "realpath",
+        lambda p: expected if str(p).endswith("a.tif") else os.path.abspath(p),
+    )
+    # ... and then it was replaced by a link to something else
+    outside = tmp / "outside.tif"
+    outside.write_bytes(b"secret")
+    target.unlink()
+    os.symlink(outside, target)
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/sem/a.tif")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_is_refused_and_does_not_block(share):
+    sh, root, _ = share
+    os.mkfifo(root / "Users/abc12de/pipe.tif")
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/pipe.tif")
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/pipe.tif", adopted=True)
+
+
+def test_a_directory_named_like_an_image_is_refused(share):
+    sh, root, _ = share
+    (root / "Users/abc12de/folder.tif").mkdir()
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/folder.tif")
+
+
+def test_a_platform_without_no_follow_reads_nothing(share, monkeypatch):
+    sh, root, _ = share
+    monkeypatch.delattr(fsr.os, "O_NOFOLLOW")
+    with pytest.raises(fsr.ReadRefused):
+        sh.open_rb("Users/abc12de/sem/a.tif")
+
+
+def test_the_stat_of_a_link_says_it_is_not_a_file(share):
+    if not hasattr(os, "symlink"):
+        pytest.skip("needs symbolic links")
+    sh, root, _ = share
+    os.symlink(root / "Users/abc12de/notes.pdf", root / "Users/abc12de/l.pdf")
+    assert not sh.stat("Users/abc12de/l.pdf").is_file
+
+
+def test_the_opener_with_no_follow_is_the_only_os_open_the_checker_allows():
+    ok = "import os\nfh = open(p, 'rb', opener=lambda q, f: os.open(q, f | os.O_NOFOLLOW | extra))"
+    assert violations(ok, "fs_readonly") == []
+    assert violations(ok, "scan")
+    assert violations("import os\nos.open(p, flags)", "fs_readonly")
+    assert violations(
+        "import os\nos.open(p, os.O_NOFOLLOW | os.O_WRONLY)", "fs_readonly"
+    )
 
 
 # ---- a whole scan changes nothing on the share, and a vanishing share loses nothing ------------

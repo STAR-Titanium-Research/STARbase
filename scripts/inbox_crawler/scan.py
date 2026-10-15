@@ -86,6 +86,8 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
             None,
             None,
         )
+    if not st.is_file:
+        return hashing.HashOutcome("error", error="not a regular file"), None, None
     out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
     out = still_the_same(share, rel, st, out)
     return out, st, db.to_datetime(st.mtime_ns)
@@ -449,6 +451,8 @@ class Scanner:
             rel
         )  # one metadata call; raises OSError for the caller to count
         self._failures = 0
+        if not st.is_file:
+            return None  # a link, a FIFO or a directory swapped in since the listing: not a found file
         cls = kinds.kind_by_name(name)
         hashed = None
         if cls.kind in ("image", "surface_scan"):

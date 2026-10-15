@@ -17,7 +17,9 @@ included) calls a write, delete, rename, `chmod`, truncate or open-for-write fun
 
 from __future__ import annotations
 
+import errno
 import os
+from stat import S_ISDIR, S_ISREG
 from typing import BinaryIO, NamedTuple
 
 # Images the crawler reads (to hash them and look at the picture) before a person has linked them.
@@ -71,20 +73,51 @@ def scandir(path: str) -> list[Entry]:
 def stat(path: str) -> Stat:
     """One metadata call; does not follow a link. OSError propagates."""
     st = os.stat(path, follow_symlinks=False)
-    is_dir = (st.st_mode & 0o170000) == 0o040000
-    is_file = (st.st_mode & 0o170000) == 0o100000
-    return Stat(st.st_size, st.st_mtime_ns, is_dir, is_file)
+    return Stat(st.st_size, st.st_mtime_ns, S_ISDIR(st.st_mode), S_ISREG(st.st_mode))
 
 
 def open_rb(path: str, adopted: bool = False) -> BinaryIO:
-    """Open for binary reading. Refuses (ReadRefused) anything the allow-list does not cover."""
+    """Open a regular file for binary reading, never through a link.
+
+    Refuses (ReadRefused) a file the allow-list does not cover unless `adopted`, a path whose last
+    component is a link (O_NOFOLLOW, so a link swapped in after any earlier check is refused too), anything
+    that is not a regular file once open (a FIFO, a device, a directory), and any platform that cannot
+    refuse links. The refusals come before anything is read.
+    """
     ext = extension(path)
     if not adopted and ext not in READ_ALLOWLIST:
         raise ReadRefused(
             f"{ext or 'a file without an extension'} is not on the read allow-list; "
             "only a file a person has linked may be read"
         )
-    return open(path, "rb")
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ReadRefused("this platform cannot refuse links, so nothing is read")
+    # O_NONBLOCK: opening a FIFO must not wait for a writer (it is refused just below); O_NOCTTY: a device
+    # must not become our terminal. Both exist wherever O_NOFOLLOW does in practice; if not, plain 0.
+    extra = (
+        os.O_NONBLOCK | os.O_NOCTTY
+        if hasattr(os, "O_NONBLOCK") and hasattr(os, "O_NOCTTY")
+        else 0
+    )
+    try:
+        fh = open(
+            path,
+            "rb",
+            opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW | extra),
+        )
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.EMLINK):
+            raise ReadRefused("the path is a link") from None
+        if isinstance(exc, IsADirectoryError):
+            raise ReadRefused("not a regular file") from None
+        raise
+    try:
+        if not S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise ReadRefused("not a regular file")
+    except BaseException:
+        fh.close()
+        raise
+    return fh
 
 
 class Share:
@@ -93,12 +126,17 @@ class Share:
     def __init__(self, root: str):
         self.root = root
 
-    def _full(self, rel: str) -> str:
+    @staticmethod
+    def _parts(rel: str) -> list[str]:
         if "\\" in rel or rel.startswith("/") or (len(rel) > 1 and rel[1] == ":"):
             raise ValueError(f"not a share-relative path: {rel!r}")
         parts = [p for p in rel.split("/") if p not in ("", ".")]
         if ".." in parts:
             raise ValueError(f"path leaves the share: {rel!r}")
+        return parts
+
+    def _full(self, rel: str) -> str:
+        parts = self._parts(rel)
         return os.path.join(self.root, *parts) if parts else self.root
 
     def scandir(self, rel: str = "") -> list[Entry]:
@@ -108,10 +146,10 @@ class Share:
         return stat(self._full(rel))
 
     def open_rb(self, rel: str, adopted: bool = False) -> BinaryIO:
+        parts = self._parts(rel)
         full = self._full(rel)
-        # A link inside the share must not lead the read outside it.
-        real_root = os.path.realpath(self.root)
-        real = os.path.realpath(full)
-        if real != real_root and not real.startswith(real_root.rstrip(os.sep) + os.sep):
-            raise ReadRefused(f"{rel!r} resolves outside the share")
+        # No component of the path may be a link: the real path must be exactly root + the relative path.
+        expected = os.path.join(os.path.realpath(self.root), *parts)
+        if os.path.realpath(full) != expected:
+            raise ReadRefused(f"{rel!r} is, or passes through, a link")
         return open_rb(full, adopted=adopted)
