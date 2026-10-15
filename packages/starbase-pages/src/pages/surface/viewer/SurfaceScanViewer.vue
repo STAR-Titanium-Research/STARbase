@@ -162,7 +162,7 @@ const facts = computed(() => {
 	}
 	return rows;
 });
-const hint = '3D view of the surface scan. Drag to rotate, scroll or pinch to zoom.';
+const hint = '3D view of the surface scan. Drag or use the arrow keys to rotate, scroll, pinch or use plus and minus to zoom.';
 </script>
 
 <template>
@@ -183,7 +183,7 @@ const hint = '3D view of the surface scan. Drag to rotate, scroll or pinch to zo
 				<p>This browser cannot draw the 3D view (WebGL 2 is off or missing). The facts of the scan are below.</p>
 			</div>
 			<div v-else ref="stageEl" class="stage">
-				<canvas :key="canvasKey" ref="canvasEl" class="canvas" tabindex="0" role="img" :aria-label="title ? `${hint} ${title}` : hint" />
+				<canvas :key="canvasKey" ref="canvasEl" class="canvas" tabindex="0" role="application" :aria-label="title ? `${hint} ${title}` : hint" />
 				<div v-if="starting" class="over"><v-progress-circular indeterminate small /> Preparing the 3D view…</div>
 				<div v-if="sceneError" class="over problem" role="alert">
 					<p>{{ sceneError }}</p>

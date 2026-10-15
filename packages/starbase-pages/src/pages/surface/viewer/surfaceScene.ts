@@ -10,6 +10,7 @@ import {
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { rampBytes } from './colourRamp';
 import { ScanDataError } from './gridData';
+import { keyStep, orbitPosition, orbitState } from './orbitKeys';
 import type { PreparedScan } from './prepareScan';
 import { FOV_DEG, frameCamera, type CameraFrame } from './scanLayout';
 import { FRAGMENT_SHADER, VERTEX_SHADER } from './surfaceShaders';
@@ -38,6 +39,7 @@ export class SurfaceScene {
 		this.renderer.setClearColor(0x000000, 0);
 		const max = this.renderer.capabilities.maxTextureSize;
 		if (meta.width > max || meta.height > max) {
+			try { this.renderer.forceContextLoss(); } catch { /* already gone */ } // do not leave a live context behind
 			this.renderer.dispose();
 			throw new ScanDataError(`This graphics card cannot hold a ${meta.width} × ${meta.height} texture.`);
 		}
@@ -91,9 +93,29 @@ export class SurfaceScene {
 		this.controls.zoomSpeed = 0.8;
 		this.controls.addEventListener('change', this.request);
 		canvas.addEventListener('webglcontextlost', this.onLost);
+		canvas.addEventListener('keydown', this.onKey);
 		this.resize(); // the camera's aspect first: the opening view is framed for the real size of the canvas
 		this.applyFrame();
 	}
+
+	// Arrow keys turn the surface and plus / minus zoom, with the canvas focused (OrbitControls' own keys only pan).
+	private readonly onKey = (e: KeyboardEvent): void => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		const t = this.controls.target;
+		const p = this.camera.position;
+		const next = keyStep(e.key, orbitState(p.x - t.x, p.y - t.y, p.z - t.z), {
+			minPolar: this.controls.minPolarAngle,
+			maxPolar: this.controls.maxPolarAngle,
+			minDistance: this.controls.minDistance,
+			maxDistance: this.controls.maxDistance,
+		});
+		if (!next) return;
+		e.preventDefault();
+		const [x, y, z] = orbitPosition(next);
+		this.camera.position.set(t.x + x, t.y + y, t.z + z);
+		this.controls.update();
+		this.request();
+	};
 
 	// ---- inputs from the viewer -------------------------------------------------------------------------
 
@@ -178,6 +200,7 @@ export class SurfaceScene {
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
 		this.canvas.removeEventListener('webglcontextlost', this.onLost);
+		this.canvas.removeEventListener('keydown', this.onKey);
 		this.controls.removeEventListener('change', this.request);
 		this.controls.dispose();
 		this.geometry.dispose();
