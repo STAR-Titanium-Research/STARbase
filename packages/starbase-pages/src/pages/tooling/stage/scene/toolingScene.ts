@@ -15,8 +15,9 @@ import { BoxView } from './boxView';
 import { shadowTexture, SHADOW_FILL } from './groundShadow';
 import { liftTargets, LIFT_MM, stepLifts } from './lifts';
 import {
-	boundsContaining, easeFraction, easeToBounds, frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, FramingTween,
-	hardBounds, moveDuration, orbitLimits, prefersReducedMotion, rotationBounds, type Framing, type Vec3,
+	boundsContaining, frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, framingsClose, FramingTween, hardBounds,
+	moveDuration, orbitLimits, prefersReducedMotion, RECENTRE_DELAY_MS, rotationBounds, rubberView, springToBounds,
+	type Framing, type SpringVelocity, type Vec3,
 } from './cameraRig';
 import { LabelLayer } from './labels';
 import { SceneMaterials, TONE_MAPPING } from './materials';
@@ -54,8 +55,11 @@ export class ToolingScene {
 	private liftTo = new Map<string, number>();
 	private finalFraming: Framing | null = null;
 	private userMoved = false;
-	private dragging = false; // a pointer is down on the orbit: no easing back to the bounds yet
+	private dragging = false; // a pointer is down on the orbit: no springing back to the bounds yet
 	private lastAdvance = 0;
+	private prevView: Framing | null = null; // the camera as the last frame left it, to damp this frame's drag step by
+	private spring: SpringVelocity = { azimuth: 0, polar: 0 }; // how fast the view is springing back to a bound
+	private recentreTimer: ReturnType<typeof setTimeout> | null = null;
 	private limitsWidened = false; // the orbit limits were widened to hold a view grabbed mid-move
 	private width = 0;
 	private height = 0;
@@ -146,9 +150,14 @@ export class ToolingScene {
 		const onStart = () => {
 			this.userMoved = true;
 			this.dragging = true;
+			this.cancelRecentre(); // new input: no recentre pending, and one under way stops where it is
 			this.settle();
 		};
-		const onEnd = () => { this.dragging = false; this.requestRender(); }; // released: the view may ease back inside the bounds
+		const onEnd = () => {
+			this.dragging = false;
+			this.scheduleRecentre();
+			this.requestRender(); // released: the view may spring back inside the bounds
+		};
 		this.controls.addEventListener('change', onChange);
 		this.controls.addEventListener('start', onStart);
 		this.controls.addEventListener('end', onEnd);
@@ -256,6 +265,7 @@ export class ToolingScene {
 		this.camera.position.set(...f.position);
 		this.controls.target.set(...f.target);
 		this.camera.lookAt(this.controls.target);
+		this.prevView = null;
 	}
 
 	// The orbit limits of a framing. With `around` (the camera was grabbed mid-move and is not yet inside them), they are
@@ -275,6 +285,7 @@ export class ToolingScene {
 	// Ease the camera (and the lifted insert) to a focus; instantly when asked or under reduced motion.
 	private goTo(f: ToolingFocus, instant: boolean): void {
 		if (!this.view) return;
+		this.cancelRecentre();
 		const to = this.framingFor(f);
 		this.finalFraming = to;
 		this.liftFrom = new Map(this.lifts);
@@ -297,6 +308,29 @@ export class ToolingScene {
 			this.tween.start(framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3), to, performance.now(), duration);
 		}
 		this.requestRender();
+	}
+
+	// --- recentring -----------------------------------------------------------------------------------------------
+
+	// Once the user lets go and stays still, the camera eases back to the focus's own framing (rotation, distance and
+	// target), as if the focus moved there; instantly under reduced motion. New input cancels it (see onStart).
+	private scheduleRecentre(): void {
+		this.cancelRecentre();
+		this.recentreTimer = setTimeout(() => this.recentre(), RECENTRE_DELAY_MS);
+	}
+
+	private cancelRecentre(): void {
+		if (this.recentreTimer !== null) clearTimeout(this.recentreTimer);
+		this.recentreTimer = null;
+	}
+
+	private recentre(): void {
+		this.recentreTimer = null;
+		if (this.disposed || !this.view || this.dragging || this.tween.active || !this.finalFraming) return;
+		const now = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
+		if (framingsClose(now, this.finalFraming)) return; // already there
+		this.userMoved = false;
+		this.goTo(this.focus, false);
 	}
 
 	// The user grabbed the camera mid-move: stop where it is, with the insert already at its destination.
@@ -375,20 +409,48 @@ export class ToolingScene {
 		return busy;
 	}
 
-	// Past the soft rotation bounds (a drag may overshoot them a little) and let go: ease back to the bound.
+	// The soft rotation bounds. Dragging past one meets rising resistance (each frame's step is damped by how far past the
+	// bound the view already is), and once let go the view springs back to it. Applied after the orbit controls have
+	// moved the camera, which they re-read every frame.
 	private easeBack(now: number): boolean {
 		const dt = now - this.lastAdvance;
 		this.lastAdvance = now;
-		if (this.dragging || this.tween.active || !this.finalFraming) return false;
-		const view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
-		const next = easeToBounds(view, rotationBounds(this.finalFraming), easeFraction(dt, prefersReducedMotion()));
-		if (!next) {
-			if (this.limitsWidened) this.applyLimits(this.finalFraming); // back inside: the plain limits again
+		if (this.tween.active || !this.finalFraming) {
+			this.prevView = null;
+			this.spring = { azimuth: 0, polar: 0 };
+			this.controls.enableDamping = true;
 			return false;
 		}
-		this.camera.position.set(...next.position);
-		this.camera.lookAt(this.controls.target);
-		return true;
+		const bounds = rotationBounds(this.finalFraming);
+		const put = (v: Framing): void => {
+			this.camera.position.set(...v.position);
+			this.camera.lookAt(this.controls.target);
+		};
+		let view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
+		if (this.prevView && !this.limitsWidened) {
+			const damped = rubberView(this.prevView, view, bounds);
+			if (damped) { put(damped); view = damped; }
+		}
+		let busy = false;
+		if (this.dragging) {
+			this.spring = { azimuth: 0, polar: 0 };
+		} else {
+			const next = springToBounds(view, bounds, this.spring, dt, prefersReducedMotion());
+			if (next) {
+				put(next.view);
+				view = next.view;
+				this.spring = next.vel;
+				busy = true;
+			} else {
+				this.spring = { azimuth: 0, polar: 0 };
+				if (this.limitsWidened) this.applyLimits(this.finalFraming); // back inside: the plain limits again
+			}
+		}
+		// Let go past a bound: the orbit controls' own coasting would fight the spring, so it is switched off until the
+		// view is back inside (and while dragging it stays on, for the feel of the drag).
+		this.controls.enableDamping = this.dragging || !busy;
+		this.prevView = view;
+		return busy;
 	}
 
 	private draw(pulse: number): void {
@@ -404,6 +466,7 @@ export class ToolingScene {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.cancelRecentre();
 		this.loop.dispose();
 		for (const c of this.cleanups) c();
 		this.cleanups.length = 0;
