@@ -1968,12 +1968,17 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
   `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
   nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
-  (ADR-0020), and `file_fingerprints.py --phase all` now skips a row the crawler registered (`metadata.found_by
-  = 'inbox_crawler'`) until it is linked. The indexer's own walk (`make index-archive`, with or without
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a document or other non-image file the crawler
+  found (a `d1_private.file_candidates` row of kind document or other, not linked, never adopted) until it is
+  linked. The exclusion keys on that candidate row, not on `directus_files.metadata.found_by`, which the
+  indexer's next run overwrites and any Lab Member can edit; a pointer row with `found_by` but no candidate
+  row is read like any other file. The indexer's own walk (`make index-archive`, with or without
   `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
-  unchanged, and a document the indexer registered earlier is not marked `found_by`. Run `make index-archive
-  --fingerprint` on a test folder with a document in it, check what was read, and decide: restrict both tools
-  to the folders the lab agreed to index, or accept it. Since: found files inbox, final review (S5).
+  unchanged. Run `make index-archive --fingerprint` on a test folder with a document in it, check what was
+  read, and decide: restrict both tools to the folders the lab agreed to index, or accept it. To check the
+  exclusion: after the crawler found a document and the indexer ran over its folder, `file_fingerprints.py
+  --phase all --dry-run` must not list it, and must list it once a person has linked it. Since: found files
+  inbox, final review (S5), re-review fix (S3).
 - [ ] **IF16 — An undone auto-link stays undone (live).** See **IF40**, which covers this check as well (the crawler restart and its log).
 - [ ] **IF17 — Pausing the crawler (SQL).** There is no admin route or tab for this. On d1-server run
   `UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused'` (psql in the `postgres` container).
@@ -2085,6 +2090,23 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   a scan run (it does not mark a decided file gone), then **Restore** (or **Undo**) it. Expect the next scan, or
   *Rescan my folder*, to list that folder again and mark the file *gone* (it leaves the New list instead of
   staying there for good). Since: found files inbox, final review fixes (server).
+- [ ] **IF50 — A restored file whose whole folder was deleted is marked gone.** Like IF41, but put the file in a
+  subfolder of a test folder (`Users/<alias>/old/deep/x.png`), let a scan find it, **Dismiss** it, then delete the
+  whole `old` folder from the share and let a scan run (the file stays dismissed). **Restore** it. Expect the next
+  scan, or *Rescan my folder*, to mark it *gone* although no folder row is left to list (the crawler stats the
+  folders of every undecided file and the folders above them). Since: found files inbox, re-review fixes (S2,
+  crawler).
+- [ ] **IF51 — A file added as a surface scan in the Alicona dialog leaves the Inbox.** Needs migration 192 and
+  a real `.al3d` the crawler found. Add that very file in the Alicona feature's own *Add surface scan* dialog (it
+  lists every star `.al3d`). Expect the next scan, or *Rescan my folder*, to delete its undecided candidate (it
+  leaves *New* and the badge) with no *already on record* refusal on the way, and a new `.al3d` in the folder to
+  appear as usual. Since: found files inbox, re-review fixes (S5, crawler).
+- [ ] **IF52 — The heartbeat has its own database connection.** While the crawler hashes a large new image or
+  scan in a folder of a person whose alias you change meanwhile (People collection, a different value), expect the
+  admin tab to keep showing the daemon *Online*, and after the scan that none of the folder's files registered
+  before the change is in the Inbox (the alias check dropped them; the heartbeat did not commit them). In
+  `pg_stat_activity` the crawler shows two sessions, the second one idle between beats. Since: found files inbox,
+  re-review fixes (S1, crawler).
 - [ ] **IF42 — Copies across inboxes.** Put the same image in two people's folders (or a person's and a team's). The
   one found first is the original; the other shows *Copy of ...* and is not counted by the badge. As the owner of the
   **original**, dismiss it: expect the copy in the other person's Inbox to stay and to be counted. Restore it and

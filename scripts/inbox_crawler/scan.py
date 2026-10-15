@@ -353,6 +353,16 @@ class Scanner:
         by_dir: dict[str, list[db.Cand]] = {}
         for c in cands.values():
             by_dir.setdefault(c.rel_path.rpartition("/")[0], []).append(c)
+            if c.state == "new":
+                # The walk only visits folders it knows from the cache, and a deleted folder's cache rows are
+                # dropped. A file restored (or an undone link) after that would never be looked for again, so
+                # every undecided file's folder, and each folder above it, is always stat-ed: a missing one
+                # lands in vanished_dirs and its files are marked gone.
+                d = c.rel_path.rpartition("/")[0]
+                while d != owner.root and d.startswith(owner.root + "/"):
+                    parent = d.rpartition("/")[0]
+                    children.setdefault(parent, set()).add(d)
+                    d = parent
 
         gone: list[db.Cand] = []
         vanished_dirs: list[str] = []

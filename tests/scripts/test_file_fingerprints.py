@@ -453,13 +453,11 @@ class Db:
         modified = kw.pop("modified", T0.isoformat())
         disk = kw.pop("filename_disk", fid)
         modified_on = kw.pop("modified_on", dt.datetime(2025, 1, 1, tzinfo=dt.UTC))
-        found_by = kw.pop(
-            "found_by", None
-        )  # 'inbox_crawler' for a row the inbox crawler registered
+        candidate = kw.pop(
+            "candidate", None
+        )  # (kind, state, adopted) of the inbox crawler's candidate row for the file
         assert not kw, kw
         meta = {"archive_path": rel, "modified": modified} if storage == "star" else {}
-        if found_by:
-            meta["found_by"] = found_by
         self.cur.execute(
             "INSERT INTO directus_files (id, storage, filename_disk, filename_download, filesize, "
             "modified_on, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -488,8 +486,19 @@ class Db:
                 f"INSERT INTO {linked}_data_files ({linked}_id, directus_files_id) VALUES (%s, %s)",
                 (str(uuid.uuid4()), fid),
             )
+        if candidate is not None:
+            self.add_candidate(fid, *candidate)
         self.conn.commit()
         return fid
+
+    def add_candidate(self, fid, kind="document", state="new", adopted=False):
+        """The inbox crawler's d1_private.file_candidates row for a file (a stand-in with the columns the
+        exclusion reads; the real table's own tests live with the inbox crawler)."""
+        self.cur.execute(
+            "INSERT INTO file_candidates (directus_files_id, kind, state, adopted_at) "
+            "VALUES (%s, %s, %s, CASE WHEN %s THEN now() END)",
+            (fid, kind, state, adopted),
+        )
 
     def update(self, fid, **cols):
         sets = ", ".join(f"{k} = %s" for k in cols)
@@ -582,6 +591,13 @@ def db(tmp_path, monkeypatch):
             "UNIQUE REFERENCES directus_files(id) ON DELETE CASCADE, "
             "live_cache_file uuid REFERENCES directus_files(id), render_file uuid REFERENCES directus_files(id))"
         )
+        # d1_private.file_candidates (migration 193) as far as `--phase all` reads it, in the throwaway schema
+        cur.execute(
+            "CREATE TABLE file_candidates (candidate_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), "
+            "directus_files_id uuid NOT NULL UNIQUE REFERENCES directus_files(id) ON DELETE CASCADE, "
+            "kind text NOT NULL, state text NOT NULL DEFAULT 'new', adopted_at timestamptz)"
+        )
+        monkeypatch.setattr(ff, "CANDIDATES_TABLE", f"{schema}.file_candidates")
         cur.execute(migration_up_sql())
         conn.commit()
         yield Db(conn, str(root))
@@ -1059,25 +1075,121 @@ def test_phase_linked_ignores_unlinked_files_and_all_takes_them(db):
     assert db.row(unlinked)["status"] == "done"
 
 
-def test_phase_all_leaves_a_file_the_inbox_crawler_found_until_a_person_links_it(db):
+def test_phase_all_leaves_a_document_the_inbox_crawler_found_until_a_person_links_it(
+    db,
+):
     """The crawler lists documents by name and size only (ADR-0020): a document nobody linked must not be
     read by this tool either. Once it is linked (any junction) it is an ordinary linked file."""
     found = db.add_file(
-        "Users/ab12/notes.pdf", b"n", linked=None, found_by="inbox_crawler"
+        "Users/ab12/notes.pdf", b"n", linked=None, candidate=("document", "new", False)
+    )
+    other = db.add_file(
+        "Users/ab12/data.mat", b"m", linked=None, candidate=("other", "new", False)
+    )
+    dismissed = db.add_file(
+        "Users/ab12/old.docx",
+        b"d",
+        linked=None,
+        candidate=("document", "dismissed", False),
+    )
+    gone = db.add_file(
+        "Users/ab12/gone.pdf", b"g", linked=None, candidate=("document", "gone", False)
     )
     plain = db.add_file("p/u.txt", b"u", linked=None)  # not the crawler's: unchanged
     linked = {
         kind: db.add_file(
-            f"Users/ab12/{kind}.pdf", b"l", linked=kind, found_by="inbox_crawler"
+            f"Users/ab12/{kind}.pdf",
+            b"l",
+            linked=kind,
+            candidate=("document", "linked", True),
         )
         for kind in ("operation", "sample", "session", "force_analysis")
     }
+    excluded = {found, other, dismissed, gone}
     assert {j.id for j in db.selected("all")} == {plain, *linked.values()}
-    assert found not in {j.id for j in db.selected("all")}
+    assert excluded.isdisjoint(j.id for j in db.selected("all"))
     assert {j.id for j in db.selected("linked")} == set(linked.values())
     assert run(db, "--phase", "all") == 0
-    assert db.row(found) is None  # never read, never fingerprinted
+    for fid in excluded:
+        assert db.row(fid) is None  # never read, never fingerprinted
     assert db.row(plain)["status"] == "done"
+
+
+def test_phase_all_still_excludes_a_crawler_document_when_metadata_found_by_is_removed(
+    db,
+):
+    """The indexer rewrites a pointer row's metadata (dropping `found_by`) and a Lab Member can edit it: the
+    exclusion must not depend on it."""
+    found = db.add_file(
+        "Users/ab12/notes.pdf", b"n", linked=None, candidate=("document", "new", False)
+    )
+    db.cur.execute(
+        'UPDATE directus_files SET metadata = (metadata::jsonb || \'{"found_by": "inbox_crawler"}\')::json '
+        "WHERE id = %s",
+        (found,),
+    )
+    db.cur.execute(
+        "UPDATE directus_files SET metadata = (metadata::jsonb - 'found_by')::json WHERE id = %s",
+        (found,),
+    )
+    db.conn.commit()
+    assert found not in {j.id for j in db.selected("all")}
+    assert run(db, "--phase", "all") == 0
+    assert db.row(found) is None
+
+
+def test_a_metadata_marker_alone_does_not_exclude_a_file(db):
+    """`found_by` in the metadata is not what excludes a file: only the candidate row is."""
+    fid = db.add_file("Users/ab12/n.pdf", b"n", linked=None)
+    db.cur.execute(
+        'UPDATE directus_files SET metadata = (metadata::jsonb || \'{"found_by": "inbox_crawler"}\')::json '
+        "WHERE id = %s",
+        (fid,),
+    )
+    db.conn.commit()
+    assert fid in {j.id for j in db.selected("all")}
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        ("document", "linked", True),  # linked
+        (
+            "document",
+            "new",
+            True,
+        ),  # adopted, then undone: the person agreed to the read
+        ("document", "dismissed", True),
+        ("document", "linked", False),
+        ("image", "new", False),  # images and scans are read by the crawler itself
+        ("surface_scan", "new", False),
+        ("sem_image", "gone", False),
+    ],
+)
+def test_phase_all_does_not_exclude_a_linked_or_adopted_candidate_or_an_image(
+    db, candidate
+):
+    fid = db.add_file("Users/ab12/x.pdf", b"x", linked=None, candidate=candidate)
+    assert fid in {j.id for j in db.selected("all")}
+    assert run(db, "--phase", "all") == 0
+    assert db.row(fid)["status"] == "done"
+
+
+def test_phase_all_is_a_superset_of_linked_even_for_a_candidate_not_yet_dropped(db):
+    """Linked in Data Studio's picker while the crawler still has an undecided candidate for it."""
+    fid = db.add_file(
+        "Users/ab12/n.pdf", b"n", linked="sample", candidate=("document", "new", False)
+    )
+    assert fid in {j.id for j in db.selected("linked")}
+    assert fid in {j.id for j in db.selected("all")}
+
+
+def test_phase_all_works_on_a_database_without_the_inbox_table(db, monkeypatch):
+    monkeypatch.setattr(ff, "CANDIDATES_TABLE", "no_such_schema.file_candidates")
+    fid = db.add_file("Users/ab12/n.pdf", b"n", linked=None)
+    assert {j.id for j in db.selected("all")} == {fid}
+    assert run(db, "--phase", "all") == 0
+    assert db.row(fid)["status"] == "done"
 
 
 def test_the_cache_files_of_a_force_analysis_are_not_linked_source_files(db):

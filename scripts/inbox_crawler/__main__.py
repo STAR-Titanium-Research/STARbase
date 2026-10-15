@@ -115,6 +115,8 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         holder["conn"],
         storage=os.environ.get("STORAGE_NAME", "star"),
         root_folder_name=os.environ.get("ROOT_FOLDER", "star_group1"),
+        heartbeat_dsn=dsn,
+        private_schema=schema,
     )
     if not store.try_crawler_lock():
         log.error(
@@ -149,13 +151,18 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         return 1 if stats.aborted else 0
 
     def reconnect(old):
+        old.close_heartbeat()
         try:
             old.conn.close()
         except Exception:  # noqa: BLE001
             pass
         holder["conn"] = db.connect(dsn, schema)
         new = db.Store(
-            holder["conn"], storage=old.storage, root_folder_name=old.root_folder_name
+            holder["conn"],
+            storage=old.storage,
+            root_folder_name=old.root_folder_name,
+            heartbeat_dsn=dsn,
+            private_schema=schema,
         )
         # The lock went with the old connection: take it again, or someone else has it now.
         if not new.try_crawler_lock():
