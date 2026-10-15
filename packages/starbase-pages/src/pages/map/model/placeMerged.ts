@@ -83,7 +83,8 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
   const pinnedBoxes = [...fixed].filter(([id]) => pinned(id)).map(([, b]) => b);
   const moved = new Set<string>();
   // Every move is queued again, so a card that was pushed (or hopped past a dragged one) is checked against everything placed.
-  for (let guard = 0; queue.length && guard < fixed.size ** 3 + 8; guard++) {
+  // The loop is bounded: if the bound is hit it just stops, and what is placed so far is returned (no hang).
+  for (let guard = 0; queue.length && guard < fixed.size ** 2 * 4 + 8; guard++) {
     const id = queue.shift()!;
     const box = fixed.get(id)!;
     for (const [otherId, other] of fixed) {

@@ -156,6 +156,24 @@ describe('placeMerged (spec 6.7)', () => {
     expect(out.n.y).toBeGreaterThanOrEqual(out.x.y + 40); // N is pushed on, past X
   });
 
+  it('terminates on a pathological input: every card grew, all on one spot, some dragged', () => {
+    const ids = Array.from({ length: 60 }, (_, i) => `c${i}`);
+    const placed = Object.fromEntries(ids.map((id) => [id, box(0, 0)]));
+    const tall = { width: 100, height: 300 };
+    const started = Date.now();
+    const out = placeMerged({
+      elk: {},
+      sizes: Object.fromEntries(ids.map((id) => [id, tall])),
+      placed,
+      edges: [],
+      dir: 'RIGHT',
+      pinned: new Set(ids.filter((_, i) => i % 7 === 0)),
+    });
+    expect(Date.now() - started).toBeLessThan(5000);
+    for (const id of ids.filter((_, i) => i % 7 === 0)) expect(out[id]).toBeUndefined();
+    expect(Object.keys(out).length).toBeLessThanOrEqual(ids.length);
+  });
+
   it('with nothing placed it is ELK as it is', () => {
     const elk = { a: { x: 0, y: 0 }, b: { x: 200, y: 10 } };
     expect(placeMerged({ elk, sizes: sizes('a', 'b'), placed: {}, edges: [], dir: 'RIGHT' })).toEqual(elk);
