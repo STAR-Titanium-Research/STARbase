@@ -11,7 +11,8 @@
 //        200 with ETag "<cache_key>" and Cache-Control: private, no-cache (the browser keeps the object but asks every time, so
 //        a change of permissions or of the render shows at once; an unchanged object answers 304 to If-None-Match);
 //        404 while render_status is not 'done', and for a scan the caller cannot read (the same answer, so it does not say
-//        which scans exist); 502 when MinIO cannot be reached; 503 while MinIO is not configured on this server.
+//        which scans exist); 502 when MinIO cannot be reached or refuses the reader; 503 while MinIO is not configured on
+//        this server. Every error reply carries Cache-Control: no-store and no ETag.
 //   POST /d1-surface-scan/:id/render  -> 200 { data: { scan_id, render_status: 'pending' } }
 //        "Render again": sets render_status = 'pending' and clears render_error, as the caller (needs update permission on
 //        the scan, 403 otherwise). From any state but pending: a scan stuck in 'rendering' (a worker that died) can be
@@ -85,6 +86,9 @@ export function mount(router, context, store) {
 		const known = err instanceof HttpError;
 		if (!known) logger?.error?.(`${SOURCE}: ${err?.stack || err?.message || err}`);
 		if (res.headersSent) return res.destroy?.(err);
+		// No ETag here and never a cached error: the cache key does not change when a scan is rendered again, so a
+		// browser that kept a 404 would go on showing it.
+		res.set('Cache-Control', 'no-store');
 		return res.status(known ? err.status : 500).json({
 			errors: [{
 				message: known ? err.message : 'Something went wrong on the server.',
@@ -138,11 +142,13 @@ export function mount(router, context, store) {
 			if (!key) throw new HttpError(404, 'NOT_RENDERED', 'That surface scan has no rendered data.', { render_status: scan.render_status });
 			if (!store) throw new HttpError(503, 'STORE_UNCONFIGURED', 'The object store is not configured on this server (MINIO_ENDPOINT).');
 
+			// ETag and Cache-Control private go on the 200 and the 304 only (an error reply must not be cached).
 			const etag = etagOf(scan.cache_key);
-			res.set('Cache-Control', CACHE_CONTROL);
-			res.set('ETag', etag);
-			res.set('X-Content-Type-Options', 'nosniff');
-			if (matchesEtag(req.headers?.['if-none-match'], etag)) return res.status(304).end();
+			if (matchesEtag(req.headers?.['if-none-match'], etag)) {
+				res.set('Cache-Control', CACHE_CONTROL);
+				res.set('ETag', etag);
+				return res.status(304).end();
+			}
 
 			// Stop the download from MinIO when the browser goes away.
 			const abort = new AbortController();
@@ -157,6 +163,9 @@ export function mount(router, context, store) {
 			if (!found) throw new HttpError(404, 'OBJECT_MISSING', 'The rendered data is missing; render the scan again.');
 
 			res.status(200);
+			res.set('Cache-Control', CACHE_CONTROL);
+			res.set('ETag', etag);
+			res.set('X-Content-Type-Options', 'nosniff');
 			res.set('Content-Type', OBJECTS[object].type);
 			if (found.size != null) res.set('Content-Length', String(found.size));
 			try {

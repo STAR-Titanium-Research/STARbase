@@ -103,6 +103,15 @@ bootstrap-minio: ## Create MinIO buckets after first `make up` (idempotent)
 		sh -c "mc mb --ignore-existing local/d1-files \
 			&& mc mb --ignore-existing local/d1-backups \
 			&& echo 'Buckets ready: d1-files, d1-backups'"
+	# The read-only user Directus (d1-surface-scan) uses; skipped while MINIO_SURFACE_READER_PASSWORD is empty.
+	docker run --rm \
+		--network $(COMPOSE_NETWORK) \
+		-e MC_HOST_local="http://$(MINIO_ROOT_USER):$(MINIO_ROOT_PASSWORD)@minio:9000" \
+		-e BUCKET="$(or $(MINIO_BUCKET),d1-files)" \
+		-e READER_USER="$(or $(MINIO_SURFACE_READER_USER),surface-reader)" \
+		-e READER_PASSWORD="$(MINIO_SURFACE_READER_PASSWORD)" \
+		-v "$(CURDIR)/infra/minio:/infra:ro" \
+		minio/mc:latest sh /infra/surface_reader.sh
 
 backup: ## Dump PostgreSQL and upload to MinIO (stack must be running)
 	bash infra/backup/backup.sh
