@@ -184,7 +184,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 .pm-ident :deep(.extra) { display: flex; flex-direction: column; gap: 8px; }
 .pm-maplink {
 	display: inline-flex; align-items: center; box-sizing: border-box; min-height: 36px; padding: 0 12px; border-radius: var(--theme--border-radius, 6px);
-	border: var(--theme--border-width, 2px) solid var(--d1-line); background: var(--d1-surface); color: var(--d1-accent, var(--theme--primary));
+	border: 2px solid var(--d1-line); background: var(--d1-surface); color: var(--d1-accent, var(--theme--primary));
 	font-size: var(--fs-sm, 12px); font-weight: 600; text-decoration: none; white-space: nowrap;
 }
 .pm-maplink:hover, .pm-maplink:focus-visible { background: var(--d1-tile); }
