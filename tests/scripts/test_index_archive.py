@@ -335,9 +335,10 @@ def _row(cur, rel, ext):
 def _missing(cur):
     cur.execute(
         "SELECT filename_download FROM directus_files "
-        "WHERE (metadata::jsonb->>'missing') = 'true' ORDER BY 1"
+        "WHERE (metadata::jsonb->>'missing') = 'true'"
     )
-    return [r[0] for r in cur.fetchall()]
+    # sorted in Python: ORDER BY follows the database collation, which differs between clusters
+    return sorted(r[0] for r in cur.fetchall())
 
 
 def test_the_sweep_flags_a_vanished_indexed_type_but_not_a_type_it_never_walks(
@@ -362,7 +363,7 @@ def test_the_sweep_flags_a_vanished_indexed_type_but_not_a_type_it_never_walks(
     assert ia.main() == 0
     cur.execute("SELECT 1")  # a fresh view of the committed data
     conn.commit()
-    assert _missing(cur) == ["gone.PNG", "gone.mat"]
+    assert _missing(cur) == sorted(["gone.PNG", "gone.mat"])
 
 
 def test_a_crawler_registered_scan_that_is_deleted_is_not_the_indexers_business(
