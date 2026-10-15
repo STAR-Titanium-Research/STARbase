@@ -276,6 +276,18 @@ class Store:
         )
         return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
 
+    def load_teams_of(self, person_id: str) -> list[dict]:
+        """The teams with a share folder that this person is a member of, for a one-person scan. Only an
+        ACTIVE person (people.active): that is who the Inbox shows a team's files to, and so who can ask."""
+        rows = self._all(
+            "SELECT t.team_id::text, t.share_folder, t.name FROM teams t "
+            "JOIN team_members m ON m.team_id = t.team_id "
+            "JOIN people p ON p.person_id = m.person_id "
+            "WHERE m.person_id = %s AND p.active AND t.share_folder IS NOT NULL ORDER BY t.team_id",
+            (person_id,),
+        )
+        return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
+
     def autolink_person_ids(self) -> set[str]:
         """People whose login has switched auto-link on (inbox_prefs, owned by the d1-inbox extension)."""
         rows = self._all(

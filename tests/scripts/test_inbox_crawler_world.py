@@ -43,6 +43,10 @@ CREATE TABLE directus_users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), emai
 CREATE TABLE people (person_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), full_name text,
     user_id uuid REFERENCES directus_users (id), active boolean NOT NULL DEFAULT true);
 CREATE TABLE teams (team_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text);
+CREATE TABLE team_members (member_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id uuid NOT NULL REFERENCES teams (team_id) ON DELETE CASCADE,
+    person_id uuid NOT NULL REFERENCES people (person_id) ON DELETE CASCADE,
+    is_manager boolean NOT NULL DEFAULT false, UNIQUE (team_id, person_id));
 CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid);
 CREATE TABLE directus_files (id uuid PRIMARY KEY, storage text NOT NULL, filename_disk text,
     filename_download text, title text, type text, folder uuid, filesize bigint, metadata json,
@@ -108,6 +112,12 @@ class World:
         )
         self.q("UPDATE teams SET share_folder = %s WHERE team_id = %s", (folder, tid))
         return tid
+
+    def member(self, team_id, person_id):
+        self.q(
+            "INSERT INTO team_members (team_id, person_id) VALUES (%s, %s)",
+            (team_id, person_id),
+        )
 
     def sample(self, short_id, code=None):
         sid = str(uuid.uuid4())

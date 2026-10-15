@@ -1,4 +1,4 @@
-# ruff: noqa: F811
+# ruff: noqa: F811, E402
 """Fixes from the final review of the inbox crawler (plan 2026-10-15-found-files-inbox, crawler side).
 
 One section per finding (S1, S2, B1, S4, ops nits). Postgres-backed like the other crawler tests.
@@ -17,8 +17,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 pytest.importorskip("psycopg2")
 from inbox_crawler import db, fs_readonly, scan  # noqa: E402
-from test_inbox_crawler_daemon import add_candidate, make_daemon  # noqa: E402
+from test_inbox_crawler_daemon import (  # noqa: E402
+    FakeInbox,  # noqa: F401
+    add_candidate,
+    eligible,
+    inbox,  # noqa: F401
+    linkable,  # noqa: F401
+    make_daemon,
+    run_autolink,
+)
 from test_inbox_crawler_scan import png, settle  # noqa: E402
+from test_inbox_crawler_scan import run as scan_all
 from test_inbox_crawler_world import world  # noqa: E402, F401
 
 # ---- S1: a path the share refuses is an error row, never an exception ------------------------------
@@ -288,14 +297,6 @@ def test_adopted_awaiting_hash_for_a_team_file(world):
 
 # ---- B1: an auto-link a person undid is never offered again ----------------------------------------
 
-from test_inbox_crawler_daemon import (  # noqa: E402
-    FakeInbox,  # noqa: F401
-    eligible,
-    inbox,  # noqa: F401
-    linkable,  # noqa: F401
-    run_autolink,
-)
-
 
 def test_an_undone_auto_link_is_not_offered_again(linkable, inbox):
     world, pid, _, sid = linkable
@@ -321,3 +322,119 @@ def test_the_in_process_attempted_map_still_holds_back_an_answered_candidate(
     inbox.requests.clear()
     counts, _ = run_autolink(world, inbox, attempted)
     assert counts["offered"] == 0 and cid in attempted and inbox.requests == []
+
+
+# ---- S4: a person-scope scan covers the person's own folder and the folders of their teams ---------
+
+
+def person_request(world, pid):
+    world.q(
+        "INSERT INTO inbox_scan_requests (scope, person_id) VALUES ('person', %s)",
+        (pid,),
+    )
+    world.commit()
+
+
+def candidate_paths(world):
+    return sorted(r[0] for r in world.q("SELECT rel_path FROM file_candidates"))
+
+
+@pytest.fixture
+def folders(world):
+    """Files in two personal folders and three team folders."""
+    for rel in (
+        "Users/aaa11/own.png",
+        "Users/bbb22/other.png",
+        "Shared/Machining/m.png",
+        "Shared/Optics/o.png",
+        "Shared/Closed/c.png",
+    ):
+        world.write(rel, png())
+    settle(world)
+    return world
+
+
+def test_a_person_request_with_an_alias_only_scans_the_own_folder(folders):
+    world = folders
+    pid, _ = world.person("aaa11")
+    world.person("bbb22")
+    world.team("Machining")
+    person_request(world, pid)
+    d, _, _ = make_daemon(world)
+    d.tick()
+    assert world.one("SELECT status, error FROM inbox_scan_requests") == ("done", None)
+    assert candidate_paths(world) == ["Users/aaa11/own.png"]
+
+
+def test_a_person_request_from_a_team_only_member_scans_the_team_folder(folders):
+    world = folders
+    pid, _ = world.person(None)  # no uni alias at all
+    tid = world.team("Machining")
+    world.team("Optics")  # a team they are not in
+    world.member(tid, pid)
+    world.commit()
+    person_request(world, pid)
+    d, _, _ = make_daemon(world)
+    d.tick()
+    assert world.one("SELECT status, error FROM inbox_scan_requests") == ("done", None)
+    assert candidate_paths(world) == ["Shared/Machining/m.png"]
+    assert world.one("SELECT owner_team_id::text FROM file_candidates")[0] == tid
+
+
+def test_a_person_request_with_both_scans_the_own_folder_and_every_team_of_theirs(
+    folders,
+):
+    world = folders
+    pid, _ = world.person("aaa11")
+    world.person("bbb22")
+    t1, t2 = world.team("Machining"), world.team("Optics")
+    world.team("Closed")  # not theirs
+    world.member(t1, pid)
+    world.member(t2, pid)
+    world.commit()
+    person_request(world, pid)
+    d, _, _ = make_daemon(world)
+    d.tick()
+    assert world.one("SELECT status, error FROM inbox_scan_requests") == ("done", None)
+    assert candidate_paths(world) == [
+        "Shared/Machining/m.png",
+        "Shared/Optics/o.png",
+        "Users/aaa11/own.png",
+    ]
+
+
+def test_a_former_person_does_not_get_their_teams_scanned_by_a_request(folders):
+    """Same rule as the Inbox's visibility: only an ACTIVE member sees (and so asks for) a team's files."""
+    world = folders
+    pid, _ = world.person("aaa11", active=False, scan_while_former=True)
+    tid = world.team("Machining")
+    world.member(tid, pid)
+    world.commit()
+    person_request(world, pid)
+    d, _, _ = make_daemon(world)
+    d.tick()
+    assert candidate_paths(world) == ["Users/aaa11/own.png"]
+
+
+def test_a_person_with_neither_an_alias_nor_a_team_fails_with_no_folder(folders):
+    world = folders
+    pid, _ = world.person(None)
+    world.team("Machining")
+    person_request(world, pid)
+    d, _, _ = make_daemon(world)
+    d.tick()
+    status, error = world.one("SELECT status, error FROM inbox_scan_requests")
+    assert status == "failed" and "no folder to scan" in error
+    assert candidate_paths(world) == []
+
+
+def test_the_scan_of_everyone_is_unchanged_by_membership(folders):
+    world = folders
+    pid, _ = world.person("aaa11")
+    world.person("bbb22")
+    world.member(world.team("Machining"), pid)
+    world.team("Optics")
+    world.team("Closed")
+    world.commit()
+    _stats, _spy, _store = scan_all(world)
+    assert len(candidate_paths(world)) == 5

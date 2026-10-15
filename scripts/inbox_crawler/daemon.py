@@ -25,8 +25,8 @@ from . import autolink, db, hashing, scan
 log = logging.getLogger("inbox_crawler.daemon")
 
 NO_FOLDER = (
-    "no folder to scan: this person has no uni alias, is a Former person, or no folder of that name "
-    "is on the share"
+    "no folder to scan: this person has no uni alias and no team folder, is a Former person, or no "
+    "folder of that name is on the share"
 )
 
 

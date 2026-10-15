@@ -248,8 +248,9 @@ class Scanner:
     # ---- one scan --------------------------------------------------------------------
 
     def scan(self, *, person_id: str | None = None) -> ScanStats:
-        """Scan everyone (person_id None), or one person's personal folder. Never raises for a share
-        problem: it returns stats with `aborted` set."""
+        """Scan everyone (person_id None), or one person: their personal folder and the folders of the
+        teams they are an active member of. Never raises for a share problem: it returns stats with
+        `aborted` set."""
         stats = ScanStats()
         if self.lookup is None:
             self.lookup = self.store.load_lookup()
@@ -266,7 +267,11 @@ class Scanner:
         people = self.store.load_people()
         if person_id is not None:
             people = [p for p in people if p["person_id"] == person_id]
-        teams = [] if person_id is not None else self.store.load_teams()
+        teams = (
+            self.store.load_teams()
+            if person_id is None
+            else self.store.load_teams_of(person_id)
+        )
         claims = {
             owners.PERSON_BASE: ("person", owners.person_claims(people)),
             owners.TEAM_BASE: ("team", owners.team_claims(teams)),
