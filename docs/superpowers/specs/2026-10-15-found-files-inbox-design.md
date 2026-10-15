@@ -137,7 +137,7 @@ already says so (changes marked *as built*).
 **Reused unchanged:** `directus_files` (`storage='star'` pointer rows, uuid5-of-relative-path ids, written by
 the crawler with the indexer's rule so ids agree), `directus_folders`, `file_fingerprints` (the crawler writes
 `content_sha256`), the three junctions `sample_data_files`, `operation_data_files`, `session_data_files`,
-`record_by_short_id()`, `short_ids`.
+`record_by_short_id()` (the crawler itself reads the record tables' `short_id` columns, §6).
 
 ## 5. The inbox crawler (`scripts/inbox_crawler/`, compose service `inbox-crawler`, profile `archive`)
 
@@ -165,7 +165,10 @@ A daemon like the force crawler: reads `inbox_crawler_state` each loop, writes i
 **Auto-link.** After a scan, for each new file whose owner is a person with auto-link on, an exact single
 short-ID match, and kind in (`sem_image`,`image`): the crawler asks the `d1-inbox` extension
 (`POST /d1-inbox/auto-link`, machine credential) to link it on the person's behalf. The crawler never writes
-the junction itself.
+the junction itself. Auto-link links only what the person could link by hand and is least likely to regret: it
+excludes backlog (Older) files, team-folder files, copies of another file, files a person already undid an auto-link
+of (`file_candidates.auto_undone_at`; the extension answers `UNDONE`, the crawler's candidate query skips them), and
+documents, other files and surface scans (kinds outside `sem_image` and `image`).
 
 **Hash after adoption.** When a person links a document, the extension marks the candidate; the crawler reads
 it once (`open_rb(..., adopted=True)`), hashes it and writes `file_fingerprints`.
@@ -182,7 +185,11 @@ UPDATE that leaves the value as it was deletes nothing.
 
 - Tokenise the relative path on `/ \ _ - . space`. Candidates: runs of `[0-9a-f]{8,32}` (lower-cased input) that
   are not all digits.
-- A token counts only if `short_ids` contains it exactly (lookup, never a regex on the database).
+- A token counts only if it equals a record's short ID exactly. The crawler looks short IDs up in the `short_id`
+  column of the three record tables (`physical_samples`, `manufacturing_operations`, `test_sessions`), not in
+  `short_ids`: a short ID of a deleted record stays in `short_ids` for ever, so the record's own row is the truth. Codes
+  are looked up in `sample_code`, `pass_code`, `test_code` and `insert_edges.edge_code` (a lookup table, never a
+  regex on the database).
 - Exact **full codes** (sample code, operation code, test code) found as a whole delimited substring of the
   path, matched against current codes. Edge codes (`H13A-#2-fC` form) likewise against `insert_edges`.
 - `match_strength`: `short_id` > `code` > `edge_code` > `none`. Two or more distinct records at the strongest
@@ -274,7 +281,7 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 | `POST /d1-inbox/undo` | login | `{link_batch_id}` removes the junction rows it made and returns the candidates to `new` |
 | `POST /d1-inbox/rescan` | login | queue a `person`-scope request; refused if the person has one queued or finished in the last 10 minutes |
 | `GET/PUT /d1-inbox/prefs` | login | auto-link opt-in |
-| `POST /d1-inbox/auto-link` | machine | only for opted-in people, exact short-ID, one record, caller-as-person edit check; the crawler sends the header `X-Inbox-Crawler-Secret` (env `D1_INBOX_CRAWLER_SECRET`, compared in constant time; 401 when the header is missing, 403 when wrong or when the secret is not configured); body `{candidate_ids: [...]}`, answer `{data: {results: [{candidate_id, status: linked/skipped/error, reason?, link_batch_id?}]}}`; backlog, team-folder, copy, document and surface-scan files are skipped |
+| `POST /d1-inbox/auto-link` | machine | only for opted-in people, exact short-ID, one record, caller-as-person edit check; the crawler sends the header `X-Inbox-Crawler-Secret` (env `D1_INBOX_CRAWLER_SECRET`, compared in constant time; 401 when the header is missing, 403 when wrong or when the secret is not configured); body `{candidate_ids: [...]}`, answer `{data: {results: [{candidate_id, status: linked/skipped/error, reason?, link_batch_id?}]}}`; backlog, team-folder, copy, document, other-file, surface-scan and undone-auto-link (`UNDONE`) files are skipped |
 | `GET /d1-inbox/admin`, `POST /d1-inbox/admin/scan-all` | administrator | status, last scan, errors, unmatched folders, people without an alias |
 
 *As built (stream B):* a file already linked to the chosen record (for example in Data Studio) is refused 409
@@ -292,8 +299,8 @@ Directus's REST (they live in `d1_private`).
 
 - **Inbox** entry at the top of the sidebar (outside the five sections) with the count badge; the same count
   and "N older files match a record" on **Home** (follows the admin attention-panel pattern).
-- **Inbox page** (`/inbox`): tabs *New · Older · Recently linked · Dismissed*; rows with thumbnail (via the
-  existing Directus thumbnail route for images), kind, name and folder, size and date, the suggestion and
+- **Inbox page** (`/inbox`): tabs *New · Older · Recently linked · Dismissed*; rows with the kind's icon and the
+  extracted metadata (no thumbnails: see §13), kind, name and folder, size and date, the suggestion and
   *why* (`short ID 3fa9c1d2 in the file name`), buttons Link / Change / Dismiss; filters; **Accept all** with a
   confirm showing the count, one **Undo** per batch; "Rescan my folder".
 - Documents: shown under "Other files", collapsed; the Link dialog says "linking reads this file once to
@@ -306,6 +313,18 @@ Directus's REST (they live in `d1_private`).
 
 ## 11. Known risks and limits
 
+- The read-only, never-open-a-document guarantee (§3) is the **inbox crawler's**. Other tools can still read files
+  under `Users/`: `scripts/index_archive.py --fingerprint` and `scripts/file_fingerprints.py` hash documents they
+  find there. The crawler worker keeps `file_fingerprints.py --phase all` away from the crawler's own unlinked
+  rows (so an unlinked document is not read by that route either), but a person running the indexer by hand reads
+  whatever the indexer's rules cover.
+- **Rolling back the migrations: roll back 194 before 193** (194 lists fields that 193 adds). Rolling back 193
+  drops every alias (`people.uni_alias`, `people.scan_while_former`), every share folder (`teams.share_folder`),
+  every candidate (so every dismissal and every Inbox undo record), every scan request, the crawler state row and
+  every auto-link consent (`inbox_prefs`); `directus_files` pointer rows and the junction links people made stay.
+  Export `people.uni_alias`, `people.scan_while_former`, `teams.share_folder` and `d1_private.inbox_prefs` first.
+  After re-applying, an administrator enters the aliases and folders again, every owner gets a first scan, so
+  everything found is Older, and previously dismissed files come back as Older (nothing is counted new).
 - The crawler runs under the maintainer's personal admin SMB account (can write). Mitigated by the read-only
   mount and the build-failing tests, not by the credential. A read-only account is a follow-up.
 - Folder mtimes must update reliably on the real share (assumed, to be confirmed on it).
