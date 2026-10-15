@@ -6,7 +6,7 @@
 //
 // A draft opened on a phone is shown but not editable (E20): `drafted` (the draft is on the map) is true there, `editing` is not.
 
-import { computed, inject, provide, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue';
+import { computed, inject, onScopeDispose, provide, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue';
 import type { DraftBody, DraftKey, DraftListEntry, FieldDef as DirectusField, HostApi } from '@d1/ui';
 import type { MapNode, ProcessData } from '../model/types';
 import type { MergeHint } from '../useMapExpand';
@@ -40,6 +40,11 @@ const first = (v: unknown): string | undefined => (Array.isArray(v) ? first(v[0]
 
 /** What the map panel says when the address asks for edit mode and this server has no d1-build (the view-only map keeps working). */
 export const UNAVAILABLE = "Building processes isn't available on this server yet.";
+
+/** What the page says when a draft's last changes are not on the server yet (so leaving would lose them). */
+export const NOT_KEPT = 'Your last changes are not kept yet. Fix the connection and try again, or keep editing.';
+/** What the page says when `edit=new` is opened on a phone. */
+export const PHONE_NEW = 'Building needs a screen at least 768 px wide.';
 
 /** A draft with nothing in it is not worth keeping when edit mode ends. */
 export const isEmptyBody = (b: DraftBody): boolean => b.items.length === 0;
@@ -82,8 +87,10 @@ export function useEditMode(o: EditModeOptions) {
 	const editing = computed(() => drafted.value && !o.isPhone.value);
 	/** An `edit` in the address that is not open yet (the probe, the start or the read of the draft is on its way): the page shows "loading". */
 	const pending = computed(() => !!param.value && !drafted.value && !failed.value && (!draft.probed.value || draft.available.value));
-	/** The toggle is offered: d1-build is there and the window is wide enough. */
-	const canBuild = computed(() => available.value && !o.isPhone.value);
+	/** The toggle is offered: d1-build is there (or could not be asked, which the next try may fix) and the window is wide enough. */
+	const canBuild = computed(() => !o.isPhone.value && (available.value || !!draft.probeError.value));
+	/** Everything the person did is on the server (nothing waiting, nothing failed): leaving the draft loses nothing. */
+	const kept = (): boolean => !draft.saving.value && !draft.saveError.value;
 
 	const body = draft.body;
 	const checks = draft.checks;
@@ -91,26 +98,33 @@ export function useEditMode(o: EditModeOptions) {
 
 	// ---- the draft as the address asks for it ----------------------------------------------------
 	let starting = false;
+	let alive = true;
 	async function sync(): Promise<void> {
 		const p = param.value;
 		if (p && failed.value && !draft.draftId.value && !starting) failed.value = '';
 		if (!p) {
-			// Edit mode ended (Done editing, Create, the back button): the draft stays on the server, the page lets go of it.
-			// (`failed` is kept: it is the reason edit mode ended, and the page says it.)
+			// Edit mode ended (Done editing, Create, the back button): the draft stays on the server, the page lets go of it, unless
+			// the server does not have the last changes yet: then they are kept in the page (the next open of the draft saves them).
 			if (draft.draftId.value) {
 				await draft.flush().catch(() => undefined);
-				draft.forget();
+				if (kept()) {
+					// A draft with nothing in it was only the toggle: it is not left behind on the server.
+					if (isEmptyBody(draft.body.value)) await draft.discard();
+					else draft.forget();
+				} else failed.value = NOT_KEPT;
 			}
 			return;
 		}
 		if (!draft.probed.value) return;
 		if (!draft.available.value) {
-			failed.value = UNAVAILABLE;
+			// A server without d1-build (404) is a plain notice; a probe that failed any other way says why (the Edit toggle asks again).
+			failed.value = draft.probeError.value || UNAVAILABLE;
 			writeQuery({ edit: null });
 			return;
 		}
 		if (p === 'new') {
 			if (o.isPhone.value) {
+				failed.value = PHONE_NEW;
 				writeQuery({ edit: null });
 				return;
 			}
@@ -118,7 +132,10 @@ export function useEditMode(o: EditModeOptions) {
 			starting = true;
 			try {
 				const id = await draft.start();
-				if (id) writeQuery({ edit: id });
+				if (id && (!alive || param.value !== 'new')) {
+					// The address moved on (the back button, another draft) while the draft was being made: nothing is left behind.
+					await draft.discard();
+				} else if (id) writeQuery({ edit: id });
 				else {
 					failed.value = draft.saveError.value || 'Could not start a draft.';
 					writeQuery({ edit: null });
@@ -137,23 +154,53 @@ export function useEditMode(o: EditModeOptions) {
 	}
 	watch([param, () => draft.probed.value, () => o.isPhone.value], () => void sync(), { immediate: true });
 	void draft.probe();
+	// The page goes away with a draft open and empty (a route change, not the lid): it is not left on the server.
+	onScopeDispose(() => {
+		alive = false;
+		if (draft.draftId.value && isEmptyBody(draft.body.value) && kept()) void draft.discard().catch(() => undefined);
+	});
+	// The changes that were not kept are kept after all (the connection came back): the message goes.
+	watch(kept, (ok) => {
+		if (ok && failed.value === NOT_KEPT) failed.value = '';
+	});
 
 	// ---- the lid -----------------------------------------------------------------------------------
 	/** Edit toggle: starts a draft on the map being looked at (the history is extended, not copied). */
-	function startEditing(): void {
+	async function startEditing(): Promise<void> {
 		if (!canBuild.value || param.value) return;
+		// The probe failed earlier (not a 404): ask again before giving up on building.
+		if (!available.value && !(await draft.probe())) {
+			failed.value = draft.probeError.value || UNAVAILABLE;
+			return;
+		}
+		failed.value = '';
 		writeQuery({ edit: 'new' });
 	}
 	/** Open ▾: one of my drafts. The map's own focus is left: a draft stands on its own cards. */
-	function openDraft(id: string): void {
+	async function openDraft(id: string): Promise<void> {
 		if (id === param.value) return;
-		void draft.flush().catch(() => undefined);
+		await draft.flush().catch(() => undefined);
+		// Opening another draft would drop what the server does not have yet.
+		if (!kept()) {
+			failed.value = NOT_KEPT;
+			return;
+		}
+		failed.value = '';
 		writeQuery({ edit: id, focus: null });
 	}
 	/** Done editing: back to the map. An empty draft is discarded (it was only the toggle); one with something in it is kept. */
 	async function done(patch: Record<string, string | null> = {}): Promise<void> {
+		failed.value = '';
 		await draft.flush().catch(() => undefined);
-		if (isEmptyBody(draft.body.value)) await draft.discard();
+		// Leaving would lose what the server does not have: stay, and say so.
+		if (!kept()) {
+			failed.value = NOT_KEPT;
+			return;
+		}
+		if (isEmptyBody(draft.body.value) && !(await draft.discard())) {
+			failed.value = draft.saveError.value || 'Could not discard the empty draft.';
+			return;
+		}
 		writeQuery({ edit: null, ...patch });
 	}
 	/** Throws the open draft away for good and leaves edit mode. */

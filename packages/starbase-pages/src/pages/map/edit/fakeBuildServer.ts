@@ -24,6 +24,10 @@ export function fakeServer() {
 		drafts,
 		calls,
 		listStatus: 200,
+		/** A non-zero status makes every save (PATCH) fail with it (a network error when -1). */
+		patchStatus: 0,
+		/** When set, starting a draft (POST) waits for it. */
+		postGate: null as Promise<void> | null,
 		/** What Create and Mark done answer: a body, or an error to throw. */
 		createAnswer: { data: { created: { n1: { collection: 'physical_samples', id: 'new1', code: '1-Ti64-MC' } }, sampleIds: ['new1'] } } as unknown,
 		markAnswer: null as unknown,
@@ -61,6 +65,7 @@ export function fakeServer() {
 		post: async (path: string, body?: { name: string; body: DraftBody } | Record<string, unknown>) => {
 			calls.push(`POST ${path}`);
 			if (path === '/d1-build/drafts') {
+				if (s.postGate) await s.postGate;
 				n += 1;
 				const b = body as { name: string; body: DraftBody };
 				const rec: DraftRecord = { id: `d${n}`, name: b.name, body: b.body, version: 1, updated_at: 'now' };
@@ -82,6 +87,8 @@ export function fakeServer() {
 		},
 		patch: async (path: string, body?: { body?: DraftBody; name?: string }) => {
 			calls.push(`PATCH ${path}`);
+			if (s.patchStatus === -1) throw new Error('Network Error');
+			if (s.patchStatus) throw httpError(s.patchStatus);
 			const d = drafts.get(idOf(path));
 			if (!d) throw httpError(404);
 			const next: DraftRecord = { ...d, body: body?.body ?? d.body, name: body?.name ?? d.name, version: d.version + 1 };

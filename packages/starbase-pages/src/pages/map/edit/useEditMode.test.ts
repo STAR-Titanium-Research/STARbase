@@ -3,8 +3,8 @@ import { nextTick, reactive, ref, type Ref } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import type { MapNode } from '../model/types';
 import { emptyBody } from './draft';
-import { fakeServer } from './fakeBuildServer';
-import { UNAVAILABLE, isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
+import { fakeServer, httpError } from './fakeBuildServer';
+import { NOT_KEPT, PHONE_NEW, UNAVAILABLE, isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
 
 const flush = async () => {
 	for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -134,7 +134,7 @@ describe('useEditMode: the address', () => {
 		const { edit, route, s } = setup({ edit: 'new', focus: 'physical_samples:s1' });
 		await flush();
 		s.seed('other');
-		edit.openDraft('other');
+		await edit.openDraft('other');
 		expect(route.query).toEqual({ edit: 'other' });
 		await flush();
 		expect(edit.draft.draftId.value).toBe('other');
@@ -173,6 +173,104 @@ describe('useEditMode: leaving', () => {
 		await flush();
 		expect(edit.drafted.value).toBe(false);
 		expect(edit.draft.draftId.value).toBeNull();
+	});
+});
+
+describe('useEditMode: what is not kept is not lost', () => {
+	it('Done editing stays in edit mode, and says so, when the last changes could not be saved', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		s.patchStatus = -1;
+		await edit.done();
+		expect(route.query.edit).toBeDefined();
+		expect(edit.editing.value).toBe(true);
+		expect(edit.failed.value).toBe(NOT_KEPT);
+		expect(edit.body.value.items).toHaveLength(1);
+		// The connection is back: the next Done editing goes through, and the message was cleared as the save went.
+		s.patchStatus = 0;
+		await edit.done();
+		expect(route.query.edit).toBeUndefined();
+		expect(edit.failed.value).toBe('');
+		expect([...s.drafts.values()][0].body.items).toHaveLength(1);
+	});
+
+	it('opening another draft waits for the save, and stays when it fails', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		s.seed('other');
+		edit.apply({ type: 'addSample' });
+		s.patchStatus = 500;
+		await edit.openDraft('other');
+		expect(route.query.edit).not.toBe('other');
+		expect(edit.failed.value).toBe(NOT_KEPT);
+		s.patchStatus = 0;
+		await edit.openDraft('other');
+		expect(route.query.edit).toBe('other');
+	});
+
+	it('the back button keeps a draft whose changes the server does not have, instead of dropping it', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		s.patchStatus = -1;
+		route.query = {};
+		await flush();
+		expect(edit.draft.draftId.value).not.toBeNull();
+		expect(edit.failed.value).toBe(NOT_KEPT);
+	});
+
+	it('the back button discards a draft with nothing in it', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		route.query = {};
+		await flush();
+		expect(s.drafts.size).toBe(0);
+		expect(edit.draft.draftId.value).toBeNull();
+	});
+
+	it('a draft whose start is overtaken by the address moving on is not left behind', async () => {
+		const server = fakeServer();
+		let open!: () => void;
+		server.s.postGate = new Promise<void>((r) => (open = r));
+		const route = reactive({ path: '/map', query: { edit: 'new' } as Record<string, unknown> });
+		const replace = vi.fn(async (to: { query: Record<string, string> }) => void (route.query = to.query));
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace }, isPhone: ref(false), focus: () => null });
+		await flush();
+		route.query = {};
+		await flush();
+		open();
+		await flush();
+		expect(server.s.drafts.size).toBe(0);
+		expect(edit.draft.draftId.value).toBeNull();
+		expect(route.query.edit).toBeUndefined();
+	});
+});
+
+describe('useEditMode: why edit mode did not open', () => {
+	it('says why on a phone instead of dropping edit=new without a word', async () => {
+		const { edit, route } = setup({ edit: 'new' }, {}, true);
+		await flush();
+		expect(route.query.edit).toBeUndefined();
+		expect(edit.failed.value).toBe(PHONE_NEW);
+	});
+
+	it('a probe that fails (not a 404) says why, keeps the toggle, and asks again on the next try', async () => {
+		const server = fakeServer();
+		server.s.listStatus = 500;
+		const route = reactive({ path: '/map', query: { edit: 'new' } as Record<string, unknown> });
+		const replace = vi.fn(async (to: { query: Record<string, string> }) => void (route.query = to.query));
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace }, isPhone: ref(false), focus: () => null });
+		await flush();
+		expect(edit.available.value).toBe(false);
+		expect(edit.failed.value).not.toBe(UNAVAILABLE);
+		expect(edit.failed.value).toMatch(/HTTP 500|Could not/);
+		expect(edit.canBuild.value).toBe(true);
+		// The server is back: the toggle works without reloading the page.
+		server.s.listStatus = 200;
+		edit.startEditing();
+		await flush();
+		expect(edit.editing.value).toBe(true);
 	});
 });
 
