@@ -293,6 +293,24 @@ A cutting insert whose cutting edge is a brazed tip of a superhard material (PCD
 insert and sold one insert per box. Each tip is one insert edge.
 _Avoid_: PCD box (for the insert), diamond insert
 
+### Surface scans
+
+**Surface scan**:
+One topography file (an Alicona scan, say) of one **cutting insert** or one **insert edge**, kept with the
+**condition** the item was in and, when known, the date and the operation that wore it. It shows on the
+insert's or edge's page as a 3D view. It is not a test.
+_Avoid_: Alicona test (for a tool edge), scan test, attachment
+
+**Condition**:
+The state a **surface scan** found its insert or edge in: new, worn, cleaned or other, with a note.
+_Avoid_: status, wear state
+
+**Add a surface scan**:
+To put a topography file on an insert or edge as a **surface scan**, from the file library or from a
+**found file** in the **inbox**. Adding it makes the file visible to every lab member, as the insert and edge
+are. It is the one verb for these files; **link** is for samples, operations and tests.
+_Avoid_: attach (that is the process map's word), link (for an insert or edge)
+
 ### Files on the share
 
 **Personal folder**:
@@ -351,6 +369,10 @@ _Avoid_: attach (that is the process map's word), upload, import
 - A **personal folder** belongs to one **person** (by **uni alias**) and a **team folder** to one **team**;
   a **found file** goes to the **inbox** of the person or team whose folder it is in.
 
+- A **surface scan** belongs to exactly one **cutting insert** or one **insert edge**, and an edge's page also
+  shows its insert's scans. A **surface scan** is never a **test**: an Alicona test on the surface of a
+  **sample** stays a test.
+
 ## Flagged ambiguities
 
 - "The frontend", "the head" and "the Explorer" were all used for this app; "Home" was used both
@@ -388,3 +410,7 @@ _Avoid_: attach (that is the process map's word), upload, import
 - "Template" was used both for starting from an existing operation and for a saved, reusable set of
   prefilled fields. Resolved: the first is **new from**, the second a **template**; copying what is
   already on the canvas is **duplicate**.
+- A topography scan of a tool edge was filed as a test with the edge as its subject, which mixed inspecting
+  tool wear with characterising samples (SEM, EBSD, Alicona of a machined surface). Resolved: a scan of an
+  insert or edge is a **surface scan**, and an Alicona test on a sample stays a **test**. A **surface scan**
+  is **added**, while **link** stays the verb for samples, operations and tests.
