@@ -1687,16 +1687,21 @@ test('GET /admin: administrators only; the shape STARbase reads (status, errors,
   assert.deepEqual(d.candidates, { new: 5, linked: 2 });
 });
 
-test('GET /admin: the daemon is stale after five minutes without a heartbeat, never when it has not run, paused when paused', async () => {
+test('GET /admin: the daemon verdict is stale or never FIRST (a dead daemon is not paused), then paused, then alive', async () => {
   const w = newWorld();
   const { call } = setup(w);
-  w.crawlerState.last_heartbeat_at = new Date(NOW.getTime() - 6 * 60_000);
-  assert.equal((await call('GET /admin', { user: U.admin, admin: true })).body.data.status.daemon, 'stale');
-  w.crawlerState.last_heartbeat_at = null;
-  assert.equal((await call('GET /admin', { user: U.admin, admin: true })).body.data.status.daemon, 'never');
-  w.crawlerState.last_heartbeat_at = new Date(NOW.getTime() - 1000);
-  w.crawlerState.desired_state = 'paused';
-  assert.equal((await call('GET /admin', { user: U.admin, admin: true })).body.data.status.daemon, 'paused');
+  const verdict = async (beat, desired) => {
+    w.crawlerState.last_heartbeat_at = beat === null ? null : new Date(NOW.getTime() - beat);
+    w.crawlerState.desired_state = desired;
+    return (await call('GET /admin', { user: U.admin, admin: true })).body.data.status.daemon;
+  };
+  assert.equal(await verdict(30_000, 'running'), 'alive', 'a heartbeat 30 s ago');
+  assert.equal(await verdict(30_000, 'paused'), 'paused', 'alive and asked to pause');
+  assert.equal(await verdict(6 * 60_000, 'running'), 'stale', 'no heartbeat for more than five minutes');
+  assert.equal(await verdict(6 * 60_000, 'paused'), 'stale', 'dead and paused: stale, not paused');
+  assert.equal(await verdict(5 * 60_000, 'running'), 'alive', 'exactly five minutes is still inside the rule');
+  assert.equal(await verdict(null, 'running'), 'never');
+  assert.equal(await verdict(null, 'paused'), 'never', 'never ran and paused: never, not paused');
   w.crawlerState.unmatched_folders = null;
   assert.deepEqual((await call('GET /admin', { user: U.admin, admin: true })).body.data.unmatched_folders, []);
 });
