@@ -20,8 +20,9 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 |---|---|---|---|
 | A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | built; reviewed (no blockers); review fixes in progress (2026-10-15) |
 | B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | reviewed, fixed, **merged** (2026-10-15) |
-| C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | built; reviewed (4 blocking); fixes in progress (2026-10-15) |
-| D — canvas editor UI (needs A-contract, B, C merged) | agent worktree | `pm-edit/d-canvas` | not started |
+| C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | reviewed, fixed, **merged** (2026-10-15) |
+| D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | in progress (2026-10-15) |
+| D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | in progress (2026-10-15) |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
 | Review + merge + PR | coordinator | `claude/keen-brahmagupta-nmo9oy` | not started |
 
