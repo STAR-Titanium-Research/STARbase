@@ -28,7 +28,7 @@ export const JOBS = {
     'packages/d1-ui/', 'packages/fast-plotting/', 'packages/directus-host/', 'packages/starbase-pages/', 'packages/force-plotting/',
     'apps/starbase/web/', 'infra/caddy/', 'core/extensions/d1-edit-frame/', 'core/extensions/d1-lab-dashboard/',
     'core/extensions/d1-composition-bar/', 'core/extensions/d1-campaign-ops/',
-    'core/extensions/d1-project-items/', ...WORKSPACE_ROOT,
+    'core/extensions/d1-project-items/', 'tests/fixtures/d1-inbox/', ...WORKSPACE_ROOT,
   ],
   backend: ['apps/force-app/backend/'],
 };

@@ -86,7 +86,7 @@ jobs:
         run: node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
-        run: node --test core/extensions/*/index.test.mjs
+        run: node --test core/extensions/*/index*.test.mjs
       - name: "STARbase compose wiring (parse-only)"
         if: ${{ !cancelled() }}
         run: node --test tests/starbase_compose.test.mjs
