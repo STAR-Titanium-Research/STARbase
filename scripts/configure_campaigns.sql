@@ -1,7 +1,7 @@
 -- Directus metadata for the campaigns layer (machining trials + testing campaigns).
 -- Idempotent: safe to re-run. Apply after migration 20260628000047_campaigns.sql.
 --   docker exec -i d1-database-postgres-1 sh -c "PGPASSWORD=change_me psql -h localhost -U d1 -d d1_database" < scripts/configure_campaigns.sql
--- then flush Redis + restart Directus.
+-- then restart Directus (it caches metadata in memory; do not flush Redis, which holds the worker job queues).
 
 -- ─── 1. COLLECTION ────────────────────────────────────────────────────────────
 BEGIN;

@@ -12,20 +12,21 @@
 # Use this script only on a brand-new Directus or a scratch database you can throw away. To change
 # Directus metadata on a live database, write a migration (see CONTRIBUTING and the db-migration skill).
 # ################################################################################################
-# Apply all Directus configuration in the correct order, then flush + restart.
+# Apply all Directus configuration in the correct order, then restart Directus.
+# Directus caches schema and permissions in memory (no CACHE_*/Redis settings), so the restart clears them.
+# Redis is not touched: it holds the rq queues of heavy-data-worker and analysis-worker.
 # Order matters: inline params recreate fields that field-presets then customise; the form layout goes last.
 #
 # Every configure_*.sql file runs in its own transaction (BEGIN/COMMIT inside the file) with
 # ON_ERROR_STOP, so the first SQL error rolls that file back, stops the script with a
-# non-zero status and leaves Redis and Directus untouched. Nothing is swallowed.
+# non-zero status and leaves Directus untouched. Nothing is swallowed.
 #
 # Environment (defaults match docker-compose.yml):
-#   PG_CONTAINER / DIRECTUS_CONTAINER / REDIS_CONTAINER   container names
+#   PG_CONTAINER / DIRECTUS_CONTAINER                    container names
 #   POSTGRES_USER (d1) / POSTGRES_DB (d1_database)         database login and name
 set -euo pipefail
 PG=${PG_CONTAINER:-d1-database-postgres-1}
 DIRECTUS=${DIRECTUS_CONTAINER:-d1-database-directus-1}
-REDIS=${REDIS_CONTAINER:-d1-database-redis-1}
 DB_USER=${POSTGRES_USER:-d1}
 DB_NAME=${POSTGRES_DB:-d1_database}
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -54,7 +55,5 @@ for f in "${FILES[@]}"; do
   fi
 done
 
-# redis-cli authenticates through REDISCLI_AUTH, which compose sets in the redis container.
-docker exec "$REDIS" redis-cli FLUSHALL >/dev/null
 docker restart "$DIRECTUS" >/dev/null
 echo "Applied all config + restarted Directus."

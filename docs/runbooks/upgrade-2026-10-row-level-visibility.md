@@ -29,11 +29,10 @@ Migration 141 prints a `NOTICE` such as `ADR-0011 ownerless records ...`: note t
 ## 3. Restart Directus right after migration 141 (do not skip)
 
 ```bash
-docker exec "$(docker compose ps -q redis)" redis-cli FLUSHALL    # or: POST /utils/cache/clear as an admin
-docker restart "$(docker compose ps -q directus)"
+docker compose restart directus
 ```
 
-(`bash scripts/configure_all.sh` does both, and re-applies the Directus metadata.)
+Directus here caches schema and permissions in memory (no `CACHE_*`/Redis settings), so a restart clears them; Redis holds the rq queues of heavy-data-worker and analysis-worker, so do not `FLUSHALL` it.
 
 Directus reads relations, collections and permissions **at start-up** and caches them. Until it
 restarts:

@@ -276,17 +276,11 @@ and leave the old extension running; the steps below do both in one go. `d1-team
    `d1-record-access` is still running, and adding a person through Who has access fails (its upsert no longer matches an index): keep that
    window short, go straight from step 2 to here (step 3 is SQL only and can wait until Directus is back).** In order:
    ```bash
-   docker compose stop directus                      # first: a running Directus would re-cache stale permissions after a flush
-   # Redis also holds the rq queues of heavy-data-worker and analysis-worker. FLUSHALL drops queued and in-flight jobs, so check first:
-   docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'     # every queue: 0 queued, 0 failed, and no worker busy
-   docker compose exec -T redis redis-cli FLUSHALL   # only when rq info shows nothing queued, nothing failed and no busy worker; otherwise wait for a quiet window
+   docker compose stop directus                      # the stop/start gives Directus a fresh permission cache
    docker compose up -d directus                     # (--force-recreate if the extension folder or .env changed)
    docker compose up -d --force-recreate proxy       # the new STARbase build
    ```
-   Alternative that leaves Redis alone (skip the `rq info` check and the flush): start Directus (`docker compose up -d --force-recreate
-   directus`) and, as an administrator, run `POST /utils/cache/clear` **immediately after Directus starts and before the proxy is recreated or
-   anyone is let back in**, so no cached permission answer from before the migration is served (Directus caches permissions; the reference
-   is docs/runbooks/upgrade-2026-10-row-level-visibility.md step 3). Then recreate proxy.
+   Directus here caches schema and permissions in memory (no `CACHE_*`/Redis settings), so a restart clears them; Redis holds the rq queues of heavy-data-worker and analysis-worker, so do not `FLUSHALL` it.
 5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
    access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
    approved or until Trust future members is ticked. `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-teams`
@@ -307,9 +301,7 @@ d1-person-link`), with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1 bash scripts/de
 maintainer's machine if the copy of live has changed a lot; the procedure is in `docs/runbooks/a1-record-access-cutover.md`.
 
 Rollback: `make migrate-down` twice (182, then 181; 182's down deletes the derived rows and restores the old unique constraints),
-`git checkout <previous commit>`, rebuild, then reload exactly as in step 4: `docker compose stop directus`, flush Redis only after `rq info`
-shows nothing queued, nothing failed and no busy worker (or, instead of the flush, start Directus and run `POST /utils/cache/clear` as an
-administrator at once), start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 181's down.
+`git checkout <previous commit>`, rebuild, then reload exactly as in step 4: `docker compose stop directus`, start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 181's down.
 
 ## Team ownership (PR 3) (maintainer's step, approve separately)
 
@@ -338,11 +330,9 @@ Directus is stopped before `make migrate` (step 2) and only started again on the
    SELECT d1_private.readers_drift_count();          -- 0
    ```
 4. Reload Directus on the new extensions and a clean permission cache, **in the same order as "Teams (PR 2)" step 4** (Directus is
-   already stopped from step 2, and must stay stopped until here, so nothing re-caches stale permissions): either flush Redis (only after
-   `docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'` shows every queue empty, nothing failed and no busy worker:
-   `docker compose exec -T redis redis-cli FLUSHALL`) and `docker compose up -d directus` (with `--force-recreate` for the changed
-   extension folders), or start Directus and run `POST /utils/cache/clear` as an administrator **immediately after it starts and before
-   anyone is let back in**; then `docker compose up -d --force-recreate proxy` for the new STARbase build. Directus is down from step 2
+   already stopped from step 2, and must stay stopped until here, so nothing re-caches stale permissions; starting it again gives a fresh
+   cache): `docker compose up -d --force-recreate directus` (the changed extension folders), then
+   `docker compose up -d --force-recreate proxy` for the new STARbase build. Directus is down from step 2
    until here, so keep that window short (184's rules and the new extensions must be live together).
 5. Smoke: on a sample you own, Who has access → Transfer ownership… → pick a team you manage; the owner row now reads "<team> (managers)",
    the rail's Owner shows the team name, and you (the previous owner) stay on it as Can edit. A plain member of that team can edit the
@@ -420,7 +410,7 @@ and Teams pages of STARbase and of the Directus Explorer module. **No new `.env`
 
 1. `git pull && npm ci && npm run build:extensions && npm run build:starbase` (the Directus module and STARbase both know the role now).
 2. **Stop Directus, migrate, start it**: `docker compose stop directus`, `make migrate-status` (185 pending), `make migrate`, `docker compose up -d --force-recreate directus`
-   (the recreate loads the changed extensions). Stopping first keeps a writer from holding the readers lock while the migration takes it. **No Redis flush is needed**: the
+   (the recreate loads the changed extensions). Stopping first keeps a writer from holding the readers lock while the migration takes it. **No separate cache step is needed**: the
    role and its policy are new, so Directus has no cached permissions for them, and none of the existing rows changed (do not `FLUSHALL`: Redis also holds the worker queues).
 3. Check: `SELECT d1_private.readers_drift_count();` is `0`; `SELECT name FROM directus_roles WHERE name = 'Lab Viewer';` returns one row; the policy has read rows only:
    `SELECT action, count(*) FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000003' GROUP BY 1;` returns `read` and nothing else.
@@ -497,7 +487,8 @@ The same branch changes `@d1/ui`, which the Directus extensions bundle, so rebui
 
 1. Check out the branch; `npm run build:extensions` and `npm run build:starbase`. `core/extensions` is mounted
    read-only into Directus, so the new folder is already there.
-2. `docker compose exec -T redis redis-cli FLUSHALL`, then `docker compose restart directus` (extensions load at start).
+2. `docker compose restart directus` (extensions load at start, and the restart clears its in-memory cache; do not `FLUSHALL` Redis,
+   which holds the worker job queues).
 3. `BUG_REPORT_RELAY_URL` can stay unset: the endpoint defaults to `http://bug-report-relay:8211`, the compose service.
 4. Smoke: sign in to STARbase, open Report a bug, send a test report; the page shows the issue number. An unreachable
    relay shows "could not reach the bug-report relay" instead.

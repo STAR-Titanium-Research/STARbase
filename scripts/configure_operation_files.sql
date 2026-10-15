@@ -1,5 +1,5 @@
 -- Directus metadata for operation_files (external data-file links on an operation).
--- Idempotent. Apply after migration 20260628000049_operation_files.sql, then flush + restart.
+-- Idempotent. Apply after migration 20260628000049_operation_files.sql, then restart Directus.
 
 BEGIN;
 

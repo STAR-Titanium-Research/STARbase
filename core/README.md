@@ -20,7 +20,7 @@ The configuration lives in two places:
 # 1. Stack must be up and migrations applied
 make up && make migrate && make seed
 
-# 2. Collections, fields and relations, then a Redis flush + Directus restart
+# 2. Collections, fields and relations, then a Directus restart
 bash scripts/configure_all.sh
 ```
 
