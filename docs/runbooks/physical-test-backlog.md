@@ -1148,6 +1148,26 @@ migration 141 prints about ownerless records.
   greyed "already added"; select all ticks the page (not the added ones); the button reads "Add N samples". Confirm:
   the picked samples arrive on the canvas (the rows' on-screen positions are what the fly-in starts from). Since:
   Process map edit mode, stream B (PR pending).
+- [ ] **PME-D2-1 — My drafts on Home and Build a process in the sidebar.** With `d1-build` deployed and two drafts of
+  yours (and one of someone else's): Home shows **My drafts** under "Waiting for you" with only your two, newest
+  first, each with its name, "2 operations, 4 samples" and the date; a click opens `/map?edit=<id>` in edit mode.
+  With no drafts, or on a server without `d1-build` (before the migration), the block is not there at all and Home
+  is otherwise unchanged. In the sidebar, Analysis lists **Build a process** under Process map: it is lit only while
+  the map is in edit mode (and Process map is not lit then), a click opens a blank canvas, and it can be pinned.
+  After opening it, **Frequently used** lists it (the usage endpoint accepts the `build-process` key). Since: Process
+  map edit mode, stream D2 (PR pending).
+- [ ] **PME-D2-2 — Mark done dialog on real records.** On a planned operation (a cut with 4 rows) and a planned test,
+  press Mark done. Expect: the date is today and **Done by** is your own People row, with a picker that lists only
+  the people your role may read; Tab and Shift+Tab stay inside the dialog, Escape closes it and focus returns to the
+  button; Mark done sends one request for every row of the card. On a done-required field left empty (a required field
+  of the form) the server's refusal is listed in the dialog, nothing is marked, and the dialog stays open. Since:
+  Process map edit mode, stream D2 (PR pending).
+- [ ] **PME-D2-3 — Rail form details on real field definitions.** Select a draft operation, a new draft sample and an
+  existing (planned) operation. Expect: the Process Category and, on the existing record, the operation code show as
+  read-only text (not "Open in Data Studio"); no code, wire, work-state or batch field is asked for on a new item;
+  values a new output sample inherits (material, form) show greyed with an "inherited" tag and typing replaces them;
+  the compact form of a container shows only its key settings (machining: cutting speed, feed, depth of cut,
+  coolant). Since: Process map edit mode, stream D2 (PR pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
