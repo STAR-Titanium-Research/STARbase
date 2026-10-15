@@ -42,8 +42,10 @@ export function makerOf(body: DraftBody, sampleKey: DraftKey): { op: DraftOperat
 }
 
 /** What a new sample inherits and does not set itself (nothing for an existing sample, or one no operation makes). */
-export function inheritedValues(body: DraftBody, sampleKey: DraftKey, ctx: InheritCtx = {}): Inherited {
+export function inheritedValues(body: DraftBody, sampleKey: DraftKey, ctx: InheritCtx = {}, trail: Set<DraftKey> = new Set()): Inherited {
 	const out: Inherited = { values: {}, from: {} };
+	if (trail.has(sampleKey)) return out;
+	trail.add(sampleKey);
 	const sample = itemOf(body, sampleKey);
 	if (sample?.kind !== 'sample' || sample.existing) return out;
 	const maker = makerOf(body, sampleKey);
@@ -52,7 +54,8 @@ export function inheritedValues(body: DraftBody, sampleKey: DraftKey, ctx: Inher
 	const inKey = inputSampleOf(body, { key: maker.op.key, row: maker.row });
 	const input = inKey ? itemOf(body, inKey) : undefined;
 	if (input) {
-		const theirs = fieldsOf(input, ctx);
+		// The input as it will stand: what it inherits in turn (a piece of a piece), then its own fields.
+		const theirs = { ...(input.kind === 'sample' ? inheritedValues(body, input.key, ctx, trail).values : {}), ...fieldsOf(input, ctx) };
 		for (const f of ['material_id', 'form']) {
 			if (empty(mine[f]) && !empty(theirs[f])) {
 				out.values[f] = theirs[f];

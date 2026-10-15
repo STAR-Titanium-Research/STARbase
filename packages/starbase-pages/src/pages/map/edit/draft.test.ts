@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftBody, DraftOperation, DraftSample, DraftTest } from '@d1/ui';
 import {
-	apply, canWire, emptyBody, inputSampleOf, isInPlace, itemOf, newFromValues, newKeys, nextKey, outputSampleOf, subjectsOf, wireInto, wireProblem,
+	apply, canWire, continuesAs, emptyBody, inputSampleOf, isInPlace, itemOf, newFromValues, newKeys, nextKey, outputSampleOf, subjectsOf, wireInto, wireProblem,
 	type DraftAction,
 } from './draft';
 
@@ -237,6 +237,43 @@ describe('wire / unwire', () => {
 		expect(inputSampleOf(b, { key: 'n4', row: 0 })).toBe('n1');
 		const t = apply(b, { type: 'addContainer', kind: 'test', source: { from: 'blank' }, from: { key: 'n4', row: 0 } });
 		expect(subjectsOf(t, t.items[t.items.length - 1].key)).toEqual(['n1']);
+	});
+
+	it('a row that makes a new sample and is wired on carries the new sample, not its input (as d1-build does)', () => {
+		// n1 → cut n2 (row n3) → new sample n4; the cut is also wired on to an operation n5 (row n6) and a test n7.
+		let b = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank' } },
+		]);
+		b = apply(b, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n5' } });
+		b = apply(b, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n7' } });
+		expect(outputSampleOf(b, 'n2')).toBe('n4');
+		expect(continuesAs(b, { key: 'n2', row: 0 })).toBe('n4');
+		expect(inputSampleOf(b, { key: 'n5', row: 0 })).toBe('n4');
+		expect(subjectsOf(b, 'n7')).toEqual(['n4']);
+		// An in-place row carries its input on.
+		const inPlace = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: {} }, { type: 'addContainer', kind: 'test', source: { from: 'blank' }, from: { key: 'n2', row: 0 } }]);
+		expect(continuesAs(inPlace, { key: 'n2', row: 0 })).toBe('n1');
+		expect(subjectsOf(inPlace, 'n4')).toEqual(['n1']);
+	});
+
+	it('a loop in the wires does not hang the readers', () => {
+		const looped: DraftBody = {
+			...emptyBody(),
+			items: [
+				{ key: 'n1', kind: 'operation', workState: 'planned', values: {}, rows: [{ key: 'n2' }] },
+				{ key: 'n3', kind: 'operation', workState: 'planned', values: {}, rows: [{ key: 'n4' }] },
+			],
+			wires: [
+				{ from: { key: 'n1', row: 0 }, to: { key: 'n3', row: 0 } },
+				{ from: { key: 'n3', row: 0 }, to: { key: 'n1', row: 0 } },
+			],
+		};
+		expect(inputSampleOf(looped, { key: 'n1', row: 0 })).toBeNull();
+		expect(continuesAs(looped, { key: 'n3', row: 0 })).toBeNull();
 	});
 });
 

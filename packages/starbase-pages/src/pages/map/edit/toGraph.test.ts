@@ -161,6 +161,22 @@ describe('toGraph', () => {
 		expect(t.rows[0].out).toBeUndefined();
 	});
 
+	it('an operation and a test wired on from a cut work on the piece the cut made', () => {
+		let body = run([
+			{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'turn' } },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' } },
+		]);
+		body = apply(body, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n5' } });
+		body = apply(body, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n7' } });
+		const data = toGraph(mkData({ samples: [mkSample('s1')] }), body, ctx);
+		const turn = data.operations.find((o) => o.id === 'draft:n6')!;
+		expect(turn.sampleId).toBe('draft:n4');
+		expect(data.tests[0].subjectSampleIds).toEqual(['draft:n4']);
+	});
+
 	it('a test after an in-place operation takes the sample through it', () => {
 		let body = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }, { type: 'addPass', sample: { key: 'n1' }, values: { method_id: 'turn' } }]);
 		body = apply(body, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, from: { key: 'n2', row: 0 } });

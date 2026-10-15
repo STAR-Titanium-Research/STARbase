@@ -125,30 +125,48 @@ export function inputSampleOf(body: DraftBody, end: WireEnd, seen: Set<string> =
 	if (item.kind === 'sample') return item.key;
 	const w = wireInto(body, end.key, item.kind === 'operation' ? (end.row ?? 0) : 0);
 	if (!w) return null;
-	const from = itemOf(body, w.from.key);
-	if (!from) return null;
-	return from.kind === 'sample' ? from.key : inputSampleOf(body, { key: w.from.key, row: w.from.row ?? 0 }, seen);
+	return sourceSample(body, w, seen);
 }
 
-/** The samples a test is done on (its subject wires, followed back through in-place operations). */
+/** The sample a wire carries: a sample's own, or what the operation row it leaves carries on. */
+function sourceSample(body: DraftBody, w: DraftWire, seen: Set<string>): DraftKey | null {
+	const from = itemOf(body, w.from.key);
+	if (!from) return null;
+	return from.kind === 'sample' ? from.key : continuesAs(body, { key: w.from.key, row: w.from.row ?? 0 }, seen);
+}
+
+/**
+ * The sample an operation row carries on to the next step: the one it makes, else the one it took in (in place). The same
+ * rule as d1-build's `continuesAs`: a row that makes X and is wired on to a next operation or test carries X, not its input.
+ */
+export function continuesAs(body: DraftBody, end: WireEnd, seen: Set<string> = new Set()): DraftKey | null {
+	const input = inputSampleOf(body, end, seen);
+	return madeBy(body, end.key, end.row ?? 0, input) ?? input;
+}
+
+/** The samples a test is done on: its subject wires, each through the operation row it leaves. */
 export function subjectsOf(body: DraftBody, testKey: DraftKey): DraftKey[] {
 	const out: DraftKey[] = [];
 	for (const w of body.wires) {
 		if (w.to.key !== testKey) continue;
-		const s = inputSampleOf(body, { key: w.from.key, row: w.from.row ?? 0 });
+		const s = sourceSample(body, w, new Set());
 		if (s && !out.includes(s)) out.push(s);
 	}
 	return out;
 }
 
-/** The sample an operation row makes: the target of its output wire when that is not the sample it took in (null = in place or open). */
-export function outputSampleOf(body: DraftBody, key: DraftKey, row = 0): DraftKey | null {
-	const input = inputSampleOf(body, { key, row });
+/** The target of an output wire of this row that is a sample other than `input` (null = in place or open). */
+function madeBy(body: DraftBody, key: DraftKey, row: number, input: DraftKey | null): DraftKey | null {
 	for (const w of wiresOutOf(body, key, row)) {
 		const to = itemOf(body, w.to.key);
 		if (to?.kind === 'sample' && to.key !== input) return to.key;
 	}
 	return null;
+}
+
+/** The sample an operation row makes: the target of its output wire when that is not the sample it took in (null = in place or open). */
+export function outputSampleOf(body: DraftBody, key: DraftKey, row = 0): DraftKey | null {
+	return madeBy(body, key, row, inputSampleOf(body, { key, row }));
 }
 
 /** An operation that makes no new sample on any row: its sample continues (a pass of a turning, a polish, a heat treatment). */

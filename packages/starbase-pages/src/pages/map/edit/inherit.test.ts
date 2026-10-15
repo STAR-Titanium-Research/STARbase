@@ -50,6 +50,19 @@ describe('inheritedValues', () => {
 		expect(inheritedValues(b, 'n6', ctx).values.material_id).toBe('mat-ti');
 	});
 
+	it('a second step after a cut works on the cut piece: its output inherits from the piece, not the disc', () => {
+		// n1 (disc, Ti) → cut n2 → piece n4 (form: rod) ; cut wired on to a second cut n5 (row n6) → piece n7
+		let b = run([
+			{ type: 'addSample', values: { material_id: 'mat-ti', form: 'disc' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+			{ type: 'addSample', values: { form: 'rod' }, from: { key: 'n2', row: 0 } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mf' } },
+		]);
+		b = apply(b, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n5' } });
+		b = apply(b, { type: 'addSample', from: { key: 'n5', row: 0 } });
+		expect(inheritedValues(b, 'n7', ctx).values).toEqual({ material_id: 'mat-ti', form: 'rod', primary_method_id: 'mf' });
+	});
+
 	it('a free new sample, an existing sample and an in-place sample inherit nothing', () => {
 		const free = run([{ type: 'addSample' }]);
 		expect(inheritedValues(free, 'n1', ctx).values).toEqual({});
