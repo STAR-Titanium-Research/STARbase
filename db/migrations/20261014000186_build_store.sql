@@ -36,7 +36,7 @@ CREATE TABLE d1_private.process_templates (
     role_id     UUID        REFERENCES directus_roles (id) ON DELETE CASCADE,
     name        TEXT        NOT NULL,
     collection  TEXT        NOT NULL,
-    values    JSONB       NOT NULL,
+    values      JSONB       NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     version     INTEGER     NOT NULL DEFAULT 1,

@@ -882,6 +882,8 @@ SELECT 'up_fk:' || string_agg(conrelid::regclass::text || '=' || confdeltype::te
     AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = conrelid AND attname = 'done_by_person_id')];
 SELECT 'up_indexes:' || string_agg(indexname || '=' || (indexdef LIKE '%WHERE (work_state = ''planned''::text)'), ',' ORDER BY indexname)
   FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('idx_manufacturing_operations_work_state_planned', 'idx_test_sessions_work_state_planned');
+SELECT 'up_done_by_indexes:' || string_agg(indexname || '=' || (indexdef LIKE '%(done_by_person_id) WHERE (done_by_person_id IS NOT NULL)'), ',' ORDER BY indexname)
+  FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('idx_manufacturing_operations_done_by_person_id', 'idx_test_sessions_done_by_person_id');
 SELECT 'up_comments:' || count(*) FROM pg_attribute
   WHERE attrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass)
     AND attname IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at') AND col_description(attrelid, attnum) IS NOT NULL;
@@ -942,6 +944,7 @@ SELECT 'redown_other_sample:' || current_status FROM physical_samples WHERE samp
 SELECT 'redown_cols:' || count(*) FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions')
     AND column_name IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at');
+SELECT 'redown_indexes:' || count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname LIKE 'idx\_%\_done\_by\_person\_id';
 SELECT 'redown_rows:' || (SELECT count(*) FROM manufacturing_operations WHERE operation_id IN ('c0000000-0000-4000-8000-0000000185d1', 'c0000000-0000-4000-8000-0000000185d2'))
   || ',' || (SELECT count(*) FROM test_sessions WHERE session_id IN ('c0000000-0000-4000-8000-0000000185e1', 'c0000000-0000-4000-8000-0000000185e2'));
 SELECT 'redown_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('manufacturing_operations', 'test_sessions') AND field IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at'))
@@ -965,6 +968,7 @@ pw_check "up_checks:manufacturing_operations_work_state_check,test_sessions_work
 pw_check "up_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text, 'planned'::text])))" "up: the sample status CHECK allows planned"
 pw_check "up_fk:manufacturing_operations=n,test_sessions=n" "up: done_by_person_id is a foreign key to people, ON DELETE SET NULL, on both tables"
 pw_check "up_indexes:idx_manufacturing_operations_work_state_planned=true,idx_test_sessions_work_state_planned=true" "up: partial indexes on work_state = 'planned'"
+pw_check "up_done_by_indexes:idx_manufacturing_operations_done_by_person_id=true,idx_test_sessions_done_by_person_id=true" "up: partial indexes on done_by_person_id where it is set"
 pw_check "up_comments:8" "up: all eight new columns carry a COMMENT"
 pw_check "up_status_comment:true" "up: the current_status comment names planned"
 pw_check "up_fields:manufacturing_operations.work_state/select-dropdown/true/false/80/grp_who_where;manufacturing_operations.planned_date/datetime/false/false/90/grp_who_where;manufacturing_operations.done_by_person_id/select-dropdown-m2o/true/false/100/grp_who_where;manufacturing_operations.done_at/datetime/true/false/110/grp_who_where;test_sessions.work_state/select-dropdown/true/false/70/grp_who_where;test_sessions.planned_date/datetime/false/false/80/grp_who_where;test_sessions.done_by_person_id/select-dropdown-m2o/true/false/90/grp_who_where;test_sessions.done_at/datetime/true/false/100/grp_who_where" \
@@ -984,6 +988,7 @@ pw_check "done_by_cleared:true" "deleting the person who marked it done clears d
 pw_check "redown_sample:archived" "down: a planned sample becomes archived"
 pw_check "redown_other_sample:active" "down: other samples keep their status"
 pw_check "redown_cols:0" "down after up: the work columns are gone"
+pw_check "redown_indexes:0" "down after up: the work indexes are gone too"
 pw_check "redown_rows:2,2" "down keeps the operation and test rows"
 pw_check "redown_meta:0,0" "down after up: the Directus fields and relations are gone"
 pw_check "redown_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text])))" "down after up: the sample status CHECK is the old four values"
@@ -1147,7 +1152,7 @@ CREATE TEMP TABLE _before AS SELECT collection, field, conditions::jsonb AS c FR
          'file_storage_pointer', 'capture_software', 'capture_frequency_khz', 'nc_program_text', 'nc_program_file_uri'))
      OR (collection = 'physical_samples' AND field = 'capture_software');
 $cf_up
-SELECT 'up_group:' || string_agg(collection || '=' || (conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"short_id":{"_null":true}}]}'::jsonb)
+SELECT 'up_group:' || string_agg(collection || '=' || (conditions::jsonb -> 0 -> 'rule' = '{"_or":[{"short_id":{"_null":true}},{"short_id":{"_empty":true}}]}'::jsonb)
   || '/' || (conditions::jsonb -> 0 ->> 'name') || '/' || (conditions::jsonb -> 0 ->> 'hidden') || '/' || jsonb_array_length(conditions::jsonb), ',' ORDER BY collection)
   FROM directus_fields WHERE field = 'grp_related' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
 SELECT 'up_fields:' || string_agg(field || '=' || (conditions::jsonb -> 0 -> 'rule' = jsonb_build_object('_and', jsonb_build_array(
@@ -1160,13 +1165,13 @@ SELECT 'up_untouched:' || (SELECT (conditions::jsonb = b.c) FROM directus_fields
     WHERE f.collection = 'manufacturing_operations' AND f.field = 'nc_program_file_uri')
   || '/' || (SELECT (conditions::jsonb = b.c) FROM directus_fields f JOIN _before b USING (collection, field)
     WHERE f.collection = 'physical_samples' AND f.field = 'capture_software');
-SELECT 'up_no_old_rules:' || count(*) FROM directus_fields WHERE conditions::text LIKE '%"_empty"%' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
-  AND (field = 'grp_related' OR (collection = 'manufacturing_operations' AND field <> 'nc_program_file_uri'));
+SELECT 'up_no_old_rules:' || count(*) FROM directus_fields WHERE collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
+  AND ((field = 'grp_related' AND position('"_and"' in conditions::text) > 0) OR (collection = 'manufacturing_operations' AND field <> 'nc_program_file_uri' AND position('_nempty' in conditions::text) > 0));
 $cf_down
 SELECT 'down_restored:' || (SELECT count(*) FROM directus_fields f JOIN _before b USING (collection, field) WHERE f.conditions::jsonb = b.c)
   || '/' || (SELECT count(*) FROM _before);
 $cf_up
-SELECT 'reup:' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"short_id":{"_null":true}}]}'::jsonb FROM directus_fields
+SELECT 'reup:' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_or":[{"short_id":{"_null":true}},{"short_id":{"_empty":true}}]}'::jsonb FROM directus_fields
     WHERE field = 'grp_related' AND collection = 'test_sessions')
   || '/' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"nc_program_text":{"_nnull":true}},{"nc_program_text":{"_neq":""}}]}'::jsonb
     FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'nc_program_text');
@@ -1178,11 +1183,11 @@ SQL
 )
 cf_check() { grep -qxF "$1" <<<"$cf_out" && ok "$2" || bad "$2 (psql output: $cf_out)"; }
 cf_check "up_group:manufacturing_operations=true/Hide until saved once/true/1,physical_samples=true/Hide until saved once/true/1,test_sessions=true/Hide until saved once/true/1" \
-    "up: Related records is hidden until saved once on short_id _null, for samples, operations and tests, rule name and flag unchanged"
+    "up: Related records is hidden until saved once on a null or empty short_id, for samples, operations and tests, rule name and flag unchanged"
 cf_check "up_fields:capture_frequency_khz=true/show when it has a value/false/false/false,capture_software=true/show when it has a value/false/false/false,file_storage_pointer=true/show when it has a value/false/false/false,machining_legacy_insert_edge_id=true/show when it has a value/false/false/false,machining_legacy_machining_uid=true/show when it has a value/false/false/false,nc_program_text=true/show when it has a value/false/false/false" \
     "up: the six 'show when it has a value' rules are not null and not '', with their name and flags unchanged"
 cf_check "up_untouched:true/true" "up: a field outside the six, and the same field name on samples, keep their rule"
-cf_check "up_no_old_rules:0" "up: no _empty / _nempty is left in the nine rows"
+cf_check "up_no_old_rules:0" "up: the old _and / _empty rule is gone from the three groups and no _nempty is left on the six fields"
 cf_check "down_restored:11/11" "down: the nine rules mean what migration 174 wrote again, and the two untouched rows are as they were"
 cf_check "reup:true/true" "up again after down gives the corrected rules"
 cf_check "up_twice:true" "up run on already-corrected rules changes nothing"

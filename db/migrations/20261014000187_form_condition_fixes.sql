@@ -4,7 +4,8 @@
 --
 --   * "Hide until saved once" on the Related records group of samples, operations and tests used
 --     `short_id {_empty: true}`. A record that has not been saved has a NULL short_id in the form, so the rule never fired
---     and the group showed on a new record. It is now `short_id {_null: true}`.
+--     and the group showed on a new record. It is now `{_or: [short_id {_null: true}, short_id {_empty: true}]}`: a null
+--     short_id (a new record) or an empty one both hide the group.
 --   * "show when it has a value" on six operation fields (the two legacy machining fields, file_storage_pointer,
 --     capture_software, capture_frequency_khz, nc_program_text) used `{field: {_nempty: true}}`, which is true for a NULL
 --     and so showed every empty field. Each is now `{_and: [{field: {_nnull: true}}, {field: {_neq: ''}}]}` (not null,
@@ -18,7 +19,11 @@
 SET LOCAL lock_timeout = '10s';
 
 UPDATE directus_fields
-SET conditions = replace(conditions::jsonb::text, '"short_id": {"_empty": true}', '"short_id": {"_null": true}')::json
+SET conditions = replace(
+        conditions::jsonb::text,
+        '{"_and": [{"short_id": {"_empty": true}}]}',
+        '{"_or": [{"short_id": {"_null": true}}, {"short_id": {"_empty": true}}]}'
+    )::json
 WHERE field = 'grp_related'
   AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
   AND conditions IS NOT NULL;
@@ -41,7 +46,11 @@ WHERE collection = 'manufacturing_operations'
 SET LOCAL lock_timeout = '10s';
 
 UPDATE directus_fields
-SET conditions = replace(conditions::jsonb::text, '"short_id": {"_null": true}', '"short_id": {"_empty": true}')::json
+SET conditions = replace(
+        conditions::jsonb::text,
+        '{"_or": [{"short_id": {"_null": true}}, {"short_id": {"_empty": true}}]}',
+        '{"_and": [{"short_id": {"_empty": true}}]}'
+    )::json
 WHERE field = 'grp_related'
   AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
   AND conditions IS NOT NULL;

@@ -40,6 +40,10 @@ ALTER TABLE test_sessions
 
 CREATE INDEX idx_manufacturing_operations_work_state_planned ON manufacturing_operations (work_state) WHERE work_state = 'planned';
 CREATE INDEX idx_test_sessions_work_state_planned ON test_sessions (work_state) WHERE work_state = 'planned';
+-- done_by_person_id is a foreign key to people ON DELETE SET NULL: deleting a person would otherwise scan both tables.
+-- Most rows have none (recorded as done directly), so the index holds only the ones that have.
+CREATE INDEX idx_manufacturing_operations_done_by_person_id ON manufacturing_operations (done_by_person_id) WHERE done_by_person_id IS NOT NULL;
+CREATE INDEX idx_test_sessions_done_by_person_id ON test_sessions (done_by_person_id) WHERE done_by_person_id IS NOT NULL;
 
 COMMENT ON COLUMN manufacturing_operations.work_state IS 'Whether the operation has been done or is only planned: done (default; everything recorded before planning existed) or planned. Set to done by Mark done in the d1-build endpoint, which also sets operation_date, done_by_person_id, done_at and turns the planned output samples active. Setting a done operation back to planned is refused by d1-access-guard unless the caller owns it or is an admin.';
 COMMENT ON COLUMN manufacturing_operations.planned_date IS 'The day the operation is meant to happen. NULL when not planned for a day. operation_date stays the day it happened and stays empty while the operation is planned.';
@@ -153,6 +157,8 @@ ALTER TABLE physical_samples
     CHECK (current_status IN ('active', 'consumed', 'destroyed', 'archived'));
 COMMENT ON COLUMN physical_samples.current_status IS 'Lifecycle state: active | consumed | destroyed | archived.';
 
+DROP INDEX IF EXISTS idx_test_sessions_done_by_person_id;
+DROP INDEX IF EXISTS idx_manufacturing_operations_done_by_person_id;
 DROP INDEX IF EXISTS idx_test_sessions_work_state_planned;
 DROP INDEX IF EXISTS idx_manufacturing_operations_work_state_planned;
 ALTER TABLE test_sessions
