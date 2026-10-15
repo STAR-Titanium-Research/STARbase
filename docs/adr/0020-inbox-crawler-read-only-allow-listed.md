@@ -58,5 +58,6 @@ used by many people.
   Inbox undo records), scan request and auto-link consent, while pointer rows and the links stay; export
   `people.uni_alias`, `teams.share_folder` and `inbox_prefs` first. After re-applying, every owner gets a first scan
   (all files Older, previously dismissed files return as Older).
+  A database that applied an EARLIER version of migration 193 (before the review fixes) has neither the auto_undone_at column nor the case-insensitive trigger conditions: roll back 194 then 193 and re-apply, or add the column and recreate the two triggers by hand; nothing live has run it.
 - The allow-list is the lever for adding more kinds later; widening it is a reviewed code change.
 - The Alicona chat's surface-scan table is written through its own contract; this feature writes none of it.

@@ -38,7 +38,10 @@
 //                                   linked_junction_id = the scan id). Its answer item is { candidate_id, collection: 'surface_scans', record_id:
 //                                   <scan_id>, junction_id: <scan_id>, insert_id, edge_id (one of them null), adopted: false }. Refusals: 400
 //                                   INVALID_PAYLOAD (extensions.field names the field), 404 NOT_FOUND (insert, edge or operation the caller cannot
-//                                   read), 409 ALREADY_ADDED (the table's unique constraints), 409 SURFACE_SCANS_UNAVAILABLE (no such table yet).
+//                                   read), 409 ALREADY_ADDED (the file already has a surface scan row, for instance one added through the Alicona
+//                                   feature's own dialog: asked up front, before any record is read; the table's unique constraints are the backstop),
+//                                   409 SURFACE_SCANS_UNAVAILABLE (no such table yet). Where the table exists, the summary and the new, older and open
+//                                   lists leave out undecided surface scan files that already have a scan (older databases use the plain queries).
 //   POST /d1-inbox/accept-all       { filter?, dry_run?, candidate_ids?, cursor? }   links the exact short-ID suggestions the caller can edit
 //                                   (images, and documents or other files, never surface scans) -> { data: { link_batch_id, linked: <count>,
 //                                   items, skipped: [{ candidate_id, reason }] (the first 200), skipped_total, has_more, next_cursor } }.
@@ -134,6 +137,9 @@ const isTarget = (name) => typeof name === 'string' && Object.hasOwn(LINK_TARGET
 // data, so Directus's own create permission on surface_scans decides) and needs a person-chosen condition. These are the collections a link item names.
 export const SURFACE_SCANS = 'surface_scans';
 export const LINK_COLLECTIONS = [...Object.keys(LINK_TARGETS), SURFACE_SCANS];
+// The edge a surface scan file's name points to (match_strength 'edge_code'): read as the caller so the list can name it, but never editable (a scan is
+// added through Directus's create permission on surface_scans, not a record-edit right) and not a link target.
+const SCAN_EDGES = 'insert_edges';
 export const SCAN_CONDITIONS = ['new', 'worn', 'cleaned', 'other'];
 // The table has no length limits (TEXT); these are the endpoint's own, so a paste of a whole report is refused instead of stored.
 const MAX_CONDITION_NOTE = 500;
@@ -202,6 +208,16 @@ const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
   .map(([collection, t]) => `NOT (c.suggested_collection = '${collection}' AND EXISTS (SELECT 1 FROM ${t.junction} j WHERE j.${t.fk} = c.suggested_record_id AND j.directus_files_id = c.directus_files_id))`)
   .join(' AND ');
 
+// A surface scan file that was already added (through the Alicona feature's own dialog, or here) is not a new thing to add: not counted, not listed as
+// undecided. Only meaningful where the surface_scans table exists (the endpoint asks first), so it is a separate fragment, never part of NOT_ON_RECORD.
+const SCAN_ADDED = "NOT (c.kind = 'surface_scan' AND EXISTS (SELECT 1 FROM surface_scans s WHERE s.directus_files_id = c.directus_files_id))";
+const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.origin,'
+  + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
+  + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
+  + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
+
 export const SQL = {
   setActor: "SELECT set_config('d1.actor_identity', ?, true)",
   lock: 'SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0))',
@@ -210,13 +226,9 @@ export const SQL = {
   teamsOfPerson:
     'SELECT t.team_id, t.name, t.share_folder FROM team_members m JOIN teams t ON t.team_id = m.team_id WHERE m.person_id = ? ORDER BY t.name',
   // Bindings: the person id, the team ids as one csv ('' for none).
-  summary:
-    'SELECT c.owner_person_id, c.owner_team_id, c.origin,'
-    + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
-    + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
-    + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-    + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}`
-    + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact',
+  summary: summarySql(false),
+  // The same where the surface_scans table exists (the endpoint checks first): without the surface scan files that already have a scan.
+  summaryWithScans: summarySql(true),
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
   candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
@@ -291,6 +303,8 @@ export const SQL = {
   // Stream F1: does the surface_scans table exist yet (the Alicona chat's migration 192)? Checked once, then remembered.
   scanTableExists: "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'surface_scans') AS available",
   // A scan row by id, as undo and a repeated add read it. Never run unless scanTableExists said yes.
+  // Which of the files already have a surface scan (any insert or edge). Binding: the file ids as one csv. Only asked where the table exists.
+  scansOfFiles: `SELECT DISTINCT directus_files_id FROM surface_scans WHERE directus_files_id = ANY(${IDS})`,
   scanById: 'SELECT scan_id AS id, insert_id, edge_id, directus_files_id FROM surface_scans WHERE scan_id = ?',
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
@@ -471,8 +485,9 @@ const LIST_FROM = ' FROM d1_private.file_candidates c'
   + " LEFT JOIN session_data_files tj ON c.linked_collection = 'test_sessions' AND tj.id = c.linked_junction_id";
 const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of';
 
-// The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers). Everything a client chose is a binding.
-export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE } = {}) {
+// The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers; { scans: true }: the surface_scans table exists, so
+// undecided surface scan files that already have a scan are left out). Everything a client chose is a binding.
+export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false } = {}) {
   const where = [];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
@@ -487,6 +502,8 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
   else if (f.tab === 'older') where.push("c.state = 'new'", "c.origin = 'backlog'", COPY_HIDDEN);
   else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN);
   else where.push(`c.state = '${f.tab}'`); // linked or dismissed (validated by parseFileFilters)
+  // a surface scan file that already has a scan is not undecided any more (only where the table exists: `scans`)
+  if (scans && !accept && ['new', 'older', 'open'].includes(f.tab)) where.push(SCAN_ADDED);
   if (f.kinds) { where.push("c.kind = ANY(string_to_array(?, ','))"); bindings.push(f.kinds.join(',')); }
   if (f.strengths) { where.push("c.match_strength = ANY(string_to_array(?, ','))"); bindings.push(f.strengths.join(',')); }
   if (f.folder) { where.push("strpos(lower(regexp_replace(c.rel_path, '[^/]*$', '')), lower(?)) > 0"); bindings.push(f.folder); }
@@ -555,7 +572,8 @@ export function duplicateOwnerOut(row, viewer) {
 export function fileOut(row, info) {
   const matches = Array.isArray(asJson(row.matches)) ? asJson(row.matches) : [];
   const key = (collection, id) => `${collection}:${id}`;
-  const seen = (collection, id) => Boolean(id) && info.readable.has(key(collection, id));
+  // an insert edge is named only on a surface scan row (the F2 dialog's pre-selection); on any other file it is never a suggestion or a match
+  const seen = (collection, id) => Boolean(id) && (collection !== SCAN_EDGES || row.kind === 'surface_scan') && info.readable.has(key(collection, id));
   const suggested = seen(row.suggested_collection, row.suggested_record_id);
   const linked = seen(row.linked_collection, row.linked_record_id);
   const out = {
@@ -844,6 +862,20 @@ export function mount(router, context, deps = {}) {
         if (!isDenied(err)) throw err;
       }
     }
+    // The edge a surface scan file's name points to (S4): read as the caller (their read rule decides), named by its code, and NEVER added to the
+    // editable set below (adding a scan is not editing the edge). fileOut passes it through for a surface scan row only.
+    const edgeIds = [...new Set(pairs.filter(([c, id]) => c === SCAN_EDGES && isUuid(id)).map(([, id]) => String(id)))];
+    if (edgeIds.length) {
+      try {
+        const rows = await itemsFor(schema, acc, SCAN_EDGES).readByQuery({ fields: ['edge_id', 'edge_code'], filter: { edge_id: { _in: edgeIds } }, limit: edgeIds.length });
+        for (const r of rows) {
+          readable.add(`${SCAN_EDGES}:${r.edge_id}`);
+          labels.set(`${SCAN_EDGES}:${r.edge_id}`, r.edge_code ?? null);
+        }
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+      }
+    }
     // A surface scan a row was added as: readable by the caller (reference data) or not named; its label is the insert or edge code and the condition.
     const scans = new Map();
     const scanIds = [...new Set(pairs.filter(([c, id]) => c === SURFACE_SCANS && isUuid(id)).map(([, id]) => String(id)))];
@@ -885,6 +917,15 @@ export function mount(router, context, deps = {}) {
   }
   const linkKey = (collection, recordId, fileId) => `${collection}:${recordId}:${fileId}`;
 
+  // 409 ALREADY_ADDED for the first fresh surface scan entry whose file already has a scan row. One query for the whole request.
+  async function requireNoScan(trx, entries) {
+    const scans = entries.filter((e) => e.collection === SURFACE_SCANS);
+    if (!scans.length) return;
+    const have = new Set(rowsOf(await trx.raw(SQL.scansOfFiles, [scans.map((e) => e.cand.directus_files_id).join(',')])).map((r) => String(r.directus_files_id)));
+    const hit = scans.find((e) => have.has(String(e.cand.directus_files_id)));
+    if (hit) throw ERRORS.alreadyAdded(hit.cand.candidate_id);
+  }
+
   // Reads the insert, edge or operation a scan names as the caller (their read permission and row rules apply): a record that is not there and one
   // the caller cannot see are the same 404, so no id is confirmed; a collection the caller may not read at all is Directus's 403.
   async function requireScanRefs(trx, { acc, schema, entries }) {
@@ -922,7 +963,7 @@ export function mount(router, context, deps = {}) {
     } catch (err) {
       if (isUnique(err)) throw ERRORS.alreadyAdded(cand.candidate_id);
       if (isDenied(err)) throw ERRORS.scanNotAllowed(cand.candidate_id);
-      if (err?.code === 'INVALID_FOREIGN_KEY' || err?.code === '23503') throw new HttpError(404, 'NOT_FOUND', 'That insert, edge, operation or file no longer exists.', { candidate_id: cand.candidate_id });
+      if (err?.code === 'INVALID_FOREIGN_KEY' || err?.code === '23503') throw new HttpError(404, 'NOT_FOUND', 'That insert, edge, operation or file no longer exists.', { candidate_id: cand.candidate_id, collection: SURFACE_SCANS });
       if (err?.status === 400 && typeof err.message === 'string') throw badInput(err.message);
       throw err;
     }
@@ -1019,6 +1060,9 @@ export function mount(router, context, deps = {}) {
       for (const e of links) if (!editable.has(`${e.collection}:${e.recordId}`)) throw ERRORS.notEditable(e.cand.candidate_id, e.collection, e.recordId);
       const there = await existingLinks(trx, links.map((e) => ({ collection: e.collection, recordId: e.recordId, fileId: e.cand.directus_files_id })));
       for (const e of links) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw ERRORS.alreadyOnRecord(e.cand.candidate_id);
+      // a file that already has a surface scan (added through the Alicona dialog, or by someone else) is treated like an already-linked file: 409 up front,
+      // before any record is read or written (the unique constraints would also refuse the same insert or edge, but not another one)
+      await requireNoScan(trx, fresh);
       await requireScanRefs(trx, { acc, schema, entries: fresh });
       // nothing newly linked (the same person repeating a link): no batch, a count of 0, never the old batch id
       const batchId = fresh.length ? newId() : null;
@@ -1201,7 +1245,7 @@ export function mount(router, context, deps = {}) {
 
   router.get('/summary', route(async ({ res, acc }) => {
     const scope = await scopeOf(acc);
-    const rows = scope.personId ? rowsOf(await database.raw(SQL.summary, [scope.personId, scope.teamIds.join(',')])) : [];
+    const rows = scope.personId ? rowsOf(await database.raw((await scanTableAvailable()) ? SQL.summaryWithScans : SQL.summary, [scope.personId, scope.teamIds.join(',')])) : [];
     res.json({ data: shapeSummary(rows, scope, scope.teams, scope.person) });
   }));
 
@@ -1210,8 +1254,9 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     requireOwnerVisible(scope, f);
     const schema = await schemaOf(req);
-    const page = buildListQuery(scope, f);
-    const total = buildListQuery(scope, f, { count: true });
+    const scans = await scanTableAvailable();
+    const page = buildListQuery(scope, f, { scans });
+    const total = buildListQuery(scope, f, { count: true, scans });
     const rows = (rowsOf(await database.raw(page.sql, page.bindings)));
     const [{ total: count } = { total: 0 }] = rowsOf(await database.raw(total.sql, total.bindings));
     const pairs = rows.flatMap((r) => [

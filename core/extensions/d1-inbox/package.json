@@ -2,7 +2,7 @@
   "name": "directus-extension-d1-inbox",
   "version": "1.0.0",
   "type": "module",
-  "description": "/d1-inbox: the Inbox of found files on the server. Lists the files the inbox crawler found in a person's or team's folder, links them to samples, operations and tests as the caller (edit rights checked), undoes a batch, queues a rescan, keeps the auto-link opt-in, and answers the crawler's auto-link calls (machine secret).",
+  "description": "/d1-inbox: the Inbox of found files on the server. Lists the files the inbox crawler found in a person's or team's folder, links them to samples, operations and tests as the caller (edit rights checked), adds a surface scan file to an insert or edge as the caller (Directus create permission), undoes a batch, queues a rescan, keeps the auto-link opt-in, and answers the crawler's auto-link calls (machine secret).",
   "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
   "directus:extension": {
     "type": "endpoint",

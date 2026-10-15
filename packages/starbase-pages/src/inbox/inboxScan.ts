@@ -155,7 +155,9 @@ export function scanErrorText(e: unknown): { message: string; field: string | nu
 	const own = e.message || 'Could not add that surface scan.';
 	switch (e.code) {
 		case 'INVALID_PAYLOAD': return { message: (field && FIELD_TEXT[field]) || own, field };
-		case 'NOT_FOUND': return { message: 'That insert, edge or operation does not exist, or you cannot see it. Choose another.', field: null };
+		// d1-inbox says which: a missing or unreadable insert, edge or operation carries collection 'surface_scans' (scanRefMissing); a file that is not in
+		// the person's inbox (notInInbox) carries only the candidate id
+		case 'NOT_FOUND': return { message: e.extensions?.collection === SURFACE_SCANS ? 'That insert, edge or operation does not exist, or you cannot see it. Choose another.' : 'That file is not in your inbox.', field: null };
 		case 'FORBIDDEN': return { message: 'You are not allowed to add surface scans.', field: null };
 		case 'READ_ONLY_ROLE': return { message: 'Your role is read-only, so you cannot add surface scans.', field: null };
 		case 'ALREADY_ADDED': return { message: 'That file is already added as a surface scan of this insert or edge.', field: null };

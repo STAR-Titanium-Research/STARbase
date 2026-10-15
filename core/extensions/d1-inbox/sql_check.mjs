@@ -4,7 +4,8 @@
 // and then runs the summary, list and accept statements on seeded rows. Run by hand: node core/extensions/d1-inbox/sql_check.mjs | psql ...
 //
 // Names: the SQL key in lower snake case, dots as underscores (junctionFindMany.physical_samples -> junctionfindmany_physical_samples), plus
-// count_new, list_new, accept_open, accept_after and similar for the dynamic queries.
+// count_new, list_new, list_new_scans, accept_open, accept_after and similar for the dynamic queries (the _scans ones are the variants for a database that
+// has the surface_scans table).
 import { SQL, buildListQuery, parseFileFilters } from './index.js';
 
 const numbered = (sql) => {
@@ -31,6 +32,9 @@ for (const [name, query] of Object.entries(variants)) {
   const f = parseFileFilters(query);
   prepare(`list_${name}`, buildListQuery(scope, f).sql);
   prepare(`count_${name}`, buildListQuery(scope, f, { count: true }).sql);
+  // where the surface_scans table exists the endpoint also leaves out undecided surface scan files that already have a scan
+  prepare(`list_${name}_scans`, buildListQuery(scope, f, { scans: true }).sql);
+  prepare(`count_${name}_scans`, buildListQuery(scope, f, { count: true, scans: true }).sql);
 }
 const open = parseFileFilters({}, { defaultTab: 'open' });
 prepare('accept_open', buildListQuery(scope, open, { accept: true, pageSize: 500 }).sql);

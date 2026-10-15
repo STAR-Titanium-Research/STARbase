@@ -6745,11 +6745,32 @@ CREATE TEMP TABLE ib_st AS EXECUTE scantableexists;
 SELECT 'ib_scan_table:' || available FROM ib_st;
 CREATE TEMP TABLE ib_sb AS EXECUTE scanbyid('a1b00000-0000-4000-8000-000000000006');
 SELECT 'ib_scan_by_id:' || (insert_id = 'a1b00000-0000-4000-8000-000000000005')::text || ':' || (edge_id IS NULL)::text || ':' || (directus_files_id = 'a1b00000-0000-4000-8000-000000000107')::text FROM ib_sb;
+-- S5: the scan row above is on the file of seed g (a surface scan, still undecided here). Where the table exists the summary and the new/older/open lists
+-- leave g out (the Alicona dialog already added it); a surface scan file with NO scan row (h is made one for this check) is still counted and listed; the
+-- queries without the exclusion (an older database) are unchanged; the linked and dismissed tabs keep scan files.
+UPDATE d1_private.file_candidates SET kind = 'surface_scan' WHERE rel_path = 'Users/ibx1/h.tif';
+CREATE TEMP TABLE ib_sm_plain AS EXECUTE summary('$IB_P', '');
+SELECT 'ib_scan_summary_plain:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FROM ib_sm_plain;
+CREATE TEMP TABLE ib_sm_scans AS EXECUTE summarywithscans('$IB_P', '');
+SELECT 'ib_scan_summary_excl:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FROM ib_sm_scans;
+CREATE TEMP TABLE ib_cnt_scans AS EXECUTE count_new_scans('$IB_P', '');
+SELECT 'ib_scan_count_excl:' || total FROM ib_cnt_scans;
+CREATE TEMP TABLE ib_ls_scans AS EXECUTE list_new_scans('$IB_P', '', 50, 0);
+SELECT 'ib_scan_list_excl:' || (count(*) FILTER (WHERE rel_path = 'Users/ibx1/g.tif') || ':' || count(*) FILTER (WHERE rel_path = 'Users/ibx1/h.tif')) FROM ib_ls_scans;
+CREATE TEMP TABLE ib_ls_old AS EXECUTE list_new('$IB_P', '', 50, 0);
+SELECT 'ib_scan_list_plain:' || count(*) FILTER (WHERE rel_path = 'Users/ibx1/g.tif') FROM ib_ls_old;
+CREATE TEMP TABLE ib_open_scans AS EXECUTE count_open_scans('$IB_P', '');
+CREATE TEMP TABLE ib_open_plain AS EXECUTE count_open('$IB_P', '');
+SELECT 'ib_scan_open_diff:' || ((SELECT total FROM ib_open_plain) - (SELECT total FROM ib_open_scans));
+CREATE TEMP TABLE ib_swf AS EXECUTE scansoffiles('a1b00000-0000-4000-8000-000000000107,a1b00000-0000-4000-8000-000000000108');
+SELECT 'ib_scans_of_files:' || count(*) || ':' || coalesce(max(directus_files_id::text), '') FROM ib_swf;
 SELECT candidate_id AS ib_g FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/g.tif' \gset
 SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'auto', 'surface_scans', 'a1b00000-0000-4000-8000-000000000006', gen_random_uuid(), :'ib_g')) AS ib_n6 \gset
 SELECT 'ib_scan_linked:' || :ib_n6 || ':' || state || ':' || linked_collection FROM d1_private.file_candidates WHERE candidate_id = :'ib_g';
 CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
+CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
+SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
 ROLLBACK;
 SQL
 )
@@ -6774,6 +6795,14 @@ SQL
     ib_check "ib_relist_foreign:true" "restore / undo: a folder row cached for another owner is left alone"
     ib_check "ib_scan_table:true" "the surface_scans feature check (information_schema) answers yes where the table exists"
     ib_check "ib_scan_by_id:true:true:true" "the scan lookup undo and a repeated add use returns the item and the file"
+    ib_check "ib_scan_summary_plain:6" "summary without the scan exclusion (a database that has no surface_scans table) is unchanged"
+    ib_check "ib_scan_summary_excl:5" "summary with the exclusion leaves out the surface scan file that already has a scan row (g) and still counts one that has none (h)"
+    ib_check "ib_scan_count_excl:8" "the new list's total leaves out the surface scan file that already has a scan row"
+    ib_check "ib_scan_list_excl:0:1" "the new list drops g (it has a scan) and keeps h (a surface scan file with none)"
+    ib_check "ib_scan_list_plain:1" "the list without the exclusion still shows g (older databases)"
+    ib_check "ib_scan_open_diff:1" "the open list's total differs by exactly that one file"
+    ib_check "ib_scans_of_files:1:a1b00000-0000-4000-8000-000000000107" "the up-front check of POST /link finds the files that already have a scan row, and only those"
+    ib_check "ib_scan_list_linked_kept:a1b00000-0000-4000-8000-000000000006" "the linked tab keeps a scan file after the exclusion variant (it is only for undecided tabs)"
     ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"
     ib_check "ib_scan_list:a1b00000-0000-4000-8000-000000000006" "the Recently linked list names the scan id as the linked record without joining a table that may not exist yet"
     ib_check "ib_prefs:1" "the auto-link preference upserts"

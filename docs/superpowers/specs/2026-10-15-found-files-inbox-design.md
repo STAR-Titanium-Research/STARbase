@@ -337,6 +337,7 @@ row); a batch of scans is titled *Added as a surface scan, 1 file*. Live checks:
   Export `people.uni_alias`, `people.scan_while_former`, `teams.share_folder` and `d1_private.inbox_prefs` first.
   After re-applying, an administrator enters the aliases and folders again, every owner gets a first scan, so
   everything found is Older, and previously dismissed files come back as Older (nothing is counted new).
+  A database that applied an EARLIER version of migration 193 (before the review fixes) has neither the auto_undone_at column nor the case-insensitive trigger conditions: roll back 194 then 193 and re-apply, or add the column and recreate the two triggers by hand; nothing live has run it.
 - The crawler runs under the maintainer's personal admin SMB account (can write). Mitigated by the read-only
   mount and the build-failing tests, not by the credential. A read-only account is a follow-up.
 - Folder mtimes must update reliably on the real share (assumed, to be confirmed on it).

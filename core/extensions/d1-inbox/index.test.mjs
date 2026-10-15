@@ -227,7 +227,8 @@ function statement(w, sql, b, txId) {
       w.scanRequests.push(row);
       return [copy(row)];
     }
-    case 'summary': return copy(w.summaryRows);
+    case 'summary': case 'summaryWithScans': return copy(w.summaryRows);
+    case 'scansOfFiles': return [...new Set(csv(b[0]))].filter((id) => w.scans.some((r) => r.directus_files_id === id)).map((id) => ({ directus_files_id: id }));
     case 'scanTableExists': return [{ available: w.scanTable }];
     case 'scanById': return copy(w.scans.filter((r) => r.scan_id === b[0]).map((r) => ({ id: r.scan_id, insert_id: r.insert_id ?? null, edge_id: r.edge_id ?? null, directus_files_id: r.directus_files_id })));
     case 'userForAccountability': return w.users.has(b[0]) ? [copy(w.users.get(b[0]))] : [];
@@ -324,6 +325,11 @@ function fakeServices(w) {
           insert_id: r.insert_id ? { insert_id: r.insert_id, insert_code: w.labels[r.insert_id] } : null,
           edge_id: r.edge_id ? { edge_id: r.edge_id, edge_code: w.labels[r.edge_id] } : null,
         }));
+      }
+      if (this.collection === 'insert_edges' && query.filter.edge_id?._in) {
+        // the label read of the list (S4): the edges the caller may READ (w.refs.insert_edges), with their codes; w.denyRefRead makes the collection forbidden
+        if (w.denyRefRead === 'insert_edges') throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+        return query.filter.edge_id._in.filter((id) => w.refs.insert_edges.has(id)).map((id) => ({ edge_id: id, edge_code: w.labels[id] }));
       }
       const refPk = { cutting_inserts: 'insert_id', insert_edges: 'edge_id', manufacturing_operations: 'operation_id' }[this.collection];
       if (refPk && !query.filter._and && query.filter[refPk]?._eq !== undefined) {
@@ -702,7 +708,7 @@ test('GET /summary: the person and each of their teams, new vs older with a matc
   assert.deepEqual(res.body.data.teams, [{ team_id: TEAM, name: 'SEM team', new: 1, older_matches: 0 }]);
   assert.equal(res.body.data.new, 3);
   assert.equal(res.body.data.older_matches, 3);
-  const q = w.log.find((l) => l.name === 'summary');
+  const q = w.log.find((l) => l.name === 'summaryWithScans');
   assert.equal(q.bindings[0], P.alice, 'the person');
   assert.equal(q.bindings[1], TEAM, 'only the teams Alice is an active member of');
   // a person with no alias yet says so (the UI shows "ask an administrator")
@@ -715,17 +721,17 @@ test('GET /summary: a Former (inactive) person is a member of no team; a login w
   const { call } = setup(w);
   const former = await call('GET /summary', { user: U.former });
   assert.deepEqual(former.body.data.teams, []);
-  assert.equal(w.log.find((l) => l.name === 'summary').bindings[1], '');
+  assert.equal(w.log.find((l) => l.name === 'summaryWithScans').bindings[1], '');
   w.log.length = 0;
   const nobody = await call('GET /summary', { user: U.nobody });
   assert.equal(nobody.statusCode, 200);
   assert.equal(nobody.body.data.person, null);
   assert.deepEqual(nobody.body.data.teams, []);
   assert.equal(nobody.body.data.new, 0);
-  assert.equal(w.log.some((l) => l.name === 'summary'), false, 'no scope, no query');
+  assert.equal(w.log.some((l) => l.name?.startsWith('summary')), false, 'no scope, no query');
   w.log.length = 0;
   await call('GET /summary', { user: U.admin, admin: true });
-  const q = w.log.find((l) => l.name === 'summary');
+  const q = w.log.find((l) => l.name === 'summaryWithScans');
   assert.equal(q.bindings[0], P.admin, 'an administrator counts their own folders, not everyone');
 });
 
@@ -1305,9 +1311,11 @@ test('POST /link, surface scan: a unique violation (the file is already a scan o
   assert.equal(img.state, 'new');
   assert.equal(scan.state, 'new');
   assert.equal(scan.link_batch_id, null);
-  // the same file on the EDGE of that insert is a different pair: allowed
-  const ok = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
-  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  // a file that already has a scan is treated like an already-linked file (S5): another insert or edge is refused the same way
+  const other = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
+  assert.equal(other.statusCode, 409);
+  assert.equal(codeOf(other), 'ALREADY_ADDED');
+  assert.equal(w.scans.length, 1);
   // the raw Postgres code is the same answer
   const w2 = newWorld();
   const scan2 = add(w2, scanCand());
@@ -1350,6 +1358,108 @@ test('POST /link, surface scan: a Lab Viewer is refused as for any link (READ_ON
   assert.equal(w.scans.length, 0);
   assert.equal(w.txCount, 0);
   assert.equal(scan.state, 'new');
+});
+
+// S5: a found .al3d that someone added through the Alicona feature's own dialog has a surface_scans row. The Inbox treats it like a file already linked.
+test('POST /link, surface scan: a file that already has a scan (added through the Alicona dialog) is 409 ALREADY_ADDED up front, before any record is read or written', async () => {
+  const w = newWorld();
+  const done = add(w, scanCand());
+  const fresh = add(w, scanCand());
+  w.scans.push({ scan_id: ID(4802), edge_id: EDGE1, directus_files_id: done.directus_files_id, condition: 'worn', render_status: 'done' });
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh, { condition: 'new' }), scanItem(done, { insert_id: INS2 })] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'ALREADY_ADDED');
+  assert.equal(errorOf(res).extensions.candidate_id, done.candidate_id);
+  assert.equal(w.items.filter((i) => i.collection === 'cutting_inserts').length, 0, 'refused before the insert or edge was even read');
+  assert.equal(writesTo(w, 'surface_scans').length, 0);
+  assert.equal(w.scans.length, 1);
+  assert.equal(done.state, 'new');
+  assert.equal(fresh.state, 'new', 'all or nothing');
+  assert.equal(w.log.filter((l) => l.name === 'scansOfFiles').length, 1, 'one query for the whole request');
+  // the other file alone is fine, and a repeat of ITS add is the idempotent answer, not this refusal
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh)] } })).statusCode, 200);
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh)] } })).body.data.items[0].already_linked, true);
+});
+
+test('POST /link: a surface scan file that already has a scan is still never linked to a sample, operation or test (409 SURFACE_SCAN)', async () => {
+  const w = newWorld();
+  const done = add(w, scanCand());
+  w.scans.push({ scan_id: ID(4803), insert_id: INS1, directus_files_id: done.directus_files_id, condition: 'worn', render_status: 'done' });
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(done)] } });
+  assert.equal(codeOf(res), 'SURFACE_SCAN');
+});
+
+test('GET /summary: counts exclude undecided surface scan files that already have a scan, where the table exists; an older database uses the old query', async () => {
+  const w = newWorld();
+  const { call } = setup(w);
+  await call('GET /summary', { user: U.alice });
+  assert.equal(w.log.filter((l) => l.name === 'summaryWithScans').length, 1);
+  assert.equal(w.log.filter((l) => l.name === 'summary').length, 0);
+  assert.match(SQL.summaryWithScans, /NOT \(c\.kind = 'surface_scan' AND EXISTS \(SELECT 1 FROM surface_scans s WHERE s\.directus_files_id = c\.directus_files_id\)\)/);
+  assert.doesNotMatch(SQL.summary, /surface_scans/, 'the plain query must run where the table does not exist yet');
+  // a database without the table (an older one): the plain query, and no read of surface_scans anywhere
+  const old = newWorld();
+  old.scanTable = false;
+  await setup(old).call('GET /summary', { user: U.alice });
+  assert.equal(old.log.filter((l) => l.name === 'summary').length, 1);
+  assert.equal(old.log.filter((l) => l.name === 'summaryWithScans').length, 0);
+  assert.equal(old.log.some((l) => /surface_scans/.test(l.sql) && l.name !== 'scanTableExists'), false);
+});
+
+test('GET /files: the new, older and open lists (and their totals) leave out undecided surface scan files that already have a scan; linked and dismissed keep them', async () => {
+  const w = newWorld();
+  const { call } = setup(w);
+  const clause = /NOT \(c\.kind = 'surface_scan' AND EXISTS \(SELECT 1 FROM surface_scans s WHERE s\.directus_files_id = c\.directus_files_id\)\)/;
+  const sqlOf = () => w.log.filter((l) => !l.name && /^SELECT /.test(l.sql)).map((l) => l.sql);
+  for (const tab of ['new', 'older', 'open']) {
+    w.log.length = 0;
+    assert.equal((await call('GET /files', { user: U.alice, query: { tab } })).statusCode, 200);
+    const queries = sqlOf();
+    assert.equal(queries.length, 2, `${tab}: the page and its total`);
+    for (const q of queries) assert.match(q, clause, tab);
+  }
+  for (const tab of ['linked', 'dismissed']) {
+    w.log.length = 0;
+    await call('GET /files', { user: U.alice, query: { tab } });
+    for (const q of sqlOf()) assert.doesNotMatch(q, /FROM surface_scans/, tab);
+  }
+  // an older database: no table, so the clause is not in the SQL at all
+  const old = newWorld();
+  old.scanTable = false;
+  await setup(old).call('GET /files', { user: U.alice, query: { tab: 'new' } });
+  for (const l of old.log.filter((x) => !x.name && /^SELECT /.test(x.sql))) assert.doesNotMatch(l.sql, /FROM surface_scans/);
+});
+
+test('the SQL: buildListQuery adds the scan exclusion only when asked, for undecided tabs only, and never to accept-all (it never takes a scan)', () => {
+  const scope = { personId: P.alice, teamIds: [], admin: false };
+  const clause = /surface_scans s WHERE s\.directus_files_id = c\.directus_files_id/;
+  for (const tab of ['new', 'older', 'open']) {
+    const f = parseFileFilters({ tab });
+    assert.doesNotMatch(buildListQuery(scope, f).sql, clause, 'off by default (older databases)');
+    assert.match(buildListQuery(scope, f, { scans: true }).sql, clause);
+    assert.match(buildListQuery(scope, f, { scans: true, count: true }).sql, clause);
+  }
+  for (const tab of ['linked', 'dismissed']) assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab }), { scans: true }).sql, clause);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({}, { defaultTab: 'open' }), { accept: true, scans: true }).sql, clause);
+});
+
+test('POST /link, surface scan: a foreign key violation at create (the insert, edge, operation or file vanished) is 404 NOT_FOUND naming collection surface_scans, as the client reads it', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  w.failCreateFor = (collection) => { if (collection === 'surface_scans') throw Object.assign(new Error('fk'), { code: 'INVALID_FOREIGN_KEY' }); };
+  const res = await setup(w).call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(res.statusCode, 404);
+  assert.equal(codeOf(res), 'NOT_FOUND');
+  assert.equal(errorOf(res).extensions.collection, 'surface_scans');
+  // a file that is not the caller's to see is a 404 too, but without it: the client says "not in your inbox"
+  const other = add(w, scanCand({ owner_person_id: P.carol }));
+  w.failCreateFor = null;
+  const gone = await setup(w).call('POST /link', { user: U.alice, body: { items: [scanItem(other)] } });
+  assert.equal(codeOf(gone), 'NOT_FOUND');
+  assert.equal(errorOf(gone).extensions.collection, undefined);
+  assert.equal(errorOf(gone).message, 'That file is not in your inbox.');
 });
 
 test('POST /link, surface scan: a missing insert, edge or operation (or one the caller cannot read) is 404; a refused read or create is 403; nothing stays written', async () => {
@@ -1588,6 +1698,84 @@ test('GET /files: a row added as a surface scan names the scan, its insert or ed
   assert.equal(gone.body.data[0].linked_collection, null);
   assert.equal(gone.body.data[0].linked_record_id, null);
   assert.equal('linked_insert_id' in gone.body.data[0], false);
+});
+
+// S4: the file name of a surface scan can name an edge ("H13A-#2-fC"): the crawler suggests it (insert_edges, match_strength edge_code) and the F2 dialog
+// starts with that edge chosen, so the list must NAME the edge to a caller who can read it. Never editable (a scan is added through Directus's create
+// permission on surface_scans, not a record-edit right), and only a surface scan candidate carries it.
+const edgeCand = (over = {}, edge = EDGE1) => scanCand({
+  match_strength: 'edge_code', matches: [{ collection: 'insert_edges', record_id: edge, via: 'edge_code', token: 'INS-001-E1' }],
+  suggested_collection: 'insert_edges', suggested_record_id: edge, ...over,
+});
+
+test('GET /files: an edge named by a surface scan file is suggested to a caller who can read the edge (id and code), never as editable', async () => {
+  const w = newWorld();
+  const scan = edgeCand();
+  w.listRows = [listRow(scan)];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const [row] = res.body.data;
+  assert.equal(row.suggested_collection, 'insert_edges');
+  assert.equal(row.suggested_record_id, EDGE1);
+  assert.equal(row.suggested_label, 'INS-001-E1', 'the edge code, read as the caller');
+  assert.equal(row.match_strength, 'edge_code');
+  assert.deepEqual(row.matches.map((m) => m.record_id), [EDGE1]);
+  assert.equal(row.suggested_can_edit, false, 'an edge is never in the editable set: adding a scan is not editing the edge');
+  const read = w.items.find((i) => i.op === 'read' && i.collection === 'insert_edges');
+  assert.equal(read.accountability.user, U.alice, 'read as the caller');
+  assert.deepEqual(read.query.fields.sort(), ['edge_code', 'edge_id']);
+  // an administrator is no exception to "never editable"
+  const admin = await call('GET /files', { user: U.admin, admin: true, role: ID(80) });
+  assert.equal(admin.body.data[0].suggested_can_edit, false);
+});
+
+test('GET /files: an edge the caller cannot read (or whose collection is forbidden) is named nowhere: no suggestion, no match, no id', async () => {
+  const w = newWorld();
+  const hidden = ID(299);
+  w.listRows = [listRow(edgeCand({}, hidden))];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice });
+  const [row] = res.body.data;
+  assert.equal(row.suggested_collection, null);
+  assert.equal(row.suggested_record_id, null);
+  assert.equal(row.suggested_label, null);
+  assert.deepEqual(row.matches, []);
+  assert.equal(row.match_strength, 'edge_code', 'the strength is kept');
+  assert.ok(!('suggested_can_edit' in row));
+  assert.equal(JSON.stringify(res.body).includes(hidden), false);
+  // no read permission on insert_edges at all: the list still answers, naming nothing
+  w.listRows = [listRow(edgeCand())];
+  w.denyRefRead = 'insert_edges';
+  const denied = await call('GET /files', { user: U.alice });
+  assert.equal(denied.statusCode, 200);
+  assert.equal(denied.body.data[0].suggested_record_id, null);
+});
+
+test('GET /files: an edge suggestion is passed through for a surface scan candidate only (an image or document named like an edge gets none)', async () => {
+  const w = newWorld();
+  w.listRows = [listRow(edgeCand({ kind: 'sem_image' })), listRow(edgeCand({ kind: 'document' })), listRow(edgeCand())];
+  const { call } = setup(w);
+  const [image, doc, scan] = (await call('GET /files', { user: U.alice })).body.data;
+  for (const r of [image, doc]) {
+    assert.equal(r.suggested_record_id, null);
+    assert.equal(r.suggested_label, null);
+    assert.deepEqual(r.matches, []);
+    assert.ok(!('suggested_can_edit' in r));
+  }
+  assert.equal(scan.suggested_record_id, EDGE1);
+});
+
+test('GET /files: one insert_edges read per page, however many rows name an edge; none when no row does', async () => {
+  const w = newWorld();
+  w.listRows = [listRow(edgeCand()), listRow(edgeCand()), listRow(cand())];
+  const { call } = setup(w);
+  await call('GET /files', { user: U.alice });
+  assert.equal(w.items.filter((i) => i.op === 'read' && i.collection === 'insert_edges').length, 1);
+  w.items.length = 0;
+  w.listRows = [listRow(cand())];
+  await call('GET /files', { user: U.alice });
+  assert.equal(w.items.filter((i) => i.collection === 'insert_edges').length, 0);
 });
 
 test('the SQL: linked_record_id of the list falls back to the scan id for a row added as a surface scan; scan SQL names only the scans table and information_schema', () => {

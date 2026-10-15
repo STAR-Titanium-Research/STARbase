@@ -77,6 +77,13 @@ const SURFACE_SCAN = row({
   candidate_id: ID(1003), directus_files_id: ID(3003), name: 'scan_0007.nid', mime_type: null, kind: 'surface_scan', kind_confidence: '0.80',
   rel_path: 'Users/ali1/afm/scan_0007.nid', size_bytes: '52428800',
 });
+// A surface scan whose file name points at an insert edge ("H13A-#2-fC"): the server names the edge (a suggestion the F2 dialog starts with) to a caller
+// who can read it. match_strength edge_code is never an exact short ID, so Accept all never touches it.
+const EDGE_SCAN = row({
+  candidate_id: ID(1014), directus_files_id: ID(3014), name: 'H13A-2_fC_new.al3d', mime_type: null, kind: 'surface_scan', kind_confidence: '1.00',
+  match_strength: 'edge_code', matches: [{ collection: 'insert_edges', record_id: EDGE, via: 'edge_code', token: 'H13A-#2-fC' }],
+  suggested_collection: 'insert_edges', suggested_record_id: EDGE, rel_path: 'Users/ali1/alicona/H13A-2_fC_new.al3d', size_bytes: '52428800',
+});
 const DOCUMENT = row({
   candidate_id: ID(1004), directus_files_id: ID(3004), name: 'S-0042_notes.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null,
   match_strength: 'code', matches: named(S_EDIT, 'S-0042', 'code'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/S-0042_notes.pdf', size_bytes: '120000',
@@ -122,8 +129,8 @@ const DISMISSED = row({
 const INFO = {
   // who is asking (Alice, in the SEM team): a copy names the owner of its original only for her own folder and her teams
   viewer: { personId: P_ALICE, teamIds: [TEAM], admin: false },
-  readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`]),
-  labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)']]),
+  readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`, `insert_edges:${EDGE}`]),
+  labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)'], [`insert_edges:${EDGE}`, 'H13A-#2-fC']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
   // a surface scan the list names: the edge (or insert) it was added to
   scans: new Map([[SCAN, { insert_id: null, edge_id: EDGE }]]),
@@ -165,7 +172,7 @@ const summary = (description, rows, scope, teams, person) => ok(description, req
 
 // ---- accept-all --------------------------------------------------------------------------------------------------------------
 
-const ALL_NEW = [NEW_ORIGINAL, COPY, SURFACE_SCAN, DOCUMENT, NOT_EDITABLE, HIDDEN_RECORD, DOC_EXACT];
+const ALL_NEW = [NEW_ORIGINAL, COPY, SURFACE_SCAN, EDGE_SCAN, DOCUMENT, NOT_EDITABLE, HIDDEN_RECORD, DOC_EXACT];
 const FILTER = { tab: 'new', strength: 'short_id' };
 // ---- the admin page ----------------------------------------------------------------------------------------------------------
 

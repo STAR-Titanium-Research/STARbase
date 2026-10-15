@@ -93,6 +93,16 @@ test('a Caddyfile change plans the directusUi job (the CSP test reads the Caddyf
   }
 });
 
+test('the d1-inbox extension plans the schema job (phase1 runs its SQL, core/extensions/d1-inbox/sql_check.mjs) and the directusUi job (the client contract test reads its fixtures)', () => {
+  for (const f of ['core/extensions/d1-inbox/index.js', 'core/extensions/d1-inbox/sql_check.mjs', 'core/extensions/d1-inbox/contract_fixtures.mjs']) {
+    const p = plan([f], EXT);
+    assert.equal(p.migrations, true, `${f} migrations`);
+    assert.equal(p.directusUi, true, `${f} directusUi`);
+  }
+  // the golden files the client test replays plan directusUi, and phase1 (tests/) is already covered by its own path
+  assert.equal(plan(['tests/fixtures/d1-inbox/files_new.json'], EXT).directusUi, true);
+});
+
 test('no job watches an extension that no longer exists', () => {
   for (const [job, paths] of Object.entries(JOBS)) {
     for (const p of paths) {

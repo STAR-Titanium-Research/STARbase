@@ -1974,13 +1974,7 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   unchanged, and a document the indexer registered earlier is not marked `found_by`. Run `make index-archive
   --fingerprint` on a test folder with a document in it, check what was read, and decide: restrict both tools
   to the folders the lab agreed to index, or accept it. Since: found files inbox, final review (S5).
-- [ ] **IF16 — An undone auto-link stays undone (live).** With auto-link on for a test person, save an image
-  with an exact short ID of a sample they can edit; let the crawler auto-link it, then **Undo** it in the Inbox
-  (*Recently auto-linked*). Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
-  forgets its in-process list of answered candidates) and run another scan (*Rescan my folder*). Expect the file
-  to stay in the *New* list, unlinked, with no new auto-link and no `auto-link:` offer for it in the crawler's
-  log; a different exact-short-ID image saved afterwards is still auto-linked. Needs the server stream's
-  `file_candidates.auto_undone_at` (migration 193). Since: found files inbox, final review (B1).
+- [ ] **IF16 — An undone auto-link stays undone (live).** See **IF40**, which covers this check as well (the crawler restart and its log).
 - [ ] **IF17 — Pausing the crawler (SQL).** There is no admin route or tab for this. On d1-server run
   `UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused'` (psql in the `postgres` container).
   Within about 30 seconds expect the admin tab to show the crawler as paused but still online (the heartbeat keeps going), a file
@@ -2075,14 +2069,17 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   30 seconds; a scheduled scan, a first one especially, can run for hours), and a second press while one
   waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
   administrators. Since: Inbox stream D.
-- [ ] **IF40 — An undone auto-link stays undone.** With auto-link on for a test person, save an image with an
-  exact short ID into their folder and let the scan auto-link it. Open **Recently auto-linked** and **Undo** it.
-  Run *Rescan my folder* twice (and wait for a scheduled scan): expect the file to stay in the **New** list, not to
-  be linked again, and no new `sample_data_files` row. Then **Link** it by hand: that must work. Also undo a link
-  made by hand and expect the next auto-link scan to be free to link it (only an undone *auto* link is
-  remembered, in `file_candidates.auto_undone_at`). Needs the migration 193 amended in place (a database that
-  already applied the first 193 needs `ALTER TABLE d1_private.file_candidates ADD COLUMN auto_undone_at
-  TIMESTAMPTZ`, or a roll back and re-apply). Since: found files inbox, final review fixes (server).
+- [ ] **IF40 — An undone auto-link stays undone (also the old IF16).** With auto-link on for a test person, save an image with an
+  exact short ID of a sample they can edit into their folder and let the crawler auto-link it. Open **Recently
+  auto-linked** and **Undo** it. Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
+  forgets its in-process list of answered candidates), then run *Rescan my folder* twice (and wait for a scheduled
+  scan): expect the file to stay in the **New** list, not to be linked again, no new `sample_data_files` row and no
+  `auto-link:` offer for it in the crawler's log; a different exact-short-ID image saved afterwards is still
+  auto-linked. Then **Link** the first file by hand: that must work. Also undo a link made by hand and expect the
+  next auto-link scan to be free to link it (only an undone *auto* link is remembered, in
+  `file_candidates.auto_undone_at`). Needs the migration 193 amended in place (a database that already applied the
+  first 193 needs `ALTER TABLE d1_private.file_candidates ADD COLUMN auto_undone_at TIMESTAMPTZ`, or a roll back and
+  re-apply). Since: found files inbox, final review fixes (server); merged with IF16 (B1).
 - [ ] **IF41 — A file that vanished while linked or dismissed is marked gone after Undo or Restore.** Save an image
   in a test folder, let the scan find it, **Dismiss** it (another file: Link it). Delete the file from the share, let
   a scan run (it does not mark a decided file gone), then **Restore** (or **Undo**) it. Expect the next scan, or
@@ -2112,6 +2109,20 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   short-ID files for records you can edit, open **Accept all**: expect the confirm to say it links about 500 at a time
   (never more than 999) and that you can run it again, the batch to link no more than 999, and a second run to take the
   rest. Since: found files inbox, final review fixes (UI).
+- [ ] **IF45 — A surface scan file named after an edge arrives with that edge chosen.** Save an `.al3d` (or another
+  surface scan file) whose name contains an existing insert edge code (for example `H13A-#2-fC`) into a test
+  folder and let the scan find it. In the Inbox, expect the row to say it matches the edge, and **Add a surface
+  scan** to open with that edge already chosen in the picker (you still choose the condition). As a Lab Viewer, or
+  with a Restricted insert you cannot read, expect the dialog to open with nothing chosen and the row to name no
+  edge. A document or image named like an edge is not given the edge as a suggestion. Since: found files inbox,
+  re-review fixes (server, S4).
+- [ ] **IF46 — A scan added through the Alicona feature's own dialog leaves the Inbox.** Save an `.al3d` into a
+  test folder, let the scan find it, and add the same file as a surface scan in the Alicona (Surface scans) dialog
+  instead of the Inbox. Reload the Inbox and Home: expect the file to be gone from **New** and **Older** and not counted
+  in the badge (nor is it under **Recently linked**: it was never linked here). Pressing *Add a
+  surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
+  this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
+  re-review fixes (server, S5).
 
 ## Done
 
