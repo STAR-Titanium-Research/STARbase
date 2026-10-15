@@ -3847,9 +3847,9 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates), 20261014000177 (batches) and 20261015000192 (surface_scans), custom-rows collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'surface_scans');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3858,8 +3858,8 @@ $tr_down
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates and batches go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches');
+-- the replay's own rows for label_templates, batches and surface_scans go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -6149,6 +6149,7 @@ ss_out=$($PSQL 2>&1 <<SQL
 BEGIN;
 $ss_down
 SELECT 'down_table:' || coalesce(to_regclass('surface_scans')::text, 'gone');
+SELECT 'down_function:' || count(*) FROM pg_proc WHERE proname = 'surface_scans_reset_render';
 SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection = 'surface_scans')
   || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'surface_scans')
   || ',' || (SELECT count(*) FROM directus_permissions WHERE collection = 'surface_scans')
@@ -6179,7 +6180,7 @@ INSERT INTO tool_boxes (tool_box_id, tool_box_code) VALUES ('${SSB}b1', 'TEST-SS
 INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id) VALUES
   ('${SSB}b2', 'TEST-SS-BOX-1', '${SSB}b1'), ('${SSB}b4', 'TEST-SS-BOX-2', '${SSB}b1');
 INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier) VALUES ('${SSB}b3', 'TEST-SS-BOX-1A', '${SSB}b2', 'A');
-INSERT INTO directus_files (id) VALUES ('${SSB}d1'), ('${SSB}d2');
+INSERT INTO directus_files (id) VALUES ('${SSB}d1'), ('${SSB}d2'), ('${SSB}d3');
 INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES ('${SSB}a1', 'T-SS', 'surface scan test method');
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${SSB}a2', 'TEST-SS-001');
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code) VALUES ('${SSB}a3', '${SSB}a1', '${SSB}a2', 'TEST-SS-OP');
@@ -6218,6 +6219,19 @@ ROLLBACK TO SAVEPOINT s1;
 UPDATE surface_scans SET render_status = 'done', cache_key = 'abc', grid_width = 4 WHERE scan_id = '${SSB}c1';
 SELECT 'occ_version:' || version FROM surface_scans WHERE scan_id = '${SSB}c1';
 SELECT 'audit:' || count(*) FROM audit_logs WHERE table_name = 'surface_scans' AND record_id = '${SSB}c1';
+-- changing the file resets a done render; changing anything else, or writing the same file again, does not
+INSERT INTO surface_scans (scan_id, insert_id, directus_files_id, condition) VALUES ('${SSB}c3', '${SSB}b4', '${SSB}d1', 'worn');
+UPDATE surface_scans SET render_status = 'done', cache_key = 'k3', rendered_at = now(), source_format = 'al3d', source_width = 8, source_height = 8,
+  grid_width = 4, grid_height = 4, pixel_pitch_x_um = 1.5, pixel_pitch_y_um = 1.5, z_min_um = -2, z_max_um = 3, render_error = 'old' WHERE scan_id = '${SSB}c3';
+UPDATE surface_scans SET notes = 'edited', condition = 'cleaned' WHERE scan_id = '${SSB}c3';
+UPDATE surface_scans SET directus_files_id = directus_files_id WHERE scan_id = '${SSB}c3';
+UPDATE surface_scans SET directus_files_id = '${SSB}d1' WHERE scan_id = '${SSB}c3';
+SELECT 'keep_render:' || render_status || '/' || cache_key || '/' || grid_width || '/' || z_max_um || '/' || (rendered_at IS NOT NULL) FROM surface_scans WHERE scan_id = '${SSB}c3';
+UPDATE surface_scans SET directus_files_id = '${SSB}d3' WHERE scan_id = '${SSB}c3';
+SELECT 'reset_render:' || render_status || '/' || (cache_key IS NULL AND rendered_at IS NULL AND render_error IS NULL AND source_format IS NULL
+  AND source_width IS NULL AND source_height IS NULL AND grid_width IS NULL AND grid_height IS NULL AND pixel_pitch_x_um IS NULL
+  AND pixel_pitch_y_um IS NULL AND z_min_um IS NULL AND z_max_um IS NULL) || '/' || directus_files_id || '/' || notes
+  FROM surface_scans WHERE scan_id = '${SSB}c3';
 DELETE FROM manufacturing_operations WHERE operation_id = '${SSB}a3';
 SELECT 'operation_cleared:' || (operation_id IS NULL) FROM surface_scans WHERE scan_id = '${SSB}c2';
 DELETE FROM people WHERE person_id = '${SSB}f1';
@@ -6227,7 +6241,7 @@ SELECT 'file_delete_keeps_others:' || count(*) FROM surface_scans;
 DELETE FROM insert_edges WHERE edge_id = '${SSB}b3';
 SELECT 'edge_delete_cascades:' || count(*) FROM surface_scans WHERE scan_id = '${SSB}c2';
 DELETE FROM directus_files WHERE id = '${SSB}d1';
-SELECT 'file_delete_cascades:' || count(*) FROM surface_scans;
+SELECT 'file_delete_cascades:' || count(*) FROM surface_scans WHERE scan_id IN ('${SSB}c1', '${SSB}c2');
 $ss_down
 SELECT 'redown_table:' || coalesce(to_regclass('surface_scans')::text, 'gone');
 ROLLBACK;
@@ -6237,13 +6251,16 @@ ss_check() { grep -qxF "$1" <<<"$ss_out" && ok "$2" || bad "$2 (psql output: $ss
 ss_check "down_table:gone" "down: surface_scans is dropped"
 ss_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
 ss_check "up_comments:0,true" "up: every surface_scans column and the table carry a COMMENT"
-ss_check "up_triggers:audit_surface_scans,occ_surface_scans" "up: audit and OCC triggers are attached"
+ss_check "up_triggers:audit_surface_scans,occ_surface_scans,surface_scans_reset_render" "up: audit, OCC and render-reset triggers are attached"
 ss_check "up_field_rows:27/27/0" "up: every surface_scans column has a Directus field row"
 ss_check "up_worker_fields:13" "up: the worker-filled columns are read-only and hidden from the form"
 ss_check "up_condition_field:select-dropdown/4" "up: condition is a dropdown of four choices"
 ss_check "up_collection:1" "up: surface_scans is a Directus collection"
 ss_check "up_relations:directus_files_id>directus_files,edge_id>insert_edges,insert_id>cutting_inserts,operation_id>manufacturing_operations,owner>directus_users,owner_person_id>people" "up: the item, file, operation and owner columns are Directus relations"
-ss_check 'up_member_perms:create={}/*;delete={}/*;read={}/*;update={}/*' "up: every Lab Member reads, creates, updates and deletes scans (reference data, like insert_edges)"
+ss_check 'up_member_perms:create={}/insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id;delete={}/*;read={}/*;update={}/insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id,render_status,render_error' "up: every Lab Member reads and deletes scans and creates and updates them, but not the worker-filled columns"
+ss_check "keep_render:done/k3/4/3/true" "changing another column, or writing the same file again, keeps the render"
+ss_check "reset_render:pending/true/${SSB}d3/edited" "changing the file sets the scan pending and clears every derived column"
+ss_check "down_function:0" "down: the render-reset function is dropped"
 ss_check 'up_viewer_perms:read={}/*' "up: Lab Viewers read scans"
 ss_check "up_llm_select:false" "up: the text-to-SQL role is not granted surface_scans (migration 168 rule)"
 ss_check "defaults:pending/1/true" "a new scan is pending, version 1, with no render result"
@@ -6255,7 +6272,7 @@ ss_check "occ_version:2" "an update bumps version"
 ss_check "audit:2" "an insert and an update of a scan are audited under its primary key"
 ss_check "operation_cleared:true" "deleting the operation clears operation_id"
 ss_check "owner_cleared:true" "deleting the owner clears owner_person_id"
-ss_check "file_delete_keeps_others:2" "deleting a file with no scan changes no scan"
+ss_check "file_delete_keeps_others:3" "deleting a file with no scan changes no scan"
 ss_check "edge_delete_cascades:0" "deleting an edge deletes its scans"
 ss_check "file_delete_cascades:0" "deleting a file deletes its scans"
 ss_check "redown_table:gone" "down runs again after up"

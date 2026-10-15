@@ -411,8 +411,11 @@ One topography scan of one cutting insert **or** one insert edge (migration `…
 Test on a sample surface stays a Test. The file is a `directus_files` pointer row on the read-only archive share; the
 `surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and fills the `render_*` and
 derived columns. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO. Reference data like
-`insert_edges`: every Lab Member reads and writes, every Lab Viewer reads (ADR-0011); not granted to the Ask-DB role. OCC (`version`)
-and audit triggers as on every mutable table.
+`insert_edges`: every Lab Member reads, creates, updates and deletes, every Lab Viewer reads (ADR-0011); create and update name their
+fields, so the worker-filled columns (`cache_key`, `rendered_at`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*`) cannot be written
+through the API (update also takes `render_status` and `render_error`, which Render again writes). Not granted to the Ask-DB role.
+OCC (`version`) and audit triggers as on every mutable table. Changing `directus_files_id` sets the scan back to `pending` and clears
+everything the worker derived (trigger `surface_scans_reset_render`).
 
 | Column | Type | Description |
 |---|---|---|
