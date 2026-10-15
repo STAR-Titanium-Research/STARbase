@@ -127,6 +127,11 @@ Private schema (not exposed)
                              migration 141 saved and the aliases it added (its down restores and
                              drops them). Not in this dictionary, not exposed by Directus (outside
                              its schema scan), not granted to the LLM role.
+  d1_private.process_drafts, d1_private.process_templates
+                             the process map's edit mode (migration 190, ADR-0018): a person's
+                             unfinished build (DraftBody JSON, private to its owner, deleted when
+                             created) and saved templates for new operations and tests (private,
+                             role or global scope). Reached only through the d1-build endpoint.
 ```
 
 ---
@@ -172,7 +177,7 @@ The central entity. Everything else points to or from here.
 | `inner_diameter_mm` | NUMERIC(10,4) | Bore diameter in mm of a `ring`-form sample; must be below `diameter_mm` (migration `…162`) |
 | `length_mm` | NUMERIC(10,4) | Length in mm |
 | `thickness_mm` | NUMERIC(10,4) | Thickness in mm |
-| `current_status` | TEXT | Lifecycle: active \| consumed \| destroyed \| archived |
+| `current_status` | TEXT | Lifecycle: active \| consumed \| destroyed \| archived \| planned. `planned` (migration `…185`, ADR-0019) = a sample a planned operation is going to make; it has its final code already and turns `active` when that operation is marked done. Filters that mean "exists physically" use `active` |
 | `manufactured_date` | DATE | Date sample was produced |
 | `export_controlled` | BOOLEAN | ITAR/ECJU flag; drives RBAC visibility |
 | `owner_person_id` | UUID FK | References `people.person_id`; the owner. Owner and co-owners may edit the sample; only the owner may delete it ([ADR-0011](adr/0011-row-level-visibility.md)) |
@@ -212,7 +217,11 @@ separate `FAST Runs` and `Machining Operations` spreadsheet tabs.
 | `pass_code` | TEXT | Human-readable operation code, e.g. `TEST-S-F2-30MPM_0.1feed_1DoC` or `22-04-21-MF25-4624-950C_11kN_20dia`. Kept up to date by the database from the operation's fields (`operation_code_for`) unless a person typed a different one; clear it to make it automatic again (not for experiment-sheet rows, whose code is fixed). Not the PK. See "Operation codes" below |
 | `sintering_run_number` | INTEGER (> 0), nullable, no default | FAST/SPS run number as the machine shows it (typed on a hand-logged operation, read from the machine file by the importer). Part of the sintering code; never invented. Unique per machine: the unique index `manufacturing_operations_sintering_run_unique` on (`equipment_id`, `sintering_run_number`) covers sintering rows that have a run number and an equipment set. Added by migration `…156` |
 | `short_id` | TEXT UNIQUE | Permanent short ID (8+ hex characters of `operation_id`), unique across samples, operations and tests. Never changes. Assigned by trigger (migration `…150`) |
-| `operation_date` | TIMESTAMPTZ | When the operation ran |
+| `operation_date` | TIMESTAMPTZ | When the operation ran; empty while the operation is planned |
+| `work_state` | TEXT NOT NULL DEFAULT `'done'` | `planned` \| `done` (migration `…185`, ADR-0019). Every record made before planning existed, and every record a form or importer writes without it, is `done`. Set to `done` by Mark done (`d1-build`), which also sets `operation_date`, `done_by_person_id`, `done_at` and turns the planned output samples `active`. Done back to planned is refused by `d1-access-guard` unless the caller owns the record or is an admin. Reports and counts of "what was done" filter `work_state = 'done'` |
+| `planned_date` | DATE | The day the operation is meant to happen (planned work); `operation_date` stays the day it happened |
+| `done_by_person_id` | UUID FK | `people`, ON DELETE SET NULL: who marked it done (Mark done); NULL for planned operations and ones recorded as done directly |
+| `done_at` | TIMESTAMPTZ | When it was marked done; NULL for planned operations and ones recorded as done directly |
 | `recorded_metadata` | JSONB | Method-specific parameters as designed in Phase 1 — now superseded by typed columns (below) |
 | `capture_software` | TEXT | e.g. `MATLAB ABFP 0.18` — needed to interpret force files |
 | `capture_frequency_khz` | NUMERIC(10,4) | Sampling frequency in kHz (e.g. 25.6) |
@@ -296,7 +305,11 @@ after parsing.
 | `file_size_gb` | NUMERIC | File size in GB as reported by client |
 | `summary_stats` | JSONB | Written by worker: min/max/mean forces, etc. |
 | `plot_uris` | JSONB | JSON array of MinIO URIs for rendered plots |
-| `status` | TEXT | Pipeline state: registered \| pending_processing \| processing \| processed \| analysing \| analysed \| failed (migration `…013`) |
+| `status` | TEXT | Pipeline state: registered \| pending_processing \| processing \| processed \| analysing \| analysed \| failed (migration `…013`). Not whether the test was carried out: that is `work_state` |
+| `work_state` | TEXT NOT NULL DEFAULT `'done'` | `planned` \| `done` (migration `…185`, ADR-0019): whether the test was carried out. A planned test has nothing for the pipeline to process yet. Set to `done` by Mark done (`d1-build`); done back to planned is refused by `d1-access-guard` unless the caller owns the record or is an admin |
+| `planned_date` | DATE | The day the test is meant to happen (planned work); `session_date` stays the day it happened |
+| `done_by_person_id` | UUID FK | `people`, ON DELETE SET NULL: who marked it done; NULL for planned tests and ones recorded as done directly |
+| `done_at` | TIMESTAMPTZ | When it was marked done; NULL for planned tests and ones recorded as done directly |
 
 Since Phase 1: what a test targets is recorded through the `test_sessions_subject`
 M2A junction (a sample, an insert edge, …). `sample_id` and `insert_edge_id` are a

@@ -464,7 +464,7 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('the selection lights its chain (both ways by default); hovering another card shows its neighbours; a wire adds to the chain', async () => {
+  it('the selection lights its chain (both ways by default); hovering a card lights its chain the same way; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
@@ -473,12 +473,17 @@ describe('useProcessMap', () => {
     const chain = map.focusOfHover.value!;
     expect(chain).toEqual(chainFocus(map.graph.value!, 's:s1', 'both'));
     map.hover('s:s2', {} as HTMLElement);
-    expect(map.focusOfHover.value).not.toEqual(chain);
-    expect(map.focusOfHover.value).toMatchObject({ dim: true });
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'both'));
     map.hover(null);
     expect(map.focusOfHover.value).toEqual(chain);
     map.setChainDir('up');
     expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s1', 'up'));
+    // The choice holds for hovering too: another card lights only what came before it.
+    map.hover('s:s2', {} as HTMLElement);
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'up'));
+    map.setChainDir('down');
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'down'));
+    map.hover(null);
     const wire = map.graph.value!.wires[0].id;
     map.hover(wire, {} as HTMLElement);
     expect(map.focusOfHover.value!.wires.has(wire)).toBe(true);
