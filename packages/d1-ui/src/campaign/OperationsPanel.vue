@@ -26,6 +26,8 @@ const props = defineProps<{
 	section: SectionState<any[]>;
 	/** The role may not read the force-analysis table: show a dash instead of "not analysed". */
 	forceHidden?: boolean;
+	/** A Lab Viewer (host.canViewAllAccess): looks at the list and changes nothing, so no picker and no remove or add button. */
+	readOnly?: boolean;
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
@@ -125,14 +127,15 @@ async function setCampaign(id: string, label: string, campaign: string | null) {
 							<span v-if="forceHidden || o.diag === 'none'" class="dim">—</span>
 							<span v-else :title="o.diag_error || ''"><StatusBadge kind="diag" :value="o.diag" /></span>
 						</td>
-						<td class="act"><button class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(o.operation_id, operationLabel(o, o.sample_code), null)"><v-icon name="close" x-small /></button></td>
+						<td class="act"><button v-if="!readOnly" class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(o.operation_id, operationLabel(o, o.sample_code), null)"><v-icon name="close" x-small /></button></td>
 					</tr>
 				</tbody>
 			</table>
-			<p v-else class="d1-cempty">No operations yet. Add them below.</p>
+			<p v-else class="d1-cempty">{{ readOnly ? 'No operations yet.' : 'No operations yet. Add them below.' }}</p>
 			<p v-if="rows.length > LIST_CAP" class="d1-ccap">Showing the first {{ LIST_CAP }} of {{ rows.length }} operations. The matrix above has them all.</p>
 		</LoadState>
 		<PickerBox
+			v-if="!readOnly"
 			v-model="search"
 			:placeholder="category ? `Add ${category} operations…` : 'Add operations…'"
 			:filter-label="category ? `filtered: ${category}` : undefined"

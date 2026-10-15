@@ -55,7 +55,7 @@
 ### Task 2: End-to-end export and docs
 
 **Files:**
-- Modify: `tests/ui/specs/19-process-map.spec.ts` (export scenario)
+- Modify: `tests/ui/specs/21-process-map.spec.ts` (export scenario)
 - Modify: `docs/wiki/database/explorer-pages.md` "Process map" section (export; also fix: probable batches are guessed for operations only, and say "the Show section")
 - Modify: `docs/runbooks/starbase.md` batches section lead-in (the Batch field/collection need steps 1–2 only; step 3 is for the map)
 

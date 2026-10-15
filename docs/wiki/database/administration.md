@@ -54,9 +54,8 @@ make migrate-down     # roll back the latest
 
 **Restart Directus right after a migration that changes Directus metadata** (relations, fields,
 permissions): it reads them at start-up and caches them, so until then the old rules and no new
-aliases are in force. Migration `20261007000141` (row-level visibility, ADR-0011) is one: apply it,
-flush Redis and `docker restart` Directus (or `bash scripts/configure_all.sh`, which does both),
-before members use the system. The steps are in
+aliases are in force. Migration `20261007000141` (row-level visibility, ADR-0011) is one: apply it
+and `docker compose restart directus` before members use the system. Directus here caches schema and permissions in memory (no `CACHE_*`/Redis settings), so a restart clears them; Redis holds the rq queues of heavy-data-worker and analysis-worker, so do not `FLUSHALL` it. The steps are in
 [`upgrade-2026-10-row-level-visibility.md`](../../runbooks/upgrade-2026-10-row-level-visibility.md).
 
 Every new table and column needs a `COMMENT`; it is the data dictionary. CI applies every
@@ -73,7 +72,7 @@ Collections' display settings, field interfaces, relations and presets are versi
 SQL in `scripts/configure_*.sql`. Apply them in order with:
 
 ```bash
-bash scripts/configure_all.sh      # applies them, flushes Redis, restarts Directus
+bash scripts/configure_all.sh      # applies them, restarts Directus (fresh database only)
 ```
 
 Roles, policies and user accounts come from `scripts/configure_users_and_policies.sql`, applied

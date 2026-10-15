@@ -34,9 +34,9 @@ number. "Since" is the PR that shipped the code.
 ## A. Live Directus (local stack with real data)
 
 Start with `make up` and apply migrations (`make migrate`); on a stack that already has its Directus
-configuration the migrations carry every metadata change, so there is nothing else to apply. Flush Redis and restart Directus so new
-extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
-`docker restart d1-database-directus-1`), then sign in as each role named in the step.
+configuration the migrations carry every metadata change, so there is nothing else to apply. Restart Directus so new
+extensions load and its cache is fresh (`docker compose restart directus`), then sign in as each role named in the step.
+Directus here caches schema and permissions in memory (no `CACHE_*`/Redis settings), so a restart clears them; Redis holds the rq queues of heavy-data-worker and analysis-worker, so do not `FLUSHALL` it.
 
 > **Do not run `scripts/configure_all.sh` or `scripts/configure_directus.sql` on a database that
 > already has migrations applied.** They delete and re-insert the field metadata of whole collections
@@ -133,8 +133,8 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   `user_created` is that member, whatever the request body said.
 - [ ] **#247-L4 — Label templates — Lab Admin.** A Lab Admin can create, edit, delete and
   set Default on any template, including the seeds.
-- [ ] **#247-L5 — Label templates — permissions apply.** After the migration, flush Redis
-  and restart Directus: the rules above then hold, with no 403 on reading `label_templates`.
+- [ ] **#247-L5 — Label templates — permissions apply.** After the migration, restart
+  Directus: the rules above then hold, with no 403 on reading `label_templates`.
 
 ### Plot dashboard inside Directus
 - [ ] **P3 — links in the Directus module.** "Copy link" in the Directus-hosted Plot opens the same
@@ -554,7 +554,7 @@ named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in 
 #### Row-level visibility (E5, ADR-0011)
 
 Setup for every item: migrations 140 and 141 applied and Directus **restarted right after applying them**
-(`docs/runbooks/upgrade-2026-10-row-level-visibility.md`; flush Redis, `docker restart`) (it reads relations
+(`docs/runbooks/upgrade-2026-10-row-level-visibility.md`; `docker compose restart directus`) (it reads relations
 at start-up, and 141 adds the hidden `projects.samples`, `operations` and `sessions` aliases, and the
 `d1-access-guard` hook is loaded at start-up too). Two Lab Member users with a People
 row each (`user_id` set): **A** and **B**, unrelated, plus a Lab Admin. Note the NOTICE that
@@ -837,7 +837,7 @@ migration 141 prints about ownerless records.
   yet in a PR.
 - [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
   record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM
-  directus_permissions`. Apply, then flush Redis and `docker restart` Directus (it caches permissions,
+  directus_permissions`. Apply, then `docker compose restart directus` (it caches permissions in memory,
   see `docs/runbooks/upgrade-2026-10-row-level-visibility.md`). Expect `UPDATE 36`
   and 36 rows in `d1_private.lab_member_some_fix_backup`. As jsmcgowan1 (or any Lab Member), open
   Home, Samples, Projects, Campaigns and Tests, and in the Data Studio open `physical_samples`,
@@ -1555,6 +1555,19 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   PC: the app starts, signs in, records a cut, opens pop-outs and updates itself. Since #230 (0.1.36).
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
   (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
+
+### Depth of cut and force limit (2026-10-14, #288, #289)
+- [ ] **#288 depth of cut on the Record page.** With NI-DAQ selected, the cut-parameter grid shows
+  Depth of cut and Axial DoC next to Spindle and Feed. Type 0.5 and 2, record and save a cut: the
+  Directus run row has `machining_radial_depth_of_cut_mm` 0.5 and `machining_axial_depth_of_cut_mm`
+  2, and the capture's summary.json `extra_metadata` has `radial_doc`/`axial_doc`. Both survive an
+  app restart; a cleared tile saves as empty, not 0. Since the #288/#289 fix branch.
+- [ ] **#289 force alarm at the limit.** Settings > Safety Alarms: set the limit to 400 N, then
+  clear the field and click away: it goes back to 400. Start a cut with no load on the dyno: the
+  alarm stays quiet. If it still trips at once, note the axis and value on the alarm banner and keep
+  that capture folder (its first second of raw data is what #289 needs). Then press the tool against
+  the dyno past 400 N: the alarm trips, and the amber warning showed first at 320 N. Since the
+  #288/#289 fix branch.
 
 ### Rig test requests, phase 1 (rig test requests PR)
 - [ ] **First request on the rig.** Set `RIG_TEST_ALLOWED_LOGINS` on the relay (§C), install the

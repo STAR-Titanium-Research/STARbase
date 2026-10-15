@@ -16,7 +16,7 @@
 // the Lab Member permission filters match `owner_person_id.user_id` (a project's
 // `principal_investigator_person.user_id`) to the signed-in user, so a record created with no
 // owner would be invisible to its creator, and a project with no PI could only be changed by an
-// admin. Explicit choices always win.
+// admin. Explicit choices always win; a team owner set in the payload replaces the person default.
 
 export const OWNER_FIELDS = {
 	physical_samples: 'owner_person_id',
@@ -32,6 +32,12 @@ export const OWNER_FIELDS = {
 	projects: 'principal_investigator_person',
 };
 
+// The four record types a team can own (migration 183): a record becomes team-owned through Transfer
+// ownership; d1-access-guard refuses owner_team_id on a non-admin create (Ruling O3), so only an admin (or
+// an internal call) reaches the branch below with it set. num_nonnulls(owner_person_id, owner_team_id) <= 1,
+// so a record created for a team must not also get its creator as person owner. Projects are not ownable by a team.
+const TEAM_OWNABLE = new Set(['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']);
+
 const isBlank = (v) => v === undefined || v === null || v === '';
 
 export default ({ filter }) => {
@@ -44,7 +50,11 @@ export default ({ filter }) => {
 
 		// Only set when the caller left it blank -- explicit choices win. Resolve the person once.
 		const items = Array.isArray(payload) ? payload : [payload];
-		const blank = items.filter((item) => item && typeof item === 'object' && isBlank(item[field]));
+		const teamOwnable = TEAM_OWNABLE.has(meta.collection);
+		const blank = items.filter(
+			(item) =>
+				item && typeof item === 'object' && isBlank(item[field]) && !(teamOwnable && !isBlank(item.owner_team_id)),
+		);
 		if (blank.length === 0) return payload;
 		const person = await db('people').where({ user_id: user, is_researcher: true }).first('person_id');
 		if (person) for (const item of blank) item[field] = person.person_id;

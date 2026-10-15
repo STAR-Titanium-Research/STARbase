@@ -12,7 +12,7 @@ import { campaignTypeLabel } from '../campaign/campaignType';
 import { HIDDEN_SAMPLES_UNIT } from '../campaign/rollup';
 import { asRecord } from '../format';
 import { indexRoute, recordRoute } from '../recordRoute';
-import type { Fact } from './facts';
+import { ownerName, type Fact } from './facts';
 import type { ContentsEntry } from './contents';
 import type { HiddenLinks } from './operationFacts';
 import { dateRangeText } from './projectFacts';
@@ -75,7 +75,7 @@ export function campaignRailFacts(campaign: Rec | null | undefined, hidden: Hidd
 		: [];
 	return [
 		{ label: 'Type', value: campaignTypeLabel(campaign.campaign_type) },
-		{ label: 'Owner', value: asRecord(campaign.owner_person_id)?.full_name },
+		{ label: 'Owner', value: ownerName(campaign) },
 		{ label: 'Dates', value: dateRangeText(campaign.start_date, campaign.end_date) },
 		{ label: 'Machine', value: asRecord(campaign.default_equipment_id)?.equipment_name },
 		{ label: 'Material', value: asRecord(campaign.default_material_id)?.common_name },

@@ -6,7 +6,7 @@ import { asRecord, formatDate, formatQuantity } from '../format';
 import { humanise } from '../status';
 import type { TestSubjects } from '../testSubjects';
 import { campaignFact, personText, projectFact, sampleFact, type HiddenLinks } from './operationFacts';
-import type { Fact } from './facts';
+import { ownerName, type Fact } from './facts';
 
 type Rec = Record<string, any>;
 
@@ -27,7 +27,7 @@ export function testRailFacts(t: Rec | null | undefined, subjects: TestSubjects,
 		{ label: 'Date', value: formatDate(t.session_date, 'Undated') },
 		{ label: 'Category', value: t.test_category ? humanise(t.test_category) : '' },
 		{ label: 'Machine', value: asRecord(t.equipment_id)?.equipment_name },
-		{ label: 'Owner', value: asRecord(t.owner_person_id)?.full_name },
+		{ label: 'Owner', value: ownerName(t) },
 		{ label: 'Operator', value: personText(t.operator_person_id, t.operator_name) },
 		sampleFact(sample, !sample && (!!hidden.sample_id || subjects.hidden > 0)),
 		projectFact(asRecord(t.project_id), hidden.project_id),

@@ -121,7 +121,7 @@ def test_first_error_stops_the_run_and_rolls_back(sandbox):
         )
 
 
-def test_success_flushes_redis_and_restarts_directus(sandbox):
+def test_success_restarts_directus_without_touching_redis(sandbox):
     tmp, env = sandbox
     for name in FILES:
         _write(tmp / name, "BEGIN;\nSELECT 1;\nCOMMIT;\n")
@@ -130,7 +130,7 @@ def test_success_flushes_redis_and_restarts_directus(sandbox):
     )
     assert r.returncode == 0, r.stderr
     log = (tmp / "docker.log").read_text()
-    assert "redis-cli FLUSHALL" in log and "restart" in log
+    assert "redis-cli" not in log and "restart" in log
 
 
 def test_missing_file_fails_before_anything_runs(sandbox):

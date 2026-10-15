@@ -66,7 +66,7 @@
 ### Task 3: Preview smoke, E2E, runbook
 
 **Files:**
-- Modify: `tests/ui/specs/19-process-map.spec.ts` (a recorded-batch scenario: create a batch + attach two operations of one family through `adminApi` on the preview copy, open the map, expect one container titled `Batch B-…`; clean up after)
+- Modify: `tests/ui/specs/21-process-map.spec.ts` (a recorded-batch scenario: create a batch + attach two operations of one family through `adminApi` on the preview copy, open the map, expect one container titled `Batch B-…`; clean up after)
 - Modify: the deploy runbook that lists `make migrate` steps (find the current STARbase runbook under `docs/runbooks/`): migrate **before** deploying this STARbase build is not required (the map tolerates a missing `batch_id`), but the form field appears only after migrate + a Directus restart — say so.
 - Modify: `docs/wiki/database/` page that documents operations/FAST fields: mention Batch and the Powder batch label.
 

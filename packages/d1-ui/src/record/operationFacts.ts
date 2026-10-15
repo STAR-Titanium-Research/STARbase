@@ -5,7 +5,7 @@
 import { asRecord, formatDate, formatQuantity } from '../format';
 import { processLabel } from '../process';
 import { recordRoute } from '../recordRoute';
-import type { Fact } from './facts';
+import { ownerName, type Fact } from './facts';
 
 type Rec = Record<string, any>;
 
@@ -66,7 +66,7 @@ export function operationRailFacts(op: Rec | null | undefined, hidden: HiddenLin
 		{ label: 'Date', value: formatDate(op.operation_date, 'Undated') },
 		{ label: 'Method', value: asRecord(op.method_id)?.method_name },
 		{ label: 'Machine', value: asRecord(op.equipment_id)?.equipment_name },
-		{ label: 'Owner', value: asRecord(op.owner_person_id)?.full_name },
+		{ label: 'Owner', value: ownerName(op) },
 		{ label: 'Operator', value: personText(op.operator_person_id, op.operator_name) },
 		sampleFact(about.sample, about.hidden),
 		projectFact(asRecord(op.project_id), hidden.project_id),

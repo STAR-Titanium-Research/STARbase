@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { forbiddenReason, guardRefusal, itemPermissionsUrl, notOwnerMessage, updateAccess } from './canUpdate';
+import { forbiddenReason, guardRefusal, itemPermissionsUrl, mayChange, notOwnerMessage, offerWrite, updateAccess } from './canUpdate';
 
 describe('itemPermissionsUrl', () => {
 	it('builds the Directus 11 item-permissions path and encodes the key', () => {
@@ -75,5 +75,23 @@ describe('guardRefusal', () => {
 			kind: 'junction', collection: 'sample_co_owners', parent: 'physical_samples', reason: 'r',
 		});
 		expect(guardRefusal(stock())).toBeNull();
+	});
+});
+
+describe('a Lab Viewer is offered no write', () => {
+	it('offerWrite: false for a viewer whatever Directus answered; the answer otherwise', () => {
+		for (const answer of [true, false, null, undefined]) expect(offerWrite(true, answer)).toBe(false);
+		expect(offerWrite(false, true)).toBe(true);
+		expect(offerWrite(false, false)).toBe(false);
+		expect(offerWrite(false, null)).toBeNull();
+		expect(offerWrite(undefined, undefined)).toBeNull();
+	});
+	it('mayChange: a viewer never, anyone else unless Directus said exactly no', () => {
+		for (const answer of [true, false, null, undefined]) expect(mayChange(true, answer)).toBe(false);
+		expect(mayChange(false, true)).toBe(true);
+		expect(mayChange(false, null)).toBe(true);
+		expect(mayChange(false, undefined)).toBe(true);
+		expect(mayChange(false, false)).toBe(false);
+		expect(mayChange(undefined, null)).toBe(true);
 	});
 });

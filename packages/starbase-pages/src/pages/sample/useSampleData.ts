@@ -14,6 +14,8 @@ const SAMPLE_FIELDS = [
 	'material_id.material_id', 'material_id.common_name', 'material_id.alloy_code', 'material_id.density_g_per_cm3',
 	'project_id.project_id', 'project_id.project_code', 'project_id.project_name',
 	'owner_person_id.person_id', 'owner_person_id.full_name',
+	// the owning team, when a team owns the record (its managers act as the owner)
+	'owner_team_id.team_id', 'owner_team_id.name', 'owner_team_id.color', 'owner_team_id.logo',
 	// `co_owners` is the M2M alias over sample_co_owners (users); the legacy TEXT column of the
 	// same name is not what the form shows, so read the people through the junction.
 	'co_owners.user_id.first_name', 'co_owners.user_id.last_name',

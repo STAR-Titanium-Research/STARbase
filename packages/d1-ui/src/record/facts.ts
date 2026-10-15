@@ -1,6 +1,8 @@
 // The label/value facts of a record page (the rail and the Details panels): the shape one fact
 // takes, which facts are worth drawing, and how a long multi-value fact is cut for the rail.
 
+import { asRecord } from '../format';
+
 export interface Fact {
 	label: string;
 	value: string | number | null | undefined;
@@ -32,4 +34,12 @@ export function visibleFacts(facts: Fact[]): Fact[] {
 /** The first `max` items of a list and how many were left out ("N more"). */
 export function capList<T>(items: T[], max = 6): { shown: T[]; more: number } {
 	return { shown: items.slice(0, max), more: Math.max(0, items.length - max) };
+}
+
+/**
+ * The Owner fact of a record page: the owning team's name when the record has one (`owner_team_id`, selected as an object), else the
+ * owner person's name. A team the reader cannot read arrives as a bare id and reads as nothing, as a hidden person does.
+ */
+export function ownerName(rec: Record<string, any> | null | undefined): string {
+	return asRecord(rec?.owner_team_id)?.name || asRecord(rec?.owner_person_id)?.full_name || '';
 }

@@ -15,8 +15,8 @@ dependencies are in [`requirements.txt`](./requirements.txt).
 
 ## Directus configuration
 
-Run [`configure_all.sh`](./configure_all.sh) to apply these in the right order, then flush Redis
-and restart Directus.
+Run [`configure_all.sh`](./configure_all.sh) to apply these in the right order; it then restarts Directus
+(which caches schema and permissions in memory). It does not touch Redis, which holds the worker job queues.
 
 | Script | Purpose |
 |---|---|

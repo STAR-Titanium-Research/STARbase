@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
-import { fanData, fanNodeIds, fanPage, fanRowIds, focusPlan, hasFan, mergeProcessData, recordWord, withFanPage, withSideFan } from './fans';
+import { focusPlan, hasFan, recordWord } from './collections';
+import { fanData, fanNodeIds, fanPage, fanRowIds, mergeProcessData, withFanPage, withSideFan } from './fans';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkStock, mkTest } from './fixtures';
-import type { UsedIn } from './loadFamily';
+import type { UsedIn } from './loadFans';
 import type { ProcessData, Ref } from './types';
 
 const ref = (collection: string, id: string, code = id.toUpperCase()): Ref => ({ collection, id, code });
@@ -32,7 +33,7 @@ describe('focusPlan (D20)', () => {
 });
 
 describe('fanPage: "+N more" is counted from the server total and the pages read', () => {
-  const used = (items: UsedIn['items'], total: number, extra: Partial<UsedIn> = {}): UsedIn => ({ items, total, ...extra });
+  const used = (items: UsedIn['items'], total: number | null, extra: Partial<UsedIn> = {}): UsedIn => ({ items, total, ...extra });
 
   it('operations of a tool: refs in the order read, remaining = total - 20 per page', () => {
     const page = fanPage('tools', used(ops(20), 47), 1);
@@ -43,10 +44,17 @@ describe('fanPage: "+N more" is counted from the server total and the pages read
     expect(fanPage('tools', used(ops(7, 40), 47), 3).remaining).toBe(0);
   });
 
-  it('a stock lot page can hold no operations at all and still have more: the total counts samples', () => {
-    const page = fanPage('raw_stock_lots', used([], 45), 1);
+  it('a stock lot page can hold no operations at all and still have more: a full page of samples, no count (D21)', () => {
+    const page = fanPage('raw_stock_lots', used([], null, { more: true }), 1);
     expect(page.items).toEqual([]);
-    expect(page.remaining).toBe(25);
+    expect(page.total).toBeNull();
+    expect(page.remaining).toBeNull();
+    expect(fanPage('raw_stock_lots', used([], null, { more: false }), 2).remaining).toBe(0);
+  });
+
+  it('a campaign with unreadable samples: "more" without a number while pages are full, none after a short page (D21)', () => {
+    expect(fanPage('campaigns', used([mkSample('a')], null, { more: true }), 1)).toMatchObject({ total: null, remaining: null });
+    expect(fanPage('campaigns', used([mkSample('a')], null, { more: false }), 2).remaining).toBe(0);
   });
 
   it('equipment: operations and tests interleaved newest first; more is the larger of the two lists', () => {
@@ -93,6 +101,33 @@ describe('fanData and withFanPage', () => {
     const paged = withFanPage(b, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40 }, 2));
     expect(paged.sideFans?.[0].items).toHaveLength(40);
     expect(paged.sideFans?.[1].items).toHaveLength(1);
+  });
+});
+
+describe('hidden fans (D21)', () => {
+  it('fanPage carries the hidden flag; a fan keeps it across "More" pages (OR)', () => {
+    const first = fanData(tool, fanPage('tools', { items: ops(20), total: 40, hidden: true }, 1));
+    expect(first.fan?.hidden).toBe(true);
+    const next = withFanPage(first, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40 }, 2));
+    expect(next.fan?.hidden).toBe(true);
+    const clean = fanData(tool, fanPage('tools', { items: ops(20), total: 40 }, 1));
+    expect(clean.fan?.hidden).toBeFalsy();
+    expect(withFanPage(clean, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40, hidden: true }, 2)).fan?.hidden).toBe(true);
+  });
+
+  it('starting a side fan again does not keep a stale flag', () => {
+    const base = mkData({ samples: [mkSample('s1')] });
+    const side = withSideFan(base, tool, fanPage('tools', { items: ops(2), total: 2, hidden: true }, 1));
+    const again = withFanPage(side, 'tools:t1', fanPage('tools', { items: ops(2), total: 2 }, 1), true);
+    expect(again.sideFans?.[0].hidden).toBeUndefined();
+  });
+
+  it('a side fan carries it too, and paging it keeps it', () => {
+    const base = mkData({ samples: [mkSample('s1')] });
+    const side = withSideFan(base, tool, fanPage('tools', { items: ops(20), total: 40, hidden: true }, 1));
+    expect(side.sideFans?.[0].hidden).toBe(true);
+    const paged = withFanPage(side, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40 }, 2));
+    expect(paged.sideFans?.[0].hidden).toBe(true);
   });
 });
 

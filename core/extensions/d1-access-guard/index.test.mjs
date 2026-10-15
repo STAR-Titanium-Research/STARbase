@@ -141,8 +141,8 @@ const denied = (re) => (err) => {
   return true;
 };
 
-test('registers an items.create, an items.delete and an items.update filter', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['items.create', 'items.delete', 'items.update']);
+test('registers the items.create, items.delete and items.update filters, and the three comment filters of the Lab Viewer', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'items.create', 'items.delete', 'items.update']);
 });
 
 test('the shipped rules guard exactly the four visibility junctions', () => {
@@ -531,13 +531,14 @@ test('update: clearing a parent key grants nothing', async () => {
 // ---- owner guard: changing the owner column needs the record's delete rule ----------------------
 
 // db(table).whereIn(pk, keys).select(...) -> the rows of `existing` for those keys.
-function ownerDb(existing) {
+// `members` are the team_members rows (team_id, is_manager) the Ruling O4 lookup reads; the record rows are `existing`.
+function ownerDb(existing, members = []) {
   const calls = [];
   const db = (table) => ({
     whereIn: (column, keys) => ({
       select: async (...columns) => {
         calls.push({ table, column, keys, columns });
-        return existing.filter((row) => keys.includes(row[column]));
+        return (table === 'team_members' ? members : existing).filter((row) => keys.includes(row[column]));
       },
     }),
   });
@@ -556,8 +557,139 @@ test('the shipped rules guard the owner column where update is wider than delete
     // proves who passes it. The generated list also names restricted as an owner-only field.
     assert.ok(JSON.stringify(g.filter).includes('$CURRENT_USER'), collection);
     assert.ok(JSON.stringify(g.filter).includes('owner_person_id'), collection);
-    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'restricted'], collection);
+    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'owner_team_id', 'restricted'], collection);
   }
+});
+
+// ---- team ownership (migration 183): owner_team_id is guarded like owner_person_id -------------------
+
+// A stand-in that answers each rule as the database would for a person who is `owner`, a team `manager` or a plain team `member`
+// of a team-owned record: the delete rule names the manager's `manage` row and no Can edit role, the update rule names `edit`.
+const roleOf = (query) => {
+  const text = JSON.stringify(query.filter);
+  return { names_edit: /"edit"/.test(text), names_manage: /"manage"/.test(text) };
+};
+
+test('the shipped rules guard owner_team_id with the same delete rule as owner_person_id, in each of the four records', () => {
+  const guards = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8')).ownerGuards;
+  for (const [collection, g] of Object.entries(guards)) {
+    assert.deepEqual(g.fields[1], { field: 'owner_team_id', valueKey: 'team_id' }, collection);
+    const rule = JSON.stringify(g.filter);
+    // the delete rule: the person owner, or a manager of the owning team (derived `manage` row); never the `edit` role
+    assert.ok(rule.includes('owner_person_id') && rule.includes('"manage"'), collection);
+    assert.ok(!rule.includes('"edit"'), `${collection}: a plain member of the owning team (edit) must not pass`);
+  }
+});
+
+test('owner_team_id change: a plain member of the owning team (edit, not manage) is refused', async () => {
+  // the fake plays the database: only a rule that names `manage` and not the Can edit role lets the caller through when they hold
+  // an `edit` row; a manager (manage row) passes the delete rule and the update rule alike
+  for (const [collection, pk] of [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']]) {
+    const asMember = (_c, _id, query) => {
+      const { names_edit, names_manage } = roleOf(query);
+      return names_edit && names_manage; // the update rule (edit, manage) passes a member; the delete rule (manage only) does not
+    };
+    const { filters, log } = mount({ canUpdate: asMember });
+    const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }]);
+    await assert.rejects(
+      filters['items.update']({ owner_team_id: 'team-b' }, { collection, keys: ['k1'] }, ctx({ database })),
+      denied(new RegExp(`${collection} k1`)),
+      collection,
+    );
+    assert.equal(log.reads.length, 1, collection);
+  }
+});
+
+test('owner_team_id change: a manager of the owning team (manage row) may hand the record over, set or clear the team', async () => {
+  const asManager = (_c, _id, query) => roleOf(query).names_manage; // both rules name `manage`
+  for (const [collection, pk] of [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']]) {
+    for (const next of ['team-b', null, { team_id: 'team-b' }]) {
+      const { filters, log } = mount({ canUpdate: asManager });
+      const payload = { owner_team_id: next };
+      const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }], [{ team_id: 'team-b', is_manager: true }]);
+      assert.equal(await filters['items.update'](payload, { collection, keys: ['k1'] }, ctx({ database })), payload);
+      assert.equal(log.reads.length, 1, collection);
+    }
+  }
+});
+
+test('owner_team_id change: the same team sent back (a form save) is not a change; a member who changes nothing else is not asked', async () => {
+  const { filters, log } = mount({ canUpdate: () => false });
+  const database = ownerDb([{ sample_id: 's1', owner_person_id: null, owner_team_id: 'team-a' }]);
+  await filters['items.update']({ owner_team_id: 'team-a', notes: 'x' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  await filters['items.update']({ owner_team_id: { team_id: 'team-a' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  await filters['items.update']({ notes: 'x' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  assert.equal(log.reads.length, 0);
+});
+
+test('owner_team_id change: setting a team on an unowned record, or on a person-owned one, needs the delete rule', async () => {
+  for (const row of [{ owner_person_id: null, owner_team_id: null }, { owner_person_id: 'p1', owner_team_id: null }]) {
+    const { filters, log } = mount({ canUpdate: () => false });
+    const database = ownerDb([{ sample_id: 's1', ...row }]);
+    await assert.rejects(
+      filters['items.update']({ owner_team_id: 'team-a' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database })),
+      denied(/physical_samples s1/),
+    );
+    assert.equal(log.reads.length, 1);
+  }
+});
+
+test('owner_team_id change: refusal is the owner kind; admins and internal calls are not checked', async () => {
+  const { filters } = mount({ canUpdate: () => false });
+  const database = ownerDb([{ session_id: 't1', owner_person_id: null, owner_team_id: 'team-a' }]);
+  const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection: 'test_sessions', keys: ['t1'] }, ctx({ database })));
+  assert.equal(err.extensions.kind, 'owner');
+  assert.equal(err.extensions.collection, 'test_sessions');
+  const meta = { collection: 'test_sessions', keys: ['t1'] };
+  await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: { user: 'a', admin: true } }));
+  await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: null }));
+});
+
+// ---- Ruling O4 on the direct path: no team without a manager becomes the owner ----------------------------------
+
+const ownable = [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']];
+
+test('O4: an owner who sets owner_team_id to a team with no manager is refused 409, in each of the four records', async () => {
+  for (const [collection, pk] of ownable) {
+    for (const members of [[], [{ team_id: 'team-b', is_manager: false }], [{ team_id: 'team-other', is_manager: true }]]) {
+      const { filters } = mount({ canUpdate: () => true }); // the caller passes the delete rule: an owner
+      const database = ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', owner_team_id: null }], members);
+      const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection, keys: ['k1'] }, ctx({ database })));
+      assert.equal(err.status, 409, collection);
+      assert.equal(err.code, 'TEAM_HAS_NO_MANAGER', collection);
+      assert.equal(err.extensions.source, 'd1-access-guard');
+      assert.equal(err.extensions.collection, collection);
+      assert.equal(err.message, 'That team has no manager to look after the record — add a manager first');
+    }
+  }
+});
+
+test('O4: a nested { team_id } counts, a team with a manager passes, and so does clearing the team or an unchanged team', async () => {
+  const { filters } = mount({ canUpdate: () => true });
+  const row = { sample_id: 's1', owner_person_id: null, owner_team_id: 'team-a' };
+  const managed = [{ team_id: 'team-b', is_manager: true }];
+  await filters['items.update']({ owner_team_id: { team_id: 'team-b' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: ownerDb([row], managed) }));
+  await assert.rejects(
+    filters['items.update']({ owner_team_id: { team_id: 'team-b' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: ownerDb([row], []) })),
+    (err) => err.status === 409,
+  );
+  // clearing the team, and the same team sent back by a form save: no lookup at all (team-a has no manager here and it does not matter)
+  for (const next of [null, '', 'team-a']) {
+    const database = ownerDb([row], []);
+    await filters['items.update']({ owner_team_id: next }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+    assert.ok(!database.calls.some((c) => c.table === 'team_members'), String(next));
+  }
+});
+
+test('O4: a caller who fails the owner check is refused 403 first (nothing is said about the team); admins and internal calls are exempt', async () => {
+  const database = () => ownerDb([{ sample_id: 's1', owner_person_id: 'p-owner', owner_team_id: null }], []);
+  const { filters } = mount({ canUpdate: () => false });
+  const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: database() })));
+  assert.equal(err.status, 403);
+  const meta = { collection: 'physical_samples', keys: ['s1'] };
+  const open = mount({ canUpdate: () => true }).filters;
+  await open['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database: database(), accountability: { user: 'a', admin: true } }));
+  await open['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database: database(), accountability: null }));
 });
 
 test('owner change: a co-owner (who cannot delete) is refused', async () => {
@@ -568,7 +700,7 @@ test('owner change: a co-owner (who cannot delete) is refused', async () => {
     denied(/physical_samples s1/),
   );
   assert.deepEqual(database.calls, [
-    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id', 'restricted'] },
+    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id', 'owner_team_id', 'restricted'] },
   ]);
   // the check is the delete rule (owner only), run as the caller on the sample itself
   const [{ collection, query }] = log.reads;
@@ -784,8 +916,8 @@ test('refusal text of an owner change, by record', async () => {
 // ---- A1a: owner-only Restricted, restricted-aware moves, and the two campaign guards ------------------
 
 // The tests below tell the update rule (an editor passes) from the delete rule (only the owner passes)
-// by the filter sent: the update rules name the access list or the co-owners, the delete rules do not.
-const isDeleteRule = (query) => !/access|co_owners/.test(JSON.stringify(query.filter));
+// by the filter sent: the update rules name the Can edit role or the co-owners, the delete rules do not (a team manager's `manage` row is in both).
+const isDeleteRule = (query) => !/"edit"|co_owners/.test(JSON.stringify(query.filter));
 // "Everyone may update; only the listed records are owned by the caller."
 const ownsOnly = (...owned) => (collection, id, query) => !isDeleteRule(query) || owned.includes(`${collection}:${id}`);
 const kindOf = (err) => [err.extensions.kind, err.message];
@@ -797,7 +929,7 @@ test('the shipped rules list the guarded fields, the moving keys and the two jun
   // the junction guards of the co-owner and the investigator are the parent's DELETE rule (the owner / the PI)
   for (const collection of ['sample_co_owners', 'project_investigators']) {
     const [check] = RULES[collection];
-    assert.ok(!/co_owners|access/.test(JSON.stringify(check.filter)), `${collection}: the owner, not an editor`);
+    assert.ok(!/"edit"|co_owners/.test(JSON.stringify(check.filter)), `${collection}: the owner, not an editor`);
     assert.ok(JSON.stringify(check.filter).includes('$CURRENT_USER'));
   }
 });
@@ -1449,4 +1581,100 @@ test('I1: a nested { sample_id } item is read like a bare id, on update and on c
   await mount({ canUpdate: ownsOnly(`test_sessions:${T}`) }).filters['items.create'](row, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
   // a nested item of another collection is not a sample
   await editor().filters['items.create']({ ...row, collection: 'something_else' }, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
+});
+
+// ---- Ruling O3: a record becomes team-owned only through Transfer ownership ---------------------------------
+
+const OWNABLE = ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns'];
+
+test('a non-admin cannot create a record with owner_team_id (Ruling O3), on all four ownable collections', async () => {
+  const { filters } = mount();
+  for (const collection of OWNABLE) {
+    await assert.rejects(
+      filters['items.create']({ owner_team_id: 'team-1' }, { collection }, ctx()),
+      (err) => {
+        assert.equal(err.status, 403);
+        assert.equal(err.code, 'FORBIDDEN');
+        assert.equal(err.message, 'A record becomes team-owned through Transfer ownership');
+        assert.equal(err.extensions.source, 'd1-access-guard');
+        assert.equal(err.extensions.kind, 'owner');
+        assert.equal(err.extensions.collection, collection);
+        return true;
+      },
+      collection,
+    );
+  }
+});
+
+test('a batch create is refused when any item sets owner_team_id; a nested team object counts too', async () => {
+  const { filters } = mount();
+  await assert.rejects(filters['items.create']([{ nickname: 'a' }, { owner_team_id: 'team-1' }], { collection: 'physical_samples' }, ctx()), /Transfer ownership/);
+  await assert.rejects(filters['items.create']({ owner_team_id: { team_id: 'team-1' } }, { collection: 'campaigns' }, ctx()), /Transfer ownership/);
+});
+
+test('owner_team_id null, empty or absent is fine on create; so is a person owner', async () => {
+  const { filters } = mount();
+  for (const payload of [{ nickname: 'a' }, { owner_team_id: null }, { owner_team_id: '' }, { owner_person_id: 'p1', owner_team_id: null }]) {
+    assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx()), payload);
+  }
+});
+
+test('an admin and an internal call may create a team-owned record; other collections are not touched', async () => {
+  const { filters } = mount();
+  const payload = { owner_team_id: 'team-1' };
+  assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx({ accountability: { user: 'a', admin: true } })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx({ accountability: null })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'projects' }, ctx()), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'sample_genealogy' }, ctx()), payload);
+});
+
+// ---- Lab Viewer (migration 185): Directus's built-in comment rights are refused to the role ----------------------------------
+
+const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const readOnly = (err) => {
+  assert.equal(err.status, 403);
+  assert.equal(err.code, 'READ_ONLY_ROLE');
+  assert.equal(err.name, 'DirectusError');
+  assert.equal(err.extensions.code, 'READ_ONLY_ROLE');
+  assert.equal(err.extensions.source, 'd1-access-guard');
+  assert.match(err.extensions.reason, /read-only/);
+  return true;
+};
+
+test('Lab Viewer: comments.create, comments.update and comments.delete are refused 403 READ_ONLY_ROLE, whatever the status or the policy', async () => {
+  const { filters } = mount();
+  const payload = { collection: 'physical_samples', item: 's1', comment: 'looks odd' };
+  const calls = {
+    'comments.create': [payload, { collection: 'directus_comments' }],
+    'comments.update': [{ comment: 'edited' }, { collection: 'directus_comments', keys: ['c1'] }],
+    'comments.delete': [['c1'], { collection: 'directus_comments', keys: ['c1'] }],
+  };
+  const viewers = [
+    { user: 'user-v', role: VIEWER_ROLE, admin: false, app: true },
+    { user: 'user-v', role: VIEWER_ROLE.toUpperCase(), admin: false, app: true }, // ids compare without case
+    { user: 'user-v', role: VIEWER_ROLE, roles: [VIEWER_ROLE], admin: true, app: true }, // the role decides, an admin policy on the login does not exempt it
+    { user: 'user-v', role: 'some-other-role', roles: ['some-other-role', VIEWER_ROLE], admin: false, app: true },
+  ];
+  for (const accountability of viewers) {
+    for (const [event, args] of Object.entries(calls)) {
+      await assert.rejects(filters[event](...args, ctx({ accountability })), readOnly, `${event} as ${JSON.stringify(accountability)}`);
+    }
+  }
+});
+
+test('Lab Viewer: a Lab Member, an administrator and an internal call (no accountability) write comments as before', async () => {
+  const { filters } = mount();
+  const payload = { comment: 'fine' };
+  const callers = [
+    member,
+    { user: 'user-a', role: '10000001-0000-0000-0000-000000000001', admin: true, app: true },
+    { user: 'user-m', role: null, admin: false, app: true }, // no role (a user policy only)
+    null,
+    undefined,
+  ];
+  for (const accountability of callers) {
+    for (const event of ['comments.create', 'comments.update', 'comments.delete']) {
+      assert.equal(await filters[event](payload, { collection: 'directus_comments' }, ctx({ accountability })), payload, event);
+    }
+  }
 });

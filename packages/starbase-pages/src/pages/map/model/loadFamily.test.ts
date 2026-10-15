@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
+import { loadFamily, loadRelationDefs, parseFocus } from './loadFamily';
+import { loadRecordRef, loadStepRow, loadUsedIn, sampleOfRow } from './loadFans';
+import { chunkByBudget, encodedQuerySize } from './requests';
 
 interface Call {
   path: string;
@@ -594,9 +596,105 @@ describe('loadUsedIn', () => {
     expect(filterOf(calls[0])).toEqual({ campaign_id: { _eq: 'c1' } });
     expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
     expect(calls[0].params.fields).toContain('sample_id.sample_code');
-    // a sample the person cannot read is dropped, and the count stays the junction's
+    // a sample the person cannot read is dropped, and the junction's count (which includes it) is not passed on
     expect((res.items as { id: string; code: string }[]).map((s) => s.id)).toEqual(['s1']);
-    expect(res.total).toBe(2);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(false); // a short page is the last one
+  });
+
+  it('campaign: a full junction page means more, whatever the readable count (D21)', async () => {
+    const rows = Array.from({ length: 20 }, (_, i) => (i < 3 ? { sample_id: { sample_id: `s${i}`, sample_code: `S${i}` } } : { sample_id: null }));
+    const { api } = fakeApi(() => ({ data: rows, meta: { filter_count: 45 } }));
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(res.items).toHaveLength(3);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(true);
+  });
+
+  it('campaign: a junction row whose sample is null sets hidden; all readable leaves it off (D21)', async () => {
+    const some = fakeApi(() => ({
+      data: [{ sample_id: { sample_id: 's1', sample_code: 'S1' } }, { sample_id: null }, { sample_id: { sample_id: 's3', sample_code: 'S3' } }],
+    }));
+    expect((await loadUsedIn(some.api, { collection: 'campaigns', id: 'c1' }, 1)).hidden).toBe(true);
+    const all = fakeApi(() => ({ data: [{ sample_id: { sample_id: 's1', sample_code: 'S1' } }, { sample_id: { sample_id: 's2', sample_code: 'S2' } }] }));
+    expect((await loadUsedIn(all.api, { collection: 'campaigns', id: 'c1' }, 1)).hidden).toBeFalsy();
+  });
+
+  it('stock lot: a provenance row whose sample is unreadable sets hidden; the rest still read (D21)', async () => {
+    const reads = (rows: unknown[]) =>
+      fakeApi((path) => (path === '/items/sample_stock_provenance' ? { data: rows } : { data: [{ operation_id: 'o9', process_category: 'sintering', output_sample_id: 's1' }] }));
+    const some = reads([{ sample_id: { sample_id: 's1' } }, { sample_id: null }]);
+    const res = await loadUsedIn(some.api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res.hidden).toBe(true);
+    expect(filterOf(some.calls[1])).toEqual({ output_sample_id: { _in: ['s1'] } });
+    expect(some.calls[0].params.fields).toContain('sample_id.sample_id');
+    expect((await loadUsedIn(reads([{ sample_id: { sample_id: 's1' } }]).api, { collection: 'raw_stock_lots', id: 'L1' }, 1)).hidden).toBeFalsy();
+  });
+
+  it('stock lot: an all-null provenance page is hidden with no items and no operations read (D21)', async () => {
+    const { api, calls } = fakeApi(() => ({ data: [{ sample_id: null }, { sample_id: null }] }));
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res).toMatchObject({ items: [], total: null, more: false, hidden: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('stock lot: a refused nested read retries with bare ids, still draws the fan, and is hidden (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path === '/items/sample_stock_provenance') {
+        return (params.fields as string[]).includes('sample_id.sample_id') ? httpError(403) : { data: [{ sample_id: 's1' }, { sample_id: 's2' }] };
+      }
+      return { data: [{ operation_id: 'o9', process_category: 'sintering', output_sample_id: 's1' }] };
+    });
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(calls.map((c) => c.path)).toEqual(['/items/sample_stock_provenance', '/items/sample_stock_provenance', '/items/manufacturing_operations']);
+    expect(calls[1].params.fields).toEqual(['sample_id']);
+    expect(filterOf(calls[2])).toEqual({ output_sample_id: { _in: ['s1', 's2'] } });
+    expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o9']);
+    expect(res).toMatchObject({ total: null, more: false, hidden: true });
+  });
+
+  it('stock lot: a refused nested read whose bare page is empty sets no hidden marker (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) =>
+      path === '/items/sample_stock_provenance' && (params.fields as string[]).includes('sample_id.sample_id') ? httpError(403) : { data: [] },
+    );
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(calls).toHaveLength(2);
+    expect(res).toEqual({ items: [], total: null, more: false });
+  });
+
+  it('campaign: a refused nested read whose bare page is empty sets no hidden marker (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) => ((params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: [] }));
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(calls).toHaveLength(2);
+    expect(res).toEqual({ items: [], total: null, more: false });
+  });
+
+  it('campaign: a refused nested read retries with bare ids: no cards, hidden, and nothing more to draw (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) =>
+      (params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })) },
+    );
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].params.fields).toEqual(['sample_id']);
+    expect(res).toMatchObject({ items: [], total: null, more: false, hidden: true });
+  });
+
+  it('a 400 or 404 on the nested read is rethrown: only a 403 means "not allowed to read", so no false hidden marker', async () => {
+    for (const status of [400, 404]) {
+      for (const collection of ['campaigns', 'raw_stock_lots']) {
+        const { api, calls } = fakeApi(() => httpError(status));
+        await expect(loadUsedIn(api, { collection, id: 'x' }, 1)).rejects.toThrow(`HTTP ${status}`);
+        expect(calls).toHaveLength(1);
+      }
+    }
+  });
+
+  it('a server error on the nested read is rethrown, not retried (D21)', async () => {
+    for (const collection of ['campaigns', 'raw_stock_lots']) {
+      const { api, calls } = fakeApi(() => httpError(500));
+      await expect(loadUsedIn(api, { collection, id: 'x' }, 1)).rejects.toThrow('HTTP 500');
+      expect(calls).toHaveLength(1);
+    }
   });
 
   it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {
@@ -612,15 +710,27 @@ describe('loadUsedIn', () => {
     expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
     expect(calls[1].path).toBe('/items/manufacturing_operations');
     expect(filterOf(calls[1])).toEqual({ output_sample_id: { _in: ['s1', 's2'] } });
-    expect(res.total).toBe(31);
+    // the provenance count is not permission-filtered by the lot: no number is passed on (D21)
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(false);
     expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o9']);
+  });
+
+  it('stock lot: a full provenance page means more', async () => {
+    const { api } = fakeApi((path) => {
+      if (path === '/items/sample_stock_provenance') return { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })), meta: { filter_count: 31 } };
+      return { data: [] };
+    });
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(true);
   });
 
   it('a lot with no samples on the page makes no operations request', async () => {
     const { api, calls } = fakeApi(() => ({ data: [], meta: { filter_count: 0 } }));
     const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
     expect(calls).toHaveLength(1);
-    expect(res).toMatchObject({ items: [], total: 0 });
+    expect(res).toMatchObject({ items: [], total: null, more: false });
   });
 
   it('rejects a collection with no fan', async () => {

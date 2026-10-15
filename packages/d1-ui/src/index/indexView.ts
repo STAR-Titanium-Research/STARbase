@@ -10,10 +10,20 @@ import type { Bookmark } from '../nav/navConfig';
 import type { ColumnDef, IndexDef, SelectAction } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
 import { PAGE_SIZE, bookmarkSort, queryFromState } from './indexQuery';
+import { dataStudioRoute, recordRoute } from '../recordRoute';
 import type { IndexState } from './indexQuery';
 import { thumbFields } from './thumbs';
 
 type Row = Record<string, unknown>;
+
+// What a click on a row (or ?open=<key> from the finder) does. A 'record' def navigates to the record's Explorer page. A 'drawer' def opens
+// the edit drawer, which is an editable form with Save: not for a Lab Viewer (migration 185: reads everything, changes nothing), who gets the
+// record in Data Studio instead, where its read-only policy shows the form read-only.
+export type RowOpen = { kind: 'navigate'; to: string } | { kind: 'studio'; to: string } | { kind: 'drawer' };
+export function rowOpen(rowTarget: 'record' | 'drawer', viewer: boolean | null | undefined, collection: string, pk: string): RowOpen {
+	if (rowTarget === 'record') return { kind: 'navigate', to: recordRoute(collection, pk) };
+	return viewer ? { kind: 'studio', to: dataStudioRoute(collection, pk) } : { kind: 'drawer' };
+}
 
 // ---- cells -------------------------------------------------------------------------------------
 
@@ -29,6 +39,8 @@ export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null 
 	// Which dashboard an operation belongs to (a sintering run has no force figure).
 	if (def.collection === 'manufacturing_operations') out.push('process_category');
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
+	// The owning team's name (a team-owned campaign has no owner person); a role that cannot read teams does not ask for it.
+	if (def.collection === 'campaigns' && (!readable || readable.has('teams'))) out.push('owner_team_id.name');
 	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
 	out.push(...thumbFields(def.collection));
 	// The row's accent colour (the ISO classes' colour_hex).
@@ -151,6 +163,11 @@ export function withChange(s: IndexState, patch: Partial<IndexState>): IndexStat
 
 export function hasActiveFilters(s: IndexState): boolean {
 	return s.q.trim() !== '' || Object.values(s.filters).some(Boolean);
+}
+
+// The note under the filters when the Team filter shows only the newest of a larger team (the endpoint's cap).
+export function teamTruncatedNote(limit: number): string {
+	return `Showing the latest ${grouped(limit)} of this team's records.`;
 }
 
 // ---- chip options -----------------------------------------------------------------------------

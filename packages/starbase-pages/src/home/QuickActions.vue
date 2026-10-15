@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { go } from './goto';
 import { openScan } from '../scan/scanState';
 import { pingVisit } from '../usagePing';
+import { WRITE_ACTION_KEYS, useExplorerHost } from '@d1/ui';
 
 // The things a researcher does every day, as buttons in the Home greeting (plus Scan a label). The other Explorer
 // pages and the analysis tools are in the sidebar, so they are not repeated here. There is no tile
@@ -19,7 +21,9 @@ const main: Action[] = [
 ];
 // Not a page: opens the camera dialog (hosted by ExplorerView).
 const scan: Action = { key: 'action:scan', label: 'Scan a label', sub: 'Open a sample from its QR code', icon: 'qr_code_scanner', to: '' };
-const tiles = [...main, scan];
+// A Lab Viewer (migration 185) changes nothing: the two buttons that create a record are not offered to it. Print labels and Scan stay.
+const viewer = useExplorerHost().canViewAllAccess;
+const tiles = computed(() => [...main.filter((a) => !(viewer?.value && WRITE_ACTION_KEYS.has(a.key))), scan]);
 const router = useRouter();
 function choose(a: Action) {
 	if (a === scan) return openScan();

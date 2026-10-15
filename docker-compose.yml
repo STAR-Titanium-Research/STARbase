@@ -114,6 +114,9 @@ services:
       # STARbase's address for report QR codes and links, the label redirects and Data Studio's "Open in
       # STARbase" (d1-report, d1-links; spec §3.6). Unset: the Directus Home module.
       STARBASE_URL: ${STARBASE_URL:-}
+      # Where an invitation e-mail points (d1-people-admin: <STARBASE_URL>/accept-invite). Directus refuses to invite to any other
+      # address; blank when STARBASE_URL is unset (the invite endpoint then answers 503).
+      USER_INVITE_URL_ALLOW_LIST: ${STARBASE_URL:+${STARBASE_URL}/accept-invite}
       # Auto-load local extensions (the actor-identity audit hook).
       EXTENSIONS_AUTO_RELOAD: "true"
       # Thumbnails of the force figures (frm_fz PNGs, ~6,100 x 5,900 px, ~20 MB) for the Explorer's

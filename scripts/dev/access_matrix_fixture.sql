@@ -148,7 +148,7 @@ BEGIN
         WHEN 'physical_samples' THEN
             SELECT coalesce(jsonb_agg(x.sample_id ORDER BY x.sample_id), '[]') INTO out FROM physical_samples x
              WHERE x.sample_id IN (SELECT id FROM ref.fx_ids WHERE ref.fx_ids.kind = 'physical_samples') AND CASE action WHEN 'read' THEN ref.s_read(x.sample_id, u) WHEN 'update' THEN ref.s_editor(x.sample_id, u)
-                               ELSE ref.me(x.owner_person_id, u) END;
+                               ELSE ref.s_owner(x.sample_id, u) END;
         WHEN 'manufacturing_operations' THEN
             SELECT coalesce(jsonb_agg(x.operation_id ORDER BY x.operation_id), '[]') INTO out FROM manufacturing_operations x
              WHERE x.operation_id IN (SELECT id FROM ref.fx_ids WHERE ref.fx_ids.kind = 'manufacturing_operations') AND CASE action WHEN 'read' THEN ref.op_read(x.operation_id, u) WHEN 'update' THEN ref.op_update(x.operation_id, u)
@@ -203,7 +203,7 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                     FROM ref.fixture_users f),
         -- the real operations every member reads (the narrowed amnesty, ref.amnesty_open): the copy's ownerless legacy runs
         'real_amnesty_ops', (SELECT coalesce(jsonb_agg(o.operation_id ORDER BY o.operation_id), '[]') FROM manufacturing_operations o
-                              WHERE ref.amnesty_open(o.owner_person_id, o.project_id, o.campaign_id, o.restricted, o.sample_id)
+                              WHERE ref.amnesty_open(o.owner_person_id, o.owner_team_id, o.project_id, o.campaign_id, o.restricted, o.sample_id)
                                 AND o.operation_id NOT IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations')),
         'universes', (SELECT jsonb_agg(jsonb_build_object(
                           'k', k, 'P', ref.id('P' || k), 'Q', ref.id('Q' || k), 'C', ref.id('C' || k), 'C2', ref.id('C2_' || k),
