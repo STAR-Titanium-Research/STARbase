@@ -16,6 +16,7 @@ import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, refKey, type MapActions, type MapView 
 import { socketLabeller } from './nodes/a11y';
 import EditLid from './edit/EditLid.vue';
 import AddMenu from './edit/AddMenu.vue';
+import SamplePicker from './edit/SamplePicker.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSurface } from './edit/useEditSurface';
@@ -280,8 +281,8 @@ onBeforeUnmount(() => {
 							:saving="edit.draft.saving.value"
 							:save-error="edit.draft.saveError.value"
 							:notice="edit.draft.notice.value"
-							@undo="edit.undo()"
-							@redo="edit.redo()"
+							@undo="build.undo()"
+							@redo="build.redo()"
 							@rename="edit.draft.rename"
 							@add="build.addUnconnected"
 							@pick="build.pickerOpen.value = true"
@@ -290,9 +291,9 @@ onBeforeUnmount(() => {
 						/>
 						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
 						<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': edit.failed.value !== UNAVAILABLE }" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</div>
-						<div v-if="build.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
-							<span>{{ build.problem.value }}</span>
-							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''"><v-icon name="close" x-small /></button>
+						<div v-if="build.problem.value || build.picking.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
+							<span>{{ build.problem.value || build.picking.problem.value }}</span>
+							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''; build.picking.problem.value = ''"><v-icon name="close" x-small /></button>
 						</div>
 						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
@@ -351,6 +352,7 @@ onBeforeUnmount(() => {
 					<MapRail v-bind="railProps" v-on="railEvents" />
 				</MapSheet>
 				<!-- Beside the layout, not in it: RecordLayout is a size container, which would make `position: fixed` relative to it. -->
+				<SamplePicker v-if="build.pickerOpen.value && edit.editing.value" :taken="build.picking.taken.value" @pick="build.picking.picked" @close="build.pickerOpen.value = false" />
 				<AddMenu
 					v-if="build.menu.target.value && edit.editing.value"
 					:target="build.menu.target.value"

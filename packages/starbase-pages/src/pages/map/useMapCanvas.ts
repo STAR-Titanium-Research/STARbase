@@ -234,11 +234,23 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
       // Cards the person placed (dragged, or dropped from the Add menu) stay where the draft says, whatever ELK would do.
       if (edit && !fresh) {
         positions = { ...positions };
+        const own = new Set<string>();
+        const shifts: { id: string; dx: number; dy: number }[] = [];
         for (const n of vf.getNodes.value) {
           const at = edit.positionOf(n.data as MapNode);
           if (!at) continue;
+          own.add(n.id);
           if (!placed.has(n.id) && n.position.x === 0 && n.position.y === 0) instant.add(n.id);
+          const was = positions[n.id] ?? n.position;
+          shifts.push({ id: n.id, dx: at.x - was.x, dy: at.y - was.y });
           positions[n.id] = at;
+        }
+        // A material, stock lot or powder batch only ever sits beside what it feeds: it goes along with that card.
+        const sources = new Set(graph.nodes.filter((m) => m.type === 'record' && ['material', 'stock_lot', 'powder_batch'].includes(m.kind)).map((m) => m.id));
+        for (const w of graph.wires) {
+          const src = nodeOfSocket(w.from);
+          const shift = shifts.find((x) => x.id === nodeOfSocket(w.to));
+          if (shift && sources.has(src) && !own.has(src) && positions[src]) positions[src] = { x: positions[src].x + shift.dx, y: positions[src].y + shift.dy };
         }
       }
       for (const n of vf.getNodes.value) {

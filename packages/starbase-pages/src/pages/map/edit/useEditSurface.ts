@@ -2,12 +2,13 @@
 // the sample picker's state and the keyboard (useEditKeys), and the pointer they open at. The page binds what this returns; the
 // rules live in the modules it is made of.
 
-import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, type Ref } from 'vue';
+import { computed, getCurrentInstance, onBeforeUnmount, onMounted, type Ref } from 'vue';
 import type { useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { useAddMenu } from './useAddMenu';
 import { useEditCanvas } from './useEditCanvas';
 import { useEditKeys } from './useEditKeys';
+import { useSamplePicking } from './useSamplePicking';
 import type { EditMode } from './useEditMode';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
@@ -16,8 +17,9 @@ type ProcessMap = ReturnType<typeof useProcessMap>;
 export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null> }) {
 	const { edit, canvasEl } = o;
 
-	/** The sample picker over the canvas (E7). */
-	const pickerOpen = ref(false);
+	/** The sample picker over the canvas (E7) and the fly-in of what it picks. */
+	const picking = useSamplePicking(o);
+	const pickerOpen = picking.open;
 
 	// ---- the pointer: where a menu opens "at the pointer" -----------------------------------------------
 	let pointer = { x: 0, y: 0 };
@@ -61,7 +63,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		return true;
 	}
 
-	return { ...build, menu, pickerOpen, addUnconnected, onContextMenu, blocked };
+	return { ...build, menu, picking, pickerOpen, undo: picking.undo, redo: picking.redo, addUnconnected, onContextMenu, blocked };
 }
 
 export type EditSurface = ReturnType<typeof useEditSurface>;

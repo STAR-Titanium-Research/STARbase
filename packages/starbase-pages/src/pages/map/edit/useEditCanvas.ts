@@ -86,9 +86,11 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 			problem.value = 'That sample could not be read, so it cannot be built from.';
 			return false;
 		}
-		edit.apply({ type: 'addExistingSamples', samples: [{ id: recordId, version: read.version }] });
-		// The draft takes its project from the first sample it holds (E16).
-		if (!edit.body.value.projectId && read.sample.projectId) edit.apply({ type: 'setProject', projectId: read.sample.projectId });
+		// One step: the sample and, when the draft has none yet, the project it takes from it (E16).
+		edit.apply([
+			{ type: 'addExistingSamples', samples: [{ id: recordId, version: read.version }] },
+			...(!edit.body.value.projectId && read.sample.projectId ? [{ type: 'setProject' as const, projectId: read.sample.projectId }] : []),
+		]);
 		return !!sampleItemOf(edit.body.value, recordId);
 	}
 
