@@ -14,8 +14,10 @@
 -- as cache). The operation and the owner SET NULL.
 --
 -- Visibility: reference data, like insert_edges (ADR-0011): every Lab Member reads and writes (scripts/access_rules.json
--- "unfiltered"), and every Lab Viewer reads. d1_llm_readonly gets SELECT as it has on insert_edges (the table holds
--- no record data of its own: it is a reference table in the phase-1 list of the row-security test).
+-- "unfiltered"), and every Lab Viewer reads. NOT granted to d1_llm_readonly: since migration 168 (ADR-0014) a table the
+-- Ask-DB role can read needs row-level-security policies or a place in migration 168's reference list, and 168's own
+-- up section (replayed by phase1) raises for a granted table it does not know. The scan metadata is of no use to
+-- text-to-SQL; the allow-list migration 132 grant for insert_edges predates that rule.
 -- Directus caches permissions and schema: restart Directus after applying (no Redis cache is configured for it).
 --
 -- Existing Alicona Tests whose subject is an edge are NOT migrated here (spec decision 9).
@@ -102,15 +104,6 @@ CREATE TRIGGER occ_surface_scans
 CREATE TRIGGER audit_surface_scans
     AFTER INSERT OR UPDATE OR DELETE ON surface_scans
     FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
-
--- Text-to-SQL: SELECT as on insert_edges (the role exists only where the llm plugin was set up).
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly') THEN
-        GRANT SELECT ON surface_scans TO d1_llm_readonly;
-    END IF;
-END
-$$;
 
 -- Directus metadata.
 INSERT INTO directus_collections (collection, icon, note, display_template, hidden, sort, color, translations)
