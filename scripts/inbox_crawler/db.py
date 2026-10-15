@@ -838,7 +838,8 @@ class Store:
 
     def autolink_candidates(self, person_ids: set[str], limit: int = 200) -> list[dict]:
         """Undecided new files of opted-in people that name exactly one record by an exact short ID,
-        are images or surface scans (never documents) and are not copies."""
+        are SEM images or other images (never surface scans or documents), are not copies and
+        were not auto-linked and undone by the person (auto_undone_at)."""
         if not person_ids:
             return []
         rows = self._all(
