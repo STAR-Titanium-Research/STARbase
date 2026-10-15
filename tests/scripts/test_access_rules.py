@@ -596,18 +596,23 @@ def test_viewer_json_and_values_cover_every_row(capsys):
     assert all("'read'" in v for v in values)
 
 
-def test_migration_185_carries_the_generated_viewer_rows():
-    """The migration is a snapshot of the rules on the day it was written; this keeps it equal until a later migration changes them."""
+def test_migration_185_inserts_read_rows_only():
+    """The migration is an immutable snapshot of the rules on the day it was written, so it is NOT compared with the current
+    generator output (a later change to a Lab Member read rule must not make an applied migration look stale: tests/phase1_schema.sh
+    compares the STORED viewer rows with the generator instead). What must hold for ever: it grants no create, update or delete."""
     migration = (
         SCRIPTS.parent / "db" / "migrations" / "20261015000185_lab_viewer.sql"
     ).read_text(encoding="utf-8")
-    values = gen.migration_values(VIEWER_ROWS, None)
-    assert values in migration
-    assert (
-        "'create'" not in values
-        and "'update'" not in values
-        and "'delete'" not in values
-    )
+    up = migration.split("-- migrate:down")[0]
+    start = up.index("INSERT INTO _lv_rules")
+    values = up[start : up.index(";" + NL, start)]
+    actions = {
+        line.split(",")[1].strip().strip("'")
+        for line in values.splitlines()
+        if line.lstrip().startswith("('")
+    }
+    assert actions == {"read"}
+    assert len(values.splitlines()) > 50
 
 
 def test_create_is_never_filtered():

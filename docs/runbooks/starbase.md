@@ -430,8 +430,10 @@ optional and only needed if the role has a different id on this server). Needs t
    that changes something answers 403 `READ_ONLY_ROLE`. **Not yet for a viewer**: the People page, the project rollup of other people's projects and Ask-the-database
    of Restricted records (it hides them from everyone).
 
-Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer, recomputes every readers table (a few seconds on the live data); it is safe to do
-while the lab works. To stop being a viewer is the same as any role change (People → Role).
+Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer (or deleting one), runs a full `readers_rebuild()`, which takes the
+global readers lock: every record write in the lab waits while it runs. `docs/runbooks/a1-record-access-cutover.md` measured a rebuild at 0.73 s on the seeded
+copy ("about a second on the live data"), so it is unnoticeable, but it is not measured for this change on the live data: do the first one in a quiet moment, and
+check `SELECT d1_private.readers_drift_count();` is `0` afterwards. Changing a login's name or `last_access` does not rebuild anything.
 
 Rollback: `make migrate-down` (185): the role, policy, view, triggers and viewer branches go, the readers are recomputed, a login that still had the role is left without one
 (give it a role again before it signs in). Then `git checkout <previous commit>`, `npm run build:extensions`, recreate `directus`.

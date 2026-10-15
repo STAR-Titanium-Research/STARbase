@@ -40,6 +40,9 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
   `python3 scripts/gen_access_rules.py --write`, and apply the new rows in the migration (copy
   `20261007000141_lab_member_row_visibility.sql`; `--values` prints them). Reference data goes in
   the file's `unfiltered` list. phase1 fails when the stored permissions drift from the file.
+  A change to a Lab Member **read** row (or a new read grant) must also reach the Lab Viewer policy, which is the read rows of
+  Lab Member under another policy id: apply `--viewer-values` (the whole set, or the rows that changed) in the same
+  migration, as `20261015000185_lab_viewer.sql` does. phase1 fails when the stored viewer rows drift from the generator.
 
 - A view granted to `d1_llm_readonly` (the nine `v_*` views of migration `…132`, and any later grant) must be created
   `WITH (security_invoker = true)`. **`CREATE OR REPLACE VIEW` without the `WITH (...)` clause resets that option and
