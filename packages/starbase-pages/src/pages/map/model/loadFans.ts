@@ -22,6 +22,8 @@ export interface UsedIn {
   total: number | null;
   /** With a null `total`: the junction page came back full, so another page may exist. */
   more?: boolean;
+  /** A junction or provenance row on this page has a sample the person may not read (it came back null): spec D21, a marker only. */
+  hidden?: boolean;
   /** Equipment and insert edges: the tests that used them (same page), and how many there are. */
   tests?: TestRow[];
   testsTotal?: number;
@@ -41,6 +43,9 @@ const SAMPLE_FAN: Record<string, (id: string) => Json> = {
   materials: (id) => ({ material_id: { _eq: id } }),
   projects: (id) => ({ project_id: { _eq: id } }),
 };
+
+/** The sample id of a provenance row: nested (`{ sample_id }`) or bare; null when the person may not read the sample. */
+const sampleIdOf = (v: unknown): string | null => idOf(v && typeof v === 'object' ? (v as Json).sample_id : v);
 
 /**
  * One page (`page` is 1-based, 20 rows) of what used a record. Operations and tests come newest first;
@@ -79,8 +84,9 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
     });
     // A sample the person may not read comes back null: no card, and no count of them. The junction's count includes
     // them, so it is not passed on: paging goes on until a page comes back short.
-    const items = res.rows.map((r) => r.sample_id).filter((s): s is Json => !!s && typeof s === 'object').map(mapSample);
-    return { items, total: null, more: res.rows.length >= FAN_PAGE };
+    const samples = res.rows.map((r) => r.sample_id);
+    const items = samples.filter((s): s is Json => !!s && typeof s === 'object').map(mapSample);
+    return { items, total: null, more: res.rows.length >= FAN_PAGE, ...(items.length < samples.length ? { hidden: true } : {}) };
   }
 
   const sampleFilter = SAMPLE_FAN[ref.collection];
@@ -97,21 +103,24 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
   if (ref.collection === 'raw_stock_lots') {
     const prov = await getList(api, 'sample_stock_provenance', {
       filter: JSON.stringify({ lot_id: { _eq: ref.id } }),
-      fields: ['sample_id'],
+      // Nested, so a sample the person may not read comes back null (a bare id would hide that).
+      fields: ['sample_id.sample_id'],
       sort: ['-created_at'],
       ...paged,
     });
-    const sampleIds = unique(prov.rows.map((r) => idOf(r.sample_id)).filter((s): s is string => !!s));
+    const readable = prov.rows.map((r) => sampleIdOf(r.sample_id));
+    const sampleIds = unique(readable.filter((s): s is string => !!s));
+    const hidden = readable.some((s) => !s);
     // As for a campaign: the provenance count includes samples the person may not read, so only "is there a next page".
     const more = prov.rows.length >= FAN_PAGE;
-    if (!sampleIds.length) return { items: [], total: null, more };
+    if (!sampleIds.length) return { items: [], total: null, more, ...(hidden ? { hidden } : {}) };
     const ops = await getList(api, 'manufacturing_operations', {
       filter: JSON.stringify({ output_sample_id: { _in: sampleIds } }),
       fields: OPERATION_FIELDS,
       sort: ['-operation_date'],
       limit: -1,
     });
-    return { items: ops.rows.map((r) => mapOperation(r)), total: null, more };
+    return { items: ops.rows.map((r) => mapOperation(r)), total: null, more, ...(hidden ? { hidden } : {}) };
   }
 
   throw new Error(`No used-in fan for ${ref.collection}`);

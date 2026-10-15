@@ -134,6 +134,8 @@ export interface Fan {
   items: Ref[];
   total: number | null;
   remaining?: number | null;
+  /** A junction or provenance row of this fan named a sample the person may not read: one marker, no count (spec D21). */
+  hidden?: boolean;
 }
 export interface SideFan extends Fan {
   root: Ref & { kind: Kind };

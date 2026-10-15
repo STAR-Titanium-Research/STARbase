@@ -611,6 +611,26 @@ describe('loadUsedIn', () => {
     expect(res.more).toBe(true);
   });
 
+  it('campaign: a junction row whose sample is null sets hidden; all readable leaves it off (D21)', async () => {
+    const some = fakeApi(() => ({
+      data: [{ sample_id: { sample_id: 's1', sample_code: 'S1' } }, { sample_id: null }, { sample_id: { sample_id: 's3', sample_code: 'S3' } }],
+    }));
+    expect((await loadUsedIn(some.api, { collection: 'campaigns', id: 'c1' }, 1)).hidden).toBe(true);
+    const all = fakeApi(() => ({ data: [{ sample_id: { sample_id: 's1', sample_code: 'S1' } }, { sample_id: { sample_id: 's2', sample_code: 'S2' } }] }));
+    expect((await loadUsedIn(all.api, { collection: 'campaigns', id: 'c1' }, 1)).hidden).toBeFalsy();
+  });
+
+  it('stock lot: a provenance row whose sample is unreadable sets hidden; the rest still read (D21)', async () => {
+    const reads = (rows: unknown[]) =>
+      fakeApi((path) => (path === '/items/sample_stock_provenance' ? { data: rows } : { data: [{ operation_id: 'o9', process_category: 'sintering', output_sample_id: 's1' }] }));
+    const some = reads([{ sample_id: { sample_id: 's1' } }, { sample_id: null }]);
+    const res = await loadUsedIn(some.api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res.hidden).toBe(true);
+    expect(filterOf(some.calls[1])).toEqual({ output_sample_id: { _in: ['s1'] } });
+    expect(some.calls[0].params.fields).toContain('sample_id.sample_id');
+    expect((await loadUsedIn(reads([{ sample_id: { sample_id: 's1' } }]).api, { collection: 'raw_stock_lots', id: 'L1' }, 1)).hidden).toBeFalsy();
+  });
+
   it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {
     const { api, calls } = fakeApi((path) => {
       if (path === '/items/sample_stock_provenance') {

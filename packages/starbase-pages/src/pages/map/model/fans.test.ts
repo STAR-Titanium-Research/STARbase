@@ -104,6 +104,26 @@ describe('fanData and withFanPage', () => {
   });
 });
 
+describe('hidden fans (D21)', () => {
+  it('fanPage carries the hidden flag; a fan keeps it across "More" pages (OR)', () => {
+    const first = fanData(tool, fanPage('tools', { items: ops(20), total: 40, hidden: true }, 1));
+    expect(first.fan?.hidden).toBe(true);
+    const next = withFanPage(first, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40 }, 2));
+    expect(next.fan?.hidden).toBe(true);
+    const clean = fanData(tool, fanPage('tools', { items: ops(20), total: 40 }, 1));
+    expect(clean.fan?.hidden).toBeFalsy();
+    expect(withFanPage(clean, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40, hidden: true }, 2)).fan?.hidden).toBe(true);
+  });
+
+  it('a side fan carries it too, and paging it keeps it', () => {
+    const base = mkData({ samples: [mkSample('s1')] });
+    const side = withSideFan(base, tool, fanPage('tools', { items: ops(20), total: 40, hidden: true }, 1));
+    expect(side.sideFans?.[0].hidden).toBe(true);
+    const paged = withFanPage(side, 'tools:t1', fanPage('tools', { items: ops(20, 20), total: 40 }, 2));
+    expect(paged.sideFans?.[0].hidden).toBe(true);
+  });
+});
+
 describe('mergeProcessData', () => {
   const family = (): ProcessData =>
     mkData({

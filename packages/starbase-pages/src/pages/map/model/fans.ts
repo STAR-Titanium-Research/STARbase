@@ -18,6 +18,8 @@ export interface FanPage {
   total: number | null;
   /** Null: more to load, no number to show (spec D21). */
   remaining: number | null;
+  /** The page skipped a sample the person may not read (spec D21). */
+  hidden: boolean;
 }
 
 /**
@@ -32,7 +34,7 @@ export function fanPage(collection: string, used: UsedIn, page: number): FanPage
   const remaining = total === null ? (used.more ? null : 0) : Math.max(0, total - FAN_PAGE * Math.max(1, page));
   if (isSampleFan(collection)) {
     const samples = used.items as SampleRec[];
-    return { operations: [], tests: [], samples, items: samples.map((s) => rowRef(COLLECTION.sample, s)), total, remaining };
+    return { operations: [], tests: [], samples, items: samples.map((s) => rowRef(COLLECTION.sample, s)), total, remaining, hidden: !!used.hidden };
   }
   const operations = used.items as OpRow[];
   const tests = used.tests ?? [];
@@ -42,7 +44,7 @@ export function fanPage(collection: string, used: UsedIn, page: number): FanPage
     ...tests.map((t) => ({ ref: rowRef(COLLECTION.test, t), t: when(t.date) })),
   ];
   rows.sort((a, b) => b.t - a.t);
-  return { operations, tests, samples: [], items: rows.map((r) => r.ref), total, remaining };
+  return { operations, tests, samples: [], items: rows.map((r) => r.ref), total, remaining, hidden: !!used.hidden };
 }
 
 const emptyData = (focus: ProcessData['focus']): ProcessData => ({
@@ -86,6 +88,8 @@ export function withFanPage(data: ProcessData, rootKey: string, page: FanPage, r
     items: replace || !fan ? items : [...fan.items, ...items.filter((i) => !fan.items.some((f) => f.id === i.id && f.collection === i.collection))],
     total: page.total,
     remaining: page.remaining,
+    // Once a fan has skipped an unreadable sample it stays marked, whichever page that was.
+    ...(page.hidden || (!replace && fan?.hidden) ? { hidden: true } : {}),
   });
   const next: ProcessData = {
     ...data,
