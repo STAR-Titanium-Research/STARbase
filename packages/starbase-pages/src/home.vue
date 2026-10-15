@@ -5,6 +5,7 @@ import { PageShell, useExplorerHost } from '@d1/ui';
 import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
 import MyWork from './home/MyWork.vue';
+import MyTeams from './home/MyTeams.vue';
 import WaitingForYou from './home/WaitingForYou.vue';
 import LabStats from './home/LabStats.vue';
 import RecentActivity from './home/RecentActivity.vue';
@@ -14,8 +15,8 @@ import FrequentlyUsed from './home/FrequentlyUsed.vue';
 // Home is "my work" (docs/superpowers/specs/2026-10-06-explorer-pages-design.md, "Home"), laid out
 // calmly (N1b, decision 5): a greeting with the quick actions in it, the frequently-used card (two
 // short lists in one panel), one stats band, then a row of
-// two equal-height panels (what needs attention, your work) and the admin panels (admins only). The
-// recent activity is a side rail beside them (for everyone), under them when the page is narrow. Every block is its own component in ./home/ and loads on its own, so one
+// two equal-height panels (what needs attention, your work), my teams' latest records (only for someone in a team) and the admin panels (admins
+// only). The recent activity is a side rail beside them (for everyone), under them when the page is narrow. Every block is its own component in ./home/ and loads on its own, so one
 // forbidden collection never blanks Home, and none of them draws an empty box.
 const host = useExplorerHost();
 
@@ -55,6 +56,7 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 							<NeedsAttention :is-admin="isAdmin" />
 							<MyWork />
 						</div>
+						<MyTeams />
 						<AdminPanels :is-admin="adminConfirmed" />
 					</div>
 					<aside class="home-rail" aria-label="Recent activity"><RecentActivity /></aside>

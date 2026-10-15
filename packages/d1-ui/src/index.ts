@@ -124,10 +124,11 @@ export { default as TeamFaces } from './teams/TeamFaces.vue';
 export { TEAM_COLORS, TEAM_PALETTE, DEFAULT_TEAM_COLOR, contrastRatio, isTeamColor, lightDark, paletteFor, teamInitials } from './teams/teamPalette';
 export type { TeamColor, TeamPaint } from './teams/teamPalette';
 export {
-	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, onTeamChange, removeMember, setManager,
+	TEAM_RECORDS_LIMIT, TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, getTeamRecordIds, listPending, listTeams, myRecentTeamRecords, onTeamChange, removeMember, setManager,
 	updateTeam, uploadTeamLogo,
 } from './teams/teamsApi';
-export type { PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamCounts, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
+export type { RecentTeamRecord, TeamRecordIds, PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamCounts, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
+export { useTeamRecordFilter } from './teams/useTeamRecordFilter';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';
 export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';
@@ -161,7 +162,7 @@ export { default as ScanResultCard } from './finder/ScanResultCard.vue';
 export { isScanStarted, normalizeScan, displayText, resolveLabel } from './finder/scan';
 export type { ScanApi, ScanOutcome, FailReason } from './finder/scan';
 export { cameraSupport, cameraErrorMessage, decodeSize, DECODE_INTERVAL_MS } from './finder/scanCamera';
-export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
+export { INDEX_DEFS, TEAM_FILTER_FIELD, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
 export type { IndexDef, ColumnDef, FilterDef, SelectAction } from './index/indexConfig';
 export { thumbKind, thumbFields, imageField, hasDrawableDims, fileId, assetThumbUrl } from './index/thumbs';
 export type { ThumbKind } from './index/thumbs';

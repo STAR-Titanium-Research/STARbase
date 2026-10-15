@@ -14,6 +14,16 @@
 //        reads all); hidden_count is the rest. events: the last 20, newest first (?events=all for every one); an event about a
 //        record the caller cannot read carries no record, no person and no detail (record_hidden: true; kind, at and actor stay).
 //        team_events has no Lab Member read permission in Directus: this endpoint is the only way to read the history.
+//   GET    /d1-teams/:id/records?collection=<c>&limit=<n>  -> { ids: [...], truncated }  the ids of the records of ONE collection
+//                                          (physical_samples, manufacturing_operations, test_sessions, campaigns or projects) that the team owns
+//                                          (owner_team_id) or has a grant on (<kind>_team_access, which includes the hidden 'own' grant of an owned
+//                                          record: deduplicated), INTERSECTED with the caller's <kind>_readers (an administrator reads all), newest
+//                                          first by the record's updated_at. limit defaults to and is capped at 300 (300 ids fit a GET URL under
+//                                          Node's 16 KiB header limit); < 1 or not a number is 400. truncated: there were more than `limit`.
+//                                          The index pages filter on these ids.
+//   GET    /d1-teams/mine/recent?limit=20  -> { items: [{ collection, id, kind, code, title, team_id, team_name, team_color, changed_at }] }
+//                                          the most recently changed records (updated_at) of the caller's own teams (as owner or grantee),
+//                                          only those the caller reads; a record of two of their teams appears once; limit defaults to 20, max 100.
 //   POST   /d1-teams                       { name, description?, color? } -> 201 team; the caller (who needs a person, else 409 NO_PERSON)
 //                                          becomes its manager; 409 TEAM_NAME_TAKEN
 //   PATCH  /d1-teams/:id                   { name?, description?, color?, logo? }  manager or administrator. logo: a directus_files id of an
@@ -65,6 +75,7 @@ const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml'];
 const MAX_LOGO_BYTES = 1048576;
 const EVENTS_SHOWN = 20;
 const CHUNK = 1000;
+const MAX_TEAM_RECORDS = 300;
 const LEVELS = ['view', 'edit', 'investigator'];
 const RECORD_TYPES = Object.values(COLLECTIONS);
 const OWNABLE_TYPES = RECORD_TYPES.filter((cfg) => cfg.ownerTeam); // the four types a team can own (not projects)
@@ -239,6 +250,32 @@ export default {
         }
       }
       return out;
+    }
+
+    // Records of one collection that a team owns (owner_team_id) or has a grant on, that the viewer reads, newest first.
+    // viewer: login id, or null = an administrator (reads every existing record). The date is updated_at (every record table has it;
+    // a row without one sorts last). -> { items: [{ id, at }] of at most `limit`, truncated: more existed }.
+    async function teamRecords(db, cfg, teamId, viewer, limit) {
+      const ids = new Map(); // lower-case id -> id; the owner grant ('own') is also a grant row, so an owned record comes twice
+      if (cfg.ownerTeam) for (const r of await db(cfg.collection).where('owner_team_id', teamId).select(cfg.key)) ids.set(String(r[cfg.key]).toLowerCase(), r[cfg.key]);
+      for (const g of await db(accessTable(cfg)).where('team_id', teamId).select(cfg.fk)) ids.set(String(g[cfg.fk]).toLowerCase(), g[cfg.fk]);
+      if (!ids.size) return { items: [], truncated: false };
+      const readable = viewer
+        ? (await selectIn(db, cfg.readers, 'record_id', [...ids.values()], ['record_id'], (q) => q.where('user_id', viewer))).map((r) => r.record_id)
+        : [...ids.values()];
+      const rows = await selectIn(db, cfg.collection, cfg.key, readable, [cfg.key, 'updated_at']);
+      const stamp = (r) => { const t = r.updated_at ? new Date(r.updated_at).getTime() : NaN; return Number.isNaN(t) ? -Infinity : t; };
+      const sorted = rows
+        .map((r) => ({ id: r[cfg.key], at: iso(r.updated_at), t: stamp(r) }))
+        .sort((a, b) => (b.t === a.t ? String(a.id).localeCompare(String(b.id)) : b.t > a.t ? 1 : -1));
+      return { items: sorted.slice(0, limit).map(({ id, at }) => ({ id, at })), truncated: sorted.length > limit };
+    }
+    // ?limit=: a whole number from 1; absent = `fallback`; larger than `max` = `max`.
+    function limitOf(raw, fallback, max) {
+      if (isBlank(raw)) return fallback;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1) throw new HttpError(400, 'INVALID_PAYLOAD', 'limit must be a whole number from 1.');
+      return Math.min(n, max);
     }
 
     // The records a team owns (owner_team_id), per collection: { physical_samples, manufacturing_operations, test_sessions, campaigns }.
@@ -514,6 +551,50 @@ export default {
         }
       }
       res.json({ decision: body.decision, decided: done.length, records: done.map((t) => ({ collection: t.collection, id: t.record_id })) });
+    }));
+
+    // ---- the records of a team (index filters) and the recent ones (Home), before /:id ------------------------------
+
+    router.get('/mine/recent', route(async ({ req, res, acc, admin }) => {
+      const limit = limitOf(req.query?.limit, 20, 100);
+      const me = await callerPerson(database, acc);
+      if (!me) return res.json({ items: [] });
+      const viewer = admin ? null : String(acc.user);
+      const memberships = await database('team_members').where('person_id', me.person_id).select('team_id');
+      const teams = (await selectIn(database, 'teams', 'team_id', memberships.map((m) => m.team_id), ['team_id', 'name', 'color'])).sort(byText('name'));
+      const found = new Map(); // recordKey -> { cfg, id, at, team }: a record of two of the caller's teams is listed once (the first by team name)
+      for (const team of teams) {
+        for (const cfg of RECORD_TYPES) {
+          for (const r of (await teamRecords(database, cfg, team.team_id, viewer, limit)).items) {
+            const key = recordKey(cfg.collection, r.id);
+            if (!found.has(key)) found.set(key, { cfg, id: r.id, at: r.at, team });
+          }
+        }
+      }
+      const newest = [...found.values()]
+        .sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')) || String(a.id).localeCompare(String(b.id)))
+        .slice(0, limit);
+      const described = await describeRecords(database, newest.map((n) => ({ collection: n.cfg.collection, id: n.id })), viewer);
+      res.json({
+        items: newest
+          .map((n) => ({ n, d: described.get(recordKey(n.cfg.collection, n.id)) }))
+          .filter(({ d }) => d)
+          .map(({ n, d }) => ({
+            collection: d.collection, id: d.id, kind: d.kind, code: d.code, title: d.title,
+            team_id: n.team.team_id, team_name: n.team.name, team_color: n.team.color ?? 'teal', changed_at: n.at,
+          })),
+      });
+    }));
+
+    router.get('/:id/records', route(async ({ req, res, acc, admin }) => {
+      const team = await teamOr404(database, req.params?.id);
+      const collection = req.query?.collection;
+      if (typeof collection !== 'string' || !Object.hasOwn(COLLECTIONS, collection)) {
+        throw invalid('collection must be physical_samples, manufacturing_operations, test_sessions, campaigns or projects.');
+      }
+      const limit = limitOf(req.query?.limit, MAX_TEAM_RECORDS, MAX_TEAM_RECORDS);
+      const { items, truncated } = await teamRecords(database, COLLECTIONS[collection], team.team_id, admin ? null : String(acc.user), limit);
+      res.json({ ids: items.map((i) => i.id), truncated });
     }));
 
     // ---- one team --------------------------------------------------------------------------------------------

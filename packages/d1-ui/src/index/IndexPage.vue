@@ -54,7 +54,7 @@ const route = useRoute();
 const router = useRouter();
 
 const {
-	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
+	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
 
@@ -273,6 +273,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				</template>
 				<button v-if="hasFilters" type="button" class="link clear" @click="clearFilters">Clear filters</button>
 			</div>
+			<p v-if="teamNote" class="d1-note" role="status">{{ teamNote }}</p>
 
 			<div v-if="error" class="state-row">
 				<LoadState :error="error" />

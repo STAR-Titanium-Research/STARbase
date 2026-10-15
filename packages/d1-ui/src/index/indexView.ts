@@ -155,6 +155,11 @@ export function hasActiveFilters(s: IndexState): boolean {
 	return s.q.trim() !== '' || Object.values(s.filters).some(Boolean);
 }
 
+// The note under the filters when the Team filter shows only the newest of a larger team (the endpoint's cap).
+export function teamTruncatedNote(limit: number): string {
+	return `Showing the latest ${grouped(limit)} of this team's records.`;
+}
+
 // ---- chip options -----------------------------------------------------------------------------
 
 export interface ChipOption {

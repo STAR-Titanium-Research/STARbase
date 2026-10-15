@@ -388,6 +388,28 @@ Rollback: `docker compose stop directus` first, then `make migrate-down` twice (
 <previous commit>`, rebuild, then reload exactly as in step 4 and deploy the previous `d1-access-guard`, `d1-owner-default`,
 `d1-record-access`, `d1-teams` and `d1-admin-overview` at the same time. Teams, members and history stay (181 and 182 are untouched).
 
+## My teams (PR 4) (maintainer's step, approve separately)
+
+The Team filter on the Samples, Operations, Tests, Campaigns and Projects lists and the Home "My teams" panel. **No migration, no new `.env`
+keys.** Needs PR 2 and PR 3 ("Teams (PR 2)", "Team ownership (PR 3)" above) deployed first. It is two new routes of `d1-teams` and the STARbase
+build, so **redeploy `d1-teams` and STARbase, nothing else**:
+
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`.
+2. Reload Directus on the new `d1-teams` (`docker compose up -d --force-recreate directus`; a new route needs no permission-cache flush, since it
+   changes no permission) and recreate `proxy` for the new STARbase build (`docker compose up -d --force-recreate proxy`).
+3. Smoke: Home shows "My teams" with your teams' newest records (nothing at all if you are in no team); on Samples pick a Team: the list narrows
+   to the team's records you can read, and the URL carries `f.team=<id>`. A record shared with a team that you cannot read yet (you joined after it
+   was shared and the owner has not approved) never appears.
+
+A team's list is capped at its newest 300 records of a kind ("newest" = last changed): 500 ids in the request exceed Node's 16 KB header limit
+(Directus answers 431), so the page says "Showing the latest 300 of this team's records." and shows only those.
+
+Rollback: `git checkout <previous commit>`, rebuild, redeploy `d1-teams` and STARbase as above. Nothing in the database changed.
+
+Preview and E2E: `npm run build:extensions && npm run build -w starbase-web`, then the preview with the overlay of `tests/ui/README.md` and
+`cd tests/ui && npx playwright test specs/20-my-teams.spec.ts` (it makes its own logins, a team, 12 team-owned samples, a pending restricted
+sample and a team-shared project, and removes them afterwards).
+
 ## Recorded batches (migration 177, process map slice 2)
 
 Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and

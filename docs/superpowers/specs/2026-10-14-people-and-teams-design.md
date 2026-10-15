@@ -618,10 +618,53 @@ Migrations are **183** (`team_ownership`: `owner_team_id`, the owner grant, the 
   and then demoting a manager (sharing allowed, then refused at once with no delay), the manager deleting the record, Ruling O3 (403
   on create), Ruling O4 (409 in the API and the message in the dialog), the team delete refusal with counts, transfer back to a person
   (owner grant and derived rows gone, members lose access, the team then deletes), and the team-owned orphan operation (read by a member,
-  refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work and
-  team-filter views of team-owned records in a browser (the pure-function tests cover them) and the E30 readers.
+  refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work
+  view of team-owned records in a browser (the pure-function tests cover it; the Team filter is spec 20, E37) and the E30 readers.
   **Performance (E20's gate, 2026-10-14, seeded copy of live, 183 and 184 withheld against applied):** worst read p95 144 ms (a stranger's
   `co_owned_operation_all_fields`, 38 to 144 ms, from 183; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
   in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL for them because it sets the Directus "after" lines against the SQL-only "before" (x7.07, x3.42); like for
   like in SQL they are x2.0 and x1.97 (n=3 medians of a few milliseconds), and through Directus they have no "before".
   Details and the caveat about two machine-loaded runs: runbook "Team ownership (PR 3)".
+
+## 12. Errata (plan 4)
+
+Where building PR 4 (My teams, `docs/superpowers/plans/2026-10-14-people-4-my-teams.md`) differs from, or settles, the text above. These win
+over §1 to §7 where they disagree. No migration: PR 4 is `d1-teams` (two routes), the index kit, STARbase's Projects page and Home.
+
+- **E32 Ruling M1: a team filter never names a record the viewer cannot read (decision 19, §1.5, §4).** The ids of "the team's records" come
+  only from `GET /d1-teams/:id/records?collection=<c>&limit=<n>` -> `{ ids, truncated }`: the records of that collection the team owns
+  (`owner_team_id`, the four ownable types) or has a grant on (`<type>_team_access`, which includes the hidden `own` grant), de-duplicated,
+  **intersected with the caller's `<type>_readers`** (administrators: all), newest first. A record shared with the team before the viewer joined
+  (pending, no trust for future members) is one of the team's records but not one the viewer can read, so it is not in the answer, in the
+  filtered list, in the panel, or in a count. The kit never falls back to an unfiltered list: no ids, an empty answer, an unknown team or a
+  failed call gives a list that matches nothing (the nil uuid in `_in`) or an error state. `GET /d1-teams/mine/recent?limit=20` (default 20,
+  max 100) is the same intersection across the caller's teams: a record in two of the caller's teams is listed once (first by team name);
+  no person or no team gives `{ items: [] }`. Spec 20 proves both on real Postgres (a restricted sample pending for the member is absent
+  everywhere, the manager who reads it through the share is told of it, a stranger of nothing).
+- **E33 Ruling M2: at most 300 ids per team.** The plan said 500. 500 uuids in a GET `_in` come to about 22 KB on the request line, over
+  Node's 16 KB header limit (Directus answers 431); about 367 is the most that fits, so the cap is **300** (`MAX_TEAM_RECORDS` in `d1-teams`,
+  `TEAM_RECORDS_LIMIT` in the kit; a larger `limit` clamps, `limit < 1` or not an integer is 400 INVALID_PAYLOAD). When more exist,
+  `truncated` is true and the page says "Showing the latest 300 of this team's records." Cost: a team with more than 300 readable records of
+  one kind shows only its newest 300 on that list.
+- **E34 "Latest" is `updated_at`.** All five record tables have `created_at` and `updated_at`, and the `occ_<table>` trigger sets `updated_at`
+  on every UPDATE, so "newest first", the cut at 300 and the panel's `changed_at` all mean "last changed", not "created". Cost: a bulk edit
+  reshuffles which 300 show. Rows with no date sort last.
+- **E35 The Team filter.** A fixed chip (`FilterDef.options = { kind: 'team' }`, URL `f.team=<id>`, like the other chips) on samples,
+  operations, tests and campaigns; the options are all teams (`listTeams`), the records are the viewer's readable ones. Projects have no
+  `IndexDef` (a bespoke page), so `ProjectsIndex` filters on the client with the same composable (`useTeamRecordFilter`, `f.team` in the URL,
+  `router.replace`): projects are grants only (a team never owns a project). While the chosen team's ids load the page says "Loading this
+  team's projects…" (never "No project matches these filters") and hides the "Showing N of M" line. The URL is shareable: someone who cannot
+  read any of the team's records opens it and sees nothing.
+- **E36 The Home "My teams" panel (decision 19).** One flat list of lines (no grouping by team), each with the team tile, kind chip, code,
+  title, team name and "changed ..." ; the first 10, and "Show N more" (N = min(total, 20) - 10) reveals the rest of the 20 already loaded (no
+  second request) and moves keyboard focus to line 11, since the button unmounts when pressed. A record link is named "<Kind> <code>: <title>"
+  ("Sample no code: ..." for a record without a code). The panel draws nothing at all, not even its heading, when the viewer is in no team, no
+  record is readable, or the read fails (silent, like the other Home panels). Its model is `home/myTeamsPanel.ts` (the plan's name `myTeams.ts`
+  was taken by "Your work"'s team ids); the component is `home/MyTeams.vue`, placed after MyWork.
+- **E37 Tests.** The unit and vitest suites cover the routes, the query building and the panel's pure model; the repo has no component-mount
+  tests, so what only a browser can show is `tests/ui/specs/20-my-teams.spec.ts` (own logins, people, team, a pending restricted sample, 12
+  team-owned samples and a team-shared project, removed in `afterAll`): the Samples Team filter shows exactly the member's 12 readable team
+  samples and never the pending one, `f.team` survives a reload and a direct visit, a stranger filtering by the team sees nothing, the Projects
+  page shows its loading text and never flashes "No project matches", the panel draws for the member with a Show more that moves focus to line
+  11 and links named by kind, code and title, and draws nothing for a person in no team. **Not covered:** the panel's "All teams" link and
+  the 300-id truncation note in a browser (unit-tested), and a team of more than 300 records.

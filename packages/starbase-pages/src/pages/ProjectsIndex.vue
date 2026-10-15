@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref } from 'vue';
-import { useRoute } from 'vue-router';
-import { AppLink, LoadState, useExplorerHost, PageShell, PinToggle, canonicalPath, filterProjects, pinTargetForIndex, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
+import { useRoute, useRouter } from 'vue-router';
+import { AppLink, LoadState, useExplorerHost, PageShell, PinToggle, canonicalPath, filterProjects, useTeamRecordFilter, pinTargetForIndex, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
 import { PROJECT_CAP, useProjectsIndex } from './projects/useProjectsIndex';
 import ProjectCard from './projects/ProjectCard.vue';
 
@@ -11,6 +11,7 @@ import ProjectCard from './projects/ProjectCard.vue';
 // docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Projects index").
 const host = useExplorerHost();
 const route = useRoute();
+const router = useRouter();
 // The header's Pin toggle: this page (a bespoke page, not IndexPage, so it asks for its own).
 const pinTarget = computed(() => pinTargetForIndex(canonicalPath(route.path), null));
 const userId = computed<string | null>(() => host.user.value?.id ?? null);
@@ -21,9 +22,11 @@ const { projects, loading, error, campaignCounts, sampleCounts, campaignCountsEr
 const role = ref<RoleFilter>('all');
 const status = ref<StatusFilter>('all');
 const query = ref('');
+// Team: the projects a team has a grant on, that you can read (a project is never owned by a team). In the URL as f.team.
+const teamFilter = useTeamRecordFilter(host, 'projects', route, router);
 
 const visible = computed(() =>
-	filterProjects(projects.value, { role: role.value, status: status.value, query: query.value }, userId.value),
+	filterProjects(projects.value, { role: role.value, status: status.value, query: query.value, teamIds: teamFilter.team.value ? teamFilter.ids.value : null }, userId.value),
 );
 const countOrNull = (m: Map<string, number>, failed: string, id: string) => (failed ? null : (m.get(id) ?? 0));
 
@@ -62,6 +65,13 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 						<option v-for="o in statusOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
 					</select>
 				</label>
+				<label class="field">
+					<span>Team</span>
+					<select :value="teamFilter.team.value" aria-label="Filter by team" @change="teamFilter.setTeam(($event.target as HTMLSelectElement).value)">
+						<option value="">Any team</option>
+						<option v-for="t in teamFilter.teams.value" :key="t.value" :value="t.value">{{ t.label }}</option>
+					</select>
+				</label>
 				<span class="spacer" />
 				<PinToggle v-if="pinTarget" :target="pinTarget" label="Projects" />
 				<v-button small secondary to="/content/projects/+"><v-icon name="add" small left />New project</v-button>
@@ -75,18 +85,23 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				empty-text="No projects visible to you yet. If you expected some, you may not have been added as PI or investigator."
 			/>
 			<template v-else>
-				<p class="d1-note">
+				<p v-if="!teamFilter.loading.value" class="d1-note">
 					Showing {{ visible.length }} of {{ projects.length }} projects you can see.
 					<span v-if="projects.length >= PROJECT_CAP">Only the first {{ PROJECT_CAP }} are loaded.</span>
 				</p>
+				<p v-if="teamFilter.note.value" class="d1-note" role="status">{{ teamFilter.note.value }}</p>
+				<p v-if="teamFilter.error.value" class="d1-note warn" role="alert">{{ teamFilter.error.value }}</p>
 				<p v-if="role !== 'all' && !userId" class="d1-note warn">Your user could not be identified, so role filters match nothing.</p>
 				<p v-if="campaignCountsError" class="d1-note warn" role="alert">{{ campaignCountsError }}</p>
 				<p v-if="sampleCountsError" class="d1-note warn" role="alert">{{ sampleCountsError }}</p>
 				<p v-if="activityError" class="d1-note warn" role="alert">{{ activityError }}</p>
 				<p v-if="rolesError" class="d1-note warn" role="alert">{{ rolesError }}</p>
 				<p v-if="truncated" class="d1-note warn">The activity charts are based on the newest records only (the lab has more than the page loads).</p>
-				<LoadState v-if="!visible.length" empty empty-text="No project matches these filters." />
-				<div v-else class="grid">
+				<!-- A chosen team's ids are still loading: nothing is known to match yet, so say loading, not "no match". -->
+				<LoadState v-if="teamFilter.loading.value" loading loading-text="Loading this team's projects…" />
+				<!-- A failed ids call already shows its alert above: no "No project matches" and no cards beside it. -->
+				<LoadState v-else-if="!visible.length && !teamFilter.error.value" empty empty-text="No project matches these filters." />
+				<div v-else-if="visible.length" class="grid">
 					<ProjectCard
 						v-for="p in visible"
 						:key="p.project_id"

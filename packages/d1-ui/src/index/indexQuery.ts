@@ -95,6 +95,10 @@ function searchClause(def: IndexDef, q: string): Record<string, unknown> | null 
 	return or.length ? { _or: or } : null;
 }
 
+// A filter that matches no row: a team with no readable records (or whose ids could not be had) shows an empty list, never every row.
+// A nil uuid is a valid value for every primary key the Team filter is used on, and no record has it.
+export const NO_MATCH_ID = '00000000-0000-0000-0000-000000000000';
+
 // Params for GET /items/<collection>. `fields` and `sort` are arrays (axios sends them as
 // fields[]=a&fields[]=b, which Directus accepts, and the STARbase pages already do the same);
 // `filter` is a JSON string, which Directus parses from the query string. A chip whose field
@@ -102,11 +106,14 @@ function searchClause(def: IndexDef, q: string): Record<string, unknown> | null 
 // `readable` is the set of collections the user may read (null = not known: every relation is
 // tried). A relation column whose collection is not in it is asked for as the bare key, because a
 // nested field of a collection the user cannot read is refused; the page then shows that cell blank.
+// `teamIds`: the ids of the chosen team's records the viewer can read (GET /d1-teams/:id/records), for the Team chip (`f.team`) when it is set:
+// the primary key must be one of them (none, or ids not known: nothing matches, so a hidden record can never slip in).
 export function buildItemsParams(
 	def: IndexDef,
 	s: IndexState,
 	bookmark: Bookmark | null,
 	readable: ReadonlySet<string> | null = null,
+	teamIds: readonly string[] | null = null,
 ): Record<string, unknown> {
 	const fields = [def.primaryKey];
 	for (const c of def.columns) {
@@ -123,6 +130,8 @@ export function buildItemsParams(
 		if (chip.options.kind === 'bool') {
 			if (value !== 'true' && value !== 'false') continue; // junk is dropped, not read as false
 			and.push({ [field]: { _eq: value === 'true' } });
+		} else if (chip.options.kind === 'team') {
+			and.push({ [def.primaryKey]: { _in: teamIds?.length ? [...teamIds] : [NO_MATCH_ID] } });
 		} else if (chip.options.kind === 'flag') {
 			if (value === 'true') and.push(chip.options.filter); // a flag is on or off: anything else is dropped
 		} else {

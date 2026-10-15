@@ -119,6 +119,39 @@ const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
 export const listTeams = (api: HostApi): Promise<TeamSummary[]> => call(() => api.get('/d1-teams'), (b) => asList<TeamSummary>(b.teams));
 
+/** The ids of a team's records of one collection that the caller can read, newest first (GET /d1-teams/:id/records). `truncated`: the team has more than `limit`. */
+export interface TeamRecordIds {
+	ids: string[];
+	truncated: boolean;
+}
+
+/** The most the endpoint returns (and the index Team filter asks for). */
+export const TEAM_RECORDS_LIMIT = 300;
+
+/** Which records of `collection` a team owns or has a grant on, and the caller reads: the Team filter of the index pages (Ruling M1: only readable ids). */
+export const getTeamRecordIds = (api: HostApi, teamId: string, collection: string, limit: number = TEAM_RECORDS_LIMIT): Promise<TeamRecordIds> =>
+	call(
+		() => api.get(path(teamId, 'records'), { params: { collection, limit } }),
+		(b) => ({ ids: asList<unknown>(b.ids).map(String), truncated: b.truncated === true }),
+	);
+
+/** A record of one of the caller's own teams, as GET /d1-teams/mine/recent lists it (readable records only, newest change first). `team_color` is a palette key. */
+export interface RecentTeamRecord {
+	collection: string;
+	id: string;
+	kind: string | null;
+	code: string | null;
+	title: string | null;
+	team_id: string;
+	team_name: string;
+	team_color: TeamColor;
+	changed_at: string | null;
+}
+
+/** The most recently changed records of the caller's teams (owner or grantee) that the caller can read; the endpoint caps `limit` at 100. */
+export const myRecentTeamRecords = (api: HostApi, limit = 20): Promise<RecentTeamRecord[]> =>
+	call(() => api.get('/d1-teams/mine/recent', { params: { limit } }), (b) => asList<RecentTeamRecord>(b.items));
+
 /** One team with its members, counts, readable records and history. `{ events: 'all' }` asks for every event, not the last 20. */
 export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Promise<TeamDetail> =>
 	call(
