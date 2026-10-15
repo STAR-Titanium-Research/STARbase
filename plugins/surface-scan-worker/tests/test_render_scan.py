@@ -140,11 +140,7 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
 
     # The same bytes under another file id and name: same content hash.
     _scan_file(world, name="copy.al3d")
-    world.files[OTHER_FILE] = {
-        "id": OTHER_FILE,
-        "storage": "star",
-        "metadata": {"archive_path": "rig/copy.al3d"},
-    }
+    world.add_file("rig/copy.al3d", file_id=OTHER_FILE)
     world.current_fingerprint(OTHER_FILE, SHA)
     world.add_scan(OTHER_SCAN, OTHER_FILE)
 
@@ -461,3 +457,22 @@ def test_the_only_open_of_an_archive_file_is_read_only_and_nofollow():
     for flag in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"):
         assert flag not in text.replace("O_RDONLY", "")
     assert 'os.fdopen(fd, "rb")' in text
+
+
+def test_a_repointed_file_row_is_not_rendered(world):
+    """A member edited metadata.archive_path of a registered row to another file under the share."""
+    other = write_al3d(world.root / "rig" / "private.al3d", ramp(20, 30))
+    assert other.exists()
+    world.add_file(
+        "rig/private.al3d", forged=True
+    )  # the id is not the one derived from that path
+    world.add_scan()
+    _fails(world, "does not match its id")
+    assert not world.objects  # nothing was rendered, nothing was written
+
+
+def test_a_file_row_with_the_derived_id_renders(world):
+    _scan_file(world)
+    world.add_scan()
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
