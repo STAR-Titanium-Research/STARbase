@@ -78,6 +78,37 @@ export function patchOf(item: DraftItem, next: Record<string, unknown>): Record<
 	return patch;
 }
 
+/** The values an existing record's form edits: the record as loaded, with the draft's changes over it (a `null` change clears). */
+export function existingModel(item: DraftItem, current: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = { ...current };
+	for (const [k, v] of Object.entries(item.values)) {
+		if (v === null) delete out[k];
+		else out[k] = v;
+	}
+	return out;
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * For an existing record edited over its loaded values (`existingModel`): the patch for setValues that leaves in the draft only
+ * what differs from the record. A field changed → its value; a field the record has and the form cleared → `null`; a field
+ * changed back to the record's value, or a change the record never had a value for and was cleared → `undefined` (dropped).
+ */
+export function existingPatch(item: DraftItem, current: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
+	const patch: Record<string, unknown> = {};
+	const keys = new Set([...Object.keys(current), ...Object.keys(item.values), ...Object.keys(next)]);
+	for (const k of keys) {
+		const had = current[k];
+		const hasHad = had !== undefined && had !== null && had !== '';
+		if (k in next) patch[k] = same(next[k], had) ? undefined : next[k];
+		else if (hasHad) patch[k] = null;
+		else if (k in item.values) patch[k] = undefined;
+	}
+	for (const k of Object.keys(patch)) if (patch[k] === undefined && !(k in item.values)) delete patch[k];
+	return patch;
+}
+
 /**
  * What the form greys as inherited, without the fields the person has cleared on an existing record (`null` in its changes):
  * those show empty, not the value the record still has until Create.

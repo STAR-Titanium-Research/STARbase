@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftOperation, DraftSample, DraftTest } from '@d1/ui';
 import { KEY_SETTING_FIELDS } from '../model/formSlots';
 import { apply, emptyBody, itemOf } from './draft';
-import { collectionFor, formDefsFor, inheritedFor, keySettingsFor, patchOf, TEXT_OVERRIDES } from './draftForm';
+import { collectionFor, existingModel, existingPatch, formDefsFor, inheritedFor, keySettingsFor, patchOf, TEXT_OVERRIDES } from './draftForm';
 
 const defs = (...names: string[]) => names.map((field) => ({ field, meta: {} }));
 const sample = (over: Partial<DraftSample> = {}): DraftSample => ({ key: 'n1', kind: 'sample', values: {}, ...over });
@@ -170,5 +170,30 @@ describe('inheritedFor', () => {
 		const inherited = { form: 'disc' };
 		expect(inheritedFor(sample({ values: {} }), inherited)).toBe(inherited);
 		expect(inheritedFor(sample({ values: {} }), undefined)).toBeUndefined();
+	});
+});
+
+describe('existingModel / existingPatch: editing an existing record over its loaded values', () => {
+	const bodyWith = (it: DraftOperation) => ({ ...emptyBody(), items: [it] });
+	const item = { key: 'n1', kind: 'operation', workState: 'planned', rows: [{ key: 'n1' }], existing: { id: 'op1', version: 3 }, values: {} } as any;
+	const current = { notes: 'old', machining_feed_mm_per_rev: 0.2, method_id: 'm1' };
+	it('shows the record with the changes over it', () => {
+		expect(existingModel({ ...item, values: { notes: null, machining_feed_mm_per_rev: 0.3 } }, current)).toEqual({ machining_feed_mm_per_rev: 0.3, method_id: 'm1' });
+	});
+	it('a changed field goes in, an unchanged one does not', () => {
+		expect(existingPatch(item, current, { ...current, machining_feed_mm_per_rev: 0.3 })).toEqual({ machining_feed_mm_per_rev: 0.3 });
+	});
+	it('clearing a field the record has writes null, and it reaches the draft', () => {
+		const patch = existingPatch(item, current, { machining_feed_mm_per_rev: 0.2, method_id: 'm1' });
+		expect(patch).toEqual({ notes: null });
+		const after = itemOf(apply(bodyWith(item), { type: 'setValues', key: item.key, values: patch }), item.key)!;
+		expect(after.values).toEqual({ notes: null });
+	});
+	it('changing a field back to the record value drops the change', () => {
+		const edited = { ...item, values: { notes: 'new' } };
+		const patch = existingPatch(edited, current, { ...current });
+		expect(patch).toEqual({ notes: undefined });
+		const after = itemOf(apply(bodyWith(edited), { type: 'setValues', key: edited.key, values: patch }), edited.key)!;
+		expect(after.values).toEqual({});
 	});
 });
