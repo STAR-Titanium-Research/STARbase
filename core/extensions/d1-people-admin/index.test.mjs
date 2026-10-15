@@ -295,6 +295,22 @@ test('GET /people joins login status, role name and last_access, and lists login
   assert.equal(r.body.logins_without_person[1].role_name, null);
 });
 
+test('a login merged into another (login_aliases) is not a login without a person, and is not counted', async () => {
+  const merged = ID(260);
+  const tables = baseTables();
+  tables.directus_users.push({ id: merged, email: 'old@login.example', first_name: 'Old', last_name: 'Alias', status: 'suspended', role: R.member, last_access: null });
+  tables.login_aliases = [{ alias_user_id: merged, canonical_user_id: U.ann }];
+  const rows = [{ key: 'login_without_person', person_ids: [], user_ids: [U.superAdmin, U.orphan, merged] }];
+  const { handlers } = mount({ tables, raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(people.body.logins_without_person.map((l) => l.user_id), [U.orphan, U.previewAdmin, U.superAdmin]);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body, { items: [{ key: 'login_without_person', count: 2 }] });
+  // and a lone alias leaves the item out altogether
+  const only = mount({ tables, raw: { 'SELECT key': [{ key: 'login_without_person', person_ids: [], user_ids: [merged] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
+});
+
 test('GET /people gives each person their teams (one query: team_members joined with teams)', async () => {
   const { handlers, db } = mount({ raw: { 'SELECT key': ATTENTION, 'SELECT tm.person_id': MEMBERSHIPS } });
   const r = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
