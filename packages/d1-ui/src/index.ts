@@ -26,7 +26,7 @@ export { sampleCodeTemplate, SEQ_PLACEHOLDER } from './build/sampleCode';
 export type { SampleCodeParts } from './build/sampleCode';
 export type {
 	Check, CheckResponse, CreatedRecord, CreateRefusal, CreateResponse, DraftBase, DraftBody, DraftItem, DraftKey, DraftListEntry, DraftOperation,
-	DraftRecord, DraftSample, DraftTest, DraftWire, MarkDoneBody, MarkDoneResponse, TemplateRecord, WriteFailure,
+	DraftRecord, DraftSample, DraftTest, DraftWire, MarkDoneBody, MarkDoneResponse, MarkPlannedBody, MarkPlannedResponse, TemplateRecord, WriteFailure,
 } from './build/types';
 
 // Display helpers and error predicates

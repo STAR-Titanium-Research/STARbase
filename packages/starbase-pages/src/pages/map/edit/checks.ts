@@ -108,6 +108,17 @@ function staleChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	return out;
 }
 
+const SAMPLE_STILL_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
+
+/** A sample no done operation has made yet: a new one made by a planned operation, or an existing one the record says is planned. */
+function samplePlanned(body: DraftBody, key: DraftKey | null, ctx: CheckCtx): boolean {
+	const item = key ? itemOf(body, key) : undefined;
+	if (item?.kind !== 'sample') return false;
+	if (!item.existing) return makerOf(body, item.key)?.op.workState === 'planned';
+	const status = (ctx.record?.(item) ?? ctx.records?.[recordKey('physical_samples', item.existing.id)]?.values)?.current_status;
+	return status === 'planned';
+}
+
 function sampleChecks(item: DraftSample, body: DraftBody, ctx: CheckCtx): Check[] {
 	if (item.existing || item.remove) return [];
 	const out: Check[] = [];
@@ -142,6 +153,11 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 		}
 	});
 	const planned = item.workState === 'planned';
+	// Done work on a sample that is still planned: its maker is not done yet (d1-build refuses it).
+	if (item.workState === 'done' && (!item.existing || item.attach)) {
+		const rows = item.rows.map((_, row) => inputSampleOf(body, { key: item.key, row }));
+		if (rows.some((k) => samplePlanned(body, k, ctx))) out.push(block(item.key, SAMPLE_STILL_PLANNED));
+	}
 	if (!item.existing || item.attach) {
 		if (!item.existing && planned && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));
 		if (empty(values.equipment_id)) out.push(warn(item.key, 'No machine yet.', 'equipment_id'));
@@ -157,6 +173,9 @@ function testChecks(item: DraftItem & { kind: 'test' }, body: DraftBody, ctx: Ch
 	if (empty(values.test_type) && known(item, 'test_type', ctx)) out.push(block(item.key, 'Choose the type of this test.', 'test_type'));
 	if (!item.existing && subjectsOf(body, item.key).length === 0) {
 		out.push(block(item.key, 'This test needs the sample it is done on: wire a sample to its socket.'));
+	}
+	if (item.workState === 'done' && !item.existing && subjectsOf(body, item.key).some((k) => samplePlanned(body, k, ctx))) {
+		out.push(block(item.key, SAMPLE_STILL_PLANNED));
 	}
 	if (!item.existing) {
 		if (item.workState === 'planned' && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));

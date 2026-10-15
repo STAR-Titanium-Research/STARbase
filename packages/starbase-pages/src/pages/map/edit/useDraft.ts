@@ -9,7 +9,7 @@
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
 import {
 	errorText, useExplorerHost, type Check, type CheckResponse, type CreateResponse, type DraftBody, type DraftListEntry, type DraftRecord, type HostApi,
-	type MarkDoneBody, type MarkDoneResponse,
+	type MarkDoneBody, type MarkDoneResponse, type MarkPlannedBody, type MarkPlannedResponse,
 } from '@d1/ui';
 import { blocking, changedKeys, checks as clientChecks, keepServerChecks, mergeChecks, onCanvas, type CheckCtx } from './checks';
 import { apply as reduce, emptyBody, type DraftAction } from './draft';
@@ -32,6 +32,7 @@ export type Refusal =
 
 export type CreateOutcome = ({ ok: true } & CreateResponse['data']) | Refusal;
 export type MarkDoneOutcome = ({ ok: true } & MarkDoneResponse['data']) | Refusal;
+export type MarkPlannedOutcome = ({ ok: true } & MarkPlannedResponse['data']) | Refusal;
 
 export interface UseDraftOptions {
 	/** The API the draft talks through; the Explorer host's by default. */
@@ -412,11 +413,26 @@ export function useDraft(options: UseDraftOptions = {}) {
 		}
 	}
 
-	/** Marks one planned operation or test done now (it is not a draft change, so it works with no draft open). */
+	/**
+	 * Marks a whole container done now: `ids` are every operation row of it, or every pass of a stack, done in one transaction (it
+	 * is not a draft change, so it works with no draft open).
+	 */
 	async function markDone(input: MarkDoneBody): Promise<MarkDoneOutcome> {
+		if (!input.ids.length) return { ok: false, reason: 'error', message: 'There is nothing to mark done.' };
 		try {
 			const res = await api.post('/d1-build/mark-done', input);
 			return { ok: true, ...(res.data as MarkDoneResponse).data };
+		} catch (e) {
+			return refusalOf(e);
+		}
+	}
+
+	/** Sets a done container back to planned (its owner only, the server decides). */
+	async function markPlanned(input: MarkPlannedBody): Promise<MarkPlannedOutcome> {
+		if (!input.ids.length) return { ok: false, reason: 'error', message: 'There is nothing to set back to planned.' };
+		try {
+			const res = await api.post('/d1-build/mark-planned', input);
+			return { ok: true, ...(res.data as MarkPlannedResponse).data };
 		} catch (e) {
 			return refusalOf(e);
 		}
@@ -444,7 +460,7 @@ export function useDraft(options: UseDraftOptions = {}) {
 		// checks
 		checks, missing, checkNow,
 		// writing records
-		creating, create, markDone,
+		creating, create, markDone, markPlanned,
 	};
 }
 

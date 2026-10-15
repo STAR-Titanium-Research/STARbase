@@ -26,6 +26,7 @@ function fakeServer() {
 		checkAnswer: [] as Check[],
 		createAnswer: null as unknown,
 		markDoneAnswer: null as unknown,
+		markPlannedAnswer: null as unknown,
 		bump(id: string, body: DraftBody) {
 			const d = drafts.get(id)!;
 			drafts.set(id, { ...d, body, version: d.version + 1 });
@@ -63,6 +64,10 @@ function fakeServer() {
 				if (s.createAnswer instanceof Error) throw s.createAnswer;
 				drafts.delete(idOf(path));
 				return { data: s.createAnswer };
+			}
+			if (path === '/d1-build/mark-planned') {
+				if (s.markPlannedAnswer instanceof Error) throw s.markPlannedAnswer;
+				return { data: s.markPlannedAnswer };
 			}
 			if (path === '/d1-build/mark-done') {
 				if (s.markDoneAnswer instanceof Error) throw s.markDoneAnswer;
@@ -625,25 +630,41 @@ describe('useDraft: Create', () => {
 describe('useDraft: Mark done and discard', () => {
 	it('marks a record done with no draft open', async () => {
 		const { s, draft } = make();
-		s.markDoneAnswer = { data: { id: 'op-1', work_state: 'done' } };
-		const input = { collection: 'manufacturing_operations', id: 'op-1', date: '2026-10-14' } as const;
-		expect(await draft.markDone(input)).toEqual({ ok: true, id: 'op-1', work_state: 'done' });
+		s.markDoneAnswer = { data: { ids: ['op-1', 'op-2'], work_state: 'done' } };
+		const input = { collection: 'manufacturing_operations', ids: ['op-1', 'op-2'], date: '2026-10-14' } as const;
+		expect(await draft.markDone({ ...input, ids: [...input.ids] })).toEqual({ ok: true, ids: ['op-1', 'op-2'], work_state: 'done' });
 		expect(s.calls[0]).toEqual({ method: 'post', path: '/d1-build/mark-done', body: input });
+	});
+
+	it('marks a container back to planned, and a refusal says why', async () => {
+		const { s, draft } = make();
+		s.markPlannedAnswer = { data: { ids: ['op-1'], work_state: 'planned' } };
+		expect(await draft.markPlanned({ collection: 'manufacturing_operations', ids: ['op-1'] })).toEqual({ ok: true, ids: ['op-1'], work_state: 'planned' });
+		expect(s.calls[0]).toEqual({ method: 'post', path: '/d1-build/mark-planned', body: { collection: 'manufacturing_operations', ids: ['op-1'] } });
+		s.markPlannedAnswer = httpError(403, undefined, 'Only the owner can set a done record back to planned');
+		expect(await draft.markPlanned({ collection: 'test_sessions', ids: ['t'] })).toEqual({ ok: false, reason: 'error', message: 'Only the owner can set a done record back to planned' });
+	});
+
+	it('has nothing to do for an empty list', async () => {
+		const { s, draft } = make();
+		expect((await draft.markDone({ collection: 'test_sessions', ids: [] })).ok).toBe(false);
+		expect((await draft.markPlanned({ collection: 'test_sessions', ids: [] })).ok).toBe(false);
+		expect(s.calls).toEqual([]);
 	});
 
 	it('is refused with the checks that stop it', async () => {
 		const { s, draft } = make();
 		const check: Check = { key: 'op-1', field: 'feed_rate', level: 'block', text: 'Fill in Feed rate: a done operation needs it.' };
 		s.markDoneAnswer = httpError(409, { code: 'CHECKS', checks: [check] }, 'Missing');
-		expect(await draft.markDone({ collection: 'manufacturing_operations', id: 'op-1' })).toEqual({ ok: false, reason: 'checks', checks: [check], message: 'Missing' });
+		expect(await draft.markDone({ collection: 'manufacturing_operations', ids: ['op-1'] })).toEqual({ ok: false, reason: 'checks', checks: [check], message: 'Missing' });
 	});
 
 	it('a refusal that is not about checks keeps its message', async () => {
 		const { s, draft } = make();
 		s.markDoneAnswer = httpError(403, undefined, 'You may not');
-		expect(await draft.markDone({ collection: 'test_sessions', id: 't' })).toEqual({ ok: false, reason: 'error', message: 'You may not' });
+		expect(await draft.markDone({ collection: 'test_sessions', ids: ['t'] })).toEqual({ ok: false, reason: 'error', message: 'You may not' });
 		s.markDoneAnswer = networkError();
-		expect((await draft.markDone({ collection: 'test_sessions', id: 't' })).ok).toBe(false);
+		expect((await draft.markDone({ collection: 'test_sessions', ids: ['t'] })).ok).toBe(false);
 	});
 
 	it('discards the draft and lets go of it', async () => {

@@ -118,6 +118,42 @@ describe('structure (planned records)', () => {
 	});
 });
 
+describe('done work on a planned sample', () => {
+	const STILL = 'block:-:Its sample is still planned; mark the operation that makes it done first.';
+	/** n1 → planned cut n2 → new planned piece n4 → polish n5 / test n7 on the piece. */
+	const onPiece = (state: 'planned' | 'done', kind: 'operation' | 'test'): DraftBody => {
+		const b = run([
+			{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			kind === 'operation'
+				? { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, workState: state, from: { key: 'n4' } }
+				: { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, workState: state, from: { key: 'n4' } },
+		]);
+		return b;
+	};
+	const stillPlanned = (b: DraftBody, c: CheckCtx = ctx) => texts(blocking(checks(b, c))).filter((t) => t === STILL);
+
+	it('a done operation or test on a sample a planned operation makes is blocked', () => {
+		expect(stillPlanned(onPiece('done', 'operation'))).toEqual([STILL]);
+		expect(stillPlanned(onPiece('done', 'test'))).toEqual([STILL]);
+	});
+
+	it('planned work on it is fine, and so is done work once the maker is done', () => {
+		expect(stillPlanned(onPiece('planned', 'operation'))).toEqual([]);
+		expect(stillPlanned(onPiece('planned', 'test'))).toEqual([]);
+		const made = apply(onPiece('done', 'operation'), { type: 'setWorkState', key: 'n2', workState: 'done' });
+		expect(stillPlanned(made)).toEqual([]);
+	});
+
+	it('an existing planned sample (from its record) blocks done work on it too', () => {
+		const b = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(stillPlanned(b)).toEqual([]); // the record is not read yet
+		expect(stillPlanned(b, { ...ctx, records: { [recordKey('physical_samples', 's')]: { version: 1, values: { current_status: 'planned' } } } })).toEqual([STILL]);
+		expect(stillPlanned(b, { ...ctx, records: { [recordKey('physical_samples', 's')]: { version: 1, values: { current_status: 'active' } } } })).toEqual([]);
+	});
+});
+
 describe('done records', () => {
 	const done = () => apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
 

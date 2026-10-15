@@ -56,7 +56,7 @@ export interface DraftWire {
 export interface Check {
 	/**
 	 * Why the server says it (d1-build): GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION are what only a re-read
-	 * of the records can tell; anything else (OTHER, or none) the client's own checks already cover. Client checks have none.
+	 * of the records can tell; REQUIRED, STRUCTURE and OTHER the client's own checks already cover. Optional on checks the client makes.
 	 */
 	code?: string;
 	key: DraftKey;
@@ -106,16 +106,27 @@ export interface WriteFailure {
 	errors: { message: string; extensions: { code: 'WRITE_FAILED'; key: DraftKey } }[];
 }
 
+/** Mark a whole container done in one transaction: every operation row of it, or every pass of a stack. */
 export interface MarkDoneBody {
 	collection: 'manufacturing_operations' | 'test_sessions';
-	id: string;
+	ids: string[];
 	/** YYYY-MM-DD; today when omitted. */
 	date?: string;
 	personId?: string;
 }
 
 export interface MarkDoneResponse {
-	data: { id: string; work_state: 'done' };
+	data: { ids: string[]; work_state: 'done' };
+}
+
+/** Back to planned (owner only): the same records as Mark done took. */
+export interface MarkPlannedBody {
+	collection: 'manufacturing_operations' | 'test_sessions';
+	ids: string[];
+}
+
+export interface MarkPlannedResponse {
+	data: { ids: string[]; work_state: 'planned' };
 }
 
 export interface TemplateRecord {
