@@ -275,13 +275,14 @@ export default {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
         // a Lab Viewer changes nothing: the access list, an owner, a team entry (the manage rule below would pass a viewer who owns a record)
-        if (isWriteRequest(req) && (await isLabViewer(database, acc.user, labViewerRoleId(env)))) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
+        const labViewer = await isLabViewer(database, acc.user, labViewerRoleId(env));
+        if (labViewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const collection = req.params?.collection;
         const cfg = isCollection(collection) ? COLLECTIONS[collection] : null;
         if (!cfg) throw new HttpError(400, 'INVALID_PAYLOAD', 'That kind of record has no access list.');
         const id = req.params?.id;
         if (typeof id !== 'string' || !UUID.test(id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The record id is not valid.');
-        await fn({ req, res, acc, cfg, id });
+        await fn({ req, res, acc, cfg, id, labViewer });
       } catch (err) {
         return sendError(res, err);
       }
@@ -590,13 +591,14 @@ export default {
 
     // -- the routes ------------------------------------------------------------------------------------------
     router.get('/:collection/:id', route(async (args) => {
-      const { res, cfg, id, acc } = args;
+      const { res, cfg, id, acc, labViewer } = args;
       await requireReadable(args);
       const record = await loadRecord(database, cfg, id);
       const owner = await ownerOf(database, cfg, record);
       // the project's PI is named only to a caller who can read that project (a sample reader need not): no hidden parent's details
       const pi = (await callerReadsParent(args, 'project_id', record)) ? await projectPi(database, cfg, record) : null;
-      const manage = await canManage(args);
+      // a Lab Viewer reads the list and changes none of it: the manage rule would say yes to a viewer who owns the record, the page must not offer the controls
+      const manage = labViewer ? false : await canManage(args);
       const entries = await buildEntries(database, cfg, id, record, acc);
       const teams = await buildTeams(database, cfg, id);
       res.json({ restricted: toBool(record.restricted), owner, project_pi: personRef(pi), can_manage: manage, entries, teams });

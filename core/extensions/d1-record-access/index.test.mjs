@@ -1712,3 +1712,28 @@ test('Lab Viewer: reading the access list is not refused (GET), and the role id 
   const old = mount({ tables: withViewer(U.owner), env });
   assert.notEqual(errorOf(await call(old.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' }))?.extensions?.code, 'READ_ONLY_ROLE');
 });
+
+// ---- Lab Viewer, Task B: the access list is readable by a viewer, and offers no change --------------------------------
+
+test('Lab Viewer: GET /:collection/:id answers a viewer with the list as everyone reads it, and can_manage is false even for the record\'s owner', async () => {
+  const world = withViewer(U.owner);
+  const { handlers } = mount({ tables: world });
+  const get = handlers['GET /:collection/:id'];
+  const viewerOwner = await call(get, { acc: owner, method: 'GET' });
+  assert.equal(viewerOwner.status, 200);
+  assert.equal(viewerOwner.body.can_manage, false); // the manage rule would say yes: the viewer owns it
+  // the same owner as a Lab Member can manage, and the rest of the body is the same
+  const asMember = await call(mount({ tables: withViewer(U.owner, '10000001-0000-0000-0000-000000000002') }).handlers['GET /:collection/:id'], { acc: owner, method: 'GET' });
+  assert.equal(asMember.body.can_manage, true);
+  assert.deepEqual({ ...viewerOwner.body, can_manage: null }, { ...asMember.body, can_manage: null });
+  // a viewer who owns nothing: the same list, no manage
+  const stranger = withViewer(U.stranger);
+  const other = await call(mount({ tables: stranger }).handlers['GET /:collection/:id'], { acc: as(U.stranger), method: 'GET' });
+  assert.equal(other.status, 200);
+  assert.equal(other.body.can_manage, false);
+  assert.deepEqual(other.body.entries, viewerOwner.body.entries);
+  // the team-members read route is readable too
+  const members = await call(handlers['GET /:collection/:id/entries/team/:team_id/members'], { acc: owner, params: { team_id: T.alpha }, method: 'GET' });
+  assert.notEqual(members.status, 403);
+  assert.notEqual(errorOf(members)?.extensions?.code, 'READ_ONLY_ROLE');
+});

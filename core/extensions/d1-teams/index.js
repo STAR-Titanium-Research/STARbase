@@ -166,9 +166,12 @@ export default {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
         // a Lab Viewer changes nothing: no team, member, decision or pending approval (a viewer may manage a team or own records; that must not matter)
-        if (isWriteRequest(req) && (await isLabViewer(database, acc.user, labViewerRoleId(env)))) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
+        const labViewer = await isLabViewer(database, acc.user, labViewerRoleId(env));
+        if (labViewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const caller = await accountAdmin(database, acc.user, labAdminRoleId);
-        await fn({ req, res, acc, admin: acc.admin === true || caller.admin });
+        const admin = acc.admin === true || caller.admin;
+        // `admin` stays the right to CHANGE things (a viewer has none); `readAll` is the right to read every record: an administrator or a Lab Viewer
+        await fn({ req, res, acc, admin, readAll: admin || labViewer, labViewer });
       } catch (err) {
         return sendError(res, err);
       }
@@ -465,9 +468,10 @@ export default {
 
     // ---- the Waiting-for-you list and the decision (before the /:id routes) -----------------------------------
 
-    router.get('/pending', route(async ({ res, acc, admin }) => {
+    router.get('/pending', route(async ({ res, acc, labViewer }) => {
       const me = await callerPerson(database, acc);
-      if (!me) return res.json({ items: [] });
+      // a Lab Viewer decides nothing, so nothing waits for them (even a record they own)
+      if (!me || labViewer) return res.json({ items: [] });
       // Waiting for you is the caller's own queue: only records they OWN (or that a team they manage owns), an administrator included
       // (an administrator approves or declines a single record from Who has access).
       const managed = await managedTeamIds(database, me);
@@ -557,11 +561,11 @@ export default {
 
     // ---- the records of a team (index filters) and the recent ones (Home), before /:id ------------------------------
 
-    router.get('/mine/recent', route(async ({ req, res, acc, admin }) => {
+    router.get('/mine/recent', route(async ({ req, res, acc, readAll }) => {
       const limit = limitOf(req.query?.limit, 20, 100);
       const me = await callerPerson(database, acc);
       if (!me) return res.json({ items: [] });
-      const viewer = admin ? null : String(acc.user);
+      const viewer = readAll ? null : String(acc.user);
       const memberships = await database('team_members').where('person_id', me.person_id).select('team_id');
       const teams = (await selectIn(database, 'teams', 'team_id', memberships.map((m) => m.team_id), ['team_id', 'name', 'color'])).sort(byText('name'));
       const found = new Map(); // recordKey -> { cfg, id, at, team }: a record of two of the caller's teams is listed once (the first by team name)
@@ -588,23 +592,23 @@ export default {
       });
     }));
 
-    router.get('/:id/records', route(async ({ req, res, acc, admin }) => {
+    router.get('/:id/records', route(async ({ req, res, acc, readAll }) => {
       const team = await teamOr404(database, req.params?.id);
       const collection = req.query?.collection;
       if (typeof collection !== 'string' || !Object.hasOwn(COLLECTIONS, collection)) {
         throw invalid('collection must be physical_samples, manufacturing_operations, test_sessions, campaigns or projects.');
       }
       const limit = limitOf(req.query?.limit, MAX_TEAM_RECORDS, MAX_TEAM_RECORDS);
-      const { items, truncated } = await teamRecords(database, COLLECTIONS[collection], team.team_id, admin ? null : String(acc.user), limit);
+      const { items, truncated } = await teamRecords(database, COLLECTIONS[collection], team.team_id, readAll ? null : String(acc.user), limit);
       res.json({ ids: items.map((i) => i.id), truncated });
     }));
 
     // ---- one team --------------------------------------------------------------------------------------------
 
-    router.get('/:id', route(async ({ req, res, acc, admin }) => {
+    router.get('/:id', route(async ({ req, res, acc, readAll }) => {
       const team = await teamOr404(database, req.params?.id);
       const me = await callerPerson(database, acc);
-      const viewer = admin ? null : String(acc.user);
+      const viewer = readAll ? null : String(acc.user);
 
       const [item, memberRows] = await Promise.all([
         teamItem(database, me, team.team_id),
