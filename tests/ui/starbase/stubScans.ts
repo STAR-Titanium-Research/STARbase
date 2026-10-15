@@ -20,8 +20,10 @@ export const STUB_TOOLING = {
 } as const;
 
 export const STUB_LIBRARY = [
-	{ id: 'file-new-1', filename_download: 'Alicona-edgeA-after-12min.al3d', filesize: 18_400_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-after-12min.al3d' } },
-	{ id: 'file-new-2', filename_download: 'Alicona-edgeA-cleaned.al3d', filesize: 17_900_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-cleaned.al3d' } },
+	{ id: 'file-new-1', storage: 'star', filename_download: 'Alicona-edgeA-after-12min.al3d', filesize: 18_400_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-after-12min.al3d' } },
+	{ id: 'file-new-2', storage: 'star', filename_download: 'Alicona-edgeA-cleaned.al3d', filesize: 17_900_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-cleaned.al3d' } },
+	// An uploaded file (not on the archive share): the worker could not read it, so the dialog's filter (storage = star) must not list it.
+	{ id: 'file-upload-1', storage: 'local', filename_download: 'uploaded-by-hand.al3d', filesize: 1_000, metadata: null },
 ];
 
 type Status = 'pending' | 'rendering' | 'done' | 'failed';
@@ -48,6 +50,8 @@ export interface StubScans {
 	renders: string[];
 	/** "GET /d1-surface-scan/<id>/<part>" of every call, in order. */
 	endpoint: string[];
+	/** Ids of done scans whose rendered files are gone: meta, grid and thumb answer 404 OBJECT_MISSING until the scan is rendered again. */
+	objectMissing: string[];
 	/** A POST /items/surface_scans answers 403 with this text, once, when set. */
 	refuseCreate: string | null;
 	scan: SyntheticScan;
@@ -76,6 +80,7 @@ export function stubScans(): StubScans {
 		created: [],
 		renders: [],
 		endpoint: [],
+		objectMissing: [],
 		refuseCreate: null,
 		scan: syntheticScan(),
 	};
@@ -132,12 +137,15 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 		if (part === 'render' && method === 'POST') {
 			if (!row) return answer(json({ errors: [{ message: 'Not found', extensions: { code: 'ROUTE_NOT_FOUND' } }] }, 404));
 			scans.renders.push(id);
+			scans.objectMissing = scans.objectMissing.filter((m) => m !== id); // rendering again puts the files back
 			row.render_status = 'pending';
 			row.render_error = null;
 			return answer(c.route.fulfill({ status: 204, headers: c.cors }));
 		}
 		if (method !== 'GET') return false;
-		if (!row || row.render_status !== 'done') return answer(json({ errors: [{ message: 'Not found', extensions: { code: 'ROUTE_NOT_FOUND' } }] }, 404));
+		if (!row || row.render_status !== 'done') return answer(json({ errors: [{ message: 'Not found', extensions: { code: 'NOT_RENDERED' } }] }, 404));
+		// A done scan whose files are gone from the object store (spec of the endpoint: 404 OBJECT_MISSING).
+		if (scans.objectMissing.includes(id)) return answer(json({ errors: [{ message: 'The rendered data is missing; render the scan again.', extensions: { code: 'OBJECT_MISSING' } }] }, 404));
 		const cache = { 'cache-control': 'private', etag: `"stub-${id}"` };
 		if (part === 'meta') return answer(json(scans.scan.meta));
 		if (part === 'grid') return answer(c.route.fulfill({ status: 200, headers: { ...c.cors, ...cache, 'content-type': 'application/octet-stream' }, body: scans.scan.grid }));
@@ -145,9 +153,19 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 	}
 
 	if (path === '/items/surface_scans' && method === 'GET') {
-		const wantEdge = raw.includes(T.edgeId);
-		const wantInsert = raw.includes(T.insertId);
-		const rows = scans.rows.filter((r) => (wantEdge && r.edge_id === T.edgeId) || (wantInsert && r.insert_id === T.insertId));
+		// The ids asked for, exactly: every `filter[...][edge_id][_eq]=<id>` (or the JSON form of the filter) in the query.
+		const asked = (field: 'edge_id' | 'insert_id'): string[] => {
+			const ids: string[] = [];
+			for (const [key, value] of c.url.searchParams) {
+				if (new RegExp(`\\[${field}\\]\\[_eq\\]$`).test(key)) ids.push(value);
+			}
+			const filterText = c.url.searchParams.get("filter");
+			if (filterText) for (const m of filterText.matchAll(new RegExp(`"${field}":\\{"_eq":"([^"]+)"\\}`, 'g'))) ids.push(m[1]);
+			return ids;
+		};
+		const edgeIds = asked('edge_id');
+		const insertIds = asked('insert_id');
+		const rows = scans.rows.filter((r) => (r.edge_id !== null && edgeIds.includes(r.edge_id)) || (r.insert_id !== null && insertIds.includes(r.insert_id)));
 		const out = rows.map((r) => ({ ...r }));
 		// A queued render moves on with every read of the list: pending, then rendering, then done.
 		for (const r of scans.rows) {
@@ -178,7 +196,11 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 		return answer(json({ data: { scan_id: row.scan_id } }));
 	}
 
-	if (path === '/files' && method === 'GET') return answer(json({ data: STUB_LIBRARY }));
+	if (path === '/files' && method === 'GET') {
+		// Like Directus: the filter decides. Only the storage clause is evaluated here (the dialog always sends it).
+		const onlyArchive = /\[storage\]\[_eq\]=star\b/.test(raw) || /"storage":\{"_eq":"star"\}/.test(raw);
+		return answer(json({ data: STUB_LIBRARY.filter((f) => !onlyArchive || f.storage === 'star') }));
+	}
 
 	if (method !== 'GET') return false;
 	const item = /^\/items\/(tool_boxes|cutting_inserts|insert_edges|manufacturing_operations)(?:\/([^/]+))?$/.exec(path);

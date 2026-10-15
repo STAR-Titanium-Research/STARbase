@@ -2,11 +2,16 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 import { STAR_BASE, watchErrors } from '../starbase/target';
 import { STUB_TOOLING as T } from '../starbase/stubScans';
 import { stubD1, type StubState } from '../starbase/stubD1';
+// The app's own framing numbers, read to know where the camera starts (pure TypeScript, no WebGL).
+import { parseMeta } from '../../../packages/starbase-pages/src/pages/surface/viewer/gridData';
+import { defaultExaggeration, frameCamera, heightRange, scanLayout } from '../../../packages/starbase-pages/src/pages/surface/viewer/scanLayout';
+import { SCAN_H, SCAN_W } from '../starbase/syntheticScan';
 
 // Surface scans on inserts and edges (docs/superpowers/specs/2026-10-15-surface-scans-design.md), in a real browser:
 // the Surface scans panel with its thumbnails, the 3D viewer drawn on the GPU from a made-up height grid (a software
 // WebGL in headless Chromium), the exaggeration slider and colour-by-height changing the picture, an edge page that also
-// lists its insert's scans, Render again on a failed render, the Add a surface scan dialog with its lab-wide warning, and
+// lists its insert's scans, Render again on a failed render and on a done one whose files are gone (404 OBJECT_MISSING), the
+// surface's orientation (the file's hole lands where the file puts it: not flipped, not mirrored), arrow keys and plus / minus, the Add a surface scan dialog with its lab-wide warning, and
 // the page without WebGL. d1-server is the stand-in of tests/ui/starbase (stubD1.ts + stubScans.ts + syntheticScan.ts), so
 // this needs only STARbase from `vite preview`, no Directus and no real scan.
 // Run: npm run build -w starbase-web && STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web, then
@@ -83,6 +88,78 @@ async function look(canvas: Locator) {
 	}, png);
 }
 
+// The synthetic scan's hole (a disc at x = 120, y = 40 of the 192 x 128 grid, y counted from the TOP row), found in a
+// screenshot of the canvas: background-coloured pixels that the background outside the surface cannot reach. The legend's
+// box is left out. Returns the hole's centre in canvas pixels, or null.
+async function findHole(canvas: Locator, legend: Locator): Promise<{ x: number; y: number; size: number } | null> {
+	const cb = (await canvas.boundingBox())!;
+	const lb = (await legend.boundingBox())!;
+	const skip = { x: lb.x - cb.x - 2, y: lb.y - cb.y - 2, w: lb.width + 4, h: lb.height + 4 };
+	const png = (await canvas.screenshot()).toString('base64');
+	return canvas.page().evaluate(async ({ b64, skip }) => {
+		const img = new Image();
+		img.src = `data:image/png;base64,${b64}`;
+		await img.decode();
+		const c = document.createElement('canvas');
+		c.width = img.width;
+		c.height = img.height;
+		const ctx = c.getContext('2d')!;
+		ctx.drawImage(img, 0, 0);
+		const d = ctx.getImageData(0, 0, c.width, c.height).data;
+		const W = c.width;
+		const H = c.height;
+		const o = (20 * W + 20) * 4; // inside the stage's rounded border (its corner pixel is the border, not the background)
+		const bg = [d[o], d[o + 1], d[o + 2]];
+		const isBg = (i: number) => Math.abs(d[i * 4] - bg[0]) + Math.abs(d[i * 4 + 1] - bg[1]) + Math.abs(d[i * 4 + 2] - bg[2]) <= 24;
+		const inSkip = (x: number, y: number) => x >= skip.x && x <= skip.x + skip.w && y >= skip.y && y <= skip.y + skip.h;
+		const outside = new Uint8Array(W * H);
+		const stack: number[] = [];
+		const push = (x: number, y: number) => {
+			const i = y * W + x;
+			if (x < 0 || y < 0 || x >= W || y >= H || outside[i] || !(isBg(i) || inSkip(x, y))) return;
+			outside[i] = 1;
+			stack.push(i);
+		};
+		const RIM = 5; // the stage's border and rounded corners: start the sweep from a frame just inside it
+		for (let x = 0; x < W; x++) { for (let k = RIM; k < RIM + 2; k++) { push(x, k); push(x, H - 1 - k); } }
+		for (let y = 0; y < H; y++) { for (let k = RIM; k < RIM + 2; k++) { push(k, y); push(W - 1 - k, y); } }
+		while (stack.length) {
+			const i = stack.pop()!;
+			const x = i % W;
+			const y = (i - x) / W;
+			push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+		}
+		let n = 0;
+		let sx = 0;
+		let sy = 0;
+		for (let y = 0; y < H; y++) {
+			for (let x = 0; x < W; x++) {
+				const i = y * W + x;
+				if (!outside[i] && isBg(i) && !inSkip(x, y)) { n++; sx += x; sy += y; }
+			}
+		}
+		return n >= 40 ? { x: sx / n, y: sy / n, size: n } : null;
+	}, { b64: png, skip });
+}
+
+// Where a scene point lands on the canvas from the opening camera (azimuth 28 deg, polar 52 deg, FOV 35 deg), in pixels.
+function project(point: [number, number, number], cam: { distance: number; polarDeg: number; azimuthDeg: number }, w: number, h: number, fovDeg = 35): [number, number] {
+	const phi = (cam.polarDeg * Math.PI) / 180;
+	const theta = (cam.azimuthDeg * Math.PI) / 180;
+	const eye = [cam.distance * Math.sin(phi) * Math.sin(theta), cam.distance * Math.cos(phi), cam.distance * Math.sin(phi) * Math.cos(theta)];
+	const f = eye.map((v) => -v / cam.distance); // looking at the origin
+	const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+	const norm = (a: number[]) => a.map((v) => v / Math.hypot(a[0], a[1], a[2]));
+	const right = norm(cross(f, [0, 1, 0]));
+	const up = cross(right, f);
+	const v = point.map((p, i) => p - eye[i]);
+	const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+	const t = Math.tan((fovDeg * Math.PI) / 360);
+	const ndcX = dot(v, right) / (dot(v, f) * t * (w / h));
+	const ndcY = dot(v, up) / (dot(v, f) * t);
+	return [((ndcX + 1) / 2) * w, ((1 - ndcY) / 2) * h];
+}
+
 async function openViewer(page: Page, rowText: string | RegExp) {
 	await row(page, rowText).getByRole('button', { name: /Open .* in 3D/ }).click();
 	const viewer = page.getByTestId('surface-scan-viewer');
@@ -103,7 +180,7 @@ test('an insert page lists its scan with a thumbnail, and the viewer draws the s
 	await expect(r.locator('.thumb img')).toBeVisible();
 	await expect.poll(() => r.locator('.thumb img').evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0); // a real PNG came through the blob URL
 	expect(state.scans.endpoint).toContain('GET /d1-surface-scan/scan-insert-new/thumb');
-	await expect(panel(page).getByRole('button', { name: 'Render again' })).toHaveCount(0);
+	await expect(r.getByRole('button', { name: 'Render again' })).toBeVisible(); // a finished render can be rendered again too (its files may be gone)
 
 	const { viewer, canvas } = await openViewer(page, 'CNMG12-1-new.al3d');
 	expect(state.scans.endpoint).toEqual(expect.arrayContaining(['GET /d1-surface-scan/scan-insert-new/meta', 'GET /d1-surface-scan/scan-insert-new/grid']));
@@ -156,6 +233,35 @@ test('an insert page lists its scan with a thumbnail, and the viewer draws the s
 	await viewer.getByRole('button', { name: 'Reset view' }).click();
 	await expect.poll(async () => apart((await look(canvas)).sig, coloured.sig), { timeout: 10_000 }).toBeLessThan(1.5);
 
+	// Not flipped, not mirrored: the file's hole (x = 120, y = 40 from the top row of 192 x 128) lands where the file says it is.
+	// The scene is x to the right, the top row of the file far away, so the hole is right of centre and in the far half.
+	const meta = parseMeta(state.scans.scan.meta);
+	const layout = scanLayout(meta);
+	const range = heightRange(meta, { min: state.scans.scan.zMin, max: state.scans.scan.zMax, valid: 1, missing: 0 });
+	const size = (await canvas.boundingBox())!;
+	const cam = frameCamera(layout, range, defaultExaggeration(layout, range), size.width / size.height);
+	const at = (col: number, rowFromTop: number): [number, number] =>
+		project([(col / (SCAN_W - 1) - 0.5) * layout.sizeX, 0, (rowFromTop / (SCAN_H - 1) - 0.5) * layout.sizeZ], cam, size.width, size.height);
+	const hole = await findHole(canvas, legend);
+	expect(hole, 'the hole in the surface is on screen').not.toBeNull();
+	const [ex, ey] = at(120, 40);
+	const dist = (p: [number, number]) => Math.hypot(hole!.x - p[0], hole!.y - p[1]);
+	expect(dist([ex, ey])).toBeLessThan(0.08 * size.width); // where the file puts it (the heights are ignored, hence the room)
+	for (const [mirrored, name] of [[at(SCAN_W - 1 - 120, 40), 'mirrored left to right'], [at(120, SCAN_H - 1 - 40), 'flipped top to bottom'], [at(SCAN_W - 1 - 120, SCAN_H - 1 - 40), 'turned half way round']] as const) {
+		expect(dist(mirrored), `not ${name}`).toBeGreaterThan(dist([ex, ey]) + 0.05 * size.width);
+	}
+
+	// The keyboard turns and zooms it too (OrbitControls' own keys only pan): focus the canvas, press keys, the picture changes.
+	await canvas.focus();
+	const keyed = await look(canvas);
+	for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+	await expect.poll(async () => apart((await look(canvas)).sig, keyed.sig), { timeout: 10_000 }).toBeGreaterThan(2);
+	const turnedByKey = await look(canvas);
+	for (let i = 0; i < 3; i++) await page.keyboard.press('+');
+	await expect.poll(async () => apart((await look(canvas)).sig, turnedByKey.sig), { timeout: 10_000 }).toBeGreaterThan(2);
+	await viewer.getByRole('button', { name: 'Reset view' }).click();
+	await expect.poll(async () => apart((await look(canvas)).sig, coloured.sig), { timeout: 10_000 }).toBeLessThan(1.5);
+
 	await page.screenshot({ path: testInfo.outputPath('insert-page-viewer.png'), fullPage: false });
 	await testInfo.attach('insert-page-viewer', { path: testInfo.outputPath('insert-page-viewer.png'), contentType: 'image/png' });
 
@@ -176,15 +282,34 @@ test("an edge page lists its own scans and its insert's, and Render again moves 
 	const failed = row(page, 'CNMG12-1-A-cleaned.al3d');
 	await expect(failed).toContainText('Render failed');
 	await expect(failed).toContainText('could not read this file');
-	await expect(failed.getByRole('button', { name: 'Open in 3D' })).toHaveCount(0);
-	await expect(panel(page).getByRole('button', { name: 'Render again' })).toHaveCount(1); // only the failed one
+	await expect(failed.getByRole('button', { name: /Open .* in 3D/ })).toHaveCount(0);
+	await expect(failed.getByRole('button', { name: 'Render again' })).toBeVisible();
+	await expect(row(page, 'CNMG12-1-A-worn.al3d').getByRole('button', { name: /Open .* in 3D/ })).toBeVisible();
 	await failed.getByRole('button', { name: 'Render again' }).click();
 	await expect.poll(() => state.scans.renders).toEqual(['scan-edge-bad']);
 	await expect(failed).toContainText(/Waiting to render|Rendering/);
 	await expect(failed).toContainText('Ready', { timeout: 25_000 }); // the panel polls while a render is queued
 	await expect(failed.locator('.thumb img')).toBeVisible();
 	await expect(failed.getByRole('button', { name: /Open .* in 3D/ })).toBeVisible();
-	await expect(panel(page).getByRole('button', { name: 'Render again' })).toHaveCount(0);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a done scan whose rendered files are gone says so in the viewer, and Render again brings it back', async ({ browser }) => {
+	const { page, state, errors } = await start(browser, `/edges/${T.edgeId}`);
+	state.scans.objectMissing = ['scan-edge-worn']; // the object store lost it after the panel loaded
+	const worn = row(page, 'CNMG12-1-A-worn.al3d');
+	await worn.getByRole('button', { name: /Open .* in 3D/ }).click();
+	const viewer = page.getByTestId('surface-scan-viewer');
+	await expect(viewer).toHaveAttribute('data-phase', 'error');
+	await expect(viewer).toContainText('The rendered data is missing; render the scan again.');
+	await viewer.getByRole('button', { name: 'Render again' }).click();
+	await expect.poll(() => state.scans.renders).toEqual(['scan-edge-worn']);
+	await expect(page.getByTestId('surface-scan-viewer')).toHaveCount(0); // the view closes: the scan is not done any more
+	await expect(worn).toContainText(/Waiting to render|Rendering/);
+	await expect(worn).toContainText('Ready', { timeout: 25_000 });
+	await worn.getByRole('button', { name: /Open .* in 3D/ }).click();
+	await expect(page.getByTestId('surface-scan-viewer')).toHaveAttribute('data-phase', 'ready', { timeout: 30_000 });
 	expect(errors).toEqual([]);
 	await page.context().close();
 });
