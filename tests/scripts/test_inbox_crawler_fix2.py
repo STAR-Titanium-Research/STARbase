@@ -160,3 +160,56 @@ def test_a_failing_heartbeat_does_not_roll_back_pending_registrations(
         world.one("SELECT current_activity FROM inbox_crawler_state")[0] == "recovered"
     )
     store.close_heartbeat()
+
+
+# ---- S2: a restored file whose whole folder was deleted ---------------------------------------------
+
+
+def _scenario(world):
+    world.person("abc12de")
+    world.write("Users/abc12de/sem/a.png", png((1, 1, 1)))
+    world.write("Users/abc12de/sem/deep/b.png", png((2, 2, 2)))
+    world.write("Users/abc12de/keep.png", png((3, 3, 3)))
+    settle(world)
+    run(world)
+
+
+def _set_state(world, rel, state):
+    world.q("UPDATE file_candidates SET state = %s WHERE rel_path = %s", (state, rel))
+    world.commit()
+
+
+@pytest.mark.parametrize(
+    "rel", ["Users/abc12de/sem/a.png", "Users/abc12de/sem/deep/b.png"]
+)
+def test_a_restored_file_whose_whole_folder_was_deleted_goes_gone(world, rel):
+    import shutil
+
+    _scenario(world)
+    _set_state(world, rel, "dismissed")
+    shutil.rmtree(Path(world.root, "Users/abc12de/sem"))
+    settle(world)
+    run(world)
+    assert cands(world)[rel][0] == "dismissed"  # untouched while dismissed
+    assert (
+        world.one(
+            "SELECT count(*) FROM inbox_dirs WHERE rel_path LIKE 'Users/abc12de/sem%'"
+        )[0]
+        == 0
+    )  # the cache rows of the folder are gone too
+    _set_state(world, rel, "new")  # the person restores it
+    stats, _, _ = run(world)
+    assert cands(world)[rel][0] == "gone"
+    assert stats.gone >= 1
+    assert cands(world)["Users/abc12de/keep.png"][0] == "new"
+
+
+def test_seeding_the_walk_with_new_candidates_folders_costs_no_extra_stat_normally(
+    world,
+):
+    _scenario(world)
+    settle(world)
+    stats, spy, _ = run(world)
+    assert stats.listed_dirs == 0 and stats.gone == 0
+    for folder in ("Users/abc12de/sem", "Users/abc12de/sem/deep"):
+        assert spy.stats.count(folder) == 1  # stat-ed once, never twice
