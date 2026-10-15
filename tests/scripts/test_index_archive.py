@@ -5,6 +5,7 @@ Postgres when DATABASE_URL is set (it builds a throwaway schema, touching nothin
 """
 
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -275,3 +276,29 @@ def test_fingerprint_dedupe_runs_before_the_update_on_a_fake_cursor():
         i for i, s in enumerate(cur.sql) if s.startswith("UPDATE file_fingerprints")
     ]
     assert dedupe and update and dedupe[0] < update[0]
+
+
+# ---- the surface-scan worker derives file ids the way this script does -----------
+
+
+def test_surface_scan_worker_derives_file_ids_like_the_indexer():
+    """The worker renders a file only when its id is uuid5 of file:<archive_path> (a repointed
+    archive_path is refused). Its copy of the namespace is a source constant in a plugin that needs
+    SurfaceTopography, so compare the text: the namespace string and the "file:" prefix."""
+    worker = (
+        Path(__file__).resolve().parents[2]
+        / "plugins"
+        / "surface-scan-worker"
+        / "app"
+        / "lib"
+        / "archive.py"
+    )
+    text = worker.read_text()
+    m = re.search(
+        r'_ID_NAMESPACE\s*=\s*uuid\.uuid5\(\s*uuid\.NAMESPACE_DNS,\s*"([^"]+)"\s*\)',
+        text,
+    )
+    assert m, "the worker no longer defines _ID_NAMESPACE the expected way"
+    assert uuid.uuid5(uuid.NAMESPACE_DNS, m.group(1)) == ia._NS
+    assert '"file:" + archive_path' in text
+    assert ia.file_id("rig/x.al3d") == uuid.uuid5(ia._NS, "file:rig/x.al3d")

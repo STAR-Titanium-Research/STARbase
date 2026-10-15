@@ -325,8 +325,17 @@ def test_expected_file_id_matches_scripts_index_archive():
     import importlib.util
     from pathlib import Path
 
-    script = Path(__file__).resolve().parents[3] / "scripts" / "index_archive.py"
-    if not script.exists():  # the plugin image tests run without the rest of the repo
+    script = next(
+        (
+            parent / "scripts" / "index_archive.py"
+            for parent in Path(__file__).resolve().parents
+            if (parent / "scripts" / "index_archive.py").exists()
+        ),
+        None,
+    )
+    if (
+        script is None
+    ):  # the plugin image tests run at /app without the rest of the repo
         pytest.skip("scripts/index_archive.py is not next to the plugin")
     spec = importlib.util.spec_from_file_location("index_archive_for_test", script)
     module = importlib.util.module_from_spec(spec)
