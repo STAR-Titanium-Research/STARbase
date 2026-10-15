@@ -269,6 +269,23 @@ export function canSee(scope, candidate) {
   return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
 }
 
+// The refusals the client acts on (each is a Directus-shaped error, see shapeError). The routes throw these, and the contract fixtures write them.
+const rateLimited = (wait) => new HttpError(429, 'RATE_LIMITED', 'Your folder was scanned or queued a moment ago. Try again in a few minutes.', { retry_after_seconds: wait });
+export const ERRORS = {
+  notEditable: (candidateId, collection, recordId) =>
+    new HttpError(403, 'FORBIDDEN', 'You can only link a file to a record you can edit.', { candidate_id: candidateId, collection, record_id: recordId }),
+  alreadyOnRecord: (candidateId) => new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record. Dismiss clears it.', { candidate_id: candidateId }),
+  dealtWith: (candidateId) => new HttpError(409, 'ALREADY_LINKED', 'Someone already dealt with that file.', { candidate_id: candidateId }),
+  alreadyLinked: (candidateId) => new HttpError(409, 'ALREADY_LINKED', 'That file was already linked.', { candidate_id: candidateId }),
+  surfaceScan: (candidateId) => new HttpError(409, 'SURFACE_SCAN', 'A surface scan is added to an insert or edge, not linked. That is not available yet.', { candidate_id: candidateId }),
+  notInInbox: (candidateId) => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: candidateId }),
+  noFolder: () => new HttpError(409, 'NO_FOLDER', 'There is no folder to scan yet. Ask an administrator to set your uni alias.'),
+  alreadyQueued: (requestId) => new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: requestId }),
+  readOnly: () => new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE),
+  adminOnly: () => new HttpError(403, 'FORBIDDEN', 'Only administrators can do that.'),
+  rateLimited,
+};
+
 const badInput = (message) => new HttpError(400, 'INVALID_PAYLOAD', message);
 const text = (v, what) => {
   if (isBlank(v)) return null;
@@ -562,14 +579,14 @@ export function mount(router, context, deps = {}) {
     try {
       const acc = req.accountability;
       if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
-      if (isWriteRequest(req) && isViewerAccountability(acc)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
+      if (isWriteRequest(req) && isViewerAccountability(acc)) throw ERRORS.readOnly();
       await fn({ req, res, acc });
     } catch (err) {
       sendError(res, err);
     }
   };
   const adminRoute = (fn) => route(async (ctx) => {
-    if (ctx.acc.admin !== true) throw new HttpError(403, 'FORBIDDEN', 'Only administrators can do that.');
+    if (ctx.acc.admin !== true) throw ERRORS.adminOnly();
     await fn(ctx);
   });
   // The crawler's route: the shared secret, nothing else (a signed-in person without it is refused too).
@@ -680,8 +697,6 @@ export function mount(router, context, deps = {}) {
     const editable = await editableSet(db, acc, schema, editPairs.filter(([c, id]) => readable.has(`${c}:${id}`)));
     return { readable, labels, editable };
   }
-  const notEditable = (candidateId, collection, recordId) =>
-    new HttpError(403, 'FORBIDDEN', 'You can only link a file to a record you can edit.', { candidate_id: candidateId, collection, record_id: recordId });
 
   // -- linking -------------------------------------------------------------------------------------------------------------------
 
@@ -697,7 +712,6 @@ export function mount(router, context, deps = {}) {
     return found;
   }
   const linkKey = (collection, recordId, fileId) => `${collection}:${recordId}:${fileId}`;
-  const alreadyOnRecord = (candidateId) => new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record. Dismiss clears it.', { candidate_id: candidateId });
 
   // Writes the links of `entries` ({ cand, collection, recordId }) in the open transaction: the junction row as the caller, then the candidate.
   // The caller has already locked the candidates, checked their state and the edit rights.
@@ -709,13 +723,13 @@ export function mount(router, context, deps = {}) {
       try {
         junctionId = await itemsFor(schema, acc, target.junction, trx).createOne({ [target.fk]: recordId, directus_files_id: cand.directus_files_id });
       } catch (err) {
-        if (isUnique(err)) throw alreadyOnRecord(cand.candidate_id);
-        if (isDenied(err)) throw notEditable(cand.candidate_id, collection, recordId);
+        if (isUnique(err)) throw ERRORS.alreadyOnRecord(cand.candidate_id);
+        if (isDenied(err)) throw ERRORS.notEditable(cand.candidate_id, collection, recordId);
         throw err;
       }
       const adopt = !IMAGE_KINDS.includes(cand.kind);
       const done = rowsOf(await trx.raw(SQL.markLinked, [acc.user, linkKind, collection, junctionId, batchId, adopt, cand.candidate_id]));
-      if (!done.length) throw new HttpError(409, 'ALREADY_LINKED', 'Someone already dealt with that file.', { candidate_id: cand.candidate_id });
+      if (!done.length) throw ERRORS.dealtWith(cand.candidate_id);
       linked.push({ candidate_id: cand.candidate_id, collection, record_id: recordId, junction_id: junctionId, adopted: adopt });
     }
     return linked;
@@ -742,10 +756,10 @@ export function mount(router, context, deps = {}) {
       const again = [];
       for (const w of wanted) {
         const cand = rows.get(w.id);
-        if (!cand || !canSee(scope, cand)) throw new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: w.id });
+        if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(w.id);
         if (cand.state === 'new') {
           // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test
-          if (cand.kind === 'surface_scan') throw new HttpError(409, 'SURFACE_SCAN', 'A surface scan is added to an insert or edge, not linked. That is not available yet.', { candidate_id: w.id });
+          if (cand.kind === 'surface_scan') throw ERRORS.surfaceScan(w.id);
           fresh.push({ cand, collection: w.collection, recordId: w.recordId });
           continue;
         }
@@ -753,7 +767,7 @@ export function mount(router, context, deps = {}) {
           // the same person repeating the same link: nothing more to do
           const same = cand.decided_by === acc.user && cand.linked_collection === w.collection && cand.linked_junction_id
             && rowsOf(await trx.raw(SQL.junctionById[w.collection], [cand.linked_junction_id]))[0]?.record_id === w.recordId;
-          if (!same) throw new HttpError(409, 'ALREADY_LINKED', 'That file was already linked.', { candidate_id: w.id });
+          if (!same) throw ERRORS.alreadyLinked(w.id);
           again.push({ candidate_id: w.id, collection: w.collection, record_id: w.recordId, junction_id: cand.linked_junction_id, adopted: !IMAGE_KINDS.includes(cand.kind), already_linked: true });
           continue;
         }
@@ -762,9 +776,9 @@ export function mount(router, context, deps = {}) {
       }
       // The edit check, before anything is written: all or nothing.
       const editable = await editableSet(trx, acc, schema, fresh.map((e) => [e.collection, e.recordId]));
-      for (const e of fresh) if (!editable.has(`${e.collection}:${e.recordId}`)) throw notEditable(e.cand.candidate_id, e.collection, e.recordId);
+      for (const e of fresh) if (!editable.has(`${e.collection}:${e.recordId}`)) throw ERRORS.notEditable(e.cand.candidate_id, e.collection, e.recordId);
       const there = await existingLinks(trx, fresh.map((e) => ({ collection: e.collection, recordId: e.recordId, fileId: e.cand.directus_files_id })));
-      for (const e of fresh) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw alreadyOnRecord(e.cand.candidate_id);
+      for (const e of fresh) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw ERRORS.alreadyOnRecord(e.cand.candidate_id);
       // nothing newly linked (the same person repeating a link): no batch, a count of 0, never the old batch id
       const batchId = fresh.length ? newId() : null;
       const linked = fresh.length ? await performLink(trx, { acc, schema, entries: fresh, linkKind, batchId }) : [];
@@ -901,7 +915,7 @@ export function mount(router, context, deps = {}) {
       const unchanged = [];
       for (const id of ids) {
         const cand = byId.get(id);
-        if (!cand || !canSee(scope, cand)) throw new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: id });
+        if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(id);
         if (cand.state === from) change.push(id);
         else if (cand.state === to) unchanged.push(id);
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
@@ -978,9 +992,9 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const hasFolder = Boolean(scope.person?.uni_alias) || scope.teams.some((t) => !isBlank(t.share_folder));
     if (!scope.personId || !hasFolder) {
-      throw new HttpError(409, 'NO_FOLDER', 'There is no folder to scan yet. Ask an administrator to set your uni alias.');
+      throw ERRORS.noFolder();
     }
-    const limited = (wait) => new HttpError(429, 'RATE_LIMITED', 'Your folder was scanned or queued a moment ago. Try again in a few minutes.', { retry_after_seconds: wait });
+    const limited = rateLimited;
     const now = clock();
     const since = new Date(now.getTime() - RESCAN_WINDOW_MS).toISOString();
     const out = await inTransaction(acc.user, async (trx) => {
@@ -1085,7 +1099,7 @@ export function mount(router, context, deps = {}) {
     const out = await inTransaction(acc.user, async (trx) => {
       await trx.raw(SQL.lock, ['inbox-scan-all']);
       const [waiting] = rowsOf(await trx.raw(SQL.scanAllBlocking, []));
-      if (waiting) throw new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: waiting.request_id });
+      if (waiting) throw ERRORS.alreadyQueued(waiting.request_id);
       return rowsOf(await trx.raw(SQL.scanAllInsert, [acc.user]))[0];
     });
     res.status(202).json({ data: shapeQueued(out) });
