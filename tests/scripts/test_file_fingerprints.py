@@ -453,8 +453,13 @@ class Db:
         modified = kw.pop("modified", T0.isoformat())
         disk = kw.pop("filename_disk", fid)
         modified_on = kw.pop("modified_on", dt.datetime(2025, 1, 1, tzinfo=dt.UTC))
+        found_by = kw.pop(
+            "found_by", None
+        )  # 'inbox_crawler' for a row the inbox crawler registered
         assert not kw, kw
         meta = {"archive_path": rel, "modified": modified} if storage == "star" else {}
+        if found_by:
+            meta["found_by"] = found_by
         self.cur.execute(
             "INSERT INTO directus_files (id, storage, filename_disk, filename_download, filesize, "
             "modified_on, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -477,6 +482,11 @@ class Db:
             self.cur.execute(
                 "INSERT INTO machining_force_analysis (directus_files_id) VALUES (%s)",
                 (fid,),
+            )
+        elif linked in ("sample", "session"):
+            self.cur.execute(
+                f"INSERT INTO {linked}_data_files ({linked}_id, directus_files_id) VALUES (%s, %s)",
+                (str(uuid.uuid4()), fid),
             )
         self.conn.commit()
         return fid
@@ -1047,6 +1057,27 @@ def test_phase_linked_ignores_unlinked_files_and_all_takes_them(db):
     assert db.row(unlinked) is None
     assert run(db, "--phase", "all") == 0
     assert db.row(unlinked)["status"] == "done"
+
+
+def test_phase_all_leaves_a_file_the_inbox_crawler_found_until_a_person_links_it(db):
+    """The crawler lists documents by name and size only (ADR-0020): a document nobody linked must not be
+    read by this tool either. Once it is linked (any junction) it is an ordinary linked file."""
+    found = db.add_file(
+        "Users/ab12/notes.pdf", b"n", linked=None, found_by="inbox_crawler"
+    )
+    plain = db.add_file("p/u.txt", b"u", linked=None)  # not the crawler's: unchanged
+    linked = {
+        kind: db.add_file(
+            f"Users/ab12/{kind}.pdf", b"l", linked=kind, found_by="inbox_crawler"
+        )
+        for kind in ("operation", "sample", "session", "force_analysis")
+    }
+    assert {j.id for j in db.selected("all")} == {plain, *linked.values()}
+    assert found not in {j.id for j in db.selected("all")}
+    assert {j.id for j in db.selected("linked")} == set(linked.values())
+    assert run(db, "--phase", "all") == 0
+    assert db.row(found) is None  # never read, never fingerprinted
+    assert db.row(plain)["status"] == "done"
 
 
 def test_the_cache_files_of_a_force_analysis_are_not_linked_source_files(db):

@@ -1964,6 +1964,15 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   runs (or between two scans), then give the old folder name to another person. Expect the old person's
   found files (not linked ones) to vanish from their Inbox, the new owner to get a first scan of that folder
   (everything *Older*, badge 0), and no found file of the folder in the old person's Inbox.
+- [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
+  `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
+  nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a row the crawler registered (`metadata.found_by
+  = 'inbox_crawler'`) until it is linked. The indexer's own walk (`make index-archive`, with or without
+  `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
+  unchanged, and a document the indexer registered earlier is not marked `found_by`. Run `make index-archive
+  --fingerprint` on a test folder with a document in it, check what was read, and decide: restrict both tools
+  to the folders the lab agreed to index, or accept it. Since: found files inbox, final review (S5).
 - [ ] **IF20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
   Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
   crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
