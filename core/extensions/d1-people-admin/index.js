@@ -150,12 +150,21 @@ export default {
 
     // d1_private.people_attention() rows: { key, person_ids, user_ids }
     // Logins merged into another person (login_aliases: alias -> canonical, and suspended): never a row and never counted.
-    const aliasIds = async () => new Set((await database('login_aliases').select('alias_user_id')).map((a) => String(a.alias_user_id)));
+    // It only guards the list, so it fails soft: if it cannot be read the page still loads (a warning is logged).
+    const aliasIds = async () => {
+      try {
+        return new Set((await database('login_aliases').select('alias_user_id')).map((a) => String(a.alias_user_id)));
+      } catch (err) {
+        logger?.warn?.(`${SOURCE}: could not read login_aliases: ${err?.message || err}`);
+        return new Set();
+      }
+    };
     // A Former person (people.active = false) has nothing to fix in an email: missing_email never names them.
-    const attentionRows = async () => {
+    // `aliasesP`: a request that has already asked for the aliases passes them in, so they are read once.
+    const attentionRows = async (aliasesP = aliasIds()) => {
       const [rows, aliases, former] = await Promise.all([
         database.raw('SELECT key, person_ids, user_ids FROM d1_private.people_attention()').then((r) => r?.rows ?? []),
-        aliasIds(),
+        aliasesP,
         database('people').where('active', false).select('person_id').then((l) => new Set(l.map((x) => String(x.person_id)))),
       ]);
       return rows.map((row) => {
@@ -174,13 +183,14 @@ export default {
 
     router.get('/people', route(async ({ res, admin, accounts }) => {
       requireAdmin(admin);
+      const aliasesP = aliasIds();
       const [people, users, roles, attention, memberships, aliases] = await Promise.all([
         database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id', 'created_at'),
         database('directus_users').select('id', 'email', 'first_name', 'last_name', 'status', 'role', 'last_access'),
         database('directus_roles').select('id', 'name'),
-        attentionRows(),
+        attentionRows(aliasesP),
         membershipRows(),
-        aliasIds(),
+        aliasesP,
       ]);
       const teamsOf = new Map(); // person_id -> their teams
       for (const m of memberships) {
