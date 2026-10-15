@@ -1,0 +1,16 @@
+{
+  "description": "a login with no People row (an administrator): no person block",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/summary"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "person": null,
+      "teams": [],
+      "new": 0,
+      "older_matches": 0
+    }
+  }
+}

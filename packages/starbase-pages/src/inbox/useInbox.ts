@@ -18,6 +18,8 @@ export interface AcceptDialog {
 	count: number;
 	hasMore: boolean;
 	skipped: Skipped[];
+	/** How many files the dry run would leave in all (`skipped` holds at most the first 200). */
+	skippedTotal: number;
 	pairs: AcceptPair[];
 	/** The pairs are the server's own list (not an example from the rows on screen). */
 	pairsExact: boolean;
@@ -25,7 +27,7 @@ export interface AcceptDialog {
 	ids: string[] | null;
 	mayRead: boolean;
 }
-const closedAccept = (): AcceptDialog => ({ open: false, loading: false, error: '', count: 0, hasMore: false, skipped: [], pairs: [], pairsExact: false, ids: null, mayRead: false });
+const closedAccept = (): AcceptDialog => ({ open: false, loading: false, error: '', count: 0, hasMore: false, skipped: [], skippedTotal: 0, pairs: [], pairsExact: false, ids: null, mayRead: false });
 /** Pairs shown in the confirm; the rest are counted. */
 export const PAIRS_SHOWN = 5;
 
@@ -187,7 +189,8 @@ export function createInbox(deps: InboxDeps) {
 			try {
 				const r = await linkFiles(api, items);
 				drop([file.candidate_id]);
-				say({ tone: 'ok', text: linkResultText(r.linked), undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
+				// the same person repeating a link: the server made no batch and linked nothing new (linked 0, link_batch_id null)
+				say({ tone: 'ok', text: r.linked > 0 ? linkResultText(r.linked) : 'That file was already linked.', undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
 				deps.onChanged?.();
 				return { ok: true } as const;
 			} catch (e) {
@@ -275,7 +278,7 @@ export function createInbox(deps: InboxDeps) {
 			// Where the files go: the server's own list when the page can name every file in it; else a few of the files on screen, said to be examples.
 			const pairs = named && named.pairs.length > 0 ? named.pairs : fromRows;
 			acceptDialog.value = {
-				...acceptDialog.value, loading: false, count: r.acceptable, hasMore: r.has_more, skipped: r.skipped, pairs, pairsExact: !!named?.all && pairs.length > 0,
+				...acceptDialog.value, loading: false, count: r.acceptable, hasMore: r.has_more, skipped: r.skipped, skippedTotal: r.skippedTotal, pairs, pairsExact: !!named?.all && pairs.length > 0,
 				ids: listed ? r.ids : null,
 			};
 		} catch (e) {
@@ -299,7 +302,7 @@ export function createInbox(deps: InboxDeps) {
 			closeAccept();
 			say({
 				tone: r.linked > 0 ? 'ok' : 'warn',
-				text: r.linked > 0 ? acceptResultText(r.linked, r.skipped.length) : 'Nothing was linked: no found file matched exactly one record you can edit.',
+				text: r.linked > 0 ? acceptResultText(r.linked, r.skippedTotal) : 'Nothing was linked: no found file matched exactly one record you can edit.',
 				undo: r.linked > 0 && r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined,
 			});
 			await load();

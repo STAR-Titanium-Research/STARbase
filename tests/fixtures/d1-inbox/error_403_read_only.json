@@ -1,0 +1,28 @@
+{
+  "description": "a Lab Viewer writes",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101"
+        }
+      ]
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "The Lab Viewer role is read-only: it can look at everything and cannot change anything.",
+        "extensions": {
+          "code": "READ_ONLY_ROLE",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

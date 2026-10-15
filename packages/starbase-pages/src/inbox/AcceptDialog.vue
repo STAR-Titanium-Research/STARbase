@@ -10,7 +10,7 @@ const props = defineProps<{ dialog: AcceptDialog; busy: boolean }>();
 const emit = defineEmits<{ (e: 'confirm'): void; (e: 'cancel'): void }>();
 
 const text = computed(() => acceptConfirmText({ count: props.dialog.count, hasMore: props.dialog.hasMore, mayRead: props.dialog.mayRead }));
-const left = computed(() => skippedText(props.dialog.skipped));
+const left = computed(() => skippedText(props.dialog.skipped, props.dialog.skippedTotal));
 const more = computed(() => Math.max(0, props.dialog.count - props.dialog.pairs.length));
 const ready = computed(() => !props.dialog.loading && !props.dialog.error);
 const canConfirm = computed(() => ready.value && props.dialog.count > 0 && !props.busy);

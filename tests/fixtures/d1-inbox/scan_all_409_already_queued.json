@@ -1,0 +1,21 @@
+{
+  "description": "one already waits",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/admin/scan-all",
+    "body": {}
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "A scan of everyone is already waiting or running.",
+        "extensions": {
+          "request_id": "00000000-0000-4000-8000-000000007002",
+          "code": "ALREADY_QUEUED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

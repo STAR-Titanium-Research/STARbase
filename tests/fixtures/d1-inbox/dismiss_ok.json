@@ -1,0 +1,25 @@
+{
+  "description": "one file dismissed, one already was",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/dismiss",
+    "body": {
+      "candidate_ids": [
+        "00000000-0000-4000-8000-000000001001",
+        "00000000-0000-4000-8000-000000001010"
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "changed": 1,
+      "changed_ids": [
+        "00000000-0000-4000-8000-000000001001"
+      ],
+      "unchanged_ids": [
+        "00000000-0000-4000-8000-000000001010"
+      ]
+    }
+  }
+}

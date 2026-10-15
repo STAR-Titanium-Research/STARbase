@@ -1,0 +1,25 @@
+{
+  "description": "the file was linked meanwhile",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/dismiss",
+    "body": {
+      "candidate_ids": [
+        "00000000-0000-4000-8000-000000001008"
+      ]
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "That file was already linked or is gone.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001008",
+          "code": "NOT_NEW",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

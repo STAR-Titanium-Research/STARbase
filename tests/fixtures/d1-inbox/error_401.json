@@ -1,0 +1,19 @@
+{
+  "description": "no signed-in user",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/summary"
+  },
+  "status": 401,
+  "body": {
+    "errors": [
+      {
+        "message": "Sign in first.",
+        "extensions": {
+          "code": "UNAUTHORIZED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}
