@@ -1837,24 +1837,52 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **F2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
   `stat` its parent and grandparent through the mount. Expect the parent's mtime to change (the grandparent's
   need not). If the parent's does not, the incremental scan misses files; report before enabling it.
+  Also compare the share's clock with the server's: the crawler lists a directory again at every scan while
+  its mtime is less than 2 seconds old or in the future, so a share clock running ahead makes every scan list
+  everything (correct, but slow: F4 would show it).
 - [ ] **F3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
   there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
   minutes (or at once with *Rescan my folder*) expect it under *New* and the badge to read 1.
 - [ ] **F4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
   watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
 - [ ] **F5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
-  log (and the file server's open-file list if available) that it is only listed, not opened, until it is
-  linked; then that linking it produces one read and a `file_fingerprints` row.
+  log (run it with `INBOX_LOG_LEVEL=DEBUG`, which logs every file it opens, and `docker compose logs
+  inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
+  it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
+  and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
 - [ ] **F6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
   Expect it flagged with the reason *short ID … in the file name*; link it; open the sample page and see it.
   Try *Accept all* on a filtered list and *Undo* the batch. Try a view-only person: Link must be refused.
 - [ ] **F7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
-  linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link.
+  linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link. The
+  crawler and Directus must have the same `D1_INBOX_CRAWLER_SECRET`; with it empty the crawler logs
+  "auto-link is off" and makes no call, with a wrong one it logs "auto-link refused" (never the secret).
 - [ ] **F8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
   record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
-  photos). Decide whether to switch the OCR flag on.
+  photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
+  from the text tags when present; the layout is a guess until seen). Decide whether to switch OCR on: it
+  needs `INBOX_OCR=1`, the `pytesseract` package and the tesseract program in the container, none of which
+  the service installs today.
 - [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
-  from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract.
+  from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract. Check the pointer
+  row has `storage = 'star'` and `metadata.archive_path`, and that its `file_fingerprints` row is `done` with
+  `size_bytes` and `source_mtime` equal to the file's (the renderer trusts the hash only then).
+
+- [ ] **F10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
+  candidate waiting in a folder that changes), disconnect the share from the server (stop the CIFS mount or
+  the VPN). Expect the log to say `scan aborted`, no candidate to become `gone`, `last_scan_finished_at` not to
+  advance, the admin tab to show the error, and the next scan after the share is back to carry on without
+  re-registering anything. A first scan that was interrupted stays *Older* (backlog) when it completes.
+- [ ] **F11 — Snapshot and hidden folders are not entered.** If the share exposes `.snapshot`, `~snapshot` or
+  similar directories inside personal or team folders, confirm the crawler never lists them (DEBUG log, or
+  the file server's access log) and no found file comes from them. Also confirm folders under `Users/` and
+  `Shared/` with no alias or share folder appear in the admin tab's unmatched list and are not scanned.
+- [ ] **F12 — The indexer and the crawler agree on the pointer rows.** Run `make index-archive` after the
+  crawler has registered files in a personal folder. The crawler also registers file types the indexer's
+  `ALLOWED_EXT` does not cover (`.al3d`, unknown types), so expect the indexer's missing-file sweep to flag
+  those pointer rows `metadata.missing`. Check that this changes nothing in the Inbox, that linked files keep
+  working, and decide whether `.al3d` belongs in `ALLOWED_EXT`. Found files the indexer does cover must keep
+  one `directus_files` row each (same id). Since the inbox crawler PR.
 
 ## Done
 
