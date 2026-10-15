@@ -2,9 +2,10 @@
 import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge, processLabel } from '@d1/ui';
+import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode, SampleRow } from '../model/types';
 import { isBundleSocket } from '../model/sockets';
-import { activating, cardHandlers, stopping, useExpanded, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
+import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 import HiddenPill from './HiddenPill.vue';
@@ -79,7 +80,7 @@ const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.val
 const card = cardHandlers(actions, () => props.id, () => open.value);
 const unstack = stopping(() => actions.unstack?.(props.id));
 const unstackKey = activating(() => actions.unstack?.(props.id));
-const sockProps = useSocketProps();
+const bind = useSocketBinder();
 const hiddenSides = useHiddenSides(() => props.id);
 const refold = stopping(() => actions.toggleRows(props.id));
 const toggleMore = stopping(() => actions.toggleMore(props.id));
@@ -87,6 +88,23 @@ const refoldKey = activating(() => actions.toggleRows(props.id));
 const toggleMoreKey = activating(() => actions.toggleMore(props.id));
 const inPos = computed(() => handlePosition(direction.value, 'in'));
 const outPos = computed(() => handlePosition(direction.value, 'out'));
+
+// Edit mode (spec E8, E9): the rows of a new container are where wires start and end. A row with a sample on a side has a socket there
+// already (a Handle); a side with nothing wired has none drawn, so edit mode draws a free one, a button, in its place (a blank
+// operation is a row with a free input and a free output). A test takes samples in but nothing comes out of it.
+const edit = useMapEdit();
+const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
+const rowRef = (recordId: string, side: EndSide): SocketRef | null =>
+	editable.value && !(props.data.kind === 'test' && side === 'out') ? { kind: 'row', id: rowRecordId(props.data, recordId, side), side } : null;
+const freeProps = (recordId: string, side: EndSide) => {
+	const ref = rowRef(recordId, side);
+	return edit && ref ? editSocketProps(edit, ref) : {};
+};
+const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
+const addRow = stopping(() => edit?.addRow(props.id));
+const addRowKey = activating(() => edit?.addRow(props.id));
+const what = computed(() => props.data.code || props.data.title);
 </script>
 
 <template>
@@ -108,12 +126,13 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			:position="inPos"
 			:connectable="false"
 			:style="edgeStyle(direction, 'in', 0, 1)"
-			v-bind="sockProps(collapsedIn, 'in')"
+			v-bind="bind(collapsedIn, 'in')"
 		/>
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
+			<span v-if="badge" class="chk" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 			<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
 		<div class="oname">
@@ -127,23 +146,26 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		<div v-if="data.rows.length && !data.collapsed" class="iorows">
 			<div v-for="(r, i) in shown" :key="i" class="orow">
 				<span>
-					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" v-bind="sockProps(r.in, 'in')" />
+					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" v-bind="bind(r.in, 'in', rowRef(r.row.recordId, 'in'))" />
+					<button v-else-if="editable" type="button" class="sock row in free nodrag nopan" :aria-label="freeSocketLabel('in', what)" v-bind="freeProps(r.row.recordId, 'in')"></button>
 					<template v-if="r.row.in">{{ r.label }}</template>
+					<template v-else-if="editable">Sample in</template>
 				</span>
 				<span :class="{ pass: r.row.inPlace }"></span>
 				<span>
 					<template v-if="r.row.out">{{ r.label }}</template>
-					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" v-bind="sockProps(r.out, 'out')" />
+					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" v-bind="bind(r.out, 'out', rowRef(r.row.recordId, 'out'))" />
+					<button v-else-if="editable && data.kind === 'operation'" type="button" class="sock row out free nodrag nopan" :aria-label="freeSocketLabel('out', what)" v-bind="freeProps(r.row.recordId, 'out')"></button>
 				</span>
 			</div>
 			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
 				<span>
-					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" v-bind="sockProps(bundleIn, 'in')" />
+					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" v-bind="bind(bundleIn, 'in')" />
 					{{ `+${hidden.length} more samples` }}
 				</span>
 				<span></span>
 				<span>
-					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" v-bind="sockProps(bundleOut, 'out')" />
+					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" v-bind="bind(bundleOut, 'out')" />
 				</span>
 			</div>
 			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
@@ -151,6 +173,9 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 			<div v-if="data.stacked" class="orow fold nodrag nopan" role="button" tabindex="0" @click="unstack" @keydown="unstackKey">
 				<span></span><span>{{ `Unstack ${data.group.rowIds.length} passes` }}</span><span></span>
+			</div>
+			<div v-if="canAddRow" class="orow fold addrow nodrag nopan" role="button" tabindex="0" @click="addRow" @keydown="addRowKey">
+				<span></span><span><v-icon name="add" x-small /> output</span><span></span>
 			</div>
 		</div>
 
@@ -188,6 +213,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 .m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .deck { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--k) 22%, var(--d1-surface)); font-variant-numeric: tabular-nums; }
 .m + .xbtn, .deck + .xbtn { margin-left: auto; }
+.m + .chk { margin-left: auto; }
 
 /* The step's own name: the full operation code wraps rather than running out of the card. */
 .oname { display: flex; flex-direction: column; gap: 1px; padding: 8px 14px 2px; }

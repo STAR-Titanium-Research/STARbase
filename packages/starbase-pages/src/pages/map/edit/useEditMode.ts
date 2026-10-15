@@ -159,11 +159,11 @@ export function useEditMode(o: EditModeOptions) {
 	}
 
 	// ---- changing the draft ---------------------------------------------------------------------------
-	/** Does one action; the canvas lays out only what is new, beside `anchor` when there is a card the change grew out of. */
-	function apply(action: DraftAction, opts: { anchor?: string } = {}): DraftBody {
+	/** Does one action, or several as one undoable step; the canvas lays out only what is new, beside `anchor` when there is a card the change grew out of. */
+	function apply(action: DraftAction | DraftAction[], opts: { anchor?: string } = {}): DraftBody {
 		if (!editing.value) return draft.body.value;
 		const before = draft.body.value;
-		const next = draft.apply(action);
+		const next = Array.isArray(action) ? draft.applyAll(action) : draft.apply(action);
 		if (next !== before) o.hint?.({ anchor: opts.anchor });
 		return next;
 	}

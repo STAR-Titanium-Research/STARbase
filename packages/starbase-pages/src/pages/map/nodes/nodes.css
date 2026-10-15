@@ -120,3 +120,37 @@
 .d1-process-map .vue-flow__node:focus { outline: none; }
 .d1-process-map .vue-flow__node:focus-visible > .node { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .d1-process-map .sock:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 3px; }
+
+/* Edit mode (spec E8, E9; the classes come from the node components while a draft can be changed). A socket the person can build
+   from is a button: a free one (nothing wired) is a hollow dashed ring, so it reads as "open"; a dragged wire marks the socket it
+   would land on, green when it fits and red when the draft refuses it (the page says why). */
+.d1-process-map .sock.editable { cursor: pointer; touch-action: none; user-select: none; }
+.d1-process-map .sock.editable:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sk, var(--k-sample)) 30%, transparent); }
+.d1-process-map button.sock.free {
+	padding: 0;
+	background: var(--d1-surface);
+	border: 2px dashed var(--sk, var(--k-sample));
+	box-shadow: none;
+	color: inherit;
+}
+.d1-process-map button.sock.free:hover { background: color-mix(in srgb, var(--sk, var(--k-sample)) 25%, var(--d1-surface)); }
+.d1-process-map .sock.drop-ok { background: var(--d1-ok); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-ok) 30%, transparent); transform: translate(-50%, -50%) scale(1.5); }
+.d1-process-map .sock.row.drop-ok { transform: translateY(-50%) scale(1.5); }
+.d1-process-map .sock.drop-bad { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
+.d1-process-map .sock.row.drop-bad { transform: translateY(-50%) scale(1.35); }
+
+/* The red badge of a card whose checks block Create: how many things. */
+.d1-process-map .chk {
+	flex: none;
+	min-width: 20px;
+	padding: 0 6px;
+	border-radius: 99px;
+	background: var(--theme--danger);
+	color: #fff;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	line-height: 20px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+.d1-process-map .orow.addrow { cursor: pointer; }

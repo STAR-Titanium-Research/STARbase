@@ -740,4 +740,21 @@ describe('buildGraph: planned work and drafts', () => {
     const data = mkData({ samples: sam('s1'), operations: [mkOp({ id: 'n', sampleId: 's1', draft: true, workState: 'planned' })] });
     expect(container(build(data), 'op:n')).toMatchObject({ draft: true, planned: true });
   });
+
+  it('a draft operation or test with no sample wired yet is drawn (a blank container), a recorded one with none is not', () => {
+    const data = mkData({
+      samples: sam('s1'),
+      operations: [mkOp({ id: 'blank', methodName: 'Turning', draft: true, workState: 'planned' }), mkOp({ id: 'orphan', methodName: 'Turning' })],
+      tests: [mkTest({ id: 'tb', testType: 'Tensile', draft: true, workState: 'planned' }), mkTest({ id: 'to', testType: 'Tensile' })],
+    });
+    const g = build(data);
+    const blank = container(g, 'op:blank');
+    expect(blank).toMatchObject({ draft: true, method: 'Turning' });
+    // One row, no sample in: an output socket nothing is wired to, and no input socket to draw.
+    expect(blank.rows).toEqual([{ recordId: 'blank', out: 'op:blank:out:0' }]);
+    expect(container(g, 'test:tb').rows).toEqual([{ recordId: 'tb', out: 'test:tb:out:0' }]);
+    expect(g.nodes.some((n) => n.id === 'op:orphan' || n.id === 'test:to')).toBe(true); // the container is drawn either way...
+    expect(container(g, 'op:orphan').rows).toEqual([]); // ...but a recorded row with no sample has nothing to draw
+    expect(container(g, 'test:to').rows).toEqual([]);
+  });
 });

@@ -301,10 +301,15 @@ export function useDraft(options: UseDraftOptions = {}) {
 
 	/** Does one action on the draft. A change is undoable and kept on the server; an action that changes nothing is no step. */
 	function apply(action: DraftAction): DraftBody {
+		return applyAll([action]);
+	}
+
+	/** Several actions as one undoable step (a wire that needs a sample added first, every card moved by a re-layout). */
+	function applyAll(actions: DraftAction[]): DraftBody {
 		// While Create runs the draft is what is being created: it does not change under it.
 		if (creating.value) return history.value.present;
 		const before = history.value.present;
-		const next = reduce(before, action);
+		const next = actions.reduce((b, a) => reduce(b, a), before);
 		if (next !== before) {
 			history.value = push(history.value, next);
 			dropStale(before, next);
@@ -454,7 +459,7 @@ export function useDraft(options: UseDraftOptions = {}) {
 		draftId, name, version, body, loading, saving, saveError, notice,
 		open, start, discard, forget, rename, flush,
 		// editing
-		apply, undo: undoStep, redo: redoStep,
+		apply, applyAll, undo: undoStep, redo: redoStep,
 		canUndo: computed(() => canUndo(history.value)),
 		canRedo: computed(() => canRedo(history.value)),
 		// checks

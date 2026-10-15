@@ -267,6 +267,22 @@ describe('useDraft: undo and redo', () => {
 		draft.apply({ type: 'addSample', values: { form: 'bar' } });
 		expect(draft.canRedo.value).toBe(false);
 	});
+
+	it('applyAll does several actions as one undoable step, and nothing when none of them changes anything', async () => {
+		const { s, draft } = make();
+		await draft.start();
+		draft.applyAll([{ type: 'addSample' }, { type: 'addSample' }, { type: 'move', key: 'n1', x: 5, y: 6 }]);
+		expect(draft.body.value.items).toHaveLength(2);
+		expect(draft.body.value.positions.n1).toEqual({ x: 5, y: 6 });
+		draft.undo();
+		expect(draft.body.value.items).toHaveLength(0);
+		expect(draft.canUndo.value).toBe(false);
+		const before = draft.body.value;
+		expect(draft.applyAll([{ type: 'remove', key: 'nope' }])).toBe(before);
+		expect(draft.canUndo.value).toBe(false);
+		await tick();
+		expect(patches(s.calls)).toHaveLength(1);
+	});
 });
 
 describe('useDraft: a draft that changed elsewhere (409)', () => {

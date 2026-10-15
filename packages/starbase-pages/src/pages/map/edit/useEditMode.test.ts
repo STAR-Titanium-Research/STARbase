@@ -1,70 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref, type Ref } from 'vue';
-import type { DraftBody, DraftRecord, HostApi } from '@d1/ui';
+import type { DraftBody } from '@d1/ui';
 import type { MapNode } from '../model/types';
 import { emptyBody } from './draft';
+import { fakeServer } from './fakeBuildServer';
 import { isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
-
-const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: { errors: [{ message: `HTTP ${status}` }] } } });
-
-/** d1-build in a box: drafts in memory, the reference data the Add menu reads, and a log of the calls. */
-function fakeServer() {
-	const drafts = new Map<string, DraftRecord>();
-	const calls: string[] = [];
-	const s = {
-		drafts,
-		calls,
-		listStatus: 200,
-		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
-			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
-		},
-	};
-	let n = 0;
-	const idOf = (path: string) => decodeURIComponent(path.split('/')[3]);
-	const api = {
-		get: async (path: string) => {
-			calls.push(`GET ${path}`);
-			if (path === '/d1-build/drafts') {
-				if (s.listStatus !== 200) throw httpError(s.listStatus);
-				return { data: { data: [...drafts.values()].map((d) => ({ id: d.id, name: d.name, updated_at: d.updated_at, summary: 'x' })) } };
-			}
-			if (path.startsWith('/d1-build/drafts/')) {
-				const d = drafts.get(idOf(path));
-				if (!d) throw httpError(404);
-				return { data: { data: d } };
-			}
-			if (path === '/items/manufacturing_methods') {
-				return { data: { data: [{ method_id: 'm-turn', method_name: 'Turning', method_code: 'MC', process_category: 'machining' }] } };
-			}
-			return { data: { data: [] } };
-		},
-		post: async (path: string, body?: any) => {
-			calls.push(`POST ${path}`);
-			if (path === '/d1-build/drafts') {
-				n += 1;
-				const rec: DraftRecord = { id: `d${n}`, name: body.name, body: body.body, version: 1, updated_at: 'now' };
-				drafts.set(rec.id, rec);
-				return { data: { data: rec } };
-			}
-			if (path.endsWith('/check')) return { data: { data: { checks: [] } } };
-			throw httpError(404);
-		},
-		patch: async (path: string, body?: any) => {
-			calls.push(`PATCH ${path}`);
-			const d = drafts.get(idOf(path));
-			if (!d) throw httpError(404);
-			const next: DraftRecord = { ...d, body: body.body ?? d.body, name: body.name ?? d.name, version: d.version + 1 };
-			drafts.set(d.id, next);
-			return { data: { data: next } };
-		},
-		delete: async (path: string) => {
-			calls.push(`DELETE ${path}`);
-			drafts.delete(idOf(path));
-			return { data: {} };
-		},
-	} as unknown as HostApi;
-	return { s, api };
-}
 
 const flush = async () => {
 	for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -306,7 +246,7 @@ describe('useEditMode: the draft on the map', () => {
 	it('reads the methods for the Add menu once edit mode is on', async () => {
 		const { edit, s } = setup({ edit: 'new' });
 		await flush();
-		expect(edit.catalog.methods.value.map((m) => m.name)).toEqual(['Turning']);
+		expect(edit.catalog.methods.value.map((m) => m.name)).toEqual(['FAST sintering', 'Heat treatment', 'Turning']);
 		expect(s.calls.filter((c) => c === 'GET /items/manufacturing_methods')).toHaveLength(1);
 	});
 });

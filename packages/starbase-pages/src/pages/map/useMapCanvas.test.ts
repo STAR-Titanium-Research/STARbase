@@ -3,8 +3,8 @@ import { nextTick, reactive, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRecordRef, loadRelationDefs, loadUsedIn } from './model/loadFamily';
-import type { ProcessData } from './model/types';
-import { useMapCanvas } from './useMapCanvas';
+import type { MapNode, ProcessData } from './model/types';
+import { useMapCanvas, type CanvasEdit } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
@@ -17,7 +17,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, dragStop: null as null | ((e: { node: unknown }) => void) }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -52,6 +52,8 @@ vi.mock('@vue-flow/core', async (orig) => {
       }
     },
     onNodesInitialized: () => undefined,
+    onNodeDragStop: (cb: (e: { node: unknown }) => void) => void (store.dragStop = cb),
+    screenToFlowCoordinate: (p: { x: number; y: number }) => ({ x: p.x - 10, y: p.y - 20 }),
     fitView: async () => true,
     setCenter: async () => true,
   };
@@ -262,5 +264,62 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('useMapCanvas: edit mode', () => {
+  const editHooks = (over: Partial<CanvasEdit> = {}) => {
+    const calls: string[] = [];
+    const hooks: CanvasEdit = {
+      positionOf: () => undefined,
+      moved: (n, to) => void calls.push(`moved ${n.id} ${to.x},${to.y}`),
+      relaid: (cards) => void calls.push(`relaid ${cards.length}`),
+      ...over,
+    };
+    return { hooks, calls };
+  };
+  async function openEdit(hooks: CanvasEdit) {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const canvas = useMapCanvas(map, hooks);
+    await settle();
+    return { map, canvas };
+  }
+
+  it('keeps a card where the draft says it is, whatever the layout would do', async () => {
+    const { hooks } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    expect(at('op:u3')).not.toEqual({ x: 700, y: 650 });
+  });
+
+  it('tells the draft when a card is dropped', async () => {
+    const { hooks, calls } = editHooks();
+    await openEdit(hooks);
+    store.dragStop?.({ node: { data: { id: 'op:u1' }, position: { x: 12, y: 34 } } });
+    expect(calls).toEqual(['moved op:u1 12,34']);
+  });
+
+  it('Re-layout puts every card where ELK says, and tells the draft the places (one change for all)', async () => {
+    const { hooks, calls } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    const { canvas } = await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    await canvas.relayout();
+    await settle();
+    expect(at('op:u2')).not.toEqual({ x: 700, y: 650 });
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual([`relaid ${nodesOf().length}`]);
+  });
+
+  it('turns a point of the window into the map\'s own coordinates', async () => {
+    const { canvas } = await openEdit(editHooks().hooks);
+    expect(canvas.toFlow(110, 120)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('is as before without edit mode: no hook is called', async () => {
+    await open();
+    store.dragStop?.({ node: { data: { id: 'op:u1' }, position: { x: 1, y: 2 } } });
+    expect(at('op:u1')).toBeDefined();
   });
 });

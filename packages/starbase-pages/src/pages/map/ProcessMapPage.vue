@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from '../../ExplorerView.vue';
-import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, provide, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -12,10 +12,13 @@ import '@vue-flow/minimap/dist/style.css';
 import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
-import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
+import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
 import EditLid from './edit/EditLid.vue';
+import type { MenuTarget } from './edit/menuTarget';
+import { canvasEditOf, useEditCanvas } from './edit/useEditCanvas';
 import { provideEditMode, useEditMode } from './edit/useEditMode';
+import WirePreview from './edit/WirePreview.vue';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
@@ -53,8 +56,13 @@ const edit = useEditMode({
 	hint: (h) => map.hintMerge(h),
 });
 const map = useProcessMap(host.api, route, router, edit.overlay);
-const canvas = useMapCanvas(map);
+const canvas = useMapCanvas(map, canvasEditOf(edit));
 provideEditMode(edit);
+const canvasEl = ref<HTMLElement | null>(null);
+/** The Add menu (E8): where it is open and what it is for; null while closed. */
+const menu = shallowRef<MenuTarget | null>(null);
+const build = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void (menu.value = t) });
+provide(MAP_EDIT, build.mapEdit);
 const pointerKind = createPointerKind();
 
 // What the node and wire components call (nodes/actions.ts).
@@ -119,7 +127,6 @@ const frameStyle = computed(() => {
 });
 
 // ---- the rail, the hover card and the data they show -----------------------------------------------
-const canvasEl = ref<HTMLElement | null>(null);
 
 // Data previews (the Fz figure, FAST run data) are read when operations arrive, so hovering and selecting only
 // look the answer up (no request per hover). An expand reads just the operations it added; a new focus (the data
@@ -280,6 +287,10 @@ onBeforeUnmount(() => {
 						/>
 						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
 						<div v-if="edit.failed.value" class="pm-banner pm-bad" role="alert">{{ edit.failed.value }}</div>
+						<div v-if="build.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
+							<span>{{ build.problem.value }}</span>
+							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''"><v-icon name="close" x-small /></button>
+						</div>
 						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
@@ -327,6 +338,7 @@ onBeforeUnmount(() => {
 								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 							</VueFlow>
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
+							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />

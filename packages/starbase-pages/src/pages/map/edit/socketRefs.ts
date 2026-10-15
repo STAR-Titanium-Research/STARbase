@@ -77,6 +77,19 @@ export function draftKeyOfNode(body: DraftBody, node: MapNode | undefined): Draf
 	return null;
 }
 
+/** The draft keys of every item a drawn card is made of (a stack of passes is several operations), none when it is not in the draft. */
+export function draftKeysOfNode(body: DraftBody, node: MapNode | undefined): DraftKey[] {
+	if (!node) return [];
+	if (node.type === 'record') return draftKeyOfNode(body, node) ? [draftKeyOfNode(body, node)!] : [];
+	if (node.type !== 'container') return [];
+	const keys: DraftKey[] = [];
+	for (const id of node.group.rowIds) {
+		const hit = rowItemOf(body, id);
+		if (hit && !keys.includes(hit.item.key)) keys.push(hit.item.key);
+	}
+	return keys;
+}
+
 /** True when the card is made of items of the draft: it is always drawn, and it can be edited and removed. */
 export const isDraftNode = (body: DraftBody, node: MapNode): boolean => draftKeyOfNode(body, node) !== null;
 

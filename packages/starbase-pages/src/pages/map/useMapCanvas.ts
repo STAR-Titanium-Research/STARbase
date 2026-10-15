@@ -52,7 +52,17 @@ export function miniMapColor(node: { data?: MapNode }): string {
   return `var(${KINDS[kind].color})`;
 }
 
-export function useMapCanvas(map: ProcessMap) {
+/** What edit mode asks of the canvas (spec §7.2): where the draft says its cards are, and being told when one is moved. */
+export interface CanvasEdit {
+  /** Where the draft keeps a card (flow coordinates), when the person placed it; layout leaves such cards there. */
+  positionOf(node: MapNode): { x: number; y: number } | undefined;
+  /** A card was dragged and dropped. */
+  moved(node: MapNode, at: { x: number; y: number }): void;
+  /** Re-layout put every card where ELK wants it: the draft keeps those places (one change for all of them). */
+  relaid(cards: { node: MapNode; at: { x: number; y: number } }[]): void;
+}
+
+export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   const vf = useVueFlow();
   const { layout } = useElkLayout();
 
@@ -70,6 +80,8 @@ export function useMapCanvas(map: ProcessMap) {
   let pendingMerges: MergeHint[] = [];
   let pendingFull = true;
   let token = 0;
+  /** The next layout is Re-layout: cards the draft placed go where ELK puts them too, and the draft keeps those places. */
+  let free = false;
   /** Where the last layout put each node and how big it was then: for nodes that are rebuilt (hidden chips, folds) but were not dragged, and to tell cards that are new, or that grew. */
   const placed = new Map<string, Box>();
   /** The expand being drawn: new cards start at the card that was expanded instead of the origin. */
@@ -206,6 +218,8 @@ export function useMapCanvas(map: ProcessMap) {
       layoutError.value = '';
       let positions = elk;
       const instant = new Set<string>();
+      const fresh = free;
+      free = false;
       if (merges) {
         // Cards already placed stay where they are (a dragged one stays where it was dropped): only new cards, and cards a grown one pushed, move.
         const here: Record<string, Box> = {};
@@ -217,6 +231,16 @@ export function useMapCanvas(map: ProcessMap) {
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])) });
         for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
       }
+      // Cards the person placed (dragged, or dropped from the Add menu) stay where the draft says, whatever ELK would do.
+      if (edit && !fresh) {
+        positions = { ...positions };
+        for (const n of vf.getNodes.value) {
+          const at = edit.positionOf(n.data as MapNode);
+          if (!at) continue;
+          if (!placed.has(n.id) && n.position.x === 0 && n.position.y === 0) instant.add(n.id);
+          positions[n.id] = at;
+        }
+      }
       for (const n of vf.getNodes.value) {
         const at = positions[n.id] ?? (merges ? n.position : undefined);
         const size = sizes[n.id];
@@ -224,6 +248,7 @@ export function useMapCanvas(map: ProcessMap) {
       }
       await moveTo(positions, instant);
       if (mine !== token) return;
+      if (edit && fresh) edit.relaid(vf.getNodes.value.map((n) => ({ node: n.data as MapNode, at: { x: positions[n.id]?.x ?? n.position.x, y: positions[n.id]?.y ?? n.position.y } })));
       laidOut.value = true;
       if (needsFit) {
         needsFit = false;
@@ -254,6 +279,10 @@ export function useMapCanvas(map: ProcessMap) {
   vf.onNodesInitialized(() => {
     if (pending) void runLayout();
   });
+  vf.onNodeDragStop(({ node }) => edit?.moved(node.data as MapNode, { x: node.position.x, y: node.position.y }));
+
+  /** A point of the window (client pixels) in the map's own coordinates: where a card added there is placed. */
+  const toFlow = (clientX: number, clientY: number): { x: number; y: number } => vf.screenToFlowCoordinate({ x: clientX, y: clientY });
 
   /**
    * Resolves true once no layout is waiting or running and no card is moving (the export must not photograph a map half-way to its
@@ -297,6 +326,7 @@ export function useMapCanvas(map: ProcessMap) {
 
   /** Re-layout (spec D18): every card back where ELK puts it, including the ones that were dragged. */
   async function relayout(): Promise<void> {
+    free = true;
     await scheduleLayout();
   }
 
@@ -383,5 +413,5 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame, whenSettled };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame, whenSettled, toFlow };
 }
