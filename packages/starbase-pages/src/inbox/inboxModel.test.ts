@@ -113,6 +113,8 @@ describe('how a file reads', () => {
 		expect(duplicateText({ duplicate_of: null })).toBeNull();
 		expect(duplicateText({ duplicate_of: 'x' })).toBe('Copy of another found file');
 		expect(duplicateText({ duplicate_of: 'x', duplicate_of_owner: 'Bo' })).toBe("Copy of a file in Bo's Inbox");
+		expect(duplicateText({ duplicate_of: 'x', duplicate_of_owner: { kind: 'other' } })).toBe('Copy of a file someone else also has');
+		expect(duplicateText({ duplicate_of: 'x', duplicate_of_owner: null })).toBe('Copy of another found file');
 	});
 });
 

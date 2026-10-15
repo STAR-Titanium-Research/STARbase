@@ -224,10 +224,17 @@ export function extractedText(extracted: Record<string, unknown>): string {
 /** The Inbox a file is in, for a row that is not in the caller's own: "Additive (team folder)". */
 export const ownerText = (f: Pick<FoundFile, 'owner'>): string => (f.owner.kind === 'team' ? `${f.owner.name} (team folder)` : f.owner.name);
 
-/** "Copy of a file in Ann's Inbox": the same image in two Inboxes shows once (D11); the copy says so. */
+/**
+ * "Copy of a file in Ann's Inbox": the same image in two Inboxes shows once (D11); the copy says so. The server names the owner only when the
+ * original is in the caller's own folder or a team's (or the caller is an administrator): for anyone else it sends { kind: 'other' }, and the
+ * words then name nobody.
+ */
 export function duplicateText(f: Pick<FoundFile, 'duplicate_of' | 'duplicate_of_owner'>): string | null {
 	if (!f.duplicate_of) return null;
-	return f.duplicate_of_owner ? `Copy of a file in ${f.duplicate_of_owner}'s Inbox` : 'Copy of another found file';
+	const who = f.duplicate_of_owner;
+	if (typeof who === 'string' && who) return `Copy of a file in ${who}'s Inbox`;
+	if (who && typeof who === 'object') return 'Copy of a file someone else also has';
+	return 'Copy of another found file';
 }
 
 // ---- suggestions ----

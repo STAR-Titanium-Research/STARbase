@@ -80,8 +80,11 @@ export interface FoundFile {
 	/** Present when a suggestion is: false when the caller may not edit the suggested record (so Link would be refused). */
 	suggested_can_edit?: boolean;
 	duplicate_of: string | null;
-	/** Optional: whose Inbox the original is in, for "copy of a file in ...". */
-	duplicate_of_owner?: string | null;
+	/**
+	 * Whose Inbox the original is in, for "copy of a file in ...": null when the row is not a copy; the name when the original is in the
+	 * caller's own folder, one of their teams, or the caller is an administrator; otherwise { kind: 'other' } with no name (D11).
+	 */
+	duplicate_of_owner?: string | { kind: 'other' } | null;
 	rel_path: string;
 	size_bytes: number | null;
 	source_mtime: string | null;
@@ -289,6 +292,12 @@ function parseOwner(v: unknown): FileOwner {
 	return { kind: o.kind === 'team' || o.type === 'team' ? 'team' : 'person', id: str(o.id), name: str(o.name) ?? '' };
 }
 
+/** A name, `{ kind: 'other' }` (a copy in an Inbox the caller has no part in), or null (not a copy). Anything else is read as "no name". */
+function parseDuplicateOwner(v: unknown): string | { kind: 'other' } | null {
+	if (v && typeof v === 'object' && !Array.isArray(v)) return { kind: 'other' };
+	return str(v);
+}
+
 /** One row of the server's list as a FoundFile, or null for a row with no id (nothing to act on). */
 export function parseFile(v: unknown): FoundFile | null {
 	if (!v || typeof v !== 'object') return null;
@@ -325,7 +334,7 @@ export function parseFile(v: unknown): FoundFile | null {
 		linked_record_id: str(r.linked_record_id),
 		linked_label: str(r.linked_label),
 		decided_by_name: str(r.decided_by_name),
-		duplicate_of_owner: str(r.duplicate_of_owner),
+		duplicate_of_owner: parseDuplicateOwner(r.duplicate_of_owner),
 		owner: parseOwner(r.owner),
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;

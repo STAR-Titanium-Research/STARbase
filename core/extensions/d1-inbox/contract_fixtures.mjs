@@ -66,6 +66,13 @@ const COPY = row({
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), duplicate_of: ID(1001), duplicate_of_owner: 'Alice A',
   duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
 });
+// A copy whose original sits in the Inbox of someone Alice has nothing to do with (not her folder, not her teams): the server sends { kind: 'other' }
+// and not the name 'Bob B' that the row carries.
+const COPY_OF_OTHERS = row({
+  candidate_id: ID(1013), directus_files_id: ID(3013), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
+  match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), duplicate_of: ID(1001), duplicate_of_owner: 'Bob B',
+  duplicate_owner_person_id: ID(12), rel_path: 'Shared/SEM/2026/copies/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
+});
 const SURFACE_SCAN = row({
   candidate_id: ID(1003), directus_files_id: ID(3003), name: 'scan_0007.nid', mime_type: null, kind: 'surface_scan', kind_confidence: '0.80',
   rel_path: 'Users/ali1/afm/scan_0007.nid', size_bytes: '52428800',
@@ -188,7 +195,7 @@ export function buildFixtures() {
   put('files_linked', list([LINKED_AUTO, LINKED_MANUAL], { tab: 'linked', link_kind: 'auto', limit: '20' }, 2));
   put('files_linked_surface_scan', list([LINKED_SCAN], { tab: 'linked', link_kind: 'manual', limit: '20' }, 1));
   put('files_dismissed', list([DISMISSED], { tab: 'dismissed', limit: '50' }));
-  put('files_team_folder', list([COPY], { tab: 'new', owner: `team:${TEAM}`, folder: 'sem', from: '2026-10-01', to: '2026-10-15', limit: '50' }));
+  put('files_team_folder', list([COPY, COPY_OF_OTHERS], { tab: 'new', owner: `team:${TEAM}`, folder: 'sem', from: '2026-10-01', to: '2026-10-15', limit: '50' }));
   put('files_empty', list([], { tab: 'new', limit: '50' }, 0));
   put('files_400_bad_filter', failure('a filter the server refuses', request('GET', LIST_PATH, { query: { kind: 'video' } }), (() => { try { parseFileFilters({ kind: 'video' }); } catch (e) { return e; } return new Error('expected a 400'); })()));
 

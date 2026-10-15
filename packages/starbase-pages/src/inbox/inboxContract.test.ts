@@ -137,6 +137,16 @@ describe('GET /d1-inbox/files', () => {
 		expect(rows.find((r) => r.candidate_id === ID(1001))!.duplicate_of).toBeNull();
 	});
 
+	it('a copy of a file in an Inbox the caller has nothing to do with says so without naming anyone', async () => {
+		const rows = (await loadFiles(only(fx('files_team_folder')).api, { tab: 'new' })).rows;
+		const other = rows.find((r) => r.candidate_id === ID(1013))!;
+		expect(other.duplicate_of).toBe(ID(1001));
+		expect(other.duplicate_of_owner).toEqual({ kind: 'other' });
+		expect(duplicateText(other)).toBe('Copy of a file someone else also has');
+		expect(JSON.stringify(other)).not.toContain('Bob B');
+		expect(duplicateText(rows.find((r) => r.candidate_id === ID(1002))!)).toBe("Copy of a file in Alice A's Inbox");
+	});
+
 	it('a surface scan has Add a surface scan and no Link, a document is read once, a file the caller cannot edit asks for a record, a hidden record has no suggestion', async () => {
 		const rows = (await loadFiles(only(fx('files_new')).api, {})).rows;
 		const by = (n: number) => rows.find((r) => r.candidate_id === ID(n))!;
