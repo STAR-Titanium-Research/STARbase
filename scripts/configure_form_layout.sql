@@ -675,4 +675,32 @@ WHERE c.collection = v.collection;
 
 -- END FORM LAYOUT
 
+-- Corrections made after migration 174 (migration 20261014000187_form_condition_fixes.sql): Directus 11's _empty matches
+-- only '' and _nempty matches null, so the Related records group hides on a null or empty short_id and the six "show when it has a
+-- value" fields test "not null and not ''". Outside the block above on purpose: that block is migration 174 as it was written
+-- (a test keeps the two identical), so this repeats the later fix to keep a configure run from undoing it.
+UPDATE directus_fields
+SET conditions = replace(
+        conditions::jsonb::text,
+        '{"_and": [{"short_id": {"_empty": true}}]}',
+        '{"_or": [{"short_id": {"_null": true}}, {"short_id": {"_empty": true}}]}'
+    )::json
+WHERE field = 'grp_related'
+  AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
+  AND conditions IS NOT NULL;
+
+UPDATE directus_fields
+SET conditions = regexp_replace(
+        conditions::jsonb::text,
+        '\{"([a-z_]+)": \{"_nempty": true\}\}',
+        '{"\1": {"_nnull": true}}, {"\1": {"_neq": ""}}',
+        'g'
+    )::json
+WHERE collection = 'manufacturing_operations'
+  AND field IN (
+      'machining_legacy_insert_edge_id', 'machining_legacy_machining_uid', 'file_storage_pointer', 'capture_software',
+      'capture_frequency_khz', 'nc_program_text'
+  )
+  AND conditions IS NOT NULL;
+
 COMMIT;

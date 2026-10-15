@@ -1169,6 +1169,75 @@ migration 141 prints about ownerless records.
   the compact form of a container shows only its key settings (machining: cutting speed, feed, depth of cut,
   coolant). Since: Process map edit mode, stream D2 (PR pending).
 
+#### Process map edit mode, server side (migrations 185 and 186, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
+
+The `d1-build` endpoint has unit tests with a fake database and a fake ItemsService; what they cannot show is Directus
+itself (its permissions, hooks and the real code triggers inside one transaction). Run these on the local stack with a copy
+of the live data, after `dbmate up` and a Directus restart. The calls below use the API (replace `$TOKEN` with a Lab
+Member's static token, or sign in through STARbase and copy the session cookie); once the canvas editor is merged, the same
+checks can be run from `/map?edit=new`.
+
+- [ ] **PM5-1 — Migrations 185 and 186 on a copy of live.** `dbmate up` applies both; `dbmate down` twice, then `up`.
+  Expect: every existing operation and test has `work_state = 'done'` (`SELECT work_state, count(*) FROM
+  manufacturing_operations GROUP BY 1`, same for `test_sessions`); in Data Studio an operation form shows **Work state**
+  (read-only, Done), **Planned date**, **Done by** and **Marked done at** in "Who & where", and the sample **Status**
+  dropdown has a blue **Planned** choice. After the `down`, a planned sample reads Archived and the Planned choice is gone.
+  `d1_private.process_drafts` and `process_templates` exist and the Ask-DB role cannot read them. Since: edit-mode
+  stream A (PR pending).
+- [ ] **PM5-2 — Build and create a cut with four planned outputs, as a Lab Member.** `POST /d1-build/drafts` with a draft
+  that has one existing sample, one planned operation (a cutting method, four rows) and four new samples wired to the rows
+  (sample codes `{seq}-<alloy>-<method>-<date>`), then `POST /d1-build/drafts/<id>/check` (no blocking check) and
+  `POST /d1-build/drafts/<id>/create`. Expect: 200 with four sample ids; four new samples with status `planned` and
+  consecutive numbered codes; four operations with `work_state = 'planned'`, the same input sample and each its own output;
+  one new batch (`B-nnnn`) shared by the four operations; `operation_sequence` and codes assigned; four `sample_genealogy`
+  rows (`cut_from`); owner of every new record is your person; the project and campaign you put on the draft are on the
+  operations and (campaign) the samples; the draft is gone from `GET /d1-build/drafts`; you can open every new record in
+  STARbase; the audit log names you (not the system) as the actor of all of them. Print the labels (`/labels?ids=…`
+  with the four ids): the codes print before the cut. Since: edit-mode stream A (PR pending).
+- [ ] **PM5-3 — Mark done.** `POST /d1-build/mark-done` with `ids` of all four planned operations of the cut (date today).
+  Expect: all four are `done` with `operation_date`, `done_by_person_id` (you) and `done_at` set, and all four output samples
+  `active`, in one go (if one is refused, none changes); Data Studio shows the work state as Done. Mark them done again: 409
+  `ALREADY_DONE`. A planned output with an empty required field (material, form) refuses with a `CHECKS` entry keyed by the
+  sample's id; an operation on a sample that is still planned refuses with "Its sample is still planned; mark the operation
+  that makes it done first." On a planned operation whose method has a field the form marks required and that is empty, the call is
+  409 `CHECKS` naming the field and nothing changes. Since: edit-mode stream A (PR pending).
+- [ ] **PM5-4 — Create rolls back as a whole when one record is refused.** Build a draft whose last operation is on a sample
+  you may read but not edit (another person's sample), or whose method is refused by a Directus rule. `create` answers an
+  error with `code: WRITE_FAILED` and the `key` of that card; afterwards no new sample, operation, batch or genealogy row
+  exists (compare the counts before and after), and the draft is still listed with the same version. A draft with a blocking
+  check (an operation without a method) answers 409 `CHECKS` and writes nothing. Since: edit-mode stream A (PR pending).
+- [ ] **PM5-5 — Back to planned is the owner's call.** On a done operation owned by someone else that you can edit, set
+  `work_state` to `planned` through Directus (`PATCH /items/manufacturing_operations/<id>`). Expect 403 "Only the owner can set
+  a done record back to planned." and no change. As the owner, and as an administrator, the same call works; the audit log
+  keeps both changes. A planned operation you can edit may still be set to done by you. Repeat for a test. Since: edit-mode
+  stream A (PR pending).
+- [ ] **PM5-5b — Mark planned.** As the owner, `POST /d1-build/mark-planned` with `ids` of the done cut: the four operations
+  are planned again with no operation date, done by or done at, and their outputs are `planned` again. With a done hardness
+  test on one of the outputs first, the call is refused (`REMOVE_BLOCKED`, naming the sample only if you can read it) and
+  nothing changes. As a non-owner editor it is a 403 "Only the owner can set a done record back to planned."; as an
+  administrator it works. Since: edit-mode stream A (PR pending).
+- [ ] **PM5-6 — Drafts are private and versioned.** A draft made by one Lab Member is a 404 (not a 403) for another on
+  `GET`, `PATCH`, `DELETE`, `check` and `create`, and is not in their `GET /d1-build/drafts`. Two `PATCH` calls with the same
+  `version`: the second is 409 `CONFLICT` and the stored draft is the first one's. A draft that was created cannot be created
+  again (404). Since: edit-mode stream A (PR pending).
+- [ ] **PM5-7 — Removing planned work.** From the cut of PM5-2 (before marking anything done), a draft with the planned
+  operation marked `remove` and `create`: the operation and its planned output samples are deleted, the others stay. With a
+  test created on one of the outputs first (done), the same removal is refused with a blocking check naming the sample's
+  code, and nothing is deleted. A done operation cannot be removed. Since: edit-mode stream A (PR pending).
+- [ ] **PM5-8 — Templates in three scopes.** As Lab Member A save an operation template as private, one for your role and one
+  for everyone. Lab Member B (same role) sees the role and global ones but not the private one; a user with another role sees
+  only the global one. B cannot edit or delete A's templates (403); an administrator can. A template whose `method_id` is not
+  a method is refused (400). Since: edit-mode stream A (PR pending).
+- [ ] **PM5-10 — Form conditions of migration 187.** Open a **new** sample, a **new** operation and a **new** test in Data
+  Studio (Create item). Expect: the **Related records** group is not shown on any of the three until the record is saved; after
+  saving it appears (closed). On an operation form, the six legacy and capture fields (Legacy insert edge, Legacy machining UID,
+  File storage pointer, Capture software, Capture frequency, NC program text) show only when they hold a value, and stay hidden
+  when empty, including after you clear one and save. `dbmate down` once, reload the forms: the 174 behaviour is back (the group
+  shows on new records, the six fields always show). Since: edit-mode stream A (PR pending).
+- [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
+  hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
+  Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
