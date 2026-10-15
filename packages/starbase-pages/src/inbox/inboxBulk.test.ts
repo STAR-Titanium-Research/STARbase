@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-	AUTO_LINK_CONSENT, acceptButtonText, acceptConfirmText, acceptPreview, acceptResultText, batchTitle, batchesOf, isAcceptable, rateLimitMessage, undoResultText,
+	AUTO_LINK_CONSENT, acceptButtonText, acceptConfirmText, acceptPreview, acceptResultText, batchTitle, batchesOf, groupLinked, isAcceptable, rateLimitMessage, undoResultText,
 } from './inboxBulk';
 import { exactMatch, foundFile } from './fakeInboxServer';
 
@@ -44,6 +44,18 @@ describe('batches (one Undo each)', () => {
 		expect(batchTitle(bs[0])).toBe('Linked automatically, 1 file');
 		expect(batchTitle(bs[1])).toBe('Accepted in bulk, 2 files');
 		expect(undoResultText(2)).toBe('Undone: 2 found files back in your Inbox.');
+	});
+});
+
+describe('groupLinked', () => {
+	it('one group per batch, newest first, then the rows that have no batch', () => {
+		const a = foundFile({ state: 'linked', link_batch_id: 'b1', decided_at: '2026-10-14T10:00:00Z', link_kind: 'bulk' });
+		const b = foundFile({ state: 'linked', link_batch_id: 'b2', decided_at: '2026-10-15T10:00:00Z', link_kind: 'manual' });
+		const c = foundFile({ state: 'linked', link_batch_id: 'b1', decided_at: '2026-10-14T10:01:00Z', link_kind: 'bulk' });
+		const loose = foundFile({ state: 'linked', link_batch_id: null });
+		const groups = groupLinked([a, b, c, loose]);
+		expect(groups.map((g) => [g.batch?.id ?? null, g.rows.length])).toEqual([['b2', 1], ['b1', 2], [null, 1]]);
+		expect(groupLinked([])).toEqual([]);
 	});
 });
 

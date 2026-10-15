@@ -1855,6 +1855,22 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   photos). Decide whether to switch the OCR flag on.
 - [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
   from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract.
+- [ ] **F10 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date; a flagged file reading
+  *short ID `…` in the file name* with a link to the record; **thumbnails**: the page asks Directus's asset
+  route for image kinds, but archive files are pointer rows with no bytes in Directus (`STORAGE_LOCATIONS:
+  local`), so expect the kind icon instead of a picture. Record what you see; if the asset route cannot
+  serve them, the endpoint must serve a thumbnail some other way (open question for the endpoint stream).
+  Link, Change (search by code, nickname and short ID in the picker), Dismiss, Restore, *Show more* past 50
+  files, the Other files section (collapsed, with its count; open it and link a document: the dialog says
+  linking reads the file once), a surface-scan row whose Link is off with *Surface scans can be added soon*,
+  and *Rescan my folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
+- [ ] **F11 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
+  under Home (rail and expanded) with the count of *new* files only (backlog excluded), the same numbers in
+  Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once;
+  save a file and, without reloading, expect the badge to catch up within about three minutes or when the
+  window regains focus. On a server without `d1-inbox`, the entry and the panel are absent and nothing errors.
+  Since: Inbox stream D.
 
 ## Done
 

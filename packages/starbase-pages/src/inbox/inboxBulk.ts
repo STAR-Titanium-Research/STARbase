@@ -1,7 +1,18 @@
 // What the Inbox does in bulk and says about it, as plain functions (no Vue, no network): Accept all (what it would link, the confirm), one
 // Undo per batch, the rescan messages and the consent text of the auto-link switch. Split from inboxModel.ts, which has the rows.
-import type { FoundFile } from './inboxApi';
-import { linkTarget, needsReadNotice } from './inboxModel';
+import type { FilesQuery, FoundFile } from './inboxApi';
+import { linkTarget, needsReadNotice, type InboxFilters } from './inboxModel';
+
+/** What Accept all sends: the tab and the filters on screen, narrowed to exact short-ID matches (the endpoint links nothing else). */
+export function acceptFilter(f: InboxFilters): FilesQuery {
+	const q: FilesQuery = { tab: f.tab, strength: f.strength === 'any' ? 'short_id' : f.strength };
+	if (f.kind !== 'any') q.kind = f.kind;
+	if (f.folder) q.folder = f.folder;
+	if (f.from) q.from = f.from;
+	if (f.to) q.to = f.to;
+	if (f.owner !== 'any') q.owner = f.owner;
+	return q;
+}
 
 // ---- Accept all ----
 
@@ -77,6 +88,19 @@ export const BATCH_KIND_TEXT: Record<'manual' | 'bulk' | 'auto', string> = { man
 export function batchTitle(b: Batch): string {
 	const how = b.kind ? BATCH_KIND_TEXT[b.kind] : 'Linked';
 	return `${how}, ${b.count} file${b.count === 1 ? '' : 's'}`;
+}
+
+export interface LinkedGroup {
+	/** The batch the rows were linked in, with its one Undo; null for rows that carry no batch id (they cannot be undone as a batch). */
+	batch: Batch | null;
+	rows: FoundFile[];
+}
+
+/** The Recently linked rows, one group per batch (newest first, each with its one Undo), then the rows with no batch. */
+export function groupLinked(rows: readonly FoundFile[]): LinkedGroup[] {
+	const groups: LinkedGroup[] = batchesOf(rows).map((b) => ({ batch: b, rows: rows.filter((f) => f.link_batch_id === b.id && f.state === 'linked') }));
+	const loose = rows.filter((f) => !f.link_batch_id || f.state !== 'linked');
+	return loose.length ? [...groups, { batch: null, rows: loose }] : groups;
 }
 
 export function undoResultText(undone: number): string {
