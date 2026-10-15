@@ -84,8 +84,10 @@ async function loadTests(
   batchCodes: Record<string, string>,
 ): Promise<{ tests: TestRow[]; refused: boolean; partial: boolean }> {
   const buildJunction = (chunk: string[]) => ({
+    // The M2A `item:<collection>` path, not `_and: [collection, item]`: Directus 11.17 keeps only the first key of a
+    // `_some` body, so the `_and` form matched every test with any sample subject.
     filter: JSON.stringify({
-      [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
+      [SUBJECT_ALIAS]: { _some: { 'item:physical_samples': { sample_id: { _in: chunk } } } },
     }),
     fields: [...TEST_FIELDS, ...SUBJECT_FIELDS],
     sort: ['session_date'],

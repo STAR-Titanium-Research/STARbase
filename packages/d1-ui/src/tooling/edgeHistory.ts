@@ -22,7 +22,8 @@ export function edgeTestsFilter(edgeId: string): Record<string, unknown> {
 	return {
 		_or: [
 			{ insert_edge_id: { _eq: edgeId } },
-			{ subject: { _some: { _and: [{ collection: { _eq: EDGES } }, { item: { _eq: edgeId } }] } } },
+			// The M2A item:<collection> path: a _some body keeps only its first key (Directus 11.17).
+			{ subject: { _some: { [`item:${EDGES}`]: { edge_id: { _eq: edgeId } } } } },
 		],
 	};
 }

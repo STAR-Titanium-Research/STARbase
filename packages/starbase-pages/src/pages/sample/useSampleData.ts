@@ -97,7 +97,8 @@ export function useSampleData(id: Ref<string>) {
 				// trigger); a test with several samples lists the others only in the junction. One read
 				// with an _or, sorted and capped by the server, covers both.
 				const direct = { sample_id: { _eq: sampleId } };
-				const viaSubject = { subject: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _eq: sampleId } }] } } };
+				// The M2A item:<collection> path: a _some body keeps only its first key (Directus 11.17).
+				const viaSubject = { subject: { _some: { 'item:physical_samples': { sample_id: { _eq: sampleId } } } } };
 				try {
 					return await read({ _or: [direct, viaSubject] });
 				} catch (e) {
