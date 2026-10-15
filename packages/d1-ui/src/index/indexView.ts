@@ -219,6 +219,9 @@ export function withSelected(options: ChipOption[], selected: string | undefined
 	return [{ value: selected, label: selected }, ...options];
 }
 
+// A sample's code: what its "Force (n)" button searches the operations list for.
+export const plotCode = (row: Row): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
+
 // ---- ticked rows -------------------------------------------------------------------------------
 
 // The most rows one select action takes: the keys travel in the address (about 37 characters each), and a

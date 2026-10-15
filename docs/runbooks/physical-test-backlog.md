@@ -1131,6 +1131,24 @@ migration 141 prints about ownerless records.
   in the network panel. The map uses the full width of the window and its full height. Since: Process map card
   tweaks (PR pending).
 
+#### Process map edit mode (plan `2026-10-14-process-map-edit-mode.md`)
+
+- [ ] **PME-B1 — STARbase's generated form on real field definitions.** In edit mode, select a draft operation, a
+  draft test and a draft sample in turn (the rail's form). Expect, for each: the Field groups of Data Studio's own
+  form as headed sections in the same order (What, Who & where, then the type groups), only the groups of the chosen
+  process category / test type / geometry, Related records and Legacy / system hidden on a new item, required fields
+  starred, units after the numbers (rpm, mm, °C), choices with their readable text (Machining sub-type "Turning –
+  Facing"); Material, Method, Equipment, Owner and Input sample are pickers that show the code or name (not an id),
+  search as you type and list only what your role may read; a field the form cannot draw (Process Category, the
+  operation code, data file links) shows its value and **Open in Data Studio**. Change the category: the groups
+  swap live. Check light and dark. Since: Process map edit mode, stream B (PR pending).
+- [ ] **PME-B2 — Sample picker over the map.** Press **Pick samples** in edit mode. Expect: the Samples list opens
+  over the canvas with its search, saved views, filters and paging; typing, filtering and paging do not change the
+  map's address (`edit=` stays); a click on a row ticks it and opens nothing; a sample already on the canvas is
+  greyed "already added"; select all ticks the page (not the added ones); the button reads "Add N samples". Confirm:
+  the picked samples arrive on the canvas (the rows' on-screen positions are what the fly-in starts from). Since:
+  Process map edit mode, stream B (PR pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

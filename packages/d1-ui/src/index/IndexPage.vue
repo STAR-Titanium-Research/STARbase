@@ -12,46 +12,63 @@
 // The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples
 // get their Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the
 // `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
+// With `pick` the page is a row picker, opened over another page (the process map's sample picker): its state is kept in
+// memory, not in the URL; a click on a row ticks it instead of opening it; a button hands the ticked rows back (`pick` event,
+// pickMode.ts); the links, Plots, Process map, Pin, New and Data Studio buttons are not drawn.
 import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import '../components/tokens.css';
 import { useExplorerHost } from '../host';
 import type { ExplorerHost } from '../host';
 import { linkHref } from '../links';
 import { recordRoute } from '../recordRoute';
 import AppLink from '../components/AppLink.vue';
-import DataTable from '../components/DataTable.vue';
 import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
-import PinToggle from '../components/PinToggle.vue';
 import { pinTargetForIndex } from '../components/pinTarget';
 import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
-import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
-import { rowAccent } from './accent';
+import IndexTable from './IndexTable.vue';
+import IndexToolbar from './IndexToolbar.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import RowMapButton from './RowMapButton.vue';
 import { MAP_ROW_COLLECTIONS } from '../mapLink';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { PAGE_SIZE, toggledBookmark } from './indexQuery';
+import { PAGE_SIZE } from './indexQuery';
 import { plotKind } from './plotData';
-import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
+import { SELECT_MAX, cellText, hasNextPage, plotCode, rangeText } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
 import { useRowSelection } from './useRowSelection';
+import { memoryRoute, nounsFor } from './pickMode';
+import type { PickedRow, PickNouns } from './pickMode';
+import { usePickMode } from './usePickMode';
 import { useIndexPage } from './useIndexPage';
+import type { RouteLike, RouterLike } from './useIndexPage';
 
 const props = defineProps<{
 	def: IndexDef;
 	cardData?: (host: ExplorerHost, rows: any[]) => Promise<ReadonlyMap<string, unknown>>;
+	/** Picker mode (fixed for the life of the component). */
+	pick?: boolean;
+	/** Keys already taken (on the canvas): drawn, but cannot be ticked. */
+	pickTaken?: readonly string[];
+	/** What the confirm button counts ("Add 3 samples"); the def's title by default. */
+	pickNouns?: PickNouns;
 }>();
+const emit = defineEmits<{ pick: [rows: PickedRow[]] }>();
 
 const host: ExplorerHost = useExplorerHost();
-const route = useRoute();
-const router = useRouter();
+// Picker mode keeps the list's state in memory: the page it is opened over keeps its own address (and has no router to ask).
+const memory = props.pick ? memoryRoute(props.def.slug) : null;
+const route: RouteLike = memory?.route ?? useRoute();
+const router: RouterLike & { resolve(to: string): { href: string } } = memory
+	? { ...memory.router, resolve: () => ({ href: '' }) }
+	: (useRouter() as unknown as RouterLike & { resolve(to: string): { href: string } });
 
 const {
 	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
@@ -67,22 +84,11 @@ const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
 // A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
 const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
-const hasPlots = computed(() => plotKind(props.def.collection) !== null);
+const hasPlots = computed(() => !props.pick && plotKind(props.def.collection) !== null);
 // The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
-const hasMap = computed(() => MAP_ROW_COLLECTIONS.includes(props.def.collection));
-// A sample's code is what its "Force (n)" button searches the operations list for.
-const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
+const hasMap = computed(() => !props.pick && MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // The row's name, for its buttons' accessible names (its first column, else its key).
 const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def) || rowKey(row);
-const VIEW_OPTIONS = [
-	{ value: 'table', label: 'Table', icon: '☰' },
-	{ value: 'cards', label: 'Cards', icon: '▦' },
-] as const;
-const DENSITY_OPTIONS = [
-	{ value: 'compact', label: 'Compact' },
-	{ value: 'normal', label: 'Normal' },
-	{ value: 'roomy', label: 'Roomy' },
-] as const;
 const saveListPrefs = () => writeListPrefs(props.def.slug, { view: view.value, density: density.value });
 function setView(v: ListView): void {
 	view.value = v;
@@ -95,18 +101,12 @@ function setDensity(d: Density): void {
 
 // ---- columns ------------------------------------------------------------------------------
 const sortable = (c: ColumnDef) => !c.relation || relationSortable(c.relation.collection);
-function ariaSort(c: ColumnDef): 'ascending' | 'descending' | undefined {
-	const d = sortable(c) ? sortDirection(sort.value, sortKey(c)) : null;
-	return d === 'asc' ? 'ascending' : d === 'desc' ? 'descending' : undefined;
-}
-const arrow = (c: ColumnDef) => (sortDirection(sort.value, sortKey(c)) === 'asc' ? '▲' : sortDirection(sort.value, sortKey(c)) === 'desc' ? '▼' : '');
-const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.format === 'code' });
-
 // ---- rows ---------------------------------------------------------------------------------
 const drawerOpen = ref(false);
 const drawerKey = ref('');
 
 function openRow(row: Record<string, unknown>): void {
+	if (props.pick) return pickState.toggle(row);
 	const pk = rowKey(row);
 	if (props.def.rowTarget === 'record') host.navigate(recordRoute(props.def.collection, pk));
 	else {
@@ -143,12 +143,27 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 }
 
 // ---- ticked rows (defs with a selectAction): kept across pages, in the order ticked ----------------
-const sel = useRowSelection(props.def, rows, rowKey, (to) => host.navigate(to));
+// In picker mode every list can tick (not only those with a selectAction), and rows already taken are not tickable,
+// so "tick every row on this page" leaves them out.
+const ticks = !!props.pick || !!props.def.selectAction;
+const tickable = computed(() => (props.pick ? rows.value.filter((r) => !pickState.isTaken(r)) : rows.value));
+const sel = useRowSelection(props.def, tickable, rowKey, (to) => host.navigate(to));
+const root = ref<unknown>(null);
+const pickState = usePickMode({
+	sel,
+	rows,
+	rowKey,
+	rowLabel,
+	root,
+	taken: () => props.pickTaken ?? [],
+	nouns: props.pickNouns ?? nounsFor(props.def.title),
+	emit: (picked) => emit('pick', picked),
+});
 
 // ---- cards ----------------------------------------------------------------------------------
 // With no column headers to click, the cards toolbar sorts through a select (the same URL sort).
 const sortChoices = computed(() => sortOptions(props.def, sort.value, (c) => sortable(c)));
-const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' ? rowHref(row) : null);
+const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' && !props.pick ? rowHref(row) : null);
 
 // What a designed card shows beyond the row (the campaigns' counts), for the rows on screen. A
 // failure leaves the map empty: the cards then say the numbers are unavailable.
@@ -179,8 +194,6 @@ watch(
 );
 onBeforeUnmount(() => cardGate.cancel());
 
-const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
-
 // ---- pin ------------------------------------------------------------------------------------
 // The header's Pin toggle pins the saved view when one is open, else the page. A saved view that is
 // not available (deleted, or not the person's to see) is not pinnable, and the page is not offered
@@ -190,89 +203,42 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 </script>
 
 <template>
-	<PageShell>
-		<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
+	<PageShell ref="root" :class="{ picking: pick }">
+		<nav v-if="!pick" class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
 
 		<NotVisible v-if="forbidden" :what="`${def.title.toLowerCase()} list`" />
 
 		<template v-else>
-			<div class="head">
-				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
-				<span class="spacer" />
-				<PinToggle v-if="pinTarget" :target="pinTarget" :label="pinLabel" />
-				<button v-if="def.selectAction" type="button" class="btn" :disabled="!sel.picked.value.length" @click="sel.run">
-					{{ def.selectAction.label }}{{ sel.picked.value.length ? ` (${sel.picked.value.length})` : '' }}
-				</button>
-				<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="setView" />
-				<label v-if="view === 'cards'" class="sortsel">
-					<span>Sort by</span>
-					<select :value="sort" aria-label="Sort by" @change="setSortTo(($event.target as HTMLSelectElement).value)">
-						<option v-for="o in sortChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
-					</select>
-				</label>
-				<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
-				<button
-					type="button"
-					class="btn"
-					:title="dsLink.note ?? undefined"
-					@click="host.openDataStudio(dsLink.to)"
-				>Open in Data Studio</button>
-				<button type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
-			</div>
-
-			<div v-if="bookmarks.length" class="chips" role="group" aria-label="Saved views">
-				<span class="lbl">Saved views</span>
-				<span v-for="b in bookmarks" :key="b.id" class="chip" :class="{ on: state.bookmark === b.id }">
-					<button
-						type="button"
-						class="chip-main"
-						:aria-pressed="state.bookmark === b.id"
-						@click="setBookmark(toggledBookmark(state.bookmark, b.id))"
-					>{{ b.bookmark }}</button>
-					<button
-						v-if="state.bookmark === b.id"
-						type="button"
-						class="chip-x"
-						:aria-label="`Clear saved view ${b.bookmark}`"
-						@click="setBookmark(null)"
-					>×</button>
-				</span>
-			</div>
-			<p v-if="bookmarkUnavailable" class="d1-note warn" role="status">
-				That saved view isn't available.
-				<button type="button" class="link" @click="setBookmark(null)">Show the whole list</button>
-			</p>
-
-			<div class="filters">
-				<label class="field search">
-					<span>Search</span>
-					<input
-						type="search"
-						:value="searchText"
-						:placeholder="`Search ${def.title.toLowerCase()}`"
-						:aria-label="`Search ${def.title.toLowerCase()}`"
-						@input="setSearch(($event.target as HTMLInputElement).value)"
-					/>
-				</label>
-				<template v-for="chip in chips" :key="chip.field">
-					<button
-						v-if="chip.flag"
-						type="button"
-						class="flag"
-						:class="{ on: chip.value === 'true' }"
-						:aria-pressed="chip.value === 'true'"
-						@click="setFilter(chip.field, chip.value === 'true' ? '' : 'true')"
-					>{{ chip.label }}</button>
-					<label v-else class="field">
-						<span>{{ chip.label }}</span>
-						<select :value="chip.value" :aria-label="`Filter by ${chip.label.toLowerCase()}`" @change="setFilter(chip.field, ($event.target as HTMLSelectElement).value)">
-							<option value="">Any {{ chip.label.toLowerCase() }}</option>
-							<option v-for="o in chip.options" :key="o.value" :value="o.value">{{ o.label }}</option>
-						</select>
-					</label>
-				</template>
-				<button v-if="hasFilters" type="button" class="link clear" @click="clearFilters">Clear filters</button>
-			</div>
+			<IndexToolbar
+				:def="def"
+				:pick="pick"
+				:range="rangeText(state.page, rows.length, total)"
+				:pin-target="pinTarget"
+				:pin-label="pinLabel"
+				:pick-text="pickState.text.value"
+				:pick-count="pickState.count.value"
+				:picked-count="sel.picked.value.length"
+				:view="view"
+				:density="density"
+				:sort="sort"
+				:sort-choices="sortChoices"
+				:ds-link="dsLink"
+				:bookmarks="bookmarks"
+				:active-bookmark="state.bookmark"
+				:bookmark-unavailable="bookmarkUnavailable"
+				:search-text="searchText"
+				:chips="chips"
+				:has-filters="hasFilters"
+				@confirm="pickState.confirm"
+				@run="sel.run"
+				@view="setView"
+				@density="setDensity"
+				@sort="setSortTo"
+				@bookmark="setBookmark"
+				@search="setSearch"
+				@filter="setFilter"
+				@clear="clearFilters"
+			/>
 
 			<div v-if="error" class="state-row">
 				<LoadState :error="error" />
@@ -293,101 +259,59 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					:loading="loading"
 					:row-key="rowKey"
 					:href-for="cardHref"
+					:pick="pick"
 					:data="cardMap"
 					:data-loading="cardLoading"
 					@open="openRow"
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || hasMap || def.selectAction" #footer="{ row }">
-						<label v-if="def.selectAction" class="tick">
-							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="!sel.isPicked(row) && sel.full.value" @change="sel.toggle(row)" />
-							<span>Select</span>
+					<template v-if="$slots.footer || hasPlots || hasMap || ticks" #footer="{ row }">
+						<label v-if="ticks" class="tick">
+							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="pickState.isTaken(row) || (!sel.isPicked(row) && sel.full.value)" @change="sel.toggle(row)" />
+							<span>{{ pickState.isTaken(row) ? 'Already added' : 'Select' }}</span>
 						</label>
 						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
 						<RowMapButton v-if="hasMap" size="card" :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 						<slot name="footer" :row="row" />
 					</template>
 				</CardGrid>
-				<DataTable v-else-if="loading || rows.length" :density="density">
-					<thead>
-						<tr>
-							<th v-if="def.selectAction" class="fit">
-								<input type="checkbox" :checked="sel.allPicked.value" aria-label="Tick every row on this page" @change="sel.togglePage" />
-							</th>
-							<th v-if="showThumb" class="thumb" aria-hidden="true" />
-							<th v-for="c in def.columns" :key="c.field" :class="{ num: c.format === 'number' }" :aria-sort="ariaSort(c)">
-								<button v-if="sortable(c)" type="button" class="sort" @click="setSort(sortKey(c))">
-									{{ c.label }}<span class="arrow" aria-hidden="true">{{ arrow(c) }}</span>
-								</button>
-								<template v-else>{{ c.label }}</template>
-							</th>
-							<th v-if="hasPlots" class="plots">Plots</th>
-							<th v-if="hasMap" class="plots"><span class="sr-only">Process map</span></th>
-						</tr>
-					</thead>
-					<tbody>
-						<template v-if="loading && !rows.length">
-							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
-							<td v-if="def.selectAction" />
-								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
-								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
-								<td v-if="hasPlots" class="plots" />
-								<td v-if="hasMap" class="plots" />
-							</tr>
-						</template>
-						<template v-else>
-							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
-								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
-							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
-							<td v-if="def.selectAction" class="fit" @click.stop>
-								<input
-									type="checkbox"
-									:checked="sel.isPicked(row)"
-									:disabled="!sel.isPicked(row) && sel.full.value"
-									aria-label="Tick this row"
-									@click.stop
-									@change="sel.toggle(row)"
-								/>
-							</td>
-								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
-								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
-									<template v-if="i === 0">
-										<span v-if="rowAccent(def, row)" class="swatch" :style="{ background: rowAccent(def, row) as string }" aria-hidden="true" />
-										<a
-											v-if="def.rowTarget === 'record'"
-											class="cell-link"
-											:href="rowHref(row)"
-											:aria-label="cellText(row, c, def) ? undefined : 'Open'"
-											@click="onRowLink($event, row)"
-										>{{ cellText(row, c, def) || '—' }}</a>
-										<button
-											v-else
-											type="button"
-											class="cell-link"
-											:aria-label="cellText(row, c, def) ? undefined : 'Open'"
-											@click.stop="openRow(row)"
-										>{{ cellText(row, c, def) || '—' }}</button>
-									</template>
-									<template v-else>{{ cellText(row, c, def) }}</template>
-								</td>
-								<td v-if="hasPlots" class="plots">
-									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
-								</td>
-								<td v-if="hasMap" class="plots">
-									<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
-								</td>
-							</tr>
-						</template>
-					</tbody>
-				</DataTable>
+				<IndexTable
+					v-else-if="loading || rows.length"
+					:def="def"
+					:density="density"
+					:rows="rows"
+					:loading="loading"
+					:row-key="rowKey"
+					:row-label="rowLabel"
+					:show-thumb="showThumb"
+					:plots="plots"
+					:has-plots="hasPlots"
+					:has-map="hasMap"
+					:pick="pick"
+					:ticks="ticks"
+					:is-picked="sel.isPicked"
+					:is-taken="pickState.isTaken"
+					:all-picked="sel.allPicked.value"
+					:full="sel.full.value"
+					:sort="sort"
+					:sortable="sortable"
+					:row-href="rowHref"
+					@open="openRow"
+					@toggle="sel.toggle"
+					@toggle-page="sel.togglePage"
+					@sort="setSort"
+					@row-link="onRowLink"
+				>
+					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
+				</IndexTable>
 				<div v-else class="state-row">
 					<LoadState empty :empty-text="filtered || state.page > 1 ? 'Nothing matches.' : 'Nothing here yet.'" />
 					<button v-if="filtered || state.page > 1" type="button" class="link" @click="clearFilters">Clear filters</button>
 				</div>
 			</div>
 
-			<p v-if="def.selectAction && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
+			<p v-if="ticks && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
@@ -398,7 +322,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 			</div>
 
 			<EditDrawer
-				v-if="def.rowTarget === 'drawer'"
+				v-if="def.rowTarget === 'drawer' && !pick"
 				:model-value="drawerOpen"
 				:collection="def.collection"
 				:primary-key="drawerKey"
@@ -410,11 +334,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 </template>
 
 <style scoped>
-.head, .filters, .chips, .foot, .state-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.filters { align-items: flex-end; }
-.spacer { flex: 1; }
-.range { font-size: var(--fs-md, 13px); color: var(--d1-dim); }
-
+.foot, .state-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .btn {
 	display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
 	border: 1px solid var(--d1-line); border-radius: 8px;
@@ -423,89 +343,21 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 }
 .btn:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
 .btn:disabled { opacity: 0.45; cursor: default; }
-.btn.pri { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 .link {
 	border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600;
 	color: var(--d1-accent, var(--theme--primary)); cursor: pointer; text-decoration: underline;
 }
-.clear { align-self: center; margin-top: 16px; }
-
-.lbl { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); margin-right: 2px; }
-.chip {
-	display: inline-flex; align-items: center; border-radius: 99px;
-	border: 1px solid var(--d1-line); background: var(--d1-surface);
-	font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-accent, var(--theme--primary)); white-space: nowrap;
-}
-.chip.on { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
-.chip button { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
-.chip-main { padding: 3px 10px; border-radius: 99px; }
-.chip.on .chip-main { padding-right: 4px; }
-.chip-x { padding: 3px 8px 3px 2px; border-radius: 99px; font-size: var(--fs-lg, 15px); line-height: 1; }
-
-.field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); }
-.field input, .field select {
-	height: 30px; min-width: 140px; padding: 0 10px;
-	border: 1px solid var(--theme--border-color); border-radius: 8px;
-	background: var(--theme--form--field--input--background, var(--theme--background));
-	color: var(--theme--foreground); font: inherit; font-size: var(--fs-md, 13px);
-}
-.field.search input { min-width: 240px; }
 
 .panel {
 	background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius, 12px);
-	padding: 6px 16px 4px; box-shadow: var(--d1-shadow);
+	padding: 6px 16px 4px; box-shadow: var(--d1-shadow); min-width: 0;
 }
-.panel { min-width: 0; }
 .panel.bare { background: none; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
 .panel.busy { opacity: 0.6; }
 .state-row { padding: 6px 0; }
-
-.sort {
-	border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer;
-	display: inline-flex; align-items: center; gap: 4px;
-}
-.sort:hover { color: var(--theme--foreground); }
-.arrow { font-size: 9px; }
-th.num .sort { justify-content: flex-end; }
-
-.row { cursor: pointer; }
-.plots { text-align: right; }
-.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* In an overlay the page has no frame of its own to pad. */
+.d1-page.picking { padding: 0 0 8px; max-width: none; }
 .tick { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); cursor: pointer; }
-.row td.plots { overflow: visible; }
-.flag {
-	height: 30px; padding: 0 12px; border: 1px solid var(--theme--border-color); border-radius: 99px; background: var(--d1-surface);
-	color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; align-self: flex-end;
-}
-.flag:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.flag.on { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
-.cell-link {
-	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
-	color: inherit; text-decoration: none; cursor: pointer;
-}
-.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent); }
-.cell-link:hover { color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; }
-.cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
-/* Long free text (outcomes, notes) is cut instead of stretching the row. */
-.row td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.sortsel { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); }
-.sortsel select {
-	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
-	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
-}
-/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load; the picture inside is contained (IndexThumb), never cropped. */
-.thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
-.skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
-
-.skeleton .bar {
-	display: block; height: 10px; width: 70%; border-radius: 5px;
-	background: linear-gradient(90deg, var(--d1-tile) 25%, var(--d1-line) 50%, var(--d1-tile) 75%);
-	background-size: 200% 100%; animation: shimmer 1.2s linear infinite;
-}
-@keyframes shimmer { to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .skeleton .bar { animation: none; } }
-
 .foot { justify-content: space-between; }
 .pager { display: inline-flex; gap: 8px; }
 .d1-note.warn { color: var(--d1-warn); }
