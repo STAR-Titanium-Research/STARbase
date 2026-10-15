@@ -53,6 +53,14 @@ describe('ChecksSection', () => {
 		expect(text(html)).toContain('Warning: No machine');
 	});
 
+	it('keeps one always-mounted live region, empty or not, whose text is swapped', async () => {
+		const statusOf = (html: string) => html.match(/<p class="vh" role="status" aria-live="polite" aria-atomic="true"[^>]*>(.*?)<\/p>/)?.[1];
+		expect(statusOf(await render({ checks: [], labelFor }))).toBe('Nothing missing');
+		expect(statusOf(await render({ checks, labelFor }))).toBe('2 things missing, 1 warning');
+		expect((await render({ checks, labelFor })).match(/role="status"/g)).toHaveLength(1);
+		expect((await render({ checks: [], labelFor })).match(/role="status"/g)).toHaveLength(1);
+	});
+
 	it('summarises the counts', async () => {
 		const html = await render({ checks, labelFor });
 		expect(text(html)).toContain('2 things missing, 1 warning');

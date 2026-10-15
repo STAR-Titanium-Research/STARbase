@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSelectionQuery } from '@d1/ui';
-import { createdText, labelsPath, missingLabel, printLabelsText } from './createText';
+import { LABELS_LINK_CAP, createdText, labelsLink, labelsPath, missingLabel, moreLabelsText, printLabelsText } from './createText';
 
 describe('createText', () => {
 	it('says what is missing', () => {
@@ -34,6 +34,18 @@ describe('labelsPath', () => {
 	it('is null for no samples', () => {
 		expect(labelsPath([])).toBeNull();
 		expect(labelsPath([''])).toBeNull();
+	});
+
+	it('carries at most 200 samples and says how many more there were', () => {
+		const ids = Array.from({ length: 217 }, (_, i) => `id-${i}`);
+		const link = labelsLink(ids);
+		expect(LABELS_LINK_CAP).toBe(200);
+		expect(link.ids).toHaveLength(200);
+		expect(link.more).toBe(17);
+		expect(labelsPath(ids)!.split('=')[1].split(',')).toHaveLength(200);
+		expect(labelsLink(ids.slice(0, 200)).more).toBe(0);
+		expect(moreLabelsText(17)).toBe('and 17 more are not in this link: pick them on the Labels page');
+		expect(moreLabelsText(1)).toBe('and 1 more is not in this link: pick it on the Labels page');
 	});
 
 	it('is what the labels page reads back', () => {

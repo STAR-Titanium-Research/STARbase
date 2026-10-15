@@ -24,6 +24,26 @@ describe('CreateToast', () => {
 		expect(text(html)).toContain('Created 6 records');
 	});
 
+	it('keeps its status region mounted when the card is hidden, with no text; only the card comes and goes', async () => {
+		const hidden = await render({ sampleIds: [A], count: 2, show: false });
+		expect(hidden).toMatch(/<p class="vh" role="status" aria-live="polite" aria-atomic="true"[^>]*><\/p>/);
+		expect(hidden).not.toContain('Dismiss');
+		expect(hidden).not.toContain('Print labels');
+		const shown = await render({ sampleIds: [A], count: 2, show: true });
+		expect(shown).toMatch(/role="status"[^>]*>Created 2 records\. Print labels for 1 new sample is available\.<\/p>/);
+		expect(shown).toContain('Dismiss');
+	});
+
+	it('caps the link at 200 samples and says how many more there were', async () => {
+		configureLinks(starbaseLinks(''));
+		const ids = Array.from({ length: 205 }, (_, i) => `id${i}`);
+		const html = await render({ sampleIds: ids, count: 210 });
+		expect(text(html)).toContain('Print labels for 200 new samples');
+		expect(text(html)).toContain('and 5 more are not in this link');
+		const href = html.match(/href="([^"]*labels[^"]*)"/)![1];
+		expect(href.split('=')[1].split(',')).toHaveLength(200);
+	});
+
 	it('offers to print labels for the new samples, linking to the labels page through AppLink', async () => {
 		configureLinks(starbaseLinks(''));
 		const html = await render({ sampleIds: [A, B], count: 6 });
