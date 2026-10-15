@@ -18,6 +18,8 @@ export const HIDEABLE: ReadonlySet<string> = new Set([...Object.keys(KINDS).filt
 export interface Remembered {
   hidden: string[];
   probable: boolean;
+  /** The "Stack passes" chip. */
+  stack: boolean;
 }
 
 /** localStorage can be missing (node), blocked or full: every access is guarded and falls back to the defaults. */
@@ -28,12 +30,13 @@ export function readRemembered(): Remembered {
       return {
         hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((k: unknown): k is string => typeof k === 'string' && HIDEABLE.has(k)) : [],
         probable: parsed.probable !== false,
+        stack: parsed.stack !== false,
       };
     }
   } catch {
     /* no storage: defaults */
   }
-  return { hidden: [], probable: true };
+  return { hidden: [], probable: true, stack: true };
 }
 
 export function writeRemembered(r: Remembered): void {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
+import { groupBatches } from './groupBatches';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkStock, mkTest } from './fixtures';
 import { FALLBACK_RELATIONS, formSlots } from './formSlots';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, RecordNode } from './types';
@@ -696,5 +697,30 @@ describe('buildGraph: a family seen from one cut piece (C1)', () => {
     const g = build(seenFromA(), { probable: false });
     expect(wire(g, 'op:cut-a:out:0', 's:a:in:0')).toBeDefined();
     expect(wire(g, 'op:cut-b:out:0', 's:b:in:0')).toBeDefined();
+  });
+});
+
+describe('buildGraph: a stack of passes', () => {
+  const passes = ['a', 'b', 'c'].map((id, i) =>
+    mkOp({ id, code: `OP-${id}`, sampleId: 's1', outputSampleId: 's1', methodId: 'turn', methodName: 'Turning', category: 'machining', date: `2026-09-0${i + 1}T09:00:00Z`, settings: { machining_feed_mm_per_rev: i === 2 ? 0.1 : 0.05 } }),
+  );
+  const tensile = mkTest({ id: 'tt', subjectSampleIds: ['s1'], date: '2026-09-09T09:00:00Z', category: 'destructive' });
+  const data = mkData({ samples: sam('s1'), operations: passes, tests: [tensile] });
+  const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
+  const id = 'stack:a,b,c';
+
+  it('is one container with one row and one pair of sockets', () => {
+    const c = container(g, id);
+    expect(c).toMatchObject({ stacked: true, title: '3 passes', code: '', method: 'Turning', category: 'machining' });
+    expect(c.rows).toEqual([{ recordId: 'a', sampleId: 's1', in: `${id}:in:0`, out: `${id}:out:0`, inPlace: true }]);
+    expect(c.settings).toEqual([{ label: 'Feed', value: 'varies' }]);
+    expect(c.when).toMatch(/–/); // first – last
+  });
+
+  it('the sample runs through it once: no wire from the stack into itself', () => {
+    expect(wire(g, 's:s1:out:0', `${id}:in:0`)).toBeDefined();
+    expect(wire(g, `${id}:out:0`, 'test:tt:in:0')).toBeDefined();
+    expect(g.wires.filter((w) => w.from.startsWith(id) && w.to.startsWith(id))).toEqual([]);
+    expect(g.nodes.filter((n) => n.type === 'container')).toHaveLength(2);
   });
 });

@@ -76,9 +76,14 @@ export function useMapHover({ graph, nodeById, nodes, info }: HoverDeps) {
     if (cardTimer) clearTimeout(cardTimer);
     cardTimer = null;
     card.value = null;
-    const delay = cardNow ? 0 : HOVER_DELAY_MS;
+    const held = cardNow;
+    const delay = held ? 0 : HOVER_DELAY_MS;
     cardNow = false;
     if (!h?.el) return;
+    // A full container says on its face what its hover card would (the rail has the rest): no card for it, except
+    // on a long press (a phone has no rail beside the map).
+    const n = nodeById.value.get(h.id);
+    if (!held && n?.type === 'container' && !n.collapsed) return;
     const resting = h;
     cardTimer = setTimeout(() => {
       cardTimer = null;

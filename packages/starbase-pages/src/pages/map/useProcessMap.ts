@@ -96,7 +96,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setReach(r: Reach): void {
     reach.value = r;
     // A fan has no reach, and the cards ＋ opened from a fan item (a side fan's) are not part of any reach: they stay.
-    if (!data.value?.fan && !data.value?.sideFans?.length) revealedKeys.value = new Set();
+    if (!data.value?.fan && !data.value?.sideFans?.length) {
+      revealedKeys.value = new Set();
+      expansion.forgetReveals(); // a ＋ that only showed cards has nothing left to take away
+    }
     // Whether the cap is what limits the map now, from what is drawn (kept cards may still fill it).
     capped.value = shown.value.size >= CARD_CAP;
     writeUrl({ reach: String(r) });
@@ -106,7 +109,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const remembered = readRemembered();
   const hiddenKinds = ref<ReadonlySet<string>>(new Set(remembered.hidden));
   const probable = ref(remembered.probable);
-  const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value });
+  const stack = ref(remembered.stack);
+  /** Operations the person took out of a stack with "Unstack"; the Stack passes chip, turned on again, stacks them again. */
+  const unstacked = ref<ReadonlySet<string>>(new Set());
+  const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value, stack: stack.value });
   function toggleKind(kind: string): void {
     if (!HIDEABLE.has(kind)) return;
     const next = new Set(hiddenKinds.value);
@@ -117,6 +123,17 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setProbable(on: boolean): void {
     probable.value = on;
     remember();
+  }
+  function setStack(on: boolean): void {
+    stack.value = on;
+    if (on) unstacked.value = new Set();
+    remember();
+  }
+  /** "Unstack" on a stack of passes: each pass becomes its own card again. */
+  function unstack(id: string): void {
+    const n = nodeById.value.get(id);
+    if (n?.type !== 'container' || !n.stacked) return;
+    unstacked.value = new Set([...unstacked.value, ...n.group.rowIds]);
   }
 
   // ---- what the page asks for ---------------------------------------------------------------------
@@ -152,6 +169,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     unfoldedKeys.value = new Set();
     moreOpenKeys.value = new Set();
     revealedKeys.value = new Set();
+    unstacked.value = new Set();
     capped.value = false;
     notice.value = '';
     selectedKey.value = null;
@@ -196,7 +214,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     const groups = groupBatches(
       d.operations.filter((o) => !collapsed.has(o.id)),
       d.tests.filter((t) => !collapsed.has(t.id)),
-      { probable: probable.value, batchCodes: d.batchCodes },
+      { probable: probable.value, batchCodes: d.batchCodes, stack: stack.value, unstacked: unstacked.value },
     );
     const unfolded = new Set(groups.filter((g) => keysOfGroup(g).some((k) => unfoldedKeys.value.has(k))).map((g) => g.id));
     return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded });
@@ -376,6 +394,22 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   });
   const expansion = useMapExpand({ api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding });
 
+  /** "Reset": the map as the focus first loaded it, without asking the server again; what ＋, Unstack and the folds did is gone. */
+  function reset(): void {
+    if (status.value !== 'ready') return;
+    const first = expansion.restore(gate.begin()); // an expand still loading belongs to the map before the reset
+    if (!first) return;
+    generation.value++; // the canvas lays it out afresh
+    revealedKeys.value = new Set();
+    unfoldedKeys.value = new Set();
+    moreOpenKeys.value = new Set();
+    unstacked.value = new Set();
+    capped.value = false;
+    notice.value = '';
+    clearHover();
+    data.value = first;
+  }
+
   // Last, so that everything a load resets is there: it runs at once for a focus already in the address.
   watch(focusKey, () => void load(), { immediate: true });
 
@@ -400,6 +434,12 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     setDir,
     probable,
     setProbable,
+    stack,
+    setStack,
+    unstack,
+    collapse: expansion.collapse,
+    expandedIds: expansion.expandedIds,
+    reset,
     hiddenKinds,
     toggleKind,
     presentKinds,

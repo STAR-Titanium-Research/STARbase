@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSSRApp, defineComponent, h, ref, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { buildGraph } from '../model/buildGraph';
+import { groupBatches } from '../model/groupBatches';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from '../model/fixtures';
 import type { ContainerNode as ContainerData, JunctionNode as JunctionData, MapNode, ProcessData, RecordNode as RecordData, Slot, Wire } from '../model/types';
 import { MAP_ACTIONS, MAP_VIEW, activating, cardHandlers, recordHandlers, refKey, socketHandlers, socketProps, stopping, wireHandlers, type MapActions, type MapView } from './actions';
@@ -64,7 +65,7 @@ describe('refKey', () => {
 });
 
 describe('ContainerNode', () => {
-	it('renders header, a rail with "+2 more" for 4 rows, Inside tray with majors then "+N more from the form"', async () => {
+	it('renders header, a rail with "+2 more" for 4 rows, the tray with majors then "+N more from the form"', async () => {
 		const [c] = containers(cutOf(4), true, () => [machine('NLX-1'), minor('operator', 'Operator', 'Ada'), minor('owner', 'Owner', 'Bob')]);
 		const html = await render(ContainerNode, { id: c.id, data: c });
 		const t = text(html);
@@ -73,7 +74,7 @@ describe('ContainerNode', () => {
 		expect(html).toContain('aria-label="Expand"');
 		expect(t).toContain('1 sample → 4 pieces'); // counted over every row, folded ones too
 		expect(t).toContain('+2 more');
-		expect(t).toContain('Inside');
+		expect(t).not.toContain('Inside'); // the tray has no label: its chips say what they are
 		expect(t).toContain('NLX-1');
 		expect(t).toContain('+2 more from the form');
 		expect(t).not.toContain('Ada'); // minors stay folded
@@ -144,7 +145,7 @@ describe('ContainerNode', () => {
 		const empty: ContainerData = { ...c, rows: [], bundled: false };
 		const html = await render(ContainerNode, { id: c.id, data: empty });
 		expect(ids(html)).toEqual([]);
-		expect(text(html)).toContain('Inside');
+		expect(html).toContain('class="slots"');
 		expect(text(html)).toContain('NLX-1');
 	});
 
@@ -496,7 +497,7 @@ describe('used-in fan cards (D20)', () => {
 		const t = text(html);
 		expect(t).toContain('Turning');
 		expect(t).toContain('2026-09-28');
-		expect(t).not.toContain('Inside');
+		expect(html).not.toContain('class="slots"');
 		expect(t).not.toContain('Sample');
 		expect(t).not.toContain('Speed');
 		expect(ids(html)).toEqual(['op:u0:in:0']);
@@ -506,7 +507,7 @@ describe('used-in fan cards (D20)', () => {
 
 	it('an opened container (collapsed gone) draws its rows and Inside tray again', async () => {
 		const html = await render(ContainerNode, { id: collapsed.id, data: { ...collapsed, collapsed: undefined, rows: [{ recordId: 'u0', sampleId: 'y0', in: 'op:u0:in:0', out: 'op:u0:out:0' }] } });
-		expect(text(html)).toContain('Inside');
+		expect(html).toContain('class="slots"');
 		expect(ids(html)).toEqual(['op:u0:in:0', 'op:u0:out:0']);
 	});
 
@@ -614,5 +615,70 @@ describe('keyboard and screen readers (spec D23)', () => {
 		expect(labelOf('s:s1:out:0', 'out')).toBe('Output: S-0412-A · Sample');
 		expect(labelOf('s:s9:out:0', 'out')).toBe('Output: Not connected');
 		expect(labelOf(`${op.id}:in:0`, 'in')).toBe(socketLabeller(wires, nodes)(`${op.id}:in:0`, 'in')); // same answer however asked
+	});
+});
+
+describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
+	const turning = (p: Parameters<typeof mkOp>[0] = {}) =>
+		mkOp({ code: '10-AA-MF-2023-03-31-F1-30MPM_0.05feed_0.1DoC', sampleId: 'p', outputSampleId: 'p', methodName: 'Turning', category: 'machining', date: DAY, ...p });
+
+	it('the title bar says process | method; the full operation name and its date are in the card', async () => {
+		const [c] = containers(mkData({ samples: sam('p'), operations: [turning({ id: 'o1' })] }));
+		const html = await render(ContainerNode, { id: c.id, data: c });
+		expect(/<span class="m"[^>]*>([^<]*)</.exec(html)?.[1]).toBe('Machining | Turning');
+		expect(html).toMatch(/class="code n"[^>]*>10-AA-MF-2023-03-31-F1-30MPM_0\.05feed_0\.1DoC</);
+		expect(text(html)).toContain('1 Sept 2026');
+	});
+
+	it('a test says Test | its type', async () => {
+		const [c] = containers(mkData({ samples: sam('s1'), tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], testType: 'Tensile' })] }));
+		expect(/<span class="m"[^>]*>([^<]*)</.exec(await render(ContainerNode, { id: c.id, data: c }))?.[1]).toBe('Test | Tensile');
+	});
+
+	it('a stack is a deck: ×N in the title bar, "N passes", and Unstack', async () => {
+		const ops = ['a', 'b', 'c'].map((id, i) => turning({ id, methodId: 'turn', date: `2026-09-0${i + 1}T09:00:00Z` }));
+		const data = mkData({ samples: sam('p'), operations: ops });
+		const [c] = buildGraph(data, groupBatches(ops, [], { probable: true, stack: true }), { slots: () => [] }).nodes.filter((n): n is ContainerData => n.type === 'container');
+		const a = spies();
+		const calls: unknown[] = [];
+		const html = await render(ContainerNode, { id: c.id, data: c }, undefined, { ...a, unstack: (id: string) => void calls.push(id) });
+		expect(html).toMatch(/class="[^"]*\bstacked\b/);
+		expect(text(html)).toContain('×3');
+		expect(text(html)).toContain('3 passes');
+		expect(html).toContain('aria-label="Unstack 3 passes"');
+		expect(ids(html)).toEqual([`${c.id}:in:0`, `${c.id}:out:0`]);
+	});
+
+	it('an expanded card draws − and its button collapses', async () => {
+		const [c] = containers(cutOf(1));
+		const html = await render(ContainerNode, { id: c.id, data: c }, { expanded: ref(new Set([c.id])) });
+		expect(html).toContain('aria-label="Collapse"');
+		expect(html).toContain('>remove<');
+		const calls: unknown[][] = [];
+		const a: MapActions = { ...spies(), expand: (id) => void calls.push(['expand', id]), collapse: (id) => void calls.push(['collapse', id]) };
+		const ev = { stopPropagation() {}, currentTarget: null };
+		cardHandlers(a, () => c.id, () => true).expand(ev);
+		cardHandlers(a, () => c.id, () => false).expand(ev);
+		expect(calls).toEqual([['collapse', c.id], ['expand', c.id]]);
+		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
+		expect(await render(RecordNode, { id: rec.id, data: rec }, { expanded: ref(new Set(['s:a'])) })).toContain('aria-label="Collapse"');
+	});
+
+	it('a slot is one chip: the whole chip is the record, a tool shows its name', async () => {
+		const tool: Slot = { field: 'tool_id', role: 'Tool', ref: { collection: 'tools', id: 't1', code: '6576cc99', label: 'Roughing holder' }, major: true };
+		const html = await render(SlotRow, { item: tool });
+		expect(html).toMatch(/<div class="slot nodrag nopan[^"]*"[^>]*role="button"[^>]*data-map-id="tools:t1"/);
+		expect(text(html)).toContain('Roughing holder');
+		expect(text(html)).not.toContain('6576cc99');
+		expect(html).toContain('aria-label="Show what else used Roughing holder"');
+		const open = await render(SlotRow, { item: tool }, { expanded: ref(new Set(['tools:t1'])) });
+		expect(open).toContain('aria-label="Hide what else used Roughing holder"');
+		// A tool's own card (the root of its used-in fan) is named the same way, its code under it.
+		const card: RecordData = { id: 'f:tools:t1', type: 'record', kind: 'tool', ref: tool.ref!, ins: [], outs: [] };
+		const rec = text(await render(RecordNode, { id: card.id, data: card }));
+		expect(rec).toContain('Roughing holder');
+		expect(rec).toContain('6576cc99');
+		// A minor slot (Owner, Campaign...) is the same chip.
+		expect(await render(SlotRow, { item: minor('owner', 'Owner', 'Bob') })).toMatch(/class="slot nodrag nopan one"/);
 	});
 });

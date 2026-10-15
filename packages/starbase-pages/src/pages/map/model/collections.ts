@@ -45,6 +45,8 @@ const TABLE: readonly CollectionInfo[] = [
   { collection: 'projects', kind: 'project', plan: 'fan', sampleFan: true, word: ['project', 'Projects'] },
   { collection: 'campaigns', kind: 'campaign', plan: 'fan', sampleFan: true, word: ['campaign', 'Campaigns'] },
   { collection: 'directus_files', kind: 'data_file' },
+  // Force data is a file path on the operation, with no record of its own: drawn as a data file.
+  { collection: 'force_file', kind: 'data_file' },
   { collection: 'people', kind: 'person' },
   { collection: 'directus_users', kind: 'person' },
 ];

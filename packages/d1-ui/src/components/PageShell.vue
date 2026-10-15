@@ -2,14 +2,15 @@
 // The frame of every Explorer page, inside <private-view>: one left edge (the Data Studio's own
 // content padding, so a page starts where the header bar's content starts and does not jump
 // sideways from one page to the next), one width, one type scale and one gap between blocks.
-// `narrow` is for a form or a list read top to bottom.
+// `narrow` is for a form or a list read top to bottom; `wide` for a canvas that should use the whole window
+// (the Process map).
 import './tokens.css';
 
-defineProps<{ narrow?: boolean }>();
+defineProps<{ narrow?: boolean; wide?: boolean }>();
 </script>
 
 <template>
-	<div class="d1-page" :class="{ narrow }"><slot /></div>
+	<div class="d1-page" :class="{ narrow, wide }"><slot /></div>
 </template>
 
 <style scoped>
@@ -26,6 +27,7 @@ defineProps<{ narrow?: boolean }>();
 	color: var(--theme--foreground);
 }
 .d1-page.narrow { max-width: 920px; }
+.d1-page.wide { max-width: none; }
 
 /* The helper classes of the page (.d1-cols, .d1-note, .d1-crumbs) are in tokens.css, unscoped and
    at the lowest weight, so that a page's own scoped rule for them (a margin) wins. */
