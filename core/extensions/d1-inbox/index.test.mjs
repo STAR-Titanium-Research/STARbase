@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary,
+  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -42,6 +42,7 @@ const cand = (overrides = {}) => {
     suggested_collection: 'physical_samples', suggested_record_id: S1, duplicate_of: null,
     rel_path: `Users/ali1/img${seq}.tif`, size_bytes: 1000, source_mtime: null, first_seen_at: '2026-10-14T10:00:00.000Z',
     decided_at: null, decided_by: null, link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null, adopted_at: null,
+    auto_undone_at: null,
     ...overrides,
   };
 };
@@ -97,6 +98,8 @@ function newWorld() {
     labels: { [INS1]: 'INS-001', [EDGE1]: 'INS-001-E1' },
     denyScanCreate: false, denyRefRead: null,
     scanRequests: [],
+    // the crawler's folder cache (d1_private.inbox_dirs): { rel_path, owner_person_id, owner_team_id, dir_mtime, last_listed_at }
+    dirs: [],
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
       daemon_started_at: new Date('2026-10-15T08:00:00.000Z'), current_activity: 'idle', last_scan_started_at: new Date('2026-10-15T11:30:00.000Z'),
@@ -127,10 +130,10 @@ const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 const copy = (v) => structuredClone(v);
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs;
 };
 
 function statement(w, sql, b, txId) {
@@ -172,7 +175,9 @@ function statement(w, sql, b, txId) {
       for (const id of csv(b[0])) {
         const c = w.candidates.get(id);
         if (c && c.link_batch_id === b[1] && c.state === 'linked') {
-          Object.assign(c, { state: 'new', decided_at: null, decided_by: null, link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null });
+          // as the SQL does: an undone AUTO link is remembered (auto_undone_at), so the crawler's auto-link never links the file again
+          Object.assign(c, { state: 'new', decided_at: null, decided_by: null, auto_undone_at: c.link_kind === 'auto' ? w.now.toISOString() : c.auto_undone_at,
+            link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null });
           out.push({ candidate_id: id });
         }
       }
@@ -190,6 +195,17 @@ function statement(w, sql, b, txId) {
         }
       }
       return out;
+    }
+    case 'relistDirs': {
+      // the folder cache rows of the folders the given candidates sit in (same path, same owner): forgotten as "listed", so the next scan lists them
+      for (const id of csv(b[0])) {
+        const c = w.candidates.get(id);
+        const parent = c?.rel_path.replace(/\/[^/]*$/, '');
+        for (const d of w.dirs) {
+          if (c && d.rel_path === parent && d.owner_person_id === c.owner_person_id && d.owner_team_id === c.owner_team_id) Object.assign(d, { last_listed_at: null, dir_mtime: null });
+        }
+      }
+      return [];
     }
     case 'prefsGet': return w.prefs.has(b[0]) ? [{ auto_link: w.prefs.get(b[0]) }] : [];
     case 'prefsPut': w.prefs.set(b[0], b[1]); return [{ auto_link: b[1] }];
@@ -493,6 +509,12 @@ test('parseFileFilters: the names STARbase sends: tab, kind, strength, folder, f
   }
 });
 
+// D11: a copy is shown (marked) while its original is undecided and drops out when the original is linked, or dismissed by the SAME owner. Another owner
+// dismissing a file must not hide yours: that copy is listed AND counted (its original no longer counts for anyone).
+const SAME_OWNER_SQL = '\\(c\\.owner_person_id IS NOT DISTINCT FROM o\\.owner_person_id AND c\\.owner_team_id IS NOT DISTINCT FROM o\\.owner_team_id\\)';
+const COPY_HIDDEN_SQL = new RegExp(`NOT \\(c\\.duplicate_of IS NOT NULL AND \\(o\\.state = 'linked' OR \\(o\\.state = 'dismissed' AND ${SAME_OWNER_SQL}\\)\\)\\)`);
+const COUNTED_COPY_SQL = new RegExp(`\\(c\\.duplicate_of IS NULL OR o\\.state = 'gone' OR \\(o\\.state = 'dismissed' AND NOT ${SAME_OWNER_SQL}\\)\\)`);
+
 test('buildListQuery: each tab, the owner scope and the filters are bindings, never text', () => {
   const scope = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
   const tabs = {
@@ -509,9 +531,10 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
     assert.ok(bindings.includes(`${TEAM},${OTHER_TEAM}`), 'the team ids are one csv binding');
     assert.doesNotMatch(sql, new RegExp(P.alice), 'no id in the text');
   }
-  // a copy drops out of the new, older and open lists once its original was linked or dismissed
-  for (const tab of ['new', 'older', 'open']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, /o\.state IN \('linked', 'dismissed'\)/);
-  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'linked' })).sql, /o\.state IN/);
+  // a copy drops out of the new, older and open lists once its original was linked, or dismissed by the SAME owner (D11); not the linked and dismissed tabs
+  for (const tab of ['new', 'older', 'open']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, COPY_HIDDEN_SQL);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'linked' })).sql, /o\.state = 'linked'/);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'dismissed' })).sql, /o\.state = 'dismissed'/);
   // filters
   const f = parseFileFilters({ kind: 'sem_image', folder: 'Run1', strength: 'short_id,code', from: '2026-10-01', to: '2026-10-15', link_kind: 'auto', tab: 'linked' });
   const q = buildListQuery(scope, f);
@@ -542,15 +565,15 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   assert.match(accept.sql, /c\.suggested_record_id IS NOT NULL/);
 });
 
-test('the summary SQL counts neither a copy (an original is still in an inbox) nor a file already on the record it names', () => {
-  assert.match(SQL.summary, /\(c\.duplicate_of IS NULL OR o\.state = 'gone'\)/, 'a copy counts only when its original is gone');
-  assert.doesNotMatch(SQL.summary, /o\.state IN \('linked', 'dismissed'\)/, 'the list hides a copy of a decided file; the badge counts no copy at all');
+test('the summary SQL counts a copy only when no inbox still holds its original (gone, or dismissed by ANOTHER owner), and not a file already on the record it names', () => {
+  assert.match(SQL.summary, COUNTED_COPY_SQL, 'a copy counts when its original is gone or dismissed by someone else');
+  assert.doesNotMatch(SQL.summary, /o\.state = 'linked'/, 'a copy of a linked original is hidden from the list and never counted');
   for (const { junction, fk } of Object.values(LINK_TARGETS)) {
     assert.match(SQL.summary, new RegExp(`EXISTS \\(SELECT 1 FROM ${junction} j WHERE j\\.${fk} = c\\.suggested_record_id AND j\\.directus_files_id = c\\.directus_files_id\\)`), junction);
   }
-  // the list still shows a copy (marked), hiding it only once its original is decided
+  // the list still shows a copy (marked), hiding it only by the rule above
   const list = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({})).sql;
-  assert.match(list, /o\.state IN \('linked', 'dismissed'\)/);
+  assert.match(list, COPY_HIDDEN_SQL);
 });
 
 test('the accept query: no surface scan, no copy, nothing already on its record, exactly one match, keyset paging in (first_seen_at, candidate_id)', () => {
@@ -715,6 +738,7 @@ const listRow = (c, over = {}) => ({
   rel_path: c.rel_path, size_bytes: c.size_bytes, source_mtime: null, first_seen_at: c.first_seen_at, decided_at: null, link_kind: null,
   linked_collection: null, link_batch_id: null, linked_record_id: null, decided_by_name: null,
   owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, owner_name: 'Alice A', adopted_at: null,
+  duplicate_owner_person_id: null, duplicate_owner_team_id: null,
   ...over,
 });
 
@@ -815,14 +839,35 @@ test('GET /files: a linked row names the record it was linked to and who linked 
   assert.equal(w.items.filter((i) => i.op === 'read' && i.query.filter._and).length, 0, 'no edit check for a linked row');
 });
 
-test('GET /files: a copy says whose folder holds the original; an owner filter on someone else is 403 unless administrator', async () => {
+test('GET /files: a copy names whose Inbox holds the original only to the owner or an owner team member; for anyone else it is { kind: "other" } with no name', async () => {
   const w = newWorld();
   const a = cand();
+  const copyOf = (owner) => listRow(a, { duplicate_of: ID(1), duplicate_of_owner: owner.name, duplicate_owner_person_id: owner.person ?? null, duplicate_owner_team_id: owner.team ?? null });
+  const askAs = async (user, admin, owner) => {
+    w.listRows = [copyOf(owner)];
+    const { call } = setup(w);
+    return (await call('GET /files', { user, admin })).body.data[0];
+  };
+  // the caller's own folder, and a team they belong to: the name (a string, as the client has always read it)
+  assert.equal((await askAs(U.alice, false, { name: 'Alice A', person: P.alice })).duplicate_of_owner, 'Alice A');
+  assert.equal((await askAs(U.alice, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, 'SEM team');
+  assert.equal((await askAs(U.bob, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, 'SEM team');
+  // another person, or a team they are not in: no name, whatever the query returned
+  const other = await askAs(U.alice, false, { name: 'Bob B', person: P.bob });
+  assert.deepEqual(other.duplicate_of_owner, { kind: 'other' });
+  assert.equal(other.duplicate_of, ID(1), 'the copy is still marked as a copy');
+  assert.deepEqual((await askAs(U.alice, false, { name: 'Other team', team: OTHER_TEAM })).duplicate_of_owner, { kind: 'other' });
+  assert.doesNotMatch(JSON.stringify(other), /Bob B/, 'no name anywhere in the row (the owner of the row is Alice herself)');
+  // a Former person is in no team, so a team's name is not theirs to read; an administrator sees every Inbox
+  assert.deepEqual((await askAs(U.former, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, { kind: 'other' });
+  assert.equal((await askAs(U.admin, true, { name: 'Bob B', person: P.bob })).duplicate_of_owner, 'Bob B');
+  // not a copy: null
+  w.listRows = [listRow(a)];
+  assert.equal((await setup(w).call('GET /files', { user: U.alice })).body.data[0].duplicate_of_owner, null);
+  // a row without the owner ids (nothing known about the original's owner) fails closed
   w.listRows = [listRow(a, { duplicate_of: ID(1), duplicate_of_owner: 'Bob B' })];
+  assert.deepEqual((await setup(w).call('GET /files', { user: U.alice })).body.data[0].duplicate_of_owner, { kind: 'other' });
   const { call } = setup(w);
-  const res = await call('GET /files', { user: U.alice });
-  assert.equal(res.body.data[0].duplicate_of, ID(1));
-  assert.equal(res.body.data[0].duplicate_of_owner, 'Bob B');
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `person:${P.bob}` } })).statusCode, 403);
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${OTHER_TEAM}` } })).statusCode, 403);
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${TEAM}` } })).statusCode, 200);
@@ -1792,6 +1837,74 @@ test('POST /dismiss then /restore: state changes, decided_by recorded, a team fi
   assert.deepEqual(actorsOf(w).map((a) => a.bindings[0]).slice(0, 2), [U.alice, U.bob]);
 });
 
+// Restore and undo put a file back to new. If it vanished meanwhile the crawler's folder cache still says "listed, unchanged", so nothing would ever
+// mark it gone: the folder's cache row is cleared (last_listed_at and dir_mtime NULL) and the next scan lists the folder again.
+const dirRow = (rel_path, over = {}) => ({ rel_path, owner_person_id: P.alice, owner_team_id: null, dir_mtime: '2026-10-14T10:00:00.000Z', last_listed_at: '2026-10-14T10:05:00.000Z', ...over });
+const listed = (d) => d.last_listed_at !== null || d.dir_mtime !== null;
+
+test('POST /restore clears the folder cache of the restored file\'s folder (and only that folder, only for that owner) so the next scan lists it again', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ state: 'dismissed', rel_path: 'Users/ali1/sem/a.tif' }));
+  const t = add(w, cand({ state: 'dismissed', owner_person_id: null, owner_team_id: TEAM, rel_path: 'Shared/SEM/2026/t.tif' }));
+  const stays = add(w, cand({ state: 'dismissed', rel_path: 'Users/ali1/other/b.tif' }));
+  w.dirs = [dirRow('Users/ali1'), dirRow('Users/ali1/sem'), dirRow('Users/ali1/other'), dirRow('Shared/SEM/2026', { owner_person_id: null, owner_team_id: TEAM }),
+    dirRow('Shared/SEM', { owner_person_id: null, owner_team_id: TEAM }), dirRow('Users/bob2/sem', { owner_person_id: P.bob })];
+  const { call } = setup(w);
+  const res = await call('POST /restore', { user: U.alice, body: { candidate_ids: [a.candidate_id, t.candidate_id] } });
+  assert.equal(res.statusCode, 200);
+  const byPath = Object.fromEntries(w.dirs.map((d) => [d.rel_path, listed(d)]));
+  assert.deepEqual(byPath, {
+    'Users/ali1': true, 'Users/ali1/sem': false, 'Users/ali1/other': true, 'Shared/SEM/2026': false, 'Shared/SEM': true, 'Users/bob2/sem': true,
+  }, 'only the two parent folders are forgotten');
+  assert.equal(w.dirs.find((d) => d.rel_path === 'Users/ali1/sem').dir_mtime, null, 'dir_mtime too, as the crawler does when it keeps a folder "changed"');
+  assert.equal(stays.state, 'dismissed');
+  const calls = w.log.filter((l) => l.name === 'relistDirs');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].bindings[0].split(',').sort(), [a.candidate_id, t.candidate_id].sort(), 'for the candidates that changed');
+  assert.equal(calls[0].tx, w.log.find((l) => l.name === 'restore').tx, 'in the transaction of the restore');
+});
+
+test('POST /undo clears the folder cache of every undone file\'s folder, as restore does', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ rel_path: 'Users/ali1/sem/a.tif' }));
+  const b = add(w, cand({ rel_path: 'Users/ali1/scans/b.tif' }));
+  const keep = add(w, cand({ rel_path: 'Users/ali1/keep/c.tif' }));
+  w.dirs = [dirRow('Users/ali1/sem'), dirRow('Users/ali1/scans'), dirRow('Users/ali1/keep')];
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  await call('POST /link', { user: U.alice, body: { items: [link(keep)] } });
+  assert.ok(w.dirs.every(listed), 'linking touches no cache row');
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(w.dirs.map((d) => [d.rel_path, listed(d)]), [['Users/ali1/sem', false], ['Users/ali1/scans', false], ['Users/ali1/keep', true]]);
+});
+
+test('dismiss, a restore that changes nothing, and a failed undo leave the folder cache alone', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ rel_path: 'Users/ali1/sem/a.tif' }));
+  const fresh = add(w, cand({ rel_path: 'Users/ali1/sem/n.tif' }));
+  w.dirs = [dirRow('Users/ali1/sem')];
+  const { call } = setup(w);
+  await call('POST /dismiss', { user: U.alice, body: { candidate_ids: [a.candidate_id] } });
+  assert.ok(w.dirs.every(listed), 'dismiss never relists');
+  const none = await call('POST /restore', { user: U.alice, body: { candidate_ids: [fresh.candidate_id] } });
+  assert.equal(none.body.data.changed, 0);
+  assert.ok(w.dirs.every(listed), 'nothing restored, nothing cleared');
+  assert.equal(w.log.filter((l) => l.name === 'relistDirs').length, 0);
+  // an undo that is refused rolls back with everything else
+  const linked = (await call('POST /link', { user: U.alice, body: { items: [link(fresh)] } })).body.data.link_batch_id;
+  const refused = await call('POST /undo', { user: U.bob, body: { link_batch_id: linked } });
+  assert.notEqual(refused.statusCode, 200);
+  assert.ok(w.dirs.every(listed));
+});
+
+test('the SQL: the relist clears last_listed_at and dir_mtime of the folder (same path, same owner) of the given candidates, and nothing else', () => {
+  assert.match(SQL.relistDirs, /^UPDATE d1_private\.inbox_dirs d SET last_listed_at = NULL, dir_mtime = NULL FROM d1_private\.file_candidates c/);
+  assert.match(SQL.relistDirs, /d\.rel_path = regexp_replace\(c\.rel_path, '\/\[\^\/\]\*\$', ''\)/, 'the parent folder: the path without its last segment');
+  assert.match(SQL.relistDirs, /d\.owner_person_id IS NOT DISTINCT FROM c\.owner_person_id AND d\.owner_team_id IS NOT DISTINCT FROM c\.owner_team_id/, 'a folder cached for another owner is not touched');
+  assert.doesNotMatch(SQL.relistDirs, /baselined_at/, 'the baseline of an owner is never reset');
+});
+
 test('POST /dismiss: a linked file is 409; an unknown or someone else\'s is 404; bad bodies are 400; nothing changes on failure', async () => {
   const w = newWorld();
   const linked = add(w, cand({ state: 'linked' }));
@@ -2096,6 +2209,78 @@ test('POST /auto-link never links a document, an ambiguous match, a code match, 
   ]);
   assert.equal(w.junctions.sample_data_files.length, 0);
   assert.equal(w.junctions.operation_data_files.length + w.junctions.session_data_files.length, 0);
+});
+
+test('unfit: an undone auto-link is UNDONE for auto-link only; a person\'s own Link and Accept all of that file stay allowed', () => {
+  const undone = cand({ auto_undone_at: '2026-10-15T10:00:00.000Z' });
+  assert.equal(unfit(undone, { auto: true }), 'UNDONE');
+  assert.equal(unfit(undone, { auto: false }), null, 'accept-all is a person acting: allowed');
+  assert.equal(unfit(cand(), { auto: true }), null);
+  assert.equal(unfit(cand({ state: 'dismissed', auto_undone_at: '2026-10-15T10:00:00.000Z' }), { auto: true }), 'NOT_NEW', 'the state comes first');
+});
+
+test('POST /undo of an AUTO batch marks the files undone: the next auto-link skips them as UNDONE, nothing is linked', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const s = setup(w);
+  w.prefs.set(U.alice, true);
+  const first = await auto(w, [c.candidate_id], undefined, { setup: s });
+  const batch = first.body.data.results[0].link_batch_id;
+  assert.equal(c.link_kind, 'auto');
+  assert.equal(c.auto_undone_at, null, 'linked, not undone');
+  const undo = await s.call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(undo.statusCode, 200);
+  assert.equal(c.state, 'new');
+  assert.equal(c.link_kind, null, 'all four link columns cleared together as before');
+  assert.equal(c.auto_undone_at, w.now.toISOString(), 'the undo of an auto batch is remembered');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  const again = await auto(w, [c.candidate_id], undefined, { setup: s });
+  assert.deepEqual(again.body.data.results.map((r) => [r.status, r.reason]), [['skipped', 'UNDONE']]);
+  assert.equal(c.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0, 'no second junction row');
+});
+
+test('an undone auto-link file is still the person\'s to link: a manual Link and Accept all work and clear nothing; undoing that manual batch keeps the mark', async () => {
+  const w = newWorld();
+  const c = add(w, candFor('physical_samples', S1, { auto_undone_at: '2026-10-15T10:00:00.000Z' }));
+  w.acceptIds = [c.candidate_id];
+  const s = setup(w);
+  const preview = await s.call('POST /accept-all', { user: U.alice, body: { dry_run: true } });
+  assert.deepEqual(preview.body.data.ids, [c.candidate_id], 'Accept all considers it');
+  const manual = await s.call('POST /link', { user: U.alice, body: { items: [link(c)] } });
+  assert.equal(manual.statusCode, 200, JSON.stringify(manual.body));
+  assert.equal(c.state, 'linked');
+  assert.equal(c.link_kind, 'manual');
+  assert.equal(c.auto_undone_at, '2026-10-15T10:00:00.000Z', 'a manual link clears nothing');
+  const undo = await s.call('POST /undo', { user: U.alice, body: { link_batch_id: manual.body.data.link_batch_id } });
+  assert.equal(undo.statusCode, 200);
+  assert.equal(c.auto_undone_at, '2026-10-15T10:00:00.000Z', 'and undoing it does not clear the mark');
+  const all = await s.call('POST /accept-all', { user: U.alice, body: {} });
+  assert.equal(all.body.data.linked, 1, 'Accept all links it');
+  assert.equal(c.link_kind, 'bulk');
+});
+
+test('POST /undo of a MANUAL or bulk batch does not set auto_undone_at: the file is a plain new file again', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const s = setup(w);
+  const one = await s.call('POST /link', { user: U.alice, body: { items: [link(a)] } });
+  const two = await s.call('POST /link', { user: U.alice, body: { items: [link(b), link(add(w, cand()))] } });
+  for (const [res, c] of [[one, a], [two, b]]) {
+    await s.call('POST /undo', { user: U.alice, body: { link_batch_id: res.body.data.link_batch_id } });
+    assert.equal(c.state, 'new');
+    assert.equal(c.auto_undone_at, null);
+  }
+  w.prefs.set(U.alice, true);
+  assert.equal((await auto(w, [a.candidate_id], undefined, { setup: s })).body.data.results[0].status, 'linked', 'nothing remembers a manual undo');
+});
+
+test('the SQL: undo remembers an undone auto link in the same UPDATE that clears the link columns, and the candidate reads carry it', () => {
+  assert.match(SQL.resetBatch, /auto_undone_at = CASE WHEN link_kind = 'auto' THEN now\(\) ELSE auto_undone_at END/);
+  assert.match(SQL.resetBatch, /link_kind = NULL, linked_collection = NULL, linked_junction_id = NULL, link_batch_id = NULL/);
+  for (const name of ['candidatesForUpdate', 'candidatesById', 'batchForUpdate']) assert.match(SQL[name], /c\.auto_undone_at/, name);
+  for (const name of ['restore', 'dismiss', 'markLinked']) assert.doesNotMatch(SQL[name], /auto_undone_at/, `${name} neither sets nor clears it`);
 });
 
 test('POST /auto-link refuses a record the person cannot edit (view-only, Restricted) and never uses another identity', async () => {

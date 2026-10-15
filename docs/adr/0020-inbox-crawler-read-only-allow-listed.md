@@ -29,7 +29,8 @@ used by many people.
    `d1-inbox` extension, which links as the person (ItemsService, caller's accountability) and refuses unless
    the person can edit the target record.
 5. **Nothing links itself unless the person opted in**, and then only on an exact short-ID match to one record
-   they can edit, for images and scans only, with an undo and an audit trail.
+   they can edit, for SEM images and other images only (never documents, never surface scans, never team
+   folders), with an undo and an audit trail.
 6. **Recognition looks for a short ID or an exact record code anywhere in the path**, never for a naming
    convention, and an ambiguous match is never flagged.
 
@@ -53,5 +54,9 @@ used by many people.
   a follow-up (physical-test backlog).
 - A new service, five `d1_private` tables, two new columns (`people.uni_alias`, `teams.share_folder`) and one
   extension to deploy: d1-server (migrations, `d1-inbox`) before STARbase; the crawler last.
+- Roll back migration 194 before 193. Rolling back 193 drops every alias, share folder, candidate (dismissals and
+  Inbox undo records), scan request and auto-link consent, while pointer rows and the links stay; export
+  `people.uni_alias`, `teams.share_folder` and `inbox_prefs` first. After re-applying, every owner gets a first scan
+  (all files Older, previously dismissed files return as Older).
 - The allow-list is the lever for adding more kinds later; widening it is a reviewed code change.
 - The Alicona chat's surface-scan table is written through its own contract; this feature writes none of it.

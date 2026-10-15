@@ -471,12 +471,13 @@ person, closing the race between the endpoint's rate-limit check and its insert.
 
 **`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
 settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default
-60); daemon status `last_heartbeat_at`, `daemon_started_at`, `current_activity`, `last_scan_started_at`,
+60), changed by an administrator with an UPDATE on this table (no admin route sets them); daemon status `last_heartbeat_at`, `daemon_started_at`, `current_activity`, `last_scan_started_at`,
 `last_scan_finished_at`, `files_registered`, `error_count`, `last_error`; `unmatched_folders` (JSON array of
 share-relative paths of folders under `Users/` and `Shared/` that match nobody, rewritten each scan); `updated_at`.
 
 **`d1_private.inbox_prefs`**: `user_id` (PK, FK `directus_users`, cascade), `auto_link` (BOOLEAN NOT NULL, default
-false: the person's opt-in to auto-linking exact short-ID matches of images and surface scans), `updated_at`.
+false: the person's opt-in to auto-linking exact short-ID matches of SEM images and other images in their personal folder, never
+documents, never surface scans, never team folders), `updated_at`.
 ### `surface_scans`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona

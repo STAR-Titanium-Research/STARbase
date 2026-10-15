@@ -6371,6 +6371,16 @@ SELECT 'fi_decider:' || count(*) || ':' || count(decided_by) FROM d1_private.fil
 grep -q 'fi_decider:1:0' <<<"$fi_out" && ok "deleting the user who decided keeps the candidate and clears decided_by" || bad "decided_by did not clear (output: $fi_out)"
 run_eq "file_candidates indexes cover (owner_person_id, state), (owner_team_id, state), (link_batch_id), (suggested_record_id), (duplicate_of)" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'file_candidates' AND (indexdef LIKE '%(owner_person_id, state)%' OR indexdef LIKE '%(owner_team_id, state)%' OR indexdef LIKE '%(link_batch_id)%' OR indexdef LIKE '%(suggested_record_id)%' OR indexdef LIKE '%(duplicate_of)%')" "5"
+# auto_undone_at: an undone auto-link is remembered so the crawler's auto-link never links the file again (Opus review B1)
+run_eq "file_candidates.auto_undone_at is nullable timestamptz" \
+    "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_candidates' AND column_name = 'auto_undone_at'" "timestamp with time zone:YES"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif'), ('$FI_F2', '$FI_P1', 'image', 'new', 'y.tif');
+UPDATE d1_private.file_candidates SET auto_undone_at = now() WHERE directus_files_id = '$FI_F1';
+SELECT 'fi_undone:' || count(*) || ':' || count(auto_undone_at) FROM d1_private.file_candidates;
+$FI_CL VALUES ('$FI_F3', '$FI_P1', 'image', 'new', 'z.tif', 'linked', 'manual', $FI_LINK);
+UPDATE d1_private.file_candidates SET auto_undone_at = now() WHERE directus_files_id = '$FI_F3';
+SELECT 'fi_undone_linked:' || state || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F3';")
+grep -q 'fi_undone:2:1' <<<"$fi_out" && grep -q 'fi_undone_linked:linked:true' <<<"$fi_out" && ok "auto_undone_at is NULL by default, can be set on a new file, and does not disturb the link bookkeeping CHECKs on a linked one" || bad "auto_undone_at behaved wrongly (output: $fi_out)"
 # A changed alias or share folder starts the owner's folder over: the old cache rows and the undecided / dismissed / gone
 # candidates go, linked ones stay, and an UPDATE that does not change the value deletes nothing.
 fi_seed_person="UPDATE people SET uni_alias = 'old01' WHERE person_id = '$FI_P1';
@@ -6396,6 +6406,19 @@ UPDATE people SET uni_alias = 'old01', notes = 'touched' WHERE person_id = '$FI_
 UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P2';
 SELECT 'fi_alias_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
 grep -q 'fi_alias_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the uni_alias as it was deletes nothing" || bad "an unchanged alias deleted rows (output: $fi_out)"
+# a change of letter case only is the same alias (uniqueness is case-insensitive): nothing is wiped; NULL to a value and back still is a change
+fi_out=$(fi_sql "$fi_seed_person
+UPDATE people SET uni_alias = 'OLD01' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_case:' || (SELECT uni_alias FROM people WHERE person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');
+UPDATE people SET uni_alias = 'Old01x' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_real:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_case:OLD01:2:4' <<<"$fi_out" && ok "changing only the letter case of a uni_alias (old01 to OLD01) wipes nothing: dismissals and the folder cache stay" || bad "a case-only alias change wiped rows (output: $fi_out)"
+grep -q 'fi_alias_real:0:1' <<<"$fi_out" && ok "a different alias after a case change still starts the folder over" || bad "a real alias change after a case change did not wipe (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/never', '$FI_P1');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'Users/never/a.tif', 'dismissed');
+UPDATE people SET uni_alias = 'first01' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_null_to_value:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_null_to_value:0:0' <<<"$fi_out" && ok "giving a person their first uni_alias (NULL to a value) still starts their folder over" || bad "NULL to a value did not wipe (output: $fi_out)"
 fi_out=$(fi_sql "$fi_seed_person
 UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P1';
 SELECT 'fi_alias_clear:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
@@ -6422,6 +6445,17 @@ fi_out=$(fi_sql "$fi_seed_team
 UPDATE teams SET share_folder = 'OldFolder', description = 'touched' WHERE team_id = '$FI_T1';
 SELECT 'fi_team_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');")
 grep -q 'fi_team_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the share_folder as it was deletes nothing" || bad "an unchanged share folder deleted rows (output: $fi_out)"
+fi_out=$(fi_sql "$fi_seed_team
+UPDATE teams SET share_folder = 'oldfolder' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_case:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');
+UPDATE teams SET share_folder = 'OldFolder2' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_real:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');
+UPDATE teams SET share_folder = NULL WHERE team_id = 'a2000000-0000-4000-8000-0000000000b2';
+SELECT 'fi_team_to_null:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = 'a2000000-0000-4000-8000-0000000000b2') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = 'a2000000-0000-4000-8000-0000000000b2');
+UPDATE teams SET share_folder = 'Back' WHERE team_id = 'a2000000-0000-4000-8000-0000000000b2';")
+grep -q 'fi_team_case:2:4' <<<"$fi_out" && ok "changing only the letter case of a share_folder (OldFolder to oldfolder) wipes nothing" || bad "a case-only share folder change wiped rows (output: $fi_out)"
+grep -q 'fi_team_real:0:1' <<<"$fi_out" && ok "a different share_folder after a case change still starts the folder over" || bad "a real share folder change after a case change did not wipe (output: $fi_out)"
+grep -q 'fi_team_to_null:0:0' <<<"$fi_out" && ok "clearing a share_folder (value to NULL) still starts the folder over" || bad "value to NULL did not wipe a team (output: $fi_out)"
 run_eq "the alias and folder triggers are AFTER UPDATE OF row triggers with a WHEN condition" \
     "SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgname IN ('people_inbox_alias_changed', 'teams_inbox_folder_changed') AND (tgtype & 1) = 1 AND (tgtype & 2) = 0 AND (tgtype & 16) = 16 AND tgqual IS NOT NULL" "people_inbox_alias_changed,teams_inbox_folder_changed"
 # inbox_dirs
@@ -6589,17 +6623,19 @@ if command -v node >/dev/null 2>&1; then
     IB_U=a1b00000-0000-4000-8000-000000000001
     IB_P=a1b00000-0000-4000-8000-000000000002
     IB_S=a1b00000-0000-4000-8000-000000000003
+    IB_Q=a1b00000-0000-4000-8000-000000000008
     ib_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1)
     ib_n=$(grep -c '^PREPARE ' <<<"$ib_prep")
     ib_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 INSERT INTO directus_users (id) VALUES ('$IB_U');
 INSERT INTO people (person_id, full_name, user_id) VALUES ('$IB_P', 'Inbox Person', '$IB_U');
+INSERT INTO people (person_id, full_name) VALUES ('$IB_Q', 'Inbox Other Person');
 UPDATE people SET uni_alias = 'ibx1' WHERE person_id = '$IB_P';
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$IB_S', 'IBX-001');
-INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 13) g;
-CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text);
-INSERT INTO ib_seed VALUES
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 20) g;
+CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text, who text DEFAULT 'p');
+INSERT INTO ib_seed (n, kind, origin, state, strength, with_suggestion, matches, dup, rel) VALUES
   (1,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'a'),
   (2,  'image',        'new',     'new',    'short_id', true,  1, 1,    'b'),
   (3,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'c'),
@@ -6610,13 +6646,28 @@ INSERT INTO ib_seed VALUES
   (8,  'image',        'new',     'new',    'short_id', false, 2, NULL, 'h'),
   (9,  'image',        'new',     'linked', 'none',     false, 0, NULL, 'i'),
   (10, 'image',        'new',     'new',    'short_id', true,  1, 9,    'j');
+INSERT INTO ib_seed (n, kind, origin, state, strength, with_suggestion, matches, dup, rel, who) VALUES
+  (11, 'image',        'new',     'dismissed', 'none',  false, 0, NULL, 'k', 'q'),
+  (12, 'image',        'new',     'new',    'none',     false, 0, 11,   'l', 'p'),
+  (13, 'image',        'new',     'linked', 'none',     false, 0, NULL, 'm', 'q'),
+  (14, 'image',        'new',     'new',    'none',     false, 0, 13,   'n', 'p'),
+  (15, 'image',        'new',     'new',    'none',     false, 0, NULL, 'o', 'q'),
+  (16, 'image',        'new',     'new',    'none',     false, 0, 15,   'p', 'p'),
+  (17, 'image',        'new',     'dismissed', 'none',  false, 0, NULL, 'r', 'p'),
+  (18, 'image',        'new',     'new',    'none',     false, 0, 17,   's', 'p'),
+  (19, 'image',        'new',     'gone',   'none',     false, 0, NULL, 't', 'q'),
+  (20, 'image',        'new',     'new',    'none',     false, 0, 19,   'u', 'p');
 -- a: an original in this inbox (counted, acceptable)         b: its copy (listed, not counted, not acceptable)
 -- c: already on its record, see the junction row below (not counted, not acceptable)                  d: older, exact match (counted as older, acceptable)
 -- e: a gone original   f: a copy of it (counted)             g: a surface scan (counted, never acceptable)   h: two records named (counted, never acceptable)
 -- i: a linked original j: a copy of it (not counted, hidden from the list)
+-- Copies across inboxes (owner q is another person; the originals k, m, o, t are q's, r is this person's own):
+-- k: q dismissed it   l: a copy of it here (listed AND counted: another person dismissing a file must not hide yours)
+-- m: q linked it      n: a copy of it here (hidden, not counted)       o: q's, still undecided   p: its copy here (listed, not counted)
+-- r: this person dismissed it   s: its copy here (hidden, not counted: the same owner)   t: q's, gone   u: its copy here (listed and counted)
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, suggested_collection, suggested_record_id, matches, rel_path,
                                         link_kind, linked_collection, linked_junction_id, link_batch_id)
-SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, '$IB_P', kind, origin, state, strength,
+SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, CASE WHEN who = 'q' THEN '$IB_Q'::uuid ELSE '$IB_P'::uuid END, kind, origin, state, strength,
        CASE WHEN with_suggestion THEN 'physical_samples' END, CASE WHEN with_suggestion THEN '$IB_S'::uuid END,
        (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', 'physical_samples', 'record_id', '$IB_S', 'via', 'short_id', 'token', 'abcd123' || i)), '[]'::jsonb) FROM generate_series(1, matches) i),
        'Users/ibx1/' || rel || '.tif',
@@ -6634,6 +6685,8 @@ SELECT 'ib_summary_new:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FR
 SELECT 'ib_summary_older_exact:' || coalesce(sum(n) FILTER (WHERE origin = 'backlog' AND exact), 0) FROM ib_sm;
 CREATE TEMP TABLE ib_cnt AS EXECUTE count_new('$IB_P', '');
 SELECT 'ib_list_new_total:' || total FROM ib_cnt;
+CREATE TEMP TABLE ib_ls AS EXECUTE list_new('$IB_P', '', 50, 0);
+SELECT 'ib_list_copies:' || coalesce(string_agg(regexp_replace(rel_path, '^.*/', '') || '=' || CASE WHEN duplicate_owner_person_id = '$IB_P' THEN 'me' WHEN duplicate_owner_person_id = '$IB_Q' THEN 'q' ELSE '-' END, ',' ORDER BY rel_path), '') FROM ib_ls WHERE duplicate_of IS NOT NULL;
 CREATE TEMP TABLE ib_acc AS EXECUTE accept_open('$IB_P', '');
 SELECT 'ib_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_acc);
 SELECT candidate_id AS ib_a FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/a.tif' \gset
@@ -6646,10 +6699,33 @@ SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)'
 SELECT 'ib_linked_twice:' || :ib_n2;
 SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_a', :'ib_b')) AS ib_n3 \gset
 SELECT 'ib_undone:' || :ib_n3 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || coalesce(link_batch_id::text, '-') FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT 'ib_manual_undo_mark:' || (auto_undone_at IS NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+-- an undone AUTO link is remembered (auto_undone_at), also when a person later links the file by hand and undoes that
+SELECT candidate_id AS ib_h FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/h.tif' \gset
+SELECT gen_random_uuid() AS ib_hj, gen_random_uuid() AS ib_hb, gen_random_uuid() AS ib_hb2 \gset
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'auto', 'physical_samples', :'ib_hj', :'ib_hb', :'ib_h')) AS ib_n7 \gset
+SELECT 'ib_auto_linked_mark:' || (auto_undone_at IS NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_h', :'ib_hb')) AS ib_n8 \gset
+SELECT 'ib_auto_undone:' || :ib_n8 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_hj', :'ib_hb2', :'ib_h')) AS ib_n9 \gset
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_h', :'ib_hb2')) AS ib_n10 \gset
+SELECT 'ib_auto_undone_kept:' || :ib_n9 || ':' || :ib_n10 || ':' || state || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
 SELECT pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_a')) AS ib_n4 \gset
 SELECT 'ib_dismissed:' || :ib_n4 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
 SELECT pg_temp.ib_run(format('EXECUTE restore(%L)', :'ib_a')) AS ib_n5 \gset
 SELECT 'ib_restored:' || :ib_n5 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+-- restore and undo forget that the file's folder was listed (the crawler then lists it again and can mark a vanished file gone), for that owner only
+INSERT INTO people (person_id, full_name) VALUES ('a1b00000-0000-4000-8000-000000000007', 'Inbox Other Owner');
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at, baselined_at) VALUES
+  ('Users/ibx1', '$IB_P', now(), now(), now()), ('Users/ibx1/other', '$IB_P', now(), now(), NULL), ('Users/ibx2', 'a1b00000-0000-4000-8000-000000000007', now(), now(), now());
+-- (ib_run's row count is 0 for this UPDATE through EXECUTE, so the rows themselves are checked)
+SELECT pg_temp.ib_run(format('EXECUTE relistdirs(%L)', :'ib_a')) AS ib_n11 \gset
+SELECT 'ib_relist:' || (last_listed_at IS NULL) || ':' || (dir_mtime IS NULL) || ':' || (baselined_at IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1';
+SELECT 'ib_relist_others:' || (last_listed_at IS NOT NULL AND dir_mtime IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1/other';
+UPDATE d1_private.file_candidates SET rel_path = 'Users/ibx2/z.tif' WHERE rel_path = 'Users/ibx1/j.tif';
+SELECT candidate_id AS ib_jj FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx2/z.tif' \gset
+SELECT pg_temp.ib_run(format('EXECUTE relistdirs(%L)', :'ib_jj')) AS ib_n12 \gset
+SELECT 'ib_relist_foreign:' || (last_listed_at IS NOT NULL AND dir_mtime IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx2';
 SELECT 'ib_prefs:' || pg_temp.ib_run(format('EXECUTE prefsput(%L, true)', '$IB_U'));
 SELECT 'ib_first_rescan:' || pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
 CREATE TEMP TABLE ib_flags (v text);
@@ -6679,15 +6755,23 @@ SQL
 )
     ib_check() { grep -qxF -- "$1" <<<"$ib_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-900 <<<"$ib_out"))"; }
     ib_check "ib_prepared:$ib_n" "every statement of d1-inbox ($ib_n, with the list, count and accept variants) prepares against the real schema"
-    ib_check "ib_summary_new:4" "summary: counts the original, a copy of a gone original, a surface scan and an ambiguous file; not a copy of a file still in an inbox, a copy of a linked file, or a file already on its record"
+    ib_check "ib_summary_new:6" "summary: counts the original, a copy of a gone original, a surface scan, an ambiguous file and a copy whose original ANOTHER person dismissed; not a copy of a file still in an inbox, a copy of a linked file, a copy of one this person dismissed, or a file already on its record"
     ib_check "ib_summary_older_exact:1" "summary: older files with an exact match are counted"
-    ib_check "ib_list_new_total:6" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked"
+    ib_check "ib_list_new_total:9" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked or dismissed by the same owner, and listed (not hidden) when another owner dismissed it"
+    ib_check "ib_list_copies:b.tif=me,f.tif=me,l.tif=q,p.tif=q,u.tif=q" "list: a copy whose original another owner dismissed (l) stays; a copy of a linked original (n) and of one this owner dismissed (s) are gone; the list says whose inbox each original is in (duplicate_owner_*_id)"
     ib_check "ib_accept:Users/ibx1/a.tif,Users/ibx1/d.tif" "accept-all selects only exact one-record matches that are not copies, surface scans or already on their record"
     ib_check "ib_linked:1:linked:manual" "link bookkeeping passes the table's CHECKs (state, kind, collection, junction and batch together)"
     ib_check "ib_linked_twice:0" "a second link of a file no longer new changes nothing"
     ib_check "ib_undone:1:new:-:-" "undo clears all four link columns together"
+    ib_check "ib_manual_undo_mark:true" "undo of a manual link leaves auto_undone_at NULL"
+    ib_check "ib_auto_linked_mark:true" "an auto link does not set auto_undone_at"
+    ib_check "ib_auto_undone:1:new:-:true" "undo of an AUTO link clears the link columns and sets auto_undone_at, in one UPDATE"
+    ib_check "ib_auto_undone_kept:1:1:new:true" "a later manual link and its undo neither clear nor re-set the mark (a person may link the file; automation never does)"
     ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
     ib_check "ib_restored:1:new" "restore moves it back to new"
+    ib_check "ib_relist:true:true:true" "restore / undo: the file's folder row forgets it was listed (last_listed_at and dir_mtime NULL), its owner's baselined_at stays"
+    ib_check "ib_relist_others:true" "restore / undo: another folder of the same owner keeps its cache row"
+    ib_check "ib_relist_foreign:true" "restore / undo: a folder row cached for another owner is left alone"
     ib_check "ib_scan_table:true" "the surface_scans feature check (information_schema) answers yes where the table exists"
     ib_check "ib_scan_by_id:true:true:true" "the scan lookup undo and a repeated add use returns the item and the file"
     ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"

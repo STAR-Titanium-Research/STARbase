@@ -11,13 +11,18 @@
 //   GET  /d1-inbox/summary          -> { data: { person: {person_id, new, older_matches, has_alias} | null, teams: [{team_id, name, new,
 //                                                older_matches}] (teams with a share folder), new, older_matches } }
 //                                                new = origin 'new' (not backlog); older_matches = backlog files that name exactly one record by
-//                                                short ID or code. A COPY of a file that is still in another inbox is not counted (D11: the badge
-//                                                counts a file once; the list shows the copy, marked), nor is a file already on the record it
-//                                                names (linked in Data Studio): neither is something new to link
+//                                                short ID or code. A COPY of a file that is still in an inbox is not counted (D11: the badge
+//                                                counts a file once; the list shows the copy, marked); it counts once its original is gone or was
+//                                                dismissed by ANOTHER owner, and never once the original is linked or dismissed by the same owner
+//                                                (then it is hidden). A file already on the record it names (linked in Data Studio) is not counted
+//                                                either: neither is something new to link
 //   GET  /d1-inbox/files?tab=new|older|linked|dismissed&kind=a,b&strength=a,b&folder=&from=&to=&owner=me|team:<id>&link_kind=&limit=&offset=
 //                                   -> { data: FoundFile[], meta: { total, limit, offset, acceptable } }   FoundFile = the file_candidates columns
 //                                      plus name, suggested_label, suggested_can_edit, duplicate_of_owner, linked_record_id, linked_label,
-//                                      decided_by_name and owner {kind, id, name}. A record is named (suggestion, matches, linked record) only
+//                                      decided_by_name and owner {kind, id, name}. duplicate_of_owner (null unless the row is a copy) is the NAME of whose
+//                                      Inbox holds the original when that is the caller's own folder or one of their teams, else { kind: 'other' } with no
+//                                      name; a copy is hidden from new, older and open once its original is linked or dismissed by the same owner, and
+//                                      once it is linked when the original belongs to someone else. A record is named (suggestion, matches, linked record) only
 //                                      to a caller who can READ it. meta.acceptable (null unless the query has acceptable=1: it reads
 //                                      candidates and checks edit rights) = how many rows Accept all would link for the same filter.
 //   POST /d1-inbox/link             { items: [{ candidate_id, collection, record_id } | <a surface scan>] }  (1 to 200, one transaction)
@@ -43,6 +48,7 @@
 //                                   on first_seen_at, candidate_id) so a page of rows it must skip never hides linkable rows behind it;
 //                                   has_more is true only when the last page it read was full, and next_cursor (sent back as `cursor`) goes on.
 //   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
+//                                   A restore (and an undo) also makes the crawler list the file's folder again (D12): see SQL.relistDirs.
 //   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created (and the surface_scans rows it added,
 //                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
@@ -178,13 +184,19 @@ const isUuid = (v) => typeof v === 'string' && UUID.test(v);
 
 const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_id, c.owner_team_id, c.kind, c.state, c.origin, c.match_strength, c.matches,'
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
-  + ' c.link_batch_id, c.adopted_at';
+  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at';
 const IDS = "string_to_array(?, ',')::uuid[]";
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
-// A copy (duplicate_of) drops out of the new and older lists once its original was linked or dismissed.
-const COPY_HIDDEN = "NOT (c.duplicate_of IS NOT NULL AND o.state IN ('linked', 'dismissed'))";
-// The badge counts a file once (D11): a copy of a file still in another inbox is not counted (the list shows it, marked), until its original is gone.
-const NOT_A_COUNTED_COPY = "(c.duplicate_of IS NULL OR o.state = 'gone')";
+// D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
+// lists once the original is LINKED, or DISMISSED BY THE SAME OWNER (the same person or team). Another owner dismissing their file must not hide yours: a
+// copy whose original sits in a different owner's inbox stays until that original is linked (and is then counted, see below). The one SAME_OWNER test
+// serves the list and the summary, so they cannot disagree.
+const SAME_OWNER = '(c.owner_person_id IS NOT DISTINCT FROM o.owner_person_id AND c.owner_team_id IS NOT DISTINCT FROM o.owner_team_id)';
+const COPY_HIDDEN = `NOT (c.duplicate_of IS NOT NULL AND (o.state = 'linked' OR (o.state = 'dismissed' AND ${SAME_OWNER})))`;
+// The badge counts a file once (D11): a copy of a file still in an inbox is not counted (the list shows it, marked). It counts once no inbox holds the
+// original any more: the original is gone, or dismissed by ANOTHER owner (so it counts for nobody). Never when the original is linked (hidden) or the same
+// owner dismissed it (hidden).
+const NOT_A_COUNTED_COPY = `(c.duplicate_of IS NULL OR o.state = 'gone' OR (o.state = 'dismissed' AND NOT ${SAME_OWNER}))`;
 // A file that is already on the record it names (linked in Data Studio) is not a new thing to link: not counted, not accepted in bulk.
 const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
   .map(([collection, t]) => `NOT (c.suggested_collection = '${collection}' AND EXISTS (SELECT 1 FROM ${t.junction} j WHERE j.${t.fk} = c.suggested_record_id AND j.directus_files_id = c.directus_files_id))`)
@@ -216,9 +228,11 @@ export const SQL = {
     + ' linked_junction_id = ?, link_batch_id = ?,'
     + ' adopted_at = CASE WHEN ?::boolean THEN coalesce(adopted_at, now()) ELSE adopted_at END'
     + " WHERE candidate_id = ? AND state = 'new' RETURNING candidate_id",
-  // Undo clears the four link columns together (the table's CHECK). adopted_at stays: the crawler may already have hashed the file.
+  // Undo clears the four link columns together (the table's CHECK). adopted_at stays: the crawler may already have hashed the file. An undone AUTO
+  // link is remembered in auto_undone_at (the SET list sees the old link_kind), so the crawler's auto-link never links that file again.
   resetBatch:
-    "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL, link_kind = NULL, linked_collection = NULL,"
+    "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL,"
+    + " auto_undone_at = CASE WHEN link_kind = 'auto' THEN now() ELSE auto_undone_at END, link_kind = NULL, linked_collection = NULL,"
     + ` linked_junction_id = NULL, link_batch_id = NULL WHERE candidate_id = ANY(${IDS}) AND link_batch_id = ? AND state = 'linked'`
     + ' RETURNING candidate_id',
   dismiss:
@@ -227,6 +241,14 @@ export const SQL = {
   restore:
     "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL"
     + ` WHERE candidate_id = ANY(${IDS}) AND state = 'dismissed' RETURNING candidate_id`,
+  // Restore and undo put a file back to 'new'. If it vanished meanwhile, the crawler's folder cache still says "listed, unchanged" for its folder, so the
+  // file would stay 'new' for good: forget that the folder was listed (last_listed_at and dir_mtime NULL, as the crawler's own lost-file handling does:
+  // a NULL mtime never equals the share's) and the next scan lists it again and marks what is missing gone. Only the file's own folder row, only for
+  // its owner (a path cached for someone else is left alone), and never baselined_at. Binding: the candidate ids as one csv.
+  relistDirs:
+    'UPDATE d1_private.inbox_dirs d SET last_listed_at = NULL, dir_mtime = NULL FROM d1_private.file_candidates c'
+    + ` WHERE c.candidate_id = ANY(${IDS}) AND d.rel_path = regexp_replace(c.rel_path, '/[^/]*$', '')`
+    + ' AND d.owner_person_id IS NOT DISTINCT FROM c.owner_person_id AND d.owner_team_id IS NOT DISTINCT FROM c.owner_team_id',
   prefsGet: 'SELECT auto_link FROM d1_private.inbox_prefs WHERE user_id = ?',
   prefsPut:
     'INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES (?, ?)'
@@ -433,7 +455,7 @@ export function parseFileFilters(source, { defaultTab = 'new' } = {}) {
 
 const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_download AS name, f.type AS mime_type, c.kind, c.kind_confidence,'
   + ' c.extracted, c.origin, c.state, c.match_strength, c.matches, c.suggested_collection, c.suggested_record_id, c.duplicate_of,'
-  + ' coalesce(cp.full_name, ct.name) AS duplicate_of_owner,'
+  + ' coalesce(cp.full_name, ct.name) AS duplicate_of_owner, o.owner_person_id AS duplicate_owner_person_id, o.owner_team_id AS duplicate_owner_team_id,'
   + ' c.rel_path, c.size_bytes, c.source_mtime, c.first_seen_at, c.decided_at, c.link_kind, c.linked_collection, c.link_batch_id,'
   + " coalesce(sj.sample_id, oj.operation_id, tj.session_id, CASE WHEN c.linked_collection = 'surface_scans' THEN c.linked_junction_id END) AS linked_record_id,"
   + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
@@ -516,6 +538,17 @@ function substitute(node, user) {
   return node;
 }
 
+// Whose Inbox holds the original of a copy: the name (a string) only for the caller's own folder, one of their teams, or any for an administrator;
+// for anyone else { kind: 'other' } and no name, so another person's name is not handed to someone who has no business with their folder. A row
+// that does not say who owns the original, or a caller not given, is 'other' (fails closed). The client reads a string as the name and anything else as
+// "a copy of another found file".
+export function duplicateOwnerOut(row, viewer) {
+  const mine = Boolean(viewer) && (viewer.admin === true
+    || (!isBlank(row.duplicate_owner_person_id) && row.duplicate_owner_person_id === viewer.personId)
+    || (!isBlank(row.duplicate_owner_team_id) && Array.isArray(viewer.teamIds) && viewer.teamIds.includes(row.duplicate_owner_team_id)));
+  return mine && !isBlank(row.duplicate_of_owner) ? row.duplicate_of_owner : { kind: 'other' };
+}
+
 // One row of the list as STARbase's FoundFile (inboxApi.ts): the file_candidates columns it uses plus resolved labels. A record is named only to
 // a caller who can READ it (`info.readable`, a set of "collection:id"; its code is in `info.labels`); for any other the suggestion, the matches
 // and the linked record are left empty, so no id of a Restricted record leaks. `suggested_can_edit` says whether Link would pass.
@@ -541,7 +574,7 @@ export function fileOut(row, info) {
     suggested_record_id: suggested ? row.suggested_record_id : null,
     suggested_label: suggested ? (info.labels.get(key(row.suggested_collection, row.suggested_record_id)) ?? null) : null,
     duplicate_of: row.duplicate_of ?? null,
-    duplicate_of_owner: row.duplicate_of ? (row.duplicate_of_owner ?? null) : null,
+    duplicate_of_owner: row.duplicate_of ? duplicateOwnerOut(row, info.viewer) : null,
     rel_path: row.rel_path,
     size_bytes: num(row.size_bytes),
     source_mtime: toIso(row.source_mtime),
@@ -571,6 +604,8 @@ export function fileOut(row, info) {
 // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
 export const unfit = (cand, { auto }) => {
   if (cand.state !== 'new') return 'NOT_NEW';
+  // a person undid an auto-link of this file: automation never links it again (their own Link or Accept all of it stays allowed)
+  if (auto && cand.auto_undone_at) return 'UNDONE';
   if (auto && cand.owner_team_id) return 'TEAM_FILE';
   if (cand.duplicate_of) return 'COPY';
   if (auto && cand.origin === 'backlog') return 'BACKLOG';
@@ -1108,6 +1143,8 @@ export function mount(router, context, deps = {}) {
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
       }
       const done = change.length ? rowsOf(await trx.raw(SQL[name], name === 'dismiss' ? [acc.user, change.join(',')] : [change.join(',')])).map((r) => r.candidate_id) : [];
+      // a restored file may have vanished while it was dismissed: have the crawler list its folder again (D12)
+      if (name === 'restore' && done.length) await trx.raw(SQL.relistDirs, [done.join(',')]);
       return shapeStateChange({ done, unchanged, change });
     });
     res.json({ data: out });
@@ -1152,6 +1189,8 @@ export function mount(router, context, deps = {}) {
         }
       }
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
+      // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
+      if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
       return shapeUndo(batch, done);
     });
     await clearDataCache(schema);
@@ -1184,7 +1223,8 @@ export function mount(router, context, deps = {}) {
     // only when asked for (acceptable=1): it reads candidates and checks edit rights, which a plain list load must not do
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
     const acceptable = f.acceptable && open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
-    res.json(shapeFiles(rows, info, { total: count, limit: f.limit, offset: f.offset, acceptable }));
+    // `viewer` is who is asking, for the one thing a row names by folder: whose Inbox holds the original of a copy (duplicateOwnerOut)
+    res.json(shapeFiles(rows, { ...info, viewer: scope }, { total: count, limit: f.limit, offset: f.offset, acceptable }));
   }));
 
   // -- rescan, prefs ----------------------------------------------------------------------------------------------------------

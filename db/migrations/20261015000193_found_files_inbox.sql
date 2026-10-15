@@ -35,7 +35,8 @@
 --     kind_confidence between 0 and 1, matches a JSON array, extracted a JSON object, a suggestion names both a collection and
 --     a record, size not negative, a candidate is not its own duplicate, a person-scope request names a person;
 --   * extra columns: file_candidates.adopted_at (the "linking a document sets a flag the crawler reads to hash it once" of
---     plan task B2, which the spec had no column for), inbox_crawler_state.unmatched_folders (where the crawler records the
+--     plan task B2, which the spec had no column for), file_candidates.auto_undone_at (an undone auto-link must not be linked
+--     again by the next scan: the final review's B1), inbox_crawler_state.unmatched_folders (where the crawler records the
 --     folders under Users/ and Shared/ that match nobody, for the admin list: inbox_dirs rows must have an owner) and
 --     updated_at on the state and prefs rows;
 --   * decided_by and requested_by are real foreign keys to directus_users (ON DELETE SET NULL), not bare uuids;
@@ -111,6 +112,7 @@ CREATE TABLE d1_private.file_candidates (
     linked_junction_id  UUID,
     link_batch_id       UUID,
     adopted_at          TIMESTAMPTZ,
+    auto_undone_at      TIMESTAMPTZ,
     CONSTRAINT file_candidates_pkey PRIMARY KEY (candidate_id),
     CONSTRAINT file_candidates_directus_files_id_key UNIQUE (directus_files_id),
     CONSTRAINT file_candidates_directus_files_id_fkey FOREIGN KEY (directus_files_id) REFERENCES directus_files (id) ON DELETE CASCADE,
@@ -157,7 +159,7 @@ COMMENT ON COLUMN d1_private.file_candidates.match_strength IS 'The strongest wa
 COMMENT ON COLUMN d1_private.file_candidates.matches IS 'Every record the path names at the strongest level, as a JSON array of {collection, record_id, via, token}; empty array when none.';
 COMMENT ON COLUMN d1_private.file_candidates.suggested_collection IS 'The collection of the single record the path names (physical_samples, manufacturing_operations, test_sessions, or insert_edges for an edge code); set together with suggested_record_id, only when exactly one record matches; else NULL.';
 COMMENT ON COLUMN d1_private.file_candidates.suggested_record_id IS 'The id of the single record the path names; set together with suggested_collection, only when exactly one record matches; else NULL.';
-COMMENT ON COLUMN d1_private.file_candidates.duplicate_of IS 'For an image or scan with the same content hash as an earlier candidate: that earlier candidate (where the file was first seen). The copy is shown as "copy of" and drops out when the original is linked or dismissed. NULL when not a duplicate or when the original row is gone (ON DELETE SET NULL).';
+COMMENT ON COLUMN d1_private.file_candidates.duplicate_of IS 'For an image or scan with the same content hash as an earlier candidate: that earlier candidate (where the file was first seen). The copy is shown as "copy of" and drops out of the new and older lists when the original is linked, or dismissed by the same owner (person or team); a copy whose original belongs to a different owner is hidden only when that original is linked (another owner dismissing a file must not hide yours), and is counted once the original is gone or dismissed by another owner. NULL when not a duplicate or when the original row is gone (ON DELETE SET NULL).';
 COMMENT ON COLUMN d1_private.file_candidates.rel_path IS 'The file''s path relative to the share root (star_group1), for example Users/abc12de/sem/3fa9c1d2.tif. Recognition reads this; the Inbox shows its folder part.';
 COMMENT ON COLUMN d1_private.file_candidates.size_bytes IS 'File size in bytes when found; NULL when unknown.';
 COMMENT ON COLUMN d1_private.file_candidates.source_mtime IS 'The file''s modification time on the share when found.';
@@ -169,6 +171,7 @@ COMMENT ON COLUMN d1_private.file_candidates.linked_collection IS 'The record co
 COMMENT ON COLUMN d1_private.file_candidates.linked_junction_id IS 'The id of the junction row the link created (sample_data_files, operation_data_files or session_data_files), so an undo removes exactly that row; NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.link_batch_id IS 'Shared by every file linked in one Link, Accept all or auto-link run; one Undo per batch removes exactly the junction rows of the batch. NULL unless state is linked.';
 COMMENT ON COLUMN d1_private.file_candidates.adopted_at IS 'When a person linked a document or other non-image file: the signal for the crawler to read the file once, hash it and write file_fingerprints (open_rb with adopted=True). NULL for files never linked. Stays set after an undo, since the hash is wanted only once.';
+COMMENT ON COLUMN d1_private.file_candidates.auto_undone_at IS 'When a person undid an AUTO link of this file (an undo of a batch whose link_kind was auto sets it; NULL otherwise, and a manual or bulk undo leaves it NULL). The crawler''s auto-link and POST /d1-inbox/auto-link skip a file that has it (reason UNDONE), so an undone auto-link is not linked again by the next scan. A person''s own Link or Accept all of the file is still allowed and clears nothing. Stays set for the life of the row.';
 COMMENT ON INDEX d1_private.file_candidates_pkey IS 'Primary key of the found file.';
 COMMENT ON INDEX d1_private.file_candidates_directus_files_id_key IS 'One candidate per directus_files pointer row.';
 COMMENT ON INDEX d1_private.idx_file_candidates_owner_person_state IS 'A person''s inbox tabs and counts: their candidates by state.';
@@ -275,7 +278,7 @@ CREATE TABLE d1_private.inbox_crawler_state (
 INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('00000000-0000-0000-0000-000000000001')
 ON CONFLICT (id) DO NOTHING;
 
-COMMENT ON TABLE d1_private.inbox_crawler_state IS 'Singleton control and status row for the inbox crawler daemon (scripts/inbox_crawler/, compose service inbox-crawler), in the shape of force_crawler_state (migration 77), migration 193. An administrator sets desired_state, the interval and the read throttle through the d1-inbox admin routes; the daemon reads the row each loop and writes its heartbeat, activity and counters back so the admin tab can show it is alive.';
+COMMENT ON TABLE d1_private.inbox_crawler_state IS 'Singleton control and status row for the inbox crawler daemon (scripts/inbox_crawler/, compose service inbox-crawler), in the shape of force_crawler_state (migration 77), migration 193. An administrator sets desired_state, the interval and the read throttle with an UPDATE on d1_private.inbox_crawler_state (the d1-inbox admin routes only read this row and queue Scan all); the daemon reads the row each loop and writes its heartbeat, activity and counters back so the admin tab can show it is alive.';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.id IS 'Always 00000000-0000-0000-0000-000000000001: the table holds exactly one row (inbox_crawler_state_singleton).';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.desired_state IS 'running or paused: what the administrator wants. A paused daemon keeps its heartbeat but scans nothing. Default running.';
 COMMENT ON COLUMN d1_private.inbox_crawler_state.interval_minutes IS 'Minutes between scheduled scans of every owner''s folder. At least 1; default 30.';
@@ -303,7 +306,7 @@ CREATE TABLE d1_private.inbox_prefs (
 
 COMMENT ON TABLE d1_private.inbox_prefs IS 'Per-person Inbox preferences, today only the auto-link opt-in (migration 193; separate from user_prefs of migration 170, whose JSON is owned and validated by the d1-usage endpoint). Read and written by the d1-inbox endpoint for the caller''s own row, never through the items API (d1_private is outside the Directus schema scan). No audit trigger: updated_at records when the person last changed it.';
 COMMENT ON COLUMN d1_private.inbox_prefs.user_id IS 'The directus_users.id these preferences belong to. The row goes with the user (ON DELETE CASCADE).';
-COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agreed to auto-linking: files in their personal folder that name exactly one record by an exact short ID, that the person can edit, and that are images or surface scans (never documents) are linked for them after each scan, listed under Recently auto-linked, with an undo. Default false (off).';
+COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agreed to auto-linking: files in their personal folder that name exactly one record by an exact short ID, that the person can edit, and that are SEM images or other images (never documents, never surface scans, never team folders) are linked for them after each scan, listed under Recently auto-linked, with an undo. Default false (off).';
 COMMENT ON COLUMN d1_private.inbox_prefs.updated_at IS 'When auto_link last changed (the time of the consent). Set by the endpoint on write.';
 COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 
@@ -314,6 +317,9 @@ COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 -- FROM, not on every UPDATE of the row) the owner's cache rows and their candidates in state new, gone or dismissed are
 -- deleted; linked candidates are kept (the link is a decision and its undo bookkeeping must survive). The owner's next
 -- scan is then a first scan of the new folder: everything in it is backlog, and baselined_at is set again.
+-- "Really changes" ignores letter case: alias and share folder uniqueness is case-insensitive (lower(...) unique indexes), so
+-- ABC and abc are the same folder name and a case-only edit must not wipe dismissals, the undo records or the folder cache.
+-- A change from or to NULL still counts (lower(NULL) IS DISTINCT FROM lower('x')).
 CREATE FUNCTION d1_private.inbox_person_alias_changed()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -326,9 +332,9 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes, deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes (not for a change of letter case only: aliases are unique ignoring case), deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
 CREATE TRIGGER people_inbox_alias_changed AFTER UPDATE OF uni_alias ON people
-    FOR EACH ROW WHEN (OLD.uni_alias IS DISTINCT FROM NEW.uni_alias)
+    FOR EACH ROW WHEN (lower(OLD.uni_alias) IS DISTINCT FROM lower(NEW.uni_alias))
     EXECUTE FUNCTION d1_private.inbox_person_alias_changed();
 
 CREATE FUNCTION d1_private.inbox_team_folder_changed()
@@ -343,9 +349,9 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes, deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes (not for a change of letter case only: folders are unique ignoring case), deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
 CREATE TRIGGER teams_inbox_folder_changed AFTER UPDATE OF share_folder ON teams
-    FOR EACH ROW WHEN (OLD.share_folder IS DISTINCT FROM NEW.share_folder)
+    FOR EACH ROW WHEN (lower(OLD.share_folder) IS DISTINCT FROM lower(NEW.share_folder))
     EXECUTE FUNCTION d1_private.inbox_team_folder_changed();
 
 -- migrate:down

@@ -49,7 +49,7 @@ const failure = (description, req, err) => {
 const row = (over) => ({
   candidate_id: ID(1000), directus_files_id: ID(3000), name: 'file.tif', mime_type: 'image/tiff', kind: 'image', kind_confidence: '0.90', extracted: {},
   origin: 'new', state: 'new', match_strength: 'none', matches: [], suggested_collection: null, suggested_record_id: null, duplicate_of: null,
-  duplicate_of_owner: null, rel_path: 'Users/ali1/file.tif', size_bytes: '2500000', source_mtime: at('2026-10-10T09:00:00.000Z'),
+  duplicate_of_owner: null, duplicate_owner_person_id: null, duplicate_owner_team_id: null, rel_path: 'Users/ali1/file.tif', size_bytes: '2500000', source_mtime: at('2026-10-10T09:00:00.000Z'),
   first_seen_at: at('2026-10-11T09:00:00.000Z'), decided_at: null, link_kind: null, linked_collection: null, link_batch_id: null, linked_record_id: null,
   decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, ...over,
 });
@@ -64,7 +64,7 @@ const NEW_ORIGINAL = row({
 const COPY = row({
   candidate_id: ID(1002), directus_files_id: ID(3002), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), duplicate_of: ID(1001), duplicate_of_owner: 'Alice A',
-  rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
+  duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
 });
 const SURFACE_SCAN = row({
   candidate_id: ID(1003), directus_files_id: ID(3003), name: 'scan_0007.nid', mime_type: null, kind: 'surface_scan', kind_confidence: '0.80',
@@ -113,6 +113,8 @@ const DISMISSED = row({
 
 // What the caller may read, name and edit: S_EDIT is theirs to edit, S_VIEW only to read, S_HIDDEN not even to read.
 const INFO = {
+  // who is asking (Alice, in the SEM team): a copy names the owner of its original only for her own folder and her teams
+  viewer: { personId: P_ALICE, teamIds: [TEAM], admin: false },
   readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`]),
   labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
