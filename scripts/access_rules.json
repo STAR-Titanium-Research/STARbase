@@ -242,6 +242,7 @@
     "tool_boxes": ["create", "read", "update", "delete"],
     "cutting_inserts": ["create", "read", "update", "delete"],
     "insert_edges": ["create", "read", "update", "delete"],
+    "surface_scans": ["create", "read", "update", "delete"],
     "insert_types": ["create", "read", "update", "delete"],
     "manufacturers": ["create", "read", "update", "delete"],
     "raw_stock_lots": ["create", "read", "update", "delete"],
