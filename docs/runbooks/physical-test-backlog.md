@@ -2032,6 +2032,25 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   scan. Press *Scan all* and expect the request to be claimed within about 30 seconds, and a second press while
   one waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
   administrators. Since: Inbox stream D.
+- [ ] **IF40 — An undone auto-link stays undone.** With auto-link on for a test person, save an image with an
+  exact short ID into their folder and let the scan auto-link it. Open **Recently auto-linked** and **Undo** it.
+  Run *Rescan my folder* twice (and wait for a scheduled scan): expect the file to stay in the **New** list, not to
+  be linked again, and no new `sample_data_files` row. Then **Link** it by hand: that must work. Also undo a link
+  made by hand and expect the next auto-link scan to be free to link it (only an undone *auto* link is
+  remembered, in `file_candidates.auto_undone_at`). Needs the migration 193 amended in place (a database that
+  already applied the first 193 needs `ALTER TABLE d1_private.file_candidates ADD COLUMN auto_undone_at
+  TIMESTAMPTZ`, or a roll back and re-apply). Since: found files inbox, final review fixes (server).
+- [ ] **IF41 — A file that vanished while linked or dismissed is marked gone after Undo or Restore.** Save an image
+  in a test folder, let the scan find it, **Dismiss** it (another file: Link it). Delete the file from the share, let
+  a scan run (it does not mark a decided file gone), then **Restore** (or **Undo**) it. Expect the next scan, or
+  *Rescan my folder*, to list that folder again and mark the file *gone* (it leaves the New list instead of
+  staying there for good). Since: found files inbox, final review fixes (server).
+- [ ] **IF42 — Copies across inboxes.** Put the same image in two people's folders (or a person's and a team's). The
+  one found first is the original; the other shows *Copy of ...* and is not counted by the badge. As the owner of the
+  **original**, dismiss it: expect the copy in the other person's Inbox to stay and to be counted. Restore it and
+  link it instead: expect the copy to disappear. When both copies are in the same person's (or team's) Inbox,
+  dismissing the original hides the copy too. A copy of another person's file must not say whose Inbox holds the
+  original (only your own folder and your teams are named). Since: found files inbox, final review fixes (server).
 
 ## Done
 
