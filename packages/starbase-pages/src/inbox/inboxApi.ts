@@ -157,6 +157,8 @@ export interface Skipped {
 }
 export interface AcceptAllResult extends LinkResult {
 	skipped: Skipped[];
+	/** How many files were left in all: `skipped` lists at most the first 200 of them. */
+	skippedTotal: number;
 	/** More files matched than one run takes (500): run it again after this one. */
 	has_more: boolean;
 	/** A dry run: nothing was linked; `acceptable` is what a real run would link. */
@@ -374,11 +376,13 @@ export const acceptAll = (api: HostApi, filter: FilesQuery, opts: AcceptOptions 
 		(b) => {
 			const done = linkedItems(b.items);
 			const linked = linkedCount(b, done);
+			const skipped = (Array.isArray(b.skipped) ? b.skipped : []).map((s: any): Skipped => ({ candidate_id: String(s?.candidate_id ?? ''), reason: String(s?.reason ?? '') }));
 			return {
 				link_batch_id: typeof b.link_batch_id === 'string' ? b.link_batch_id : '',
 				linked,
 				items: done,
-				skipped: (Array.isArray(b.skipped) ? b.skipped : []).map((s: any): Skipped => ({ candidate_id: String(s?.candidate_id ?? ''), reason: String(s?.reason ?? '') })),
+				skipped,
+				skippedTotal: Math.max(num(b.skipped_total) ?? 0, skipped.length),
 				has_more: b.has_more === true,
 				dry_run: b.dry_run === true,
 				acceptable: num(b.acceptable) ?? num(b.count) ?? (Array.isArray(b.ids) ? b.ids.length : linked),

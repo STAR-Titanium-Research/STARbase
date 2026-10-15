@@ -24,6 +24,8 @@ export function isAcceptable(f: FoundFile): boolean {
 		!!f.suggested_record_id &&
 		!!linkTarget(f.suggested_collection) &&
 		f.kind !== 'surface_scan' &&
+		// a copy of a file still in another Inbox is shown (marked), but Accept all leaves it (reason COPY)
+		!f.duplicate_of &&
 		f.suggested_can_edit !== false
 	);
 }
@@ -74,7 +76,7 @@ const REASON_WORDS: Record<string, [string, string]> = {
 };
 
 /** "Left for you to decide: 2 files whose record you cannot edit, 1 surface scan (added one by one)." null when nothing was left. */
-export function skippedText(skipped: readonly Skipped[]): string | null {
+export function skippedText(skipped: readonly Skipped[], total: number = skipped.length): string | null {
 	if (!skipped.length) return null;
 	const counts = new Map<string, number>();
 	for (const s of skipped) counts.set(s.reason, (counts.get(s.reason) ?? 0) + 1);
@@ -83,7 +85,9 @@ export function skippedText(skipped: readonly Skipped[]): string | null {
 		const plain = reason.toLowerCase().replace(/_/g, ' ');
 		return `${n} ${words ? words[n === 1 ? 0 : 1] : n === 1 ? `file (${plain})` : `files (${plain})`}`;
 	});
-	return `Left for you to decide: ${parts.join(', ')}.`;
+	// the endpoint names at most 200 of the files it left (skipped_total says how many in all)
+	const more = total > skipped.length ? ` ${total - skipped.length} more are not listed.` : '';
+	return `Left for you to decide: ${parts.join(', ')}.${more}`;
 }
 
 export interface AcceptPair {
