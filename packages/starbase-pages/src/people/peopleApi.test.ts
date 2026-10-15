@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
-import { PeopleApiError, invite, listTeamsBrief, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
+import { PeopleApiError, invite, personAttention, listTeamsBrief, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
 
 const fakeApi = (over: Partial<Record<keyof HostApi, any>> = {}): HostApi & Record<keyof HostApi, ReturnType<typeof vi.fn>> =>
 	({
@@ -15,6 +15,20 @@ const login = (status: string, id = status) => ({
 	user_id: `u-${id}`, email: `${id}@lab.example`, first_name: null, last_name: null, status, role_id: 'r1', role_name: 'Lab Member', last_access: null,
 });
 const refused = (message: string) => Object.assign(new Error('Request failed with status code 409'), { response: { status: 409, data: { errors: [{ message, extensions: { code: 'X' } }] } } });
+
+describe('a Former person is never missing an email', () => {
+	it('personAttention drops missing_email for active = false and keeps the other checks', () => {
+		expect(personAttention({ active: false, attention: ['missing_email', 'former_login_active'] })).toEqual(['former_login_active']);
+		expect(personAttention({ active: true, attention: ['missing_email'] })).toEqual(['missing_email']);
+		expect(personAttention({ active: false })).toEqual([]);
+	});
+	it('loadPeople applies it to the rows', async () => {
+		const api = fakeApi({
+			get: vi.fn(async () => ({ data: { people: [{ person_id: 'p1', full_name: 'Gone', email: null, active: false, user_id: null, login: null, attention: ['missing_email'] }], logins_without_person: [] } })),
+		});
+		expect((await loadPeople(api, true)).rows[0].attention).toEqual([]);
+	});
+});
 
 describe('loadPeople', () => {
 	it('an administrator gets persons plus active, invited and suspended logins as login rows', async () => {

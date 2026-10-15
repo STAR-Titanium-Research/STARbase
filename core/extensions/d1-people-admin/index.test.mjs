@@ -311,6 +311,21 @@ test('a login merged into another (login_aliases) is not a login without a perso
   assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
 });
 
+test('a Former person is never missing an email: not on their row, not in the /attention count', async () => {
+  // Cy (active: false) and Bob (active) both have no email on the people row
+  const rows = [{ key: 'missing_email', person_ids: [P.bob, P.cy], user_ids: [U.bob] }, ...ATTENTION.filter((a) => a.key === 'possible_duplicate')];
+  const { handlers } = mount({ raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  const byName = Object.fromEntries(people.body.people.map((p) => [p.full_name, p]));
+  assert.ok(byName['Bob Member'].attention.includes('missing_email'));
+  assert.deepEqual(byName['Cy Nologin'].attention, []);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body.items.find((i) => i.key === 'missing_email'), { key: 'missing_email', count: 1 });
+  // a missing_email whose only person is Former leaves the item out altogether
+  const only = mount({ raw: { 'SELECT key': [{ key: 'missing_email', person_ids: [P.cy], user_ids: [] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
+});
+
 test('GET /people gives each person their teams (one query: team_members joined with teams)', async () => {
   const { handlers, db } = mount({ raw: { 'SELECT key': ATTENTION, 'SELECT tm.person_id': MEMBERSHIPS } });
   const r = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });

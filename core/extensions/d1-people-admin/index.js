@@ -9,7 +9,8 @@
 //                     teams: [{ team_id, name, color, logo, is_manager }] }],
 //          logins_without_person: [{ user_id, email, first_name, last_name, status, role_id, role_name, last_access }] }
 //        A login that login_aliases lists as an alias (merged into another person's login, suspended) is left out of
-//        logins_without_person, and out of the user_ids that /attention counts.
+//        logins_without_person, and out of the user_ids that /attention counts. A Former person (active = false) is never in
+//        missing_email: not on their row's attention list, not in the /attention count.
 //   GET /d1-people-admin/attention
 //     -> { items: [{ key, count }] }      (d1_private.people_attention(); zero counts omitted)
 //   GET /d1-people-admin/people/:person_id/access[?list=owns|shared|investigator|teams]
@@ -150,13 +151,19 @@ export default {
     // d1_private.people_attention() rows: { key, person_ids, user_ids }
     // Logins merged into another person (login_aliases: alias -> canonical, and suspended): never a row and never counted.
     const aliasIds = async () => new Set((await database('login_aliases').select('alias_user_id')).map((a) => String(a.alias_user_id)));
+    // A Former person (people.active = false) has nothing to fix in an email: missing_email never names them.
     const attentionRows = async () => {
-      const [rows, aliases] = await Promise.all([
+      const [rows, aliases, former] = await Promise.all([
         database.raw('SELECT key, person_ids, user_ids FROM d1_private.people_attention()').then((r) => r?.rows ?? []),
         aliasIds(),
+        database('people').where('active', false).select('person_id').then((l) => new Set(l.map((x) => String(x.person_id)))),
       ]);
-      if (!aliases.size) return rows;
-      return rows.map((row) => (Array.isArray(row.user_ids) ? { ...row, user_ids: row.user_ids.filter((id) => !aliases.has(String(id))) } : row));
+      return rows.map((row) => {
+        let out = row;
+        if (aliases.size && Array.isArray(row.user_ids)) out = { ...out, user_ids: row.user_ids.filter((id) => !aliases.has(String(id))) };
+        if (row.key === 'missing_email' && former.size && Array.isArray(row.person_ids)) out = { ...out, person_ids: row.person_ids.filter((id) => !former.has(String(id))) };
+        return out;
+      });
     };
 
     // One query for every membership: team_members joined with teams, in team-name order.
