@@ -13,8 +13,10 @@ import { buildGeometry, type Dims } from '../../geometry';
 // styled in this file, so a class added to the engine fails the check until it is styled here.
 //
 // Form 'other' or no form: the engine draws nothing, and this says so (it does not invent a shape).
-const props = defineProps<{ dims: Dims }>();
-const svg = computed(() => buildGeometry(props.dims));
+// `labelSize`: the dimension labels' size in viewBox units (the drawing is 260 wide). 12 reads at about
+// 11px when the drawing is ~240px wide; a caller that draws it smaller passes more.
+const props = withDefaults(defineProps<{ dims: Dims; labelSize?: number }>(), { labelSize: 12 });
+const svg = computed(() => buildGeometry(props.dims, { labelSize: props.labelSize }));
 </script>
 
 <template>
