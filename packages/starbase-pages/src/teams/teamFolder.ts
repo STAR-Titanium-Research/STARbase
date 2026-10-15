@@ -50,7 +50,7 @@ export function createTeamFolder(api: HostApi) {
 			serverValue.value = clean(folder.value) || null;
 			return null;
 		} catch (e) {
-			return `${teamName} was saved, but the share folder was not: ${folderSaveError(e, 'share_folder', 'Could not save.')}`;
+			return `${teamName} was saved, but the share folder was not: ${folderSaveError(e, 'share_folder', 'Could not save.', { only: true })}`;
 		}
 	}
 

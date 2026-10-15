@@ -38,21 +38,28 @@ export const ALIAS_HINT = 'The name of this person\'s folder under Users on the 
 export const FORMER_HINT = 'Scan the folder of a Former person too. Off: a person marked Former is not scanned.';
 export const SHARE_FOLDER_HINT = 'The name of this team\'s folder under Shared on the share, as it appears there. Leave it empty for no folder.';
 
-/** A unique-constraint failure from the server (Directus RECORD_NOT_UNIQUE, or the database's own wording). */
-export function isDuplicate(e: any): boolean {
-	const first = e?.response?.data?.errors?.[0];
-	const code = first?.extensions?.code;
-	const text = `${first?.message ?? ''} ${e?.message ?? ''}`.toLowerCase();
-	return code === 'RECORD_NOT_UNIQUE' || /unique|duplicate key|already exists/.test(text);
+/**
+ * Is this failure a unique violation of `field` (Directus answers RECORD_NOT_UNIQUE with extensions.field)? It is told by the field, never by the
+ * message text: people.user_id is unique too, so a login that is already linked fails the same way and must not read as "alias taken". When the
+ * answer names no field, `only` says whether the request changed just this one unique column (then it can only be that one).
+ */
+export function isDuplicateOf(e: any, field: RegExp, { only = false }: { only?: boolean } = {}): boolean {
+	const ext = e?.response?.data?.errors?.[0]?.extensions;
+	if (ext?.code !== 'RECORD_NOT_UNIQUE') return false;
+	if (typeof ext.field === 'string' && ext.field !== '') return field.test(ext.field);
+	return only;
 }
+
+const ALIAS_FIELD = /uni_alias/;
+const FOLDER_FIELD = /share_folder/;
 
 // The administrator may not be able to see who holds it (a person can be Former and hidden by a filter); the message names no one.
 export const ALIAS_TAKEN = 'That alias is already used by another person. Aliases are compared without regard to case.';
 export const SHARE_FOLDER_TAKEN = 'That share folder is already used by another team. Folder names are compared without regard to case.';
 
-/** What to show when saving an alias or share folder failed: the duplicate wording, else the server's own words. */
-export function folderSaveError(e: any, kind: 'alias' | 'share_folder', fallback: string): string {
-	if (isDuplicate(e)) return kind === 'alias' ? ALIAS_TAKEN : SHARE_FOLDER_TAKEN;
+/** What to show when saving an alias or share folder failed: the duplicate wording when the violation is that field's, else the server's own words. */
+export function folderSaveError(e: any, kind: 'alias' | 'share_folder', fallback: string, opts: { only?: boolean } = {}): string {
+	if (isDuplicateOf(e, kind === 'alias' ? ALIAS_FIELD : FOLDER_FIELD, opts)) return kind === 'alias' ? ALIAS_TAKEN : SHARE_FOLDER_TAKEN;
 	return e?.response?.data?.errors?.[0]?.message || e?.message || fallback;
 }
 

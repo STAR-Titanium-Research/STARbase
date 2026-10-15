@@ -4,7 +4,7 @@ import { createPersonFolder } from './personFolder';
 
 const api = (over: Partial<Record<keyof HostApi, any>> = {}): HostApi & Record<'get' | 'patch', ReturnType<typeof vi.fn>> =>
 	({ get: vi.fn(async () => ({ data: { data: { uni_alias: 'ab1cd', scan_while_former: true } } })), post: vi.fn(), patch: vi.fn(async () => ({ data: {} })), delete: vi.fn(), ...over }) as any;
-const failure = (message: string, code?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: code ? { code } : {} }] } } });
+const failure = (message: string, code?: string, field?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: { ...(code ? { code } : {}), ...(field ? { field } : {}) } }] } } });
 
 describe('createPersonFolder', () => {
 	it('reads an existing person\'s alias and Former switch as the administrator, and the fields wait until then', async () => {
@@ -70,7 +70,7 @@ describe('createPersonFolder', () => {
 	});
 
 	it('a refused second request says the person was added and what failed; a duplicate names no one', async () => {
-		const a = api({ patch: vi.fn(async () => { throw failure('Value for field "uni_alias" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE'); }) });
+		const a = api({ patch: vi.fn(async () => { throw failure('Value for field "uni_alias" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE', 'uni_alias'); }) });
 		const f = createPersonFolder(a);
 		f.reset(false);
 		f.alias.value = 'ab1cd';

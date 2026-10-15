@@ -198,7 +198,7 @@ async function removeTeam() {
 					<div v-if="canShowAll" class="pad"><button type="button" class="link" :disabled="loadingAll" @click="showEverything">Show all</button></div>
 				</Section>
 
-				<TeamEditDialog v-model="editOpen" :team="team" @saved="load({ silent: true })" />
+				<TeamEditDialog v-model="editOpen" :team="team" @saved="load({ silent: true })" @partial="load({ silent: true })" />
 				<AddMemberDialog v-model="addOpen" :team="team" :member-ids="members.map((m) => m.person_id)" @added="load({ silent: true })" />
 			</template>
 		</PageShell>

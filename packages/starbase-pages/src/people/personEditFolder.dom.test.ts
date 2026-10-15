@@ -21,7 +21,7 @@ const row = (over: Partial<PeopleRow> = {}): PeopleRow => ({
 	kind: 'person', person_id: 'p1', full_name: 'Ann Lee', email: null, is_researcher: true, is_operator: false, active: true, notes: null, user_id: null, login: null, attention: [], ...over,
 });
 
-const failure = (message: string, code?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: code ? { code } : {} }] } } });
+const failure = (message: string, code?: string, field?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: { ...(code ? { code } : {}), ...(field ? { field } : {}) } }] } } });
 
 let app: App | null = null;
 let api: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
@@ -117,12 +117,22 @@ describe('People edit dialog: uni alias and Scan while Former', () => {
 	it('a duplicate alias shows the message that names no one, and the dialog stays open', async () => {
 		await open(row());
 		await vi.waitFor(() => expect(alias().value).toBe('ab1cd'));
-		api.patch.mockRejectedValueOnce(failure('Value for field "uni_alias" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE'));
+		api.patch.mockRejectedValueOnce(failure('Value for field "uni_alias" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE', 'uni_alias'));
 		type(alias(), 'taken1');
 		saveButton().click();
 		await vi.waitFor(() => expect(text()).toContain('That alias is already used by another person.'));
 		expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 		expect(saved).not.toHaveBeenCalled();
+	});
+
+	it('a unique violation of another column (the login) is NOT shown as "alias taken": the server\'s own words are', async () => {
+		await open(row());
+		await vi.waitFor(() => expect(alias().value).toBe('ab1cd'));
+		api.patch.mockRejectedValueOnce(failure('Value for field "user_id" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE', 'user_id'));
+		type(alias(), 'zz9');
+		saveButton().click();
+		await vi.waitFor(() => expect(text()).toContain('Value for field "user_id"'));
+		expect(text()).not.toContain('That alias is already used');
 	});
 
 	it('a new person is created WITHOUT the alias, then the alias is set by a second PATCH', async () => {
@@ -144,7 +154,7 @@ describe('People edit dialog: uni alias and Scan while Former', () => {
 		await open(null);
 		type(document.querySelector<HTMLInputElement>('.edit-card input')!, 'Bo Chan');
 		type(alias(), 'bc2de');
-		api.patch.mockRejectedValueOnce(failure('duplicate key value violates unique constraint "people_uni_alias_key"'));
+		api.patch.mockRejectedValueOnce(failure('Value for field "uni_alias" in collection "people" has to be unique.', 'RECORD_NOT_UNIQUE', 'uni_alias'));
 		saveButton().click();
 		await vi.waitFor(() => expect(text()).toContain('Bo Chan was added, but the folder settings were not saved: That alias is already used by another person.'));
 		expect(saved).toHaveBeenCalledTimes(1);

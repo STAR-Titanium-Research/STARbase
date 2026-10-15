@@ -10,13 +10,17 @@ import { LOGO_TYPES, logoProblem, tileOf } from './teamPage';
 import { createTeamFolder } from './teamFolder';
 
 const props = defineProps<{ modelValue: boolean; team: TeamSummary | null }>();
-const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void; (e: 'saved', team: TeamSummary): void }>();
+// `saved`: done, the dialog closes. `partial`: the team is saved but its share folder was not; the dialog stays open on the message (a page that
+// navigates on `saved` must not on `partial`, or the message is lost).
+const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void; (e: 'saved', team: TeamSummary): void; (e: 'partial', team: TeamSummary): void }>();
 
 const host = useExplorerHost();
 const isNew = computed(() => !props.team);
 // The share folder (the inbox crawler's team folder under Shared/): administrators only, saved after the team (see teamFolder.ts).
 const folder = createTeamFolder(host.api);
 const shareFolder = folder.folder;
+// A new team that was created but whose folder failed: the next Save edits it instead of creating a second one.
+const made = ref<TeamSummary | null>(null);
 
 const name = ref('');
 const description = ref('');
@@ -47,6 +51,7 @@ watch(
 		removed.value = false;
 		err.value = '';
 		dropPreview();
+		made.value = null;
 		folder.reset(!!props.team);
 		if (props.team && host.isAdmin.value) void folder.load(props.team.team_id);
 	},
@@ -93,20 +98,22 @@ async function save() {
 	try {
 		const body = { name: n, description: description.value.trim(), color: color.value };
 		let saved: TeamSummary;
-		if (!props.team) {
+		const target = props.team ?? made.value;
+		if (!target) {
 			saved = await createTeam(host.api, body);
+			made.value = saved;
 		} else {
 			const patch: TeamEdit = { ...body, description: body.description || null };
 			if (file.value) patch.logo = await uploadTeamLogo(host.api, file.value);
 			else if (removed.value) patch.logo = null;
-			saved = await updateTeam(host.api, props.team.team_id, patch);
+			saved = await updateTeam(host.api, target.team_id, patch);
 		}
-		// The share folder is a second request, after the team exists. If it fails the team is saved and the list learns of it; the dialog
-		// stays open with the reason (a duplicate folder names no other team).
+		// The share folder is a second request, after the team exists. If it fails the team is saved and the list learns of it (`partial`, not
+		// `saved`: no navigation); the dialog stays open with the reason (a duplicate folder names no other team).
 		const failure = host.isAdmin.value ? await folder.apply(saved.team_id, saved.name || n) : null;
 		if (failure) {
 			err.value = failure;
-			emit('saved', saved);
+			emit('partial', saved);
 			return;
 		}
 		close();

@@ -3,7 +3,7 @@
 // a member can edit only their OWN row (the server refuses the rest), anyone may add a person, only an admin links a login.
 import { computed, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
-import { ALIAS_HINT, FOLDER_CHANGE_NOTE, FORMER_HINT, folderSaveError, isDuplicate } from '../inbox/folderModel';
+import { ALIAS_HINT, FOLDER_CHANGE_NOTE, FORMER_HINT, folderSaveError, isDuplicateOf } from '../inbox/folderModel';
 import { createPersonFolder } from './personFolder';
 import type { PeopleRow } from './peopleQuery';
 
@@ -116,7 +116,7 @@ async function save() {
 		emit('saved');
 	} catch (e: any) {
 		// A unique violation on a save that changed the alias can only be the alias: say so, naming no one.
-		err.value = 'uni_alias' in folderChanges && isDuplicate(e)
+		err.value = 'uni_alias' in folderChanges && isDuplicateOf(e, /uni_alias/)
 			? folderSaveError(e, 'alias', 'Could not save.')
 			: e?.response?.data?.errors?.[0]?.message || e?.message || 'Could not save.';
 	} finally {

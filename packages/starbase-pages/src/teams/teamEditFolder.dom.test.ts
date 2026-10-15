@@ -16,24 +16,25 @@ const Dialog = defineComponent({ props: { modelValue: Boolean }, setup: (p, { sl
 const Input = defineComponent({ props: { modelValue: { type: String, default: '' } }, emits: ['update:modelValue'], setup: (p, { emit }) => () => h('input', { value: p.modelValue, onInput: (e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).value) }) });
 
 const team = { team_id: 't1', name: 'Additive', description: null, color: 'teal', logo: null } as unknown as TeamSummary;
-const failure = (message: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: {} }] } } });
+const failure = (message: string, field = 'share_folder') => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: { code: 'RECORD_NOT_UNIQUE', field } }] } } });
 
 let app: App | null = null;
 let api: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
 const saved = vi.fn();
+const partial = vi.fn();
 
 async function open(t: TeamSummary | null, admin = true) {
 	api = {
 		get: vi.fn(async (url: string) => (url.startsWith('/items/teams/') ? { data: { data: { share_folder: 'Additive' } } } : { data: {} })),
 		post: vi.fn(async (_u: string, body: any) => ({ data: { ...team, ...body, team_id: 't-new' } })),
-		patch: vi.fn(async (url: string, body: any) => (url.startsWith('/d1-teams') ? { data: { ...team, ...body } } : { data: {} })),
+		patch: vi.fn(async (url: string, body: any) => (url.startsWith('/d1-teams') ? { data: { ...team, team_id: url.split('/').pop(), ...body } } : { data: {} })),
 		delete: vi.fn(),
 	};
 	setExplorerHostFactory(() => ({
 		api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(admin), adminKnown: ref(true), canViewAllAccess: ref(false), user: ref({ id: 'u-me' }),
 	}));
 	const model = ref(true);
-	app = createApp({ render: () => h(TeamEditDialog, { modelValue: model.value, team: t, 'onUpdate:modelValue': (v: boolean) => (model.value = v), onSaved: saved }) });
+	app = createApp({ render: () => h(TeamEditDialog, { modelValue: model.value, team: t, 'onUpdate:modelValue': (v: boolean) => (model.value = v), onSaved: saved, onPartial: partial }) });
 	app.component('v-button', Button);
 	app.component('v-dialog', Dialog);
 	app.component('v-input', Input);
@@ -53,6 +54,7 @@ const text = () => document.querySelector('[role="dialog"]')?.textContent ?? '';
 beforeEach(() => {
 	document.body.innerHTML = '';
 	saved.mockReset();
+	partial.mockReset();
 });
 afterEach(() => {
 	app?.unmount();
@@ -99,16 +101,33 @@ describe('Team edit dialog: share folder', () => {
 		expect(api.patch).not.toHaveBeenCalled();
 	});
 
-	it('a new team is created, then its folder is set; a duplicate folder says the team was saved and names no other team', async () => {
+	it('a new team is created, then its folder is set; a duplicate folder says the team was saved, names no other team, and does NOT close or navigate (partial, not saved)', async () => {
 		await open(null);
 		type(document.querySelector<HTMLInputElement>('.edit-card input')!, 'Powder');
 		type(field(), 'Additive');
-		api.patch.mockRejectedValueOnce(failure('duplicate key value violates unique constraint "teams_share_folder_key"'));
+		api.patch.mockRejectedValueOnce(failure('Value for field "share_folder" in collection "teams" has to be unique.'));
 		saveButton().click();
 		await vi.waitFor(() => expect(text()).toContain('was saved, but the share folder was not: That share folder is already used by another team.'));
 		expect(api.post).toHaveBeenCalledTimes(1);
 		expect(api.patch).toHaveBeenCalledWith('/items/teams/t-new', { share_folder: 'Additive' });
-		expect(saved).toHaveBeenCalledTimes(1);
+		expect(partial).toHaveBeenCalledTimes(1);
+		expect(saved).not.toHaveBeenCalled();
 		expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+	});
+
+	it('after that, Save edits the team that exists instead of creating a second one, and then it is saved', async () => {
+		await open(null);
+		type(document.querySelector<HTMLInputElement>('.edit-card input')!, 'Powder');
+		type(field(), 'Additive');
+		api.patch.mockRejectedValueOnce(failure('Value for field "share_folder" in collection "teams" has to be unique.'));
+		saveButton().click();
+		await vi.waitFor(() => expect(partial).toHaveBeenCalled());
+		type(field(), 'Additive 2');
+		saveButton().click();
+		await vi.waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+		expect(api.post).toHaveBeenCalledTimes(1);
+		expect(api.patch.mock.calls.some(([url]) => String(url) === '/d1-teams/t-new')).toBe(true);
+		expect(api.patch).toHaveBeenLastCalledWith('/items/teams/t-new', { share_folder: 'Additive 2' });
+		await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
 	});
 });

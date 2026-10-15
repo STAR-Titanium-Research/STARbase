@@ -4,7 +4,7 @@ import { createTeamFolder } from './teamFolder';
 
 const api = (over: Partial<Record<keyof HostApi, any>> = {}) =>
 	({ get: vi.fn(async () => ({ data: { data: { share_folder: 'Additive' } } })), post: vi.fn(), patch: vi.fn(async () => ({ data: {} })), delete: vi.fn(), ...over }) as unknown as HostApi & { get: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn> };
-const failure = (message: string, code?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: code ? { code } : {} }] } } });
+const failure = (message: string, code?: string, field?: string) => Object.assign(new Error('Request failed'), { response: { status: 400, data: { errors: [{ message, extensions: { ...(code ? { code } : {}), ...(field ? { field } : {}) } }] } } });
 
 describe('createTeamFolder', () => {
 	it('reads an existing team\'s share folder as the administrator; nothing is sent when it is unchanged', async () => {
@@ -56,7 +56,7 @@ describe('createTeamFolder', () => {
 	});
 
 	it('a refused save says the team was saved, and a duplicate names no one', async () => {
-		const a = api({ patch: vi.fn(async () => { throw failure('duplicate key value violates unique constraint "teams_share_folder_key"'); }) });
+		const a = api({ patch: vi.fn(async () => { throw failure('Value for field "share_folder" in collection "teams" has to be unique.', 'RECORD_NOT_UNIQUE', 'share_folder'); }) });
 		const f = createTeamFolder(a);
 		f.reset(false);
 		f.folder.value = 'Additive';

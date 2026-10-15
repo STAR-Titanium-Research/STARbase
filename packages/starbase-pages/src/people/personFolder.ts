@@ -67,7 +67,7 @@ export function createPersonFolder(api: HostApi) {
 			serverAlias.value = null;
 			serverScan.value = false;
 			ready.value = true;
-			return `${name} was added, but the folder settings were not saved: ${folderSaveError(e, 'alias', 'Could not save.')}`;
+			return `${name} was added, but the folder settings were not saved: ${folderSaveError(e, 'alias', 'Could not save.', { only: true })}`;
 		}
 	}
 

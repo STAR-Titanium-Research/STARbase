@@ -69,7 +69,7 @@ const created = (t: TeamSummary) => open(t);
 			</li>
 		</ul>
 
-		<TeamEditDialog v-model="creating" :team="null" @saved="created" />
+		<TeamEditDialog v-model="creating" :team="null" @saved="created" @partial="load()" />
 	</div>
 </template>
 
