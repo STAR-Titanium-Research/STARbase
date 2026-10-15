@@ -11,7 +11,7 @@ import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
 import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
-import { recordWord } from './model/fans';
+import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
 import ExportFrame from './ExportFrame.vue';
@@ -26,7 +26,8 @@ import { miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { personName, useMapExport } from './useMapExport';
-import { useProcessMap, type Reach } from './useProcessMap';
+import type { Reach } from './model/reach';
+import { useProcessMap } from './useProcessMap';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing
@@ -57,8 +58,8 @@ const actions: MapActions = {
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);
-		// The card grows or shrinks: measure it, then lay out again so it does not overlap its neighbours.
-		void canvas.remeasure(id).then(() => canvas.relayout());
+		// The card grows or shrinks: measure it, then make room round it; every card stays where it is (a dragged one too).
+		void canvas.remeasure(id).then(() => canvas.reflow());
 	},
 };
 // What a socket connects, for its aria-label: one pass over the wires per graph, not per socket.

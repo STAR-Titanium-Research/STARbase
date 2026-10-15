@@ -543,6 +543,12 @@ describe('buildGraph: used-in fans (D20)', () => {
     expect(buildFan(data).nodes.find((n) => n.type === 'more')).toMatchObject({ remaining: 25 });
   });
 
+  it('a fan with more to load but no count (campaign, stock lot) gets a stub with remaining null (D21)', () => {
+    const data = toolFan(0);
+    data.fan = { items: [], total: null, remaining: null };
+    expect(buildFan(data).nodes.find((n) => n.type === 'more')).toMatchObject({ remaining: null });
+  });
+
   it('equipment fans into operations and tests alike', () => {
     const op = mkOp({ id: 'o1', methodName: 'Sinter', date: DAY });
     const test = mkTest({ id: 't9', testType: 'Tensile', category: 'destructive', date: '2026-09-02T09:00:00Z', status: 'done' });

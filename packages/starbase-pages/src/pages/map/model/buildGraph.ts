@@ -4,8 +4,10 @@
 // `lot:<id>`, powder batch `pb:<opId>`, material `m:<sampleId>`. Socket ids `<nodeId>:in:<i>`,
 // `<nodeId>:out:<i>`, and the bundle `<nodeId>:in:b` / `<nodeId>:out:b` (spec D8).
 
+import { COLLECTION } from './collections';
 import type {
   ContainerNode,
+  Fan,
   Group,
   JunctionNode,
   Kind,
@@ -36,7 +38,7 @@ export interface BuildGraphOpts {
 }
 
 /** The node a used-in fan hangs from: the focus record, or a record ＋ opened a fan of. A stock lot is its `lot:` card. */
-export const fanRootId = (r: Pick<Ref, 'collection' | 'id'>): string => (r.collection === 'raw_stock_lots' ? `lot:${r.id}` : `f:${r.collection}:${r.id}`);
+export const fanRootId = (r: Pick<Ref, 'collection' | 'id'>): string => (r.collection === COLLECTION.stockLot ? `lot:${r.id}` : `f:${r.collection}:${r.id}`);
 /** The "+N more" stub that continues the fan of a record. */
 export const moreNodeId = (r: Pick<Ref, 'collection' | 'id'>): string => `more:${r.collection}:${r.id}`;
 
@@ -45,12 +47,6 @@ const DEFAULT_MAX_ROWS = 3;
 export const OTHER_PIECE = 'another piece';
 /** Rows still shown on their own sockets once a container folds (spec D8: show 2, fold the rest). */
 const SHOWN_WHEN_FOLDED = 2;
-
-const COLLECTION = {
-  sample: 'physical_samples',
-  operation: 'manufacturing_operations',
-  stockLot: 'raw_stock_lots',
-} as const;
 
 /** One operation or test turned into the facts the wiring needs. */
 interface Planned {
@@ -373,13 +369,13 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
 
   // ---- 4b. used-in fans (D20): the record, a collapsed container or a sample card per item, "+N more" -----
   const fanNodes: MapNode[] = [];
-  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number }[] = [];
+  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number | null }[] = [];
   if (data.fan) fans.push({ root: data.focus, items: data.fan.items, remaining: remainingOf(data.fan) });
   for (const f of data.sideFans ?? []) fans.push({ root: f.root, items: f.items, remaining: remainingOf(f) });
   for (const fan of fans) {
     const rootId = fanRootId(fan.root);
     const rootOut = `${rootId}:out:0`;
-    if (fan.root.collection === 'raw_stock_lots') {
+    if (fan.root.collection === COLLECTION.stockLot) {
       if (!lotNodes.has(rootId)) lotNodes.set(rootId, { id: rootId, type: 'record', kind: 'stock_lot', ref: fan.root, ins: [], outs: [rootOut] });
     } else {
       fanNodes.push({ id: rootId, type: 'record', kind: fan.root.kind, ref: fan.root, ins: [], outs: [rootOut] });
@@ -389,7 +385,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         if (known(item.id)) pushIncoming(item.id, { from: rootOut, origin: rootId, carries: null, flow: 'stock' });
         continue;
       }
-      const kind = item.collection === COLLECTION.operation ? 'operation' : item.collection === 'test_sessions' ? 'test' : null;
+      const kind = item.collection === COLLECTION.operation ? 'operation' : item.collection === COLLECTION.test ? 'test' : null;
       if (!kind || placedByRecord.has(recKey(kind, item.id))) continue; // its family is loaded: the full container stands
       const row = kind === 'operation' ? opById.get(item.id) : testById.get(item.id);
       if (!row) continue;
@@ -397,7 +393,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       fanNodes.push(node);
       addWire(rootOut, node.rows[0].in!, null, 'stock', rootId);
     }
-    if (fan.remaining > 0) {
+    if (fan.remaining !== 0) {
       fanNodes.push({ id: moreNodeId(fan.root), type: 'more', of: `${fan.root.collection}:${fan.root.id}`, remaining: fan.remaining } satisfies MoreNode);
     }
   }
@@ -486,7 +482,12 @@ function focusNodeId(data: ProcessData, groups: Group[], present: Set<string>): 
   return firstSample && present.has(`s:${firstSample.id}`) ? `s:${firstSample.id}` : null;
 }
 
-const remainingOf = (f: { items: Ref[]; total: number; remaining?: number }): number => Math.max(0, f.remaining ?? f.total - f.items.length);
+/** Rows still to load; null = more, but no number to show (a null remaining, or a fan with no count: D21). */
+const remainingOf = (f: Fan): number | null => {
+  if (f.remaining === null) return null;
+  if (f.remaining !== undefined) return Math.max(0, f.remaining);
+  return f.total === null ? null : Math.max(0, f.total - f.items.length);
+};
 
 /** A used-in fan item as a header-only container: its sample flow is loaded when the person expands it. */
 function collapsedContainer(kind: 'operation' | 'test', row: OpRow | TestRow): ContainerNode {

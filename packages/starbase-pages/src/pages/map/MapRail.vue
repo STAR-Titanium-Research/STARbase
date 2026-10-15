@@ -6,8 +6,10 @@ import DataThumb from './DataThumb.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
 import { openPath, type RecordInfo } from './model/recordInfo';
-import { KINDS, kindOfCollection, kindVar, statusKindOf } from './nodes/kinds';
-import { CARD_CAP, SETTINGS_CHIP, type Reach } from './useProcessMap';
+import { kindOf } from './model/collections';
+import { KINDS, kindVar, statusKindOf } from './nodes/kinds';
+import { CARD_CAP, type Reach } from './model/reach';
+import { SETTINGS_CHIP } from './model/showChips';
 
 // The rail of the Process map (spec §6.5), from the top: the selected record's identity (kind, status,
 // code, title), its actions (Open record, Expand, Centre), the sample drawing for a sample, the data
@@ -59,9 +61,8 @@ const flip = (group: string) => {
 const listed = <T,>(group: string, items: T[]): T[] => (opened.value.has(group) ? items : items.slice(0, SHOWN));
 
 /** The kind of a connection's record, for its dot. */
-const COLLECTION_KIND: Record<string, keyof typeof KINDS> = { physical_samples: 'sample', manufacturing_operations: 'operation', test_sessions: 'test', raw_stock_lots: 'stock_lot' };
 const dot = (collection: string): string => {
-	const k = COLLECTION_KIND[collection] ?? kindOfCollection(collection);
+	const k = kindOf(collection);
 	return k ? kindVar(KINDS[k]) : 'var(--k-file)';
 };
 

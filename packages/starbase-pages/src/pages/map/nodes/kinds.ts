@@ -53,20 +53,3 @@ export function statusKindOf(kind: Kind): 'sample' | 'test' | 'campaign' {
 	if (kind === 'test') return 'test';
 	return 'campaign';
 }
-
-/** The kind a related record is drawn as in an Inside slot, from its collection; null when unknown. */
-const BY_COLLECTION: Record<string, Kind> = {
-	equipment: 'equipment',
-	tools: 'tool',
-	insert_edges: 'insert_edge',
-	fast_recipes: 'recipe',
-	prep_recipes: 'recipe',
-	directus_files: 'data_file',
-	people: 'person',
-	directus_users: 'person',
-	campaigns: 'campaign',
-	projects: 'project',
-	materials: 'material',
-	raw_stock_lots: 'stock_lot',
-};
-export const kindOfCollection = (collection: string): Kind | null => BY_COLLECTION[collection] ?? null;
