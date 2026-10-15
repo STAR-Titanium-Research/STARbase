@@ -419,6 +419,33 @@ class Store:
             (owner.id, len(owner.root) + 1, owner.root + "/"),
         )
 
+    def already_linked(self, files_ids: list[str]) -> set[str]:
+        """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
+        picker or by the d1-inbox extension). Such a file is not a found file: nobody needs to link it."""
+        if not files_ids:
+            return set()
+        rows = self._all(
+            "SELECT directus_files_id::text FROM sample_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
+            "UNION SELECT directus_files_id::text FROM operation_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
+            "UNION SELECT directus_files_id::text FROM session_data_files WHERE directus_files_id = ANY(%s::uuid[])",
+            (files_ids, files_ids, files_ids),
+        )
+        return {r[0] for r in rows}
+
+    def drop_linked_elsewhere(self, owner: Owner) -> int:
+        """Delete the owner's UNDECIDED candidates (new or gone) whose file has meanwhile been linked in one
+        of the three junctions: the extension would refuse to link them again (already on the record) and
+        the Inbox would show them for ever. Linked and dismissed rows are never touched."""
+        return self._run(
+            "DELETE FROM file_candidates c WHERE "
+            + _owner_eq(owner, "c.")
+            + " AND c.state IN ('new', 'gone') "
+            "AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = c.directus_files_id) "
+            "  OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = c.directus_files_id) "
+            "  OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = c.directus_files_id))",
+            (owner.id,),
+        )
+
     def mark_gone(self, candidate_ids: list[str]) -> int:
         """Undecided candidates that vanished from the share. Decided ones (linked, dismissed) are
         never touched. Copies of a vanished original become originals again."""

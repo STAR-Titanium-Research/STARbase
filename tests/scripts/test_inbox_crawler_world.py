@@ -56,6 +56,10 @@ CREATE TABLE test_sessions (session_id uuid PRIMARY KEY DEFAULT gen_random_uuid(
 CREATE TABLE insert_edges (edge_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), edge_code text);
 CREATE TABLE sample_data_files (id serial PRIMARY KEY, sample_id uuid,
     directus_files_id uuid REFERENCES directus_files (id) ON DELETE CASCADE);
+CREATE TABLE operation_data_files (id serial PRIMARY KEY, operation_id uuid,
+    directus_files_id uuid REFERENCES directus_files (id) ON DELETE CASCADE);
+CREATE TABLE session_data_files (id serial PRIMARY KEY, session_id uuid,
+    directus_files_id uuid REFERENCES directus_files (id) ON DELETE CASCADE);
 """
 
 

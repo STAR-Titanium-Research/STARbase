@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import classify_sem, db, hashing, kinds, owners, recognise
+from .identity import file_id
 
 log = logging.getLogger("inbox_crawler.scan")
 
@@ -309,6 +310,14 @@ class Scanner:
         store.resync_paths(
             owner
         )  # the indexer may have moved files: its pointer rows say where
+        # Files linked meanwhile in Data Studio are no longer found files: drop their undecided candidates.
+        dropped = store.drop_linked_elsewhere(owner)
+        if dropped:
+            log.info(
+                "%s: %d candidates dropped, their files are linked elsewhere",
+                owner.root,
+                dropped,
+            )
         dirs = store.load_dirs(owner)
         cands = store.load_candidates(owner)
         origin = "new" if store.owner_baselined(owner) else "backlog"
@@ -471,6 +480,9 @@ class Scanner:
                 gone.append(c)
         complete = True
         batch = 0
+        # A file already linked to a record is not a found file: do not register it at all.
+        unknown = [f"{d}/{e.name}" for e in files if f"{d}/{e.name}" not in cands]
+        linked = store.already_linked([str(file_id(r)) for r in unknown])
         for e in files:
             rel = f"{d}/{e.name}"
             known = cands.get(rel)
@@ -484,6 +496,8 @@ class Scanner:
                         "new",
                         known.kind,
                     )
+                continue
+            if str(file_id(rel)) in linked:
                 continue
             try:
                 f = self._new_file(owner, rel, e.name, origin, stats)
@@ -608,7 +622,7 @@ class Scanner:
             return None
         stats.registered += 1
         stats.new_candidates.append(result.candidate_id)
-        fid = str(self._file_id(rel))
+        fid = str(file_id(rel))
         cand = db.Cand(result.candidate_id, fid, rel, "new", cls.kind)
         sha = hashed.sha256 if hashed is not None and hashed.status == "done" else None
         return _Fresh(cand, sha, st.size, db.to_datetime(st.mtime_ns))
@@ -617,12 +631,6 @@ class Scanner:
         self, rel, st, hashed: hashing.HashOutcome
     ) -> hashing.HashOutcome:
         return still_the_same(self.share, rel, st, hashed)
-
-    @staticmethod
-    def _file_id(rel):
-        from .identity import file_id
-
-        return file_id(rel)
 
     # ---- moves -----------------------------------------------------------------------
 
