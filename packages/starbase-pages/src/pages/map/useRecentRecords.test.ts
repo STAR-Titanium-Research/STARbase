@@ -39,7 +39,7 @@ describe('loadRecentPicks', () => {
 
   it('lists the newest first and no more than eight', async () => {
     const records = Array.from({ length: 12 }, (_, n) => tick(n + 1, n)); // 1 oldest .. 12 newest
-    const picks = await loadRecentPicks(fakeApi(records.reverse()).api);
+    const picks = await loadRecentPicks(fakeApi(records).api); // oldest first in, so the sort is what puts the newest first
     expect(picks).toHaveLength(MAX_PICKS);
     expect(MAX_PICKS).toBe(8);
     expect(picks.map((p) => p.target)).toEqual(Array.from({ length: 8 }, (_, n) => `physical_samples:${id(12 - n)}`));

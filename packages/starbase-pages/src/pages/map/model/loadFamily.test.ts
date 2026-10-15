@@ -662,6 +662,13 @@ describe('loadUsedIn', () => {
     expect(res).toEqual({ items: [], total: null, more: false });
   });
 
+  it('campaign: a refused nested read whose bare page is empty sets no hidden marker (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) => ((params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: [] }));
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(calls).toHaveLength(2);
+    expect(res).toEqual({ items: [], total: null, more: false });
+  });
+
   it('campaign: a refused nested read retries with bare ids: no cards, hidden, "more" from the page size (D21)', async () => {
     const { api, calls } = fakeApi((path, params) =>
       (params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })) },

@@ -209,7 +209,7 @@ onBeforeUnmount(() => {
 					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">
 						<h3>Recent records</h3>
 						<ul>
-							<li v-for="pick in recent.picks.value" :key="pick.target"><AppLink :to="pick.to" class="pm-recent-link">{{ pick.label }}</AppLink></li>
+							<li v-for="pick in recent.picks.value" :key="pick.target"><AppLink :to="pick.to">{{ pick.label }}</AppLink></li>
 						</ul>
 					</nav>
 				</div>

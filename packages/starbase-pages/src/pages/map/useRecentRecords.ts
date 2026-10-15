@@ -1,10 +1,10 @@
 import { ref } from 'vue';
-import { mapPath, recordEntries, recordRequest, splitRecordTarget, type HostApi } from '@d1/ui';
+import { loadRecordLabels, mapPath, splitRecordTarget, type HostApi } from '@d1/ui';
 import { focusPlan } from './model/collections';
 
 // The empty state's quick picks (spec section 8): the records this person used lately, to start a map from.
 // The same GET /d1-usage the Home "Frequently used" panel reads (core/extensions/d1-usage), with the same
-// labels (the kit's recordRequest / recordEntries, read through the items API as the user, so a record
+// labels (the kit's loadRecordLabels, read through the items API as the user, so a record
 // that is gone or unreadable simply does not come back). Only records the map can open on are offered
 // (not people), the newest first, at most MAX_PICKS. A usage that cannot be read is no list, not an error.
 
@@ -40,20 +40,7 @@ export async function loadRecentPicks(api: HostApi): Promise<QuickPick[]> {
   } catch {
     return [];
   }
-  const byCollection = new Map<string, UsedRecord[]>();
-  for (const u of used) byCollection.set(u.collection, [...(byCollection.get(u.collection) ?? []), u]);
-  const labels = new Map<string, string>();
-  await Promise.all([...byCollection].map(async ([collection, records]) => {
-    const params = recordRequest(collection, records.map((r) => r.id));
-    if (!params) return;
-    let rows: any[] = [];
-    try {
-      rows = (await api.get(`/items/${collection}`, { params })).data?.data ?? [];
-    } catch {
-      // Forbidden, or no such collection for this person: those records are left out.
-    }
-    for (const e of recordEntries(collection, rows, records.map((r) => ({ target: r.target, pinned: false })))) labels.set(e.target, e.label);
-  }));
+  const labels = new Map((await loadRecordLabels((path, config) => api.get(path, config), used)).map((e) => [e.target, e.label]));
   return used
     .filter((u) => labels.has(u.target))
     .slice(0, MAX_PICKS)
