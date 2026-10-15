@@ -90,6 +90,11 @@
 .d1-process-map .sock.row.out { right: -21px; }
 .d1-process-map .sock.row.fat.in { left: -23px; }
 .d1-process-map .sock.row.fat.out { right: -23px; }
+/* A container's socket rail: stacked on the card's edge, `top` set inline (ContainerNode). */
+.d1-process-map .sock.rail-sock { transform: translate(-50%, -50%); }
+.d1-process-map .sock.rail-sock:hover { transform: translate(-50%, -50%) scale(1.35); }
+.d1-process-map .sock.rail-sock.in { left: 0; right: auto; }
+.d1-process-map .sock.rail-sock.out { left: 100%; right: auto; }
 
 /* Keyboard focus (spec D23): the card's Vue Flow wrapper is the tab stop, so its ring is drawn on the card; sockets get a ring too. */
 .d1-process-map .vue-flow__node:focus { outline: none; }
