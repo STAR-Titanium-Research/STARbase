@@ -32,7 +32,7 @@
 | B | `d1-inbox` extension (routes, edit-rights check, undo, rate limit, auto-link guard) | `d1-server-implementer` | `feat/inbox-b-endpoint` | not started (after A is merged) |
 | C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` | not started (after A is merged) |
 | D | STARbase: Inbox entry and badge, page, Home panel, People/Teams fields, admin tab | `directus-ui-implementer` | `feat/inbox-d-ui` | not started (after A is merged) |
-| F | Surface-scan confirm form (item, condition, operation) | `directus-ui-implementer` | `feat/inbox-f-scan-form` | **blocked** on the Alicona chat's surface-scan contract |
+| F | Surface-scan confirm form (item, condition, operation) and the `surface_scans` link target in `d1-inbox` | `directus-ui-implementer` + `d1-server-implementer` | `feat/inbox-f-scan-form` | contract received (spec §8); builds with fakes; live link waits for the Alicona chat's `surface_scans` migration |
 | R | Opus review of A–D, fixes, CI | reviewers | — | not started |
 
 Order: **A → (B, C, D in parallel) → R → F when unblocked.** Update this table on every state change and fold the edit into the next code push.
@@ -97,9 +97,13 @@ Develop against the route table in spec §9 with a typed `inboxApi.ts` and a fak
 - [ ] **D5: Admin:** alias field on the People edit dialog (and "scan while Former"), share folder on Teams, a second tab on `/crawler` (status, last scan, errors, unmatched folders, people without an alias, Scan all).
 - [ ] **D6:** vitest for models, a Playwright spec for the page against the fake server, `directus-ui-conventions` checks, backlog items kept accurate; commit per task.
 
-## Stream F — Surface-scan confirm form (blocked)
+## Stream F — Surface-scan link target and confirm form
 
-Unblocks when the Alicona chat publishes the surface-scan row contract (columns, required fields, the ADR-0018 write-path call). Then: for `kind='surface_scan'` the Link dialog collects item (insert or edge), condition and optional operation, and calls that contract; CONTEXT.md terms are added by whichever chat edits second.
+Contract received from the Alicona chat (spec §8). Two parts, started after B and D are merged:
+
+- [ ] **F1 (`d1-server-implementer`):** in `d1-inbox`, a `surface_scans` link target: `POST /d1-inbox/link` accepts `{candidate_id, collection:'surface_scans', insert_id|edge_id, condition, operation_id?, scanned_on?, condition_note?, notes?}`; creates the row through `ItemsService` as the caller in the same transaction as the candidate update; undo deletes it; refuses a missing/invalid `condition`, both or neither of `insert_id`/`edge_id`; a feature check that the `surface_scans` table exists (otherwise 409 "Surface scans are not available yet"). Tests with fakes.
+- [ ] **F2 (`directus-ui-implementer`):** for `kind='surface_scan'` the Link dialog's button reads "Add a surface scan" and collects item (insert or edge picker), condition (required, no default), optional operation, date and notes; never says "link" or "attach" for it.
+- [ ] **F3:** once the Alicona chat's `surface_scans` migration is on the base branch, run both against the real table (schema test) and tick backlog item F9.
 
 ## Stream R — Review and CI (coordinator)
 

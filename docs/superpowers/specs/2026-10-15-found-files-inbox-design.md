@@ -156,13 +156,36 @@ it once (`open_rb(..., adopted=True)`), hashes it and writes `file_fingerprints`
 
 ## 8. Surface scans (coordination with the Alicona chat)
 
-The surface-scan table, viewer and derivatives belong to the "Alicona files and GitHub resources" chat; its
-design (reported by that chat, confirmed by the maintainer there) says Alicona files belong to an insert or an
-edge, each with a condition and an optional operation, added through the ADR-0018 write path. This feature:
-detects and tags `kind='surface_scan'`; on confirm, the Inbox dialog collects item, condition and optional
-operation and calls that chat's write path. Neither writes the other's tables; the scan row is the contract.
-**Until that contract exists the stream F (surface-scan confirm form) is blocked**; scans still appear in the
-Inbox as found files and cannot be linked yet.
+The surface-scan table, viewer and derivatives belong to the "Alicona files and GitHub resources" chat (spec on
+its branch `ccr-6b593491-4alqyj`: `docs/superpowers/specs/2026-10-15-surface-scans-design.md`). Its design,
+reported by that chat as confirmed by the maintainer there: Alicona files belong to an insert or an edge; a
+surface scan is **added**, not linked; visibility is lab-wide like inserts and edges. This feature detects and
+tags `kind='surface_scan'` and, on confirm, creates the scan row. Neither chat writes the other's tables; the
+scan row is the contract.
+
+**Row contract (`surface_scans`, published by that chat; its migration is not merged yet):**
+
+- Required from the inbox: `directus_files_id` (the pointer row this crawler created), exactly one of
+  `insert_id` (cutting_inserts) or `edge_id` (insert_edges), and `condition` (`new | worn | cleaned | other`;
+  never guessed by the crawler, always chosen by the person).
+- Optional from the inbox: `operation_id` (the operation that wore the edge), `scanned_on` (date),
+  `condition_note`, `notes`.
+- Written only by the viewer's worker, never by us: `render_status` (the default `pending` queues the render),
+  `render_error`, `rendered_at`, `cache_key`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*`.
+- Unique per `(insert_id, directus_files_id)` and `(edge_id, directus_files_id)`; standard columns as on
+  `insert_edges` (`version` for OCC, `owner`, `owner_person_id`).
+
+**Write path:** a plain Directus item create on `surface_scans` as the caller (permissions and hooks apply); not
+`d1-build`, because it is one row. In the `d1-inbox` link route this is a `surface_scans` create through
+`ItemsService` with the caller's accountability inside the same transaction that marks the candidate linked;
+the edit check is Directus's own create permission on `surface_scans` (lab-wide reference data), not a
+record-access function. Undo deletes that row.
+
+**Hashing:** the crawler writes `file_fingerprints.content_sha256` for `.al3d` at discovery; the viewer's worker
+reads it, uses a provisional key when it is not `done`, and never hashes or writes that table.
+
+**Until `surface_scans` is merged** stream F builds against this contract with fakes, and the live link stays
+disabled behind a feature flag the extension reads (the table's existence).
 
 ## 9. The `d1-inbox` extension (Directus endpoint, plain ESM, like `d1-build`)
 
