@@ -18,22 +18,31 @@ describe('chainFocus', () => {
   const g = buildGraph(cut, groupsOf(cut, true), { slots: () => [] });
   const opOf = (row: string) => g.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(row))!.id;
 
-  it('a piece: back through its own row of the cut to the parent; siblings and what came after stay dim', () => {
+  const sorted = (s: Set<string>) => [...s].sort();
+  const behind = ['s:m', opOf('cut-c0'), 's:c0'];
+  const ahead = ['s:c0', opOf('pol-d'), 's:d'];
+
+  it('both (the default): back through its own row of the cut, on to what came after; siblings stay dim', () => {
     const f = chainFocus(g, 's:c0')!;
     expect(f.dim).toBe(true);
-    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0'].sort());
+    expect(sorted(f.nodes)).toEqual([...new Set([...behind, ...ahead])].sort());
+    expect(f.nodes.has('s:c1')).toBe(false);
+    expect(f.nodes.has('s:e')).toBe(false);
   });
 
-  it('a later sample: its whole history, through the polish and the cut', () => {
-    const f = chainFocus(g, 's:d')!;
-    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0', opOf('pol-d'), 's:d'].sort());
-    expect(f.wires.size).toBe(4);
+  it('upstream only: what it came from', () => {
+    expect(sorted(chainFocus(g, 's:c0', 'up')!.nodes)).toEqual([...behind].sort());
   });
 
-  it('the root: only itself (nothing behind it)', () => {
-    const f = chainFocus(g, 's:m')!;
-    expect([...f.nodes]).toEqual(['s:m']);
-    expect(f.wires.size).toBe(0);
+  it('downstream only: what it went on to', () => {
+    expect(sorted(chainFocus(g, 's:c0', 'down')!.nodes)).toEqual([...ahead].sort());
+  });
+
+  it('the root downstream: every piece and branch', () => {
+    const f = chainFocus(g, 's:m', 'down')!;
+    for (const id of ['s:c0', 's:c1', 's:c2', 's:d', 's:e']) expect(f.nodes.has(id)).toBe(true);
+    expect(f.wires.size).toBe(g.wires.length);
+    expect(sorted(chainFocus(g, 's:m', 'up')!.nodes)).toEqual(['s:m']);
   });
 
   it('nothing selected, or an id not on the map: no chain', () => {

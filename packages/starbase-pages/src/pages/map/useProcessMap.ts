@@ -12,7 +12,7 @@ import { COLLECTION, focusPlan, slotKindOf, stepCollection } from './model/colle
 import { connectionsOf, type Connections } from './model/connections';
 import { FALLBACK_RELATIONS, formSlots } from './model/formSlots';
 import { groupBatches } from './model/groupBatches';
-import { chainFocus, type HoverFocus } from './model/hoverFocus';
+import { chainFocus, type ChainDir, type HoverFocus } from './model/hoverFocus';
 import { fanNodeIds, fanRowIds } from './model/fans';
 import { parseFocus } from './model/loadFamily';
 import { NoSample, loadFocus, type DefsByKind } from './model/loadFocus';
@@ -360,17 +360,19 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   // ---- the pointer, and ＋ ------------------------------------------------------------------------
   const { hovered, hover, holdHover, clearHover, tooltip, focusOfHover: hoverOnly, socketHighlight, card } = useMapHover({ graph, nodeById, nodes, info });
-  // A card lights up its chain behind it (everything its samples came from): the hovered card while the
-  // pointer is on one, else the selected card. Hovering a wire or socket adds its wires to the selection's
-  // chain; hovering a record in an Inside tray keeps the neighbour rule (useMapHover).
-  const chain = computed(() => (graph.value ? chainFocus(graph.value, selectedId.value) : null));
+  // The selected card lights up its chain: upstream, downstream or both (the card's right-click menu; both
+  // when the map opens). Hovering another card shows that card's neighbours (useMapHover); hovering a wire or
+  // socket adds its wires to the chain.
+  const chainDir = ref<ChainDir>('both');
+  const setChainDir = (d: ChainDir) => void (chainDir.value = d);
+  const chain = computed(() => (graph.value ? chainFocus(graph.value, selectedId.value, chainDir.value) : null));
   const focusOfHover = computed<HoverFocus | null>(() => {
     const h = hoverOnly.value;
-    const id = hovered.value?.id;
-    if (graph.value && id && nodeById.value.has(id)) return chainFocus(graph.value, id) ?? h;
     const c = chain.value;
-    if (!c || (h && h.dim)) return h ?? c;
-    return h ? { ...c, wires: new Set([...c.wires, ...h.wires]) } : c;
+    if (!c) return h;
+    if (!h || hovered.value?.id === selectedId.value) return c;
+    if (!h.dim) return { ...c, wires: new Set([...c.wires, ...h.wires]) };
+    return h;
   });
   const expansion = useMapExpand({ api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding });
 
@@ -424,6 +426,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     connections,
     selectedOnMap,
     focusOfHover,
+    chainDir,
+    setChainDir,
     socketHighlight,
     hiddenSides,
     card,
