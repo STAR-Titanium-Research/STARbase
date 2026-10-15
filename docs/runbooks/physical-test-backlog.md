@@ -1172,7 +1172,7 @@ migration 141 prints about ownerless records.
   existing sample's Status is not offered (d1-build refuses it), and the date done is not offered on a planned
   operation or test. Since: Process map edit mode, stream D2 (PR pending).
 
-#### Process map edit mode, server side (migrations 185 and 186, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
+#### Process map edit mode, server side (migrations 189 and 190, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
 
 The `d1-build` endpoint has unit tests with a fake database and a fake ItemsService; what they cannot show is Directus
 itself (its permissions, hooks and the real code triggers inside one transaction). Run these on the local stack with a copy
@@ -1180,7 +1180,7 @@ of the live data, after `dbmate up` and a Directus restart. The calls below use 
 Member's static token, or sign in through STARbase and copy the session cookie); once the canvas editor is merged, the same
 checks can be run from `/map?edit=new`.
 
-- [ ] **PM5-1 — Migrations 185 and 186 on a copy of live.** `dbmate up` applies both; `dbmate down` twice, then `up`.
+- [ ] **PM5-1 — Migrations 189 and 190 on a copy of live.** `dbmate up` applies both; `dbmate down` twice, then `up`.
   Expect: every existing operation and test has `work_state = 'done'` (`SELECT work_state, count(*) FROM
   manufacturing_operations GROUP BY 1`, same for `test_sessions`); in Data Studio an operation form shows **Work state**
   (read-only, Done), **Planned date**, **Done by** and **Marked done at** in "Who & where", and the sample **Status**
@@ -1231,7 +1231,7 @@ checks can be run from `/map?edit=new`.
   for everyone. Lab Member B (same role) sees the role and global ones but not the private one; a user with another role sees
   only the global one. B cannot edit or delete A's templates (403); an administrator can. A template whose `method_id` is not
   a method is refused (400). Since: edit-mode stream A (PR pending).
-- [ ] **PM5-10 — Form conditions of migration 187.** Open a **new** sample, a **new** operation and a **new** test in Data
+- [ ] **PM5-10 — Form conditions of migration 191.** Open a **new** sample, a **new** operation and a **new** test in Data
   Studio (Create item). Expect: the **Related records** group is not shown on any of the three until the record is saved; after
   saving it appears (closed). On an operation form, the six legacy and capture fields (Legacy insert edge, Legacy machining UID,
   File storage pointer, Capture software, Capture frequency, NC program text) show only when they hold a value, and stay hidden

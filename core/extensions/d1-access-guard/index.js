@@ -197,7 +197,7 @@ const REMOVE_FROM_RESTRICTED_CAMPAIGN = "Only the campaign's owner can remove sa
 const CAMPAIGN_MOVE = "Only the campaign's owner can move it to another project.";
 const CAMPAIGN_CONTENT =
   'This campaign holds restricted records you do not own, so only an administrator can move it to another project.';
-// Operations and tests carry a work state (migration 185, ADR-0019): done -> planned is the owner's call.
+// Operations and tests carry a work state (migration 189, ADR-0019): done -> planned is the owner's call.
 const WORK_STATE_COLLECTIONS = new Set(['manufacturing_operations', 'test_sessions']);
 const DONE_DATE_FIELD = { manufacturing_operations: 'operation_date', test_sessions: 'session_date' };
 const BACK_TO_PLANNED = 'Only the owner can set a done record back to planned.';

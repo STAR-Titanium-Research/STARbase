@@ -847,7 +847,7 @@ echo "== Planned work migration (ADR-0019) =="
 # Process map edit mode, slice 1: work_state, planned_date, done_by_person_id, done_at on operations and tests, and the
 # `planned` sample status. Down and up run inside a rolled-back transaction; the Directus tables are stubs here, so a
 # stand-in Status field row (four choices) is seeded and the metadata is asserted by reading what the SQL wrote.
-PW=db/migrations/20261014000185_planned_work.sql
+PW=db/migrations/20261015000189_planned_work.sql
 pw_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$PW")
 pw_down=$(awk '/-- migrate:down/{f=1;next}f' "$PW")
 pw_out=$($PSQL 2>&1 <<SQL
@@ -997,7 +997,7 @@ pw_check "redown_choices:active,consumed,destroyed,archived/active,archived" "do
 echo "== Draft and template store migration (ADR-0018) =="
 # Process map edit mode, slice 2: d1_private.process_drafts and process_templates, reached only through d1-build.
 # Down and up run inside a rolled-back transaction.
-BS=db/migrations/20261014000186_build_store.sql
+BS=db/migrations/20261015000190_build_store.sql
 bs_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$BS")
 bs_down=$(awk '/-- migrate:down/{f=1;next}f' "$BS")
 bs_out=$($PSQL 2>&1 <<SQL
@@ -1120,11 +1120,11 @@ bs_check "role_gone:0" "deleting a role deletes the templates shared with it"
 bs_check "user_gone:0,0,1" "deleting a login deletes its drafts and templates, and only theirs"
 bs_check "redown_tables:0" "down after up drops both tables"
 
-echo "== Form condition fixes (migration 187) =="
+echo "== Form condition fixes (migration 191) =="
 # Migration 174's "Hide until saved once" and "show when it has a value" rules used _empty / _nempty, which in Directus 11 mean
 # '' and not-'' (null counts as nempty). Directus is a stub here, so seed the 174 rules, run the up and the down, and read
 # the conditions back, all in a rolled-back transaction.
-CF=db/migrations/20261014000187_form_condition_fixes.sql
+CF=db/migrations/20261015000191_form_condition_fixes.sql
 cf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CF")
 cf_down=$(awk '/-- migrate:down/{f=1;next}f' "$CF")
 cf_out=$($PSQL 2>&1 <<SQL

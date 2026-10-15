@@ -35,7 +35,7 @@ Glossary: `CONTEXT.md` → "Building on the process map".
   ```
 - Migrations: re-scan every `refs/remotes/origin/*` for the next number right before creating the file
   (`.claude/skills/db-migration/scripts/next_migration_name.sh`). On 2026-10-14 `183`/`184` are taken on
-  `feat/team-ownership`, so expect `20261014000185_planned_work.sql` and `20261014000186_build_store.sql`.
+  `feat/team-ownership`, so (renumbered 2026-10-15 after main took 185 and 188) `20261015000189_planned_work.sql`, `20261015000190_build_store.sql`, `20261015000191_form_condition_fixes.sql`.
 - STARbase must keep working before the migration is applied: request `work_state` / `planned_date` only when
   `/fields/<collection>` lists them (the `batch_id` pattern in `loadFamily.ts`). Hide edit mode when
   `GET /d1-build/drafts` 404s.
