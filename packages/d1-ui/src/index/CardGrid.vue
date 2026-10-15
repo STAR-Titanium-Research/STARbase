@@ -8,6 +8,7 @@ import type { IndexDef } from './indexConfig';
 import { cardFacts, cardHead } from './cardFacts';
 import TextCard from './TextCard.vue';
 import { rowAccent } from './accent';
+import { PICK_ATTR } from './pickMode';
 
 type Row = Record<string, unknown>;
 
@@ -23,6 +24,8 @@ defineProps<{
 	dataLoading?: boolean;
 	/** The Projects index's wider columns, for a designed card (the campaigns list). */
 	wide?: boolean;
+	/** Picker mode: each card carries its key, so the page can measure where it is (pickMode.ts). */
+	pick?: boolean;
 }>();
 const emit = defineEmits<{ open: [row: Row] }>();
 
@@ -34,7 +37,7 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 		<li v-for="n in SKELETONS" :key="n" class="skeleton"><span class="bar wide" /><span class="bar" /><span class="bar short" /></li>
 	</ul>
 	<ul v-else class="card-grid" :class="{ wide }">
-		<li v-for="row in rows" :key="rowKey(row)">
+		<li v-for="row in rows" :key="rowKey(row)" :[PICK_ATTR]="pick ? rowKey(row) : undefined">
 			<slot name="card" :row="row" :data="data?.get(rowKey(row)) ?? null" :loading="!!dataLoading">
 				<TextCard
 					:link="cardHead(def, row).link"
