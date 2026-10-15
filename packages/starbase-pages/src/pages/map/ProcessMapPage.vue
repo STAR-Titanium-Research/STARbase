@@ -257,6 +257,7 @@ onBeforeUnmount(() => {
 							ref="canvasEl"
 							class="pm-canvas"
 							:class="{ pending: !canvas.laidOut.value }"
+							:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
 							@mouseleave="map.clearHover()"
 							@keydown="input.onKey"
 							@focusin="input.onFocusIn"
@@ -346,7 +347,8 @@ onBeforeUnmount(() => {
 	z-index: -1;
 	box-sizing: border-box;
 	pointer-events: none;
-	border: 1.5px dashed color-mix(in srgb, var(--k) 55%, transparent);
+	/* --pm-px is one screen pixel in flow units: the frame stays visible when zoomed out. */
+	border: max(1.5px, calc(1.5 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--k) 70%, transparent);
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }
