@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  CHECK_CODES, cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, templateVisibleTo, validateDraftBody, validateName,
+  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, cleanValues, dayOf, describeFailure, editValues, parseRequired, realColumns, summarise, templateVisibleTo, validateDraftBody, validateName,
   validateTemplateValues,
 } from './index.js';
 
@@ -16,6 +16,21 @@ const BOB = ID(2);
 const ROLE_A = ID(81);
 const ROLE_B = ID(82);
 const NOW = new Date('2026-10-14T09:00:00.000Z');
+
+// Directus's schema overview, as far as d1-build reads it: the real columns of the three collections, and an alias of each.
+const fieldsOf = (names, alias) => Object.fromEntries([
+  ...names.map((f) => [f, { field: f, type: 'string', alias: false }]),
+  [alias, { field: alias, type: 'alias', alias: true }],
+]);
+const SCHEMA = {
+  collections: {
+    physical_samples: { fields: fieldsOf(['sample_id', 'sample_code', 'material_id', 'form', 'primary_method_id', 'project_id', 'current_status', 'notes', 'version', 'mass_grams'], 'co_owners') },
+    manufacturing_operations: {
+      fields: fieldsOf(['operation_id', 'method_id', 'equipment_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'outcome_notes', 'campaign_id', 'project_id', 'pass_code'], 'additional_operators'),
+    },
+    test_sessions: { fields: fieldsOf(['session_id', 'test_type', 'session_date', 'planned_date', 'equipment_id', 'campaign_id', 'project_id', 'notes'], 'additional_operators') },
+  },
+};
 
 // An Express-ish router that remembers its handlers, and a response that remembers what was sent.
 function fakeRouter() {
@@ -38,8 +53,8 @@ function fakeWorld() {
     // records the caller can read (what ItemsService answers), by collection then lower-case id
     records: { physical_samples: new Map(), manufacturing_operations: new Map(), test_sessions: new Map() },
     required: [], // directus_fields rows { collection, field, translations }
-    refOps: [], refTests: [], refSubjects: [], // what points at a sample
-    deniedReads: new Set(),
+    refOps: [], refTests: [], refSubjects: [], refGenealogy: [], // what points at a sample
+    deniedReads: new Set(), hiddenIds: new Set(), // collections, and record ids, the caller cannot read
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
     people: [], // { person_id, user_id, is_researcher }
@@ -74,7 +89,7 @@ function fakeServices(world, log = { built: [], reads: [] }) {
       const pk = COLLECTION_PK[this.collection];
       const rows = [];
       for (const id of query.filter[pk]._in) {
-        const r = world.records[this.collection]?.get(String(id).toLowerCase());
+        const r = world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
         if (r) rows.push(Object.fromEntries(query.fields.map((f) => [f, r[f]])));
       }
       return rows;
@@ -201,6 +216,8 @@ function fakeDatabase(world) {
           .map((r) => ({ sample_id: r.sample_id, sample_code: r.sample_code, current_status: r.current_status })) };
       case SQL.refsOperations:
         return { rows: world.refOps.filter((r) => csvOf(b).includes(r.sample_id) || csvOf(b).includes(r.output_sample_id)) };
+      case SQL.refsGenealogy:
+        return { rows: world.refGenealogy.filter((r) => csvOf(b).includes(r.parent_sample_id)) };
       case SQL.refsTests:
         return { rows: world.refTests.filter((r) => csvOf(b).includes(r.sample_id)) };
       case SQL.refsSubjects:
@@ -248,7 +265,7 @@ function setup({ env = {} } = {}) {
   const logged = [];
   const logger = { error: (m) => logged.push(m), warn: (m) => logged.push(m) };
   const fake = fakeServices(world);
-  mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService, UtilsService }, getSchema: async () => ({ schema: true }), env }, () => NOW);
+  mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService, UtilsService }, getSchema: async () => SCHEMA, env }, () => NOW);
   const call = async (method, path, { user = ALICE, params = {}, body, admin = false, role = ROLE_A } = {}) => {
     const handler = router.routes.get(`${method} ${path}`);
     assert.ok(handler, `no route ${method} ${path}`);
@@ -601,7 +618,8 @@ const opRow = (n, extra = {}) => ({
   work_state: 'planned', batch_id: null, ...extra,
 });
 const testRow = (n, extra = {}) => ({ session_id: ID(n), version: 1, test_code: `T-${n}`, work_state: 'planned', test_type: 'hardness', ...extra });
-const known = (...rows) => new Map(rows.map((r) => [String(r.operation_id ?? r.session_id ?? r.sample_id).toLowerCase(), r]));
+const collectionOfRow = (r) => (r.operation_id ? 'manufacturing_operations' : r.session_id ? 'test_sessions' : 'physical_samples');
+const known = (...rows) => new Map(rows.map((r) => [`${collectionOfRow(r)}:${String(r.operation_id ?? r.session_id ?? r.sample_id).toLowerCase()}`, r]));
 const REQUIRED = parseRequired([
   { collection: 'physical_samples', field: 'material_id', translations: [{ language: 'en-US', translation: 'Material' }] },
   { collection: 'physical_samples', field: 'form', translations: [{ language: 'en-US', translation: 'Form' }] },
@@ -904,14 +922,25 @@ test('attach: an existing operation without an input gets one from a wire; once 
   assert.match(where(unwired.checks, 'o1')[0].text, /Wire a sample into this operation to attach it/);
 });
 
-test('the wires of an existing operation that is not being attached are left alone', () => {
-  const body = draft(
-    [sample('s0', { existing: { id: ID(10), version: 1 } }), sample('s1', { existing: { id: ID(11), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 } })],
-    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('s1'))],
+test('a wire into an existing operation that is not being attached is left alone; one out of it, or into an existing test, is refused', () => {
+  const ctx = { existing: known(sampleRow(10), sampleRow(11), opRow(40, { sample_id: ID(12) }), testRow(50)) };
+  const into = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 } })],
+    [wire(w('s0'), w('o1'))],
   );
-  const { checks, plan } = buildPlan(body, { existing: known(sampleRow(10), sampleRow(11), opRow(40, { sample_id: ID(12) })) });
-  assert.deepEqual(checks, []);
-  assert.deepEqual(plan.operations, []);
+  const a = buildPlan(into, ctx);
+  assert.deepEqual(a.checks, []);
+  assert.deepEqual(a.plan.operations, []);
+  const out = draft(
+    [sample('s1', { existing: { id: ID(11), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 } })],
+    [wire(w('o1', 0), w('s1'))],
+  );
+  assert.deepEqual(buildPlan(out, ctx).checks, [{ key: 'o1', level: 'block', code: 'STRUCTURE', text: 'An existing operation keeps the sample it made: a new wire out of it cannot be created.' }]);
+  const toTest = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), test_('t1', { existing: { id: ID(50), version: 1 } })],
+    [wire(w('s0'), w('t1'))],
+  );
+  assert.deepEqual(buildPlan(toTest, ctx).checks, [{ key: 't1', level: 'block', code: 'STRUCTURE', text: 'An existing test keeps the samples it has: a sample cannot be wired into it here.' }]);
 });
 
 test('a new operation can be wired from the output of an existing one', () => {
@@ -1026,7 +1055,7 @@ test('POST /drafts/:id/check answers the checks for the owner\'s draft, reading 
   assert.deepEqual(levels(res.body.data.checks), ['block:o1:operation_date', 'warn:o1:equipment_id']);
   // the record read went through ItemsService with the caller's accountability and the schema
   assert.deepEqual(log.built.map((b) => [b.collection, b.options.accountability.user, b.options.schema, 'knex' in b.options]), [
-    ['physical_samples', ALICE, { schema: true }, false],
+    ['physical_samples', ALICE, SCHEMA, false],
   ]);
   assert.deepEqual(log.reads.map((r) => r.collection), ['physical_samples']);
   assert.deepEqual(log.reads[0].query.filter, { sample_id: { _in: [ID(10)] } });
@@ -1789,7 +1818,7 @@ test('PATCH /templates/:id: nobody else edits it, and bad input is a 400', async
 test('PATCH /templates/:id: a test template\'s values are checked as a test\'s', async () => {
   const env = setup();
   const made = (await tpl(env, hardTemplate())).body.data;
-  const res = await env.call('PATCH', '/templates/:id', { params: { id: made.id }, body: { values: { method_id: METHOD }, version: 1 } });
+  const res = await env.call('PATCH', '/templates/:id', { params: { id: made.id }, body: { values: { notes: 'x' }, version: 1 } });
   assert.equal(res.statusCode, 400);
   assert.match(res.body.errors[0].message, /test type/);
 });
@@ -1861,13 +1890,13 @@ test('every check carries a stable code: what is missing, gone, stale, attachabl
   // warnings that are only advice
   assert.deepEqual(codesOf(buildPlan(draft([mop('o1')]), {}).checks.filter((c) => c.level === 'warn')), ['o1:equipment_id:OTHER', 'o1:planned_date:OTHER']);
   // records that exist already
-  const existing = known(sampleRow(11, { version: 4 }), opRow(40, { sample_id: ID(12) }), opRow(41, { work_state: 'done' }));
+  const existing = known(sampleRow(11, { version: 4 }), opRow(40, { sample_id: ID(12) }), opRow(41, { work_state: 'done' }), opRow(42, { work_state: 'done' }));
   const body = draft([
     sample('gone', { existing: { id: ID(10), version: 1 } }),
     sample('stale', { existing: { id: ID(11), version: 1 } }),
     op('edit', { existing: { id: ID(41), version: 1 }, values: { notes: 'x' } }),
     op('attach', { existing: { id: ID(40), version: 1 }, attach: true }),
-    op('rem', { existing: { id: ID(41), version: 1 }, remove: true }),
+    op('rem', { existing: { id: ID(42), version: 1 }, remove: true }),
   ], [wire(w('stale'), w('attach'))]);
   const out = buildPlan(body, { existing }).checks;
   assert.deepEqual(codesOf(out), ['attach:-:NOT_ATTACHABLE', 'gone:-:GONE', 'rem:-:REMOVE_BLOCKED', 'stale:-:STALE_VERSION']);
@@ -1940,4 +1969,149 @@ test('a draft may carry the client\'s key counter, seq: accepted and kept', () =
   assert.equal(validateDraftBody({ ...emptyBody(), seq: 3 }).body.seq, 3);
   // and it does not change what the checks say
   assert.deepEqual(buildPlan({ ...draft([mop('o1')]), seq: 9 }, {}).checks, buildPlan(draft([mop('o1')]), {}).checks);
+});
+
+// ---- review round: columns only, caps, duplicates, attach rows, planned samples, genealogy, codes ----------------------
+
+test('realColumns: the real columns of each collection, never an alias', () => {
+  const cols = realColumns(SCHEMA);
+  assert.ok(cols.physical_samples.has('sample_code') && cols.manufacturing_operations.has('method_id') && cols.test_sessions.has('test_type'));
+  assert.equal(cols.physical_samples.has('co_owners'), false);
+  assert.equal(cols.manufacturing_operations.has('additional_operators'), false);
+  assert.deepEqual(ALIAS_ALLOWED, { physical_samples: [], manufacturing_operations: [], test_sessions: [] });
+  assert.equal(realColumns(undefined).physical_samples.size, 0, 'no schema, no columns: nothing passes');
+});
+
+test('values may name real columns only: an alias or an unknown field is a 400 that names it, on a draft and on a template', async () => {
+  const cols = realColumns(SCHEMA);
+  for (const [item, field] of [
+    [sample('n1', { values: { co_owners: [{ create: [] }] } }), 'co_owners'],
+    [mop('o1', { additional_operators: [1] }), 'additional_operators'],
+    [test_('t1', { values: { test_type: 'x', not_a_field: 1 } }), 'not_a_field'],
+  ]) {
+    const out = validateDraftBody(draft([item]), { columns: cols });
+    assert.equal(out.ok, false, field);
+    assert.match(out.message, new RegExp(`names ${field}, which is not a column`));
+  }
+  assert.equal(validateDraftBody(draft([sample('n1', { values: { sample_code: 'x', notes: 'y' } })]), { columns: cols }).ok, true);
+  const env = setup();
+  const bad = draft([sample('n1', { values: { co_owners: [] } })]);
+  const res = await env.call('POST', '/drafts', { body: { name: 'x', body: bad } });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.errors[0].message, /co_owners/);
+  assert.equal(env.world.drafts.length, 0);
+  const made = (await env.call('POST', '/drafts', { body: { name: 'x', body: emptyBody() } })).body.data;
+  const patch = await env.call('PATCH', '/drafts/:id', { params: { id: made.id }, body: { body: bad, version: 1 } });
+  assert.equal(patch.statusCode, 400);
+  const t = await env.call('POST', '/templates', { body: { name: 'x', collection: 'test_sessions', values: { test_type: 'x', additional_operators: [] } } });
+  assert.equal(t.statusCode, 400);
+  assert.match(t.body.errors[0].message, /additional_operators/);
+  assert.equal(validateTemplateValues('test_sessions', { test_type: 'x', zzz: 1 }, cols).ok, false);
+});
+
+test('a draft saved before the schema changed is checked again: a value on an alias is a blocking STRUCTURE check', () => {
+  const body = draft([sample('n1', { values: { sample_code: 'X', co_owners: [] } })]);
+  const { checks } = buildPlan(body, { columns: realColumns(SCHEMA) });
+  assert.deepEqual(where(checks, 'n1', 'co_owners'), [{ key: 'n1', field: 'co_owners', level: 'block', code: 'STRUCTURE', text: 'co_owners is not a field a draft can set.' }]);
+});
+
+test('a Create is limited to about 500 records, blocked as STRUCTURE', () => {
+  const many = Array.from({ length: 251 }, (_, i) => sample(`n${i}`, { values: code('X') }));
+  const ok = buildPlan(draft(many.slice(0, 250)), {}).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(ok, []);
+  const over = buildPlan({ ...draft(many), campaignId: CAMPAIGN }, {}).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(over.map((c) => [c.key, c.code]), [['n0', 'STRUCTURE']]);
+  assert.match(over[0].text, /would write 502 records and a Create is limited to 500/);
+  assert.equal(MAX_RECORDS, 500);
+});
+
+test('an attached operation cannot have several rows', () => {
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true, rows: [{ key: 'a' }, { key: 'b' }] })],
+    [wire(w('s0'), w('o1'))],
+  );
+  const { checks } = buildPlan(body, { existing: known(sampleRow(10), opRow(40)) });
+  assert.ok(checks.some((c) => c.key === 'o1' && c.level === 'block' && /cannot have several rows/.test(c.text)));
+});
+
+test('existing records are keyed by collection and id: one record on two cards is blocked, the same id in two collections is not', () => {
+  const twice = draft([sample('a', { existing: { id: ID(10), version: 1 } }), sample('b', { existing: { id: ID(10), version: 1 } })]);
+  const checks = buildPlan(twice, { existing: known(sampleRow(10)) }).checks;
+  assert.deepEqual(checks, [{ key: 'b', level: 'block', code: 'STRUCTURE', text: 'This record is on the draft twice, on another card too. Keep one.' }]);
+  const same = draft([sample('a', { existing: { id: ID(10), version: 1 } }), op('b', { existing: { id: ID(10), version: 1 } })]);
+  const ctx = { existing: known(sampleRow(10), opRow(10)) };
+  assert.deepEqual(buildPlan(same, ctx).checks.filter((c) => c.level === 'block'), []);
+  // and a sample's row is not found under an operation's key
+  const lookup = buildPlan(draft([sample('a', { existing: { id: ID(10), version: 1 } })]), { existing: known(opRow(10)) }).checks;
+  assert.deepEqual(codesOf(lookup), ['a:-:GONE']);
+});
+
+test('done work needs a sample that exists: a done operation or test on a planned sample is blocked', () => {
+  const TEXT = 'Its sample is still planned; mark the operation that makes it done first.';
+  // an existing planned sample
+  const onPlanned = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', { operation_date: '2026-10-14' }, { workState: 'done' }), test_('t1', { workState: 'done', values: { test_type: 'x', session_date: '2026-10-14' } })],
+    [wire(w('s0'), w('o1')), wire(w('s0'), w('t1'))],
+  );
+  const a = buildPlan(onPlanned, { existing: known(sampleRow(10, { current_status: 'planned' })) }).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(a.map((c) => [c.key, c.code, c.text]), [['o1', 'STRUCTURE', TEXT], ['t1', 'STRUCTURE', TEXT]]);
+  // a planned sample this draft makes, then a done operation on it
+  const chain = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('make'), sample('n1', { values: code() }), mop('use', { operation_date: '2026-10-14' }, { workState: 'done' })],
+    [wire(w('s0'), w('make')), wire(w('make', 0), w('n1')), wire(w('n1'), w('use'))],
+  );
+  const b = buildPlan(chain, { existing: known(sampleRow(10)) }).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(b.map((c) => [c.key, c.text]), [['use', TEXT]]);
+  // an active sample, or a sample a done operation makes, is fine; planned work on a planned sample is fine
+  const fine = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', { operation_date: '2026-10-14' }, { workState: 'done' }), mop('p1')],
+    [wire(w('s0'), w('o1')), wire(w('s0'), w('p1'))],
+  );
+  assert.deepEqual(buildPlan(fine, { existing: known(sampleRow(10)) }).checks.filter((c) => c.level === 'block'), []);
+  const planned = buildPlan(draft([sample('s0', { existing: { id: ID(10), version: 1 } }), mop('p1')], [wire(w('s0'), w('p1'))]), { existing: known(sampleRow(10, { current_status: 'planned' })) });
+  assert.deepEqual(planned.checks.filter((c) => c.level === 'block'), []);
+});
+
+test('removals: a sample made from the planned sample still hangs off it; a code the caller cannot read is "a sample"', () => {
+  const body = draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]);
+  const base = { existing: known(opRow(40, { sample_id: ID(10), output_sample_id: ID(11) })) };
+  const child = { kind: 'genealogy', id: ID(12), work_state: null, sampleIds: [ID(11)] };
+  const seen = buildPlan(body, { ...base, outputs: new Map([[ID(11), { code: 'S-11', status: 'planned' }]]), refs: [child] }).checks;
+  assert.deepEqual(seen, [{ key: 'o1', level: 'block', code: 'REMOVE_BLOCKED', text: 'A sample made from S-11 still exists, so it cannot be removed.' }]);
+  const hidden = buildPlan(body, { ...base, outputs: new Map([[ID(11), { code: null, status: 'planned' }]]), refs: [child, { kind: 'test', id: ID(50), work_state: 'done', sampleIds: [ID(11)] }] }).checks;
+  assert.deepEqual(hidden.map((c) => c.text), ['Something done hangs off a sample, so it cannot be removed.', 'A sample made from a sample still exists, so it cannot be removed.']);
+  // the child being removed in the same draft no longer hangs there
+  const both = draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true }), sample('s12', { existing: { id: ID(12), version: 1 }, remove: true })]);
+  const ctx = {
+    existing: known(opRow(40, { output_sample_id: ID(11) }), sampleRow(12, { current_status: 'planned' })),
+    outputs: new Map([[ID(11), { code: null, status: 'planned' }], [ID(12), { code: 'S-12', status: 'planned' }]]),
+    refs: [child],
+  };
+  assert.deepEqual(buildPlan(both, ctx).checks, []);
+});
+
+test('check: a planned output the caller cannot read is "a sample" in the text, one they can read is named; genealogy children are looked up', async () => {
+  const run = async (hide) => {
+    const env = setup();
+    seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11) })]);
+    seed(env.world, 'physical_samples', [sampleRow(11, { current_status: 'planned', sample_code: 'SECRET-11' })]);
+    env.world.refGenealogy = [{ parent_sample_id: ID(11), child_sample_id: ID(12) }];
+    if (hide) env.world.hiddenIds.add(ID(11));
+    const id = await keep(env, draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]));
+    return (await env.call('POST', '/drafts/:id/check', { params: { id } })).body.data.checks;
+  };
+  assert.deepEqual((await run(false)).map((c) => c.text), ['A sample made from SECRET-11 still exists, so it cannot be removed.']);
+  const hidden = await run(true);
+  assert.deepEqual(hidden.map((c) => c.text), ['A sample made from a sample still exists, so it cannot be removed.']);
+  assert.doesNotMatch(JSON.stringify(hidden), /SECRET/);
+});
+
+test('create: the same checks hold at Create (done work on a planned sample is a 409 CHECKS)', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10, { current_status: 'planned' })]);
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', { operation_date: '2026-10-14' }, { workState: 'done' })], [wire(w('s0'), w('o1'))]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 409);
+  assert.ok(res.body.errors[0].extensions.checks.some((c) => c.code === 'STRUCTURE' && /still planned/.test(c.text)));
+  assert.deepEqual(env.world.ops, []);
 });

@@ -53,6 +53,10 @@ export const LIMITS = { bodyChars: 1_000_000, items: 300, rows: 100, wires: 1000
 
 // The stable reasons a check carries in `code`.
 export const CHECK_CODES = ['GONE', 'NOT_ATTACHABLE', 'STALE_VERSION', 'REMOVE_BLOCKED', 'PERMISSION', 'REQUIRED', 'STRUCTURE', 'OTHER'];
+// Aliases a draft's values may set besides the real columns (the form needs none today). A value can never reach an alias
+// otherwise: an alias is a relation (a nested create, update or delete through ItemsService), and a draft writes no relations.
+export const ALIAS_ALLOWED = { physical_samples: [], manufacturing_operations: [], test_sessions: [] };
+export const MAX_RECORDS = 500;
 export const WORK_STATES = ['planned', 'done'];
 export const KINDS = ['sample', 'operation', 'test'];
 
@@ -119,7 +123,20 @@ const isInt = (v, min = 0) => Number.isInteger(v) && v >= min;
 // Checks the SHAPE of a DraftBody and returns { ok: true, body } or { ok: false, message }. What a draft means (a wire to
 // nothing, an operation without a method) is the checks' job, not the save's: a draft is saved while it is still being built.
 // Unknown extra properties are kept as they come (a client may carry its own), the known ones must be well-formed.
-export function validateDraftBody(input) {
+// The real columns a draft's values may name, by collection, from Directus's schema overview (an alias is not one).
+export function realColumns(schema) {
+  const out = {};
+  for (const collection of Object.values(KIND_COLLECTION)) {
+    const fields = schema?.collections?.[collection]?.fields ?? {};
+    out[collection] = new Set([
+      ...Object.entries(fields).filter(([, f]) => f?.alias !== true && f?.type !== 'alias').map(([name]) => name),
+      ...ALIAS_ALLOWED[collection],
+    ]);
+  }
+  return out;
+}
+
+export function validateDraftBody(input, opts = {}) {
   if (!isObject(input)) return fail('The draft body must be an object.');
   if (input.v !== 1) return fail('The draft body must have v: 1.');
   for (const f of ['projectId', 'campaignId']) {
@@ -145,6 +162,9 @@ export function validateDraftBody(input) {
       if (!FIELD.test(field)) return fail(`${at}.values has a field name that is not allowed: ${field.slice(0, 40)}.`);
       if (RESERVED_FIELDS[item.kind].includes(field)) {
         return fail(`${at}.values must not set ${field}: the wiring and the server decide it.`);
+      }
+      if (opts.columns && !opts.columns[KIND_COLLECTION[item.kind]]?.has(field)) {
+        return fail(`${at}.values names ${field}, which is not a column of ${KIND_COLLECTION[item.kind]}: a draft sets columns only.`);
       }
     }
     if (item.existing !== undefined) {
@@ -259,6 +279,8 @@ export const SQL = {
   refsOperations:
     'SELECT operation_id, work_state, sample_id, output_sample_id FROM manufacturing_operations'
     + " WHERE sample_id = ANY(string_to_array(?, ',')::uuid[]) OR output_sample_id = ANY(string_to_array(?, ',')::uuid[])",
+  refsGenealogy:
+    "SELECT parent_sample_id, child_sample_id FROM sample_genealogy WHERE parent_sample_id = ANY(string_to_array(?, ',')::uuid[])",
   refsTests:
     "SELECT session_id, work_state, sample_id FROM test_sessions WHERE sample_id = ANY(string_to_array(?, ',')::uuid[])",
   refsSubjects:
@@ -371,6 +393,7 @@ export function buildPlan(body, ctx = {}) {
   const existing = ctx.existing ?? new Map();
   const required = ctx.required ?? {};
   const outputsInfo = ctx.outputs ?? new Map();
+  const columns = ctx.columns ?? null;
   const refs = ctx.refs ?? [];
   const items = Array.isArray(body?.items) ? body.items : [];
   const wires = Array.isArray(body?.wires) ? body.wires : [];
@@ -391,9 +414,24 @@ export function buildPlan(body, ctx = {}) {
 
   // -- the cards ------------------------------------------------------------------------------------------------
   const byKey = new Map();
+  const existingOwner = new Map(); // collection:id -> the first card that holds that record
   for (const item of items) {
-    if (byKey.has(item.key)) block(item.key, 'Two cards in this draft share a key. Reload the draft.');
-    else byKey.set(item.key, item);
+    if (byKey.has(item.key)) {
+      block(item.key, 'Two cards in this draft share a key. Reload the draft.');
+      continue;
+    }
+    byKey.set(item.key, item);
+    if (item.existing) {
+      const ek = `${KIND_COLLECTION[item.kind]}:${lower(item.existing.id)}`;
+      if (existingOwner.has(ek)) block(item.key, 'This record is on the draft twice, on another card too. Keep one.');
+      else existingOwner.set(ek, item.key);
+    }
+    // values may name real columns only (a draft writes no relations); re-checked here for a draft saved before a schema change
+    if (columns) {
+      for (const field of Object.keys(item.values ?? {})) {
+        if (!columns[KIND_COLLECTION[item.kind]]?.has(field)) block(item.key, `${field} is not a field a draft can set.`, field);
+      }
+    }
   }
   const rowsFor = (item) => (Array.isArray(item.rows) && item.rows.length ? item.rows : [{ key: item.key }]);
   const owners = new Map([...byKey.keys()].map((k) => [k, k]));
@@ -405,7 +443,8 @@ export function buildPlan(body, ctx = {}) {
       else owners.set(row.key, item.key);
     }
   }
-  const stored = (item) => (item.existing ? existing.get(lower(item.existing.id)) : undefined);
+  const existingKey = (collection, id) => `${collection}:${lower(id)}`;
+  const stored = (item) => (item.existing ? existing.get(existingKey(KIND_COLLECTION[item.kind], item.existing.id)) : undefined);
   const isNew = (item) => !item.existing;
   const live = (item) => !item.remove;
 
@@ -457,11 +496,17 @@ export function buildPlan(body, ctx = {}) {
       const rows = to.row === undefined ? rowsFor(to.item).map((_, i) => i) : [rowSel(to, 'it goes into')];
       for (const i of rows) if (i !== null) push(inWires, `${to.item.key}#${i}`, src);
     } else if (fk === 'operation' && tk === 'sample') {
-      if (!isNew(from.item) && !from.item.attach) continue;
+      if (!isNew(from.item) && !from.item.attach) {
+        block(from.item.key, 'An existing operation keeps the sample it made: a new wire out of it cannot be created.');
+        continue;
+      }
       const i = rowSel(from, 'the sample comes from');
       if (i !== null) push(outWires, `${from.item.key}#${i}`, to.item.key);
     } else if (tk === 'test' && (fk === 'sample' || fk === 'operation')) {
-      if (!isNew(to.item)) continue;
+      if (!isNew(to.item)) {
+        block(to.item.key, 'An existing test keeps the samples it has: a sample cannot be wired into it here.');
+        continue;
+      }
       const src = fk === 'sample' ? { kind: 'sample', key: from.item.key } : { kind: 'op', key: from.item.key, row: rowSel(from, 'it comes from') };
       if (src.row !== null) push(subjects, to.item.key, src);
     } else {
@@ -546,6 +591,7 @@ export function buildPlan(body, ctx = {}) {
       order += 1;
     });
     if (mode === 'new' && isBlank(item.values.method_id)) block(item.key, 'Choose a method.', 'method_id');
+    if (mode === 'attach' && rowCount > 1) block(item.key, 'An attached operation is one existing record: it cannot have several rows.');
     if (mode === 'attach' && !records.some((r) => r.itemKey === item.key && r.input)) {
       block(item.key, 'Wire a sample into this operation to attach it.');
     }
@@ -560,10 +606,17 @@ export function buildPlan(body, ctx = {}) {
     if (rs.length > 1 && ref.startsWith('item:')) block(ref.slice(5), 'More than one operation makes this sample.');
   }
 
+  // Done work needs a sample that exists: an operation marked done on a sample that is still planned has nothing to work on.
+  const SAMPLE_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
+  const plannedSample = (ref) => !!ref && (ref.startsWith('item:')
+    ? makers.get(ref)?.[0]?.workState === 'planned'
+    : existing.get(existingKey('physical_samples', ref.slice(3)))?.current_status === 'planned');
+  for (const r of records) if (r.mode === 'new' && r.workState === 'done' && plannedSample(r.input)) block(r.itemKey, SAMPLE_PLANNED);
+
   // -- samples (new) ------------------------------------------------------------------------------------------------------
   const sampleValues = (ref, trail = new Set()) => {
     if (!ref) return {};
-    if (ref.startsWith('id:')) return existing.get(ref.slice(3)) ?? {};
+    if (ref.startsWith('id:')) return existing.get(existingKey('physical_samples', ref.slice(3))) ?? {};
     const item = byKey.get(ref.slice(5));
     if (!item) return {};
     if (item.existing) return { ...(stored(item) ?? {}), ...item.values };
@@ -616,6 +669,7 @@ export function buildPlan(body, ctx = {}) {
       const ref = s.kind === 'sample' ? refOfSampleItem(byKey.get(s.key)) : continuesAs(`${s.key}#${s.row}`);
       if (ref && !subjectRefs.includes(ref)) subjectRefs.push(ref);
     }
+    if (stateOf(item) === 'done' && subjectRefs.some(plannedSample)) block(item.key, SAMPLE_PLANNED);
     if (isBlank(item.values.test_type)) block(item.key, 'Choose a test type.', 'test_type');
     if (!subjectRefs.length) block(item.key, 'Wire a sample into this test.', 'subject');
     tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs });
@@ -677,13 +731,21 @@ export function buildPlan(body, ctx = {}) {
       edits.push({ key: item.key, collection: KIND_COLLECTION[item.kind], id: lower(item.existing.id), version: item.existing.version, values: item.values });
     }
   }
-  // Samples that go (explicitly, or as the planned outputs of a removed operation): nothing may hang off them.
+  // Samples that go (explicitly, or as the planned outputs of a removed operation): nothing may hang off them. What hangs off:
+  // operations and tests that point at the sample, and samples made from it (a genealogy row with it as the parent). Other
+  // rows that point at a sample cascade silently when it is deleted, and that is fine for a planned sample, which has none of
+  // their data yet: stock provenance, data files, campaign_samples, the access tables (sample_access, co-owners, team access),
+  // the readers table and its own genealogy rows as the child.
+  // A code only goes into a check's text when the caller can read the sample (outputsInfo holds it only then, or the sample is
+  // a card the caller read); otherwise it says "a sample", so a check never tells a caller a code they cannot see.
   for (const [sid, cause] of deleting.samples) {
-    const code = outputsInfo.get(sid)?.code ?? existing.get(sid)?.sample_code ?? 'the sample';
-    const hanging = refs.filter((r) => r.sampleIds.map(lower).includes(sid)
-      && !(r.kind === 'operation' ? deleting.operations : deleting.tests).has(lower(r.id)));
+    const code = outputsInfo.get(sid)?.code ?? existing.get(existingKey('physical_samples', sid))?.sample_code ?? 'a sample';
+    const mine = refs.filter((r) => r.sampleIds.map(lower).includes(sid));
+    const hanging = mine.filter((r) => r.kind !== 'genealogy' && !(r.kind === 'operation' ? deleting.operations : deleting.tests).has(lower(r.id)));
+    const children = mine.filter((r) => r.kind === 'genealogy' && !deleting.samples.has(lower(r.id)));
     if (hanging.some((r) => r.work_state === 'done')) block(cause, `Something done hangs off ${code}, so it cannot be removed.`, undefined, 'REMOVE_BLOCKED');
     else if (hanging.length) block(cause, `Something planned still hangs off ${code}. Remove that too.`, undefined, 'REMOVE_BLOCKED');
+    if (children.length) block(cause, `A sample made from ${code} still exists, so it cannot be removed.`, undefined, 'REMOVE_BLOCKED');
     for (const r of records) if (r.input === `id:${sid}` || r.output === `id:${sid}`) block(r.itemKey, `This is wired to ${code}, which is being removed.`, undefined, 'REMOVE_BLOCKED');
     for (const t of tests) if (t.subjects.includes(`id:${sid}`)) block(t.key, `This is wired to ${code}, which is being removed.`, undefined, 'REMOVE_BLOCKED');
   }
@@ -698,6 +760,13 @@ export function buildPlan(body, ctx = {}) {
 
   const batches = [];
   for (const r of records) if (r.batchKey && !batches.some((b) => b.key === r.batchKey)) batches.push({ key: r.batchKey, workState: r.workState, values: r.values });
+
+  // One Create is one transaction: keep it to a size a request and a lock can carry.
+  const total = samples.length * (body?.campaignId ? 2 : 1) + ordered.order.length + tests.length + batches.length + edits.length
+    + removals.tests.length + removals.operations.length + removals.samples.length;
+  if (total > MAX_RECORDS) {
+    block(items[0].key, `This draft would write ${total} records and a Create is limited to ${MAX_RECORDS}. Split it into several drafts.`);
+  }
 
   return {
     checks,
@@ -716,13 +785,14 @@ const TEMPLATE_VALUES_CHARS = 100_000;
 
 // A template's prefilled fields: an object of field names (none of the wiring-owned ones) that includes what makes it an
 // operation (method_id) or a test (test_type). Returns { ok: true, values } or { ok: false, message }.
-export function validateTemplateValues(collection, values) {
+export function validateTemplateValues(collection, values, columns) {
   const kind = TEMPLATE_KIND[collection];
   if (!kind) return fail('A template makes operations or tests.');
   if (!isObject(values)) return fail('values must be an object.');
   for (const field of Object.keys(values)) {
     if (!FIELD.test(field)) return fail(`values has a field name that is not allowed: ${field.slice(0, 40)}.`);
     if (RESERVED_FIELDS[kind].includes(field)) return fail(`values must not set ${field}: the wiring and the server decide it.`);
+    if (columns && !columns[collection]?.has(field)) return fail(`values names ${field}, which is not a column of ${collection}: a template sets columns only.`);
   }
   if (JSON.stringify(values).length > TEMPLATE_VALUES_CHARS) return fail('The template is too large.');
   if (kind === 'operation' && !(typeof values.method_id === 'string' && UUID.test(values.method_id))) {
@@ -849,7 +919,7 @@ export function mount(router, context, clock = () => new Date()) {
     };
     const existing = new Map();
     const take = (collection, rows) => {
-      for (const r of rows ?? []) existing.set(lower(r[COLLECTION_PK[collection]]), { ...r, _collection: collection });
+      for (const r of rows ?? []) existing.set(`${collection}:${lower(r[COLLECTION_PK[collection]])}`, { ...r, _collection: collection });
     };
     const ids = { physical_samples: new Set(), manufacturing_operations: new Set(), test_sessions: new Set() };
     for (const item of body.items) if (item.existing) ids[KIND_COLLECTION[item.kind]].add(lower(item.existing.id));
@@ -858,7 +928,7 @@ export function mount(router, context, clock = () => new Date()) {
     for (const r of existing.values()) {
       if (r._collection !== 'manufacturing_operations') continue;
       for (const f of ['sample_id', 'output_sample_id']) {
-        if (r[f] && !existing.has(lower(r[f]))) more.add(lower(r[f]));
+        if (r[f] && !existing.has(`physical_samples:${lower(r[f])}`)) more.add(lower(r[f]));
       }
     }
     take('physical_samples', await read('physical_samples', [...more]));
@@ -870,7 +940,7 @@ export function mount(router, context, clock = () => new Date()) {
     for (const item of body.items) {
       if (!item.remove || !item.existing) continue;
       if (item.kind === 'sample') candidates.add(lower(item.existing.id));
-      const out = item.kind === 'operation' ? existing.get(lower(item.existing.id))?.output_sample_id : null;
+      const out = item.kind === 'operation' ? existing.get(`manufacturing_operations:${lower(item.existing.id)}`)?.output_sample_id : null;
       if (out) candidates.add(lower(out));
     }
     const outputs = new Map();
@@ -878,8 +948,15 @@ export function mount(router, context, clock = () => new Date()) {
     if (candidates.size) {
       const csv = [...candidates].join(',');
       if (lock) await db.raw(SQL.lockSamples, [csv]);
+      // The status comes from the database (the check needs it whoever asks); the code only when the caller can read the sample.
+      const readable = new Map((await read('physical_samples', [...candidates].filter((c) => !existing.has(`physical_samples:${c}`))))
+        .map((r) => [lower(r.sample_id), r.sample_code]));
       for (const r of rowsOf(await db.raw(SQL.sampleInfo, [csv]))) {
-        outputs.set(lower(r.sample_id), { code: r.sample_code, status: r.current_status });
+        const sid = lower(r.sample_id);
+        outputs.set(sid, { code: existing.get(`physical_samples:${sid}`)?.sample_code ?? readable.get(sid) ?? null, status: r.current_status });
+      }
+      for (const r of rowsOf(await db.raw(SQL.refsGenealogy, [csv]))) {
+        refs.push({ kind: 'genealogy', id: r.child_sample_id, work_state: null, sampleIds: [lower(r.parent_sample_id)] });
       }
       for (const r of rowsOf(await db.raw(SQL.refsOperations, [csv, csv]))) {
         refs.push({
@@ -895,7 +972,7 @@ export function mount(router, context, clock = () => new Date()) {
       }
       refs.push(...tests.values());
     }
-    return { existing, required, outputs, refs };
+    return { existing, required, outputs, refs, columns: realColumns(schema) };
   }
 
   // -- drafts -----------------------------------------------------------------------------------------------------
@@ -915,7 +992,7 @@ export function mount(router, context, clock = () => new Date()) {
   router.post('/drafts', route(async ({ req, res, acc }) => {
     const b = req.body;
     if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { name?, body }.');
-    const body = validateDraftBody(b.body);
+    const body = validateDraftBody(b.body, { columns: realColumns(await schemaOf(req)) });
     if (!body.ok) throw new HttpError(400, 'INVALID_PAYLOAD', body.message);
     let name = `Draft · ${clock().toISOString().slice(0, 10)}`;
     if (b.name !== undefined && b.name !== null) {
@@ -948,7 +1025,7 @@ export function mount(router, context, clock = () => new Date()) {
     }
     let body = null;
     if (b.body !== undefined) {
-      const v = validateDraftBody(b.body);
+      const v = validateDraftBody(b.body, { columns: realColumns(await schemaOf(req)) });
       if (!v.ok) throw new HttpError(400, 'INVALID_PAYLOAD', v.message);
       body = JSON.stringify(v.body);
     }
@@ -1071,7 +1148,7 @@ export function mount(router, context, clock = () => new Date()) {
     }
     const scope = b.scope === undefined || b.scope === null ? 'private' : scopeOf(b.scope);
     const role = roleFor(scope, b.role_id, acc);
-    const values = validateTemplateValues(b.collection, b.values);
+    const values = validateTemplateValues(b.collection, b.values, realColumns(await schemaOf(req)));
     if (!values.ok) throw new HttpError(400, 'INVALID_PAYLOAD', values.message);
     const [row] = rowsOf(await database.raw(SQL.insertTemplate, [acc.user, scope, role, name.name, b.collection, JSON.stringify(values.values)]));
     res.status(201).json({ data: templateOut(row) });
@@ -1097,7 +1174,7 @@ export function mount(router, context, clock = () => new Date()) {
     const role = scope === 'role' && b.role_id === undefined && row.scope === 'role' ? row.role_id : roleFor(scope, b.role_id, acc);
     let values = typeof row.values === 'string' ? JSON.parse(row.values) : row.values;
     if (b.values !== undefined) {
-      const v = validateTemplateValues(row.collection, b.values);
+      const v = validateTemplateValues(row.collection, b.values, realColumns(await schemaOf(req)));
       if (!v.ok) throw new HttpError(400, 'INVALID_PAYLOAD', v.message);
       values = v.values;
     }
