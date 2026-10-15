@@ -1922,11 +1922,14 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   from the text tags when present; the layout is a guess until seen). Decide whether to switch OCR on: it
   needs `INBOX_OCR=1`, the `pytesseract` package and the tesseract program in the container, none of which
   the service installs today.
-- [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
-  from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract. Check the pointer
+- [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the `surface_scans`
+  migration (192) applied. Expect tag `surface_scan`; the hand-off is an add, not a link:
+  `POST /d1-inbox/link` with `{candidate_id, collection:'surface_scans', insert_id | edge_id, condition, ...}`
+  (see **IF23**). Check the pointer
   row has `storage = 'star'` and `metadata.archive_path`, and that its `file_fingerprints` row is `done` with
   `size_bytes` and `source_mtime` equal to the file's (the renderer trusts the hash only then). A scan is
-  never auto-linked, whatever its name says.
+  never auto-linked or accepted in bulk, whatever its name says, and linking it to a sample, operation or
+  test answers 409 `SURFACE_SCAN`.
 
 - [ ] **IF10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
   candidate waiting in a folder that changes), disconnect the share from the server (stop the CIFS mount or
@@ -1976,6 +1979,18 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **IF22 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
   then try to link the same found file to that sample in the Inbox: expect the refusal "already linked to that
   record. Dismiss clears it." (409 `ALREADY_ON_RECORD`) and no second row, and the Inbox badge not counting it. Since: found files inbox, stream B.
+- [ ] **IF23 — Add a surface scan from the Inbox (live).** Needs the deployed `d1-inbox`, migration 192
+  (`surface_scans`), the surface-scan worker running, and a found `.al3d` file (see IF9). As a Lab Member, add
+  it to an insert, then (a second file) to an edge, each with a condition (try the request without one: 400
+  naming `condition`; the condition is never preset). Expect: a `surface_scans` row for the file with the
+  condition you chose and `owner_person_id` set to you (the `d1-owner-default` hook, not the endpoint), the
+  viewer's render queued (`render_status` `pending`, then `rendering`, then `done` once the worker has it) and the
+  scan open in the viewer from the insert or edge page, and the candidate under **Recently linked** (`manual`)
+  naming the insert or edge. Adding the same file to the same insert again is refused 409 `ALREADY_ADDED`; a Lab
+  Viewer is refused 403. Then **Undo** the batch and expect the `surface_scans` row to be gone, the candidate back
+  in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
+  while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
+  as failed; nothing else changes). Since: found files inbox, stream F1.
 - [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
   `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
   thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
