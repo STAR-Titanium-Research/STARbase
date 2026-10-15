@@ -65,6 +65,7 @@ export const DEFAULT_IC_MM = 12.7;
 export const DEFAULT_THICKNESS_MM = 4.76;
 export const DEFAULT_NOSE_RADIUS_MM = 0.8;
 const MAX_POLYGON_CORNERS = 24;
+const MAX_ANGLE_OVERRIDE_DEG = 15;
 const MAX_FILLET_STEP_DEG = 10;
 const ROUND_STEP_DEG = 5;
 
@@ -179,7 +180,10 @@ export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometr
 		cuttingCorners = range(cornerCount);
 		includedAngleDeg = SHAPE_ANGLE_DEG.R;
 	} else if (iso) {
-		includedAngleDeg = isRhombic(iso.shape) ? (positive(type?.included_angle_deg) ?? SHAPE_ANGLE_DEG[iso.shape]) : SHAPE_ANGLE_DEG[iso.shape];
+		const nominal = SHAPE_ANGLE_DEG[iso.shape];
+		const override = positive(type?.included_angle_deg);
+		// The shape letter fixes the angle; an override only nudges it (a live CNMG row said 0.010, which drew a needle).
+		includedAngleDeg = isRhombic(iso.shape) && override !== null && Math.abs(override - nominal) <= MAX_ANGLE_OVERRIDE_DEG ? override : nominal;
 		cornerCount = { C: 4, D: 4, V: 4, S: 4, T: 3, W: 3 }[iso.shape as Exclude<ShapeLetter, 'R'>];
 		cuttingCorners = isRhombic(iso.shape) ? [0, 2] : range(cornerCount);
 	} else {

@@ -134,6 +134,12 @@ describe('resolveInsertGeometry', () => {
 		expect(g.includedAngleDeg).toBe(80);
 	});
 
+	it('ignores an included angle far from the shape letter (live CNMG row: 0.010)', () => {
+		const g = resolveInsertGeometry({ type_code: 'CNMG 12 04 08-SM H13A', iso_designation: 'CNMG 12 04 08', edge_count: 4, included_angle_deg: '0.010', cutting_edge_length_mm: '8.500' });
+		expect(g.includedAngleDeg).toBe(80);
+		expect(g.icMm).toBeCloseTo(8.5 * Math.sin((80 * Math.PI) / 180), 3);
+	});
+
 	it('has no hole for a type letter without one, unless the row gives a diameter', () => {
 		expect(resolveInsertGeometry(type('CNMN120408')).holeDiameterMm).toBeNull();
 		expect(resolveInsertGeometry(type('CNMN120408', { fixing_hole_diameter_mm: 5 })).holeDiameterMm).toBe(5);
