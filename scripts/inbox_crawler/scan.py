@@ -56,12 +56,9 @@ def still_the_same(
     again later."""
     if hashed.status != "done":
         return hashed
-    try:
-        after = share.stat(rel)
-    except OSError as exc:
-        return hashing.HashOutcome(
-            "error", error=f"could not re-check the file ({type(exc).__name__})"
-        )
+    after = share.stat(
+        rel
+    )  # an OSError here (the share going away) is the caller's to handle
     if hashed.size != st.size or (after.size, after.mtime_ns) != (st.size, st.mtime_ns):
         return hashing.HashOutcome(
             "error", error="the file changed while it was being hashed"
@@ -89,7 +86,12 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
     if not st.is_file:
         return hashing.HashOutcome("error", error="not a regular file"), None, None
     out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
-    out = still_the_same(share, rel, st, out)
+    try:
+        out = still_the_same(share, rel, st, out)
+    except OSError as exc:
+        out = hashing.HashOutcome(
+            "error", error=f"could not re-check the file ({type(exc).__name__})"
+        )
     return out, st, db.to_datetime(st.mtime_ns)
 
 
@@ -267,6 +269,9 @@ class Scanner:
 
         gone: list[db.Cand] = []
         vanished_dirs: list[str] = []
+        # Folders whose listing showed a loss (a missing file or folder): their real mtime is written
+        # only together with the gone marks, so an abort or a stop in between cannot hide the loss.
+        deferred: dict[str, object] = {}
         fresh: list[_Fresh] = []
         owner_errors_before = stats.errors
         root_listed = False
@@ -325,6 +330,7 @@ class Scanner:
                 fresh,
                 stack,
                 stats,
+                deferred,
             )
             if listing_ok and d == owner.root:
                 root_listed = True
@@ -340,9 +346,12 @@ class Scanner:
                     if c.state == "new" and c.rel_path.startswith(v + "/"):
                         lost[c.candidate_id] = c
             lost_list = sorted(lost.values(), key=lambda c: c.rel_path)
-            self._reconcile_moves(lost_list, fresh, stats)
+            self._reconcile_moves(lost_list, fresh, stats, owner)
             stats.gone += store.mark_gone([c.candidate_id for c in lost_list])
             store.forget_dirs_under(owner, vanished_dirs)
+            for d, mtime in deferred.items():  # same transaction as mark_gone
+                if not any(d == v or d.startswith(v + "/") for v in vanished_dirs):
+                    store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
         stats.owners_scanned += 1
         if root_listed and stats.errors == owner_errors_before:
             store.mark_baselined(owner)
@@ -363,6 +372,7 @@ class Scanner:
         fresh,
         stack,
         stats,
+        deferred,
     ) -> bool:
         """List one changed directory and register its new files. True when it was listed completely
         (the cache row is then updated); False leaves the cache as it was so the next scan lists it again."""
@@ -388,6 +398,7 @@ class Scanner:
             (e for e in entries if e.is_file and not ignored_file(e.name)),
             key=lambda e: e.name,
         )
+        lost_before = len(gone) + len(vanished_dirs)
         wanted = {f"{d}/{n}" for n in subdirs}
         for known in sorted(children.get(d, ())):
             if known not in wanted:
@@ -436,13 +447,20 @@ class Scanner:
                 store.upsert_dir(owner, child, None, listed=False)
                 children.setdefault(d, set()).add(child)
         if complete:
-            # A directory changed in the last moments may change again within the same clock tick, which
-            # its modification time cannot show. Leave its time out of the cache so the next scan lists it.
-            racy = self._wall() - mtime.timestamp() < RACY_WINDOW_S
-            store.upsert_dir(owner, d, None if racy else mtime, listed=True)
+            if len(gone) + len(vanished_dirs) > lost_before:
+                # Something is missing here: keep the folder "changed" until the gone marks are written.
+                store.upsert_dir(owner, d, None, listed=True)
+                deferred[d] = mtime
+            else:
+                store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
         store.commit()
         stack.extend((f"{d}/{n}", depth + 1) for n in reversed(subdirs))
         return complete
+
+    def _cacheable(self, mtime):
+        """The mtime to cache for a listed folder. One changed in the last moments may change again within
+        the same clock tick, which its modification time cannot show: leave it out so the next scan lists it."""
+        return None if self._wall() - mtime.timestamp() < RACY_WINDOW_S else mtime
 
     # ---- one new file ----------------------------------------------------------------
 
@@ -464,6 +482,10 @@ class Scanner:
             hashed = hashing.hash_file(
                 self.share, rel, throttle=self.throttle, keep_up_to=keep
             )
+            if hashed.status == "missing":
+                # Listed a moment ago and gone now: the file was removed or the share is going. Do not
+                # register it with a hash that says "missing"; the folder is listed again next scan.
+                raise FileNotFoundError(rel)
             hashed = self._still_the_same(rel, st, hashed)
             if (
                 cls.kind == "image"
@@ -509,10 +531,15 @@ class Scanner:
 
     # ---- moves -----------------------------------------------------------------------
 
-    def _reconcile_moves(self, gone: list[db.Cand], fresh: list[_Fresh], stats) -> None:
+    def _reconcile_moves(
+        self, gone: list[db.Cand], fresh: list[_Fresh], stats, owner
+    ) -> None:
         """A vanished undecided file and a new file with the same content, one of each: it moved.
-        Re-point the candidate instead of marking it gone. Ambiguous matches are left as gone + new."""
-        if not gone or not fresh:
+        Re-point the candidate instead of marking it gone. Ambiguous matches are left as gone + new.
+
+        The new file may have been registered by an earlier, interrupted scan; it was then recorded as a
+        copy of the file that has now vanished (duplicate_of), so those copies count as well."""
+        if not gone:
             return
         gone_by_sha: dict[str, list[db.Cand]] = {}
         for c in list(gone):
@@ -521,12 +548,19 @@ class Scanner:
             sha = self.store.fingerprint_of(c.directus_files_id)
             if sha:
                 gone_by_sha.setdefault(sha, []).append(c)
-        fresh_by_sha: dict[str, list[_Fresh]] = {}
+        news_by_sha: dict[str, dict[str, _Fresh]] = {}
         for f in fresh:
             if f.sha:
-                fresh_by_sha.setdefault(f.sha, []).append(f)
+                news_by_sha.setdefault(f.sha, {})[f.cand.candidate_id] = f
         for sha, olds in gone_by_sha.items():
-            news = fresh_by_sha.get(sha, [])
+            news = news_by_sha.setdefault(sha, {})
+            for old in olds:
+                for f in self.store.copies_of(old, owner):
+                    news.setdefault(
+                        f.cand.candidate_id, _Fresh(f.cand, sha, f.size, f.mtime)
+                    )
+        for sha, olds in gone_by_sha.items():
+            news = list(news_by_sha.get(sha, {}).values())
             if len(olds) == 1 and len(news) == 1:
                 old, new = olds[0], news[0]
                 if self.store.repoint_candidate(old, new.cand, new.size, new.mtime):

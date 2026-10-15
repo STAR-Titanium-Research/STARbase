@@ -71,6 +71,13 @@ class Cand:
 
 
 @dataclass(frozen=True)
+class Copy:
+    cand: Cand
+    size: int
+    mtime: datetime | None
+
+
+@dataclass(frozen=True)
 class RegisterResult:
     candidate_id: str | None
     created: bool
@@ -519,6 +526,19 @@ class Store:
             )
             return RegisterResult(existing[0] if existing else None, False)
         return RegisterResult(row[0], True, duplicate_of)
+
+    def copies_of(self, original: Cand, owner: Owner) -> list:
+        """The owner's undecided candidates recorded as copies of `original` (same content hash, found
+        while it was still there). Returns objects with .cand, .size, .mtime."""
+        rows = self._all(
+            "SELECT candidate_id::text, directus_files_id::text, rel_path, kind, size_bytes, source_mtime "
+            "FROM file_candidates WHERE duplicate_of = %s AND state = 'new' "
+            "AND owner_person_id IS NOT DISTINCT FROM %s AND owner_team_id IS NOT DISTINCT FROM %s",
+            (original.candidate_id, owner.person_id, owner.team_id),
+        )
+        return [
+            Copy(Cand(r[0], r[1], r[2], "new", r[3]), r[4] or 0, r[5]) for r in rows
+        ]
 
     def repoint_candidate(
         self, old: Cand, new: Cand, new_size: int, new_mtime: datetime
