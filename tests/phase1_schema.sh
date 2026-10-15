@@ -3458,6 +3458,12 @@ SELECT 'people_columns_left_out:' || string_agg(c.column_name, ',' ORDER BY c.co
  WHERE c.table_schema = 'public' AND c.table_name = 'people'
    AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
         WHERE policy = '$LM' AND collection = 'people' AND action = 'update'), ','));
+-- people.create lists its fields too (migration 194): a member may not set the inbox alias columns on a new person row.
+SELECT 'people_create_columns_left_out:' || coalesce(string_agg(c.column_name, ',' ORDER BY c.column_name), '')
+  FROM information_schema.columns c
+ WHERE c.table_schema = 'public' AND c.table_name = 'people'
+   AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
+        WHERE policy = '$LM' AND collection = 'people' AND action = 'create'), ','));
 -- read visibility is the readers tables: one membership test per record type, the amnesty leaf for operations, one bare hop for children
 SELECT 'read_membership:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND action = 'read' AND collection IN ('physical_samples','test_sessions','campaigns','projects','campaign_samples')
@@ -3515,6 +3521,7 @@ rl_check "people_actions:create,read,update" "Lab Member can create, read and up
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,scan_while_former,uni_alias,user_id" "people.update leaves out exactly the key, the login, the legacy id, the timestamp and the inbox alias columns (migration 193: administrators only)"
+rl_check "people_create_columns_left_out:scan_while_former,uni_alias" "people.create leaves out exactly the inbox alias columns (migration 194: a member cannot squat a uni alias or switch on scan_while_former; administrators only)"
 rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
 rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
@@ -3729,6 +3736,15 @@ fl_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG_FL")
 ll_up="$ll_up
 $fl_up"
 ll_down="$fl_down
+$ll_down"
+# 20261015000194 (people create without the inbox alias columns) rewrites one Lab Member row (people create: its field list) and needs no backup
+# (down puts '*' back), so, like 169, it is peeled with 168 (down first of all) and replayed with it (up last).
+PC=db/migrations/20261015000194_people_create_no_inbox_fields.sql
+pc_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$PC")
+pc_down=$(awk '/-- migrate:down/{f=1;next}f' "$PC")
+ll_up="$ll_up
+$pc_up"
+ll_down="$pc_down
 $ll_down"
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
@@ -4335,8 +4351,8 @@ la_check "dn_matches_main:72" "167 down then 166 down: every ruled Lab Member ro
 la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
-[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
-    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 7 ))" ]] \
+    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's), people create (194's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
@@ -6558,6 +6574,108 @@ SQL
     grep -q 'fi_dn_triggers:0,0' <<<"$fi_out" && grep -q 'fi_up_triggers:3,3' <<<"$fi_out" && ok "down drops the three trigger functions and triggers; up brings them back" || bad "triggers did not round-trip (output: $fi_out)"
     grep -q 'fi_dn_people:1' <<<"$fi_out" && grep -q 'fi_dn_files:1' <<<"$fi_out" && ok "down keeps the people and files rows (only the new columns and tables go)" || bad "down removed people or files rows (output: $fi_out)"
     grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
+
+echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="
+# core/extensions/d1-inbox/sql_check.mjs prints a PREPARE for every statement the endpoint sends (SQL.* and the list, count and accept queries
+# buildListQuery builds, ? turned into $n). They are prepared here in a rolled-back transaction, so a column or table the real schema lacks fails the
+# build (the endpoint's node tests use a fake knex and cannot see that); then the summary, the list count and accept-all's selection run on seeded
+# rows: an original and its copy, a copy of a gone original and of a linked one, a file already on its record, a surface scan, an ambiguous match;
+# then a link, an undo, a dismiss, a restore and two rescan requests against the table's CHECKs and its unique index.
+# Needs node (GitHub's runners have it; the docker schema-test image may not: then this block is skipped with a note).
+if command -v node >/dev/null 2>&1; then
+    IB_U=a1b00000-0000-4000-8000-000000000001
+    IB_P=a1b00000-0000-4000-8000-000000000002
+    IB_S=a1b00000-0000-4000-8000-000000000003
+    ib_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1)
+    ib_n=$(grep -c '^PREPARE ' <<<"$ib_prep")
+    ib_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$IB_U');
+INSERT INTO people (person_id, full_name, user_id) VALUES ('$IB_P', 'Inbox Person', '$IB_U');
+UPDATE people SET uni_alias = 'ibx1' WHERE person_id = '$IB_P';
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$IB_S', 'IBX-001');
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 13) g;
+CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text);
+INSERT INTO ib_seed VALUES
+  (1,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'a'),
+  (2,  'image',        'new',     'new',    'short_id', true,  1, 1,    'b'),
+  (3,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'c'),
+  (4,  'image',        'backlog', 'new',    'short_id', true,  1, NULL, 'd'),
+  (5,  'image',        'new',     'gone',   'none',     false, 0, NULL, 'e'),
+  (6,  'image',        'new',     'new',    'short_id', true,  1, 5,    'f'),
+  (7,  'surface_scan', 'new',     'new',    'short_id', true,  1, NULL, 'g'),
+  (8,  'image',        'new',     'new',    'short_id', false, 2, NULL, 'h'),
+  (9,  'image',        'new',     'linked', 'none',     false, 0, NULL, 'i'),
+  (10, 'image',        'new',     'new',    'short_id', true,  1, 9,    'j');
+-- a: an original in this inbox (counted, acceptable)         b: its copy (listed, not counted, not acceptable)
+-- c: already on its record, see the junction row below (not counted, not acceptable)                  d: older, exact match (counted as older, acceptable)
+-- e: a gone original   f: a copy of it (counted)             g: a surface scan (counted, never acceptable)   h: two records named (counted, never acceptable)
+-- i: a linked original j: a copy of it (not counted, hidden from the list)
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, suggested_collection, suggested_record_id, matches, rel_path,
+                                        link_kind, linked_collection, linked_junction_id, link_batch_id)
+SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, '$IB_P', kind, origin, state, strength,
+       CASE WHEN with_suggestion THEN 'physical_samples' END, CASE WHEN with_suggestion THEN '$IB_S'::uuid END,
+       (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', 'physical_samples', 'record_id', '$IB_S', 'via', 'short_id', 'token', 'abcd123' || i)), '[]'::jsonb) FROM generate_series(1, matches) i),
+       'Users/ibx1/' || rel || '.tif',
+       CASE WHEN state = 'linked' THEN 'manual' END, CASE WHEN state = 'linked' THEN 'physical_samples' END,
+       CASE WHEN state = 'linked' THEN gen_random_uuid() END, CASE WHEN state = 'linked' THEN gen_random_uuid() END
+  FROM ib_seed ORDER BY n;
+UPDATE d1_private.file_candidates c SET duplicate_of = o.candidate_id
+  FROM ib_seed s JOIN ib_seed t ON t.n = s.dup JOIN d1_private.file_candidates o ON o.rel_path = 'Users/ibx1/' || t.rel || '.tif'
+ WHERE c.rel_path = 'Users/ibx1/' || s.rel || '.tif' AND s.dup IS NOT NULL;
+INSERT INTO sample_data_files (sample_id, directus_files_id) VALUES ('$IB_S', 'a1b00000-0000-4000-8000-000000000103');
+$ib_prep
+SELECT 'ib_prepared:' || count(*) FROM pg_prepared_statements WHERE name <> '';
+CREATE TEMP TABLE ib_sm AS EXECUTE summary('$IB_P', '');
+SELECT 'ib_summary_new:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FROM ib_sm;
+SELECT 'ib_summary_older_exact:' || coalesce(sum(n) FILTER (WHERE origin = 'backlog' AND exact), 0) FROM ib_sm;
+CREATE TEMP TABLE ib_cnt AS EXECUTE count_new('$IB_P', '');
+SELECT 'ib_list_new_total:' || total FROM ib_cnt;
+CREATE TEMP TABLE ib_acc AS EXECUTE accept_open('$IB_P', '');
+SELECT 'ib_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_acc);
+SELECT candidate_id AS ib_a FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/a.tif' \gset
+SELECT gen_random_uuid() AS ib_j, gen_random_uuid() AS ib_b \gset
+-- a prepared INSERT/UPDATE cannot feed CREATE TABLE AS: ib_run runs one and answers how many rows it changed
+CREATE FUNCTION pg_temp.ib_run(stmt text) RETURNS int LANGUAGE plpgsql AS \$f\$ DECLARE n int; BEGIN EXECUTE stmt; GET DIAGNOSTICS n = ROW_COUNT; RETURN n; END \$f\$;
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_j', :'ib_b', :'ib_a')) AS ib_n1 \gset
+SELECT 'ib_linked:' || :ib_n1 || ':' || state || ':' || link_kind FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_j', :'ib_b', :'ib_a')) AS ib_n2 \gset
+SELECT 'ib_linked_twice:' || :ib_n2;
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_a', :'ib_b')) AS ib_n3 \gset
+SELECT 'ib_undone:' || :ib_n3 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || coalesce(link_batch_id::text, '-') FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_a')) AS ib_n4 \gset
+SELECT 'ib_dismissed:' || :ib_n4 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE restore(%L)', :'ib_a')) AS ib_n5 \gset
+SELECT 'ib_restored:' || :ib_n5 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT 'ib_prefs:' || pg_temp.ib_run(format('EXECUTE prefsput(%L, true)', '$IB_U'));
+SELECT 'ib_first_rescan:' || pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
+CREATE TEMP TABLE ib_flags (v text);
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
+  INSERT INTO ib_flags VALUES ('inserted');
+EXCEPTION WHEN unique_violation THEN INSERT INTO ib_flags VALUES ('refused');
+END \$\$;
+SELECT 'ib_second_rescan:' || v FROM ib_flags;
+ROLLBACK;
+SQL
+)
+    ib_check() { grep -qxF -- "$1" <<<"$ib_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-900 <<<"$ib_out"))"; }
+    ib_check "ib_prepared:$ib_n" "every statement of d1-inbox ($ib_n, with the list, count and accept variants) prepares against the real schema"
+    ib_check "ib_summary_new:4" "summary: counts the original, a copy of a gone original, a surface scan and an ambiguous file; not a copy of a file still in an inbox, a copy of a linked file, or a file already on its record"
+    ib_check "ib_summary_older_exact:1" "summary: older files with an exact match are counted"
+    ib_check "ib_list_new_total:6" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked"
+    ib_check "ib_accept:Users/ibx1/a.tif,Users/ibx1/d.tif" "accept-all selects only exact one-record matches that are not copies, surface scans or already on their record"
+    ib_check "ib_linked:1:linked:manual" "link bookkeeping passes the table's CHECKs (state, kind, collection, junction and batch together)"
+    ib_check "ib_linked_twice:0" "a second link of a file no longer new changes nothing"
+    ib_check "ib_undone:1:new:-:-" "undo clears all four link columns together"
+    ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
+    ib_check "ib_restored:1:new" "restore moves it back to new"
+    ib_check "ib_prefs:1" "the auto-link preference upserts"
+    ib_check "ib_first_rescan:1" "a rescan request is queued"
+    ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"
+else
+    echo "  skip: node is not installed here, so the d1-inbox SQL is not run (CI has node)"
 fi
 
 echo "== Cleanup test rows =="

@@ -250,8 +250,15 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 | `POST /d1-inbox/undo` | login | `{link_batch_id}` removes the junction rows it made and returns the candidates to `new` |
 | `POST /d1-inbox/rescan` | login | queue a `person`-scope request; refused if the person has one queued or finished in the last 10 minutes |
 | `GET/PUT /d1-inbox/prefs` | login | auto-link opt-in |
-| `POST /d1-inbox/auto-link` | machine | only for opted-in people, exact short-ID, one record, caller-as-person edit check |
+| `POST /d1-inbox/auto-link` | machine | only for opted-in people, exact short-ID, one record, caller-as-person edit check; the crawler sends the header `X-Inbox-Crawler-Secret` (env `D1_INBOX_CRAWLER_SECRET`, compared in constant time; 401 when the header is missing, 403 when wrong or when the secret is not configured); body `{candidate_ids: [...]}`, answer `{data: {results: [{candidate_id, status: linked/skipped/error, reason?, link_batch_id?}]}}`; backlog, team-folder, copy, document and surface-scan files are skipped |
 | `GET /d1-inbox/admin`, `POST /d1-inbox/admin/scan-all` | administrator | status, last scan, errors, unmatched folders, people without an alias |
+
+*As built (stream B):* a file already linked to the chosen record (for example in Data Studio) is refused 409
+`ALREADY_ON_RECORD`: the table's CHECK needs a junction id the batch itself made, and undo must never delete a row it
+did not create. Accept-all skips such rows and surface scans (a scan needs a person-chosen condition) but may link
+documents and other files with an exact short-ID match (the link adopts them, the confirm says so); auto-link links
+images only (`sem_image`, `image`) and also skips backlog, team-folder and copy files. Payload shapes are the ones
+STARbase's `inboxApi.ts` reads; a record is named in a list row only to a caller who can read it.
 
 Visibility of a candidate: its owner person's login; any active member of its owner team (the first member to
 link or dismiss resolves it for everyone); administrators (all). Candidates are never readable through
