@@ -63,6 +63,19 @@ describe('pageTarget', () => {
 		expect(pageTarget('/admin/home/tests#top')).toBe('tests');
 	});
 
+	it('reads the Process map in edit mode as Build a process, and the map itself as no page', () => {
+		expect(pageTarget('/map?edit=new')).toBe('build-process');
+		expect(pageTarget('/map?edit=0b9c5a3e-1f2d-4c6b-8a7e-123456789abc')).toBe('build-process');
+		expect(pageTarget('/map?focus=x&edit=new')).toBe('build-process');
+		expect(pageTarget('/admin/map?edit=new#top')).toBe('build-process');
+		expect(pageTarget('/map')).toBeNull();
+		expect(pageTarget('/map?focus=x')).toBeNull();
+		expect(pageTarget('/map?edit=')).toBeNull();
+		expect(pageTarget('/maps?edit=new')).toBeNull();
+		// not a /home/<slug> page
+		expect(pageTarget('/home/build-process')).toBeNull();
+	});
+
 	it('is null for Home, record pages, unknown slugs, the Data Studio and the actions as page keys', () => {
 		for (const p of ['/home', '/home/', '/home/register-sample', '/home/nope', `/home/samples/${S1}`, '/content/physical_samples', `/content/physical_samples/${S1}`, '/report-bug', '', '/']) {
 			expect(pageTarget(p), p).toBeNull();
@@ -101,6 +114,13 @@ describe('routeTarget', () => {
 		expect(routeTarget(`/home/tests/${S1}`)).toEqual({ kind: 'record', target: `test_sessions:${S1}` });
 		expect(routeTarget(`/home/campaigns/${S1}`)).toEqual({ kind: 'record', target: `campaigns:${S1}` });
 		expect(routeTarget(`/home/projects/${S1}`)).toEqual({ kind: 'record', target: `projects:${S1}` });
+	});
+
+	it('counts the map in edit mode as a visit to Build a process, and the plain map as nothing', () => {
+		expect(routeTarget('/map?edit=new')).toEqual({ kind: 'page', target: 'build-process' });
+		expect(routeTarget(`/map?edit=${S1}`)).toEqual({ kind: 'page', target: 'build-process' });
+		expect(routeTarget('/map')).toBeNull();
+		expect(routeTarget(`/map?focus=physical_samples:${S1}`)).toBeNull();
 	});
 
 	it('counts an equipment drawer (?open=<uuid>) as a visit to that item, and only that', () => {
@@ -210,6 +230,10 @@ describe('page entries', () => {
 		expect(pageEntry('samples', true)).toEqual({ target: 'samples', label: 'Samples', to: '/home/samples', pinned: true, newTab: undefined });
 		expect(pageEntry('action:print-labels', false)?.newTab).toBeFalsy();
 		expect(pageEntry('home', false)).toBeNull();
+	});
+
+	it('names Build a process and sends it to a blank canvas', () => {
+		expect(pageEntry('build-process', false)).toEqual({ target: 'build-process', label: 'Build a process', to: '/map?edit=new', pinned: false, newTab: undefined });
 	});
 
 	it('suggests the plain Samples page, not a saved view', () => {

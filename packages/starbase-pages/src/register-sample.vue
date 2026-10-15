@@ -2,7 +2,7 @@
 import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, openLink, recordRoute, useExplorerHost } from '@d1/ui';
+import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, openLink, recordRoute, sampleCodeTemplate, useExplorerHost } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, fieldLabel, matchingPreset, presetDims, presetLabel, presetsFor } from './geometry';
 
 const host = useExplorerHost();
@@ -95,9 +95,7 @@ function applyPreset(id: string | null) {
 function codeWith(num: string): string {
 	const mat = materials.value.find((m) => m.value === f.value.material_id);
 	const met = methods.value.find((m) => m.value === f.value.primary_method_id);
-	if (!mat?.extra || !met?.extra) return '';
-	const d = new Date(f.value.manufactured_date || Date.now());
-	return `${num}-${mat.extra}-${met.extra}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+	return sampleCodeTemplate({ alloyCode: mat?.extra, methodCode: met?.extra, date: f.value.manufactured_date }, num);
 }
 // What is sent: the number is left to the database.
 const codeTemplate = computed(() => codeWith('{seq}'));

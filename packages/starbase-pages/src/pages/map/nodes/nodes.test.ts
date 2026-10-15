@@ -337,13 +337,13 @@ describe('WireEdge', () => {
 		...over,
 	});
 
-	it('renders a bezier wire with a wide hit path, thicker when bundled', async () => {
+	it('renders a bezier wire with a wide hit path, as thick as any other when it carries a folded bundle', async () => {
 		const html = await render(WireEdge, edgeProps());
 		expect(html).toMatch(/<path class="[^"]*\bwire\b[^"]*" d="M/);
 		expect(html).toContain('class="hit"');
 		expect(wireClass(html)).not.toContain('fat');
-		const fat = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
-		expect(wireClass(fat)).toContain('fat');
+		const bundled = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
+		expect(wireClass(bundled)).not.toContain('fat'); // the bundle socket is fat; the wire into it is not
 		const stock = await render(WireEdge, edgeProps({ data: { wire: { ...wire, flow: 'stock' }, tooltip: [] } }));
 		expect(stock).toContain('flow-stock');
 	});
@@ -680,5 +680,25 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 		expect(rec).toContain('6576cc99');
 		// A minor slot (Owner, Campaign...) is the same chip.
 		expect(await render(SlotRow, { item: minor('owner', 'Owner', 'Bob') })).toMatch(/class="slot nodrag nopan one"/);
+	});
+});
+
+describe('planned and draft cards (ADR-0019, edit mode)', () => {
+	it('a planned container and a planned sample get the planned class, a draft one the draft class, a recorded one neither', async () => {
+		const data = mkData({
+			samples: [mkSample('s1'), mkSample('s2', { status: 'planned' })],
+			operations: [mkOp({ id: 'cut', sampleId: 's1', outputSampleId: 's2', workState: 'planned', draft: true })],
+		});
+		const g = buildGraph(data, groupsOf(data), { slots: () => [] });
+		const c = g.nodes.find((x): x is ContainerData => x.type === 'container')!;
+		const r = g.nodes.find((x) => x.id === 's:s2') as RecordData;
+		const plain = g.nodes.find((x) => x.id === 's:s1') as RecordData;
+		const cls = (html: string) => /class="(node [^"]*)"/.exec(html)?.[1].split(' ') ?? [];
+		expect(cls(await render(ContainerNode, { id: c.id, data: c }))).toEqual(expect.arrayContaining(['planned', 'draft']));
+		expect(cls(await render(RecordNode, { id: r.id, data: r }))).toContain('planned');
+		expect(cls(await render(RecordNode, { id: r.id, data: r }))).not.toContain('draft');
+		expect(cls(await render(RecordNode, { id: plain.id, data: plain }))).not.toContain('planned');
+		expect(cls(await render(ContainerNode, { id: c.id, data: { ...c, planned: undefined, draft: undefined } }))).not.toContain('planned');
+		expect(text(await render(RecordNode, { id: r.id, data: r }))).toContain('Planned'); // the status badge: no extra pill needed
 	});
 });

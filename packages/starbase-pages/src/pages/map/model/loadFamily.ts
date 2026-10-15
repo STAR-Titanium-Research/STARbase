@@ -7,7 +7,8 @@
 
 import { isNotVisible, type HostApi, type TraceResponse } from '@d1/ui';
 import { type RelationDef } from './formSlots';
-import { chunkByBudget, extrasOf, fieldsWith, getList, hasBatch, readList, rootsOf, type Json, type Optional } from './requests';
+import { chunkByBudget, extrasOf, fieldsWith, getList, hasBatch, listedWork, readList, rootsOf, type Json, type Optional } from './requests';
+export { WORK_FIELDS } from './requests';
 import {
   OPERATION_FIELDS,
   SAMPLE_FIELDS,
@@ -29,6 +30,12 @@ import type { LineageRow, OpRow, ProcessData, SampleRec, StockOrigin, TestRow } 
 export interface FormDefs {
   operation: RelationDef[];
   test: RelationDef[];
+  /**
+   * The work-state fields (`work_state`, `planned_date`) that `/fields/<collection>` lists for each form. Asked for only
+   * when listed, like `batch_id`: a database without the planned-work migration has no such columns and asking would
+   * refuse the whole read. Left out, nothing is asked for and every record is drawn done.
+   */
+  workFields?: { operation: string[]; test: string[] };
 }
 
 const GENEALOGY_FIELDS = ['child_sample_id', 'parent_sample_id', 'relationship_type', 'fraction'];
@@ -210,8 +217,8 @@ export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs
 
   const batchCodes: Record<string, string> = {};
   const [operations, testRead, lineageRead, samples] = await Promise.all([
-    loadOperations(api, ids, { extras: extrasOf(defs?.operation, OPERATION_ROOTS), batch: hasBatch(defs?.operation) }, batchCodes),
-    loadTests(api, ids, { extras: extrasOf(defs?.test, TEST_ROOTS), batch: hasBatch(defs?.test) }, batchCodes),
+    loadOperations(api, ids, { extras: extrasOf(defs?.operation, OPERATION_ROOTS), batch: hasBatch(defs?.operation), work: listedWork(defs?.workFields?.operation) }, batchCodes),
+    loadTests(api, ids, { extras: extrasOf(defs?.test, TEST_ROOTS), batch: hasBatch(defs?.test), work: listedWork(defs?.workFields?.test) }, batchCodes),
     loadLineage(api, ids),
     loadSamples(api, trace, ids),
   ]);
@@ -262,6 +269,19 @@ function humanise(field: string): string {
  * role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left.
  */
 export async function loadRelationDefs(api: HostApi, collection: string): Promise<RelationDef[] | null> {
+  return (await loadFormRead(api, collection)).defs;
+}
+
+/** The relations of a form and the work-state fields it lists, from `/relations/<c>` and `/fields/<c>`. */
+export interface FormRead {
+  /** `null` when the role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left. */
+  defs: RelationDef[] | null;
+  /** Which of `WORK_FIELDS` the collection's fields list. */
+  work: string[];
+}
+
+/** `loadRelationDefs` and, from the same `/fields` answer, the work-state fields the collection lists (planned work, ADR-0019). */
+export async function loadFormRead(api: HostApi, collection: string): Promise<FormRead> {
   let relations: Json[];
   let fields: Json[];
   try {
@@ -270,9 +290,10 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
       api.get(`/fields/${collection}`).then((r) => (r.data?.data ?? []) as Json[]),
     ]);
   } catch (e) {
-    if (isNotVisible(e)) return null;
+    if (isNotVisible(e)) return { defs: null, work: [] };
     throw e;
   }
+  const work = listedWork(fields.map((f) => String(f.field)));
 
   const meta = new Map<string, Json>(fields.map((f) => [String(f.field), f.meta ?? {}]));
   const defs: (RelationDef & { sort: number })[] = [];
@@ -301,6 +322,6 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
       }
     }
   }
-  if (!defs.length) return null;
-  return defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def);
+  if (!defs.length) return { defs: null, work };
+  return { defs: defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def), work };
 }

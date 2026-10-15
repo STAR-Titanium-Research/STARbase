@@ -42,7 +42,7 @@ export interface PlaceInput {
 }
 
 /** Room kept between cards the layout moves. */
-const GAP = 28;
+export const GAP = 28;
 /** A card whose size changed by less than this did not grow. */
 const GROWN = 2;
 
@@ -53,10 +53,10 @@ const median = (xs: number[]): number => {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 };
 
-const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width + GAP && b.x < a.x + a.width + GAP && a.y < b.y + b.height + GAP && b.y < a.y + a.height + GAP;
+export const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width + GAP && b.x < a.x + a.width + GAP && a.y < b.y + b.height + GAP && b.y < a.y + a.height + GAP;
 
 /** The cross axis is the one nodes of a layer stack along: y when the flow runs right, x when it runs down. */
-const cross = (dir: Dir) =>
+export const cross = (dir: Dir) =>
   dir === 'RIGHT'
     ? { start: (b: Box) => b.y, end: (b: Box) => b.y + b.height, set: (b: Box, v: number): void => void (b.y = v) }
     : { start: (b: Box) => b.x, end: (b: Box) => b.x + b.width, set: (b: Box, v: number): void => void (b.x = v) };

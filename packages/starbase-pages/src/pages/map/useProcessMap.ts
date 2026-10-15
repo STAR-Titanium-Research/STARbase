@@ -349,7 +349,11 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   const toggleRows = (id: string) => {
     const n = nodeById.value.get(id);
-    if (n) unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    if (!n) return;
+    unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    // The container's sockets are other sockets now (each row its own, or the bundle again), in row order: the cards on them
+    // swap places until their order follows the sockets' and no wire crosses. Dragged cards stay, and nothing further away moves.
+    expansion.hint({ reslot: id });
   };
   const toggleMore = (id: string) => {
     const n = nodeById.value.get(id);

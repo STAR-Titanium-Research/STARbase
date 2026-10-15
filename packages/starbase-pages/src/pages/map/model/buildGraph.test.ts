@@ -724,3 +724,59 @@ describe('buildGraph: a stack of passes', () => {
     expect(g.nodes.filter((n) => n.type === 'container')).toHaveLength(2);
   });
 });
+
+describe('buildGraph: planned work and drafts', () => {
+  const planned = (p: Parameters<typeof mkOp>[0]) => mkOp({ workState: 'planned', plannedDate: '2026-11-01', date: '2026-11-01', ...p });
+
+  it('a planned cut is a planned container; its planned samples are planned cards; recorded work is neither', () => {
+    const data = mkData({
+      samples: [mkSample('s1'), mkSample('s2', { status: 'planned' }), mkSample('s3', { status: 'active' })],
+      operations: [planned({ id: 'cut', sampleId: 's1', outputSampleId: 's2' }), mkOp({ id: 'done', sampleId: 's1', outputSampleId: 's3', date: '2026-09-01T09:00:00Z' })],
+    });
+    const g = build(data);
+    expect(container(g, 'op:cut').planned).toBe(true);
+    expect(container(g, 'op:done').planned).toBeUndefined();
+    expect(record(g, 's:s2').planned).toBe(true);
+    expect(record(g, 's:s3').planned).toBeUndefined();
+    expect(record(g, 's:s1').planned).toBeUndefined();
+    expect(container(g, 'op:cut').draft).toBeUndefined();
+  });
+
+  it('a batch is planned only when every row is', () => {
+    const data = mkData({
+      samples: sam('p', 'a', 'b'),
+      operations: [planned({ id: 'x', sampleId: 'p', outputSampleId: 'a', batchId: 'B' }), mkOp({ id: 'y', sampleId: 'p', outputSampleId: 'b', batchId: 'B' })],
+    });
+    expect(container(build(data), 'batch:B').planned).toBeUndefined();
+    const all = mkData({ samples: sam('p', 'a', 'b'), operations: [planned({ id: 'x', sampleId: 'p', outputSampleId: 'a', batchId: 'B' }), planned({ id: 'y', sampleId: 'p', outputSampleId: 'b', batchId: 'B' })] });
+    expect(container(build(all), 'batch:B').planned).toBe(true);
+  });
+
+  it('a planned test is a planned container', () => {
+    const data = mkData({ samples: sam('s1'), tests: [mkTest({ id: 't', subjectSampleIds: ['s1'], workState: 'planned' })] });
+    expect(container(build(data), 'test:t').planned).toBe(true);
+  });
+
+  it('a draft pass in place joins the stack of passes the recorded ones make, and draft samples carry the draft flag', () => {
+    const pass = (id: string, day: number, p: Parameters<typeof mkOp>[0] = {}) =>
+      mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, ...p });
+    // Two recorded passes, and a third drawn from the draft: planned, no date of its own, no batch, no output.
+    const data = mkData({
+      samples: [mkSample('s1'), mkSample('d1', { draft: true })],
+      operations: [pass('a', 1), pass('b', 2), pass('c', 3, { date: null, workState: 'planned', draft: true })],
+    });
+    const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
+    const stack = container(g, 'stack:a,b,c');
+    expect(stack).toMatchObject({ stacked: true, title: '3 passes' });
+    // Mixed recorded and draft: neither flag on the stack as a whole.
+    expect(stack.planned).toBeUndefined();
+    expect(stack.draft).toBeUndefined();
+    expect(record(g, 's:d1').draft).toBe(true);
+    expect(record(g, 's:s1').draft).toBeUndefined();
+  });
+
+  it('a container of draft rows only is a draft container', () => {
+    const data = mkData({ samples: sam('s1'), operations: [mkOp({ id: 'n', sampleId: 's1', draft: true, workState: 'planned' })] });
+    expect(container(build(data), 'op:n')).toMatchObject({ draft: true, planned: true });
+  });
+});

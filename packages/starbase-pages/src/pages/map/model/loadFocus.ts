@@ -5,7 +5,7 @@ import { isNotVisible, type HostApi } from '@d1/ui';
 import { FALLBACK_RELATIONS } from './formSlots';
 import { fanData, fanPage } from './fans';
 import { COLLECTION, fanKindOf, type FocusPlan } from './collections';
-import { loadFamily, loadRelationDefs, type FormDefs } from './loadFamily';
+import { loadFamily, loadFormRead, type FormDefs } from './loadFamily';
 import { loadRecordRef, loadStepRow, loadUsedIn, sampleOfRow } from './loadFans';
 import type { ProcessData } from './types';
 
@@ -18,13 +18,15 @@ export function loadDefs(api: HostApi): Promise<DefsByKind> {
   let cached = defsCache.get(api);
   if (!cached) {
     const read = (collection: string, kind: 'operation' | 'test') =>
-      loadRelationDefs(api, collection)
-        .catch(() => null)
-        .then((defs) => ({ defs: defs ?? FALLBACK_RELATIONS[kind], runtime: !!defs }));
+      loadFormRead(api, collection)
+        .catch(() => ({ defs: null, work: [] as string[] }))
+        .then(({ defs, work }) => ({ defs: defs ?? FALLBACK_RELATIONS[kind], runtime: !!defs, work }));
     cached = Promise.all([read(COLLECTION.operation, 'operation'), read(COLLECTION.test, 'test')]).then(([operation, test]) => ({
       operation: operation.defs,
       test: test.defs,
       runtime: operation.runtime && test.runtime,
+      // Planned work (ADR-0019), only when a form lists it: a database without the migration is read as before.
+      ...(operation.work.length || test.work.length ? { workFields: { operation: operation.work, test: test.work } } : {}),
     }));
     defsCache.set(api, cached);
   }
@@ -37,7 +39,14 @@ export function loadDefs(api: HostApi): Promise<DefsByKind> {
  */
 export async function loadFamilyAndDefs(api: HostApi, sampleId: string): Promise<{ family: ProcessData; defs: DefsByKind }> {
   const relationDefs = await loadDefs(api);
-  const family = await loadFamily(api, sampleId, ...(relationDefs.runtime ? [{ operation: relationDefs.operation, test: relationDefs.test }] : []));
+  const { workFields } = relationDefs;
+  // The relations only when read at runtime; the work-state fields whenever a form lists them (alone, they ask for no relation).
+  const defs: FormDefs | undefined = relationDefs.runtime
+    ? { operation: relationDefs.operation, test: relationDefs.test, ...(workFields ? { workFields } : {}) }
+    : workFields
+      ? { operation: [], test: [], workFields }
+      : undefined;
+  const family = await loadFamily(api, sampleId, ...(defs ? [defs] : []));
   return { family, defs: relationDefs };
 }
 

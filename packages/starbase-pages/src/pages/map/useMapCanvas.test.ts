@@ -4,13 +4,18 @@ import type { HostApi } from '@d1/ui';
 import { mkData, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
-import type { ProcessData } from './model/types';
+import { nodeOfSocket } from './model/sockets';
+import type { ContainerNode as ContainerData, ProcessData } from './model/types';
 import { MIN_ZOOM, screenPixel, useMapCanvas } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
 // positions and a size, and the position changes it applies. ELK is a fixed table so the test says where
 // "the layout" puts every card: one column, 100 px apart, in the order of the graph.
+interface FakeGraph {
+  nodes: { id: string; type?: string; rows?: { in?: string; out?: string }[] }[];
+  wires: { from: string; to: string }[];
+}
 interface FakeNode {
   id: string;
   position: { x: number; y: number };
@@ -18,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, tall: new Map<string, number>(), dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -39,8 +44,9 @@ vi.mock('@vue-flow/core', async (orig) => {
       });
     },
     setEdges: (list: { id: string }[]) => void (edges.value = list),
-    applyNodeChanges: (changes: { id: string; type: string; position?: { x: number; y: number } }[]) => {
+    applyNodeChanges: (changes: { id: string; type: string; from?: { x: number; y: number }; position?: { x: number; y: number } }[]) => {
       for (const c of changes) {
+        if (c.type === 'position' && c.position && c.from) store.moves.push({ id: c.id, from: c.from, position: c.position });
         const n = nodes.value.find((x) => x.id === c.id);
         if (n && c.type === 'position' && c.position) n.position = { ...c.position };
       }
@@ -62,9 +68,10 @@ vi.mock('@vue-flow/core', async (orig) => {
 
 vi.mock('./useElkLayout', () => ({
   useElkLayout: () => ({
-    layout: async (graph: { nodes: { id: string }[] }, shown: Set<string>) => {
+    layout: async (graph: FakeGraph, shown: Set<string>, _sizes: unknown, dir: 'RIGHT' | 'DOWN') => {
       store.layouts++;
       if (store.gate) await store.gate;
+      if (store.elk) return store.elk(graph, shown, dir);
       const out: Record<string, { x: number; y: number }> = {};
       graph.nodes.filter((n) => shown.has(n.id)).forEach((n, i) => (out[n.id] = { x: 0, y: i * 100 }));
       return out;
@@ -131,6 +138,8 @@ beforeEach(() => {
   store.gate = null;
   store.dragStops.length = 0;
   store.tall.clear();
+  store.elk = null;
+  store.moves.length = 0;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -380,6 +389,170 @@ describe('useMapCanvas: a dragged card stays put when what is shown changes (spe
     await settle();
     expect(at('s:b').x).toBe(0);
     expect(at('s:b').y).toBeLessThan(900);
+  });
+});
+
+// A recorded batch of five cuts from one sample, each cut piece going on to a step of its own: folded, the container has sockets
+// out:0, out:1 and a bundle socket for the other three.
+const batchOfCuts = () =>
+  mkData({
+    samples: ['p', ...[0, 1, 2, 3, 4].flatMap((i) => [`c${i}`, `e${i}`])].map((id) => mkSample(id)),
+    operations: [
+      ...[0, 1, 2, 3, 4].map((i) => mkOp({ id: `cut${i}`, sampleId: 'p', outputSampleId: `c${i}`, batchId: 'B1', date: '2026-09-01T09:00:00Z', methodName: 'Wire cut' })),
+      ...[0, 1, 2, 3, 4].map((i) => mkOp({ id: `d${i}`, sampleId: `c${i}`, outputSampleId: `e${i}`, date: `2026-09-0${i + 2}T09:00:00Z`, methodName: `Step ${i}` })),
+    ],
+    batchCodes: { B1: 'B-1' },
+  });
+// A recorded batch that takes five samples in (an anneal): sockets in:0, in:1 and a bundle socket for the other three.
+const batchOfInputs = () =>
+  mkData({
+    samples: [0, 1, 2, 3, 4].map((i) => mkSample(`a${i}`)),
+    operations: [0, 1, 2, 3, 4].map((i) => mkOp({ id: `h${i}`, sampleId: `a${i}`, batchId: 'B2', date: '2026-09-01T09:00:00Z', methodName: 'Anneal' })),
+    batchCodes: { B2: 'B-2' },
+  });
+/**
+ * Stands in for ELK with the container's ports in FIXED_ORDER: the cards on one side of the batch are stacked along the cross axis in
+ * the order of its sockets (what follows them stays in their lane). What shares the bundle socket has no order of its own, so here
+ * it comes out reversed (as ELK may).
+ */
+const elkBySocketOrder = (batch: string, side: 'in' | 'out') => (graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => {
+  const box = graph.nodes.find((n) => n.id === batch)!;
+  const sockets = [...new Set((box.rows ?? []).map((r) => (side === 'out' ? r.out : r.in)!))].sort((a, b) => Number(a.endsWith(':b')) - Number(b.endsWith(':b')));
+  const mine = (w: { from: string; to: string }) => (side === 'out' ? w.from : w.to);
+  const fed = graph.wires
+    .filter((w) => sockets.includes(mine(w)))
+    .map((w) => ({ id: nodeOfSocket(side === 'out' ? w.to : w.from), socket: sockets.indexOf(mine(w)), bundle: mine(w).endsWith(':b') }))
+    .sort((a, b) => a.socket - b.socket || (a.bundle ? (a.id < b.id ? 1 : -1) : a.id < b.id ? -1 : 1));
+  const first = side === 'out' ? 2 : 0; // the layer the fed cards are on
+  const at = (layer: number, lane: number) => (dir === 'RIGHT' ? { x: layer * 400, y: lane * 100 } : { x: lane * 400, y: layer * 400 });
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const n of graph.nodes) if (shown.has(n.id)) out[n.id] = at(n.id === batch ? 1 : 0, 0);
+  fed.forEach((f, i) => {
+    out[f.id] = at(first, i);
+    if (side === 'out') {
+      // what comes after a fed card stays in its lane
+      let frontier = [f.id];
+      for (let layer = first + 1; frontier.length && layer < 8; layer++) {
+        frontier = graph.wires.filter((w) => frontier.includes(nodeOfSocket(w.from))).map((w) => nodeOfSocket(w.to));
+        for (const id of frontier) out[id] = at(layer, i);
+      }
+    }
+  });
+  return out;
+};
+
+describe('useMapCanvas: unfolding or folding a container re-deals the places of the cards on its sockets', () => {
+  type Dir = 'RIGHT' | 'DOWN';
+  async function openBatch(opts: { dir?: Dir; side?: 'in' | 'out' } = {}) {
+    const { dir = 'RIGHT', side = 'out' } = opts;
+    const batch = side === 'out' ? 'batch:B1' : 'batch:B2';
+    store.elk = elkBySocketOrder(batch, side);
+    vi.mocked(loadFamily).mockResolvedValue(side === 'out' ? batchOfCuts() : batchOfInputs());
+    const route = reactive({ path: '/map', query: { focus: side === 'out' ? 'physical_samples:p' : 'physical_samples:a0', reach: 'all' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const canvas = useMapCanvas(map);
+    if (dir === 'DOWN') map.setDir('DOWN');
+    await settle();
+    return { map, canvas, batch, side, dir };
+  }
+  type Opened = Awaited<ReturnType<typeof openBatch>>;
+  const snapshot = () => new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+  /** The cards on the container's sockets on one side, in the order of its rows. */
+  const rowsOf = ({ map, batch, side }: Opened) => {
+    const g = map.graph.value!;
+    const box = g.nodes.find((n): n is ContainerData => n.id === batch)!;
+    return box.rows.map((r) => {
+      const socket = (side === 'out' ? r.out : r.in)!;
+      const w = g.wires.find((x) => (side === 'out' ? x.from : x.to) === socket)!;
+      return { socket, card: nodeOfSocket(side === 'out' ? w.to : w.from) };
+    });
+  };
+  const alongCross = (id: string, dir: Dir) => (dir === 'RIGHT' ? at(id).y : at(id).x);
+  /** For every pair of different sockets i < j: the card on i lies before the card on j (no wires cross). */
+  const inSocketOrder = (o: Opened, skip: string[] = []) => {
+    const rows = rowsOf(o);
+    for (let i = 0; i < rows.length; i++) {
+      for (let j = i + 1; j < rows.length; j++) {
+        if (rows[i].socket === rows[j].socket || skip.includes(rows[i].card) || skip.includes(rows[j].card)) continue;
+        expect(alongCross(rows[i].card, o.dir), `${rows[i].card} (${rows[i].socket}) before ${rows[j].card} (${rows[j].socket})`).toBeLessThan(alongCross(rows[j].card, o.dir));
+      }
+    }
+  };
+  const stay = (before: Map<string, { x: number; y: number }>, ids: string[]) => {
+    for (const id of ids) expect(at(id), id).toEqual(before.get(id));
+  };
+  const downstream = ['op:d0', 'op:d1', 'op:d2', 'op:d3', 'op:d4', 's:e0', 's:e1', 's:e2', 's:e3', 's:e4'];
+
+  for (const dir of ['RIGHT', 'DOWN'] as const) {
+    it(`unfolding puts the cards on its output sockets in the sockets' order, each in its own area (${dir})`, async () => {
+      const o = await openBatch({ dir });
+      const box = o.map.graph.value!.nodes.find((n): n is ContainerData => n.id === o.batch)!;
+      expect(box.bundled).toBe(true);
+      // folded: the three on the bundle socket came out in ELK's arbitrary (here reversed) order
+      expect(alongCross('s:c3', dir)).toBeLessThan(alongCross('s:c2', dir));
+      const before = snapshot();
+      o.map.toggleRows(o.batch);
+      await settle();
+      expect(new Set(rowsOf(o).map((r) => r.socket)).size).toBe(5);
+      inSocketOrder(o);
+      // the cards only swap cross-axis slots: each keeps its own flow-axis place; what is not on a socket does not move
+      for (const c of ['s:c0', 's:c1', 's:c2', 's:c3', 's:c4']) expect(dir === 'RIGHT' ? at(c).x : at(c).y, c).toBe(dir === 'RIGHT' ? before.get(c)!.x : before.get(c)!.y);
+      stay(before, ['s:p', o.batch, ...downstream]);
+    });
+  }
+
+  it('with a card downstream of the cuts dragged away, the others still follow the sockets and the dragged one (and what it feeds) does not move', async () => {
+    const o = await openBatch();
+    drag('op:d3', { x: 1700, y: 900 }); // the step after c3, far from where it was
+    const before = snapshot();
+    o.map.toggleRows(o.batch);
+    await settle();
+    inSocketOrder(o);
+    stay(before, ['op:d3', 's:p', o.batch, ...downstream]);
+  });
+
+  it('a neighbour the person dragged stays where it was dropped; the others still follow the sockets', async () => {
+    const o = await openBatch();
+    drag('s:c3', { x: 900, y: 900 });
+    const dropped = { ...at('s:c3') };
+    o.map.toggleRows(o.batch);
+    await settle();
+    expect(at('s:c3')).toEqual(dropped);
+    inSocketOrder(o, ['s:c3']);
+  });
+
+  it('folding it again deals the places once more, still without moving a dragged card', async () => {
+    const o = await openBatch();
+    o.map.toggleRows(o.batch);
+    await settle();
+    drag('s:c0', { x: 900, y: 900 });
+    o.map.toggleRows(o.batch); // fold
+    await settle();
+    expect(at('s:c0')).toEqual({ x: 900, y: 900 });
+    inSocketOrder(o, ['s:c0']);
+  });
+
+  it('the input side too: the samples that go in follow the container\'s input sockets', async () => {
+    const o = await openBatch({ side: 'in' });
+    const box = o.map.graph.value!.nodes.find((n): n is ContainerData => n.id === o.batch)!;
+    expect(box.bundled).toBe(true);
+    expect(alongCross('s:a3', 'RIGHT')).toBeLessThan(alongCross('s:a2', 'RIGHT'));
+    const before = snapshot();
+    o.map.toggleRows(o.batch);
+    await settle();
+    expect(new Set(rowsOf(o).map((r) => r.socket)).size).toBe(5);
+    inSocketOrder(o);
+    stay(before, [o.batch]);
+  });
+
+  it('the cards glide to their places: a move from where they were, not an instant placement like a new card\'s', async () => {
+    const o = await openBatch();
+    store.moves.length = 0;
+    o.map.toggleRows(o.batch);
+    await settle();
+    const swapped = store.moves.filter((m) => m.id === 's:c3' || m.id === 's:c2');
+    expect(swapped.length).toBeGreaterThan(0);
+    for (const m of swapped) expect(m.from, m.id).not.toEqual(m.position);
   });
 });
 
