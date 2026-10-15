@@ -17,6 +17,7 @@ pytest.importorskip("psycopg2")
 import psycopg2  # noqa: E402
 from inbox_crawler import db, hashing, kinds, recognise  # noqa: E402
 from inbox_crawler.owners import Owner  # noqa: E402
+from test_inbox_crawler_daemon import add_candidate  # noqa: E402
 from test_inbox_crawler_scan import cands, make, png, run, settle  # noqa: E402, F401
 from test_inbox_crawler_world import world  # noqa: E402, F401
 
@@ -307,3 +308,106 @@ def test_without_the_surface_scans_table_both_checks_still_work(world):
     assert list(cands(world)) == ["Users/abc12de/a.al3d"]
     assert store.drop_linked_elsewhere(person_owner(pid, "abc12de")) == 0
     assert list(cands(world)) == ["Users/abc12de/a.al3d"]
+
+
+# ---- NIT 4: a pile of linked documents with a bad path cannot starve the queue ---------------------
+
+
+def add_bad_path_rows(world, pid, n):
+    """n adopted, linked candidates (older than any real one) whose stored path is not their own: a
+    document linked under an alias the person no longer has."""
+    world.q(
+        "INSERT INTO directus_files (id, storage, filename_download) "
+        "SELECT ('b0000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'star', 'old' || g || '.pdf' "
+        "FROM generate_series(1, %s) g",
+        (n,),
+    )
+    world.q(
+        "INSERT INTO file_candidates (directus_files_id, owner_person_id, kind, state, origin, rel_path, "
+        " adopted_at, link_kind, linked_collection, linked_junction_id, link_batch_id) "
+        "SELECT ('b0000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, %s, 'document', 'linked', "
+        " 'new', 'Users/oldalias/old' || g || '.pdf', now() - interval '3 days' + g * interval '1 second', "
+        " 'manual', 'physical_samples', gen_random_uuid(), gen_random_uuid() "
+        "FROM generate_series(1, %s) g",
+        (pid, n),
+    )
+    world.commit()
+
+
+def test_many_bad_rows_ahead_of_one_good_one_do_not_starve_it(world):
+    pid, _ = world.person("aaa11")
+    add_bad_path_rows(
+        world, pid, 150
+    )  # more than the 5 pages of 10 x limit the old walk looked through
+    cid, fid = add_candidate(
+        world,
+        pid,
+        "Users/aaa11/d/mine.pdf",
+        kind="document",
+        state="linked",
+        adopted=True,
+    )
+    store = db.Store(world.conn)
+    assert store.adopted_awaiting_hash(limit=2) == [
+        (cid, fid, "Users/aaa11/d/mine.pdf")
+    ]
+    # every bad row now has an error row with the reason, and is out of the queue
+    got = world.q(
+        "SELECT status, error_message, count(*) FROM file_fingerprints GROUP BY 1, 2"
+    )
+    assert got == [("error", db.BAD_PATH_ERROR, 150)]
+
+
+def test_a_bad_row_is_retried_like_any_error_but_not_every_tick(world):
+    pid, _ = world.person("aaa11")
+    add_bad_path_rows(world, pid, 3)
+    store = db.Store(world.conn)
+    assert store.adopted_awaiting_hash() == []
+    first = world.q(
+        "SELECT directus_files_id, hashed_at FROM file_fingerprints ORDER BY 1"
+    )
+    assert len(first) == 3
+    assert (
+        store.adopted_awaiting_hash() == []
+    )  # the next tick: nothing is written again
+    assert (
+        world.q("SELECT directus_files_id, hashed_at FROM file_fingerprints ORDER BY 1")
+        == first
+    )
+    world.q("UPDATE file_fingerprints SET hashed_at = now() - interval '2 hours'")
+    world.commit()
+    assert (
+        store.adopted_awaiting_hash() == []
+    )  # an hour later: looked at again, still not its own
+    assert (
+        world.one(
+            "SELECT count(*) FROM file_fingerprints WHERE hashed_at > now() - interval '1 hour'"
+        )[0]
+        == 3
+    )
+
+
+def test_a_bad_row_whose_path_is_fixed_is_read_after_its_retry(world):
+    pid, _ = world.person("aaa11")
+    cid, fid = add_candidate(
+        world,
+        pid,
+        "Users/aaa11/mine.pdf",
+        kind="document",
+        state="linked",
+        adopted=True,
+    )
+    world.q(
+        "UPDATE file_candidates SET rel_path = 'Users/old/mine.pdf' WHERE candidate_id = %s",
+        (cid,),
+    )
+    world.commit()
+    store = db.Store(world.conn)
+    assert store.adopted_awaiting_hash() == []
+    world.q(
+        "UPDATE file_candidates SET rel_path = 'Users/aaa11/mine.pdf' WHERE candidate_id = %s",
+        (cid,),
+    )
+    world.q("UPDATE file_fingerprints SET hashed_at = now() - interval '2 hours'")
+    world.commit()
+    assert store.adopted_awaiting_hash() == [(cid, fid, "Users/aaa11/mine.pdf")]

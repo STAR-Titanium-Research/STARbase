@@ -32,6 +32,10 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 STALE_REQUEST_MINUTES = 15
 # An errored hash is tried again no sooner than this.
 HASH_RETRY_HOURS = 1
+# The fingerprint error written for a linked document whose stored path is not its own (see
+# adopted_awaiting_hash), and how many pages of the queue one call looks through.
+BAD_PATH_ERROR = "path is not under its owner folder"
+BAD_PATH_PAGES = 50
 # The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
 # bigint; it lives on the crawler's own connection, so it goes with a killed process.
 CRAWLER_LOCK_KEY = 7_302_150_400_193
@@ -890,11 +894,14 @@ class Store:
 
         Nothing is returned for a row whose stored path is not its own: the path must be clean, below the
         owner's folder (spelled as the share spells it, SMB being case-insensitive) and the row's id must be
-        the indexer's uuid5 of it. Such a row is skipped before anything is read, and does not block the
-        rows behind it."""
+        the indexer's uuid5 of it. Such a row is never read. It gets an 'error' fingerprint row instead
+        (BAD_PATH_ERROR), which takes it out of this queue for an hour like any failed hash, so a pile of
+        them (linked documents left under an old alias) cannot starve the rows behind it. Written here and
+        committed here: nothing else is pending on the scan connection when the daemon asks."""
         out: list[tuple[str, str, str]] = []
+        taken: set[str] = set()
         page = max(limit, 1) * 10
-        for offset in range(0, page * 5, page):
+        for _ in range(BAD_PATH_PAGES):
             rows = self._all(
                 "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
                 " CASE WHEN c.owner_person_id IS NOT NULL THEN 'Users' ELSE 'Shared' END, "
@@ -905,20 +912,34 @@ class Store:
                 "LEFT JOIN teams t ON t.team_id = c.owner_team_id "
                 "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
                 "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
-                "ORDER BY c.adopted_at, c.candidate_id LIMIT %s OFFSET %s",
-                (HASH_RETRY_HOURS, page, offset),
+                "ORDER BY c.adopted_at, c.candidate_id LIMIT %s",
+                (HASH_RETRY_HOURS, page),
             )
+            bad = []
             for cid, fid, rel, base, folder in rows:
                 if self._own_path(rel, fid, base, folder):
-                    out.append((cid, fid, rel))
-                    if len(out) >= limit:
-                        return out
-                elif cid not in self._warned:
-                    self._warned.add(cid)
-                    log.warning(
-                        "not reading candidate %s: its stored path is not its own", cid
-                    )
-            if len(rows) < page:
+                    if cid not in taken:
+                        taken.add(cid)
+                        out.append((cid, fid, rel))
+                        if len(out) >= limit:
+                            break
+                else:
+                    bad.append(fid)
+                    if cid not in self._warned:
+                        self._warned.add(cid)
+                        log.warning(
+                            "not reading candidate %s: its stored path is not its own",
+                            cid,
+                        )
+            for fid in bad:
+                self.upsert_fingerprint(
+                    fid, HashOutcome("error", error=BAD_PATH_ERROR), None, None
+                )
+            if bad:
+                self.commit()
+            # Done when enough rows are found, the queue is shorter than a page, or this page had no bad
+            # row to drop (so the next page would be the same one).
+            if len(out) >= limit or len(rows) < page or not bad:
                 break
         return out
 
