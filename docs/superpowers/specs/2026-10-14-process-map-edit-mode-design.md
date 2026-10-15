@@ -263,8 +263,9 @@ settings inline and the Checks list.
   reloaded"; local undo history is dropped.
 - Create 409: Checks section opens, each card with its message. Network error: the draft is already kept; the
   Create button returns to its state with "Could not reach the server; nothing was created".
-- `d1-build` missing (STARbase deployed before d1-server): Edit and Build a process are hidden (the GET
-  `/d1-build/drafts` probe 404s).
+- `d1-build` missing (STARbase deployed before d1-server): the Edit toggle and My drafts are hidden (the GET
+  `/d1-build/drafts` probe 404s); the sidebar's Build a process stays, and `/map?edit=…` shows "Building processes isn't
+  available on this server yet." over the view-only map.
 - Fields missing (migration not applied): the map does not request `work_state` unless `/fields` lists it
   (the `batch_id` pattern), and draws everything done.
 
