@@ -631,6 +631,46 @@ describe('loadUsedIn', () => {
     expect((await loadUsedIn(reads([{ sample_id: { sample_id: 's1' } }]).api, { collection: 'raw_stock_lots', id: 'L1' }, 1)).hidden).toBeFalsy();
   });
 
+  it('stock lot: an all-null provenance page is hidden with no items and no operations read (D21)', async () => {
+    const { api, calls } = fakeApi(() => ({ data: [{ sample_id: null }, { sample_id: null }] }));
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res).toMatchObject({ items: [], total: null, more: false, hidden: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('stock lot: a refused nested read retries with bare ids, still draws the fan, and is hidden (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path === '/items/sample_stock_provenance') {
+        return (params.fields as string[]).includes('sample_id.sample_id') ? httpError(403) : { data: [{ sample_id: 's1' }, { sample_id: 's2' }] };
+      }
+      return { data: [{ operation_id: 'o9', process_category: 'sintering', output_sample_id: 's1' }] };
+    });
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(calls.map((c) => c.path)).toEqual(['/items/sample_stock_provenance', '/items/sample_stock_provenance', '/items/manufacturing_operations']);
+    expect(calls[1].params.fields).toEqual(['sample_id']);
+    expect(filterOf(calls[2])).toEqual({ output_sample_id: { _in: ['s1', 's2'] } });
+    expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o9']);
+    expect(res).toMatchObject({ total: null, more: false, hidden: true });
+  });
+
+  it('campaign: a refused nested read retries with bare ids: no cards, hidden, "more" from the page size (D21)', async () => {
+    const { api, calls } = fakeApi((path, params) =>
+      (params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })) },
+    );
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].params.fields).toEqual(['sample_id']);
+    expect(res).toMatchObject({ items: [], total: null, more: true, hidden: true });
+  });
+
+  it('a server error on the nested read is rethrown, not retried (D21)', async () => {
+    for (const collection of ['campaigns', 'raw_stock_lots']) {
+      const { api, calls } = fakeApi(() => httpError(500));
+      await expect(loadUsedIn(api, { collection, id: 'x' }, 1)).rejects.toThrow('HTTP 500');
+      expect(calls).toHaveLength(1);
+    }
+  });
+
   it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {
     const { api, calls } = fakeApi((path) => {
       if (path === '/items/sample_stock_provenance') {

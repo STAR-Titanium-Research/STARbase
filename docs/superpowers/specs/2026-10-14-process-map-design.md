@@ -253,6 +253,9 @@ Used-in fan (D20): operations (or tests) filtered by the relation (`equipment_id
 `limit=20`, `meta=filter_count` for "+N more". The campaign fan and the stock-lot fan are counted from a junction or
 provenance table whose rows the target's permissions do not filter, so a count could include records the person may
 not read: those two fans show "More" **without a number** (D21) and keep paging until a page comes back short.
+The same two fans carry the D21 marker ("some records hidden", on the fan's record) when a junction or provenance row
+names a sample the person may not read. A row whose sample was deleted shows it too (conservative: it cannot be told from
+an unreadable one), and an unreadable making operation behind a readable sample gives no marker (no signal to read).
 
 Expand (＋): on a slot record → its used-in fan beside the container; on a sample outside the loaded
 family → that sample's family (steps 1–4) merged in. Each request goes through `useRequestGate` so a

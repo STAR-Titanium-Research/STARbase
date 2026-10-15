@@ -99,7 +99,7 @@ export function withFanPage(data: ProcessData, rootKey: string, page: FanPage, r
   };
   const sideIndex = (data.sideFans ?? []).findIndex((f) => `${f.root.collection}:${f.root.id}` === rootKey);
   if (`${data.focus.collection}:${data.focus.id}` === rootKey && sideIndex < 0) next.fan = grow(data.fan);
-  else if (sideIndex >= 0) next.sideFans = (data.sideFans ?? []).map((f, i) => (i === sideIndex ? { ...f, ...grow(f) } : f));
+  else if (sideIndex >= 0) next.sideFans = (data.sideFans ?? []).map((f, i) => (i === sideIndex ? { root: f.root, ...grow(f) } : f));
   return next;
 }
 

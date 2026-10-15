@@ -4,7 +4,7 @@
 
 import { isNotVisible, type HostApi } from '@d1/ui';
 import { OPERATION_FIELDS, RELATIONS, SAMPLE_FIELDS, SUBJECT_FIELDS, TEST_FIELDS, idOf, mapOperation, mapSample, mapTest, str, unique, type RelSpec } from './rows';
-import { getList, type Json } from './requests';
+import { getList, isRefusal, type Json } from './requests';
 import type { OpRow, Ref, SampleRec, TestRow } from './types';
 
 /** Rows per used-in page (spec D20). */
@@ -76,12 +76,16 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
 
   if (ref.collection === 'campaigns') {
     // Through the campaign_samples junction (as the Sample page reads it), not an alias filter on samples.
-    const res = await getList(api, 'campaign_samples', {
-      filter: JSON.stringify({ campaign_id: { _eq: ref.id } }),
-      fields: SAMPLE_FIELDS.map((f) => `sample_id.${f}`),
-      sort: ['sample_id.sample_code'],
-      ...paged,
-    });
+    const junction = { filter: JSON.stringify({ campaign_id: { _eq: ref.id } }), ...paged };
+    let res: { rows: Json[] };
+    try {
+      res = await getList(api, 'campaign_samples', { ...junction, fields: SAMPLE_FIELDS.map((f) => `sample_id.${f}`), sort: ['sample_id.sample_code'] });
+    } catch (e) {
+      if (!isRefusal(e)) throw e;
+      // A role that reads the junction but not the samples: bare ids, enough to page; no card can be drawn, so it is all "hidden".
+      res = await getList(api, 'campaign_samples', { ...junction, fields: ['sample_id'], sort: ['campaign_id'] });
+      return { items: [], total: null, more: res.rows.length >= FAN_PAGE, hidden: true };
+    }
     // A sample the person may not read comes back null: no card, and no count of them. The junction's count includes
     // them, so it is not passed on: paging goes on until a page comes back short.
     const samples = res.rows.map((r) => r.sample_id);
@@ -101,16 +105,21 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
   }
 
   if (ref.collection === 'raw_stock_lots') {
-    const prov = await getList(api, 'sample_stock_provenance', {
-      filter: JSON.stringify({ lot_id: { _eq: ref.id } }),
+    const provenance = { filter: JSON.stringify({ lot_id: { _eq: ref.id } }), sort: ['-created_at'], ...paged };
+    let prov: { rows: Json[] };
+    let refused = false;
+    try {
       // Nested, so a sample the person may not read comes back null (a bare id would hide that).
-      fields: ['sample_id.sample_id'],
-      sort: ['-created_at'],
-      ...paged,
-    });
+      prov = await getList(api, 'sample_stock_provenance', { ...provenance, fields: ['sample_id.sample_id'] });
+    } catch (e) {
+      if (!isRefusal(e)) throw e;
+      // A role that reads the provenance but not the samples: bare ids still feed the operations read, but what they are stays unseen.
+      refused = true;
+      prov = await getList(api, 'sample_stock_provenance', { ...provenance, fields: ['sample_id'] });
+    }
     const readable = prov.rows.map((r) => sampleIdOf(r.sample_id));
     const sampleIds = unique(readable.filter((s): s is string => !!s));
-    const hidden = readable.some((s) => !s);
+    const hidden = refused || readable.some((s) => !s);
     // As for a campaign: the provenance count includes samples the person may not read, so only "is there a next page".
     const more = prov.rows.length >= FAN_PAGE;
     if (!sampleIds.length) return { items: [], total: null, more, ...(hidden ? { hidden } : {}) };
