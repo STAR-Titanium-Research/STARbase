@@ -6599,17 +6599,19 @@ if command -v node >/dev/null 2>&1; then
     IB_U=a1b00000-0000-4000-8000-000000000001
     IB_P=a1b00000-0000-4000-8000-000000000002
     IB_S=a1b00000-0000-4000-8000-000000000003
+    IB_Q=a1b00000-0000-4000-8000-000000000008
     ib_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1)
     ib_n=$(grep -c '^PREPARE ' <<<"$ib_prep")
     ib_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 INSERT INTO directus_users (id) VALUES ('$IB_U');
 INSERT INTO people (person_id, full_name, user_id) VALUES ('$IB_P', 'Inbox Person', '$IB_U');
+INSERT INTO people (person_id, full_name) VALUES ('$IB_Q', 'Inbox Other Person');
 UPDATE people SET uni_alias = 'ibx1' WHERE person_id = '$IB_P';
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$IB_S', 'IBX-001');
-INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 13) g;
-CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text);
-INSERT INTO ib_seed VALUES
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 20) g;
+CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text, who text DEFAULT 'p');
+INSERT INTO ib_seed (n, kind, origin, state, strength, with_suggestion, matches, dup, rel) VALUES
   (1,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'a'),
   (2,  'image',        'new',     'new',    'short_id', true,  1, 1,    'b'),
   (3,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'c'),
@@ -6620,13 +6622,28 @@ INSERT INTO ib_seed VALUES
   (8,  'image',        'new',     'new',    'short_id', false, 2, NULL, 'h'),
   (9,  'image',        'new',     'linked', 'none',     false, 0, NULL, 'i'),
   (10, 'image',        'new',     'new',    'short_id', true,  1, 9,    'j');
+INSERT INTO ib_seed (n, kind, origin, state, strength, with_suggestion, matches, dup, rel, who) VALUES
+  (11, 'image',        'new',     'dismissed', 'none',  false, 0, NULL, 'k', 'q'),
+  (12, 'image',        'new',     'new',    'none',     false, 0, 11,   'l', 'p'),
+  (13, 'image',        'new',     'linked', 'none',     false, 0, NULL, 'm', 'q'),
+  (14, 'image',        'new',     'new',    'none',     false, 0, 13,   'n', 'p'),
+  (15, 'image',        'new',     'new',    'none',     false, 0, NULL, 'o', 'q'),
+  (16, 'image',        'new',     'new',    'none',     false, 0, 15,   'p', 'p'),
+  (17, 'image',        'new',     'dismissed', 'none',  false, 0, NULL, 'r', 'p'),
+  (18, 'image',        'new',     'new',    'none',     false, 0, 17,   's', 'p'),
+  (19, 'image',        'new',     'gone',   'none',     false, 0, NULL, 't', 'q'),
+  (20, 'image',        'new',     'new',    'none',     false, 0, 19,   'u', 'p');
 -- a: an original in this inbox (counted, acceptable)         b: its copy (listed, not counted, not acceptable)
 -- c: already on its record, see the junction row below (not counted, not acceptable)                  d: older, exact match (counted as older, acceptable)
 -- e: a gone original   f: a copy of it (counted)             g: a surface scan (counted, never acceptable)   h: two records named (counted, never acceptable)
 -- i: a linked original j: a copy of it (not counted, hidden from the list)
+-- Copies across inboxes (owner q is another person; the originals k, m, o, t are q's, r is this person's own):
+-- k: q dismissed it   l: a copy of it here (listed AND counted: another person dismissing a file must not hide yours)
+-- m: q linked it      n: a copy of it here (hidden, not counted)       o: q's, still undecided   p: its copy here (listed, not counted)
+-- r: this person dismissed it   s: its copy here (hidden, not counted: the same owner)   t: q's, gone   u: its copy here (listed and counted)
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, suggested_collection, suggested_record_id, matches, rel_path,
                                         link_kind, linked_collection, linked_junction_id, link_batch_id)
-SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, '$IB_P', kind, origin, state, strength,
+SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, CASE WHEN who = 'q' THEN '$IB_Q'::uuid ELSE '$IB_P'::uuid END, kind, origin, state, strength,
        CASE WHEN with_suggestion THEN 'physical_samples' END, CASE WHEN with_suggestion THEN '$IB_S'::uuid END,
        (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', 'physical_samples', 'record_id', '$IB_S', 'via', 'short_id', 'token', 'abcd123' || i)), '[]'::jsonb) FROM generate_series(1, matches) i),
        'Users/ibx1/' || rel || '.tif',
@@ -6644,6 +6661,8 @@ SELECT 'ib_summary_new:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FR
 SELECT 'ib_summary_older_exact:' || coalesce(sum(n) FILTER (WHERE origin = 'backlog' AND exact), 0) FROM ib_sm;
 CREATE TEMP TABLE ib_cnt AS EXECUTE count_new('$IB_P', '');
 SELECT 'ib_list_new_total:' || total FROM ib_cnt;
+CREATE TEMP TABLE ib_ls AS EXECUTE list_new('$IB_P', '', 50, 0);
+SELECT 'ib_list_copies:' || coalesce(string_agg(regexp_replace(rel_path, '^.*/', '') || '=' || CASE WHEN duplicate_owner_person_id = '$IB_P' THEN 'me' WHEN duplicate_owner_person_id = '$IB_Q' THEN 'q' ELSE '-' END, ',' ORDER BY rel_path), '') FROM ib_ls WHERE duplicate_of IS NOT NULL;
 CREATE TEMP TABLE ib_acc AS EXECUTE accept_open('$IB_P', '');
 SELECT 'ib_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_acc);
 SELECT candidate_id AS ib_a FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/a.tif' \gset
@@ -6712,9 +6731,10 @@ SQL
 )
     ib_check() { grep -qxF -- "$1" <<<"$ib_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-900 <<<"$ib_out"))"; }
     ib_check "ib_prepared:$ib_n" "every statement of d1-inbox ($ib_n, with the list, count and accept variants) prepares against the real schema"
-    ib_check "ib_summary_new:4" "summary: counts the original, a copy of a gone original, a surface scan and an ambiguous file; not a copy of a file still in an inbox, a copy of a linked file, or a file already on its record"
+    ib_check "ib_summary_new:6" "summary: counts the original, a copy of a gone original, a surface scan, an ambiguous file and a copy whose original ANOTHER person dismissed; not a copy of a file still in an inbox, a copy of a linked file, a copy of one this person dismissed, or a file already on its record"
     ib_check "ib_summary_older_exact:1" "summary: older files with an exact match are counted"
-    ib_check "ib_list_new_total:6" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked"
+    ib_check "ib_list_new_total:9" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked or dismissed by the same owner, and listed (not hidden) when another owner dismissed it"
+    ib_check "ib_list_copies:b.tif=me,f.tif=me,l.tif=q,p.tif=q,u.tif=q" "list: a copy whose original another owner dismissed (l) stays; a copy of a linked original (n) and of one this owner dismissed (s) are gone; the list says whose inbox each original is in (duplicate_owner_*_id)"
     ib_check "ib_accept:Users/ibx1/a.tif,Users/ibx1/d.tif" "accept-all selects only exact one-record matches that are not copies, surface scans or already on their record"
     ib_check "ib_linked:1:linked:manual" "link bookkeeping passes the table's CHECKs (state, kind, collection, junction and batch together)"
     ib_check "ib_linked_twice:0" "a second link of a file no longer new changes nothing"

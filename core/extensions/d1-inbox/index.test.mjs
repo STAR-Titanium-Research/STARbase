@@ -509,6 +509,12 @@ test('parseFileFilters: the names STARbase sends: tab, kind, strength, folder, f
   }
 });
 
+// D11: a copy is shown (marked) while its original is undecided and drops out when the original is linked, or dismissed by the SAME owner. Another owner
+// dismissing a file must not hide yours: that copy is listed AND counted (its original no longer counts for anyone).
+const SAME_OWNER_SQL = '\\(c\\.owner_person_id IS NOT DISTINCT FROM o\\.owner_person_id AND c\\.owner_team_id IS NOT DISTINCT FROM o\\.owner_team_id\\)';
+const COPY_HIDDEN_SQL = new RegExp(`NOT \\(c\\.duplicate_of IS NOT NULL AND \\(o\\.state = 'linked' OR \\(o\\.state = 'dismissed' AND ${SAME_OWNER_SQL}\\)\\)\\)`);
+const COUNTED_COPY_SQL = new RegExp(`\\(c\\.duplicate_of IS NULL OR o\\.state = 'gone' OR \\(o\\.state = 'dismissed' AND NOT ${SAME_OWNER_SQL}\\)\\)`);
+
 test('buildListQuery: each tab, the owner scope and the filters are bindings, never text', () => {
   const scope = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
   const tabs = {
@@ -525,9 +531,10 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
     assert.ok(bindings.includes(`${TEAM},${OTHER_TEAM}`), 'the team ids are one csv binding');
     assert.doesNotMatch(sql, new RegExp(P.alice), 'no id in the text');
   }
-  // a copy drops out of the new, older and open lists once its original was linked or dismissed
-  for (const tab of ['new', 'older', 'open']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, /o\.state IN \('linked', 'dismissed'\)/);
-  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'linked' })).sql, /o\.state IN/);
+  // a copy drops out of the new, older and open lists once its original was linked, or dismissed by the SAME owner (D11); not the linked and dismissed tabs
+  for (const tab of ['new', 'older', 'open']) assert.match(buildListQuery(scope, parseFileFilters({ tab })).sql, COPY_HIDDEN_SQL);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'linked' })).sql, /o\.state = 'linked'/);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab: 'dismissed' })).sql, /o\.state = 'dismissed'/);
   // filters
   const f = parseFileFilters({ kind: 'sem_image', folder: 'Run1', strength: 'short_id,code', from: '2026-10-01', to: '2026-10-15', link_kind: 'auto', tab: 'linked' });
   const q = buildListQuery(scope, f);
@@ -558,15 +565,15 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   assert.match(accept.sql, /c\.suggested_record_id IS NOT NULL/);
 });
 
-test('the summary SQL counts neither a copy (an original is still in an inbox) nor a file already on the record it names', () => {
-  assert.match(SQL.summary, /\(c\.duplicate_of IS NULL OR o\.state = 'gone'\)/, 'a copy counts only when its original is gone');
-  assert.doesNotMatch(SQL.summary, /o\.state IN \('linked', 'dismissed'\)/, 'the list hides a copy of a decided file; the badge counts no copy at all');
+test('the summary SQL counts a copy only when no inbox still holds its original (gone, or dismissed by ANOTHER owner), and not a file already on the record it names', () => {
+  assert.match(SQL.summary, COUNTED_COPY_SQL, 'a copy counts when its original is gone or dismissed by someone else');
+  assert.doesNotMatch(SQL.summary, /o\.state = 'linked'/, 'a copy of a linked original is hidden from the list and never counted');
   for (const { junction, fk } of Object.values(LINK_TARGETS)) {
     assert.match(SQL.summary, new RegExp(`EXISTS \\(SELECT 1 FROM ${junction} j WHERE j\\.${fk} = c\\.suggested_record_id AND j\\.directus_files_id = c\\.directus_files_id\\)`), junction);
   }
-  // the list still shows a copy (marked), hiding it only once its original is decided
+  // the list still shows a copy (marked), hiding it only by the rule above
   const list = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({})).sql;
-  assert.match(list, /o\.state IN \('linked', 'dismissed'\)/);
+  assert.match(list, COPY_HIDDEN_SQL);
 });
 
 test('the accept query: no surface scan, no copy, nothing already on its record, exactly one match, keyset paging in (first_seen_at, candidate_id)', () => {
@@ -731,6 +738,7 @@ const listRow = (c, over = {}) => ({
   rel_path: c.rel_path, size_bytes: c.size_bytes, source_mtime: null, first_seen_at: c.first_seen_at, decided_at: null, link_kind: null,
   linked_collection: null, link_batch_id: null, linked_record_id: null, decided_by_name: null,
   owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, owner_name: 'Alice A', adopted_at: null,
+  duplicate_owner_person_id: null, duplicate_owner_team_id: null,
   ...over,
 });
 
@@ -831,14 +839,35 @@ test('GET /files: a linked row names the record it was linked to and who linked 
   assert.equal(w.items.filter((i) => i.op === 'read' && i.query.filter._and).length, 0, 'no edit check for a linked row');
 });
 
-test('GET /files: a copy says whose folder holds the original; an owner filter on someone else is 403 unless administrator', async () => {
+test('GET /files: a copy names whose Inbox holds the original only to the owner or an owner team member; for anyone else it is { kind: "other" } with no name', async () => {
   const w = newWorld();
   const a = cand();
+  const copyOf = (owner) => listRow(a, { duplicate_of: ID(1), duplicate_of_owner: owner.name, duplicate_owner_person_id: owner.person ?? null, duplicate_owner_team_id: owner.team ?? null });
+  const askAs = async (user, admin, owner) => {
+    w.listRows = [copyOf(owner)];
+    const { call } = setup(w);
+    return (await call('GET /files', { user, admin })).body.data[0];
+  };
+  // the caller's own folder, and a team they belong to: the name (a string, as the client has always read it)
+  assert.equal((await askAs(U.alice, false, { name: 'Alice A', person: P.alice })).duplicate_of_owner, 'Alice A');
+  assert.equal((await askAs(U.alice, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, 'SEM team');
+  assert.equal((await askAs(U.bob, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, 'SEM team');
+  // another person, or a team they are not in: no name, whatever the query returned
+  const other = await askAs(U.alice, false, { name: 'Bob B', person: P.bob });
+  assert.deepEqual(other.duplicate_of_owner, { kind: 'other' });
+  assert.equal(other.duplicate_of, ID(1), 'the copy is still marked as a copy');
+  assert.deepEqual((await askAs(U.alice, false, { name: 'Other team', team: OTHER_TEAM })).duplicate_of_owner, { kind: 'other' });
+  assert.doesNotMatch(JSON.stringify(other), /Bob B/, 'no name anywhere in the row (the owner of the row is Alice herself)');
+  // a Former person is in no team, so a team's name is not theirs to read; an administrator sees every Inbox
+  assert.deepEqual((await askAs(U.former, false, { name: 'SEM team', team: TEAM })).duplicate_of_owner, { kind: 'other' });
+  assert.equal((await askAs(U.admin, true, { name: 'Bob B', person: P.bob })).duplicate_of_owner, 'Bob B');
+  // not a copy: null
+  w.listRows = [listRow(a)];
+  assert.equal((await setup(w).call('GET /files', { user: U.alice })).body.data[0].duplicate_of_owner, null);
+  // a row without the owner ids (nothing known about the original's owner) fails closed
   w.listRows = [listRow(a, { duplicate_of: ID(1), duplicate_of_owner: 'Bob B' })];
+  assert.deepEqual((await setup(w).call('GET /files', { user: U.alice })).body.data[0].duplicate_of_owner, { kind: 'other' });
   const { call } = setup(w);
-  const res = await call('GET /files', { user: U.alice });
-  assert.equal(res.body.data[0].duplicate_of, ID(1));
-  assert.equal(res.body.data[0].duplicate_of_owner, 'Bob B');
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `person:${P.bob}` } })).statusCode, 403);
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${OTHER_TEAM}` } })).statusCode, 403);
   assert.equal((await call('GET /files', { user: U.alice, query: { owner: `team:${TEAM}` } })).statusCode, 200);
