@@ -163,20 +163,35 @@ export function useEditMode(o: EditModeOptions) {
 
 	// ---- changing the draft ---------------------------------------------------------------------------
 	/** Does one action, or several as one undoable step; the canvas lays out only what is new, beside `anchor` when there is a card the change grew out of. */
-	function apply(action: DraftAction | DraftAction[], opts: { anchor?: string } = {}): DraftBody {
+	function apply(action: DraftAction | DraftAction[], opts: { anchor?: string; merge?: boolean } = {}): DraftBody {
 		if (!editing.value) return draft.body.value;
+		if (!opts.merge) typing = null;
 		const before = draft.body.value;
-		const next = Array.isArray(action) ? draft.applyAll(action) : draft.apply(action);
+		const o2 = opts.merge ? { merge: true } : undefined;
+		const next = Array.isArray(action) ? draft.applyAll(action, o2) : draft.apply(action, o2);
 		if (next !== before) o.hint?.({ anchor: opts.anchor });
 		return next;
 	}
+
+	/** Keys typed in one field of one item within this long are one undo step. */
+	const TYPING_MS = 1500;
+	let typing: { key: DraftKey; at: number } | null = null;
+	/** The form's change of an item's values: successive changes to the same item are folded into one step while the person types. */
+	function setValues(key: DraftKey, values: Record<string, unknown>): void {
+		const now = Date.now();
+		const merge = !!typing && typing.key === key && now - typing.at < TYPING_MS;
+		apply({ type: 'setValues', key, values }, { merge });
+		typing = { key, at: now };
+	}
 	function undo(): void {
 		if (!editing.value) return;
+		typing = null;
 		draft.undo();
 		o.hint?.({});
 	}
 	function redo(): void {
 		if (!editing.value) return;
+		typing = null;
 		draft.redo();
 		o.hint?.({});
 	}
@@ -240,7 +255,7 @@ export function useEditMode(o: EditModeOptions) {
 		// the lid
 		startEditing, openDraft, done, discardDraft,
 		// changing
-		apply, undo, redo, writeQuery,
+		apply, setValues, undo, redo, writeQuery,
 		refreshDrafts: draft.refresh,
 	};
 	return api;

@@ -3,6 +3,8 @@ import { computed, ref } from 'vue';
 import { RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, sampleDims } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
+import EditRailChecks from './edit/EditRailChecks.vue';
+import EditRailItem from './edit/EditRailItem.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
 import { openPath, type RecordInfo } from './model/recordInfo';
@@ -31,6 +33,8 @@ const props = defineProps<{
 	reach: Reach;
 	/** The reach actually drawn: fewer steps than `reach` when the card cap clamped it (spec D22). */
 	drawnReach?: Reach;
+	/** The selected card is a planned operation or test that can be marked done (E6): the button shows, in view mode and on phones too. */
+	canMarkDone?: boolean;
 }>();
 const emit = defineEmits<{
 	expand: [];
@@ -41,6 +45,7 @@ const emit = defineEmits<{
 	setProbable: [on: boolean];
 	setStack: [on: boolean];
 	setReach: [reach: Reach];
+	markDone: [];
 }>();
 
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
@@ -105,6 +110,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
+				<v-button v-if="canMarkDone" small @click="emit('markDone')"><v-icon name="done" small left />Mark done</v-button>
 			</template>
 			<template v-if="drawable || (preview && preview.kind !== 'none')" #extra>
 				<SampleGeometry v-if="drawable" :dims="dims" aria-hidden="true" />
@@ -112,6 +118,10 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			</template>
 		</RecordRail>
 		<div v-else class="pm-none">Select a record on the map to see it here.</div>
+
+		<!-- Edit mode (spec §7.1): the form of the selected draft item, and Checks above Connections. Each draws nothing outside edit mode. -->
+		<EditRailItem />
+		<EditRailChecks />
 
 		<Section title="Connections" :count="total" class="pm-conn" :empty="!total" empty-text="Nothing else is connected in what is loaded.">
 			<template v-for="g in groups" :key="g.group">

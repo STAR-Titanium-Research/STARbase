@@ -199,6 +199,27 @@ describe('useEditMode: changing the draft', () => {
 	});
 });
 
+describe('useEditMode: typing in a form', () => {
+	it('folds the changes of one item\'s values into one undo step, until something else changes', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'di' });
+		edit.setValues('n1', { form: 'disc' });
+		edit.undo();
+		expect(edit.body.value.items[0].values.form).toBeUndefined();
+		// another item, or another kind of change, starts a new step
+		edit.redo();
+		edit.apply({ type: 'addSample' });
+		edit.setValues('n2', { form: 'a' });
+		edit.apply({ type: 'move', key: 'n1', x: 1, y: 1 });
+		edit.setValues('n2', { form: 'ab' });
+		edit.undo();
+		expect(edit.body.value.items[1].values.form).toBe('a');
+	});
+});
+
 describe('useEditMode: the draft on the map', () => {
 	it('merges the draft into the loaded data, and keeps its cards drawn', async () => {
 		const { edit } = setup({ edit: 'new' });

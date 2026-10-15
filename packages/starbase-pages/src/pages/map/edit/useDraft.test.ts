@@ -268,6 +268,24 @@ describe('useDraft: undo and redo', () => {
 		expect(draft.canRedo.value).toBe(false);
 	});
 
+	it('merge folds a change into the step before it, so typing in a field is one undo step', async () => {
+		const { draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample' });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'd' } });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'di' } }, { merge: true });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'disc' } }, { merge: true });
+		expect(draft.body.value.items[0].values.form).toBe('disc');
+		draft.undo();
+		expect(draft.body.value.items[0].values.form).toBeUndefined();
+		expect(draft.body.value.items).toHaveLength(1);
+		// with nothing before it to fold into, it is a step of its own
+		const fresh = make();
+		await fresh.draft.start();
+		fresh.draft.apply({ type: 'addSample' }, { merge: true });
+		expect(fresh.draft.canUndo.value).toBe(true);
+	});
+
 	it('applyAll does several actions as one undoable step, and nothing when none of them changes anything', async () => {
 		const { s, draft } = make();
 		await draft.start();

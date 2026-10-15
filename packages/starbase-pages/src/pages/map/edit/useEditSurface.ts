@@ -10,6 +10,7 @@ import type { useProcessMap } from '../useProcessMap';
 import { recordKey, collectionOf } from './checks';
 import { connectTargets, type ConnectEntry, type ConnectNames } from './connectModel';
 import { sampleLabel } from './menuModel';
+import { draftKeysOfNode } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
 import { dropVerdict } from './wireDrop';
 import { resolveEnd, type SocketRef } from './socketRefs';
@@ -75,6 +76,17 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		const item = end ? edit.body.value.items.find((i) => i.key === end.key) : undefined;
 		if (!item) return sock.kind === 'sample' ? 'this sample' : 'this card';
 		return item.kind === 'sample' ? names.value.sample(item) : item.kind === 'operation' ? names.value.operation(item, end?.row ?? 0) : names.value.test(item);
+	}
+	/** A card of the draft called by what the canvas calls it (Checks lists cards by it). */
+	function labelForKey(key: string): string {
+		const item = edit.body.value.items.find((i) => i.key === key);
+		if (!item) return key;
+		return item.kind === 'sample' ? names.value.sample(item) : item.kind === 'operation' ? names.value.operation(item, 0) : names.value.test(item);
+	}
+	/** Selects the card a draft item is drawn as, and brings it into view. */
+	function selectKey(key: string): void {
+		const node = o.map.graph.value?.nodes.find((n) => draftKeysOfNode(edit.body.value, n).includes(key));
+		if (node) o.map.select(node.id, { centre: true });
 	}
 	const connectEntries = computed<ConnectEntry[]>(() => (connecting.value?.sock ? connectTargets(edit.body.value, connecting.value.sock, names.value) : []));
 	/** The list opens for a socket; a sample of the loaded history is tried as if the draft held it (it joins when the wire is made). */
@@ -164,6 +176,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		connectEntries,
 		connectFrom: computed(() => (connecting.value?.sock ? labelOf(connecting.value.sock) : '')),
 		connectTo,
+		labelForKey,
+		selectKey,
 		duplicating,
 		confirmDuplicate,
 		removeSelected,

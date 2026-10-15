@@ -4,7 +4,7 @@
 import type { DraftBody, DraftRecord, HostApi } from '@d1/ui';
 import { emptyBody } from './draft';
 
-const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: { errors: [{ message: `HTTP ${status}` }] } } });
+export const httpError = (status: number, extensions?: Record<string, unknown>) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: { errors: [{ message: `HTTP ${status}`, ...(extensions ? { extensions } : {}) }] } } });
 
 export const FAKE_METHODS = [
 	{ method_id: 'm-turn', method_name: 'Turning', method_code: 'MC', process_category: 'machining' },
@@ -24,6 +24,10 @@ export function fakeServer() {
 		drafts,
 		calls,
 		listStatus: 200,
+		/** What Create and Mark done answer: a body, or an error to throw. */
+		createAnswer: { data: { created: { n1: { collection: 'physical_samples', id: 'new1', code: '1-Ti64-MC' } }, sampleIds: ['new1'] } } as unknown,
+		markAnswer: null as unknown,
+		bodies: [] as unknown[],
 		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
 			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
 		},
@@ -54,15 +58,26 @@ export function fakeServer() {
 			}
 			return { data: { data: [] } };
 		},
-		post: async (path: string, body?: { name: string; body: DraftBody }) => {
+		post: async (path: string, body?: { name: string; body: DraftBody } | Record<string, unknown>) => {
 			calls.push(`POST ${path}`);
 			if (path === '/d1-build/drafts') {
 				n += 1;
-				const rec: DraftRecord = { id: `d${n}`, name: body!.name, body: body!.body, version: 1, updated_at: 'now' };
+				const b = body as { name: string; body: DraftBody };
+				const rec: DraftRecord = { id: `d${n}`, name: b.name, body: b.body, version: 1, updated_at: 'now' };
 				drafts.set(rec.id, rec);
 				return { data: { data: rec } };
 			}
 			if (path.endsWith('/check')) return { data: { data: { checks: [] } } };
+			if (path.endsWith('/create')) {
+				if (s.createAnswer instanceof Error) throw s.createAnswer;
+				drafts.delete(idOf(path));
+				return { data: s.createAnswer };
+			}
+			if (path === '/d1-build/mark-done') {
+				s.bodies.push(body);
+				if (s.markAnswer instanceof Error) throw s.markAnswer;
+				return { data: s.markAnswer ?? { data: { ids: (body as { ids?: string[] } | undefined)?.ids ?? [], work_state: 'done' } } };
+			}
 			throw httpError(404);
 		},
 		patch: async (path: string, body?: { body?: DraftBody; name?: string }) => {

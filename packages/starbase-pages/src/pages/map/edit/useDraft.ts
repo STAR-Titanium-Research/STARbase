@@ -300,18 +300,22 @@ export function useDraft(options: UseDraftOptions = {}) {
 	// ---- editing -------------------------------------------------------------------------------------
 
 	/** Does one action on the draft. A change is undoable and kept on the server; an action that changes nothing is no step. */
-	function apply(action: DraftAction): DraftBody {
-		return applyAll([action]);
+	function apply(action: DraftAction, opts?: { merge?: boolean }): DraftBody {
+		return applyAll([action], opts);
 	}
 
-	/** Several actions as one undoable step (a wire that needs a sample added first, every card moved by a re-layout). */
-	function applyAll(actions: DraftAction[]): DraftBody {
+	/**
+	 * Several actions as one undoable step (a wire that needs a sample added first, every card moved by a re-layout). `merge` folds
+	 * the change into the step before it instead of making a new one (typing in a field: one step per field, not per key).
+	 */
+	function applyAll(actions: DraftAction[], opts?: { merge?: boolean }): DraftBody {
 		// While Create runs the draft is what is being created: it does not change under it.
 		if (creating.value) return history.value.present;
 		const before = history.value.present;
 		const next = actions.reduce((b, a) => reduce(b, a), before);
 		if (next !== before) {
-			history.value = push(history.value, next);
+			const h = history.value;
+			history.value = opts?.merge && h.past.length ? { ...h, present: next, future: [] } : push(h, next);
 			dropStale(before, next);
 			schedule();
 		}

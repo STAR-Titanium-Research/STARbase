@@ -12,16 +12,14 @@ import '@vue-flow/minimap/dist/style.css';
 import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
-import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
+import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
+import CreateBar from './edit/CreateBar.vue';
 import EditLid from './edit/EditLid.vue';
-import AddMenu from './edit/AddMenu.vue';
-import ConnectTo from './edit/ConnectTo.vue';
-import DuplicatePrompt from './edit/DuplicatePrompt.vue';
-import SamplePicker from './edit/SamplePicker.vue';
+import EditOverlays from './edit/EditOverlays.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
-import { useEditSurface } from './edit/useEditSurface';
+import { useEditSide } from './edit/useEditSide';
 import WirePreview from './edit/WirePreview.vue';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
@@ -63,9 +61,9 @@ const map = useProcessMap(host.api, route, router, edit.overlay);
 const canvas = useMapCanvas(map, canvasEditOf(edit));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
-/** Edit mode on the canvas: socket clicks and drags, the Add menu, the sample picker, the keys. */
-const build = useEditSurface({ edit, map, canvas, canvasEl });
-provide(MAP_EDIT, build.mapEdit);
+/** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */
+const side = useEditSide({ host, edit, map, canvas, canvasEl });
+const { build, create, markDone } = side;
 const pointerKind = createPointerKind();
 
 // What the node and wire components call (nodes/actions.ts).
@@ -177,11 +175,12 @@ const railProps = computed(() => ({
 	stack: map.stack.value,
 	reach: map.reach.value,
 	drawnReach: map.effectiveReach.value,
+	canMarkDone: markDone.canMarkDone.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
-const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach };
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show };
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
@@ -290,9 +289,17 @@ onBeforeUnmount(() => {
 							@pick="build.pickerOpen.value = true"
 							@open="edit.openDraft"
 							@dismiss-notice="edit.draft.notice.value = ''"
-						/>
+						>
+							<template #create>
+								<CreateBar :summary="edit.summary.value" :missing="edit.missing.value" :creating="create.creating.value" :error="create.error.value" :empty="create.empty.value" @create="create.create" />
+							</template>
+						</EditLid>
 						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
 						<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': edit.failed.value !== UNAVAILABLE }" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</div>
+						<div v-if="markDone.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
+							<span>{{ markDone.error.value }}</span>
+							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="markDone.error.value = ''"><v-icon name="close" x-small /></button>
+						</div>
 						<div v-if="build.problem.value || build.picking.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
 							<span>{{ build.problem.value || build.picking.problem.value }}</span>
 							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''; build.picking.problem.value = ''"><v-icon name="close" x-small /></button>
@@ -353,21 +360,8 @@ onBeforeUnmount(() => {
 				<MapSheet v-if="phone" :title="map.selectedInfo.value?.code ?? 'Nothing selected'">
 					<MapRail v-bind="railProps" v-on="railEvents" />
 				</MapSheet>
-				<!-- Beside the layout, not in it: RecordLayout is a size container, which would make `position: fixed` relative to it. -->
-				<ConnectTo v-if="build.connecting.value && edit.editing.value" :entries="build.connectEntries.value" :from="build.connectFrom.value" :at="build.connecting.value.at" @choose="build.connectTo" @close="build.connecting.value = null" />
-				<DuplicatePrompt v-if="build.duplicating.value && edit.editing.value" :what="build.duplicating.value.what" @confirm="build.confirmDuplicate" @close="build.duplicating.value = null" />
-				<SamplePicker v-if="build.pickerOpen.value && edit.editing.value" :taken="build.picking.taken.value" @pick="build.picking.picked" @close="build.pickerOpen.value = false" />
-				<AddMenu
-					v-if="build.menu.target.value && edit.editing.value"
-					:target="build.menu.target.value"
-					:body="edit.body.value"
-					:methods="edit.catalog.methods.value"
-					:test-types="edit.catalog.testTypes.value"
-					:search="edit.catalog.searchSamples"
-					:code-of="(id: string) => edit.catalog.samples.get(id)?.code"
-					@choose="build.menu.choose"
-					@close="build.menu.close"
-				/>
+				<!-- Beside the layout, not in it (see EditOverlays). -->
+				<EditOverlays :edit="edit" :side="side" />
 			</template>
 		</PageShell>
 		<Finder v-if="finderOpen" :pick-record="map.pickRecord" @close="finderOpen = false" />

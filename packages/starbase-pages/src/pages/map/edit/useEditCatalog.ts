@@ -14,6 +14,9 @@ import { KEY_FIELD, METHOD_FIELDS, checkFieldsOf, existingIds, loadedRecordOf, m
 
 type Row = Record<string, any>;
 
+/** The key of a relation read as an object (`material_id.alloy_code` expands it), or as the key itself. */
+const keyOf = (v: unknown, key: string): unknown => (v && typeof v === 'object' ? ((v as Row)[key] ?? null) : (v ?? null));
+
 const COLLECTIONS: CheckCollection[] = ['physical_samples', 'manufacturing_operations', 'test_sessions'];
 
 export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => Promise<DirectusField[]>) {
@@ -100,14 +103,17 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	async function loadSamples(ids: string[]): Promise<Map<string, { sample: SampleRec; version: number; values: Row }>> {
 		const out = new Map<string, { sample: SampleRec; version: number; values: Row }>();
 		if (!ids.length) return out;
-		const rows = await readRows('physical_samples', ids, [...SAMPLE_FIELDS, 'version']);
+		// The card's fields (with the material and project expanded) and the whole record: the form edits the record, the card draws it.
+		const rows = await readRows('physical_samples', ids, ['*', ...SAMPLE_FIELDS, 'version']);
 		for (const row of rows) {
 			const sample = mapSample(row);
 			samples.set(sample.id, sample);
 			const version = Number(row.version);
 			if (Number.isFinite(version)) {
-				out.set(sample.id, { sample, version, values: row });
-				records.set(recordKey('physical_samples', sample.id), { version, values: row });
+				// The expanded relations back to their ids: what a form and a new sample's inheritance work with.
+				const values: Row = { ...row, material_id: keyOf(row.material_id, 'material_id'), project_id: keyOf(row.project_id, 'project_id') };
+				out.set(sample.id, { sample, version, values });
+				records.set(recordKey('physical_samples', sample.id), { version, values });
 			}
 		}
 		return out;
