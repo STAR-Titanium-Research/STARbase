@@ -18,6 +18,8 @@ export const isAccessCollection = (collection: string): collection is AccessColl
 export const RESTRICT_UI = false;
 
 export interface AccessPerson {
+	/** The endpoint says which kind of owner it sends (older answers have no `kind`: a person). */
+	kind?: 'person';
 	person_id: string;
 	name: string;
 	can_sign_in: boolean;
@@ -67,9 +69,30 @@ export interface TeamAccess {
 	declined: number;
 }
 
+/** A team that owns the record (the four ownable types): its managers act as the owner. */
+export interface AccessTeamOwner {
+	kind: 'team';
+	team_id: string;
+	name: string;
+	color: TeamColor;
+	logo: string | null;
+	managers: { person_id: string; full_name: string | null }[];
+}
+
+export type AccessOwner = AccessPerson | AccessTeamOwner;
+
+export const isTeamOwner = (owner: unknown): owner is AccessTeamOwner => !!owner && (owner as AccessTeamOwner).kind === 'team';
+
+/** The owner row's words: the person's name, or "Additive (managers)" for a team (its managers act as the owner). */
+export const ownerRowText = (owner: AccessOwner | null): string => (!owner ? 'No owner' : isTeamOwner(owner) ? `${owner.name} (managers)` : owner.name);
+
+/** The managers under a team owner's row, comma separated; empty for a person or a team with none. */
+export const ownerManagersText = (owner: AccessOwner | null): string =>
+	isTeamOwner(owner) ? owner.managers.map((m) => m.full_name || 'Unnamed').join(', ') : '';
+
 export interface AccessList {
 	restricted: boolean;
-	owner: AccessPerson | null;
+	owner: AccessOwner | null;
 	project_pi: AccessPerson | null;
 	can_manage: boolean;
 	entries: AccessEntry[];
@@ -228,26 +251,59 @@ export function initials(name: string): string {
 /** Search hits without the people already on the list, the owner and the project's PI (they have access already). */
 export function addable(hits: PersonHit[], list: Pick<AccessList, 'owner' | 'entries'>): PersonHit[] {
 	const taken = new Set<string>();
-	if (list.owner) taken.add(list.owner.person_id);
+	if (list.owner && !isTeamOwner(list.owner)) taken.add(list.owner.person_id);
 	for (const e of list.entries) if (e.person_id) taken.add(e.person_id);
 	return hits.filter((h) => !taken.has(h.person_id));
 }
 
+/** The four types a team can own (a project's owner is its principal investigator, a person). */
+export const transferOffersTeams = (collection: string): boolean => isAccessCollection(collection) && collection !== 'projects';
+
 /**
- * The confirm step of an ownership transfer. The previous owner stays on the record (Can edit; Secondary investigator on a
+ * What the transfer picker leaves out: only the owner (a record's grants do not matter for ownership), where the add box leaves out
+ * everyone already on the record. A team that owns the record is offered by neither.
+ */
+export function pickerTaken(
+	list: Pick<AccessList, 'owner' | 'entries'> & { teams?: Pick<TeamAccess, 'team_id'>[] },
+	entries: boolean,
+): Pick<AccessList, 'owner' | 'entries'> & { teams?: Pick<TeamAccess, 'team_id'>[] } {
+	if (entries) {
+		// the owning team has no entry of its own (Ruling O2) yet cannot be given another grant on its own record (409 TEAM_OWNS_RECORD)
+		return isTeamOwner(list.owner) ? { ...list, teams: [...(list.teams ?? []), { team_id: list.owner.team_id }] } : list;
+	}
+	return { owner: list.owner, entries: [], teams: isTeamOwner(list.owner) ? [{ team_id: list.owner.team_id }] : [] };
+}
+
+/** The name of a person or team the add box found. */
+export const hitName = (hit: PersonHit | TeamHit): string => (isTeamHit(hit) ? hit.name : hit.full_name);
+
+/**
+ * The confirm step of an ownership transfer. The previous PERSON owner stays on the record (Can edit; Secondary investigator on a
  * project) so the record never disappears for the person who made it. `byOwner`: the person asking is the owner, so "you stay";
  * an admin transferring someone else's record reads "<name> stays". No previous owner: nobody stays.
+ * `fromTeam` (Ruling O5): the owner is a team, and its managers do NOT stay: they lose access unless added back, so the text says so.
+ * `toTeam`: the new owner is a team, so its managers (not one person) decide from now on.
  */
-export function transferConfirmText(from: string | null, to: string, collection: string, byOwner = true): string {
+export function transferConfirmText(from: string | null, to: string, collection: string, byOwner = true, opts: { fromTeam?: boolean; toTeam?: boolean } = {}): string {
 	const kept = ROLE_LABELS(collection).find((r) => r.role === (collection === 'projects' ? 'investigator' : 'edit'))!.label;
 	const becomes = `${to} becomes ${collection === 'projects' ? 'the principal investigator' : 'the owner'}.`;
-	const stays = from ? ` ${byOwner ? 'You stay' : `${from} stays`} on the record as ${kept}.` : '';
-	return `${becomes}${stays} Only the new ${collection === 'projects' ? 'principal investigator' : 'owner'} can change who has access.`;
+	let stays = '';
+	if (opts.fromTeam && from) {
+		stays = byOwner
+			? ` You and the other managers of ${from} will lose access unless you are added back.`
+			: ` The managers of ${from} will lose access unless they are added back.`;
+	} else if (from) {
+		stays = ` ${byOwner ? 'You stay' : `${from} stays`} on the record as ${kept}.`;
+	}
+	const who = opts.toTeam ? `${to}'s managers` : `the new ${collection === 'projects' ? 'principal investigator' : 'owner'}`;
+	return `${becomes}${stays} Only ${who} can change who has access.`;
 }
 
 /** What a person who may read but not manage sees instead of the controls. */
-export function noManagerText(owner: Pick<AccessPerson, 'name'> | null): string {
-	return owner ? `Only ${owner.name} can change who has access.` : 'Only an admin can change who has access.';
+export function noManagerText(owner: Pick<AccessPerson, 'name'> | Pick<AccessTeamOwner, 'kind' | 'name'> | null): string {
+	if (!owner) return 'Only an admin can change who has access.';
+	if ((owner as AccessTeamOwner).kind === 'team') return `Only ${owner.name}'s managers can change who has access.`;
+	return `Only ${owner.name} can change who has access.`;
 }
 
 /**

@@ -11,7 +11,7 @@ import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
 import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
-import { recordWord } from './model/fans';
+import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
 import CreateBar from './edit/CreateBar.vue';
@@ -21,6 +21,8 @@ import { canvasEditOf } from './edit/useEditCanvas';
 import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSide } from './edit/useEditSide';
 import WirePreview from './edit/WirePreview.vue';
+import ChainMenu from './ChainMenu.vue';
+import type { ChainDir } from './model/hoverFocus';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
@@ -33,7 +35,9 @@ import { miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { personName, useMapExport } from './useMapExport';
-import { useProcessMap, type Reach } from './useProcessMap';
+import type { Reach } from './model/reach';
+import { useProcessMap } from './useProcessMap';
+import { useRecentRecords } from './useRecentRecords';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing
@@ -83,8 +87,8 @@ const actions: MapActions = {
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);
-		// The card grows or shrinks: measure it, then lay out again so it does not overlap its neighbours.
-		void canvas.remeasure(id).then(() => canvas.relayout());
+		// The card grows or shrinks: measure it, then make room round it; every card stays where it is (a dragged one too).
+		void canvas.remeasure(id).then(() => canvas.reflow());
 	},
 };
 // What a socket connects, for its aria-label: one pass over the wires per graph, not per socket.
@@ -117,6 +121,9 @@ const DIRECTIONS: { value: Dir; label: string }[] = [
 
 // The shell owns the Finder (Ctrl+K); with no focus the page offers it as the way to pick a record.
 const finderOpen = ref(false);
+// The records this person used lately, offered as starting points while no record is picked (read once, when that state first shows).
+const recent = useRecentRecords(host.api);
+watch(() => map.status.value, (s) => { if (s === 'empty') recent.load().catch(() => {}); }, { immediate: true });
 
 const frameLabel = computed(() => {
 	const p = map.project.value;
@@ -165,6 +172,7 @@ const railSelect = (id: string) => {
 /** The rail's props, one object for its two homes: the left column, and on a phone the bottom sheet. */
 const railProps = computed(() => ({
 	info: map.selectedInfo.value,
+	focus: map.focus.value,
 	preview: selectedPreview.value,
 	onMap: map.selectedOnMap.value,
 	connections: map.connections.value,
@@ -184,6 +192,27 @@ const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, s
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
+
+// Right-click on a card selects it and offers which way its chain is lit (upstream, downstream, both).
+// Not on touch: a long press there is the hover card (useLongPress).
+const chainMenu = ref<{ x: number; y: number } | null>(null);
+const MENU_W = 200;
+const MENU_H = 150;
+function onContextMenu(e: MouseEvent) {
+	input.onContextMenu(e);
+	if (pointerKind.touch || !canvasEl.value) return;
+	const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('.vue-flow__node')?.dataset.id;
+	if (!id) return;
+	e.preventDefault();
+	map.clearHover();
+	map.select(id);
+	const r = canvasEl.value.getBoundingClientRect();
+	chainMenu.value = { x: Math.min(e.clientX - r.left, r.width - MENU_W), y: Math.min(e.clientY - r.top, r.height - MENU_H) };
+}
+function pickChain(d: ChainDir) {
+	map.setChainDir(d);
+	chainMenu.value = null;
+}
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
 // The project frame is part of the picture only when it is drawn (the same test the template makes).
@@ -231,6 +260,12 @@ onBeforeUnmount(() => {
 					<p v-if="edit.failed.value === UNAVAILABLE" class="pm-note" role="status">{{ edit.failed.value }}</p>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
+					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">
+						<h3>Recent records</h3>
+						<ul>
+							<li v-for="pick in recent.picks.value" :key="pick.target"><AppLink :to="pick.to">{{ pick.label }}</AppLink></li>
+						</ul>
+					</nav>
 				</div>
 			</Section>
 
@@ -318,6 +353,7 @@ onBeforeUnmount(() => {
 							ref="canvasEl"
 							class="pm-canvas"
 							:class="{ pending: !canvas.laidOut.value && map.nodes.value.length > 0 }"
+							:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
 							@mouseleave="map.clearHover()"
 							@keydown="input.onKey"
 							@focusin="input.onFocusIn"
@@ -326,7 +362,7 @@ onBeforeUnmount(() => {
 							@pointerup.capture="input.onPointerEnd"
 							@pointercancel.capture="input.onPointerEnd"
 							@click.capture="input.onClickCapture"
-							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || input.onContextMenu(e)"
+							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
 						>
 							<VueFlow
 								:node-types="canvas.nodeTypes"
@@ -353,6 +389,7 @@ onBeforeUnmount(() => {
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
+							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>
@@ -373,6 +410,9 @@ onBeforeUnmount(() => {
 .pm-empty h2 { margin: 0; font-size: var(--fs-xl, 18px); }
 .pm-empty p { margin: 0; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .pm-empty .pm-note { padding: 8px 12px; border-radius: 8px; background: var(--d1-tile, var(--theme--background-subdued)); }
+.pm-recent { margin-top: 8px; }
+.pm-recent h3 { margin: 0 0 6px; font-size: var(--fs-md, 14px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.pm-recent ul { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
 
 /* The canvas fills what is left of the window under the page header (the panel's head and the crumb line take
    about 130 px); the panel's body has no padding. */
@@ -409,7 +449,8 @@ onBeforeUnmount(() => {
 	z-index: -1;
 	box-sizing: border-box;
 	pointer-events: none;
-	border: 1.5px dashed color-mix(in srgb, var(--k) 55%, transparent);
+	/* --pm-px is one screen pixel in flow units: the frame stays visible when zoomed out. */
+	border: max(1.5px, calc(1.5 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--k) 70%, transparent);
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }

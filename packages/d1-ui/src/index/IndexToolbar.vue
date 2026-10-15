@@ -77,7 +77,7 @@ const DENSITY_OPTIONS = [
 		<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="emit('density', $event as Density)" />
 		<template v-if="!pick">
 			<button type="button" class="btn" :title="dsLink.note ?? undefined" @click="host.openDataStudio(dsLink.to)">Open in Data Studio</button>
-			<button type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
+			<button v-if="!host.canViewAllAccess?.value" type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
 		</template>
 	</div>
 

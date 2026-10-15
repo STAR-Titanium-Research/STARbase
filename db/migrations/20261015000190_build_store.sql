@@ -50,7 +50,7 @@ CREATE TABLE d1_private.process_templates (
 CREATE INDEX idx_process_templates_user_updated ON d1_private.process_templates (user_id, updated_at DESC);
 CREATE INDEX idx_process_templates_scope_role ON d1_private.process_templates (scope, role_id);
 
-COMMENT ON TABLE d1_private.process_drafts IS 'A person''s unfinished process-map build (edit mode): the DraftBody JSON, named, several per person, private to the owner, deleted when it is created (migration 186, ADR-0018). Read and written only by the d1-build endpoint, never through the items API (d1_private is outside the Directus schema scan). Private scratch data: no audit trigger; the endpoint does the version check.';
+COMMENT ON TABLE d1_private.process_drafts IS 'A person''s unfinished process-map build (edit mode): the DraftBody JSON, named, several per person, private to the owner, deleted when it is created (migration 190, ADR-0018). Read and written only by the d1-build endpoint, never through the items API (d1_private is outside the Directus schema scan). Private scratch data: no audit trigger; the endpoint does the version check.';
 COMMENT ON COLUMN d1_private.process_drafts.draft_id IS 'Primary key.';
 COMMENT ON COLUMN d1_private.process_drafts.user_id IS 'The directus_users.id of the owner. Only the owner can see or change the draft. The draft goes with the login (ON DELETE CASCADE).';
 COMMENT ON COLUMN d1_private.process_drafts.name IS 'The draft''s name; the client defaults it to "<first sample code> · <date>" and lets the owner rename it.';
@@ -59,7 +59,7 @@ COMMENT ON COLUMN d1_private.process_drafts.created_at IS 'When the draft was st
 COMMENT ON COLUMN d1_private.process_drafts.updated_at IS 'When the draft was last saved. Set by the endpoint on every write.';
 COMMENT ON COLUMN d1_private.process_drafts.version IS 'Optimistic-concurrency counter. A save must name the version it was made against; the endpoint writes version + 1 and answers 409 on a mismatch (another tab saved first).';
 
-COMMENT ON TABLE d1_private.process_templates IS 'A saved set of prefilled fields for a new operation or test on the process map (edit mode), with the three scopes of saved views: private (its creator), role (everyone with that account role), global (everyone) (migration 186, ADR-0018). Read and written only by the d1-build endpoint. Private convenience data: no audit trigger.';
+COMMENT ON TABLE d1_private.process_templates IS 'A saved set of prefilled fields for a new operation or test on the process map (edit mode), with the three scopes of saved views: private (its creator), role (everyone with that account role), global (everyone) (migration 190, ADR-0018). Read and written only by the d1-build endpoint. Private convenience data: no audit trigger.';
 COMMENT ON COLUMN d1_private.process_templates.template_id IS 'Primary key.';
 COMMENT ON COLUMN d1_private.process_templates.user_id IS 'The directus_users.id of the creator; only they (or an administrator) can edit or delete the template. The template goes with the login (ON DELETE CASCADE).';
 COMMENT ON COLUMN d1_private.process_templates.scope IS 'Who can use the template: private (the creator), role (callers whose account role is role_id), global (everyone).';

@@ -142,5 +142,6 @@ const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 </template>
 
 <style scoped>
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 .notes { margin: 0; max-width: 90ch; font-size: var(--fs-md); line-height: 1.55; color: var(--d1-dim); white-space: pre-wrap; }
 </style>

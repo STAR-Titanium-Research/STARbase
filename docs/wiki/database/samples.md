@@ -24,7 +24,7 @@ covers equipment-type and miscellaneous stock (the *Item Type* field).
 | **Item Type** | Sample, Equipment or Miscellaneous |
 | **Alloy / Material** | from the materials catalogue. Its alloy code goes into the sample code. |
 | **Primary Method (for code)** | how the sample was made, e.g. `MF` FAST/SPS sintering. Its code goes into the sample code. |
-| **Geometry** | Disc, Cylindrical, Rectangular, Powder / Compact or Other. It decides which dimension fields appear. |
+| **Geometry** | Disc, Cylindrical, Rectangular, Powder / Compact or Other. It decides which dimension fields appear. Pick **None** at the top of the list to clear it. |
 | **Stock Category** | Bulk, Powder or Specialty |
 | **Dimensions**, **Weight** | Ø, width, length, thickness, gauge dimensions (mm) and mass (g) |
 | **Shape Preview** | a live sketch of the geometry with its dimensions, drawn from the fields above |

@@ -80,6 +80,36 @@ describe('MapRail', () => {
     expect(await render(MapRail, railProps({ info: info(op.id) }))).not.toContain('d1-geometry');
   });
 
+  describe('Process map of the selected record', () => {
+    const as = (collection: string, id: string, code: string): RecordInfo => ({ ...info('s:p'), ref: { collection, id, code }, code });
+    const label = 'Process map of ';
+
+    it('is offered for a record whose collection opens a map, linking to its own focus', async () => {
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', 'Mill'), focus: { collection: 'physical_samples', id: 'p' } }));
+      expect(text(html)).toContain(`${label}Mill`);
+      expect(html).toContain('/map?focus=equipment:e1');
+    });
+
+    it('is offered for another sample or step than the focus', async () => {
+      expect(text(await render(MapRail, railProps({ focus: { collection: 'physical_samples', id: 'other' } })))).toContain(`${label}S-1`);
+    });
+
+    it('with no code falls back to the kind word', async () => {
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', ''), focus: { collection: 'physical_samples', id: 'p' } }));
+      expect(text(html)).toContain(`${label}Sample`);
+    });
+
+    it('is not offered when the record already is the focus', async () => {
+      expect(text(await render(MapRail, railProps({ focus: { collection: 'physical_samples', id: 'p' } })))).not.toContain(label);
+    });
+
+    it('is not offered for people, files or a collection the map cannot open', async () => {
+      for (const [collection, id] of [['people', 'x'], ['directus_users', 'u'], ['directus_files', 'f'], ['force_file', 'a/b.mat'], ['nope', 'n']]) {
+        expect(text(await render(MapRail, railProps({ info: as(collection, id, 'X') })))).not.toContain(label);
+      }
+    });
+  });
+
   it('Open record of a kind with no record page falls back to the Data Studio form', async () => {
     const lot: RecordInfo = { ...info('s:p'), kind: 'equipment', ref: { collection: 'equipment', id: 'e1', code: 'Mill' }, code: 'Mill' };
     expect(await render(MapRail, railProps({ info: lot }))).toContain('href="/content/equipment/e1"');

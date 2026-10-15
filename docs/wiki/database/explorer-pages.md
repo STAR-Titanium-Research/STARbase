@@ -157,6 +157,21 @@ used (machine, tool, insert edge, recipe, data file) sits inside the box. A samp
 it shows a small dashed junction (cut from, sintered from...). Click a box to see the record in the panel on the left; the
 **+** on a box loads more around it.
 
+- **Sample cards** show the sample's code with its nickname underneath (for example *163-F1E-MO-2026-10-15*,
+  *F1E Cutoff*), then its form.
+- **Operation and test boxes** have one summary line instead of a row per sample: *1 sample → 4 pieces* for a cut,
+  *2 samples · in place* for a step that changes a sample without making a new one, *Makes 1 sample* for one that
+  starts from powder or stock, *1 sample tested* for a test. The input sockets sit on the left edge and the outputs on
+  the right; follow the wires to see which sample is which. A box with many samples folds the rest behind **+N more**;
+  **fold** folds it back.
+- **Machines** are shown by name (*RDC Water Jet Cutter*), not by their six-character equipment code.
+- **Highlighting.** The selected card lights up its chain and dims everything else: what its samples came from and
+  what they went on to. Right-click a card to select it and choose **Show upstream**, **Show downstream** or **Show
+  both**; the map opens on *both*. The chain follows the samples, not the boxes: select one piece of a cut and its
+  sibling pieces stay dim. Hovering another card still lights only that card and its direct neighbours, and hovering
+  a wire highlights it.
+- **Geometry.** Hovering a sample shows its drawing at its real dimensions, with the measurements labelled.
+
 Open it from **Analysis → Process map** in the sidebar, or from the **Process map** button on a sample, operation, test,
 project, campaign or insert edge page (in the left rail) or on a row of an index page, which opens the map on that record.
 A tool box or a cutting insert is not drawn on the map, so its page has no such button. The address is

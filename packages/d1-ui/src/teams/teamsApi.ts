@@ -42,6 +42,9 @@ export interface TeamMember {
 
 export type TeamLevel = 'view' | 'edit' | 'investigator';
 
+/** The records of a team per access level; `owns` is the records the team OWNS (owner_team_id), whose owner grant is a record with role 'own'. */
+export type TeamCounts = Record<TeamLevel, number> & { owns?: number };
+
 export interface TeamRecord {
 	collection: string;
 	id: string;
@@ -71,7 +74,7 @@ export interface TeamEvent {
 export interface TeamDetail {
 	team: TeamSummary;
 	members: TeamMember[];
-	counts: Record<TeamLevel, number>;
+	counts: TeamCounts;
 	records: TeamRecord[];
 	hidden_count: number;
 	events: TeamEvent[];
@@ -116,6 +119,39 @@ const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
 export const listTeams = (api: HostApi): Promise<TeamSummary[]> => call(() => api.get('/d1-teams'), (b) => asList<TeamSummary>(b.teams));
 
+/** The ids of a team's records of one collection that the caller can read, newest first (GET /d1-teams/:id/records). `truncated`: the team has more than `limit`. */
+export interface TeamRecordIds {
+	ids: string[];
+	truncated: boolean;
+}
+
+/** The most the endpoint returns (and the index Team filter asks for). */
+export const TEAM_RECORDS_LIMIT = 300;
+
+/** Which records of `collection` a team owns or has a grant on, and the caller reads: the Team filter of the index pages (Ruling M1: only readable ids). */
+export const getTeamRecordIds = (api: HostApi, teamId: string, collection: string, limit: number = TEAM_RECORDS_LIMIT): Promise<TeamRecordIds> =>
+	call(
+		() => api.get(path(teamId, 'records'), { params: { collection, limit } }),
+		(b) => ({ ids: asList<unknown>(b.ids).map(String), truncated: b.truncated === true }),
+	);
+
+/** A record of one of the caller's own teams, as GET /d1-teams/mine/recent lists it (readable records only, newest change first). `team_color` is a palette key. */
+export interface RecentTeamRecord {
+	collection: string;
+	id: string;
+	kind: string | null;
+	code: string | null;
+	title: string | null;
+	team_id: string;
+	team_name: string;
+	team_color: TeamColor;
+	changed_at: string | null;
+}
+
+/** The most recently changed records of the caller's teams (owner or grantee) that the caller can read; the endpoint caps `limit` at 100. */
+export const myRecentTeamRecords = (api: HostApi, limit = 20): Promise<RecentTeamRecord[]> =>
+	call(() => api.get('/d1-teams/mine/recent', { params: { limit } }), (b) => asList<RecentTeamRecord>(b.items));
+
 /** One team with its members, counts, readable records and history. `{ events: 'all' }` asks for every event, not the last 20. */
 export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Promise<TeamDetail> =>
 	call(
@@ -123,7 +159,7 @@ export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Pr
 		(b) => ({
 			team: b.team,
 			members: asList<TeamMember>(b.members),
-			counts: { view: 0, edit: 0, investigator: 0, ...(b.counts ?? {}) },
+			counts: { view: 0, edit: 0, investigator: 0, owns: 0, ...(b.counts ?? {}) },
 			records: asList<TeamRecord>(b.records),
 			hidden_count: Number(b.hidden_count) || 0,
 			events: asList<TeamEvent>(b.events),

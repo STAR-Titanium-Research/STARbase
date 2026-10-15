@@ -938,3 +938,22 @@ test('every new route touches only the caller\'s rows', async () => {
     assert.ok(alice.length > 0);
     for (const l of db.log) if (l.bindings?.includes(BOB)) assert.ok(!l.bindings.includes(ALICE) || l.sql === SQL.lock, l.sql);
 });
+
+// Lab Viewer (migration 185): a read-only account role keeps its own prefs, pins and usage. This endpoint writes only the caller's rows of two d1_private tables
+// with knex (never ItemsService, so Directus permissions do not apply and a policy with read rows only does not matter), and it has no role check: nothing here refuses a viewer.
+test('Lab Viewer: pins, prefs and usage keep working; every write is a d1_private statement bound to the caller, through knex and no Directus permission', async () => {
+    const VIEWER = 'c3333333-3333-4333-8333-333333333333';
+    const { db, call } = setup();
+    assert.equal((await call('POST /prefs', VIEWER, { theme: 'dark', sidebarCollapsed: true })).status, 204);
+    assert.equal((await call('POST /pin', VIEWER, { ...pg('tests'), pinned: true })).status, 204);
+    assert.equal((await call('POST /visit', VIEWER, { kind: 'record', target: `physical_samples:${S1}` })).status, 204);
+    assert.equal((await call('POST /hide', VIEWER, { ...pg('projects') })).status, 204);
+    assert.equal((await call('POST /pins/reset', VIEWER)).status, 204);
+    assert.equal((await call('GET /nav', VIEWER)).status, 200);
+    assert.deepEqual(db.state.prefs.get(VIEWER).prefs, { theme: 'dark', sidebarCollapsed: true });
+    const writes = db.log.filter((l) => /^(INSERT|UPDATE|DELETE)/i.test(l.sql));
+    assert.ok(writes.length > 0);
+    for (const l of writes) assert.match(l.sql, /d1_private\./, l.sql);
+    const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+    assert.ok(!/ItemsService|READ_ONLY_ROLE|isLabViewer/.test(source), 'the endpoint neither goes through Directus permissions nor refuses a role');
+});

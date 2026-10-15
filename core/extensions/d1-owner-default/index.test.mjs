@@ -159,3 +159,38 @@ test('an array payload (createMany) fills every blank item with one lookup', asy
   );
   assert.equal(db.calls.length, 1);
 });
+
+// Team ownership (migration 183): num_nonnulls(owner_person_id, owner_team_id) <= 1, so a record
+// created for a team must not also get the creator as person owner.
+for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']) {
+  test(`${collection}: a new record that sets owner_team_id gets no person owner, and no lookup`, async () => {
+    const db = fakeDb({ 'user-1': { person_id: 'person-1' } });
+    const payload = { owner_team_id: 'team-1' };
+    await mount()['items.create'](payload, { collection }, ctx(db));
+    assert.deepEqual(payload, { owner_team_id: 'team-1' });
+    assert.equal(db.calls.length, 0);
+  });
+}
+
+test('a blank owner_team_id (null or empty) does not stop the creator default', async () => {
+  for (const blankValue of [null, '', undefined]) {
+    const db = fakeDb({ 'user-1': { person_id: 'person-1' } });
+    const payload = { owner_team_id: blankValue };
+    await mount()['items.create'](payload, { collection: 'physical_samples' }, ctx(db));
+    assert.equal(payload.owner_person_id, 'person-1');
+  }
+});
+
+test('an array payload: only the items that set owner_team_id skip the default', async () => {
+  const db = fakeDb({ 'user-1': { person_id: 'person-1' } });
+  const payload = [{ owner_team_id: 'team-1' }, { a: 1 }, { owner_person_id: 'other' }];
+  await mount()['items.create'](payload, { collection: 'campaigns' }, ctx(db));
+  assert.deepEqual(payload, [{ owner_team_id: 'team-1' }, { a: 1, owner_person_id: 'person-1' }, { owner_person_id: 'other' }]);
+});
+
+test('projects have no team owner: owner_team_id in a project payload is ignored', async () => {
+  const db = fakeDb({ 'user-1': { person_id: 'person-1' } });
+  const payload = { owner_team_id: 'team-1' };
+  await mount()['items.create'](payload, { collection: 'projects' }, ctx(db));
+  assert.equal(payload.principal_investigator_person, 'person-1');
+});

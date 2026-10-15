@@ -172,7 +172,7 @@ svg { width: 100%; max-height: 280px; }
 	stroke-linejoin: round;
 }
 .hole { fill: var(--d1-tile, var(--theme--background-subdued)); stroke: color-mix(in srgb, var(--theme--foreground) 40%, transparent); stroke-width: 0.2; }
-.mark { fill: color-mix(in srgb, var(--theme--foreground) 55%, transparent); }
+.mark { fill: color-mix(in srgb, var(--theme--foreground) 80%, transparent); }
 .edge { cursor: pointer; outline: none; }
 .edge circle {
 	fill: var(--d1-surface, var(--theme--background));

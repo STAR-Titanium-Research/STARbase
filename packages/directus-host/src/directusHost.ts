@@ -1,7 +1,7 @@
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter, type Router } from 'vue-router';
-import { guessAdmin, openLink, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
+import { guessAdmin, isLabViewerRole, openLink, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
 
 // The Directus side of the Explorer's host contract (packages/d1-ui/src/host.ts). A standalone
 // app provides its own ExplorerHost (setExplorerHostFactory) and reuses the components unchanged.
@@ -54,6 +54,9 @@ export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: 
 			// Keep the store seed: Home, ProjectsIndex and register-sample read it, and a failed lookup is no reason to forget who is signed in.
 		});
 
+	// The Lab Viewer role, off the role id the host already holds (the store's seed, then /users/me): no extra request.
+	const canViewAllAccess = computed(() => isLabViewerRole(user.value?.role));
+
 	const host: ExplorerHost = {
 		api,
 		navigate: (to) => openLink(to, router),
@@ -68,6 +71,7 @@ export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: 
 		},
 		isAdmin,
 		adminKnown,
+		canViewAllAccess,
 		user,
 	};
 	// (an app's own hook, once per signed-in user)

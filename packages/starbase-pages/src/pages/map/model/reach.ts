@@ -83,3 +83,22 @@ export function shownNodes(graph: ProcessGraph, focusNodeId: string, reach: numb
   }
   return shown;
 }
+
+/** Soft cap on the cards the map draws (spec D22). */
+export const CARD_CAP = 300;
+
+export type Reach = 1 | 2 | 3 | 'all';
+
+/** The nodes shown at `reach`, stepped down 3, 2, 1 while more than CARD_CAP would show (spec D22). */
+export function fitReach(graph: ProcessGraph, focusNodeId: string, reach: Reach): { ids: Set<string>; effective: Reach; clamped: boolean } {
+  let ids = shownNodes(graph, focusNodeId, reach);
+  let effective = reach;
+  if (ids.size <= CARD_CAP) return { ids, effective, clamped: false };
+  for (const step of [3, 2, 1] as const) {
+    if (reach !== 'all' && step >= reach) continue;
+    effective = step;
+    ids = shownNodes(graph, focusNodeId, step);
+    if (ids.size <= CARD_CAP) break;
+  }
+  return { ids, effective, clamped: true };
+}

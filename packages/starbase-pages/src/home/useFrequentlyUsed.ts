@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
-	useExplorerHost, usePins, RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, readDismissed, recordEntries, recordRequest, removeEntry, restoreEntry,
-	splitRecordTarget, suggestedPageEntries, useRequestGate, withoutDismissed, withoutPinned, writeDismissed, type UsageEntry,
+	useExplorerHost, usePins, RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, readDismissed, loadRecordLabels, removeEntry, restoreEntry,
+	suggestedPageEntries, useRequestGate, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed, type UsageEntry,
 } from '@d1/ui';
 
 // The Home "Frequently used" lists. GET /d1-usage (core/extensions/d1-usage) says which pages and
@@ -22,7 +22,8 @@ export const MAX_SHOWN = 15;
 type Which = 'pages' | 'records';
 
 export function useFrequentlyUsed() {
-	const api = useExplorerHost().api;
+	const host = useExplorerHost();
+	const api = host.api;
 	const pinsState = usePins();
 	const gate = useRequestGate();
 	const pages = ref<UsageEntry[]>([]);
@@ -32,31 +33,6 @@ export function useFrequentlyUsed() {
 	const loadFailed = ref(false);
 	const error = ref('');
 
-	async function loadLabels(items: Array<{ target: string; pinned?: boolean }>): Promise<UsageEntry[]> {
-		const byCollection = new Map<string, Array<{ target: string; pinned: boolean; id: string }>>();
-		for (const it of items) {
-			const parts = splitRecordTarget(it.target);
-			if (!parts) continue;
-			const list = byCollection.get(parts.collection) ?? [];
-			list.push({ pinned: false, target: it.target, id: parts.id });
-			byCollection.set(parts.collection, list);
-		}
-		const found = new Map<string, UsageEntry>();
-		await Promise.all([...byCollection].map(async ([collection, used]) => {
-			const params = recordRequest(collection, used.map((u) => u.id));
-			if (!params) return;
-			let rows: any[] = [];
-			try {
-				rows = (await api.get(`/items/${collection}`, { params })).data?.data ?? [];
-			} catch {
-				// Forbidden, or the collection is not there for this user: those records are left out.
-			}
-			for (const e of recordEntries(collection, rows, used)) found.set(e.target, e);
-		}));
-		// The endpoint's order (by score), whichever request answered first.
-		return items.flatMap((it) => found.get(it.target) ?? []);
-	}
-
 	async function load() {
 		const token = gate.begin();
 		try {
@@ -64,7 +40,7 @@ export function useFrequentlyUsed() {
 			const body = res.data ?? {};
 			const pageItems: Array<{ target: string }> = Array.isArray(body.pages) ? body.pages : [];
 			const recordItems: Array<{ target: string }> = Array.isArray(body.records) ? body.records : [];
-			const recordList = await loadLabels(recordItems.filter((r) => RECORD_COLLECTIONS.includes(String(r.target).split(':')[0])));
+			const recordList = await loadRecordLabels(api.get.bind(api), recordItems.filter((r) => RECORD_COLLECTIONS.includes(String(r.target).split(':')[0])));
 			if (!gate.isCurrent(token)) return;
 			pages.value = pageItems.flatMap((p) => pageEntry(p.target, false) ?? []);
 			records.value = recordList;
@@ -139,9 +115,11 @@ export function useFrequentlyUsed() {
 	// Pinned rows are left out of both lists, as the shared pins state says (a suggestion has no row on
 	// the server, so only this filter keeps a pinned one off the list).
 	const isPinned = pinsState.isPinned;
+	// A Lab Viewer changes nothing: the create actions (Register a sample, Log an operation) are left out of both.
+	const viewer = () => host.canViewAllAccess?.value === true;
 	const pageList = computed(() => mergeWithSuggestions(
-		withoutPinned(pages.value, 'page', isPinned),
-		withoutPinned(withoutDismissed(suggestedPageEntries(), dismissed.value), 'page', isPinned),
+		withoutPinned(withoutWriteActions(pages.value, viewer()), 'page', isPinned),
+		withoutPinned(withoutDismissed(withoutWriteActions(suggestedPageEntries(), viewer()), dismissed.value), 'page', isPinned),
 		SHOWN,
 	).slice(0, MAX_SHOWN));
 	const recordList = computed(() => withoutPinned(records.value, 'record', isPinned).slice(0, MAX_SHOWN));

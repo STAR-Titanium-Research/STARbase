@@ -90,6 +90,7 @@ export interface TestRow {
 export interface SampleRec {
   id: string;
   code: string;
+  nickname: string | null;
   form: string | null;
   status: string | null;
   projectId: string | null;
@@ -127,7 +128,7 @@ export interface ProcessData {
    * Codes of samples that operations of the family made but that are outside it (the sibling pieces of a cut,
    * seen from one piece): they are drawn as small cards, "another piece" when the code was not read.
    */
-  pieces?: Record<string, { code: string; form: string | null }>;
+  pieces?: Record<string, { code: string; nickname?: string | null; form: string | null }>;
   /**
    * Codes of the recorded batches the rows above belong to, by batch id ("B-0003"). Only batches whose code was
    * read: a batch the person may not see the code of is still a group, headed "Batch".
@@ -147,13 +148,15 @@ export interface ProcessData {
 /**
  * A page-by-page list of what used a record: operations or tests (drawn as collapsed containers) or
  * samples (cards). `items` are the refs loaded so far, in the order drawn. `total` is the server's count of
- * the main list; `remaining` is what is still to load ("+N more"), which differs from `total - items.length`
- * for a stock lot (counted in samples, drawn as operations) and a campaign (unreadable samples are dropped).
+ * the main list, or null for a campaign or stock lot (their junction counts include records the person may not read,
+ * spec D21). `remaining` is what is still to load ("+N more"): null = more to load, no number to show ("More").
  */
 export interface Fan {
   items: Ref[];
-  total: number;
-  remaining?: number;
+  total: number | null;
+  remaining?: number | null;
+  /** A junction or provenance row of this fan named a sample the person may not read: one marker, no count (spec D21). */
+  hidden?: boolean;
 }
 export interface SideFan extends Fan {
   root: Ref & { kind: Kind };
@@ -248,7 +251,8 @@ export type MoreNode = {
   type: 'more';
   /** The record whose fan it continues, `<collection>:<id>`. */
   of: string;
-  remaining: number;
+  /** Null: more to load, but a count would include records the person may not read (D21): the stub says "More". */
+  remaining: number | null;
 };
 
 export type JunctionNode = {
@@ -283,3 +287,6 @@ export interface ProcessGraph {
   hidden: HiddenMarker[];
   truncated: boolean;
 }
+
+/** Where the Process map is in loading its focus. */
+export type MapStatus = 'empty' | 'loading' | 'ready' | 'notVisible' | 'error';

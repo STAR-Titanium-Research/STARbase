@@ -6,7 +6,7 @@
 // browser loads as a small image (`assetThumbUrl`), the plotter is a link.
 
 import { analysisLink, mergePlots, plotRequests, type HostApi, type RowPlots } from '@d1/ui';
-import { chunkByBudget } from './loadFamily';
+import { chunkByBudget } from './requests';
 import type { Ref } from './types';
 
 const OPERATIONS = 'manufacturing_operations';

@@ -4,7 +4,7 @@ import { EXPLORER_HOST } from '../host';
 import { useRequestGate } from '../composables/useRequestGate';
 import { loadTeamHits, searchPeople } from '../access/accessApi';
 import {
-	LOGINLESS_NOTE, addable, isLoginless, isTeamHit, teamMembersLabel, teamsMatching, type AccessList, type PersonHit, type TeamHit,
+	LOGINLESS_NOTE, addable, isLoginless, isTeamHit, pickerTaken, teamMembersLabel, teamsMatching, type AccessList, type PersonHit, type TeamHit,
 } from '../access/accessModel';
 import { moveIndex } from '../finder/finderNav';
 import TeamTile from '../teams/TeamTile.vue';
@@ -12,7 +12,7 @@ import TeamTile from '../teams/TeamTile.vue';
 // The add box of the "Who has access" dialog: a combobox that searches active People by name (the same /items/people the People
 // page reads) and, with `teams`, the teams too (GET /d1-teams, read once and filtered by name here). A person with no login can be picked
 // and is marked "can't sign in yet": the grant starts working the day an admin links a login to them. People and teams already on the list
-// are left out; for a transfer (`entries: false`) only the owner is. People come first, then teams.
+// are left out; for a transfer (`entries: false`) only the owner is (a team that owns the record is not offered again). People come first, then teams.
 // Enter picks the highlighted row, the arrow keys move, Escape closes the list (and only then: a second Escape closes the dialog).
 const props = withDefaults(
 	defineProps<{
@@ -47,8 +47,9 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 
 const shown = computed<(PersonHit | TeamHit)[]>(() => {
 	const list = props.list ?? { owner: null, entries: [] };
-	const people = addable(hits.value, props.entries ? list : { owner: list.owner, entries: [] });
-	const teams = props.teams && allTeams.value ? teamsMatching(allTeams.value, searched.value, list) : [];
+	const taken = pickerTaken(list, props.entries);
+	const people = addable(hits.value, taken);
+	const teams = props.teams && allTeams.value ? teamsMatching(allTeams.value, searched.value, taken) : [];
 	return [...people, ...teams];
 });
 const keyOf = (hit: PersonHit | TeamHit) => (isTeamHit(hit) ? `team-${hit.team_id}` : hit.person_id);

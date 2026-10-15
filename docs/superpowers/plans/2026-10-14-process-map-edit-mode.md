@@ -18,11 +18,11 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | built; reviewed (no blockers); review fixes in progress (2026-10-15) |
+| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | reviewed, fixed, **merged** (2026-10-15); migrations renumbered 189–191 |
 | B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | reviewed, fixed, **merged** (2026-10-15) |
 | C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | reviewed, fixed, **merged** (2026-10-15) |
-| D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | in progress (2026-10-15) |
-| D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | in progress (2026-10-15) |
+| D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | built (all 6 steps); in review; must be ported onto the split map base (2026-10-15) |
+| D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | reviewed, fixed, **merged** (2026-10-15) |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
 | Review + merge + PR | coordinator | `claude/keen-brahmagupta-nmo9oy` | not started |
 
@@ -35,7 +35,7 @@ Glossary: `CONTEXT.md` → "Building on the process map".
   ```
 - Migrations: re-scan every `refs/remotes/origin/*` for the next number right before creating the file
   (`.claude/skills/db-migration/scripts/next_migration_name.sh`). On 2026-10-14 `183`/`184` are taken on
-  `feat/team-ownership`, so expect `20261014000185_planned_work.sql` and `20261014000186_build_store.sql`.
+  `feat/team-ownership`, so (renumbered 2026-10-15 after main took 185 and 188) `20261015000189_planned_work.sql`, `20261015000190_build_store.sql`, `20261015000191_form_condition_fixes.sql`.
 - STARbase must keep working before the migration is applied: request `work_state` / `planned_date` only when
   `/fields/<collection>` lists them (the `batch_id` pattern in `loadFamily.ts`). Hide edit mode when
   `GET /d1-build/drafts` 404s.

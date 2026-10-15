@@ -8,7 +8,7 @@ describe('edgeTestsFilter', () => {
 		expect(edgeTestsFilter('e1')).toEqual({
 			_or: [
 				{ insert_edge_id: { _eq: 'e1' } },
-				{ subject: { _some: { _and: [{ collection: { _eq: 'insert_edges' } }, { item: { _eq: 'e1' } }] } } },
+				{ subject: { _some: { 'item:insert_edges': { edge_id: { _eq: 'e1' } } } } },
 			],
 		});
 	});

@@ -122,7 +122,7 @@ describe('buildInsertGeometry', () => {
 
 describe('buildReferenceMark', () => {
 	it('is a small flat mark on the top face, toward corner 0', () => {
-		const g = buildReferenceMark(cnmg.geometry, cnmg.outline);
+		const g = buildReferenceMark(cnmg.geometry, cnmg.outline)!;
 		const b = bounds(g);
 		expect(b.h).toBeLessThan(0.2);
 		expect(b.b.min.y).toBeGreaterThan(cnmg.geometry.thicknessMm / 2 - 0.1);

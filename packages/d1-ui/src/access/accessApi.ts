@@ -55,15 +55,20 @@ export const removeEntry = (api: AccessApi, collection: string, id: string, pers
 		return true as const;
 	});
 
-/** The new owner's name and `blocked_by` come back too: the dialog says when they cannot read the record yet (the change is made anyway). */
+/**
+ * The new owner's name and `blocked_by` come back too: the dialog says when they cannot read the record yet (the change is made anyway).
+ * `to`: a person id, `{ person_id }` or `{ team_id }` (the four ownable types only: a project is 409 NOT_OWNABLE_BY_TEAM, a team with no
+ * manager is 409 TEAM_HAS_NO_MANAGER; the endpoint's words come back as the message).
+ */
 export const transfer = (
 	api: AccessApi,
 	collection: string,
 	id: string,
-	personId: string,
+	to: string | { person_id: string } | { team_id: string },
 ): Promise<Outcome<{ email: EmailResult; owner: { name: string } | null; blocked_by: BlockedBy | null }>> =>
 	run(async () => {
-		const body = (await api.post(`${base(collection, id)}/transfer`, { person_id: personId })).data ?? {};
+		const target = typeof to === 'string' ? { person_id: to } : to;
+		const body = (await api.post(`${base(collection, id)}/transfer`, target)).data ?? {};
 		return { email: body.email ?? 'skipped', owner: body.owner ?? null, blocked_by: body.blocked_by ?? null };
 	});
 

@@ -244,8 +244,8 @@
 
 **Files:**
 - Modify: `tests/ui/specs/13-explorer-routes.spec.ts` (`EXTRA_ROUTES` gains `'/map'`)
-- Create: `tests/ui/specs/19-process-map.spec.ts`
+- Create: `tests/ui/specs/21-process-map.spec.ts`
 
 - [ ] **Step 1:** Write spec 17 (helpers from `tests/ui/starbase/target.ts`: `signInStarbase`, `adminApi`, `findFirstId`, `watchErrors`), as admin and as member: find a sample with operations (`adminApi` query on `manufacturing_operations` with `sample_id` not null); visit `/map?focus=physical_samples:<id>`; expect `.vue-flow__node` count ≥ 2 and a container node; hover a wire hit path → tooltip contains the sample code; Ctrl+click it → the rail's code changes to the origin; click ＋ on a slot → node count grows; "Open record" in the rail leads to the record page; the Sample page's Process map button opens `/map?focus=…`; the page text never contains "lineage graph"; no console errors.
-- [ ] **Step 2:** Start the preview exactly as `tests/ui/README.md` describes with `D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057` (build extensions and `starbase-web` first), then `D1_ROUTES_CREDENTIALS=.superpowers/preview-credentials-d1-starbase.txt D1_ROUTES_STARBASE=http://127.0.0.1:5190 npx playwright test specs/13-explorer-routes.spec.ts specs/19-process-map.spec.ts --retries=0` from `tests/ui` → all pass. Stop the preview (`--stop`).
+- [ ] **Step 2:** Start the preview exactly as `tests/ui/README.md` describes with `D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057` (build extensions and `starbase-web` first), then `D1_ROUTES_CREDENTIALS=.superpowers/preview-credentials-d1-starbase.txt D1_ROUTES_STARBASE=http://127.0.0.1:5190 npx playwright test specs/13-explorer-routes.spec.ts specs/21-process-map.spec.ts --retries=0` from `tests/ui` → all pass. Stop the preview (`--stop`).
 - [ ] **Step 3:** Commit `test(map): end-to-end process map on the preview`, push.

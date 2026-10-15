@@ -9,7 +9,8 @@
 import { computed, inject, provide, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue';
 import type { DraftBody, DraftKey, DraftListEntry, FieldDef as DirectusField, HostApi } from '@d1/ui';
 import type { MapNode, ProcessData } from '../model/types';
-import type { MapOverlay, MapRoute, MapRouter, MergeHint } from '../useProcessMap';
+import type { MergeHint } from '../useMapExpand';
+import type { MapOverlay, MapRoute, MapRouter } from '../useProcessMap';
 import { blocking } from './checks';
 import type { DraftAction } from './draft';
 import { draftKeyOfNode, isDraftNode } from './socketRefs';

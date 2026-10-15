@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge, processLabel } from '@d1/ui';
 import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
-import type { ContainerNode, SampleRow } from '../model/types';
+import type { ContainerNode } from '../model/types';
 import { isBundleSocket } from '../model/sockets';
 import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
@@ -12,12 +12,13 @@ import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
 
 // An operation or a test as a container (spec D4, D5, D8, D9, D14): a tinted title bar saying what kind of
-// step it is ("Machining | Turning"), the step's own name and date, one sample row per sample with its
-// sockets, the Inside tray, the key settings. A stack of passes is drawn as a deck of cards with "Unstack".
-// Every socket id is drawn once: a shared
-// input (a cut) on the first row that has it, the folded rows' bundle sockets on the "+N more samples"
-// row. Folding is the model's (`bundled`, rows from index 2 on share `:b` sockets); the bundle row and
-// the "Fold samples" row ask the page to refold through `toggleRows`.
+// step it is ("Machining | Turning"), the step's own name and date, a socket rail, the Inside tray, the key
+// settings. A stack of passes is drawn as a deck of cards, with "Unstack" on its rail. The rail is one line of
+// text ("1 sample → 4 pieces") with the input sockets stacked on its left edge and the output sockets on its
+// right: no per-row labels, since the wires and the sample cards already say which sample is which. Every
+// socket id is drawn once (a cut's shared input once; the folded rows' bundle sockets last, fat). Folding is
+// the model's (`bundled`, rows from index 2 on share `:b` sockets); the rail's "+N more" / "fold" asks the
+// page through `toggleRows`.
 const props = defineProps<{ id: string; data: ContainerNode; selected?: boolean }>();
 defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
@@ -25,7 +26,7 @@ const { direction, moreOpen } = useMapView();
 
 /** Rows drawn on their own sockets when a container is folded. */
 const SHOWN_WHEN_FOLDED = 2;
-/** More rows than this fold by default; an unfolded container with more offers "Fold samples". */
+/** More rows than this fold by default; an unfolded container with more offers "fold". */
 const FOLD_ABOVE = 3;
 
 const style = computed(() => KINDS[props.data.kind]);
@@ -48,28 +49,93 @@ const name = computed(() => {
 });
 const open = useExpanded(() => props.id);
 
-interface RowView {
-	row: SampleRow;
-	label: string;
-	in: string | null;
-	out: string | null;
+/** Vertical distance between two sockets of a rail stack, and the rail's padding above and below it. */
+const PITCH = 16;
+const RAIL_PAD = 8;
+
+interface RailSocket {
+	id: string;
+	fat: boolean;
+	top: string;
+	/** Edit mode: nothing is wired here, so no Handle is drawn: a button stands in, for the row `free` names. */
+	free?: string;
 }
-const several = computed(() => props.data.rows.length > 1);
-const shown = computed<RowView[]>(() => {
-	const seen = new Set<string>();
-	const rows = props.data.bundled ? props.data.rows.slice(0, SHOWN_WHEN_FOLDED) : props.data.rows;
-	return rows.map((row, i) => {
-		const input = row.in && !isBundleSocket(row.in) && !seen.has(row.in) ? row.in : null;
-		if (input) seen.add(input);
-		const out = row.out && !isBundleSocket(row.out) && !seen.has(row.out) ? row.out : null;
-		if (out) seen.add(out);
-		return { row, label: several.value ? `Sample ${i + 1}` : 'Sample', in: input, out };
-	});
-});
+
 const hidden = computed(() => (props.data.bundled ? props.data.rows.slice(SHOWN_WHEN_FOLDED) : []));
-const bundleIn = computed(() => hidden.value.find((r) => r.in && isBundleSocket(r.in))?.in ?? null);
-const bundleOut = computed(() => hidden.value.find((r) => r.out && isBundleSocket(r.out))?.out ?? null);
 const canFold = computed(() => !props.data.bundled && props.data.rows.length > FOLD_ABOVE);
+
+// Edit mode (spec E8, E9): the sockets of a new container are where wires start and end. A socket with a wire is a Handle already; a
+// side with nothing wired has none drawn, so edit mode draws a free one, a button, on the rail in its place (a blank operation is
+// one row with a free input). A test takes samples in but nothing comes out of it. The rail does not say which row a socket is, so
+// the row is found from the socket id.
+const edit = useMapEdit();
+const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
+const rowRef = (recordId: string, side: EndSide): SocketRef | null =>
+	editable.value && !(props.data.kind === 'test' && side === 'out') ? { kind: 'row', id: rowRecordId(props.data, recordId, side), side } : null;
+/** The edit controls of a rail socket drawn as a Handle (null where nobody can build from it: folded bundles). */
+const railRef = (socket: string, side: EndSide): SocketRef | null => {
+	const row = props.data.rows.find((r) => r[side] === socket);
+	return row && !isBundleSocket(socket) ? rowRef(row.recordId, side) : null;
+};
+const freeProps = (recordId: string, side: EndSide) => {
+	const ref = rowRef(recordId, side);
+	return edit && ref ? editSocketProps(edit, ref) : {};
+};
+const what = computed(() => props.data.code || props.data.title);
+const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
+const addRow = stopping(() => edit?.addRow(props.id));
+const addRowKey = activating(() => edit?.addRow(props.id));
+
+/** Each side's socket ids, in row order, each once; the bundle socket (if any) last. */
+function sideSockets(side: 'in' | 'out'): { id: string; fat: boolean; free?: string }[] {
+	const seen = new Set<string>();
+	const out: { id: string; fat: boolean; free?: string }[] = [];
+	const rows = props.data.bundled ? props.data.rows.slice(0, SHOWN_WHEN_FOLDED) : props.data.rows;
+	for (const r of rows) {
+		const id = r[side];
+		if (!id || isBundleSocket(id) || seen.has(id)) continue;
+		seen.add(id);
+		out.push({ id, fat: false });
+	}
+	const bundle = hidden.value.find((r) => r[side] && isBundleSocket(r[side]!))?.[side];
+	if (bundle) out.push({ id: bundle, fat: true });
+	// A row with nothing wired on this side: a free socket for it (new containers, in edit mode).
+	if (editable.value && !(props.data.kind === 'test' && side === 'out')) {
+		for (const r of rows) if (!r[side]) out.push({ id: `free:${side}:${r.recordId}`, fat: false, free: r.recordId });
+	}
+	return out;
+}
+
+// The two stacks are centred on each other, so a cut's one input sits level with the middle of its pieces
+// and rows in place (same count each side) line up straight across.
+const rail = computed(() => {
+	const ins = sideSockets('in');
+	const outs = sideSockets('out');
+	const tall = Math.max(ins.length, outs.length, 1);
+	const place = (list: { id: string; fat: boolean; free?: string }[]): RailSocket[] =>
+		list.map((s, i) => ({ ...s, top: `${RAIL_PAD + PITCH / 2 + ((tall - list.length) / 2 + i) * PITCH}px` }));
+	return { ins: place(ins), outs: place(outs), height: `${RAIL_PAD * 2 + tall * PITCH}px` };
+});
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** What goes in and what comes out, counted over every row (folded ones too). */
+const summary = computed(() => {
+	const rows = props.data.rows;
+	const inPlace = rows.filter((r) => r.inPlace).length;
+	const made = rows.filter((r) => r.out && !r.inPlace).length;
+	const ins = rows.filter((r) => r.in);
+	const bundledIn = ins.some((r) => isBundleSocket(r.in!));
+	const nIn = bundledIn ? ins.length : new Set(ins.map((r) => r.in)).size;
+	if (props.data.kind === 'test') return `${plural(rows.length, 'sample')} tested`;
+	if (props.data.stacked) return `1 sample · ${props.data.group.rowIds.length} passes`;
+	if (made === 0 && inPlace === 0) return plural(nIn, 'sample');
+	if (inPlace === rows.length) return `${plural(rows.length, 'sample')} · in place`;
+	if (nIn === 0) return `Makes ${plural(made, 'sample')}`;
+	if (nIn === 1) return `1 sample → ${plural(made, 'piece')}`;
+	return `${plural(nIn, 'sample')} → ${plural(made + inPlace, 'sample')}`;
+});
+const railToggle = computed(() => (hidden.value.length ? `+${hidden.value.length} more` : canFold.value ? 'fold' : null));
 
 const collapsedIn = computed(() => (props.data.collapsed ? (props.data.rows[0]?.in ?? null) : null));
 const majors = computed(() => props.data.slots.filter((s) => s.major));
@@ -80,7 +146,7 @@ const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.val
 const card = cardHandlers(actions, () => props.id, () => open.value);
 const unstack = stopping(() => actions.unstack?.(props.id));
 const unstackKey = activating(() => actions.unstack?.(props.id));
-const bind = useSocketBinder();
+const sockProps = useSocketBinder();
 const hiddenSides = useHiddenSides(() => props.id);
 const refold = stopping(() => actions.toggleRows(props.id));
 const toggleMore = stopping(() => actions.toggleMore(props.id));
@@ -88,23 +154,6 @@ const refoldKey = activating(() => actions.toggleRows(props.id));
 const toggleMoreKey = activating(() => actions.toggleMore(props.id));
 const inPos = computed(() => handlePosition(direction.value, 'in'));
 const outPos = computed(() => handlePosition(direction.value, 'out'));
-
-// Edit mode (spec E8, E9): the rows of a new container are where wires start and end. A row with a sample on a side has a socket there
-// already (a Handle); a side with nothing wired has none drawn, so edit mode draws a free one, a button, in its place (a blank
-// operation is a row with a free input and a free output). A test takes samples in but nothing comes out of it.
-const edit = useMapEdit();
-const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
-const rowRef = (recordId: string, side: EndSide): SocketRef | null =>
-	editable.value && !(props.data.kind === 'test' && side === 'out') ? { kind: 'row', id: rowRecordId(props.data, recordId, side), side } : null;
-const freeProps = (recordId: string, side: EndSide) => {
-	const ref = rowRef(recordId, side);
-	return edit && ref ? editSocketProps(edit, ref) : {};
-};
-const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
-const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
-const addRow = stopping(() => edit?.addRow(props.id));
-const addRowKey = activating(() => edit?.addRow(props.id));
-const what = computed(() => props.data.code || props.data.title);
 </script>
 
 <template>
@@ -126,7 +175,7 @@ const what = computed(() => props.data.code || props.data.title);
 			:position="inPos"
 			:connectable="false"
 			:style="edgeStyle(direction, 'in', 0, 1)"
-			v-bind="bind(collapsedIn, 'in')"
+			v-bind="sockProps(collapsedIn, 'in')"
 		/>
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
@@ -143,40 +192,53 @@ const what = computed(() => props.data.code || props.data.title);
 			<span v-if="data.when || (data.collapsed && data.meta)" class="d">{{ data.when ?? data.meta }}</span>
 		</div>
 
-		<div v-if="data.rows.length && !data.collapsed" class="iorows">
-			<div v-for="(r, i) in shown" :key="i" class="orow">
-				<span>
-					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" v-bind="bind(r.in, 'in', rowRef(r.row.recordId, 'in'))" />
-					<button v-else-if="editable" type="button" class="sock row in free nodrag nopan" :aria-label="freeSocketLabel('in', what)" v-bind="freeProps(r.row.recordId, 'in')"></button>
-					<template v-if="r.row.in">{{ r.label }}</template>
-					<template v-else-if="editable">Sample in</template>
-				</span>
-				<span :class="{ pass: r.row.inPlace }"></span>
-				<span>
-					<template v-if="r.row.out">{{ r.label }}</template>
-					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" v-bind="bind(r.out, 'out', rowRef(r.row.recordId, 'out'))" />
-					<button v-else-if="editable && data.kind === 'operation'" type="button" class="sock row out free nodrag nopan" :aria-label="freeSocketLabel('out', what)" v-bind="freeProps(r.row.recordId, 'out')"></button>
-				</span>
-			</div>
-			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
-				<span>
-					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" v-bind="bind(bundleIn, 'in')" />
-					{{ `+${hidden.length} more samples` }}
-				</span>
-				<span></span>
-				<span>
-					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" v-bind="bind(bundleOut, 'out')" />
-				</span>
-			</div>
-			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
-				<span></span><span>Fold samples</span><span></span>
-			</div>
-			<div v-if="data.stacked" class="orow fold nodrag nopan" role="button" tabindex="0" @click="unstack" @keydown="unstackKey">
-				<span></span><span>{{ `Unstack ${data.group.rowIds.length} passes` }}</span><span></span>
-			</div>
-			<div v-if="canAddRow" class="orow fold addrow nodrag nopan" role="button" tabindex="0" @click="addRow" @keydown="addRowKey">
-				<span></span><span><v-icon name="add" x-small /> output</span><span></span>
-			</div>
+		<div v-if="data.rows.length && !data.collapsed" class="rail" :style="{ minHeight: rail.height }">
+			<template v-for="s in rail.ins" :key="s.id">
+				<button
+					v-if="s.free"
+					type="button"
+					class="sock rail-sock in free nodrag nopan"
+					:style="{ top: s.top }"
+					:aria-label="freeSocketLabel('in', what)"
+					v-bind="freeProps(s.free, 'in')"
+				></button>
+				<Handle
+					v-else
+					:id="s.id"
+					class="sock rail-sock in"
+					:class="{ fat: s.fat }"
+					type="target"
+					:position="inPos"
+					:connectable="false"
+					:style="{ top: s.top }"
+					v-bind="sockProps(s.id, 'in', railRef(s.id, 'in'))"
+				/>
+			</template>
+			<span class="sum">{{ summary }}</span>
+			<button v-if="railToggle" class="rtoggle nodrag nopan" type="button" @click="refold" @keydown="refoldKey">{{ railToggle }}</button>
+			<button v-if="data.stacked" class="rtoggle nodrag nopan" type="button" :aria-label="`Unstack ${data.group.rowIds.length} passes`" @click="unstack" @keydown="unstackKey">Unstack</button>
+			<button v-if="canAddRow" class="rtoggle addrow nodrag nopan" type="button" aria-label="Add an output" @click="addRow" @keydown="addRowKey"><v-icon name="add" x-small />output</button>
+			<template v-for="s in rail.outs" :key="s.id">
+				<button
+					v-if="s.free"
+					type="button"
+					class="sock rail-sock out free nodrag nopan"
+					:style="{ top: s.top }"
+					:aria-label="freeSocketLabel('out', what)"
+					v-bind="freeProps(s.free, 'out')"
+				></button>
+				<Handle
+					v-else
+					:id="s.id"
+					class="sock rail-sock out"
+					:class="{ fat: s.fat }"
+					type="source"
+					:position="outPos"
+					:connectable="false"
+					:style="{ top: s.top }"
+					v-bind="sockProps(s.id, 'out', railRef(s.id, 'out'))"
+				/>
+			</template>
 		</div>
 
 		<div v-if="data.slots.length && !data.collapsed" class="slots" @click.stop>
@@ -199,7 +261,7 @@ const what = computed(() => props.data.code || props.data.title);
 </template>
 
 <style scoped>
-.op { width: 310px; }
+.op { width: 264px; }
 .ohead {
 	display: flex;
 	align-items: center;
@@ -228,19 +290,17 @@ const what = computed(() => props.data.code || props.data.title);
 .op.stacked { box-shadow: 5px 5px 0 -1px var(--d1-surface), 5px 5px 0 0 var(--d1-line), 10px 10px 0 -1px var(--d1-surface), 10px 10px 0 0 var(--d1-line), var(--d1-shadow); }
 .op.stacked:hover { box-shadow: 5px 5px 0 -1px var(--d1-surface), 5px 5px 0 0 var(--d1-accent, var(--theme--primary)), 10px 10px 0 -1px var(--d1-surface), 10px 10px 0 0 var(--d1-line), var(--d1-shadow-lg, var(--d1-shadow)); }
 
-.iorows { padding: 6px 0 8px; }
-.orow { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 3px 14px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); min-height: 24px; }
-.orow > span { position: relative; }
-/* A sample passing straight through (in place): a faint line from its in socket to its out socket. */
-.pass { height: 0; border-top: 1px dashed color-mix(in srgb, var(--k-sample) 45%, transparent); }
-.orow.bundle, .orow.fold { cursor: pointer; font-weight: 600; color: color-mix(in srgb, var(--k-sample) 62%, var(--theme--foreground)); }
-.orow.bundle:hover, .orow.fold:hover { background: var(--d1-tint); }
-.orow.fold { grid-template-columns: 1fr auto 1fr; font-weight: 500; color: var(--d1-dim); }
+.rail { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+.sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rtoggle { flex: none; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--d1-line); background: none; font: inherit; font-weight: 600; color: color-mix(in srgb, var(--k-sample) 62%, var(--theme--foreground)); cursor: pointer; }
+.rtoggle:hover { background: var(--d1-tint); }
+.rtoggle:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
 
-.slots { margin: 0 10px; padding: 6px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); display: flex; flex-direction: column; gap: 4px; cursor: default; }
+.slots { margin: 0 10px 10px; padding: 6px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); display: flex; flex-direction: column; gap: 4px; cursor: default; }
+.slots:has(+ .params) { margin-bottom: 0; }
 .more-toggle { text-align: center; padding: 5px 8px; border-radius: 8px; border: 1px dashed var(--d1-line); color: var(--d1-dim); font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; }
 .more-toggle:hover { color: var(--theme--foreground); }
-.orow:focus-visible, .more-toggle:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -2px; }
+.more-toggle:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -2px; }
 
 .params { margin: 0; padding: 8px 14px 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; font-size: var(--fs-sm, 12px); }
 .params div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--d1-line); padding: 2px 0; }

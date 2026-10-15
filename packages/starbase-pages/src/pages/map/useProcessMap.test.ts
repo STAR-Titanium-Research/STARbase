@@ -2,14 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, watch } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
+import { chainFocus } from './model/hoverFocus';
 import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
-import { loadFamily, loadFormRead, loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFamily';
-import { HOVER_DELAY_MS, useProcessMap } from './useProcessMap';
+import { loadFamily, loadFormRead } from './model/loadFamily';
+import { loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFans';
+import { HOVER_DELAY_MS } from './useMapHover';
+import { useProcessMap } from './useProcessMap';
 
 vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
   loadFamily: vi.fn(),
   loadFormRead: vi.fn(async () => ({ defs: null, work: [] as string[] })),
+}));
+vi.mock('./model/loadFans', async (orig) => ({
+  ...(await orig<typeof import('./model/loadFans')>()),
   loadStepRow: vi.fn(),
   loadRecordRef: vi.fn(),
   loadUsedIn: vi.fn(),
@@ -458,16 +464,24 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('hovering a card dims the rest; hovering a wire only highlights it', async () => {
+  it('the selection lights its chain (both ways by default); hovering another card shows its neighbours; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
+    expect(map.selectedId.value).toBe('s:s1');
+    expect(map.chainDir.value).toBe('both');
+    const chain = map.focusOfHover.value!;
+    expect(chain).toEqual(chainFocus(map.graph.value!, 's:s1', 'both'));
     map.hover('s:s2', {} as HTMLElement);
+    expect(map.focusOfHover.value).not.toEqual(chain);
     expect(map.focusOfHover.value).toMatchObject({ dim: true });
     map.hover(null);
-    expect(map.focusOfHover.value).toBeNull();
-    map.hover(map.graph.value!.wires[0].id, {} as HTMLElement);
-    expect(map.focusOfHover.value).toMatchObject({ dim: false });
+    expect(map.focusOfHover.value).toEqual(chain);
+    map.setChainDir('up');
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s1', 'up'));
+    const wire = map.graph.value!.wires[0].id;
+    map.hover(wire, {} as HTMLElement);
+    expect(map.focusOfHover.value!.wires.has(wire)).toBe(true);
   });
 
   it('hidden markers become the sides a node draws "some records hidden" on, even with no socket there', async () => {
@@ -811,16 +825,21 @@ describe('expand: loading more (D15, spec 7)', () => {
 
   it('a stock lot page with no operations is not the end: "+N more" stays and loads the next page', async () => {
     recordRef.mockResolvedValue({ collection: 'raw_stock_lots', id: 'l1', code: 'LOT-1' });
-    usedIn.mockResolvedValue({ items: [], total: 45 });
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
     const { map } = setup({ focus: 'raw_stock_lots:l1' });
     await settle();
     expect(map.focusNodeId.value).toBe('lot:l1');
-    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(25);
-    usedIn.mockResolvedValue({ items: toolOps(2), total: 45 });
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBeNull(); // "More": no count of samples the person may not read
+    usedIn.mockResolvedValue({ items: toolOps(2), total: null, more: true });
     await map.expand('more:raw_stock_lots:l1');
     await settle();
     expect(containersOf(map)).toHaveLength(2);
-    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(5);
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBeNull();
+    usedIn.mockResolvedValue({ items: toolOps(1, 10), total: null, more: false }); // a short page ends the paging
+    await map.expand('more:raw_stock_lots:l1');
+    await settle();
+    expect(containersOf(map)).toHaveLength(3);
+    expect(map.graph.value!.nodes.some((n) => n.type === 'more')).toBe(false);
   });
 
   it('a sample card of a fan opens its family once; after that the plus button reveals what is one step beyond it', async () => {
@@ -887,6 +906,42 @@ describe('expand: loading more (D15, spec 7)', () => {
     expect(usedIn).not.toHaveBeenCalled();
   });
 
+  it('a stock lot side fan whose first page has no operations still shows "More", and no notice (D21)', async () => {
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], stock: [{ lotId: 'l1', lotCode: 'LOT-1', supplier: null, massUsedGrams: null, sampleId: 's1' }] }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    await map.expand('lot:l1');
+    await settle();
+    expect(map.notice.value).toBe('');
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')).toMatchObject({ id: 'more:raw_stock_lots:l1', remaining: null });
+  });
+
+  it('Expand on a fan root whose "More" has no count loads the next page (side fan, then focus fan)', async () => {
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], stock: [{ lotId: 'l1', lotCode: 'LOT-1', supplier: null, massUsedGrams: null, sampleId: 's1' }] }));
+    const side = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    await side.map.expand('lot:l1');
+    await settle();
+    usedIn.mockClear();
+    usedIn.mockResolvedValue({ items: toolOps(1), total: null, more: false });
+    await side.map.expand('lot:l1');
+    await settle();
+    expect(usedIn).toHaveBeenCalledWith(api, { collection: 'raw_stock_lots', id: 'l1' }, 2);
+
+    usedIn.mockReset();
+    recordRef.mockResolvedValue({ collection: 'raw_stock_lots', id: 'l2', code: 'LOT-2' });
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    const focus = setup({ focus: 'raw_stock_lots:l2' });
+    await settle();
+    usedIn.mockClear();
+    usedIn.mockResolvedValue({ items: toolOps(1), total: null, more: false });
+    await focus.map.expand('lot:l2');
+    await settle();
+    expect(usedIn).toHaveBeenCalledWith(api, { collection: 'raw_stock_lots', id: 'l2' }, 2);
+  });
+
   it('a record nothing else used says so and adds nothing', async () => {
     const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
     const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { tool_id: tool } });
@@ -897,6 +952,19 @@ describe('expand: loading more (D15, spec 7)', () => {
     await map.expand('tools:t1');
     expect(map.notice.value).toMatch(/Nothing else/);
     expect(idsOf(map)).not.toContain('f:tools:t1');
+  });
+
+  it('a record whose only other users are hidden still opens its side fan, with the marker', async () => {
+    const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { tool_id: tool } });
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [op] }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [op], total: 1, hidden: true });
+    await map.expand('tools:t1');
+    expect(map.notice.value).toBe('');
+    expect(idsOf(map)).toContain('f:tools:t1');
+    expect([...map.hiddenSides.value.keys()]).toContain('f:tools:t1');
   });
 
   it('a failed expand shows the error and keeps what is loaded', async () => {

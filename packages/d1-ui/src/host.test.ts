@@ -9,6 +9,7 @@ const fake = (): ExplorerHost => ({
 	fieldsFor: async () => [],
 	isAdmin: ref(false),
 	adminKnown: ref(true),
+	canViewAllAccess: ref(false),
 	user: ref(null),
 });
 

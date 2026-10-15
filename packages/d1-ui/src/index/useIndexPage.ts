@@ -10,6 +10,8 @@ import { useRequestGate } from '../composables/useRequestGate';
 import { useExplorerNav } from '../nav/useExplorerNav';
 import { bookmarkVisibleToUser } from '../nav/navConfig';
 import type { Bookmark } from '../nav/navConfig';
+import { TEAM_RECORDS_LIMIT, getTeamRecordIds, listTeams } from '../teams/teamsApi';
+import { TEAM_FILTER_FIELD } from './indexConfig';
 import type { IndexDef } from './indexConfig';
 import { mergePlots, plotRequests } from './plotData';
 import type { PlotKey, RowPlots } from './plotData';
@@ -17,7 +19,7 @@ import { bookmarkSort, buildItemsParams, dataStudioLink, stateFromQuery } from '
 import type { IndexState } from './indexQuery';
 import {
 	BOOL_OPTIONS, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, nextSort,
-	queryForState, relationKey, relationOptionParams, relationOptions, validSort, withChange, withSelected,
+	queryForState, relationKey, relationOptionParams, relationOptions, teamTruncatedNote, validSort, withChange, withSelected,
 } from './indexView';
 import type { ChipOption } from './indexView';
 
@@ -68,6 +70,8 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	const loading = ref(true);
 	const error = ref('');
 	const forbidden = ref(false);
+	// The Team filter shows only the newest TEAM_RECORDS_LIMIT of a larger team: the note says so (empty = nothing cut).
+	const teamNote = ref('');
 	// The URL named a saved view that could not be read (or is not this collection's).
 	const settledBookmark = ref<number | null>(null);
 
@@ -150,7 +154,31 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		if (!gate.isCurrent(token)) return;
 		settledBookmark.value = ok ? null : id;
 
-		const params = buildItemsParams(def, state.value, bookmark.value, visible.value);
+		// The Team chip filters on ids the d1-teams endpoint gives (only records the viewer can read, Ruling M1), so they are asked for first.
+		// Without them the list is never shown unfiltered: a failed answer is an error, not every row.
+		const team = def.filters.some((f) => f.options.kind === 'team') ? state.value.filters[TEAM_FILTER_FIELD] : undefined;
+		let teamIds: string[] | null = null;
+		if (team) {
+			try {
+				const found = await getTeamRecordIds(host.api, team, def.collection, TEAM_RECORDS_LIMIT);
+				if (!gate.isCurrent(token)) return;
+				teamIds = found.ids;
+				teamNote.value = found.truncated ? teamTruncatedNote(TEAM_RECORDS_LIMIT) : '';
+			} catch (e) {
+				if (!gate.isCurrent(token)) return;
+				rows.value = [];
+				plots.value = {};
+				total.value = null;
+				teamNote.value = '';
+				error.value = errorText(e, "Could not load this team's records");
+				loading.value = false;
+				return;
+			}
+		} else {
+			teamNote.value = '';
+		}
+
+		const params = buildItemsParams(def, state.value, bookmark.value, visible.value, teamIds);
 		params.fields = [...(params.fields as string[]), ...extraFields(def, visible.value).filter((f) => !(params.fields as string[]).includes(f))];
 		try {
 			const res = await host.api.get(`/items/${def.collection}`, { params });
@@ -307,6 +335,12 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 				if (hit) return setOptions(field, null, hit);
 				const res = await host.api.get(`/items/${filter.options.collection}`, { params: relationOptionParams(key, display, fallback) });
 				setOptions(field, cacheKey, relationOptions(res.data?.data, key, display, fallback));
+			} else if (filter.options.kind === 'team') {
+				const cacheKey = 'teams.list';
+				const hit = chipCacheFor(host).get(cacheKey);
+				if (hit) return setOptions(field, null, hit);
+				const teams = await listTeams(host.api);
+				setOptions(field, cacheKey, teams.map((t) => ({ value: t.team_id, label: t.name })));
 			} else if (filter.options.kind === 'enum') {
 				if (filter.options.values) {
 					setOptions(field, null, filter.options.values.map((v) => ({ value: v, label: v })));
@@ -335,7 +369,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			for (const f of def.filters) {
 				if (!offered(f.field) || requested.has(f.field)) continue;
 				requested.add(f.field);
-				if (f.options.kind === 'relation' || f.options.kind === 'enum') void loadOptions(f.field);
+				if (f.options.kind === 'relation' || f.options.kind === 'enum' || f.options.kind === 'team') void loadOptions(f.field);
 			}
 		},
 		{ immediate: true },
@@ -361,7 +395,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	const hasFilters = computed(() => hasActiveFilters(state.value));
 
 	return {
-		rows, total, plots, loading, error, forbidden, bookmarkUnavailable,
+		rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote,
 		state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 		reload: load, rowKey, relationSortable,
 		setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,

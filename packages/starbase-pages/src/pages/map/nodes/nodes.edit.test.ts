@@ -115,7 +115,8 @@ describe('a container in edit mode', () => {
 		const html = await render(ContainerNode, { id: c.id, data: c }, edit());
 		expect(socks(html)).toEqual(['row|draft:n2|in', 'row|draft:n2|out']);
 		expect(freeButtons(html)).toHaveLength(1);
-		expect(html).toContain('Sample in');
+		expect(html).toContain('rail-sock in free'); // on the rail, at the left edge
+		expect(html).toContain('Makes 1 sample');
 	});
 
 	it('draws a blank test with only a free input: nothing comes out of a test', async () => {
@@ -146,7 +147,7 @@ describe('a container in edit mode', () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]));
 		const e = edit({ canAddRow: () => true });
 		const html = await render(ContainerNode, { id: c.id, data: c }, e);
-		expect(html).toMatch(/class="orow fold addrow[^"]*"[^>]*role="button"/);
+		expect(html).toMatch(/class="rtoggle addrow[^"]*"[^>]*aria-label="Add an output"/);
 		expect(html).toContain('output');
 		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ canAddRow: () => false }))).not.toContain('addrow');
 	});

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, sampleDims } from '@d1/ui';
+import { AppLink, RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, mapPath, sampleDims } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
 import EditRailChecks from './edit/EditRailChecks.vue';
@@ -8,16 +8,20 @@ import EditRailItem from './edit/EditRailItem.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
 import { openPath, type RecordInfo } from './model/recordInfo';
-import { KINDS, kindOfCollection, kindVar, statusKindOf } from './nodes/kinds';
-import { CARD_CAP, SETTINGS_CHIP, type Reach } from './useProcessMap';
+import { focusPlan, kindOf } from './model/collections';
+import { KINDS, kindVar, statusKindOf } from './nodes/kinds';
+import { CARD_CAP, type Reach } from './model/reach';
+import { SETTINGS_CHIP } from './model/showChips';
 
 // The rail of the Process map (spec §6.5), from the top: the selected record's identity (kind, status,
-// code, title), its actions (Open record, Expand, Centre), the sample drawing for a sample, the data
+// code, title), its actions (Open record, Process map of it, Expand, Centre), the sample drawing for a sample, the data
 // thumbnail when it has data, its facts; then Connections (hover shows the hover card on the canvas,
 // click selects and centres), Show (what the map draws) and Reach (how many steps). The page owns the
 // state; this only draws it and reports what the person did.
 const props = defineProps<{
 	info: RecordInfo | null;
+	/** The record the map is focused on (the URL's), so the rail does not offer a map of the map it is already showing. */
+	focus?: { collection: string; id: string } | null;
 	preview?: DataPreview;
 	/** The selected record is a card on the map (Expand and Centre need one). */
 	onMap: boolean;
@@ -51,6 +55,13 @@ const emit = defineEmits<{
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
 /** Where Open record goes: the record's page, the Force dashboard for Force data, the file library for a file; none, no button. */
 const openTo = computed(() => (props.info ? openPath(props.info) : null));
+/** The selected record's own map (spec §8): offered when its collection opens one and it is not the focus already. */
+const mapTo = computed(() => {
+	const ref = props.info?.ref;
+	if (!ref || !focusPlan(ref.collection)) return null;
+	if (props.focus && props.focus.collection === ref.collection && props.focus.id === ref.id) return null;
+	return mapPath(ref.collection, ref.id);
+});
 const drawable = computed(() => !!props.info?.geometry && hasDrawableDims(props.info.geometry));
 const dims = computed(() => sampleDims(props.info?.geometry));
 
@@ -67,9 +78,8 @@ const flip = (group: string) => {
 const listed = <T,>(group: string, items: T[]): T[] => (opened.value.has(group) ? items : items.slice(0, SHOWN));
 
 /** The kind of a connection's record, for its dot. */
-const COLLECTION_KIND: Record<string, keyof typeof KINDS> = { physical_samples: 'sample', manufacturing_operations: 'operation', test_sessions: 'test', raw_stock_lots: 'stock_lot' };
 const dot = (collection: string): string => {
-	const k = COLLECTION_KIND[collection] ?? kindOfCollection(collection);
+	const k = kindOf(collection);
 	return k ? kindVar(KINDS[k]) : 'var(--k-file)';
 };
 
@@ -108,6 +118,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			<template #status><StatusBadge :kind="statusKindOf(info.kind)" :value="info.status" /></template>
 			<template #actions>
 				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
+				<AppLink v-if="mapTo" :to="mapTo" class="pm-maplink"><v-icon name="account_tree" small left />Process map of {{ info.code || style?.label }}</AppLink>
 				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 				<v-button v-if="canMarkDone" small @click="emit('markDone')"><v-icon name="done" small left />Mark done</v-button>
@@ -187,6 +198,13 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 	background: color-mix(in srgb, var(--k) 14%, transparent);
 }
 .pm-ident :deep(.extra) { display: flex; flex-direction: column; gap: 8px; }
+.pm-maplink {
+	display: inline-flex; align-items: center; box-sizing: border-box; min-height: 36px; padding: 0 12px; border-radius: var(--theme--border-radius, 6px);
+	border: 2px solid var(--d1-line); background: var(--d1-surface); color: var(--d1-accent, var(--theme--primary));
+	font-size: var(--fs-sm, 12px); font-weight: 600; text-decoration: none; white-space: nowrap;
+}
+.pm-maplink:hover, .pm-maplink:focus-visible { background: var(--d1-tile); }
+.pm-maplink:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
 .pm-none { padding: 14px 16px; color: var(--d1-dim); font-size: var(--fs-md, 13px); border: 1px dashed var(--d1-line); border-radius: var(--d1-radius, 12px); }
 
 .rel { margin: 10px 0 4px; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }

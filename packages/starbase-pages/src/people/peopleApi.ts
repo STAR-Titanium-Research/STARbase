@@ -143,6 +143,10 @@ const memberRow = (p: any): PeopleRow => ({
 	created_at: p.created_at ?? null,
 });
 
+/** A Former person (active = false) is never "missing an email": the endpoint leaves it out, and this keeps an older one honest. */
+export const personAttention = (p: { active?: boolean; attention?: unknown }): string[] =>
+	(Array.isArray(p.attention) ? (p.attention as string[]) : []).filter((k) => !(k === 'missing_email' && p.active === false));
+
 const byTeamName = (a: TeamBrief, b: TeamBrief) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 
 /** Every team (name, colour, logo), for the Team menu and for a member's team chips. Lab Members read the teams. */
@@ -197,7 +201,7 @@ export function loadPeople(api: HostApi, isAdmin: boolean): Promise<PeopleData> 
 				canAdministerAccounts: body.can_administer_accounts === true,
 				roles: Array.isArray(body.roles) ? body.roles : [],
 				rows: [
-					...(Array.isArray(body.people) ? body.people : []).map((p: any): PeopleRow => ({ ...p, teams: Array.isArray(p.teams) ? p.teams : [], kind: 'person' })),
+					...(Array.isArray(body.people) ? body.people : []).map((p: any): PeopleRow => ({ ...p, attention: personAttention(p), teams: Array.isArray(p.teams) ? p.teams : [], kind: 'person' })),
 					...(Array.isArray(body.logins_without_person) ? body.logins_without_person : [])
 						.filter((l: LoginWithoutPerson) => LISTED_LOGIN.has(l.status ?? ''))
 						.map(loginRow),

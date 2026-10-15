@@ -135,8 +135,12 @@ const SORTERS: Record<SortKey, (a: PeopleRow, b: PeopleRow) => number> = {
 	added: byDateDesc((r) => when(r.created_at)),
 };
 
+// Former people (active = false) go last whatever the sort; the chosen sort still orders the Former among themselves.
+const formerLast = (sort: (a: PeopleRow, b: PeopleRow) => number) => (a: PeopleRow, b: PeopleRow) =>
+	(a.active === b.active ? 0 : a.active ? -1 : 1) || sort(a, b);
+
 /**
- * The rows to show. A login without a person is a row only under the "All" chip or the "login without person" attention filter;
+ * The rows to show, Former people last. A login without a person is a row only under the "All" chip or the "login without person" attention filter;
  * every chip counts persons. A new array: the input is not changed.
  */
 export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
@@ -152,7 +156,46 @@ export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
 			if (q && !`${r.full_name}\n${r.email ?? ''}\n${r.login?.email ?? ''}`.toLowerCase().includes(q)) return false;
 			return true;
 		})
-		.sort(SORTERS[s.sort]);
+		.sort(formerLast(SORTERS[s.sort]));
+}
+
+export type GroupId = 'admins' | 'users' | 'operators' | 'former';
+export interface PeopleGroup {
+	id: GroupId;
+	label: string;
+	rows: PeopleRow[];
+}
+const GROUPS: { id: GroupId; label: string }[] = [
+	{ id: 'admins', label: 'Admins' },
+	{ id: 'users', label: 'Users' },
+	{ id: 'operators', label: 'Operators' },
+	{ id: 'former', label: 'Former' },
+];
+const ADMIN_ROLES = new Set(['administrator', 'lab admin']);
+
+/**
+ * The one group a row belongs to, the first match of: Former (a person with active = false, whatever their role), Admins (the login's account role
+ * is Administrator or Lab Admin), Operators (an operator who is not a researcher and has no login), else Users (everyone with a login, researchers
+ * without one, a login without a person, and anyone left over).
+ */
+export function groupOf(r: PeopleRow): GroupId {
+	if (r.kind === 'person' && !r.active) return 'former';
+	if (ADMIN_ROLES.has((r.login?.role_name ?? '').trim().toLowerCase())) return 'admins';
+	if (r.kind === 'person' && r.is_operator && !r.is_researcher && r.login === null) return 'operators';
+	return 'users';
+}
+
+/**
+ * Splits the rows into the page's groups, in the order Admins, Users, Operators, Former. Each row is in exactly one; the rows keep the order
+ * they came in (so the chosen sort holds inside a group); a group with no rows is left out.
+ */
+export function groupPeople(rows: PeopleRow[]): PeopleGroup[] {
+	const by = new Map<GroupId, PeopleRow[]>();
+	for (const r of rows) {
+		const id = groupOf(r);
+		by.set(id, [...(by.get(id) ?? []), r]);
+	}
+	return GROUPS.filter((g) => by.has(g.id)).map((g) => ({ ...g, rows: by.get(g.id)! }));
 }
 
 /** How many persons each chip holds (login rows are not counted). */

@@ -1,7 +1,7 @@
 // Directus endpoint: d1-build  (mounted at /d1-build)
 //
 // The server half of the process map's edit mode (ADR-0018, ADR-0019; spec
-// docs/superpowers/specs/2026-10-14-process-map-edit-mode-design.md sections 5 and 6, migrations 185 and 186).
+// docs/superpowers/specs/2026-10-14-process-map-edit-mode-design.md sections 5 and 6, migrations 189 and 190).
 // The browser builds a DRAFT (a DraftBody, spec 5.1: items, wires, positions) and this endpoint keeps it, checks it,
 // and turns the whole draft into real records in ONE database transaction.
 //
@@ -33,7 +33,7 @@
 // { errors: [{ message, extensions: { code, source: 'd1-build', ... } }] }.
 //
 // How it runs (the d1-record-access and d1-people-admin pattern):
-//   * Drafts and templates live in d1_private (migration 186): outside the Directus schema scan, reached only here, with
+//   * Drafts and templates live in d1_private (migration 190): outside the Directus schema scan, reached only here, with
 //     plain parameterised SQL. A draft is private to its owner (every query names user_id); a save names the version it was
 //     made against (UPDATE ... WHERE version = ?), so a stale tab gets 409 instead of overwriting.
 //   * The caller's reads and writes of RECORDS go through Directus's ItemsService with the caller's accountability and, for

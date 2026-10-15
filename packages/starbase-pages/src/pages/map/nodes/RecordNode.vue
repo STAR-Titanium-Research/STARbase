@@ -75,6 +75,7 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 				<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
 			<div class="code">{{ name }}</div>
+			<div v-if="data.kind === 'sample' && data.ref.label" class="nick" :title="data.ref.label">{{ data.ref.label }}</div>
 			<div v-if="meta" class="meta">{{ meta }}</div>
 		</div>
 		<Handle
@@ -98,5 +99,6 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 .ntop .kind + .xbtn { margin-left: auto; }
 .ntop .st + .chk, .ntop .kind + .chk { margin-left: 6px; }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nick { font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta { font-size: var(--fs-sm, 12px); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

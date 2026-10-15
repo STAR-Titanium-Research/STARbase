@@ -20,11 +20,37 @@
         }
       },
       "manage": {
-        "owner_person_id": {
-          "user_id": {
-            "_eq": "$CURRENT_USER"
+        "_or": [
+          {
+            "owner_person_id": {
+              "user_id": {
+                "_eq": "$CURRENT_USER"
+              }
+            }
+          },
+          {
+            "_and": [
+              {
+                "access": {
+                  "person_id": {
+                    "user_id": {
+                      "_eq": "$CURRENT_USER"
+                    }
+                  }
+                }
+              },
+              {
+                "access": {
+                  "role": {
+                    "_in": [
+                      "manage"
+                    ]
+                  }
+                }
+              }
+            ]
           }
-        }
+        ]
       }
     },
     "manufacturing_operations": {
@@ -68,11 +94,37 @@
             }
           },
           {
-            "owner_person_id": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
-            }
+            ]
           }
         ]
       }
@@ -105,11 +157,37 @@
             }
           },
           {
-            "owner_person_id": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
-            }
+            ]
           }
         ]
       }
@@ -142,11 +220,37 @@
             }
           },
           {
-            "owner_person_id": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
-            }
+            ]
           }
         ]
       }

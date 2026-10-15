@@ -7,13 +7,13 @@ import { CARD_LIMIT, SAMPLE_LIMIT, useMyWork } from './useMyWork';
 // samples, as cards in one panel. A group with nothing in it is left out (not shown as an empty
 // box), so a researcher with only samples sees only samples. Every card is a link to its Explorer
 // page. Each group shows its first few cards (GROUP_SHOWN) and a "See all" link to the list, so a
-// busy researcher's panel stays about as tall as its neighbour. The three reads still load and fail
+// busy researcher's panel stays about as tall as its neighbour. The campaigns and samples include those a team I belong to owns. The three reads still load and fail
 // on their own (useMyWork).
 const GROUP_SHOWN = 5;
 const shown = <T,>(rows: T[]) => rows.slice(0, GROUP_SHOWN);
 // The reads are capped (CARD_LIMIT / SAMPLE_LIMIT), so a count at the cap is "at least".
 const more = (n: number, cap: number) => `See all (${n}${n >= cap ? '+' : ''})`;
-const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples } = useMyWork();
+const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples, partialTeams } = useMyWork();
 
 const loading = computed(() => projects.value.loading || campaigns.value.loading || samples.value.loading);
 const errors = computed(() => [projects.value.error, campaigns.value.error, samples.value.error].filter(Boolean));
@@ -29,6 +29,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		</p>
 		<p v-if="partialProjects" class="notice" role="note">{{ partialProjects }}</p>
 		<p v-if="partialSamples" class="notice" role="note">{{ partialSamples }}</p>
+		<p v-if="partialTeams" class="notice" role="note">{{ partialTeams }}</p>
 		<p v-for="e in errors" :key="e" class="d1-note bad" role="alert">{{ e }}</p>
 
 		<p v-if="loading && !anything" class="d1-note">Loading…</p>

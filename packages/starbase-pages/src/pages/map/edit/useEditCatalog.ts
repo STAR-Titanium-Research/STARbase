@@ -7,7 +7,8 @@
 import { computed, reactive, ref, shallowRef } from 'vue';
 import type { FieldDef as DirectusField, HostApi } from '@d1/ui';
 import type { SampleRec } from '../model/types';
-import { SAMPLE_FIELDS, chunkByBudget, mapSample } from '../model/loadFamily';
+import { chunkByBudget } from '../model/requests';
+import { SAMPLE_FIELDS, mapSample } from '../model/rows';
 import type { CheckCollection, CheckCtx, FieldDef, LoadedRecord } from './checks';
 import { collectionOf, recordKey } from './checks';
 import { KEY_FIELD, METHOD_FIELDS, checkFieldsOf, existingIds, loadedRecordOf, methodsOf, testTypesOf, type MethodEntry, type TestTypeEntry } from './catalog';

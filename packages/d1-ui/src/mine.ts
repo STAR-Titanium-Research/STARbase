@@ -35,6 +35,21 @@ export const coOwnedByMe: Filter = {
 
 export const samplesMine: Filter = { _or: [ownedByMe, coOwnedByMe] };
 
+// A record a team owns (owner_team_id on the four ownable types) is the work of every member of that team. The team ids are the caller's
+// own memberships, read from /items/team_members (a Lab Member may read that table), so no relation hop through the team is needed: a plain
+// `_in` on the record's own column. They are not part of the constants above: samplesMine and projectsMine are carried verbatim by the
+// smoke test (scripts/dev/directus_smoke.mjs), and a person with no team gets the unchanged filter.
+export const ownedByTeams = (teamIds: string[]): Filter | null => (teamIds.length ? { owner_team_id: { _in: [...teamIds] } } : null);
+
+/** A "mine" filter widened with the records of the teams I belong to. An `_or` of its own is extended, not nested. */
+export function withMyTeams(base: Filter, teamIds: string[]): Filter {
+	const teams = ownedByTeams(teamIds);
+	if (!teams) return base;
+	const keys = Object.keys(base);
+	if (keys.length === 1 && keys[0] === '_or' && Array.isArray(base._or)) return { _or: [...(base._or as Filter[]), teams] };
+	return { _or: [base, teams] };
+}
+
 export const projectsMine: Filter = {
 	_or: [
 		{ principal_investigator_person: { user_id: { _eq: CURRENT_USER } } },
@@ -63,5 +78,5 @@ export const forcePendingOperations: Filter = withForceFile('pending');
 
 export const failedTests: Filter = { status: { _eq: 'failed' } };
 
-// A sample with no owner. Offered to admins only: members would see their own rows or nothing.
-export const ownerlessSamples: Filter = { owner_person_id: { _null: true } };
+// A sample with no owner (neither a person nor a team). Offered to admins only: members would see their own rows or nothing.
+export const ownerlessSamples: Filter = { _and: [{ owner_person_id: { _null: true } }, { owner_team_id: { _null: true } }] };

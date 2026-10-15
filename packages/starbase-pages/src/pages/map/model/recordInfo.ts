@@ -4,8 +4,9 @@
 //
 // `id` is what the page's actions take: a node id, or a record inside a card (`<collection>:<id>`).
 
-import { analysisLink, humanise, processLabel, recordRoute, type Fact } from '@d1/ui';
-import { LINEAGE_LABEL, kindOfCollection, slotText } from '../nodes/kinds';
+import { analysisLink, formatDate, humanise, processLabel, type Fact } from '@d1/ui';
+import { LINEAGE_LABEL, slotText } from '../nodes/kinds';
+import { recordPath, slotKindOf, stepCollection } from './collections';
 import { refKey } from '../nodes/actions';
 import { OTHER_PIECE } from './buildGraph';
 import { dateText } from './dates';
@@ -36,8 +37,6 @@ export interface RecordInfo {
   /** The operation whose data (force figure, FAST run) may be shown; null when nothing can have any. */
   dataOf: Ref | null;
 }
-
-const COLLECTION_OF = { operation: 'manufacturing_operations', test: 'test_sessions' } as const;
 
 /** The heading of a record: a tool or a campaign by its name with its code under it, anything else by its code and label. */
 function named(ref: Ref): Pick<RecordInfo, 'code' | 'title' | 'plain'> {
@@ -82,7 +81,7 @@ function sampleInfo(id: string, data: ProcessData, rec: SampleRec): RecordInfo {
     kind: 'sample',
     ref: { collection: 'physical_samples', id: rec.id, code: rec.code },
     code: rec.code,
-    title: rec.form ? humanise(rec.form) : undefined,
+    title: [rec.nickname, rec.form ? humanise(rec.form) : null].filter(Boolean).join(' · ') || undefined,
     status: rec.status,
     facts,
     counts: [
@@ -108,7 +107,7 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
   facts.push({ label: 'Date', value: dateText(rows.map((r) => r.date)) });
   facts.push(...slotFacts(node));
   facts.push(...node.settings.map((s) => ({ label: s.label, value: s.value })));
-  const ref: Ref = { collection: COLLECTION_OF[node.kind], id: first.id, code: first.code };
+  const ref: Ref = { collection: stepCollection(node.kind), id: first.id, code: first.code };
   return {
     id,
     kind: node.kind,
@@ -196,7 +195,7 @@ function openOf(ref: Ref, data: ProcessData): string | null | undefined {
 
 /** Where "Open record" goes for `info`; null when there is nowhere to go (the button is not drawn). */
 export const openPath = (info: Pick<RecordInfo, 'ref' | 'open'>): string | null =>
-  info.open === undefined ? recordRoute(info.ref.collection, info.ref.id) : info.open;
+  info.open === undefined ? recordPath(info.ref.collection, info.ref.id) : info.open;
 
 /** A record shown inside a card's Inside tray: what kind it is and how many steps in the map use it. */
 function slotInfo(id: string, data: ProcessData, graph: ProcessGraph): RecordInfo | null {
@@ -215,14 +214,14 @@ function slotInfo(id: string, data: ProcessData, graph: ProcessGraph): RecordInf
   const holder = ref.collection === 'force_file' ? data.operations.find((o) => o.relations.force_file_id?.id === ref.id) : undefined;
   return {
     id,
-    kind: kindOfCollection(ref.collection) ?? 'data_file',
+    kind: slotKindOf(ref.collection) ?? 'data_file',
     ref,
     ...(open === undefined ? {} : { open }),
     ...named(ref),
     facts: [],
     counts: [{ value: steps, label: 'steps' }],
     geometry: null,
-    dataOf: holder ? { collection: COLLECTION_OF.operation, id: holder.id, code: holder.code } : null,
+    dataOf: holder ? { collection: stepCollection('operation'), id: holder.id, code: holder.code } : null,
   };
 }
 

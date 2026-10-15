@@ -60,6 +60,12 @@ describe('filterProjects', () => {
 		expect(f({ query: 'nothing' })).toEqual([]);
 	});
 	it('combines filters', () => expect(f({ role: 'any', status: 'active' })).toEqual(['a']));
+	it('filters to the project ids of a team; an empty set (none, or not known yet) matches nothing; null is no team', () => {
+		expect(f({ teamIds: new Set(['a', 'c']) })).toEqual(['a', 'c']);
+		expect(f({ teamIds: new Set(['a']), status: 'inactive' })).toEqual([]);
+		expect(f({ teamIds: new Set() })).toEqual([]);
+		expect(f({ teamIds: null })).toEqual(['a', 'b', 'c']);
+	});
 	it('role filters match nothing without a user id', () => {
 		expect(filterProjects(all, { role: 'any', status: 'all', query: '' }, null)).toEqual([]);
 	});
