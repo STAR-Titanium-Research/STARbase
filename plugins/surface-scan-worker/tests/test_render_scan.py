@@ -3,6 +3,7 @@
 import ast
 import io
 import json
+import os
 import re
 from pathlib import Path
 
@@ -11,7 +12,8 @@ import pytest
 from PIL import Image
 
 from app.jobs import render_scan as job
-from app.lib import topography
+from app.lib import archive, topography
+from app.lib.archive import RenderError
 from app.lib.directus_client import VersionConflictError
 
 from .conftest import FILE, OTHER_FILE, OTHER_SCAN, SCAN
@@ -37,7 +39,7 @@ def _objects_under(world, key):
 def test_happy_path_renders_and_fills_the_row(world):
     _scan_file(world, pixel_size_x_m=2e-6, pixel_size_y_m=4e-6)
     world.add_scan()
-    world.fingerprints[FILE] = {"status": "done", "content_sha256": SHA}
+    world.current_fingerprint(FILE, SHA)
 
     job.render_scan(SCAN)
 
@@ -72,7 +74,7 @@ def test_the_worker_only_writes_its_own_columns(world):
 def test_the_three_objects_are_written_under_the_cache_key(world):
     _scan_file(world, rows=3, cols=4)
     world.add_scan()
-    world.fingerprints[FILE] = {"status": "done", "content_sha256": SHA}
+    world.current_fingerprint(FILE, SHA)
     job.render_scan(SCAN)
 
     objects = _objects_under(world, SHA)
@@ -131,7 +133,7 @@ def test_provisional_key_when_the_fingerprint_is_not_done(world):
 def test_cache_hit_skips_reading_the_file(world, monkeypatch):
     _scan_file(world)
     world.add_scan()
-    world.fingerprints[FILE] = {"status": "done", "content_sha256": SHA}
+    world.current_fingerprint(FILE, SHA)
     job.render_scan(SCAN)
     first = dict(world.rows[SCAN])
     writes = dict(world.objects)
@@ -143,10 +145,10 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
         "storage": "star",
         "metadata": {"archive_path": "rig/copy.al3d"},
     }
-    world.fingerprints[OTHER_FILE] = {"status": "done", "content_sha256": SHA}
+    world.current_fingerprint(OTHER_FILE, SHA)
     world.add_scan(OTHER_SCAN, OTHER_FILE)
 
-    def boom(path):
+    def boom(*args):
         raise AssertionError("the file must not be read on a cache hit")
 
     monkeypatch.setattr(topography, "read_scan", boom)
@@ -164,7 +166,7 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
 def test_an_incomplete_earlier_render_is_not_a_cache_hit(world):
     _scan_file(world)
     world.add_scan()
-    world.fingerprints[FILE] = {"status": "done", "content_sha256": SHA}
+    world.current_fingerprint(FILE, SHA)
     job.render_scan(SCAN)
     del world.objects[f"surface-scans/{SHA}/thumb.png"]
     world.rows[SCAN]["render_status"] = "pending"
@@ -198,8 +200,8 @@ def test_a_render_again_during_the_render_is_not_overwritten(world, monkeypatch)
     world.add_scan()
     real = topography.read_scan
 
-    def read_then_reset(path):
-        scan = real(path)
+    def read_then_reset(path, expected=None):
+        scan = real(path, expected)
         world.rows[SCAN]["render_status"] = "pending"  # Render again pressed meanwhile
         world.rows[SCAN]["version"] += 1
         return scan
@@ -338,6 +340,60 @@ def test_render_again_after_a_failure_clears_the_error(world):
     assert world.rows[SCAN]["render_error"] is None
 
 
+def test_a_file_re_exported_in_place_is_not_served_from_the_old_hash(world):
+    """Same size, new mtime: the crawler's hash is stale, so the cache must not hit."""
+    path = _scan_file(world, rows=20, cols=30)
+    world.add_scan()
+    world.current_fingerprint(FILE, SHA)
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["cache_key"] == SHA
+    old_surface = world.objects[f"surface-scans/{SHA}/grid.bin"][0]
+
+    # Re-export in place: a different surface of the same size, a newer mtime; the fingerprint is old.
+    write_al3d(path, ramp(20, 30, scale_m=2e-6))
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 3_600 * 10**9))
+    world.rows[SCAN]["render_status"] = "pending"
+
+    job.render_scan(SCAN)
+
+    row = world.rows[SCAN]
+    assert row["render_status"] == "done"
+    assert row["cache_key"] != SHA
+    assert row["cache_key"].startswith(f"p-{FILE}-")
+    new_surface = world.objects[f"surface-scans/{row['cache_key']}/grid.bin"][0]
+    assert new_surface != old_surface  # really re-read, not the old surface
+    assert world.objects[f"surface-scans/{SHA}/grid.bin"][0] == old_surface
+
+
+def test_a_fingerprint_without_source_mtime_is_not_trusted_by_the_job(world):
+    _scan_file(world)
+    world.add_scan()
+    world.current_fingerprint(FILE, SHA, source_mtime=None)
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["cache_key"].startswith(f"p-{FILE}-")
+
+
+def test_a_file_replaced_between_the_stat_and_the_read_fails_the_row(
+    world, monkeypatch
+):
+    path = _scan_file(world, rows=10, cols=10)
+    world.add_scan()
+    real_stat = archive.stat_file
+
+    def stat_then_swap(p):
+        st = real_stat(p)
+        os.replace(write_al3d(path.parent / "other.al3d", ramp(12, 12)), path)
+        return st
+
+    monkeypatch.setattr(archive, "stat_file", stat_then_swap)
+    with pytest.raises(RenderError, match="changed on the share"):
+        job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "failed"
+    assert "changed on the share" in world.rows[SCAN]["render_error"]
+    assert world.objects == {}
+
+
 # --- the invariants of the design ------------------------------------------------------------------
 
 
@@ -382,19 +438,26 @@ def test_the_worker_never_writes_file_fingerprints():
                 mentions.append((source.name, value))
     # Only the Directus client names the table, and it builds exactly one URL for it (a GET, below).
     assert {name for name, _ in mentions} == {"directus_client.py"}
-    assert [v for _, v in mentions if "/items/" in v] == ["/items/file_fingerprints/"]
+    assert [v for _, v in mentions if "/items/" in v] == ["/items/file_fingerprints"]
     text = (APP / "lib" / "directus_client.py").read_text()
     block = text[text.index("def get_fingerprint") :]
     for verb in ("patch", "post", "put", "delete"):
         assert f"requests.{verb}" not in block
 
 
-def test_the_only_open_of_an_archive_file_is_read_only():
-    opens = []
+def test_the_only_open_of_an_archive_file_is_read_only_and_nofollow():
+    calls = []
     for source in APP.rglob("*.py"):
-        for line in source.read_text().splitlines():
-            if re.search(r"(?<![\w.])open\(", line) and not line.lstrip().startswith(
-                ("#", '"""')
-            ):
-                opens.append((source.name, line.strip()))
-    assert opens == [("archive.py", 'return open(path, "rb")  # the caller closes it')]
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.Call):
+                f = node.func
+                name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", "")
+                if name in ("open", "fdopen"):
+                    calls.append((source.name, ast.unparse(f)))
+    # One descriptor open and its file object; nothing else opens a file in the worker.
+    assert calls == [("archive.py", "os.open"), ("archive.py", "os.fdopen")]
+    text = (APP / "lib" / "archive.py").read_text()
+    assert "os.O_RDONLY | os.O_NOFOLLOW" in text
+    for flag in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"):
+        assert flag not in text.replace("O_RDONLY", "")
+    assert 'os.fdopen(fd, "rb")' in text

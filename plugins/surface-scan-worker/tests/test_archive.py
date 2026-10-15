@@ -100,6 +100,16 @@ def test_a_root_outside_the_mount_is_refused(share, monkeypatch, tmp_path):
         "x.al3d.pdf",
         "x.exe",
         "x.",
+        # formats SurfaceTopography reads but the lab's rule keeps off the share's read path
+        "scan.tif",
+        "scan.tiff",
+        "profile.xyz",
+        "profile.asc",
+        "profile.hfm",
+        "array.npy",
+        "data.hdf5",
+        "image.sxm",
+        "data.nc",
     ],
 )
 def test_non_topography_extensions_are_refused(share, name):
@@ -117,18 +127,60 @@ def test_non_topography_extensions_are_refused(share, name):
         ("a.opd", "opd"),
         ("a.vk4", "vk"),
         ("a.nid", "ezd"),
-        ("a.asc", "asc"),
-        ("a.npy", "npy"),
+        ("a.ezd", "ezd"),
+        ("a.spm", "di"),
+        ("a.h5", "h5"),
     ],
 )
 def test_topography_extensions_map_to_one_reader(name, fmt):
     assert archive.format_for(name) == fmt
 
 
-def test_documents_and_force_files_are_not_in_the_allowlist():
-    assert archive.NOT_TOPOGRAPHY >= {"mat", "txt", "csv", "dat", "xlsx", "zip"}
-    assert not archive.NOT_TOPOGRAPHY & set(archive.EXTENSION_FORMATS)
-    assert "al3d" in archive.EXTENSION_FORMATS
+EXPECTED_ALLOWLIST = set(
+    "al3d opd opdx x3p ibw h5 datx sur plu apx plux vk3 vk4 vk6 vk7 lext zon os3d sdf frt mnt gwy "
+    "mdt nms oir poir ezd nid bcr bcrf tmd zmg mi jpk qep spm".split()
+)
+
+
+def test_the_allowlist_is_exactly_the_agreed_one():
+    # STARbase's dialog offers the same list: change both together.
+    assert archive.ALLOWED_EXTENSIONS == EXPECTED_ALLOWLIST
+    assert len(archive.ALLOWED_EXTENSIONS) == 36
+
+
+def test_every_allowed_extension_has_an_installed_reader():
+    assert set(archive.EXTENSION_FORMATS) == EXPECTED_ALLOWLIST
+
+
+def test_generic_and_document_formats_are_not_allowed():
+    for ext in (
+        "tif",
+        "tiff",
+        "xyz",
+        "asc",
+        "hfm",
+        "npy",
+        "hdf5",
+        "sxm",
+        "mat",
+        "txt",
+        "csv",
+        "dat",
+    ):
+        assert ext not in archive.EXTENSION_FORMATS
+
+
+def test_an_allowed_extension_without_a_reader_fails_clearly(monkeypatch):
+    monkeypatch.delitem(archive.EXTENSION_FORMATS, "al3d")
+    with pytest.raises(RenderError, match="no reader for .al3d"):
+        archive.format_for("x.al3d")
+
+
+def test_a_link_to_a_file_of_another_type_is_refused(share):
+    (share / "rig" / "doc.pdf").write_bytes(b"%PDF")
+    (share / "rig" / "alias.al3d").symlink_to(share / "rig" / "doc.pdf")
+    with pytest.raises(RenderError, match="topography"):
+        archive.resolve("rig/alias.al3d")
 
 
 def test_the_extension_is_checked_before_the_file_is_looked_up(share):
@@ -161,20 +213,89 @@ def test_stat_returns_size_and_mtime(share):
 
 def test_open_readonly_never_opens_for_writing(share, monkeypatch):
     path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
-    modes = []
-    real_open = builtins.open
+    flags = []
+    real_os_open = os.open
 
-    def spy(file, mode="r", *args, **kwargs):
-        modes.append(mode)
-        return real_open(file, mode, *args, **kwargs)
+    def spy(file, flag, *args, **kwargs):
+        flags.append(flag)
+        return real_os_open(file, flag, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "open", spy)
-    with archive.open_readonly(path) as handle:
+    def no_builtin_open(*args, **kwargs):
+        raise AssertionError("the worker must open through os.open only")
+
+    monkeypatch.setattr(os, "open", spy)
+    monkeypatch.setattr(builtins, "open", no_builtin_open)
+    with archive.open_readonly(path, archive.stat_file(path)) as handle:
         assert handle.mode == "rb"
         assert not handle.writable()
         with pytest.raises(OSError):
             handle.write(b"x")
-    assert modes == ["rb"]
+    assert len(flags) == 1
+    (flag,) = flags
+    assert flag & os.O_ACCMODE == os.O_RDONLY
+    assert flag & os.O_NOFOLLOW
+    assert not flag & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+
+
+def test_a_file_swapped_for_another_after_the_stat_is_refused(share):
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    other = write_al3d(share / "rig" / "other.al3d", ramp(4, 4))
+    os.replace(other, path)  # a different inode now sits at the path
+    with pytest.raises(RenderError, match="changed on the share"):
+        archive.open_readonly(path, expected)
+
+
+def test_a_file_rewritten_in_place_after_the_stat_is_refused(share):
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    write_al3d(path, ramp(6, 6))  # same inode, new size
+    with pytest.raises(RenderError, match="changed on the share"):
+        archive.open_readonly(path, expected)
+
+
+def test_a_symlink_swapped_in_after_the_check_is_not_followed(share, tmp_path):
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    outside = write_al3d(tmp_path / "outside.al3d", ramp(3, 3))
+    path.unlink()
+    path.symlink_to(outside)  # what resolve() would have refused, swapped in afterwards
+    with pytest.raises(RenderError, match="could not be opened read-only"):
+        archive.open_readonly(path, expected)
+
+
+def test_a_directory_or_fifo_swapped_in_is_refused(share):
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    path.unlink()
+    os.mkfifo(path)
+    # O_RDONLY on a FIFO with no writer would block, so make sure a writer exists
+    writer = os.open(path, os.O_RDWR)
+    try:
+        with pytest.raises(RenderError):
+            archive.open_readonly(path, expected)
+    finally:
+        os.close(writer)
+
+
+def test_the_descriptor_is_closed_when_the_check_fails(share):
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    write_al3d(path, ramp(6, 6))
+    before = set(os.listdir("/proc/self/fd"))
+    with pytest.raises(RenderError):
+        archive.open_readonly(path, expected)
+    assert set(os.listdir("/proc/self/fd")) == before
+
+
+def test_read_scan_refuses_a_file_swapped_after_the_stat(share):
+    from app.lib import topography
+
+    path = write_al3d(share / "rig" / "a.al3d", ramp(3, 3))
+    expected = archive.stat_file(path)
+    os.replace(write_al3d(share / "rig" / "o.al3d", ramp(5, 5)), path)
+    with pytest.raises(RenderError, match="changed on the share"):
+        topography.read_scan(path, expected)
 
 
 def test_reading_a_scan_leaves_the_file_untouched(share):
