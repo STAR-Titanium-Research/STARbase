@@ -1,7 +1,7 @@
 """Is this image a (possible) SEM image? A pluggable per-instrument profile (spec section 7).
 
-`classify_image(fh)` takes an already-open binary handle (from `fs_readonly.open_rb` or an in-memory
-copy), never a path, so Pillow cannot reach the share by itself. Each `SemProfile` looks at the picture
+`classify_image(fh)` takes an in-memory `io.BytesIO` (the bytes the crawler already read through
+`fs_readonly`), never a path or a handle, so Pillow cannot reach the share by itself. Each `SemProfile` looks at the picture
 and either claims it with a confidence or says nothing. v1 has one profile, JEOL: a dark data bar along
 the bottom edge, with high-contrast text-like content and a scale-bar line in it, plus any embedded TIFF
 metadata the profile knows.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Callable
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -102,7 +103,10 @@ def parse_text(text: str, *, scale_bar: bool = False) -> dict:
 
 def _metadata_text(img) -> str:
     parts: list[str] = []
-    tags = getattr(img, "tag_v2", None)
+    try:
+        tags = img.tag_v2  # TIFF only
+    except AttributeError:
+        tags = None
     if tags is not None:
         for key in tags:
             val = tags.get(key)
@@ -110,9 +114,7 @@ def _metadata_text(img) -> str:
                 val = val.decode("latin-1", "ignore")
             if isinstance(val, str) and (key in _TEXT_TAGS or len(val) > 64):
                 parts.append(val[:_MAX_META_CHARS])
-    for val in (
-        getattr(img, "info", None) or {}
-    ).values():  # PNG text chunks, JPEG comments
+    for val in (img.info or {}).values():  # PNG text chunks, JPEG comments
         if isinstance(val, bytes):
             val = val.decode("latin-1", "ignore")
         if isinstance(val, str):
@@ -254,8 +256,10 @@ def classify_image(
     ocr_func: Callable | None = None,
 ) -> Classification:
     """sem_image with a confidence and what was read, or a plain image. `fh` is a binary file object."""
-    if not hasattr(fh, "read"):
-        raise TypeError("classify_image takes an open binary handle, not a path")
+    if not isinstance(fh, BytesIO):
+        # Pillow is only ever given bytes the crawler already read through fs_readonly, never a path or
+        # a handle on the share.
+        raise TypeError("classify_image takes an in-memory io.BytesIO")
     if Image is None:  # pragma: no cover
         return Classification("image", None, {}, "Pillow is not installed")
     profiles = PROFILES if profiles is None else profiles

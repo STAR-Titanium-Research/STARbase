@@ -2,9 +2,10 @@
 
 Three layers are tested here:
 
-* an AST scan of the whole `scripts/inbox_crawler` package that fails on any write, delete, rename,
-  chmod, truncate, copy, move or open-for-write call, on any `open` outside `fs_readonly.open_rb`, and on
-  an `os`/`shutil`/`pathlib` import outside `fs_readonly` that is not pure path maths;
+* an AST scan of the whole `scripts/inbox_crawler` package (subpackages too) that fails on any write, delete,
+  rename, chmod, truncate, copy, move, exec or spawn call or reference, on reflection and dynamic code, on any
+  `open` outside `fs_readonly.open_rb`, on an import that is not on the module's allow-list, and on Pillow
+  anywhere but classify_image's guarded BytesIO;
 * `open_rb` refuses every file type that is not on the read allow-list (documents, .mat, ...);
 * a share that vanishes mid-scan aborts the scan and marks nothing gone (see the end of this file).
 """
@@ -25,9 +26,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from inbox_crawler import fs_readonly as fsr  # noqa: E402
 
 # ---- the AST checker ------------------------------------------------------------------
+#
+# The package is scanned module by module (subpackages too). Every module except fs_readonly may import
+# ONLY what ALLOWED_IMPORTS lists for it, so a new import is a reviewed change to this table. On top of that:
+# no write, delete, rename, copy, move, exec or spawn call or reference by any name or attribute; no dynamic
+# trickery (getattr, eval, exec, compile, __import__, importlib, vars, globals, dunder attributes); `open`
+# only in fs_readonly, only with a literal "rb", never assigned to a variable; Pillow only on a BytesIO.
 
-# Calls whose name starts with one of these are writes, deletes, renames, copies or moves, whatever
-# object they are called on (os.remove, Path.unlink, shutil.copyfile, f.write, ...).
+# Calls and references whose name starts with one of these are writes, deletes, renames, copies, moves,
+# process starts or kills, whatever object they are on (os.remove, Path.unlink, shutil.copyfile, f.write ...).
 FORBIDDEN_PREFIXES = (
     "write",
     "copy",
@@ -48,7 +55,15 @@ FORBIDDEN_PREFIXES = (
     "symlink",
     "rmdir",
     "rmtree",
+    "exec",
+    "spawn",
+    "posix_spawn",
+    "fork",
+    "popen",
+    "kill",
 )
+# `execute` is the database cursor's, not os.exec*.
+PREFIX_EXCEPTIONS = frozenset({"execute", "executemany"})
 # Exact names that are just as bad but too common as a prefix (`link`, `replace`, `save`).
 FORBIDDEN_NAMES = frozenset(
     {
@@ -56,22 +71,122 @@ FORBIDDEN_NAMES = frozenset(
         "link",
         "touch",
         "system",
-        "popen",
         "save",
         "mkfifo",
         "mknod",
         "startfile",
         "fdopen",
         "lutimes",
+        "FileIO",
     }
 )
+# Reflection and dynamic code: ways to reach a forbidden call without writing its name.
+DYNAMIC_NAMES = frozenset(
+    {
+        "getattr",
+        "setattr",
+        "delattr",
+        "vars",
+        "globals",
+        "locals",
+        "__import__",
+        "eval",
+        "exec",
+        "compile",
+        "breakpoint",
+        "__builtins__",
+        "importlib",
+    }
+)
+DUNDER_ALLOWED = frozenset({"__name__", "__doc__"})
 FORBIDDEN_ATTRS = frozenset(
     {"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_EXCL"}
 )
-FORBIDDEN_IMPORTS = frozenset({"shutil", "subprocess", "ctypes", "mmap", "tempfile"})
-# What a module other than fs_readonly may take from `os`: string path maths and the environment.
-OS_ALLOWED = frozenset({"path", "environ", "getpid", "sep", "fspath"})
-PATHLIB_ALLOWED = frozenset({"PurePath", "PurePosixPath", "PureWindowsPath"})
+# Imports no module may make, whatever the table says (a belt over the braces). fs_readonly may not take
+# them either, apart from nothing: it needs only os, errno, stat and typing.
+NEVER_IMPORT = frozenset(
+    {
+        "shutil",
+        "subprocess",
+        "ctypes",
+        "mmap",
+        "tempfile",
+        "importlib",
+        "builtins",
+        "pathlib",
+        "socket",
+        "pickle",
+        "sqlite3",
+        "zipfile",
+        "tarfile",
+        "gzip",
+        "bz2",
+        "lzma",
+        "shelve",
+        "dbm",
+        "fcntl",
+        "pty",
+        "code",
+        "codecs",
+        "multiprocessing",
+        "concurrent",
+        "asyncio",
+    }
+)
+
+# module name -> what it may import (top-level module or dotted name). Relative imports (from . import x)
+# and `from __future__ import annotations` are always fine.
+ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
+    "__init__": frozenset(),
+    "__main__": frozenset({"argparse", "logging", "os", "signal", "sys", "threading"}),
+    "autolink": frozenset({"json", "logging", "urllib.error", "urllib.request"}),
+    "classify_scan": frozenset(),
+    "classify_sem": frozenset(
+        {
+            "re",
+            "warnings",
+            "collections.abc",
+            "dataclasses",
+            "typing",
+            "io",
+            "PIL",
+            "pytesseract",
+        }
+    ),
+    "daemon": frozenset({"logging", "threading", "dataclasses", "datetime"}),
+    "db": frozenset({"json", "logging", "dataclasses", "datetime", "psycopg2"}),
+    "hashing": frozenset({"hashlib", "logging", "time", "dataclasses"}),
+    "identity": frozenset({"os.path", "sys", "index_archive"}),
+    "kinds": frozenset({"dataclasses"}),
+    "owners": frozenset({"collections.abc", "dataclasses"}),
+    "recognise": frozenset({"re", "collections.abc", "dataclasses"}),
+    "scan": frozenset({"io", "logging", "time", "dataclasses"}),
+}
+PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
+# (module, imported name) -> the attributes of it that module may use; anything else is refused. `io` is
+# BytesIO only; `os` and `sys` only what the entry points and the path set-up need.
+ATTR_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
+    ("__main__", "os"): frozenset({"environ"}),
+    ("__main__", "sys"): frozenset({"exit"}),
+    ("identity", "sys"): frozenset({"path"}),
+    ("identity", "os"): frozenset({"path"}),
+    ("autolink", "urllib.request"): frozenset(
+        {"Request", "build_opener", "ProxyHandler", "HTTPRedirectHandler", "urlopen"}
+    ),
+}
+IMAGE_ATTRS = frozenset({"open", "BOX", "DecompressionBombWarning", "MAX_IMAGE_PIXELS"})
+# What the package may use of the indexer: the id rule and the move re-pointing, nothing that walks or
+# writes (index_archive.main, fingerprint, ...).
+INDEX_ARCHIVE_ATTRS = frozenset(
+    {
+        "file_id",
+        "folder_id",
+        "guess_type",
+        "_FILENAME_DISK_MAX",
+        "find_file_fk_columns",
+        "repoint_file_references",
+    }
+)
 
 
 def _is_binary_read_mode(call: ast.Call) -> bool:
@@ -84,174 +199,510 @@ def _is_binary_read_mode(call: ast.Call) -> bool:
     return mode == "rb"
 
 
+def _dotted(node) -> str | None:
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _forbidden_name(name: str) -> bool:
+    if name in PREFIX_EXCEPTIONS:
+        return False
+    return name in FORBIDDEN_NAMES or name.startswith(FORBIDDEN_PREFIXES)
+
+
+def _descendants(node) -> set[int]:
+    return {id(n) for n in ast.walk(node)}
+
+
 def violations(source: str, module: str) -> list[str]:
     """Every rule the module breaks, as 'module:line: what'."""
     tree = ast.parse(source)
     found: list[str] = []
     is_fs = module == "fs_readonly"
+    allowed = ALLOWED_IMPORTS.get(module, frozenset())
 
     def bad(node, what):
-        found.append(f"{module}:{node.lineno}: {what}")
+        found.append(f"{module}:{getattr(node, 'lineno', 0)}: {what}")
 
+    # ---- imports
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                top = a.name.split(".")[0]
-                if top in FORBIDDEN_IMPORTS:
+                if a.asname:
+                    bad(
+                        node,
+                        f"import {a.name} as {a.asname} (an alias hides what is called)",
+                    )
+                if a.name.split(".")[0] in NEVER_IMPORT:
                     bad(node, f"import {a.name}")
-                if top == "pathlib" and not is_fs:
-                    bad(node, "import pathlib (only PurePath names may be imported)")
-                if top == "os" and not is_fs and a.name not in ("os", "os.path"):
-                    bad(node, f"import {a.name}")
+                elif not is_fs and a.name not in allowed:
+                    bad(node, f"import {a.name} is not on {module}'s import allow-list")
         elif isinstance(node, ast.ImportFrom):
-            top = (node.module or "").split(".")[0]
-            if top in FORBIDDEN_IMPORTS:
-                bad(node, f"from {node.module} import ...")
-            if top == "pathlib" and not is_fs:
-                for a in node.names:
-                    if a.name not in PATHLIB_ALLOWED:
-                        bad(node, f"from pathlib import {a.name}")
-            if top == "os" and not is_fs:
-                for a in node.names:
-                    if a.name not in OS_ALLOWED:
-                        bad(node, f"from os import {a.name}")
+            for a in node.names:
+                if a.asname:
+                    bad(node, f"from {node.module} import {a.name} as {a.asname}")
+            if node.level:  # inside the package
+                mods = (
+                    [a.name for a in node.names]
+                    if node.module is None
+                    else [node.module.split(".")[0]]
+                )
+                for m in mods:
+                    if m not in PACKAGE_MODULES:
+                        bad(
+                            node, f"relative import of {m}: not a module of the package"
+                        )
+                continue
+            mod = node.module or ""
+            names = [a.name for a in node.names]
+            if mod == "__future__":
+                continue
+            if mod.split(".")[0] in NEVER_IMPORT:
+                bad(node, f"from {mod} import ...")
+            elif is_fs:
+                continue
+            elif mod == "io":
+                if names != ["BytesIO"]:
+                    bad(node, "from io import anything but BytesIO")
+            elif mod == "PIL":
+                if names != ["Image"] or module != "classify_sem":
+                    bad(node, "from PIL import anything but Image (classify_sem only)")
+            elif mod in ("os", "sys"):
+                ok = ATTR_ALLOWED.get((module, mod))
+                if mod not in allowed or ok is None or not set(names) <= ok:
+                    bad(node, f"from {mod} import {', '.join(names)}")
+            elif mod not in allowed:
+                bad(
+                    node,
+                    f"from {mod} import ... is not on {module}'s import allow-list",
+                )
+
+    # ---- reflection, dynamic code, dunders, file-writing log handlers
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in DYNAMIC_NAMES:
+            bad(node, f"{node.id} (reflection or dynamic code)")
         elif isinstance(node, ast.Attribute):
+            if node.attr in DYNAMIC_NAMES and _dotted(node) != "re.compile":
+                bad(node, f".{node.attr} (reflection or dynamic code)")
+            if (
+                node.attr.startswith("__")
+                and node.attr.endswith("__")
+                and node.attr not in DUNDER_ALLOWED
+            ):
+                bad(node, f".{node.attr} (a dunder attribute)")
             if node.attr in FORBIDDEN_ATTRS:
                 bad(node, f"open flag {node.attr}")
-            if (
-                isinstance(node.value, ast.Name)
-                and node.value.id == "os"
-                and not is_fs
-                and node.attr not in OS_ALLOWED
-            ):
-                bad(node, f"os.{node.attr} outside fs_readonly")
+            if "FileHandler" in node.attr or node.attr == "handlers":
+                bad(node, f".{node.attr} (a logging handler that writes files)")
         elif isinstance(node, ast.Call):
-            f = node.func
-            name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
-            if name is None:
+            for kw in node.keywords:
+                if kw.arg in ("filename", "filemode", "stream"):
+                    bad(node, f"keyword {kw.arg}= (logging or streaming to a file)")
+
+    # ---- forbidden names, by call AND by reference (so `rm = os.remove` is caught too)
+    for node in ast.walk(tree):
+        name = (
+            node.attr
+            if isinstance(node, ast.Attribute)
+            else node.id
+            if isinstance(node, ast.Name)
+            else None
+        )
+        if name and _forbidden_name(name):
+            bad(node, f"{name} (write, delete, rename, copy, move, exec or spawn)")
+
+    # ---- Pillow: only inside classify_image, only on `fh`, which is refused unless it is a BytesIO
+    classify_image_nodes: set[int] = set()
+    guarded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "classify_image":
+            classify_image_nodes |= _descendants(node)
+            for n in ast.walk(node):
+                if (
+                    isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name)
+                    and n.func.id == "isinstance"
+                    and len(n.args) == 2
+                    and isinstance(n.args[0], ast.Name)
+                    and n.args[0].id == "fh"
+                    and isinstance(n.args[1], ast.Name)
+                    and n.args[1].id == "BytesIO"
+                ):
+                    guarded = True
+
+    # ---- open: only fs_readonly, only "rb", never as a value
+    ok_funcs: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and f.id == "open":
+            if is_fs and _is_binary_read_mode(node):
+                ok_funcs.add(id(f))
+            elif is_fs:
+                bad(node, 'open() with a mode other than "rb"')
+            else:
+                bad(node, "open() outside fs_readonly")
+        elif isinstance(f, ast.Attribute) and f.attr == "open":
+            image_open = (
+                isinstance(f.value, ast.Name)
+                and f.value.id == "Image"
+                and module == "classify_sem"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "fh"
+                and {k.arg for k in node.keywords} <= {"formats"}
+            )
+            if image_open and id(node) in classify_image_nodes and guarded:
+                ok_funcs.add(id(f))
+            elif (
+                is_fs
+                and isinstance(f.value, ast.Name)
+                and f.value.id == "os"
+                and len(node.args) == 2
+                and any(
+                    isinstance(n, ast.Attribute) and n.attr == "O_NOFOLLOW"
+                    for n in ast.walk(node.args[1])
+                )
+            ):
+                ok_funcs.add(
+                    id(f)
+                )  # fs_readonly's opener: os.open(path, flags | O_NOFOLLOW | extra)
+            else:
+                bad(
+                    node,
+                    "a .open() call (Pillow only on classify_image's guarded BytesIO)",
+                )
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == "open"
+            and id(node) not in ok_funcs
+        ):
+            bad(node, "open used as a value (assigned, passed or aliased)")
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr == "open"
+            and id(node) not in ok_funcs
+        ):
+            if not any(
+                isinstance(p, ast.Call) and p.func is node for p in ast.walk(tree)
+            ):
+                bad(node, ".open used as a value")
+
+    # ---- what a package module may touch of the modules it imports (fs_readonly: only its own checks)
+    if not is_fs:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
                 continue
-            if name in FORBIDDEN_NAMES or name.startswith(FORBIDDEN_PREFIXES):
-                bad(node, f"call to {name}()")
-            elif name == "open":
-                if isinstance(f, ast.Name):
-                    # builtin open: only fs_readonly, only mode "rb"
-                    if not is_fs:
-                        bad(node, "open() outside fs_readonly")
-                    elif not _is_binary_read_mode(node):
-                        bad(node, 'open() with a mode other than "rb"')
-                elif (
-                    isinstance(f.value, ast.Name)
-                    and f.value.id == "Image"
-                    and module == "classify_sem"
-                    and len(node.args) == 1
-                    and isinstance(node.args[0], ast.Name)
+            dotted = _dotted(node)
+            if dotted is None:
+                continue
+            parts = dotted.split(".")
+            head, n = parts[0], len(parts)
+            if (
+                head in ("os", "sys")
+                and n == 2
+                and node.attr not in ATTR_ALLOWED.get((module, head), frozenset())
+            ):
+                bad(
+                    node,
+                    f"{head}.{node.attr} is not on {module}'s attribute allow-list",
+                )
+            elif head == "io" and n == 2 and node.attr != "BytesIO":
+                bad(node, f"io.{node.attr} (only BytesIO)")
+            elif head == "Image" and n == 2 and node.attr not in IMAGE_ATTRS:
+                bad(node, f"Image.{node.attr}")
+            elif parts[:2] == ["urllib", "request"] and n == 3:
+                if node.attr not in ATTR_ALLOWED.get(
+                    (module, "urllib.request"), frozenset()
                 ):
-                    pass  # Pillow reading a handle that open_rb gave us (never a path)
-                elif (
-                    is_fs
-                    and isinstance(f.value, ast.Name)
-                    and f.value.id == "os"
-                    and len(node.args) == 2
-                    and any(
-                        isinstance(n, ast.Attribute) and n.attr == "O_NOFOLLOW"
-                        for n in ast.walk(node.args[1])
-                    )
-                ):
-                    pass  # fs_readonly's opener: os.open(path, flags | extra) with O_NOFOLLOW in `extra`
-                else:
-                    bad(node, "a .open() call")
+                    bad(node, f"urllib.request.{node.attr}")
+            elif (
+                head == "index_archive"
+                and n == 2
+                and node.attr not in INDEX_ARCHIVE_ATTRS
+            ):
+                bad(node, f"index_archive.{node.attr}")
+            elif parts[:2] == ["identity", "index_archive"]:
+                if module != "db":
+                    bad(node, "identity.index_archive outside db")
+                elif n == 3 and node.attr not in INDEX_ARCHIVE_ATTRS:
+                    bad(node, f"index_archive.{node.attr}")
+        # classify_image is only ever given an in-memory BytesIO
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                called = (
+                    fn.id
+                    if isinstance(fn, ast.Name)
+                    else fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else None
+                )
+                if called == "classify_image" and module != "classify_sem":
+                    first = node.args[0] if node.args else None
+                    if not (
+                        isinstance(first, ast.Call)
+                        and (_dotted(first.func) or "") in ("io.BytesIO", "BytesIO")
+                    ):
+                        bad(node, "classify_image must be given io.BytesIO(...)")
+        if module == "classify_sem" and classify_image_nodes and not guarded:
+            bad(
+                tree,
+                "classify_image must refuse anything that is not a BytesIO (isinstance(fh, BytesIO))",
+            )
     return found
 
 
 def package_modules() -> list[Path]:
-    return sorted(PKG.glob("*.py"))
+    return sorted(p for p in PKG.rglob("*.py") if "__pycache__" not in p.parts)
+
+
+def module_name(path: Path) -> str:
+    return path.relative_to(PKG).with_suffix("").as_posix()
 
 
 def test_package_is_there():
     assert (PKG / "fs_readonly.py").is_file()
 
 
-@pytest.mark.parametrize("path", package_modules(), ids=lambda p: p.name)
+def test_every_module_of_the_package_is_known_to_the_import_table():
+    names = {module_name(p) for p in package_modules()}
+    assert (
+        names - {"fs_readonly"} == set(ALLOWED_IMPORTS)
+    ), "a new module needs a reviewed entry in ALLOWED_IMPORTS (and a removed one must leave it)"
+
+
+@pytest.mark.parametrize("path", package_modules(), ids=module_name)
 def test_module_has_no_write_delete_rename_or_open_for_write(path):
-    found = violations(path.read_text(encoding="utf-8"), path.stem)
+    found = violations(path.read_text(encoding="utf-8"), module_name(path))
     assert not found, "\n".join(found)
 
 
-# The checker itself: each forbidden thing is caught, the allowed things are not.
-@pytest.mark.parametrize(
-    "snippet",
-    [
-        "import os\nos.remove(p)",
-        "import os\nos.unlink(p)",
-        "import os\nos.rename(a, b)",
-        "import os\nos.replace(a, b)",
-        "import os\nos.rmdir(p)",
-        "import os\nos.mkdir(p)",
-        "import os\nos.makedirs(p)",
-        "import os\nos.chmod(p, 0o600)",
-        "import os\nos.truncate(p, 0)",
-        "import os\nos.utime(p)",
-        "import os\nos.symlink(a, b)",
-        "import shutil\nshutil.copyfile(a, b)",
-        "from shutil import move",
-        "import shutil",
-        "import subprocess",
-        "from pathlib import Path\nPath(p).write_text('x')",
-        "from pathlib import Path",
-        "p.write_bytes(b'x')",
-        "p.unlink()",
-        "p.touch()",
-        "f.write(b'x')",
-        "f.writelines([])",
-        "x.copy2(a, b)",
-        "open(p)",
-        "open(p, 'w')",
-        "open(p, 'wb')",
-        "open(p, 'ab')",
-        "open(p, 'r+b')",
-        "open(p, mode='w')",
-        "import io\nio.open(p, 'rb')",
-        "import os\nos.fdopen(1)",
-        "import os\nos.open(p, os.O_WRONLY)",
-        "import os\nfd = os.O_CREAT",
-        "img.save(p)",
-        "from PIL import Image\nImage.open('a.tif')",
-        "from PIL import Image\nImage.open(p + 'a.tif')",
-        "import os\nos.scandir(p)",
-        "import os\nos.stat(p)",
-        "from os import walk",
-    ],
-)
+def test_the_package_uses_of_the_indexer_are_exactly_the_allowed_ones():
+    used = set()
+    for path in package_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                d = _dotted(node)
+                if d and d.startswith("index_archive."):
+                    used.add(d.split(".")[1])
+                if d and d.startswith("identity.index_archive."):
+                    used.add(d.split(".")[2])
+    assert (
+        used and used <= INDEX_ARCHIVE_ATTRS
+    )  # nothing but the id rule and the re-pointing
+
+
+# The checker itself: each forbidden thing is caught, the allowed things are not. A snippet is checked as if it
+# were module `scan` unless it says otherwise.
+BYPASSES = [
+    # direct writes, deletes, renames
+    "import os\nos.remove(p)",
+    "import os\nos.unlink(p)",
+    "import os\nos.rename(a, b)",
+    "import os\nos.replace(a, b)",
+    "import os\nos.rmdir(p)",
+    "import os\nos.mkdir(p)",
+    "import os\nos.makedirs(p)",
+    "import os\nos.chmod(p, 0o600)",
+    "import os\nos.truncate(p, 0)",
+    "import os\nos.utime(p)",
+    "import os\nos.symlink(a, b)",
+    "import shutil\nshutil.copyfile(a, b)",
+    "from shutil import move",
+    "import shutil",
+    "import subprocess",
+    "from pathlib import Path\nPath(p).write_text('x')",
+    "from pathlib import Path",
+    "p.write_bytes(b'x')",
+    "p.unlink()",
+    "p.touch()",
+    "f.write(b'x')",
+    "f.writelines([])",
+    "x.copy2(a, b)",
+    # open
+    "open(p)",
+    "open(p, 'w')",
+    "open(p, 'wb')",
+    "open(p, 'ab')",
+    "open(p, 'r+b')",
+    "open(p, mode='w')",
+    "open(p, 'rb')",  # outside fs_readonly even a read is refused
+    "import io\nio.open(p, 'rb')",
+    "import os\nos.fdopen(1)",
+    "import os\nos.open(p, os.O_WRONLY)",
+    "import os\nfd = os.O_CREAT",
+    "img.save(p)",
+    # the reviewer's bypasses
+    "import os as o\no.spawnlp(os.P_WAIT, 'rm', 'rm', p)",
+    "import os\ngetattr(os, 're' + 'move')(p)",
+    "eval(\"open(p,'w')\")",
+    'exec("import os; os.remove(p)")',
+    "import io\nio.FileIO(p, 'w')",
+    "_o = open\n_o(p, 'wb')",
+    "fs = [open]\nfs[0](p, 'wb')",
+    "import logging\nlogging.FileHandler(p)",
+    "import logging\nlogging.basicConfig(filename=p)",
+    "import sqlite3\nsqlite3.connect(p)",
+    "import zipfile\nzipfile.ZipFile(p)",
+    "import sys\nsys.modules['os'].execv('/bin/rm', ['rm', p])",
+    "from PIL import Image\nImage.open(rel_path_string)",
+    "from PIL import Image\nImage.open('a.tif')",
+    "from PIL import Image\nImage.open(p + 'a.tif')",
+    # more ways round
+    "__import__('os').remove(p)",
+    "import importlib\nimportlib.import_module('os')",
+    "compile('1', 'x', 'exec')",
+    "vars(os)['remove'](p)",
+    "globals()['open'](p, 'w')",
+    "x = __builtins__",
+    "().__class__.__mro__",
+    "import os\nrm = os.remove\nrm(p)",
+    "import os\nos.execv('/bin/rm', ['rm'])",
+    "import os\nos.posix_spawn('/bin/rm', ['rm'], {})",
+    "import os\nos.fork()",
+    "import os\nos.popen('rm x')",
+    "import os\nos.system('rm x')",
+    "import os\nos.kill(1, 9)",
+    "import os\nos.scandir(p)",
+    "import os\nos.stat(p)",
+    "from os import walk",
+    "import ctypes",
+    "import tempfile",
+    "import mmap",
+    "import socket",
+    "import http.server",
+    "import pickle",
+    "import builtins\nbuiltins.open(p, 'w')",
+    "import io\nio.StringIO()",
+    "import index_archive\nindex_archive.main()",
+    "import urllib.request\nurllib.request.urlretrieve(u, p)",
+    "import psycopg2\npsycopg2.connect(d).cursor().copy_expert('COPY x TO STDOUT', f)",
+]
+# Snippets that are only bad in the module they are checked as.
+BYPASSES_AS = [
+    ("import io", "hashing"),  # `io` is on the table for scan only
+    ("import index_archive\nindex_archive.main()", "identity"),
+    ("import index_archive\nindex_archive.fingerprint(p, 1)", "identity"),
+    ("import urllib.request\nurllib.request.urlretrieve(u, p)", "autolink"),
+    ("import sys\nsys.modules['os']", "__main__"),
+    ("import sys\nsys.path.insert(0, p)", "__main__"),
+    ("import os\nos.environ.copy()", "__main__"),
+    ("import os\nos.getcwd()", "__main__"),
+    ("from os import getcwd", "__main__"),
+    (
+        "from PIL import Image\nImage.open(fh)",
+        "classify_sem",
+    ),  # not inside a guarded classify_image
+    (
+        "from PIL import Image\ndef classify_image(fh):\n    return Image.open(fh)",
+        "classify_sem",
+    ),  # no BytesIO guard
+    (
+        "from io import BytesIO\nfrom PIL import Image\ndef classify_image(fh):\n"
+        "    if not isinstance(fh, BytesIO):\n        raise TypeError\n    return Image.open(fh, 'x')",
+        "classify_sem",
+    ),
+    (
+        "from io import BytesIO\nfrom PIL import Image\ndef other(fh):\n"
+        "    return Image.open(fh)\ndef classify_image(fh):\n    isinstance(fh, BytesIO)",
+        "classify_sem",
+    ),
+    ("from PIL import Image\nImage.new('L', (1, 1))", "classify_sem"),
+]
+
+
+@pytest.mark.parametrize("snippet", BYPASSES)
 def test_checker_catches(snippet):
     assert violations(snippet, "scan"), snippet
 
 
-@pytest.mark.parametrize(
-    "snippet",
-    [
-        "import os.path\nx = os.path.join('a', 'b')",
-        "import os\nos.environ.get('A')",
-        "from pathlib import PurePosixPath\nPurePosixPath('a/b').name",
-        "from os import environ",
-        "data = fh.read()",
-        "import hashlib\nhashlib.sha256()",
-        "s = set()\ns.discard(1)",
-    ],
-)
-def test_checker_lets_clean_code_through(snippet):
-    assert violations(snippet, "scan") == []
+@pytest.mark.parametrize("snippet,module", BYPASSES_AS)
+def test_checker_catches_in_the_module_it_matters(snippet, module):
+    assert violations(snippet, module), (module, snippet)
+
+
+def test_imports_outside_the_table_are_refused_even_if_harmless():
+    for src in (
+        "import json",
+        "import errno",
+        "import random",
+        "from typing import Any",
+    ):
+        assert violations(src, "hashing"), src
+    assert violations(
+        "import json", "some_new_module"
+    )  # an unknown module may import nothing
+
+
+CLEAN = [
+    ("import re\nre.compile('x')", "recognise"),
+    ("import logging\nlog = logging.getLogger('x')", "scan"),
+    ("import os\nos.environ.get('A')", "__main__"),
+    ("from os import environ", "__main__"),
+    ("import sys\nsys.exit(1)", "__main__"),
+    ("import sys\nsys.path.insert(0, p)", "identity"),
+    ("import os.path\nx = os.path.join('a', 'b')", "identity"),
+    ("import io\nb = io.BytesIO(data)", "scan"),
+    ("data = fh.read()", "scan"),
+    ("import hashlib\nhashlib.sha256()", "hashing"),
+    ("s = set()\ns.discard(1)", "scan"),
+    ("cur.execute('select 1')\ncur.executemany('x', [])", "db"),
+    ("import urllib.request\nreq = urllib.request.Request(u)", "autolink"),
+    ("from . import fs_readonly\nfrom .kinds import Classification", "classify_scan"),
+    ("import index_archive\nx = index_archive.file_id('a')", "identity"),
+    ("from dataclasses import dataclass", "owners"),
+    ("def f(exc):\n    return type(exc).__name__", "scan"),
+    (
+        "from io import BytesIO\nfrom PIL import Image\ndef classify_image(fh):\n"
+        "    if not isinstance(fh, BytesIO):\n        raise TypeError\n    return Image.open(fh, formats=['PNG'])",
+        "classify_sem",
+    ),
+    ("x = classify_sem.classify_image(io.BytesIO(data))\nimport io", "scan"),
+]
+
+
+@pytest.mark.parametrize("snippet,module", CLEAN)
+def test_checker_lets_clean_code_through(snippet, module):
+    assert violations(snippet, module) == [], (module, snippet)
 
 
 def test_only_fs_readonly_may_open_and_only_for_rb():
     assert violations('open(p, "rb")', "fs_readonly") == []
     assert violations("open(p)", "fs_readonly")
     assert violations('open(p, "rb")', "hashing")
+    assert violations("f = open\nf(p, 'rb')", "fs_readonly")
 
 
-def test_pillow_may_read_a_handle_in_classify_sem_only():
-    src = "from PIL import Image\nimg = Image.open(fh)"
-    assert violations(src, "classify_sem") == []
-    assert violations(src, "scan")
+def test_classify_image_may_only_be_given_a_bytesio():
+    assert (
+        violations("classify_sem.classify_image(io.BytesIO(data))\nimport io", "scan")
+        == []
+    )
+    assert violations("classify_sem.classify_image(fh)", "scan")
+    assert violations("classify_sem.classify_image(open_rb(p))", "scan")
+    assert violations("classify_sem.classify_image(rel)", "scan")
+
+
+def test_only_the_indexers_id_rule_and_repointing_may_be_used():
+    assert (
+        violations("import index_archive\nindex_archive.file_id(p)", "identity") == []
+    )
+    assert violations("import index_archive", "db")  # only identity may import it
+    assert violations(
+        "x = identity.index_archive.file_id", "scan"
+    )  # only db may reach through identity
+    assert violations("x = identity.index_archive.main", "db")
+    assert violations("x = identity.index_archive.repoint_file_references", "db") == []
 
 
 # ---- open_rb and the allow-list --------------------------------------------------------
