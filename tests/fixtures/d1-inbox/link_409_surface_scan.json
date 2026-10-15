@@ -1,5 +1,5 @@
 {
-  "description": "a surface scan is never linked",
+  "description": "a surface scan is never linked to a sample, operation or test: it is added to an insert or an edge",
   "request": {
     "method": "POST",
     "path": "/d1-inbox/link",
@@ -17,7 +17,7 @@
   "body": {
     "errors": [
       {
-        "message": "A surface scan is added to an insert or edge, not linked. That is not available yet.",
+        "message": "A surface scan is added to an insert or an edge.",
         "extensions": {
           "candidate_id": "00000000-0000-4000-8000-000000001003",
           "code": "SURFACE_SCAN",

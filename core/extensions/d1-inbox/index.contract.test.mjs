@@ -11,7 +11,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { FIXTURE_DIR, buildFixtures, fixtureText } from './contract_fixtures.mjs';
-import { FILTER_KEYS, FILTER_VALUES, LINK_TARGETS, buildListQuery, parseFileFilters, shapeAcceptAll } from './index.js';
+import { FILTER_KEYS, FILTER_VALUES, LINK_COLLECTIONS, SCAN_CONDITIONS, buildListQuery, parseFileFilters, parseScanItem, shapeAcceptAll } from './index.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const built = buildFixtures();
@@ -33,7 +33,10 @@ test('the fixtures are the cases the client has to handle', () => {
   for (const wanted of [
     'files_new', 'files_older', 'files_linked', 'files_dismissed', 'files_new_acceptable', 'summary_person_alias_team', 'summary_person_no_alias', 'summary_no_person',
     'accept_all_dry_run', 'accept_all_dry_run_has_more', 'accept_all_real', 'accept_all_real_candidate_ids', 'link_ok', 'link_already_linked', 'link_403_not_editable',
-    'link_409_already_linked', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
+    'link_409_already_linked', 'link_409_surface_scan', 'link_409_not_a_surface_scan', 'link_surface_scan_ok', 'link_surface_scan_ok_edge', 'link_surface_scan_ok_mixed',
+    'link_surface_scan_already_linked', 'link_surface_scan_400_condition', 'link_surface_scan_400_item', 'link_surface_scan_400_date', 'link_surface_scan_404_not_found',
+    'link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'files_linked_surface_scan', 'undo_ok_surface_scan',
+    'undo_403_surface_scan', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
     'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
@@ -64,8 +67,18 @@ test('every request in a fixture is one the server accepts', () => {
       assert.ok(body.items.length >= 1 && body.items.length <= 200, label);
       for (const i of body.items) {
         assert.match(i.candidate_id, UUID, label);
-        assert.match(i.record_id, UUID, label);
-        assert.ok(Object.hasOwn(LINK_TARGETS, i.collection), `${label}: ${i.collection}`);
+        assert.ok(LINK_COLLECTIONS.includes(i.collection), `${label}: ${i.collection}`);
+        if (i.collection === 'surface_scans') {
+          // a surface scan item is checked by the server's own parser: the 400 fixtures are the ones it refuses, with the message and field they show
+          if (fx.status === 400) {
+            assert.throws(() => parseScanItem(i), (e) => e.status === 400 && e.message === fx.body.errors[0].message && e.extra.field === fx.body.errors[0].extensions.field, label);
+          } else {
+            assert.doesNotThrow(() => parseScanItem(i), label);
+          }
+          assert.deepEqual(Object.keys(i).filter((k) => !['candidate_id', 'collection', 'insert_id', 'edge_id', 'condition', 'operation_id', 'scanned_on', 'condition_note', 'notes'].includes(k)), [], `${label} sends a field the server drops`);
+        } else {
+          assert.match(i.record_id, UUID, label);
+        }
       }
     } else if (req.path === '/d1-inbox/accept-all') {
       const parsed = parseFileFilters(body.filter, { defaultTab: 'open' });
@@ -181,6 +194,26 @@ test('accept-all names at most 200 skipped files and says how many there were in
   const out = shapeAcceptAll({ batchId: null, items: [], skipped: many, has_more: false, next_cursor: null });
   assert.equal(out.skipped.length, 200);
   assert.equal(out.skipped_total, 250);
+});
+
+test('a surface scan item always carries a condition the person chose: the fixtures show every condition the server accepts and none is defaulted', () => {
+  assert.deepEqual(SCAN_CONDITIONS, ['new', 'worn', 'cleaned', 'other']);
+  const sent = [...built.values()].filter((fx) => fx.request?.path === '/d1-inbox/link').flatMap((fx) => fx.request.body.items).filter((i) => i.collection === 'surface_scans');
+  assert.ok(sent.length >= 5);
+  assert.ok(sent.some((i) => i.condition === undefined), 'the 400 fixture for a missing condition');
+  assert.throws(() => parseScanItem({ candidate_id: '00000000-0000-4000-8000-000000001003', insert_id: '00000000-0000-4000-8000-000000000201' }), { status: 400 });
+  // the answer item of an add names the scan (record_id = junction_id = scan id) and the insert or edge it went to
+  for (const name of ['link_surface_scan_ok.json', 'link_surface_scan_ok_edge.json', 'link_surface_scan_ok_mixed.json']) {
+    const item = built.get(name).body.data.items.find((i) => i.collection === 'surface_scans');
+    assert.equal(item.record_id, item.junction_id, name);
+    assert.equal([item.insert_id, item.edge_id].filter((v) => v !== null).length, 1, `${name}: exactly one of insert_id and edge_id`);
+    assert.equal(item.adopted, false, name);
+  }
+  // a linked surface scan in the list names the scan and where it went
+  const [linked] = built.get('files_linked_surface_scan.json').body.data;
+  assert.equal(linked.linked_collection, 'surface_scans');
+  assert.equal([linked.linked_insert_id, linked.linked_edge_id].filter((v) => v !== null).length, 1);
+  assert.match(linked.linked_label, /worn/);
 });
 
 test('the folder filter reads the folder part of the path, not the file name (the client words it that way)', () => {

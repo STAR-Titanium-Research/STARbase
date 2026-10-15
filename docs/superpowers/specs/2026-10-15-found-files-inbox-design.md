@@ -233,6 +233,30 @@ reads it, uses a provisional key when it is not `done`, and never hashes or writ
 **Until `surface_scans` is merged** stream F builds against this contract with fakes, and the live link stays
 disabled behind a feature flag the extension reads (the table's existence).
 
+*As built (stream F1, `d1-inbox`):* `surface_scans` is on the base branch (migration 192), so the feature flag is the
+table's existence, read once from `information_schema` (409 `SURFACE_SCANS_UNAVAILABLE` when it is missing). A surface
+scan is **added** through `POST /d1-inbox/link` with an item of its own shape:
+
+```
+{ candidate_id, collection: 'surface_scans', insert_id | edge_id (exactly one), condition: 'new'|'worn'|'cleaned'|'other' (required, never defaulted),
+  operation_id?, scanned_on? ('YYYY-MM-DD'), condition_note? (500 characters), notes? (2000 characters) }
+```
+
+It may sit in one batch with sample, operation and test links. Only a candidate of kind `surface_scan` can be added
+(409 `NOT_A_SURFACE_SCAN` for any other); a surface scan linked to a sample, operation or test is 409 `SURFACE_SCAN`
+("A surface scan is added to an insert or an edge."); accept-all and auto-link keep skipping it. The row is created
+through `ItemsService` as the caller in the transaction that marks the candidate linked (`link_kind` `manual` or `bulk`,
+`linked_collection` `surface_scans`, `linked_junction_id` = the new `scan_id`); the endpoint sends only `insert_id` or
+`edge_id`, `directus_files_id` (from the candidate), `condition` and the optional fields, never `owner_*`, `render_*`,
+`cache_key`, `source_*`, `grid_*`, `pixel_pitch_*` or `z_*` (the default `render_status = 'pending'` queues the render, and
+`d1-owner-default` sets the owner). The insert, edge and operation are read as the caller first: one that is missing or
+that the caller cannot read is 404 `NOT_FOUND`. A unique violation is 409 `ALREADY_ADDED`; any refusal rolls the whole
+batch back. The answer item is `{ candidate_id, collection: 'surface_scans', record_id: <scan_id>, junction_id: <scan_id>,
+insert_id, edge_id, adopted: false }`. Validation errors are 400 `INVALID_PAYLOAD` with `extensions.field`. Undo deletes
+only the scan rows the batch created (still holding the same file), as the caller, so a caller who may no longer delete
+gets 403 and nothing is undone (administrators are not substituted). `GET /files` names a linked scan: `linked_collection`
+`surface_scans`, `linked_record_id` the scan, `linked_label` "H13A-#2 (worn)", and `linked_insert_id` / `linked_edge_id`.
+
 ## 9. The `d1-inbox` extension (Directus endpoint, plain ESM, like `d1-build`)
 
 All routes run as the caller (Directus accountability); linking writes through `ItemsService` with the caller's
@@ -244,7 +268,7 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 |---|---|---|
 | `GET /d1-inbox/summary` | login | counts: new, older with an exact match, for the person and each of their teams |
 | `GET /d1-inbox/files` | login | paged list, filters: tab (new/older/linked/dismissed), kind, folder, date, owner or team, match strength |
-| `POST /d1-inbox/link` | login | `{items:[{candidate_id, collection, record_id}]}` in one transaction; returns `link_batch_id` |
+| `POST /d1-inbox/link` | login | `{items:[{candidate_id, collection, record_id}]}` in one transaction; returns `link_batch_id`. A surface scan is `{candidate_id, collection:'surface_scans', insert_id\|edge_id, condition, ...}` (§8) |
 | `POST /d1-inbox/accept-all` | login | `{filter}` → links only rows with exact short-ID suggestion the caller can edit; returns the batch |
 | `POST /d1-inbox/dismiss`, `/restore` | login | state changes |
 | `POST /d1-inbox/undo` | login | `{link_batch_id}` removes the junction rows it made and returns the candidates to `new` |

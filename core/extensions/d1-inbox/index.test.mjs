@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, safeEqual, shapeSummary,
+  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -21,6 +21,10 @@ const S2 = ID(104); // a Restricted sample nobody but its owner can read
 const S3 = ID(105); // a sample Carol can only view
 const O1 = ID(102);
 const T1 = ID(103);
+const INS1 = ID(201); // a cutting insert every member can read
+const INS2 = ID(204);
+const EDGE1 = ID(202); // an insert edge every member can read
+const MISSING = ID(299); // an id no record has (or none the caller can read: the answer is the same)
 const ROLE_MEMBER = ID(81);
 const ROLE_PARENT = ID(82);
 const NOW = new Date('2026-10-15T12:00:00.000Z');
@@ -87,6 +91,11 @@ function newWorld() {
     // records a person may read but not edit (a view-only person on a visible record)
     viewable: { [U.carol]: { physical_samples: new Set([S3]), manufacturing_operations: new Set(), test_sessions: new Set() } },
     prefs: new Map(),
+    // stream F1: the surface_scans table (rows as the fake ItemsService keeps them), and the records a scan may name (every non-viewer can read these)
+    scanTable: true, scans: [],
+    refs: { cutting_inserts: new Set([INS1, INS2]), insert_edges: new Set([EDGE1]), manufacturing_operations: new Set([O1]) },
+    labels: { [INS1]: 'INS-001', [EDGE1]: 'INS-001-E1' },
+    denyScanCreate: false, denyRefRead: null,
     scanRequests: [],
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
@@ -118,10 +127,10 @@ const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 const copy = (v) => structuredClone(v);
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scanRequests = s.scanRequests; w.prefs = s.prefs;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs;
 };
 
 function statement(w, sql, b, txId) {
@@ -203,6 +212,8 @@ function statement(w, sql, b, txId) {
       return [copy(row)];
     }
     case 'summary': return copy(w.summaryRows);
+    case 'scanTableExists': return [{ available: w.scanTable }];
+    case 'scanById': return copy(w.scans.filter((r) => r.scan_id === b[0]).map((r) => ({ id: r.scan_id, insert_id: r.insert_id ?? null, edge_id: r.edge_id ?? null, directus_files_id: r.directus_files_id })));
     case 'userForAccountability': return w.users.has(b[0]) ? [copy(w.users.get(b[0]))] : [];
     case 'roleTree': {
       const out = [];
@@ -289,6 +300,23 @@ function fakeServices(w) {
     async readByQuery(query) {
       // a mirror of d1-access-guard's canPass read: { _and: [ {pk: _eq|_in}, <update rule> ] }
       w.items.push({ op: 'read', collection: this.collection, query, accountability: this.options.accountability, knex: this.options.knex });
+      if (this.collection === 'surface_scans') {
+        // the label read of the list: scans as the caller may read them (every member), with the insert or edge nested
+        const wanted = new Set(query.filter.scan_id._in);
+        return w.scans.filter((r) => wanted.has(r.scan_id)).map((r) => ({
+          scan_id: r.scan_id, condition: r.condition,
+          insert_id: r.insert_id ? { insert_id: r.insert_id, insert_code: w.labels[r.insert_id] } : null,
+          edge_id: r.edge_id ? { edge_id: r.edge_id, edge_code: w.labels[r.edge_id] } : null,
+        }));
+      }
+      const refPk = { cutting_inserts: 'insert_id', insert_edges: 'edge_id', manufacturing_operations: 'operation_id' }[this.collection];
+      if (refPk && !query.filter._and && query.filter[refPk]?._eq !== undefined) {
+        // the existence read of a scan's insert, edge or operation, as the caller
+        if (w.denyRefRead === this.collection) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+        const id = query.filter[refPk]._eq;
+        const seen = w.refs[this.collection].has(id);
+        return seen ? [{ [refPk]: id }] : [];
+      }
       const pk = LINK_TARGETS[this.collection]?.pk;
       const user = this.options.accountability.user;
       if (!query.filter._and) {
@@ -306,6 +334,17 @@ function fakeServices(w) {
 
     async createOne(data) {
       w.failCreateFor?.(this.collection, data);
+      if (this.collection === 'surface_scans') {
+        if (w.denyScanCreate) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+        // the table's unique constraints: one scan per (insert, file) and per (edge, file); Directus answers RECORD_NOT_UNIQUE
+        if (w.scans.some((r) => r.directus_files_id === data.directus_files_id && ((data.insert_id && r.insert_id === data.insert_id) || (data.edge_id && r.edge_id === data.edge_id)))) {
+          throw Object.assign(new Error('Field has to be unique.'), { status: 400, code: 'RECORD_NOT_UNIQUE' });
+        }
+        const scanId = ID(6000 + w.scans.length + w.items.length);
+        w.scans.push({ scan_id: scanId, ...data, render_status: 'pending' });
+        w.items.push({ op: 'create', collection: 'surface_scans', data, accountability: this.options.accountability, knex: this.options.knex, id: scanId });
+        return scanId;
+      }
       const target = Object.values(LINK_TARGETS).find((t) => t.junction === this.collection);
       const rows = w.junctions[this.collection];
       if (rows.some((j) => j[target.fk] === data[target.fk] && j.directus_files_id === data.directus_files_id)) {
@@ -319,6 +358,11 @@ function fakeServices(w) {
 
     async deleteOne(id) {
       if (w.denyDelete) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      if (this.collection === 'surface_scans') {
+        w.scans = w.scans.filter((r) => r.scan_id !== id);
+        w.items.push({ op: 'delete', collection: 'surface_scans', id, accountability: this.options.accountability, knex: this.options.knex });
+        return id;
+      }
       w.junctions[this.collection] = w.junctions[this.collection].filter((j) => j.id !== id);
       w.items.push({ op: 'delete', collection: this.collection, id, accountability: this.options.accountability, knex: this.options.knex });
       return id;
@@ -387,7 +431,8 @@ test('the spec table of link targets: sample, operation and test junctions', () 
   assert.equal(LINK_TARGETS.manufacturing_operations.fk, 'operation_id');
   assert.equal(LINK_TARGETS.test_sessions.junction, 'session_data_files');
   assert.equal(LINK_TARGETS.test_sessions.fk, 'session_id');
-  assert.equal(LINK_TARGETS.surface_scans, undefined, 'the surface_scans target is stream F1, not v1');
+  assert.equal(LINK_TARGETS.surface_scans, undefined, 'a surface scan makes a row of its own, not a junction row: it is not a LINK_TARGETS entry');
+  assert.deepEqual(LINK_COLLECTIONS, ['physical_samples', 'manufacturing_operations', 'test_sessions', 'surface_scans'], 'what a link item may name (stream F1)');
 });
 
 test('the junction FK columns match the migrations (20260624000031, 20260624000032)', () => {
@@ -1014,7 +1059,7 @@ test('POST /link: the same person repeating the same link is idempotent (same ba
   assert.equal(codeOf(other), 'ALREADY_LINKED');
 });
 
-test('POST /link refuses a surface scan (409 SURFACE_SCAN) until stream F: nothing is written', async () => {
+test('POST /link refuses a surface scan linked to a sample (409 SURFACE_SCAN): it is added to an insert or an edge, nothing is written', async () => {
   const w = newWorld();
   const scan = add(w, cand({ kind: 'surface_scan' }));
   const img = add(w, cand());
@@ -1025,6 +1070,487 @@ test('POST /link refuses a surface scan (409 SURFACE_SCAN) until stream F: nothi
   assert.equal(errorOf(res).extensions.candidate_id, scan.candidate_id);
   assert.equal(w.junctions.sample_data_files.length, 0);
   assert.equal(img.state, 'new');
+});
+
+// ---- adding a surface scan (stream F1) ---------------------------------------------------------------------------------------
+
+// a found .al3d file: the crawler tags it surface_scan and names no record
+const scanCand = (over = {}) => cand({
+  kind: 'surface_scan', kind_confidence: 1, match_strength: 'none', matches: [], suggested_collection: null, suggested_record_id: null,
+  rel_path: `Users/ali1/alicona/edge${seq}.al3d`, ...over,
+});
+const scanItem = (candidate, over = {}) => ({ candidate_id: candidate.candidate_id, collection: 'surface_scans', insert_id: INS1, condition: 'worn', ...over });
+const ACCESS_RULES = JSON.parse(readFileSync(new URL('../../../scripts/access_rules.json', import.meta.url), 'utf8'));
+const MEMBER_CREATE_FIELDS = ACCESS_RULES.custom.surface_scans.create.fields;
+
+test('a surface scan item is parsed to what the contract allows: a condition, exactly one of insert and edge, a real day, bounded notes', () => {
+  const c = scanCand();
+  const ok = parseScanItem(scanItem(c, { operation_id: O1.toUpperCase(), scanned_on: '2026-10-14', condition_note: '  chipped ', notes: 'n' }));
+  assert.deepEqual(ok, { condition: 'worn', insertId: INS1, edgeId: null, operationId: O1, scannedOn: '2026-10-14', conditionNote: 'chipped', notes: 'n' });
+  assert.deepEqual(parseScanItem({ candidate_id: c.candidate_id, edge_id: EDGE1, condition: 'other', notes: '', scanned_on: '' }),
+    { condition: 'other', insertId: null, edgeId: EDGE1, operationId: null, scannedOn: null, conditionNote: null, notes: null });
+  for (const condition of ['new', 'worn', 'cleaned', 'other']) assert.equal(parseScanItem(scanItem(c, { condition })).condition, condition);
+});
+
+test('POST /link, surface scan: every invalid item is 400 INVALID_PAYLOAD naming the field; no transaction is opened and nothing is checked or written', async () => {
+  const w = newWorld();
+  const c = add(w, scanCand());
+  const { call } = setup(w);
+  const bad = [
+    ['condition', scanItem(c, { condition: undefined })],
+    ['condition', scanItem(c, { condition: null })],
+    ['condition', scanItem(c, { condition: '' })],
+    ['condition', scanItem(c, { condition: 'broken' })],
+    ['condition', scanItem(c, { condition: 'Worn' })],
+    ['condition', scanItem(c, { condition: ['worn'] })],
+    ['edge_id', scanItem(c, { edge_id: EDGE1 })], // both
+    ['insert_id', scanItem(c, { insert_id: undefined })], // neither
+    ['insert_id', scanItem(c, { insert_id: 'nope' })],
+    ['edge_id', scanItem(c, { insert_id: undefined, edge_id: 'nope' })],
+    ['operation_id', scanItem(c, { operation_id: 'nope' })],
+    ['scanned_on', scanItem(c, { scanned_on: '2026-13-40' })],
+    ['scanned_on', scanItem(c, { scanned_on: '2026-02-30' })],
+    ['scanned_on', scanItem(c, { scanned_on: '15/10/2026' })],
+    ['scanned_on', scanItem(c, { scanned_on: 20261015 })],
+    ['notes', scanItem(c, { notes: 'x'.repeat(2001) })],
+    ['notes', scanItem(c, { notes: { text: 'x' } })],
+    ['condition_note', scanItem(c, { condition_note: 'x'.repeat(501) })],
+  ];
+  for (const [field, item] of bad) {
+    const res = await call('POST /link', { user: U.alice, body: { items: [item] } });
+    assert.equal(res.statusCode, 400, `${field}: ${JSON.stringify(item).slice(0, 90)}`);
+    assert.equal(codeOf(res), 'INVALID_PAYLOAD');
+    assert.equal(errorOf(res).extensions.field, field, JSON.stringify(item).slice(0, 90));
+    assert.equal(errorOf(res).extensions.candidate_id, c.candidate_id);
+  }
+  // the limits are inclusive: 2000 characters of notes and 500 of condition note are fine
+  assert.doesNotThrow(() => parseScanItem(scanItem(c, { notes: 'x'.repeat(2000), condition_note: 'x'.repeat(500) })));
+  assert.equal(w.txCount, 0, 'no transaction for a bad body');
+  assert.equal(w.log.some((l) => l.name === 'scanTableExists'), false, 'validation comes before the table check');
+  assert.equal(w.scans.length, 0);
+});
+
+test('POST /link, surface scan: an insert gets a scan created as the caller, the candidate is marked linked in the same transaction', async () => {
+  const w = newWorld();
+  const c = add(w, scanCand());
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(c)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const batch = res.body.data.link_batch_id;
+  assert.match(batch, /^[0-9a-f-]{36}$/);
+  assert.equal(res.body.data.linked, 1);
+  const created = writesTo(w, 'surface_scans');
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].data, { insert_id: INS1, directus_files_id: c.directus_files_id, condition: 'worn' }, 'only what was given: no operation, date, note or owner');
+  assert.equal(created[0].accountability.user, U.alice, 'created as the caller, so permissions and the owner hook apply');
+  assert.equal(created[0].accountability.admin, false);
+  assert.ok(created[0].knex?.isTransaction, 'inside the one transaction');
+  assert.deepEqual(res.body.data.items, [{
+    candidate_id: c.candidate_id, collection: 'surface_scans', record_id: created[0].id, junction_id: created[0].id, insert_id: INS1, edge_id: null, adopted: false,
+  }]);
+  assert.equal(c.state, 'linked');
+  assert.equal(c.decided_by, U.alice);
+  assert.equal(c.link_kind, 'manual');
+  assert.equal(c.linked_collection, 'surface_scans');
+  assert.equal(c.linked_junction_id, created[0].id, 'the new scan id: the four link columns go together');
+  assert.equal(c.link_batch_id, batch);
+  assert.equal(c.adopted_at, null, 'a surface scan is read by the viewer worker, not adopted for hashing here');
+  assert.equal(w.junctions.sample_data_files.length + w.junctions.operation_data_files.length + w.junctions.session_data_files.length, 0, 'no junction row');
+  assert.equal(w.scans[0].render_status, 'pending', 'the default queues the render');
+  const tx = w.log.filter((l) => l.tx !== null);
+  assert.equal(tx[0].name, 'setActor');
+  assert.deepEqual(tx[0].bindings, [U.alice]);
+});
+
+test('POST /link, surface scan: an edge with the operation, day and notes; the optional fields are sent when given', async () => {
+  const w = newWorld();
+  const c = add(w, scanCand());
+  const { call } = setup(w);
+  const res = await call('POST /link', {
+    user: U.alice,
+    body: { items: [{ candidate_id: c.candidate_id, collection: 'surface_scans', edge_id: EDGE1, condition: 'cleaned', operation_id: O1, scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: ' after pass 3 ' }] },
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writesTo(w, 'surface_scans')[0].data, {
+    edge_id: EDGE1, directus_files_id: c.directus_files_id, condition: 'cleaned', condition_note: 'ultrasonic bath', scanned_on: '2026-10-14', operation_id: O1, notes: 'after pass 3',
+  });
+  assert.deepEqual(res.body.data.items[0].insert_id, null);
+  assert.equal(res.body.data.items[0].edge_id, EDGE1);
+});
+
+test('POST /link, surface scan: only the fields the contract lets a Lab Member send reach the table, whatever the client puts in the item', async () => {
+  const w = newWorld();
+  const c = add(w, scanCand());
+  const { call } = setup(w);
+  const worker = {
+    scan_id: ID(9999), render_status: 'done', render_error: 'x', rendered_at: '2026-10-15T00:00:00Z', cache_key: 'abc', source_format: 'al3d', source_width: 1, source_height: 1,
+    grid_width: 1, grid_height: 1, pixel_pitch_x_um: 1, pixel_pitch_y_um: 1, z_min_um: 1, z_max_um: 2, owner: U.bob, owner_person_id: P.bob, created_at: 'x', updated_at: 'x', version: 7, record_id: S1,
+  };
+  const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(c, { ...worker, operation_id: O1, scanned_on: '2026-10-14', condition_note: 'c', notes: 'n' })] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const sent = Object.keys(writesTo(w, 'surface_scans')[0].data).sort();
+  assert.deepEqual(sent, ['condition', 'condition_note', 'directus_files_id', 'insert_id', 'notes', 'operation_id', 'scanned_on']);
+  for (const key of sent) assert.ok(MEMBER_CREATE_FIELDS.includes(key), `${key} is in the Lab Member create list of scripts/access_rules.json`);
+  assert.doesNotMatch(sent.join(), /render_|cache_key|source_|grid_|pixel_pitch_|z_m|owner/);
+  assert.equal(w.scans[0].render_status, 'pending', 'the worker owns render_status; the endpoint left the default');
+});
+
+test('POST /link, surface scan: the candidate must be a surface scan (409 NOT_A_SURFACE_SCAN); a surface scan is never linked to a sample (409 SURFACE_SCAN)', async () => {
+  const w = newWorld();
+  const image = add(w, cand());
+  const doc = add(w, cand({ kind: 'document' }));
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  for (const other of [image, doc]) {
+    const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(other)] } });
+    assert.equal(res.statusCode, 409);
+    assert.equal(codeOf(res), 'NOT_A_SURFACE_SCAN');
+    assert.equal(errorOf(res).extensions.candidate_id, other.candidate_id);
+  }
+  for (const [collection, record] of [['physical_samples', S1], ['manufacturing_operations', O1], ['test_sessions', T1]]) {
+    const res = await call('POST /link', { user: U.alice, body: { items: [link(scan, collection, record)] } });
+    assert.equal(res.statusCode, 409, collection);
+    assert.equal(codeOf(res), 'SURFACE_SCAN');
+    assert.match(errorOf(res).message, /^A surface scan is added to an insert or an edge/);
+  }
+  assert.equal(w.scans.length, 0);
+  assert.equal(scan.state, 'new');
+  assert.equal(image.state, 'new');
+});
+
+test('POST /link, surface scan: a batch of a sample link and a scan is one transaction, one batch id; link_kind is bulk', async () => {
+  const w = newWorld();
+  const img = add(w, cand());
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(img), scanItem(scan, { edge_id: undefined, insert_id: INS2, condition: 'new' })] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.linked, 2);
+  assert.equal(img.link_batch_id, scan.link_batch_id);
+  assert.equal(scan.link_batch_id, res.body.data.link_batch_id);
+  assert.equal(img.link_kind, 'bulk');
+  assert.equal(scan.link_kind, 'bulk');
+  assert.equal(w.junctions.sample_data_files.length, 1);
+  assert.equal(w.scans.length, 1);
+  assert.deepEqual(res.body.data.items.map((i) => i.collection), ['physical_samples', 'surface_scans']);
+  assert.equal(w.txCount, 1, 'one transaction for both');
+  // the edit check still applies to the sample half: a sample the caller cannot edit stops the whole batch, scan included
+  const img2 = add(w, cand());
+  const scan2 = add(w, scanCand());
+  const refused = await call('POST /link', { user: U.alice, body: { items: [link(img2, 'physical_samples', S2), scanItem(scan2)] } });
+  assert.equal(refused.statusCode, 403);
+  assert.equal(w.scans.length, 1, 'the scan of the refused batch was never written');
+  assert.equal(scan2.state, 'new');
+});
+
+test('POST /link, surface scan: a unique violation (the file is already a scan of that insert or edge) is 409 ALREADY_ADDED and the whole batch rolls back', async () => {
+  const w = newWorld();
+  const img = add(w, cand());
+  const scan = add(w, scanCand());
+  // someone added this file to INS1 in Data Studio already
+  w.scans.push({ scan_id: ID(4801), insert_id: INS1, directus_files_id: scan.directus_files_id, condition: 'new', render_status: 'done' });
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(img), scanItem(scan)] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'ALREADY_ADDED');
+  assert.equal(errorOf(res).message, 'That file is already a surface scan of this insert or edge.');
+  assert.equal(errorOf(res).extensions.candidate_id, scan.candidate_id);
+  assert.equal(w.junctions.sample_data_files.length, 0, 'the sample link made before the scan rolled back');
+  assert.equal(w.scans.length, 1, 'only the scan that was already there');
+  assert.equal(img.state, 'new');
+  assert.equal(scan.state, 'new');
+  assert.equal(scan.link_batch_id, null);
+  // the same file on the EDGE of that insert is a different pair: allowed
+  const ok = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  // the raw Postgres code is the same answer
+  const w2 = newWorld();
+  const scan2 = add(w2, scanCand());
+  w2.failCreateFor = (collection) => { if (collection === 'surface_scans') throw Object.assign(new Error('duplicate key'), { code: '23505' }); };
+  assert.equal(codeOf(await setup(w2).call('POST /link', { user: U.alice, body: { items: [scanItem(scan2)] } })), 'ALREADY_ADDED');
+});
+
+test('POST /link, surface scan: no surface_scans table yet is 409 SURFACE_SCANS_UNAVAILABLE before any transaction; samples still link; a yes is asked once', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const img = add(w, cand());
+  const { call } = setup(w);
+  w.scanTable = false;
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(img), scanItem(scan)] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'SURFACE_SCANS_UNAVAILABLE');
+  assert.equal(errorOf(res).message, 'Surface scans are not available yet.');
+  assert.equal(w.txCount, 0);
+  assert.equal(img.state, 'new', 'nothing was linked');
+  // a link that names no scan never asks
+  const before = w.log.filter((l) => l.name === 'scanTableExists').length;
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [link(img)] } })).statusCode, 200);
+  assert.equal(w.log.filter((l) => l.name === 'scanTableExists').length, before);
+  // the migration lands: the next request sees it, and then the answer is remembered
+  w.scanTable = true;
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } })).statusCode, 200);
+  const scan2 = add(w, scanCand());
+  w.scanTable = false;
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(scan2)] } })).statusCode, 200, 'a table that was there is not asked about again');
+  assert.equal(w.log.filter((l) => l.name === 'scanTableExists').length, before + 1);
+});
+
+test('POST /link, surface scan: a Lab Viewer is refused as for any link (READ_ONLY_ROLE), nothing is written', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand({ owner_person_id: P.viewer }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.viewer, role: LAB_VIEWER_ROLE_ID, body: { items: [scanItem(scan)] } });
+  assert.equal(res.statusCode, 403);
+  assert.equal(codeOf(res), 'READ_ONLY_ROLE');
+  assert.equal(w.scans.length, 0);
+  assert.equal(w.txCount, 0);
+  assert.equal(scan.state, 'new');
+});
+
+test('POST /link, surface scan: a missing insert, edge or operation (or one the caller cannot read) is 404; a refused read or create is 403; nothing stays written', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  for (const [item, what] of [
+    [scanItem(scan, { insert_id: MISSING }), 'insert'],
+    [scanItem(scan, { insert_id: undefined, edge_id: MISSING }), 'edge'],
+    [scanItem(scan, { operation_id: MISSING }), 'operation'],
+  ]) {
+    const res = await call('POST /link', { user: U.alice, body: { items: [item] } });
+    assert.equal(res.statusCode, 404, what);
+    assert.equal(codeOf(res), 'NOT_FOUND');
+    assert.match(errorOf(res).message, new RegExp(`That ${what} does not exist`));
+    assert.equal(errorOf(res).extensions.candidate_id, scan.candidate_id);
+  }
+  w.denyRefRead = 'cutting_inserts';
+  const denied = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(codeOf(denied), 'FORBIDDEN');
+  w.denyRefRead = null;
+  w.denyScanCreate = true;
+  const noCreate = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(noCreate.statusCode, 403);
+  assert.equal(codeOf(noCreate), 'FORBIDDEN');
+  assert.match(errorOf(noCreate).message, /not allowed to add surface scans/);
+  assert.equal(w.scans.length, 0);
+  assert.equal(scan.state, 'new');
+  // the existence reads ran as the caller, inside the transaction
+  const reads = w.items.filter((i) => i.op === 'read' && i.collection === 'cutting_inserts');
+  assert.ok(reads.length >= 1);
+  assert.equal(reads[0].accountability.user, U.alice);
+  assert.ok(reads[0].knex?.isTransaction);
+});
+
+test('POST /link, surface scan: a candidate that is not the caller\'s to see is 404; a team file can be added by any active member', async () => {
+  const w = newWorld();
+  const others = add(w, scanCand({ owner_person_id: P.carol }));
+  const team = add(w, scanCand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(others)] } })).statusCode, 404);
+  assert.equal((await call('POST /link', { user: U.carol, body: { items: [scanItem(team)] } })).statusCode, 404);
+  const res = await call('POST /link', { user: U.bob, body: { items: [scanItem(team)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(writesTo(w, 'surface_scans')[0].accountability.user, U.bob);
+});
+
+test('POST /link, surface scan: an administrator adds one with their own accountability (the endpoint never adds admin rights)', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand({ owner_person_id: P.admin }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.admin, admin: true, role: ID(80), body: { items: [scanItem(scan)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(writesTo(w, 'surface_scans')[0].accountability.user, U.admin);
+});
+
+test('POST /link, surface scan: the same person repeating the same add is idempotent (no second row, no new batch); another insert is 409 ALREADY_LINKED', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  const first = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  const again = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(again.statusCode, 200, JSON.stringify(again.body));
+  assert.equal(again.body.data.link_batch_id, null);
+  assert.equal(again.body.data.linked, 0);
+  assert.equal(again.body.data.items[0].already_linked, true);
+  assert.equal(again.body.data.items[0].record_id, first.body.data.items[0].record_id);
+  assert.equal(w.scans.length, 1);
+  const other = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: INS2 })] } });
+  assert.equal(other.statusCode, 409);
+  assert.equal(codeOf(other), 'ALREADY_LINKED');
+  const edge = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
+  assert.equal(codeOf(edge), 'ALREADY_LINKED');
+  const bob = add(w, scanCand({ owner_person_id: null, owner_team_id: TEAM }));
+  await call('POST /link', { user: U.alice, body: { items: [scanItem(bob)] } });
+  assert.equal(codeOf(await call('POST /link', { user: U.bob, body: { items: [scanItem(bob)] } })), 'ALREADY_LINKED', 'a teammate\'s add is not yours to repeat');
+});
+
+test('POST /link, surface scan: a dismissed scan file is 409 NOT_NEW, nothing written', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand({ state: 'dismissed' }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'NOT_NEW');
+  assert.equal(w.scans.length, 0);
+});
+
+test('POST /link, surface scan: the data cache is cleared after the commit when CACHE_ENABLED', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const { call } = setup(w, { env: { D1_INBOX_CRAWLER_SECRET: SECRET, CACHE_ENABLED: 'true' } });
+  await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(w.cacheCleared, 1);
+});
+
+test('POST /accept-all and /auto-link keep refusing a surface scan (it needs a condition a person chooses)', async () => {
+  const w = newWorld();
+  const scan = add(w, candFor('physical_samples', S1, { kind: 'surface_scan' }));
+  const { call } = setup(w);
+  const dry = await call('POST /accept-all', { user: U.alice, body: { dry_run: true, candidate_ids: [scan.candidate_id] } });
+  assert.equal(dry.body.data.count, 0);
+  assert.deepEqual(dry.body.data.skipped, [{ candidate_id: scan.candidate_id, reason: 'SURFACE_SCAN' }]);
+  w.prefs.set(U.alice, true);
+  const auto = await call('POST /auto-link', { headers: { 'x-inbox-crawler-secret': SECRET }, body: { candidate_ids: [scan.candidate_id] } });
+  assert.deepEqual(auto.body.data.results, [{ candidate_id: scan.candidate_id, status: 'skipped', reason: 'SURFACE_SCAN' }]);
+  assert.equal(w.scans.length, 0);
+});
+
+// ---- undo of a scan batch ----------------------------------------------------------------------------------------------------
+
+test('POST /undo of a batch that added scans deletes only the scan rows it made, as the caller, and returns the candidates to new', async () => {
+  const w = newWorld();
+  const img = add(w, cand());
+  const scan = add(w, scanCand());
+  const keep = add(w, scanCand());
+  // another scan, somebody else's, of the same insert
+  w.scans.push({ scan_id: ID(4802), insert_id: INS1, directus_files_id: ID(3998), condition: 'new', render_status: 'done' });
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(img), scanItem(scan)] } })).body.data.link_batch_id;
+  await call('POST /link', { user: U.alice, body: { items: [scanItem(keep, { condition: 'new' })] } });
+  assert.equal(w.scans.length, 3);
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.undone, 2);
+  assert.deepEqual(w.scans.map((r) => r.directus_files_id).sort(), [ID(3998), keep.directus_files_id].sort(), 'the other batch\'s scan and somebody else\'s stay');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  for (const c of [img, scan]) {
+    assert.equal(c.state, 'new');
+    assert.equal(c.link_batch_id, null);
+    assert.equal(c.linked_junction_id, null);
+    assert.equal(c.linked_collection, null);
+  }
+  assert.equal(keep.state, 'linked');
+  const deletes = w.items.filter((i) => i.op === 'delete' && i.collection === 'surface_scans');
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].accountability.user, U.alice, 'deleted as the caller, never as an administrator');
+  assert.equal(deletes[0].accountability.admin, false);
+  assert.ok(deletes[0].knex?.isTransaction);
+  assert.equal(actorsOf(w).at(-1).bindings[0], U.alice);
+  // the file can be added again afterwards
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } })).statusCode, 200);
+});
+
+test('POST /undo leaves a scan alone that was deleted, or repointed at another file, since; the candidate still goes back to new', async () => {
+  const w = newWorld();
+  const a = add(w, scanCand());
+  const b = add(w, scanCand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [scanItem(a), scanItem(b)] } })).body.data.link_batch_id;
+  // a's scan is deleted in Data Studio; b's is repointed at another file there
+  w.scans = w.scans.filter((r) => r.directus_files_id !== a.directus_files_id);
+  w.scans.find((r) => r.directus_files_id === b.directus_files_id).directus_files_id = ID(3999);
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.undone, 2);
+  assert.equal(w.items.filter((i) => i.op === 'delete').length, 0, 'neither row was this batch\'s any more');
+  assert.deepEqual(w.scans.map((r) => r.directus_files_id), [ID(3999)]);
+  assert.equal(a.state, 'new');
+  assert.equal(b.state, 'new');
+});
+
+test('POST /undo: a caller who may no longer delete the scan gets 403, nothing is undone and no administrator is used', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand()); // first in candidate id order, which is the order undo deletes in
+  const img = add(w, cand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(img), scanItem(scan)] } })).body.data.link_batch_id;
+  w.denyDelete = true;
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 403);
+  assert.equal(codeOf(res), 'FORBIDDEN');
+  assert.match(errorOf(res).message, /cannot be undone/);
+  assert.equal(errorOf(res).extensions.candidate_id, scan.candidate_id);
+  assert.equal(scan.state, 'linked');
+  assert.equal(img.state, 'linked');
+  assert.equal(w.scans.length, 1);
+  assert.equal(w.junctions.sample_data_files.length, 1, 'the sample half was rolled back too');
+  assert.equal(w.items.some((i) => i.op === 'delete' && i.accountability.admin === true), false);
+});
+
+test('POST /undo of a scan batch: another person\'s batch is 403 (an administrator may, with their own accountability)', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } })).body.data.link_batch_id;
+  assert.equal((await call('POST /undo', { user: U.bob, body: { link_batch_id: batch } })).statusCode, 403);
+  assert.equal(w.scans.length, 1);
+  const admin = await call('POST /undo', { user: U.admin, admin: true, role: ID(80), body: { link_batch_id: batch } });
+  assert.equal(admin.statusCode, 200, JSON.stringify(admin.body));
+  assert.equal(w.scans.length, 0);
+  assert.equal(w.items.filter((i) => i.op === 'delete')[0].accountability.user, U.admin);
+});
+
+test('POST /undo of a scan batch whose table has since gone: nothing to delete, the candidate returns to new', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } })).body.data.link_batch_id;
+  // a fresh process (the answer is not remembered) on a database that no longer has the table
+  w.scanTable = false;
+  const fresh = setup(w);
+  const res = await fresh.call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(scan.state, 'new');
+});
+
+// ---- the list shows a scan that was added ------------------------------------------------------------------------------------
+
+test('GET /files: a row added as a surface scan names the scan, its insert or edge and a label; a scan that is gone names nothing', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { condition: 'worn' })] } })).body.data.link_batch_id;
+  const scanId = w.scans[0].scan_id;
+  w.listRows = [{
+    ...scan, name: 'edge.al3d', mime_type: null, decided_by_name: 'Alice A', owner_name: 'Alice A', linked_record_id: scanId, size_bytes: '1000',
+    source_mtime: null, first_seen_at: '2026-10-14T10:00:00.000Z', decided_at: '2026-10-15T10:00:00.000Z',
+  }];
+  w.listTotal = 1;
+  const res = await call('GET /files', { user: U.alice, query: { tab: 'linked' } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const [row] = res.body.data;
+  assert.equal(row.linked_collection, 'surface_scans');
+  assert.equal(row.linked_record_id, scanId);
+  assert.equal(row.linked_label, 'INS-001 (worn)');
+  assert.equal(row.linked_insert_id, INS1);
+  assert.equal(row.linked_edge_id, null);
+  assert.equal(row.link_batch_id, batch);
+  const read = w.items.find((i) => i.op === 'read' && i.collection === 'surface_scans');
+  assert.equal(read.accountability.user, U.alice, 'read as the caller');
+  // deleted since: not readable, so not named
+  w.scans = [];
+  const gone = await call('GET /files', { user: U.alice, query: { tab: 'linked' } });
+  assert.equal(gone.body.data[0].linked_collection, null);
+  assert.equal(gone.body.data[0].linked_record_id, null);
+  assert.equal('linked_insert_id' in gone.body.data[0], false);
+});
+
+test('the SQL: linked_record_id of the list falls back to the scan id for a row added as a surface scan; scan SQL names only the scans table and information_schema', () => {
+  const { sql } = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({ tab: 'linked' }));
+  assert.match(sql, /CASE WHEN c\.linked_collection = 'surface_scans' THEN c\.linked_junction_id END\) AS linked_record_id/);
+  assert.doesNotMatch(sql, /JOIN surface_scans/, 'the list must not break where the table does not exist yet');
+  assert.match(SQL.scanTableExists, /information_schema\.tables/);
+  assert.match(SQL.scanById, /FROM surface_scans WHERE scan_id = \?/);
 });
 
 test('POST /link looks for files already on their record with one query per collection, not one per row', async () => {
@@ -1738,8 +2264,8 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   ]);
 });
 
-test('no route reads or writes anything outside d1_private and the three junction and record tables', () => {
-  const allowed = /d1_private\.|\b(people|teams|team_members|directus_files|directus_users|directus_roles|directus_access|directus_policies|sample_data_files|operation_data_files|session_data_files|physical_samples|manufacturing_operations|test_sessions)\b/;
+test('no route reads or writes anything outside d1_private, the three junction and record tables, and (stream F1) surface_scans', () => {
+  const allowed = /d1_private\.|information_schema\.tables|\b(people|teams|team_members|directus_files|directus_users|directus_roles|directus_access|directus_policies|sample_data_files|operation_data_files|session_data_files|physical_samples|manufacturing_operations|test_sessions|surface_scans)\b/;
   const statements = Object.values(SQL).flatMap((v) => (typeof v === 'string' ? [v] : Object.values(v)));
   for (const text of statements) {
     if (/\bFROM\b|\bINTO\b|\bUPDATE\b/i.test(text)) assert.match(text, allowed, text);

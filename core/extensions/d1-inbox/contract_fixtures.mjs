@@ -13,7 +13,7 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, parseFileFilters, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
+  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
   shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo, unfit,
 } from './index.js';
 
@@ -27,6 +27,10 @@ const TEAM_NO_FOLDER = ID(22);
 const S_EDIT = ID(101); // a sample the caller can edit ("S-0042")
 const S_VIEW = ID(105); // a sample the caller can read but not edit
 const S_HIDDEN = ID(104); // a Restricted sample the caller cannot read
+const INSERT = ID(201); // a cutting insert ("H13A-#2")
+const EDGE = ID(202); // one of its edges ("H13A-#2-fC")
+const OPERATION = ID(102); // the operation that wore it
+const SCAN = ID(6001); // a surface_scans row
 const BATCH = ID(901);
 const NOW = new Date('2026-10-15T12:00:00.000Z');
 const at = (iso) => new Date(iso);
@@ -93,6 +97,11 @@ const LINKED_MANUAL = row({
   match_strength: 'code', matches: named(S_EDIT, 'S-0042', 'code'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/S-0042_final.pdf', decided_at: at('2026-10-14T17:30:00.000Z'),
   link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
 });
+const LINKED_SCAN = row({
+  candidate_id: ID(1012), directus_files_id: ID(3012), name: 'H13A-2_fC_worn.al3d', mime_type: null, kind: 'surface_scan', kind_confidence: '1.00', state: 'linked',
+  rel_path: 'Users/ali1/alicona/H13A-2_fC_worn.al3d', size_bytes: '52428800', decided_at: at('2026-10-15T09:30:00.000Z'), link_kind: 'manual',
+  linked_collection: 'surface_scans', linked_record_id: SCAN, link_batch_id: ID(903), decided_by_name: 'Alice A', adopted_at: null,
+});
 const DOC_EXACT = row({
   candidate_id: ID(1011), directus_files_id: ID(3011), name: '3fa9c1d2_report.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null,
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/3fa9c1d2_report.pdf', size_bytes: '88000',
@@ -104,9 +113,11 @@ const DISMISSED = row({
 
 // What the caller may read, name and edit: S_EDIT is theirs to edit, S_VIEW only to read, S_HIDDEN not even to read.
 const INFO = {
-  readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`]),
-  labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050']]),
+  readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`]),
+  labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
+  // a surface scan the list names: the edge (or insert) it was added to
+  scans: new Map([[SCAN, { insert_id: null, edge_id: EDGE }]]),
 };
 // What accept-all does with `rows`: the rows its query reads (an exact short ID naming one record: buildListQuery's accept filter), sorted by the
 // endpoint's own unfit() and the caller's edit rights into what it links and what it leaves.
@@ -173,6 +184,7 @@ export function buildFixtures() {
   put('files_new_acceptable', list([NEW_ORIGINAL, NOT_EDITABLE], { tab: 'new', strength: 'short_id', acceptable: '1', limit: '50' }, 2, acceptPlan([NEW_ORIGINAL, NOT_EDITABLE]).entries.length));
   put('files_older', list([BACKLOG_EXACT], { tab: 'older', owner: 'me', limit: '50' }));
   put('files_linked', list([LINKED_AUTO, LINKED_MANUAL], { tab: 'linked', link_kind: 'auto', limit: '20' }, 2));
+  put('files_linked_surface_scan', list([LINKED_SCAN], { tab: 'linked', link_kind: 'manual', limit: '20' }, 1));
   put('files_dismissed', list([DISMISSED], { tab: 'dismissed', limit: '50' }));
   put('files_team_folder', list([COPY], { tab: 'new', owner: `team:${TEAM}`, folder: 'sem', from: '2026-10-01', to: '2026-10-15', limit: '50' }));
   put('files_empty', list([], { tab: 'new', limit: '50' }, 0));
@@ -197,7 +209,37 @@ export function buildFixtures() {
   put('link_403_not_editable', failure('the caller cannot edit the record', linkReq(oneLink), ERRORS.notEditable(ID(1001), 'physical_samples', S_EDIT)));
   put('link_409_already_linked', failure('someone else linked the file first', linkReq(oneLink), ERRORS.alreadyLinked(ID(1001))));
   put('link_409_already_on_record', failure('the file is already on the record (linked in Data Studio)', linkReq(oneLink), ERRORS.alreadyOnRecord(ID(1001))));
-  put('link_409_surface_scan', failure('a surface scan is never linked', linkReq([{ candidate_id: ID(1003), collection: 'physical_samples', record_id: S_EDIT }]), ERRORS.surfaceScan(ID(1003))));
+  put('link_409_surface_scan', failure('a surface scan is never linked to a sample, operation or test: it is added to an insert or an edge',
+    linkReq([{ candidate_id: ID(1003), collection: 'physical_samples', record_id: S_EDIT }]), ERRORS.surfaceScan(ID(1003))));
+
+  // POST /link, a surface scan: { candidate_id, collection: 'surface_scans', insert_id | edge_id, condition, operation_id?, scanned_on?, condition_note?, notes? }
+  const scanItem = { candidate_id: ID(1003), collection: 'surface_scans', insert_id: INSERT, condition: 'worn' };
+  const scanReq = (item = scanItem) => linkReq([item]);
+  const asEntry = (item) => ({ cand: SURFACE_SCAN, collection: 'surface_scans', scan: parseScanItem(item) });
+  const refusal = (item) => { try { parseScanItem(item); } catch (e) { return e; } return new Error('expected a 400'); };
+  put('link_surface_scan_ok', ok('a surface scan added to an insert (the condition is the only thing the person must choose)', scanReq(),
+    { data: shapeLink({ link_batch_id: BATCH, newly: 1, items: [linkedItemOut(asEntry(scanItem), SCAN, false)] }) }));
+  const fullItem = { candidate_id: ID(1003), collection: 'surface_scans', edge_id: EDGE, condition: 'cleaned', operation_id: OPERATION, scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: 'after pass 3' };
+  put('link_surface_scan_ok_edge', ok('a surface scan added to an edge, with the operation, the day and notes', scanReq(fullItem),
+    { data: shapeLink({ link_batch_id: BATCH, newly: 1, items: [linkedItemOut(asEntry(fullItem), SCAN, false)] }) }));
+  put('link_surface_scan_ok_mixed', ok('a sample link and a surface scan in one batch', linkReq([...oneLink, scanItem]),
+    { data: shapeLink({ link_batch_id: BATCH, newly: 2, items: [...linkedItems([{ cand: NEW_ORIGINAL }]), linkedItemOut(asEntry(scanItem), SCAN, false)] }) }));
+  put('link_surface_scan_already_linked', ok('the same person repeats the same add: no new batch, a count of 0', scanReq(),
+    { data: shapeLink({ link_batch_id: null, newly: 0, items: [{ ...linkedItemOut(asEntry(scanItem), SCAN, false), already_linked: true }] }) }));
+  const noCondition = { candidate_id: ID(1003), collection: 'surface_scans', insert_id: INSERT };
+  put('link_surface_scan_400_condition', failure('no condition: the person always chooses it, it is never defaulted', scanReq(noCondition), refusal(noCondition)));
+  const bothItems = { ...scanItem, edge_id: EDGE };
+  put('link_surface_scan_400_item', failure('both an insert and an edge: exactly one is needed', scanReq(bothItems), refusal(bothItems)));
+  const badDay = { ...scanItem, scanned_on: '15/10/2026' };
+  put('link_surface_scan_400_date', failure('a day that is not YYYY-MM-DD', scanReq(badDay), refusal(badDay)));
+  put('link_surface_scan_404_not_found', failure('the insert, edge or operation does not exist or the caller cannot read it (the same answer)', scanReq(),
+    ERRORS.scanRefMissing(ID(1003), 'insert', INSERT)));
+  put('link_surface_scan_403_not_allowed', failure('the caller may not create surface scans', scanReq(), ERRORS.scanNotAllowed(ID(1003))));
+  put('link_surface_scan_409_already_added', failure('the file is already a surface scan of that insert or edge (the table\'s unique constraint); the whole batch is rolled back',
+    scanReq(), ERRORS.alreadyAdded(ID(1003))));
+  put('link_surface_scan_409_unavailable', failure('there is no surface_scans table yet (the feature check)', scanReq(), ERRORS.scansUnavailable()));
+  put('link_409_not_a_surface_scan', failure('only a surface_scan file can be added as a surface scan', request('POST', '/d1-inbox/link', { body: { items: [{ ...scanItem, candidate_id: ID(1001) }] } }),
+    ERRORS.notASurfaceScan(ID(1001))));
 
   // POST /accept-all
   const acceptReq = (extra) => request('POST', '/d1-inbox/accept-all', { body: { filter: FILTER, ...extra } });
@@ -226,6 +268,10 @@ export function buildFixtures() {
   put('dismiss_409_not_new', failure('the file was linked meanwhile', request('POST', '/d1-inbox/dismiss', { body: { candidate_ids: [ID(1008)] } }),
     new HttpError(409, 'NOT_NEW', 'That file was already linked or is gone.', { candidate_id: ID(1008) })));
   put('undo_ok', ok('a batch undone', request('POST', '/d1-inbox/undo', { body: { link_batch_id: BATCH } }), { data: shapeUndo(BATCH, [{}, {}]) }));
+  put('undo_ok_surface_scan', ok('a batch that added a surface scan undone: the scan row is deleted, the file returns to new', request('POST', '/d1-inbox/undo', { body: { link_batch_id: ID(903) } }),
+    { data: shapeUndo(ID(903), [{}]) }));
+  put('undo_403_surface_scan', failure('the caller may no longer delete the scan: nothing is undone', request('POST', '/d1-inbox/undo', { body: { link_batch_id: ID(903) } }),
+    ERRORS.scanUndoDenied(ID(1003))));
   put('undo_404', failure('a batch that does not exist or was already undone', request('POST', '/d1-inbox/undo', { body: { link_batch_id: BATCH } }),
     new HttpError(404, 'NOT_FOUND', 'That batch does not exist or was already undone.')));
 

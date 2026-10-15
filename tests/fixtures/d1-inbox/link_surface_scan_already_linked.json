@@ -1,0 +1,36 @@
+{
+  "description": "the same person repeats the same add: no new batch, a count of 0",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn"
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": null,
+      "linked": 0,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "record_id": "00000000-0000-4000-8000-000000006001",
+          "junction_id": "00000000-0000-4000-8000-000000006001",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "edge_id": null,
+          "adopted": false,
+          "already_linked": true
+        }
+      ]
+    }
+  }
+}

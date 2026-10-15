@@ -6659,6 +6659,21 @@ DO \$\$ BEGIN
 EXCEPTION WHEN unique_violation THEN INSERT INTO ib_flags VALUES ('refused');
 END \$\$;
 SELECT 'ib_second_rescan:' || v FROM ib_flags;
+-- stream F1: a surface scan added from the Inbox. The feature check, the scan lookup undo and a repeated add use, the link bookkeeping with
+-- linked_collection 'surface_scans' (the scan id as the junction id) against the table's CHECK, and the list falling back to that id.
+INSERT INTO tool_boxes (tool_box_id, tool_box_code) VALUES ('a1b00000-0000-4000-8000-000000000004', 'IBX-BOX');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id) VALUES ('a1b00000-0000-4000-8000-000000000005', 'IBX-INS', 'a1b00000-0000-4000-8000-000000000004');
+INSERT INTO surface_scans (scan_id, insert_id, directus_files_id, condition)
+  VALUES ('a1b00000-0000-4000-8000-000000000006', 'a1b00000-0000-4000-8000-000000000005', 'a1b00000-0000-4000-8000-000000000107', 'worn');
+CREATE TEMP TABLE ib_st AS EXECUTE scantableexists;
+SELECT 'ib_scan_table:' || available FROM ib_st;
+CREATE TEMP TABLE ib_sb AS EXECUTE scanbyid('a1b00000-0000-4000-8000-000000000006');
+SELECT 'ib_scan_by_id:' || (insert_id = 'a1b00000-0000-4000-8000-000000000005')::text || ':' || (edge_id IS NULL)::text || ':' || (directus_files_id = 'a1b00000-0000-4000-8000-000000000107')::text FROM ib_sb;
+SELECT candidate_id AS ib_g FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/g.tif' \gset
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'auto', 'surface_scans', 'a1b00000-0000-4000-8000-000000000006', gen_random_uuid(), :'ib_g')) AS ib_n6 \gset
+SELECT 'ib_scan_linked:' || :ib_n6 || ':' || state || ':' || linked_collection FROM d1_private.file_candidates WHERE candidate_id = :'ib_g';
+CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
+SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
 ROLLBACK;
 SQL
 )
@@ -6673,6 +6688,10 @@ SQL
     ib_check "ib_undone:1:new:-:-" "undo clears all four link columns together"
     ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
     ib_check "ib_restored:1:new" "restore moves it back to new"
+    ib_check "ib_scan_table:true" "the surface_scans feature check (information_schema) answers yes where the table exists"
+    ib_check "ib_scan_by_id:true:true:true" "the scan lookup undo and a repeated add use returns the item and the file"
+    ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"
+    ib_check "ib_scan_list:a1b00000-0000-4000-8000-000000000006" "the Recently linked list names the scan id as the linked record without joining a table that may not exist yet"
     ib_check "ib_prefs:1" "the auto-link preference upserts"
     ib_check "ib_first_rescan:1" "a rescan request is queued"
     ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"
