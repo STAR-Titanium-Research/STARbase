@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-	DEFAULT_FILTERS, DOCUMENT_NOTICE, PAGE_SIZE, STRENGTH_LABEL, TABS,
+	DEFAULT_FILTERS, DOCUMENT_NOTICE, PAGE_SIZE, STRENGTH_FILTER_ITEMS, STRENGTH_LABEL, TABS,
 	canChange, duplicateText, extractedText, filtersToQuery,
 	folderOf, hasActiveFilters, hasThumbnail, kindLabel, linkTarget, listPlan, nameOf, needsReadNotice, ownerText, parseFilters,
 	primaryAction, sizeText, suggestionOf, whereInPath,
@@ -28,6 +28,27 @@ describe('filters in the URL', () => {
 	});
 	it('drops what it does not know: a bad tab, kind, strength, date or owner', () => {
 		expect(parseFilters({ tab: 'nope', kind: 'video', strength: 'maybe', from: '15/10/2026', to: '2026-13-45', owner: 'everyone' })).toEqual(DEFAULT_FILTERS);
+	});
+	it('carries a comma list of known strengths (the Home link) and drops the unknown ones', () => {
+		const f = parseFilters({ tab: 'older', strength: 'short_id,code' });
+		expect(f.strength).toBe('short_id,code');
+		expect(filtersToQuery(f)).toEqual({ tab: 'older', strength: 'short_id,code' });
+		expect(listPlan(f).main).toMatchObject({ strength: 'short_id,code' });
+		expect(parseFilters({ strength: 'code,short_id' }).strength).toBe('short_id,code');
+		expect(parseFilters({ strength: 'short_id,short_id,nope' }).strength).toBe('short_id');
+		expect(parseFilters({ strength: 'nope,,' }).strength).toBe('any');
+		expect(parseFilters({ strength: 'any,code' }).strength).toBe('code');
+		expect(hasActiveFilters(parseFilters({ strength: 'short_id,code' }))).toBe(true);
+	});
+	it('offers Exact match (short ID or record code) next to the single choices', () => {
+		expect(STRENGTH_FILTER_ITEMS.map((i) => [i.value, i.text])).toEqual([
+			['any', 'Any match'],
+			['short_id,code', 'Exact match'],
+			['short_id', 'Exact short ID'],
+			['code', 'Record code'],
+			['edge_code', 'Insert edge code (weaker)'],
+			['none', 'No match'],
+		]);
 	});
 	it('takes the first of a repeated key and trims the folder text', () => {
 		expect(parseFilters({ tab: ['linked', 'new'], folder: '  sem  ' })).toMatchObject({ tab: 'linked', folder: 'sem' });

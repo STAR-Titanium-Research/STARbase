@@ -73,8 +73,12 @@ export const STRENGTH_LABEL: Record<MatchStrength, string> = {
 	none: 'No match',
 };
 
+/** "Exact match": the two strengths that name a record outright (what Home's "older files match a record" counts). */
+export const EXACT_MATCH = 'short_id,code';
+
 export const STRENGTH_FILTER_ITEMS: ReadonlyArray<{ value: string; text: string }> = [
 	{ value: 'any', text: 'Any match' },
+	{ value: EXACT_MATCH, text: 'Exact match' },
 	{ value: 'short_id', text: STRENGTH_LABEL.short_id },
 	{ value: 'code', text: STRENGTH_LABEL.code },
 	{ value: 'edge_code', text: STRENGTH_LABEL.edge_code },
@@ -97,7 +101,7 @@ export interface InboxFilters {
 	to: string;
 	/** 'any', 'me' (my personal folder) or 'team:<team_id>'. */
 	owner: string;
-	/** 'any' or one match strength. */
+	/** 'any', or a comma list of match strengths in the server's order ('short_id', 'short_id,code'). */
 	strength: string;
 }
 
@@ -113,6 +117,13 @@ const day = (v: unknown): string => {
 	return DAY.test(t) && !Number.isNaN(Date.parse(t)) ? t : '';
 };
 
+/** A comma list of strengths: the known ones once each, in the server's order; 'any' when none is known (or 'any' is in it with others). */
+function strengthList(v: string): string {
+	const asked = v.split(',').map((x) => x.trim());
+	const known = STRENGTHS.filter((s) => asked.includes(s));
+	return known.length ? known.join(',') : 'any';
+}
+
 /** The filters a URL query describes; anything unknown or malformed is the default. */
 export function parseFilters(query: Record<string, unknown>): InboxFilters {
 	const tab = text(query.tab);
@@ -126,7 +137,7 @@ export function parseFilters(query: Record<string, unknown>): InboxFilters {
 		from: day(query.from),
 		to: day(query.to),
 		owner: owner === 'me' || /^team:[0-9a-f-]{8,}$/i.test(owner) ? owner : 'any',
-		strength: STRENGTHS.includes(strength) ? strength : 'any',
+		strength: strengthList(strength),
 	};
 }
 

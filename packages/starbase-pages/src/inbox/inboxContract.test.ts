@@ -668,7 +668,7 @@ describe('the client sends only filters the server reads', () => {
 	it('the tabs the page has are tabs the server has', () => {
 		for (const t of TABS) expect(keys.values.tab).toContain(t.id);
 		for (const k of KIND_FILTER_ITEMS.map((i) => i.value).filter((v) => v !== 'any')) expect(keys.values.kind).toContain(k);
-		for (const s of STRENGTH_FILTER_ITEMS.map((i) => i.value).filter((v) => v !== 'any')) expect(keys.values.strength).toContain(s);
+		for (const s of STRENGTH_FILTER_ITEMS.map((i) => i.value).filter((v) => v !== 'any').flatMap((v) => v.split(','))) expect(keys.values.strength).toContain(s);
 	});
 
 	it('the Home panel, the Home target and the tab links go to addresses whose filters the server reads', async () => {
