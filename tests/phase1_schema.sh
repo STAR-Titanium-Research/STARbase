@@ -4348,8 +4348,8 @@ la_check "dn_matches_main:72" "167 down then 166 down: every ruled Lab Member ro
 la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
-[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
-    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 7 ))" ]] \
+    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's), people create (194's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
