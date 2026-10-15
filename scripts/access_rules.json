@@ -191,6 +191,12 @@
       "read": {},
       "update": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}, "fields": ["code", "batch_date", "notes", "owner_person_id"]},
       "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
+    },
+    "surface_scans": {
+      "create": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id"]},
+      "read": {},
+      "update": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id", "render_status", "render_error"]},
+      "delete": {}
     }
   },
   "guards": {
@@ -242,7 +248,6 @@
     "tool_boxes": ["create", "read", "update", "delete"],
     "cutting_inserts": ["create", "read", "update", "delete"],
     "insert_edges": ["create", "read", "update", "delete"],
-    "surface_scans": ["create", "read", "update", "delete"],
     "insert_types": ["create", "read", "update", "delete"],
     "manufacturers": ["create", "read", "update", "delete"],
     "raw_stock_lots": ["create", "read", "update", "delete"],

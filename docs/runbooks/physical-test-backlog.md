@@ -1280,7 +1280,15 @@ checks can be run from `/map?edit=new`.
   without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
   volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
   and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
-  key, one it has not gets `p-<file id>-<size>-<mtime>`. Since: surface scans PR (pending).
+  key, one it has not gets `p-<file id>-<size>-<mtime>`. Also check the least-privilege reader on the real MinIO: set
+  `MINIO_SURFACE_READER_PASSWORD` in `.env`, run `make bootstrap-minio` (creates the user `surface-reader` and its policy) and restart
+  Directus, which must not hold the root credentials (`docker compose exec directus env | grep MINIO` shows no `MINIO_ROOT_*`). As
+  that user (`mc alias set reader http://localhost:9000 surface-reader <password>`): `mc cat reader/d1-files/surface-scans/<cache_key>/meta.json`
+  works; a key under `surface-scans/` that does not exist answers 404 NoSuchKey, **not** 403 (this needs the `s3:ListBucket` statement
+  with the `surface-scans/*` prefix condition; the viewer's "render again" message depends on it); `mc cp` of any file into
+  `d1-files/surface-scans/`, `mc rm` of an object there, `mc ls reader/d1-files/` (no prefix), `mc cat` of an object under another prefix
+  and any access to `d1-backups` are all refused (403). With the password empty, `GET /d1-surface-scan/<id>/grid` answers 503, not a
+  crash. Since: surface scans PR (pending).
 - [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
   surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
   legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on

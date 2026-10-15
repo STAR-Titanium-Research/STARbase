@@ -171,11 +171,13 @@ test('matchesEtag: one tag, a list, a weak tag and * all match; anything else do
 
 // ---- the object store ------------------------------------------------------------------------------------------------
 
-const ENV = { MINIO_ENDPOINT: 'http://minio:9000/', MINIO_ROOT_USER: 'user', MINIO_ROOT_PASSWORD: 'secret', MINIO_BUCKET: 'd1-files' };
+const ENV = { MINIO_ENDPOINT: 'http://minio:9000/', MINIO_SURFACE_READER_USER: 'user', MINIO_SURFACE_READER_PASSWORD: 'secret', MINIO_BUCKET: 'd1-files' };
 
 test('createObjectStore is null until MinIO is configured', () => {
 	assert.equal(createObjectStore({}), null);
-	assert.equal(createObjectStore({ MINIO_ENDPOINT: 'http://minio:9000', MINIO_ROOT_USER: 'u' }), null);
+	assert.equal(createObjectStore({ MINIO_ENDPOINT: 'http://minio:9000', MINIO_SURFACE_READER_USER: 'u' }), null);
+	// the root credentials are never used, even when they are all there is
+	assert.equal(createObjectStore({ MINIO_ENDPOINT: 'http://minio:9000', MINIO_ROOT_USER: 'root', MINIO_ROOT_PASSWORD: 'rootsecret' }), null);
 	assert.equal(createObjectStore({ ...ENV, MINIO_ENDPOINT: 'minio:9000' }), null);
 	assert.ok(createObjectStore(ENV));
 });
@@ -201,7 +203,7 @@ test('the store GETs the object path-style with a signed request and returns a s
 test('the store answers null for a missing object and throws for anything else', async () => {
 	const answer = (status) => createObjectStore(ENV, { fetchImpl: async () => new Response(status === 200 ? 'x' : 'no', { status }) });
 	assert.equal(await answer(404).get(`surface-scans/${HASH}/grid.bin`), null);
-	await assert.rejects(answer(403).get(`surface-scans/${HASH}/grid.bin`), /403/);
+	await assert.rejects(answer(403).get(`surface-scans/${HASH}/grid.bin`), /403.*bootstrap-minio/);
 	await assert.rejects(answer(500).get(`surface-scans/${HASH}/grid.bin`), /500/);
 });
 
@@ -262,6 +264,49 @@ test('an unchanged object answers 304 to If-None-Match without touching the stor
 	assert.equal(store.calls.length, 0);
 	const stale = await call('GET', '/:id/grid', { headers: { 'if-none-match': '"old"' } });
 	assert.equal(stale.statusCode, 200);
+});
+
+// An error reply must not be cached and must not carry the ETag: the cache key stays the same when a scan is rendered again.
+const assertUncacheable = (res, label) => {
+	assert.equal(res.headers['Cache-Control'], 'no-store', `${label}: Cache-Control`);
+	assert.equal(res.headers.ETag, undefined, `${label}: no ETag`);
+};
+
+test('every error reply carries Cache-Control: no-store and no ETag', async () => {
+	assertUncacheable(await setup().call('GET', '/:id/grid', { user: null }), '401');
+	assertUncacheable(await setup().call('GET', '/:id/grid', { id: 'nope' }), 'bad id');
+	const hidden = setup();
+	hidden.world.hidden.add(SCAN);
+	assertUncacheable(await hidden.call('GET', '/:id/grid'), 'unreadable');
+	assertUncacheable(await setup({ row: { render_status: 'failed', cache_key: null } }).call('GET', '/:id/grid'), 'not rendered');
+	assertUncacheable(await setup({ row: { cache_key: '../x' } }).call('GET', '/:id/grid'), 'bad cache key');
+	const missing = await setup({ store: fakeStore({}) }).call('GET', '/:id/grid');
+	assert.equal(missing.statusCode, 404);
+	assertUncacheable(missing, 'OBJECT_MISSING');
+	const down = await setup({ store: fakeStore({}, { fail: new Error('down') }) }).call('GET', '/:id/grid');
+	assert.equal(down.statusCode, 502);
+	assertUncacheable(down, '502');
+	const refused = await setup({ store: fakeStore({}, { fail: Object.assign(new Error('object store answered 403'), { status: 403 }) }) }).call('GET', '/:id/grid');
+	assert.equal(refused.statusCode, 502, 'a refused reader is a server problem, not a missing scan');
+	assert.equal(refused.body.errors[0].extensions.code, 'STORE_UNAVAILABLE');
+	assertUncacheable(refused, 'refused reader');
+	const unset = await setup({ store: null }).call('GET', '/:id/grid');
+	assert.equal(unset.statusCode, 503);
+	assertUncacheable(unset, '503');
+	const noWrite = setup({ row: { render_status: 'failed' } });
+	noWrite.world.updateDenied = true;
+	assertUncacheable(await noWrite.call('POST', '/:id/render'), 'render 403');
+});
+
+test('ETag and Cache-Control private are on the 200 and the 304 only', async () => {
+	const ok = await setup().call('GET', '/:id/grid');
+	assert.equal(ok.statusCode, 200);
+	assert.equal(ok.headers.ETag, `"${HASH}"`);
+	assert.equal(ok.headers['Cache-Control'], CACHE_CONTROL);
+	const notModified = await setup().call('GET', '/:id/grid', { headers: { 'if-none-match': `"${HASH}"` } });
+	assert.equal(notModified.statusCode, 304);
+	assert.equal(notModified.headers.ETag, `"${HASH}"`);
+	assert.equal(notModified.headers['Cache-Control'], CACHE_CONTROL);
 });
 
 test('not signed in: 401, and nothing is read', async () => {

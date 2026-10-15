@@ -13,8 +13,8 @@
 -- deleting a pointer row in directus_files removes only the scan; the derived MinIO objects are keyed by content and stay
 -- as cache). The operation and the owner SET NULL.
 --
--- Visibility: reference data, like insert_edges (ADR-0011): every Lab Member reads and writes (scripts/access_rules.json
--- "unfiltered"), and every Lab Viewer reads. NOT granted to d1_llm_readonly: since migration 168 (ADR-0014) a table the
+-- Visibility: reference data, like insert_edges (ADR-0011): every Lab Member reads, creates, updates and deletes
+-- (scripts/access_rules.json "custom", with field lists), and every Lab Viewer reads. NOT granted to d1_llm_readonly: since migration 168 (ADR-0014) a table the
 -- Ask-DB role can read needs row-level-security policies or a place in migration 168's reference list, and 168's own
 -- up section (replayed by phase1) raises for a granted table it does not know. The scan metadata is of no use to
 -- text-to-SQL; the allow-list migration 132 grant for insert_edges predates that rule.
@@ -104,6 +104,38 @@ CREATE TRIGGER occ_surface_scans
 CREATE TRIGGER audit_surface_scans
     AFTER INSERT OR UPDATE OR DELETE ON surface_scans
     FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+-- Changing the file of a scan makes the stored render stale: the old grid would show under the new file. So the row goes
+-- back to pending and everything the worker derived is cleared (the worker then renders the new file; the objects of the
+-- old cache key stay in MinIO as cache). A BEFORE trigger on the column, so it holds for every writer (the form, the API,
+-- SQL), and only when the value really changes.
+CREATE FUNCTION surface_scans_reset_render() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    NEW.render_status := 'pending';
+    NEW.render_error := NULL;
+    NEW.rendered_at := NULL;
+    NEW.cache_key := NULL;
+    NEW.source_format := NULL;
+    NEW.source_width := NULL;
+    NEW.source_height := NULL;
+    NEW.grid_width := NULL;
+    NEW.grid_height := NULL;
+    NEW.pixel_pitch_x_um := NULL;
+    NEW.pixel_pitch_y_um := NULL;
+    NEW.z_min_um := NULL;
+    NEW.z_max_um := NULL;
+    RETURN NEW;
+END;
+$$;
+COMMENT ON FUNCTION surface_scans_reset_render() IS 'BEFORE UPDATE OF directus_files_id on surface_scans, only when the file changes: sets render_status back to pending and clears render_error, rendered_at, cache_key and every source_*, grid_*, pixel_pitch_* and z_* column, so the old render is never shown under the new file.';
+
+CREATE TRIGGER surface_scans_reset_render
+    BEFORE UPDATE OF directus_files_id ON surface_scans
+    FOR EACH ROW WHEN (OLD.directus_files_id IS DISTINCT FROM NEW.directus_files_id)
+    EXECUTE FUNCTION surface_scans_reset_render();
 
 -- Directus metadata.
 INSERT INTO directus_collections (collection, icon, note, display_template, hidden, sort, color, translations)
@@ -195,11 +227,19 @@ FROM (VALUES
 ) v(many_collection, many_field, one_collection, one_field, one_deselect_action)
 WHERE NOT EXISTS (SELECT 1 FROM directus_relations r WHERE r.many_collection = v.many_collection AND r.many_field = v.many_field);
 
--- Permissions: the rows scripts/access_rules.json generates ("unfiltered": surface_scans create/read/update/delete for
--- Lab Member, like insert_edges) and the Lab Viewer read row (`gen_access_rules.py --viewer-values`).
+-- Permissions: the Lab Member rows scripts/access_rules.json generates (custom rows:
+-- `gen_access_rules.py --values --only surface_scans`) and the Lab Viewer read row (`--viewer-values`). Reference data like
+-- insert_edges, every member reads, creates, updates and deletes; but create and update name their fields, so the columns the
+-- worker fills (cache_key, source_*, grid_*, pixel_pitch_*, z_*, rendered_at) and the system columns cannot be written through
+-- the API. Update also takes render_status and render_error: POST /d1-surface-scan/<id>/render writes them as the caller.
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
-SELECT 'surface_scans', v.action, '{}'::json, '{}'::json, NULL, '*', '20000002-0000-0000-0000-000000000002'
-FROM (VALUES ('create'), ('read'), ('update'), ('delete')) v(action)
+SELECT 'surface_scans', v.action, '{}'::json, '{}'::json, NULL, v.fields, '20000002-0000-0000-0000-000000000002'
+FROM (VALUES
+    ('create', 'insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id'),
+    ('read', '*'),
+    ('update', 'insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id,render_status,render_error'),
+    ('delete', '*')
+) v(action, fields)
 WHERE NOT EXISTS (
     SELECT 1 FROM directus_permissions p
     WHERE p.policy = '20000002-0000-0000-0000-000000000002' AND p.collection = 'surface_scans' AND p.action = v.action
@@ -221,6 +261,8 @@ DELETE FROM directus_relations WHERE many_collection = 'surface_scans' OR one_co
 DELETE FROM directus_fields WHERE collection = 'surface_scans';
 DELETE FROM directus_collections WHERE collection = 'surface_scans';
 
+DROP TRIGGER IF EXISTS surface_scans_reset_render ON surface_scans;
 DROP TRIGGER IF EXISTS audit_surface_scans ON surface_scans;
 DROP TRIGGER IF EXISTS occ_surface_scans ON surface_scans;
 DROP TABLE IF EXISTS surface_scans;
+DROP FUNCTION IF EXISTS surface_scans_reset_render();

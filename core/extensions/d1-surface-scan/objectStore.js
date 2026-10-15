@@ -6,12 +6,13 @@
 // an extension, so the request is signed here (AWS Signature Version 4, path-style URL, an empty payload) and sent with fetch.
 // Nothing here lists, writes or deletes, and a key outside the prefix is refused before any request is made.
 //
-// Settings (the names the workers already use; docker-compose.yml passes them to the Directus service):
-//   MINIO_ENDPOINT        http://minio:9000
-//   MINIO_ROOT_USER       access key
-//   MINIO_ROOT_PASSWORD   secret key
-//   MINIO_BUCKET          bucket of the heavy-data pipeline (default d1-files)
-//   MINIO_REGION          optional, default us-east-1 (MinIO's default)
+// Settings (docker-compose.yml passes them to the Directus service):
+//   MINIO_ENDPOINT                  http://minio:9000
+//   MINIO_SURFACE_READER_USER       access key and secret of the dedicated reader that `make bootstrap-minio` creates: a policy that
+//   MINIO_SURFACE_READER_PASSWORD   allows only s3:GetObject on <bucket>/surface-scans/* and s3:ListBucket for that prefix. Never the
+//                                   MinIO root user. Either unset: no store, and the endpoint answers 503.
+//   MINIO_BUCKET                    bucket of the heavy-data pipeline (default d1-files)
+//   MINIO_REGION                    optional, default us-east-1 (MinIO's default)
 
 import { createHash, createHmac } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -53,8 +54,8 @@ export function safeKey(key) {
 // null when MinIO is not configured (the endpoint then answers 503 instead of failing mid-request).
 export function createObjectStore(env, { fetchImpl = globalThis.fetch, now = () => new Date() } = {}) {
 	const endpoint = String(env?.MINIO_ENDPOINT ?? '').trim().replace(/\/+$/, '');
-	const accessKey = String(env?.MINIO_ROOT_USER ?? '');
-	const secretKey = String(env?.MINIO_ROOT_PASSWORD ?? '');
+	const accessKey = String(env?.MINIO_SURFACE_READER_USER ?? '');
+	const secretKey = String(env?.MINIO_SURFACE_READER_PASSWORD ?? '');
 	const bucket = String(env?.MINIO_BUCKET ?? 'd1-files').trim() || 'd1-files';
 	const region = String(env?.MINIO_REGION ?? 'us-east-1').trim() || 'us-east-1';
 	if (!/^https?:\/\//.test(endpoint) || !accessKey || !secretKey) return null;
@@ -79,7 +80,10 @@ export function createObjectStore(env, { fetchImpl = globalThis.fetch, now = () 
 			}
 			if (!res.ok) {
 				await res.body?.cancel?.();
-				throw new Error(`object store answered ${res.status}`);
+				// MinIO answers 403 AccessDenied (not 404) for a missing key when the caller may not list the bucket, and for a
+				// wrong secret: either way the reader's policy or password is wrong, which is a server problem, not a missing scan.
+				const hint = res.status === 403 ? ' (the surface reader needs s3:GetObject on surface-scans/* and s3:ListBucket for that prefix: run make bootstrap-minio)' : '';
+				throw Object.assign(new Error(`object store answered ${res.status}${hint}`), { status: res.status });
 			}
 			const length = Number(res.headers.get('content-length'));
 			return { body: Readable.fromWeb(res.body), size: Number.isFinite(length) && length >= 0 ? length : null };

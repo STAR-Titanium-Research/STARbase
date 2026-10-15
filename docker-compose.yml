@@ -144,12 +144,13 @@ services:
       FLOWS_ENV_ALLOW_LIST: WORKER_WEBHOOK_SECRET
       # The container runs in UTC; d1-report prints label dates in this IANA zone instead.
       D1_TIMEZONE: ${D1_TIMEZONE:-Europe/London}
-      # Read-only use of the heavy-data bucket by d1-surface-scan (ADR-0021): it streams the rendered height grids, metadata
-      # and thumbnails of surface scans (prefix surface-scans/) to signed-in users, so browsers never reach MinIO. The same
-      # settings the workers use; the endpoint only ever issues GETs under that prefix. Unset: it answers 503.
+      # d1-surface-scan (ADR-0021) streams the rendered height grids, metadata and thumbnails of surface scans to signed-in
+      # users, so browsers never reach MinIO. It does NOT get the MinIO root credentials: `make bootstrap-minio` creates a
+      # dedicated user whose policy allows only s3:GetObject on <bucket>/surface-scans/* (and s3:ListBucket for that prefix).
+      # Password unset: the endpoint answers 503 (nothing else in Directus needs MinIO).
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env (openssl rand -hex 32)}
+      MINIO_SURFACE_READER_USER: ${MINIO_SURFACE_READER_USER:-surface-reader}
+      MINIO_SURFACE_READER_PASSWORD: ${MINIO_SURFACE_READER_PASSWORD:-}
       MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
     # Path A (built-in AI Chat) and any server-side extension that calls the host
     # can reach the host's Ollama here. Auto-resolved on Windows/Mac Docker
