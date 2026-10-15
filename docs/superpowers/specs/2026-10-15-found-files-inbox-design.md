@@ -55,7 +55,7 @@ Files stay on the share. Nothing is uploaded, moved or changed (§3).
 
 Migrations are written by stream A. Names below are binding; column types are binding unless a constraint
 forces a change (then the worker updates this table in the same commit). Implemented by migration
-`20261015000192_found_files_inbox.sql`; where it differs from the first draft of this section the text below
+`20261015000193_found_files_inbox.sql`; where it differs from the first draft of this section the text below
 already says so (changes marked *as built*).
 
 **public**
