@@ -16,7 +16,7 @@ import PersonRow from './PersonRow.vue';
 import { backdropDismiss, tabWrapTarget, useNarrowPanel } from './panelSheet';
 import TeamsView from '../teams/TeamsView.vue';
 import { loadAttention, loadPeople, type AttentionItem, type PeopleData } from './peopleApi';
-import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type Chip, type ListState, type PeopleRow, type PeopleViewKind } from './peopleQuery';
+import { ATTENTION_LABELS, applyList, chipCounts, groupPeople, parseListState, toQuery, type Chip, type ListState, type PeopleRow, type PeopleViewKind } from './peopleQuery';
 
 const host = useExplorerHost();
 const { api, isAdmin } = host;
@@ -81,6 +81,8 @@ const counts = computed(() => chipCounts(rows.value));
 // A member has no logins to filter by: their list state is the chip, team, sort and search only.
 const effective = computed<ListState>(() => (isAdmin.value ? state.value : { ...state.value, role: 'any', attn: null }));
 const shown = computed(() => applyList(rows.value, effective.value));
+// What is shown, in groups (Admins, Users, Operators, Former); the filters, chips and search have already chosen the rows.
+const groups = computed(() => groupPeople(shown.value));
 
 const CHIPS: { id: Chip; label: string; admin?: boolean }[] = [
 	{ id: 'all', label: 'Everyone' },
@@ -303,17 +305,22 @@ function openLink(r: PeopleRow) {
 			<div v-else class="split" :class="{ open: !!panelId }">
 				<div class="main">
 					<div v-if="!shown.length" class="empty">No people match.</div>
-					<div v-else ref="listEl" class="list">
-						<PersonRow
-							v-for="r in shown"
-							:key="rowKey(r)"
-							:row="r"
-							:row-key="rowKey(r)"
-							:admin="isAdmin"
-							:selected="!!panelId && r.person_id === panelId"
-							@open="openRow"
-							@link="openLink"
-						/>
+					<div v-else ref="listEl" class="groups">
+						<section v-for="g in groups" :key="g.id" class="group" :aria-label="g.label">
+							<h2 class="grp">{{ g.label }} <span class="n">{{ g.rows.length }}</span></h2>
+							<div class="list">
+								<PersonRow
+									v-for="r in g.rows"
+									:key="rowKey(r)"
+									:row="r"
+									:row-key="rowKey(r)"
+									:admin="isAdmin"
+									:selected="!!panelId && r.person_id === panelId"
+									@open="openRow"
+									@link="openLink"
+								/>
+							</div>
+						</section>
 					</div>
 				</div>
 				<!-- Wide: the panel is beside the list, where it is written. Narrower: the same markup is teleported to the body as a
@@ -386,7 +393,7 @@ function openLink(r: PeopleRow) {
 .fc .n { opacity: .75; font-weight: 700; margin-left: 5px; font-variant-numeric: tabular-nums; }
 .sep { flex: 1 1 12px; }
 /* Two classes: STARbase's v-select stand-in sets width: 100% and min-height: 36px with one, and which of the two stylesheets comes last is not ours to count on. */
-.menus .menu { width: auto; min-width: 0; max-width: 160px; min-height: 28px; font-size: var(--fs-sm); }
+.menus .menu { width: auto; min-width: 0; max-width: 138px; min-height: 28px; font-size: var(--fs-sm); }
 
 /* One quiet line, not a banner. */
 .attn { margin: 0; font-size: var(--fs-sm); color: var(--d1-warn); }
@@ -400,6 +407,10 @@ function openLink(r: PeopleRow) {
 /* One panel with a row per person, not a card per person: 40 cards were 40 boxes to read past. */
 .split { display: block; }
 .main { min-width: 0; }
+.groups { display: flex; flex-direction: column; gap: 16px; }
+/* A small dim heading over each group's panel, like the index pages' section labels (sentence case, not shouting). */
+.grp { margin: 0 0 6px 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); }
+.grp .n { font-weight: 400; margin-left: 4px; font-variant-numeric: tabular-nums; }
 .list { display: flex; flex-direction: column; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); overflow: hidden; }
 
 /* Wide (1000 px and up): the panel sits beside the list. Narrower: it is a full-height sheet over the page, as the phone menu is: a

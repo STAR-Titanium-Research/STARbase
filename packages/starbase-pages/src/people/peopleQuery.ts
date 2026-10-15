@@ -159,6 +159,45 @@ export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
 		.sort(formerLast(SORTERS[s.sort]));
 }
 
+export type GroupId = 'admins' | 'users' | 'operators' | 'former';
+export interface PeopleGroup {
+	id: GroupId;
+	label: string;
+	rows: PeopleRow[];
+}
+const GROUPS: { id: GroupId; label: string }[] = [
+	{ id: 'admins', label: 'Admins' },
+	{ id: 'users', label: 'Users' },
+	{ id: 'operators', label: 'Operators' },
+	{ id: 'former', label: 'Former' },
+];
+const ADMIN_ROLES = new Set(['administrator', 'lab admin']);
+
+/**
+ * The one group a row belongs to, the first match of: Former (a person with active = false, whatever their role), Admins (the login's account role
+ * is Administrator or Lab Admin), Operators (an operator who is not a researcher and has no login), else Users (everyone with a login, researchers
+ * without one, a login without a person, and anyone left over).
+ */
+export function groupOf(r: PeopleRow): GroupId {
+	if (r.kind === 'person' && !r.active) return 'former';
+	if (ADMIN_ROLES.has((r.login?.role_name ?? '').trim().toLowerCase())) return 'admins';
+	if (r.kind === 'person' && r.is_operator && !r.is_researcher && r.login === null) return 'operators';
+	return 'users';
+}
+
+/**
+ * Splits the rows into the page's groups, in the order Admins, Users, Operators, Former. Each row is in exactly one; the rows keep the order
+ * they came in (so the chosen sort holds inside a group); a group with no rows is left out.
+ */
+export function groupPeople(rows: PeopleRow[]): PeopleGroup[] {
+	const by = new Map<GroupId, PeopleRow[]>();
+	for (const r of rows) {
+		const id = groupOf(r);
+		by.set(id, [...(by.get(id) ?? []), r]);
+	}
+	return GROUPS.filter((g) => by.has(g.id)).map((g) => ({ ...g, rows: by.get(g.id)! }));
+}
+
 /** How many persons each chip holds (login rows are not counted). */
 export function chipCounts(rows: PeopleRow[]): Record<Chip, number> {
 	const counts: Record<Chip, number> = { all: 0, researchers: 0, operators: 0, nologin: 0, former: 0 };

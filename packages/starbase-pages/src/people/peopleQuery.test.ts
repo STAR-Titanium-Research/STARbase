@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type ListState, type PeopleRow, type PersonTeam } from './peopleQuery';
+import { ATTENTION_LABELS, applyList, chipCounts, groupOf, groupPeople, parseListState, toQuery, type ListState, type PeopleRow, type PersonTeam } from './peopleQuery';
 
 const DEFAULT: ListState = { view: 'people', chip: 'all', role: 'any', team: 'any', sort: 'name', q: '', attn: null, person: null };
 const team = (id: string, over: Partial<PersonTeam> = {}): PersonTeam => ({ team_id: id, name: `Team ${id}`, color: 'teal', logo: null, is_manager: false, ...over });
@@ -152,6 +152,55 @@ describe('Former people go last', () => {
 	});
 	it('a login without a person is not Former', () => {
 		expect(applyList([person('Amy', { active: false }), loginRow('u1', 'z@lab.example')], state()).map((r) => r.kind)).toEqual(['login', 'person']);
+	});
+});
+
+describe('groupPeople', () => {
+	const admin = (id: string, over: Over = {}) => ({ ...person(id, { signedIn: null, ...over }), login: { status: 'active', role_id: 'r-a', role_name: 'Administrator', last_access: null, email: null } });
+	const labAdmin = (id: string) => ({ ...admin(id), login: { ...admin(id).login!, role_name: 'Lab Admin' } });
+	const operator = (id: string, over: Partial<PeopleRow> = {}) => person(id, { is_researcher: false, is_operator: true, ...over });
+
+	it('puts each person in the first group that matches: Admins, Users, Operators, then Former', () => {
+		const groups = groupPeople([
+			admin('Ada'), labAdmin('Lee'), person('Una', { signedIn: null }), person('Rex'), operator('Olly'), operator('Ned', { signedIn: null }),
+			person('Gus', { is_researcher: false, is_operator: true, signedIn: null }),
+		]);
+		expect(groups.map((g) => [g.id, ids(g.rows)])).toEqual([
+			['admins', ['Ada', 'Lee']],
+			['users', ['Una', 'Rex', 'Ned', 'Gus']], // a login, or a researcher without one
+			['operators', ['Olly']], // an operator who is not a researcher and has no login
+		]);
+	});
+
+	it('a researcher who is also an operator, without a login, is a User', () => {
+		expect(groupOf(person('Both', { is_operator: true }))).toBe('users');
+	});
+
+	it('Former overrides every other group, an Administrator and an operator included', () => {
+		const groups = groupPeople([admin('Ada', { active: false }), operator('Olly', { active: false }), person('Una', { active: false, signedIn: null }), person('Ann')]);
+		expect(groups.map((g) => [g.id, ids(g.rows)])).toEqual([['users', ['Ann']], ['former', ['Ada', 'Olly', 'Una']]]);
+	});
+
+	it('a login without a person is a User, or an Admin when its role is', () => {
+		const asAdmin = { ...loginRow('u2', 'boss@lab.example'), login: { ...loginRow('u2', 'x').login!, role_name: 'Lab Admin' } };
+		const groups = groupPeople([loginRow('u1', 'who@lab.example'), asAdmin]);
+		expect(groups.map((g) => [g.id, ids(g.rows)])).toEqual([['admins', ['u2']], ['users', ['u1']]]);
+	});
+
+	it('hides the empty groups, and gives none for no rows', () => {
+		expect(groupPeople([operator('Olly')]).map((g) => g.id)).toEqual(['operators']);
+		expect(groupPeople([])).toEqual([]);
+	});
+
+	it('keeps the order it was given inside each group (the chosen sort holds), and each group has a label', () => {
+		const sorted = applyList([person('Zoe', { signedIn: null }), person('Abe', { signedIn: null }), admin('Mo'), admin('Al')], state());
+		const groups = groupPeople(sorted);
+		expect(groups.map((g) => [g.label, ids(g.rows)])).toEqual([['Admins', ['Al', 'Mo']], ['Users', ['Abe', 'Zoe']]]);
+	});
+
+	it('is a partition: every row is in exactly one group', () => {
+		const rows = [admin('A'), person('B', { signedIn: null }), operator('C'), person('D', { active: false }), loginRow('u1', 'l@x.y')];
+		expect(groupPeople(rows).flatMap((g) => g.rows).length).toBe(rows.length);
 	});
 });
 
