@@ -6444,6 +6444,108 @@ SQL
     grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
 fi
 
+echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="
+# core/extensions/d1-inbox/sql_check.mjs prints a PREPARE for every statement the endpoint sends (SQL.* and the list, count and accept queries
+# buildListQuery builds, ? turned into $n). They are prepared here in a rolled-back transaction, so a column or table the real schema lacks fails the
+# build (the endpoint's node tests use a fake knex and cannot see that); then the summary, the list count and accept-all's selection run on seeded
+# rows: an original and its copy, a copy of a gone original and of a linked one, a file already on its record, a surface scan, an ambiguous match;
+# then a link, an undo, a dismiss, a restore and two rescan requests against the table's CHECKs and its unique index.
+# Needs node (GitHub's runners have it; the docker schema-test image may not: then this block is skipped with a note).
+if command -v node >/dev/null 2>&1; then
+    IB_U=a1b00000-0000-4000-8000-000000000001
+    IB_P=a1b00000-0000-4000-8000-000000000002
+    IB_S=a1b00000-0000-4000-8000-000000000003
+    ib_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1)
+    ib_n=$(grep -c '^PREPARE ' <<<"$ib_prep")
+    ib_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$IB_U');
+INSERT INTO people (person_id, full_name, user_id) VALUES ('$IB_P', 'Inbox Person', '$IB_U');
+UPDATE people SET uni_alias = 'ibx1' WHERE person_id = '$IB_P';
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$IB_S', 'IBX-001');
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(g::text, 2, '0'))::uuid, 'f' || g || '.tif' FROM generate_series(1, 13) g;
+CREATE TEMP TABLE ib_seed (n int, kind text, origin text, state text, strength text, with_suggestion boolean, matches int, dup int, rel text);
+INSERT INTO ib_seed VALUES
+  (1,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'a'),
+  (2,  'image',        'new',     'new',    'short_id', true,  1, 1,    'b'),
+  (3,  'image',        'new',     'new',    'short_id', true,  1, NULL, 'c'),
+  (4,  'image',        'backlog', 'new',    'short_id', true,  1, NULL, 'd'),
+  (5,  'image',        'new',     'gone',   'none',     false, 0, NULL, 'e'),
+  (6,  'image',        'new',     'new',    'short_id', true,  1, 5,    'f'),
+  (7,  'surface_scan', 'new',     'new',    'short_id', true,  1, NULL, 'g'),
+  (8,  'image',        'new',     'new',    'short_id', false, 2, NULL, 'h'),
+  (9,  'image',        'new',     'linked', 'none',     false, 0, NULL, 'i'),
+  (10, 'image',        'new',     'new',    'short_id', true,  1, 9,    'j');
+-- a: an original in this inbox (counted, acceptable)         b: its copy (listed, not counted, not acceptable)
+-- c: already on its record, see the junction row below (not counted, not acceptable)                  d: older, exact match (counted as older, acceptable)
+-- e: a gone original   f: a copy of it (counted)             g: a surface scan (counted, never acceptable)   h: two records named (counted, never acceptable)
+-- i: a linked original j: a copy of it (not counted, hidden from the list)
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, suggested_collection, suggested_record_id, matches, rel_path,
+                                        link_kind, linked_collection, linked_junction_id, link_batch_id)
+SELECT ('a1b00000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid, '$IB_P', kind, origin, state, strength,
+       CASE WHEN with_suggestion THEN 'physical_samples' END, CASE WHEN with_suggestion THEN '$IB_S'::uuid END,
+       (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', 'physical_samples', 'record_id', '$IB_S', 'via', 'short_id', 'token', 'abcd123' || i)), '[]'::jsonb) FROM generate_series(1, matches) i),
+       'Users/ibx1/' || rel || '.tif',
+       CASE WHEN state = 'linked' THEN 'manual' END, CASE WHEN state = 'linked' THEN 'physical_samples' END,
+       CASE WHEN state = 'linked' THEN gen_random_uuid() END, CASE WHEN state = 'linked' THEN gen_random_uuid() END
+  FROM ib_seed ORDER BY n;
+UPDATE d1_private.file_candidates c SET duplicate_of = o.candidate_id
+  FROM ib_seed s JOIN ib_seed t ON t.n = s.dup JOIN d1_private.file_candidates o ON o.rel_path = 'Users/ibx1/' || t.rel || '.tif'
+ WHERE c.rel_path = 'Users/ibx1/' || s.rel || '.tif' AND s.dup IS NOT NULL;
+INSERT INTO sample_data_files (sample_id, directus_files_id) VALUES ('$IB_S', 'a1b00000-0000-4000-8000-000000000103');
+$ib_prep
+SELECT 'ib_prepared:' || count(*) FROM pg_prepared_statements WHERE name <> '';
+CREATE TEMP TABLE ib_sm AS EXECUTE summary('$IB_P', '');
+SELECT 'ib_summary_new:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FROM ib_sm;
+SELECT 'ib_summary_older_exact:' || coalesce(sum(n) FILTER (WHERE origin = 'backlog' AND exact), 0) FROM ib_sm;
+CREATE TEMP TABLE ib_cnt AS EXECUTE count_new('$IB_P', '');
+SELECT 'ib_list_new_total:' || total FROM ib_cnt;
+CREATE TEMP TABLE ib_acc AS EXECUTE accept_open('$IB_P', '');
+SELECT 'ib_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_acc);
+SELECT candidate_id AS ib_a FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/a.tif' \gset
+SELECT gen_random_uuid() AS ib_j, gen_random_uuid() AS ib_b \gset
+-- a prepared INSERT/UPDATE cannot feed CREATE TABLE AS: ib_run runs one and answers how many rows it changed
+CREATE FUNCTION pg_temp.ib_run(stmt text) RETURNS int LANGUAGE plpgsql AS \$f\$ DECLARE n int; BEGIN EXECUTE stmt; GET DIAGNOSTICS n = ROW_COUNT; RETURN n; END \$f\$;
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_j', :'ib_b', :'ib_a')) AS ib_n1 \gset
+SELECT 'ib_linked:' || :ib_n1 || ':' || state || ':' || link_kind FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_j', :'ib_b', :'ib_a')) AS ib_n2 \gset
+SELECT 'ib_linked_twice:' || :ib_n2;
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_a', :'ib_b')) AS ib_n3 \gset
+SELECT 'ib_undone:' || :ib_n3 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || coalesce(link_batch_id::text, '-') FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_a')) AS ib_n4 \gset
+SELECT 'ib_dismissed:' || :ib_n4 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT pg_temp.ib_run(format('EXECUTE restore(%L)', :'ib_a')) AS ib_n5 \gset
+SELECT 'ib_restored:' || :ib_n5 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT 'ib_prefs:' || pg_temp.ib_run(format('EXECUTE prefsput(%L, true)', '$IB_U'));
+SELECT 'ib_first_rescan:' || pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
+CREATE TEMP TABLE ib_flags (v text);
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
+  INSERT INTO ib_flags VALUES ('inserted');
+EXCEPTION WHEN unique_violation THEN INSERT INTO ib_flags VALUES ('refused');
+END \$\$;
+SELECT 'ib_second_rescan:' || v FROM ib_flags;
+ROLLBACK;
+SQL
+)
+    ib_check() { grep -qxF -- "$1" <<<"$ib_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-900 <<<"$ib_out"))"; }
+    ib_check "ib_prepared:$ib_n" "every statement of d1-inbox ($ib_n, with the list, count and accept variants) prepares against the real schema"
+    ib_check "ib_summary_new:4" "summary: counts the original, a copy of a gone original, a surface scan and an ambiguous file; not a copy of a file still in an inbox, a copy of a linked file, or a file already on its record"
+    ib_check "ib_summary_older_exact:1" "summary: older files with an exact match are counted"
+    ib_check "ib_list_new_total:6" "list: a copy is listed (marked) while its original is undecided, hidden once the original is linked"
+    ib_check "ib_accept:Users/ibx1/a.tif,Users/ibx1/d.tif" "accept-all selects only exact one-record matches that are not copies, surface scans or already on their record"
+    ib_check "ib_linked:1:linked:manual" "link bookkeeping passes the table's CHECKs (state, kind, collection, junction and batch together)"
+    ib_check "ib_linked_twice:0" "a second link of a file no longer new changes nothing"
+    ib_check "ib_undone:1:new:-:-" "undo clears all four link columns together"
+    ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
+    ib_check "ib_restored:1:new" "restore moves it back to new"
+    ib_check "ib_prefs:1" "the auto-link preference upserts"
+    ib_check "ib_first_rescan:1" "a rescan request is queued"
+    ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"
+else
+    echo "  skip: node is not installed here, so the d1-inbox SQL is not run (CI has node)"
+fi
+
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy

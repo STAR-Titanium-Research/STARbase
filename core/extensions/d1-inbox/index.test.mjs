@@ -1,5 +1,6 @@
 // Run with: node --test core/extensions/d1-inbox/index.test.mjs
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -1739,4 +1740,18 @@ test('no route reads or writes anything outside d1_private and the three junctio
     if (/\bFROM\b|\bINTO\b|\bUPDATE\b/i.test(text)) assert.match(text, allowed, text);
     assert.doesNotMatch(text, /directus_collections|directus_fields|directus_permissions/);
   }
+});
+
+test('sql_check.mjs (run on a real Postgres by tests/phase1_schema.sh) prepares every statement the endpoint has, and the phase1 block names the checks', () => {
+  const printed = execFileSync(process.execPath, [new URL('./sql_check.mjs', import.meta.url).pathname], { encoding: 'utf8' });
+  const names = new Set([...printed.matchAll(/^PREPARE (\w+) AS /gm)].map((m) => m[1]));
+  for (const [key, value] of Object.entries(SQL)) {
+    const wanted = typeof value === 'string' ? [key.toLowerCase()] : Object.keys(value).map((sub) => `${key}_${sub}`.toLowerCase());
+    for (const name of wanted) assert.ok(names.has(name), `${name} is prepared`);
+  }
+  for (const name of ['list_new', 'count_new', 'count_older', 'list_linked', 'accept_open', 'accept_after']) assert.ok(names.has(name), name);
+  assert.doesNotMatch(printed, /\?/, 'every ? is numbered');
+  const phase1 = readFileSync(new URL('../../../tests/phase1_schema.sh', import.meta.url), 'utf8');
+  assert.match(phase1, /core\/extensions\/d1-inbox\/sql_check\.mjs/);
+  for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
 });
