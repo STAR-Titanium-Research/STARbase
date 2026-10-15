@@ -305,7 +305,7 @@ export function parseFile(v: unknown): FoundFile | null {
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;
 	if (str(r.name)) file.name = str(r.name) as string;
-	if (typeof r.mime_type === 'string') file.mime_type = r.mime_type;
+	if (typeof r.mime_type === 'string' || r.mime_type === null) file.mime_type = r.mime_type;
 	if (typeof r.adopted === 'boolean') file.adopted = r.adopted;
 	return file;
 }

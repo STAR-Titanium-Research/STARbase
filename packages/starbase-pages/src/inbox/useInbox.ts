@@ -187,7 +187,8 @@ export function createInbox(deps: InboxDeps) {
 			try {
 				const r = await linkFiles(api, items);
 				drop([file.candidate_id]);
-				say({ tone: 'ok', text: linkResultText(r.linked), undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
+				// the same person repeating a link: the server made no batch and linked nothing new (linked 0, link_batch_id null)
+				say({ tone: 'ok', text: r.linked > 0 ? linkResultText(r.linked) : 'That file was already linked.', undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
 				deps.onChanged?.();
 				return { ok: true } as const;
 			} catch (e) {
