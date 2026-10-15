@@ -1,6 +1,6 @@
 // What the Inbox does in bulk and says about it, as plain functions (no Vue, no network): Accept all (what it would link, the confirm), one
 // Undo per batch, the rescan messages and the consent text of the auto-link switch. Split from inboxModel.ts, which has the rows.
-import type { FilesQuery, FoundFile, LinkedItem, Skipped } from './inboxApi';
+import { InboxApiError, type FilesQuery, type FoundFile, type LinkedItem, type Skipped } from './inboxApi';
 import { linkTarget, needsReadNotice, type InboxFilters } from './inboxModel';
 import { isAddedScan } from './inboxScan';
 
@@ -182,6 +182,29 @@ export function groupLinked(rows: readonly FoundFile[]): LinkedGroup[] {
 
 export function undoResultText(undone: number): string {
 	return `Undone: ${undone} found file${undone === 1 ? '' : 's'} back in your Inbox.`;
+}
+
+/**
+ * Why an Undo was refused, when it is the rule "only the person who linked it, or an administrator": the list rows say who linked a batch only
+ * by name (decided_by_name), never by id, so the page cannot tell in advance whose Undo it is and shows the button to everyone who sees the row.
+ * That refusal is the endpoint's 403 with no candidate_id (the one for a surface scan the person may no longer delete names its file).
+ * null for any other failure: it keeps the endpoint's own words.
+ */
+export function undoRefusalText(e: unknown): string | null {
+	if (!(e instanceof InboxApiError) || e.status !== 403 || e.code !== 'FORBIDDEN') return null;
+	if (e.extensions && 'candidate_id' in e.extensions) return null;
+	return 'Only the person who linked this, or an administrator, can undo it.';
+}
+
+export const TEAM_RACE_TEXT = 'Someone already dealt with that file.';
+
+/**
+ * The 409 of Link on a file someone else got to first. In a team folder that is another member (or the same file linked a moment ago), so it
+ * reads "Someone already dealt with that file."; in the person's own folder only they can have linked it ("That file was already linked.", the
+ * endpoint's words). null for any other failure.
+ */
+export function teamRaceText(file: Pick<FoundFile, 'owner'>, e: unknown): string | null {
+	return e instanceof InboxApiError && e.status === 409 && e.code === 'ALREADY_LINKED' && file.owner.kind === 'team' ? TEAM_RACE_TEXT : null;
 }
 
 // ---- rescan ----

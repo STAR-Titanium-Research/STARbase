@@ -5,7 +5,7 @@ import {
 	type FilesQuery, type FoundFile, type LinkItem, type Skipped,
 } from './inboxApi';
 import {
-	RESCAN_QUEUED_TEXT, acceptFilter, acceptPairs, acceptPreview, acceptResultText, isAcceptable, linkResultText, mayReadDocuments, rateLimitMessage, undoResultText,
+	RESCAN_QUEUED_TEXT, acceptFilter, acceptPairs, acceptPreview, acceptResultText, isAcceptable, linkResultText, mayReadDocuments, rateLimitMessage, teamRaceText, undoRefusalText, undoResultText,
 	type AcceptPair,
 } from './inboxBulk';
 import { listPlan, nameOf, suggestionOf, type InboxFilters } from './inboxModel';
@@ -198,7 +198,8 @@ export function createInbox(deps: InboxDeps) {
 				deps.onChanged?.();
 				return { ok: true } as const;
 			} catch (e) {
-				return failed(e, 'Could not link that file.');
+				const race = teamRaceText(file, e);
+				return failed(e, 'Could not link that file.', race ? { message: race, field: null } : undefined);
 			}
 		});
 	}
@@ -361,7 +362,8 @@ export function createInbox(deps: InboxDeps) {
 			deps.onChanged?.();
 			return { ok: true };
 		} catch (e) {
-			return failed(e, 'Could not undo that.');
+			const refused = undoRefusalText(e);
+			return failed(e, 'Could not undo that.', refused ? { message: refused, field: null } : undefined);
 		} finally {
 			undoing.value = null;
 		}

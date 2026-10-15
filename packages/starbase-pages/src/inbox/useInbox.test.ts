@@ -420,3 +420,38 @@ describe('adding a surface scan', () => {
 		expect(r).toEqual({ ok: false, message: 'The scan date is not a valid day. Use the date box, or leave it empty.', field: 'scanned_on' });
 	});
 });
+
+describe('refusals that depend on whose folder it is and who linked', () => {
+	const team = { kind: 'team' as const, id: 't1', name: 'SEM team' };
+
+	it('a team file someone else already linked says someone dealt with it; a personal file says it was already linked', async () => {
+		const { inbox, fake } = setup([exactMatch({ owner: team }), exactMatch({}, '9ab3c4d5', 'S-0043')]);
+		await inbox.load();
+		const mine = inbox.main.value.rows.find((f) => f.owner.kind === 'team')!;
+		const personal = inbox.main.value.rows.find((f) => f.owner.kind === 'person')!;
+		for (const f of [mine, personal]) fake.files.find((x) => x.candidate_id === f.candidate_id)!.state = 'linked';
+		expect(await inbox.linkSuggested(mine)).toEqual({ ok: false, message: 'Someone already dealt with that file.' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'Someone already dealt with that file.' });
+		expect(await inbox.linkSuggested(personal)).toEqual({ ok: false, message: 'That file was already linked.' });
+	});
+
+	it('the 409 of a team race still reloads the list', async () => {
+		const { inbox, fake } = setup([exactMatch({ owner: team })]);
+		await inbox.load();
+		const file = inbox.main.value.rows[0];
+		fake.files[0].state = 'linked';
+		await inbox.linkSuggested(file);
+		await vi.waitFor(() => expect(inbox.main.value.rows).toHaveLength(0));
+	});
+
+	it('an Undo the server refuses because someone else linked the batch says who may undo it', async () => {
+		const { inbox, fake } = setup([exactMatch({ owner: team })], undefined, { undoByLinkerOnly: true });
+		await inbox.load();
+		await inbox.link(inbox.main.value.rows[0], 'physical_samples', 's-1');
+		const batch = fake.files[0].link_batch_id!;
+		const r = await inbox.undo({ kind: 'batch', id: batch });
+		expect(r).toEqual({ ok: false, message: 'Only the person who linked this, or an administrator, can undo it.' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'Only the person who linked this, or an administrator, can undo it.' });
+		expect(fake.files[0].state).toBe('linked');
+	});
+});
