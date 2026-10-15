@@ -1,4 +1,4 @@
-import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
+import { computed, getCurrentInstance, getCurrentScope, onBeforeUnmount, onMounted, onScopeDispose, ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
 import type { ExplorerHost } from '../host';
 import { errorText } from '../format';
@@ -109,7 +109,7 @@ function create(host: ExplorerHost): Internal {
 
 /**
  * The shared Inbox counts for this host. Call it from a component's setup: the poll runs while at least one component that called it is
- * mounted, and stops with the last one. Outside a component it only returns the state (nothing polls).
+ * mounted, and stops with the last one. Outside a component or an effect scope it only returns the state (nothing polls).
  */
 export function useInboxSummary(host: ExplorerHost): InboxSummaryState {
 	let state = states.get(host);
@@ -118,13 +118,22 @@ export function useInboxSummary(host: ExplorerHost): InboxSummaryState {
 		states.set(host, state);
 	}
 	const s = state;
-	if (getCurrentScope()) {
+	const attach = () => {
 		s.subscribers += 1;
 		s.start();
-		onScopeDispose(() => {
-			s.subscribers -= 1;
-			if (s.subscribers <= 0) s.stop();
-		});
+	};
+	const detach = () => {
+		s.subscribers -= 1;
+		if (s.subscribers <= 0) s.stop();
+	};
+	// In a component the poll starts when it is mounted in the browser (a server render never mounts, so it never touches window);
+	// in a bare effect scope (a test, a store) it starts at once.
+	if (getCurrentInstance()) {
+		onMounted(attach);
+		onBeforeUnmount(detach);
+	} else if (getCurrentScope()) {
+		attach();
+		onScopeDispose(detach);
 	}
 	return s;
 }

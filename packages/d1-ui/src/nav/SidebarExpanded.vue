@@ -14,15 +14,21 @@ import SidebarRow from './SidebarRow.vue';
 import { moveAmongShown } from './pinDrag';
 import { pinnedListCut, pinKey } from './sidebarModel';
 import type { PinRef, SectionId, SidebarLink } from './sidebarModel';
-import { HOME_LINK } from './sidebarRows';
+import { HOME_LINK, INBOX_LINK } from './sidebarRows';
 import { usePinDrag } from './usePinDrag';
 import { useRowMenu } from './useRowMenu';
 import { useSidebarData } from './useSidebarData';
+import { useExplorerHost } from '../host';
+import { badgeText, inboxLabel } from '../inbox/inboxSummary';
+import { useInboxSummary } from '../inbox/useInboxSummary';
 
 const props = withDefaults(defineProps<{ collapsible?: boolean; openSection?: SectionId | null }>(), { collapsible: false, openSection: null });
 defineEmits<{ (e: 'open-finder'): void; (e: 'request-mode', mode: 'expanded' | 'rail', sectionId?: SectionId): void }>();
 
 const route = useRoute();
+// The Inbox row: shown unless the server has no d1-inbox; its badge is the count of new files (polled calmly, shared with the rail and Home).
+const inbox = useInboxSummary(useExplorerHost());
+const inboxBadge = computed(() => badgeText(inbox.newCount.value));
 const { sections, resolved, isCurrent, currentSection, loading, error, refresh, pins } = useSidebarData();
 
 const root = ref<HTMLElement | null>(null);
@@ -129,6 +135,16 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 		</div>
 
 		<SidebarRow :item="HOME_LINK" variant="section" :pinned="false" :current="isCurrent(HOME_LINK.to)" plain />
+		<SidebarRow
+			v-if="!inbox.absent.value"
+			:item="INBOX_LINK"
+			variant="section"
+			:pinned="false"
+			:current="isCurrent(INBOX_LINK.to)"
+			:badge="inboxBadge"
+			:badge-label="inboxLabel(inbox.newCount.value)"
+			plain
+		/>
 
 		<section
 			ref="pinnedBlock"
