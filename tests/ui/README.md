@@ -74,7 +74,7 @@ part of `npx playwright test`.
 - The full stack is up (`docker compose up -d`) and Directus is reachable at
   `http://localhost:8055`.
 - `scripts/configure_directus.sql` has been applied and Directus restarted
-  (after a Redis flush) so the latest field config is served.
+  so the latest field config is served.
 
 ## Run
 
@@ -114,7 +114,8 @@ it (which silently logged out later tests and made the suite flaky).
 - Run order after a config change: `configure_directus.sql` **then**
   `scripts/configure_inline_params.sql` (the latter registers the inline fields
   and is idempotent).
-- After changing `configure_directus.sql`, always flush Redis
-  (`docker exec d1-database-redis-1 redis-cli FLUSHALL`) and restart Directus
-  before re-running, or the UI serves stale field metadata.
+- After changing `configure_directus.sql`, always restart Directus
+  (`docker compose restart directus`) before re-running, or the UI serves stale
+  field metadata. Directus caches it in memory, not in Redis; do not `FLUSHALL`
+  Redis, which holds the worker job queues.
 - `report/`, `test-results/`, `artifacts/`, `.auth/`, and `node_modules/` are git-ignored.

@@ -17,7 +17,7 @@ the extensions `d1-access-guard`, `d1-record-access`, `d1-trace` and the rebuilt
 3. Stop Directus; pause the force crawler and any import.
 4. `git pull` and build the extensions.
 5. Migrate 165 to 169, then check the drift.
-6. Flush Redis, start Directus.
+6. Start Directus.
 7. Smoke read as a Lab Member.
 8. Rollback (below), with Directus stopped.
 
@@ -29,7 +29,7 @@ campaign-sample writes. Between the migrations and the restart, a permissions ca
 stale schema does not know (the incident pattern of migration 160: every Lab Member read fails). Migration 166 also adds
 foreign keys to `directus_users`, which a live Directus touches constantly (`last_access`), under a 10 s `lock_timeout`.
 So nothing of A1a may be visible to a running Directus: **it is stopped before the pull and started only after the
-migrations, once, with a flushed cache.** Do it in a quiet window and tell members first. A1a has no screen that turns
+migrations, once, with a fresh cache.** Do it in a quiet window and tell members first. A1a has no screen that turns
 Restricted on, and until A1b only an admin can set it over the API (the guard's `RESTRICT_ADMIN_ONLY` switch, below), but the
 rules and the endpoint are live from the start.
 
@@ -165,10 +165,11 @@ If the drift is not 0, run `SELECT d1_private.readers_rebuild();` and check agai
 Do the same after **any** restore (below). Migration 167 refreshes `project_rollup`; it may take a moment on a large instance.
 The migrations print `NOTICE`s (counts of rows changed); note them.
 
-## 6. Flush Redis, start Directus
+## 6. Start Directus
+
+Directus here caches schema and permissions in memory (no `CACHE_*`/Redis settings), so starting it after the stop in step 3 gives a fresh cache; Redis holds the rq queues of heavy-data-worker and analysis-worker, so do not `FLUSHALL` it.
 
 ```bash
-docker compose exec -T redis redis-cli FLUSHALL
 docker compose start directus
 docker compose up -d --force-recreate proxy    # serves the new STARbase build
 ```
@@ -221,7 +222,6 @@ cutover: it must not load the old rules against the new schema or the other way 
 docker compose stop directus
 make migrate-down        # five times: 169, 168, 167, 166, 165, in that order
 # restore the previous extension builds (d1-access-guard, d1-trace, d1-lab-dashboard; remove d1-record-access)
-docker compose exec -T redis redis-cli FLUSHALL
 docker compose start directus
 ```
 
