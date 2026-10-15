@@ -295,6 +295,58 @@ test('GET /people joins login status, role name and last_access, and lists login
   assert.equal(r.body.logins_without_person[1].role_name, null);
 });
 
+test('a login merged into another (login_aliases) is not a login without a person, and is not counted', async () => {
+  const merged = ID(260);
+  const tables = baseTables();
+  tables.directus_users.push({ id: merged, email: 'old@login.example', first_name: 'Old', last_name: 'Alias', status: 'suspended', role: R.member, last_access: null });
+  tables.login_aliases = [{ alias_user_id: merged, canonical_user_id: U.ann }];
+  const rows = [{ key: 'login_without_person', person_ids: [], user_ids: [U.superAdmin, U.orphan, merged] }];
+  const { handlers } = mount({ tables, raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(people.body.logins_without_person.map((l) => l.user_id), [U.orphan, U.previewAdmin, U.superAdmin]);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body, { items: [{ key: 'login_without_person', count: 2 }] });
+  // and a lone alias leaves the item out altogether
+  const only = mount({ tables, raw: { 'SELECT key': [{ key: 'login_without_person', person_ids: [], user_ids: [merged] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
+});
+
+test('login_aliases is read once per /people request, and an unreadable one only logs a warning', async () => {
+  let reads = 0;
+  const tables = baseTables();
+  tables.login_aliases = [];
+  const ok = mount({ tables, raw: { 'SELECT key': ATTENTION } });
+  const real = tables.login_aliases;
+  Object.defineProperty(tables, 'login_aliases', { get() { reads += 1; return real; }, configurable: true });
+  assert.equal((await call(ok.handlers['GET /people'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.equal(reads, 1);
+
+  const broken = baseTables();
+  Object.defineProperty(broken, 'login_aliases', { get() { throw new Error('relation "login_aliases" does not exist'); } });
+  const m = mount({ tables: broken, raw: { 'SELECT key': ATTENTION } });
+  const r = await call(m.handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.logins_without_person.length, 3); // nothing is hidden when the aliases cannot be read
+  assert.equal((await call(m.handlers['GET /attention'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.ok(m.warnings.some((w) => /login_aliases/.test(w)));
+  assert.deepEqual(m.errors, []);
+});
+
+test('a Former person is never missing an email: not on their row, not in the /attention count', async () => {
+  // Cy (active: false) and Bob (active) both have no email on the people row
+  const rows = [{ key: 'missing_email', person_ids: [P.bob, P.cy], user_ids: [U.bob] }, ...ATTENTION.filter((a) => a.key === 'possible_duplicate')];
+  const { handlers } = mount({ raw: { 'SELECT key': rows } });
+  const people = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
+  const byName = Object.fromEntries(people.body.people.map((p) => [p.full_name, p]));
+  assert.ok(byName['Bob Member'].attention.includes('missing_email'));
+  assert.deepEqual(byName['Cy Nologin'].attention, []);
+  const att = await call(handlers['GET /attention'], { acc: admin(U.superAdmin) });
+  assert.deepEqual(att.body.items.find((i) => i.key === 'missing_email'), { key: 'missing_email', count: 1 });
+  // a missing_email whose only person is Former leaves the item out altogether
+  const only = mount({ raw: { 'SELECT key': [{ key: 'missing_email', person_ids: [P.cy], user_ids: [] }] } });
+  assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
+});
+
 test('GET /people gives each person their teams (one query: team_members joined with teams)', async () => {
   const { handlers, db } = mount({ raw: { 'SELECT key': ATTENTION, 'SELECT tm.person_id': MEMBERSHIPS } });
   const r = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });

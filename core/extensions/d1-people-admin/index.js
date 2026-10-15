@@ -8,6 +8,9 @@
 //                     login: null | { status, role_id, role_name, last_access, email }, attention: [key],
 //                     teams: [{ team_id, name, color, logo, is_manager }] }],
 //          logins_without_person: [{ user_id, email, first_name, last_name, status, role_id, role_name, last_access }] }
+//        A login that login_aliases lists as an alias (merged into another person's login, suspended) is left out of
+//        logins_without_person, and out of the user_ids that /attention counts. A Former person (active = false) is never in
+//        missing_email: not on their row's attention list, not in the /attention count.
 //   GET /d1-people-admin/attention
 //     -> { items: [{ key, count }] }      (d1_private.people_attention(); zero counts omitted)
 //   GET /d1-people-admin/people/:person_id/access[?list=owns|shared|investigator|teams]
@@ -146,7 +149,31 @@ export default {
     };
 
     // d1_private.people_attention() rows: { key, person_ids, user_ids }
-    const attentionRows = async () => (await database.raw('SELECT key, person_ids, user_ids FROM d1_private.people_attention()'))?.rows ?? [];
+    // Logins merged into another person (login_aliases: alias -> canonical, and suspended): never a row and never counted.
+    // It only guards the list, so it fails soft: if it cannot be read the page still loads (a warning is logged).
+    const aliasIds = async () => {
+      try {
+        return new Set((await database('login_aliases').select('alias_user_id')).map((a) => String(a.alias_user_id)));
+      } catch (err) {
+        logger?.warn?.(`${SOURCE}: could not read login_aliases: ${err?.message || err}`);
+        return new Set();
+      }
+    };
+    // A Former person (people.active = false) has nothing to fix in an email: missing_email never names them.
+    // `aliasesP`: a request that has already asked for the aliases passes them in, so they are read once.
+    const attentionRows = async (aliasesP = aliasIds()) => {
+      const [rows, aliases, former] = await Promise.all([
+        database.raw('SELECT key, person_ids, user_ids FROM d1_private.people_attention()').then((r) => r?.rows ?? []),
+        aliasesP,
+        database('people').where('active', false).select('person_id').then((l) => new Set(l.map((x) => String(x.person_id)))),
+      ]);
+      return rows.map((row) => {
+        let out = row;
+        if (aliases.size && Array.isArray(row.user_ids)) out = { ...out, user_ids: row.user_ids.filter((id) => !aliases.has(String(id))) };
+        if (row.key === 'missing_email' && former.size && Array.isArray(row.person_ids)) out = { ...out, person_ids: row.person_ids.filter((id) => !former.has(String(id))) };
+        return out;
+      });
+    };
 
     // One query for every membership: team_members joined with teams, in team-name order.
     const membershipRows = async () =>
@@ -156,12 +183,14 @@ export default {
 
     router.get('/people', route(async ({ res, admin, accounts }) => {
       requireAdmin(admin);
-      const [people, users, roles, attention, memberships] = await Promise.all([
+      const aliasesP = aliasIds();
+      const [people, users, roles, attention, memberships, aliases] = await Promise.all([
         database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id', 'created_at'),
         database('directus_users').select('id', 'email', 'first_name', 'last_name', 'status', 'role', 'last_access'),
         database('directus_roles').select('id', 'name'),
-        attentionRows(),
+        attentionRows(aliasesP),
         membershipRows(),
+        aliasesP,
       ]);
       const teamsOf = new Map(); // person_id -> their teams
       for (const m of memberships) {
@@ -205,7 +234,7 @@ export default {
       }).sort(byText('full_name'));
 
       const logins_without_person = users
-        .filter((u) => !linked.has(String(u.id)))
+        .filter((u) => !linked.has(String(u.id)) && !aliases.has(String(u.id)))
         .map((u) => {
           const login = loginOf(u);
           return {
