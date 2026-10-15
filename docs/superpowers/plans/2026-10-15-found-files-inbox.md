@@ -27,15 +27,16 @@
 
 | Stream | What | Agent profile | Worktree / branch | State |
 |---|---|---|---|---|
-| E | Spec, ADR-0020, glossary, backlog items IF1–IF9, this plan, the crawler profile and skill | coordinator | `ccr-f5ece72d-pvkcct` | **done** (PR #310) |
-| A | Migration `20261015000193_found_files_inbox.sql`: `uni_alias`, `share_folder`, five `d1_private` tables, schema tests | `d1-server-implementer` | `feat/inbox-a-schema` (final `76f6b15c`) | built; Opus review done, all findings fixed (final `43115a5c`, 1471 schema checks pass locally, CI green on the first version); merged into the integration branch |
-| B | `d1-inbox` extension (routes, edit-rights check, undo, rate limit, auto-link guard) and the alias-squat fix (people create `fields`, migration >= 194) | `d1-server-implementer` | `feat/inbox-b-endpoint` | in progress (told to match D's client contract; auto-link excludes surface scans) |
-| C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` (`dba6972c`) | built; Opus review done (1 conditional blocker, symlinks; 9 should-fix); fixes in progress |
-| D | STARbase: Inbox entry and badge, page, Home panel, People/Teams fields, admin tab | `directus-ui-implementer` | `feat/inbox-d-ui` (`a2379338`) | built; Opus UI review running |
-| F | Surface-scan confirm form (item, condition, operation) and the `surface_scans` link target in `d1-inbox` | `directus-ui-implementer` + `d1-server-implementer` | `feat/inbox-f-scan-form` | contract received (spec §8); builds with fakes; live link waits for the Alicona chat's `surface_scans` migration |
-| R | Opus review of A–D, fixes, CI | reviewers | — | not started |
+| E | Spec, ADR-0020, glossary, backlog items, this plan, the crawler profile and skill | coordinator | `ccr-f5ece72d-pvkcct` | **done** |
+| A | Migration `20261015000193_found_files_inbox.sql` (`uni_alias`, `share_folder`, five `d1_private` tables, schema tests) | `d1-server-implementer` | `feat/inbox-a-schema` | **merged**; reviewed (Opus), fixed; amended again by the final review fixes |
+| B | `d1-inbox` extension and the alias-squat fix (migration 194) | `d1-server-implementer` | `feat/inbox-b-endpoint` | **merged**; reviewed (Opus), fixed |
+| C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` | **merged**; reviewed (Opus: symlink blocker and others), fixed |
+| D | STARbase: Inbox entry and badge, page, Home panel, People/Teams fields, admin tab | `directus-ui-implementer` | `feat/inbox-d-ui` | **merged**; reviewed (Opus), fixed |
+| X | Cross-stream contract test (golden fixtures from B's real code replayed through D's client) | `directus-ui-implementer` | `feat/inbox-contract` | **merged**; found and fixed 4 real mismatches |
+| F | Add a surface scan from the Inbox: F1 `d1-inbox` link target, F2 STARbase form | `d1-server-implementer`, `directus-ui-implementer` | `feat/inbox-f1-server`, `feat/inbox-f2-ui` | **merged** (against the Alicona chat's merged `surface_scans`, migration 192) |
+| R | Final whole-feature Opus review and its fixes: server and schema, crawler and ops, UI | reviewers + the same profiles | `feat/inbox-fix-server`, `feat/inbox-fix-crawler`, `feat/inbox-fix-ui` | **merged**; a focused re-review of the changes since the full review is the last step |
 
-Order: **A → (B, C, D in parallel) → R → F** (F builds against the contract in spec §8; its live link waits for the Alicona chat's `surface_scans` migration, number 192). Update this table on every state change and fold the edit into the next code push.
+Order: **A → (B, C, D in parallel) → contract test → F → R** (F built against the Alicona chat's `surface_scans`, migration 192, now on main). Update this table on every state change and fold the edit into the next code push.
 
 ## Review Focus
 
@@ -103,7 +104,7 @@ Contract received from the Alicona chat (spec §8). Two parts, started after B a
 
 - [ ] **F1 (`d1-server-implementer`):** in `d1-inbox`, a `surface_scans` link target: `POST /d1-inbox/link` accepts `{candidate_id, collection:'surface_scans', insert_id|edge_id, condition, operation_id?, scanned_on?, condition_note?, notes?}`; creates the row through `ItemsService` as the caller in the same transaction as the candidate update; undo deletes it; refuses a missing/invalid `condition`, both or neither of `insert_id`/`edge_id`; a feature check that the `surface_scans` table exists (otherwise 409 "Surface scans are not available yet"). Tests with fakes.
 - [ ] **F2 (`directus-ui-implementer`):** for `kind='surface_scan'` the Link dialog's button reads "Add a surface scan" and collects item (insert or edge picker), condition (required, no default), optional operation, date and notes; shows the warning "Adding a surface scan makes the file visible to every lab member"; a duplicate (same item and file, refused by the table's unique constraint) is shown as "already added"; never says "link" or "attach" for it.
-- [ ] **F3:** once the Alicona chat's `surface_scans` migration is on the base branch, run both against the real table (schema test) and tick backlog item F9.
+- [ ] **F3:** once the Alicona chat's `surface_scans` migration is on the base branch, run both against the real table (schema test) and tick backlog item IF9.
 
 ## Stream R — Review and CI (coordinator)
 
