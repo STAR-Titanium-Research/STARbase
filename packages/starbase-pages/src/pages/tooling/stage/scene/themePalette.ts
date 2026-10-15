@@ -8,8 +8,9 @@ export const PALETTE_EXPRESSIONS = {
 	tile: 'var(--d1-tile, var(--theme--background-subdued))',
 	tray: 'light-dark(color-mix(in srgb, var(--theme--foreground) 12%, var(--d1-tile, var(--theme--background-subdued))), color-mix(in srgb, var(--theme--foreground) 5%, var(--d1-tile, var(--theme--background-subdued))))',
 	ink: 'var(--theme--foreground)',
-	body: 'light-dark(color-mix(in srgb, var(--theme--foreground) 88%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 28%, var(--theme--background)))',
-	mark: 'light-dark(color-mix(in srgb, var(--theme--foreground) 38%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 85%, var(--theme--background)))',
+	body: 'light-dark(color-mix(in srgb, var(--theme--foreground) 88%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 42%, var(--theme--background)))', // dark theme: a mid grey, well clear of the near-black tray
+	// The reference arrow: near-white in both themes, so it is the brightest thing on the graphite top face.
+	mark: 'light-dark(color-mix(in srgb, var(--theme--foreground) 5%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 96%, var(--theme--background)))',
 	// Brazed tips, lighter than the carbide body in both themes. PCD is near-silver; CBN is a warm, dark gold-grey
 	// (the warning amber stirred into a grey from the same foreground).
 	tipPcd: 'light-dark(color-mix(in srgb, var(--theme--foreground) 14%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 86%, var(--theme--background)))',
@@ -21,6 +22,9 @@ export const PALETTE_EXPRESSIONS = {
 	// The accent, lifted toward white: the selected and hovered edge sit on a dark graphite body, where the
 	// light theme's near-black accent would vanish.
 	pick: 'color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 50%, var(--theme--foreground-inverted))',
+	// The selected edge: a saturated blue that no state colour (ok, warn, dim) and no insert body is close to. A page
+	// can retheme it with --d1-select; the stage's selected pill reads the same variable.
+	select: 'var(--d1-select, royalblue)',
 } as const;
 
 export type PaletteKey = keyof typeof PALETTE_EXPRESSIONS;

@@ -8,7 +8,7 @@ import { luminance, type Palette, type Rgba } from './themePalette';
 const rgba = (v: number): Rgba => ({ r: v, g: v, b: v, a: 1 });
 const palette = (dark: boolean): Palette => {
 	const p = {} as Palette;
-	for (const k of ['tile', 'tray', 'ink', 'body', 'mark', 'ok', 'warn', 'dim', 'accent', 'pick', 'tipPcd', 'tipCbn'] as const) p[k] = rgba(0.5);
+	for (const k of ['tile', 'tray', 'ink', 'body', 'mark', 'ok', 'warn', 'dim', 'accent', 'pick', 'select', 'tipPcd', 'tipCbn'] as const) p[k] = rgba(0.5);
 	p.tile = rgba(dark ? 0.05 : 0.95);
 	p.body = rgba(dark ? 0.2 : 0.3);
 	p.tipPcd = rgba(dark ? 0.8 : 0.85);
@@ -83,7 +83,7 @@ describe('buildTipGeometry', () => {
 		const pos = buildTipGeometry(g, o)!.getAttribute('position');
 		let apexZ = -Infinity; // the pad's inner point lies on the bisector (x = 0); corner 0 points to -z
 		for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getX(i)) < 1e-3) apexZ = Math.max(apexZ, pos.getZ(i));
-		const mark = buildReferenceMark(g, o);
+		const mark = buildReferenceMark(g, o)!;
 		mark.computeBoundingBox();
 		expect(apexZ).toBeLessThan(-1);
 		expect(mark.boundingBox!.min.z).toBeGreaterThanOrEqual(apexZ - 1e-6);

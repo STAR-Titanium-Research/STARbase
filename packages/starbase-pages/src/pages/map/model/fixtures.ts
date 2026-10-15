@@ -50,7 +50,7 @@ export function mkTest(p: Partial<TestRow> = {}): TestRow {
 }
 
 export function mkSample(id: string, p: Partial<SampleRec> = {}): SampleRec {
-  return { id, code: id.toUpperCase(), form: null, status: null, projectId: null, materialRef: null, facts: {}, ...p };
+  return { id, code: id.toUpperCase(), nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {}, ...p };
 }
 
 export function mkLineage(parentId: string, childId: string, type: LineageRow['type'] = 'cut_from', fraction: number | null = null): LineageRow {

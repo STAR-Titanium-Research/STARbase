@@ -405,7 +405,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
   // on) is a small card of its own: "another piece" until the person opens it with ＋.
   const stubs = [...incoming.keys()]
     .filter((id) => !knownSamples.has(id))
-    .map((id) => ({ id, code: data.pieces?.[id]?.code ?? OTHER_PIECE, form: data.pieces?.[id]?.form ?? null, status: null, projectId: null }));
+    .map((id) => ({ id, code: data.pieces?.[id]?.code ?? OTHER_PIECE, nickname: data.pieces?.[id]?.nickname ?? null, form: data.pieces?.[id]?.form ?? null, status: null, projectId: null }));
   const sampleNodes: RecordNode[] = [...data.samples, ...stubs].map((s) => {
     const nodeId = `s:${s.id}`;
     const list = incoming.get(s.id) ?? [];
@@ -420,7 +420,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       id: nodeId,
       type: 'record',
       kind: 'sample',
-      ref: { collection: COLLECTION.sample, id: s.id, code: s.code },
+      ref: { collection: COLLECTION.sample, id: s.id, code: s.code, ...(s.nickname ? { label: s.nickname } : {}) },
       status: s.status,
       meta: s.form ?? undefined,
       ins,

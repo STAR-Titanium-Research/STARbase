@@ -134,6 +134,12 @@ describe('resolveInsertGeometry', () => {
 		expect(g.includedAngleDeg).toBe(80);
 	});
 
+	it('ignores an included angle far from the shape letter (live CNMG row: 0.010)', () => {
+		const g = resolveInsertGeometry({ type_code: 'CNMG 12 04 08-SM H13A', iso_designation: 'CNMG 12 04 08', edge_count: 4, included_angle_deg: '0.010', cutting_edge_length_mm: '8.500' });
+		expect(g.includedAngleDeg).toBe(80);
+		expect(g.icMm).toBeCloseTo(8.5 * Math.sin((80 * Math.PI) / 180), 3);
+	});
+
 	it('has no hole for a type letter without one, unless the row gives a diameter', () => {
 		expect(resolveInsertGeometry(type('CNMN120408')).holeDiameterMm).toBeNull();
 		expect(resolveInsertGeometry(type('CNMN120408', { fixing_hole_diameter_mm: 5 })).holeDiameterMm).toBe(5);
@@ -272,5 +278,63 @@ describe('insertOutline', () => {
 		expect(o.corners).toHaveLength(5);
 		expect(o.corners[0].angleDeg).toBeCloseTo(108, 6);
 		expect(o.points).toHaveLength(5);
+	});
+});
+
+describe('designation from type_code', () => {
+	it.each([
+		['CNMG 12 04 08-SM H13A', 'C'], ['DNMG150604-MF1 890 (A41)', 'D'], ['TCMT 16 T3 08-KM H13A', 'T'], ['RCMT 08 03 MP-H7 S205', 'R'],
+	])('reads the shape of %s when iso_designation is empty', (code, shape) => {
+		expect(resolveInsertGeometry({ iso_designation: null, type_code: code, edge_count: 4 })).toMatchObject({ shape, recognised: true });
+	});
+
+	it('draws a rhombus, not a square, for a CNMG with only a type_code', () => {
+		const g = resolveInsertGeometry({ iso_designation: null, type_code: 'CNMG 12 04 08-SM H13A', edge_count: 4 });
+		expect(g.shape).toBe('C');
+		expect(insertOutline(g).corners.map((c) => Math.round(c.angleDeg))).toEqual([80, 100, 80, 100]);
+	});
+});
+
+describe('milling inserts (R390)', () => {
+	const r390 = { iso_designation: null, type_code: 'R390-11 T3 08M-MM S30T', nose_radius_mm: 0.8, fixing_hole_diameter_mm: 2.8 };
+
+	it('resolves R390-11 as an 11.45 x 6.8 rectangle with two cutting corners', () => {
+		const g = resolveInsertGeometry(r390);
+		expect(g).toMatchObject({
+			shape: 'rect', recognised: true, lengthMm: 11.45, icMm: 6.8, thicknessMm: 3.59, noseRadiusMm: 0.8,
+			cuttingCorners: [0, 2], edgesPerFace: 2, doubleSided: false, holeCountersunk: true,
+		});
+	});
+
+	it('letters A and B on the opposite corners of the one face', () => {
+		const g = resolveInsertGeometry(r390);
+		expect(placeEdge(g, 'A')).toEqual({ face: 'top', corner: 0 });
+		expect(placeEdge(g, 'B')).toEqual({ face: 'top', corner: 2 });
+		expect(placeEdge(g, 'C')).toBeNull();
+	});
+
+	it('draws a clockwise rectangle of the right size', () => {
+		const o = insertOutline(resolveInsertGeometry(r390));
+		const xs = o.points.map((p) => p[0]);
+		const ys = o.points.map((p) => p[1]);
+		expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(11.45, 6);
+		expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(6.8, 6);
+		expect(signedArea(o.points)).toBeLessThan(0);
+		expect(o.corners.map((c) => c.angleDeg)).toEqual([90, 90, 90, 90]);
+	});
+
+	it('leaves an unknown R390 size as a generic polygon', () => {
+		expect(resolveInsertGeometry({ type_code: 'R390-18 T3 08M-MM', edge_count: 4 })).toMatchObject({ shape: 'polygon', recognised: false });
+	});
+});
+
+describe('rect corner bearing', () => {
+	it('points each corner bearing at its fillet centre, so a step out from the middle lands on the corner', () => {
+		const o = insertOutline(resolveInsertGeometry({ type_code: 'R390-11 T3 08M-MM S30T' }));
+		for (const c of o.corners) {
+			const a = (c.bisectorDeg * Math.PI) / 180;
+			expect(Math.hypot(c.x, c.y) * Math.sin(a)).toBeCloseTo(c.y, 9);
+			expect(Math.hypot(c.x, c.y) * Math.cos(a)).toBeCloseTo(c.x, 9);
+		}
 	});
 });

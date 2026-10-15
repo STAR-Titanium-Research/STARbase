@@ -33,7 +33,7 @@ function padOutline(geom: InsertGeometry, outline: InsertOutline, corner: number
 	const tip = Math.hypot(c.x, c.y) + (geom.shape === 'R' ? 0 : geom.noseRadiusMm);
 	const a = (c.bisectorDeg * Math.PI) / 180;
 	// Stop short of the reference mark (which sits on corner 0's bisector) and always keep a visible wedge.
-	const stop = corner === 0 ? markDistance(geom, outline).end + 0.3 : 0;
+	const stop = corner === 0 ? (markDistance(geom, outline)?.end ?? -0.3) + 0.3 : 0;
 	const depth = Math.max(MIN_TIP_DEPTH_MM, Math.min(TIP_DEPTH_MM, tip - stop));
 	const inner = (tip - depth) * inset;
 	return [...run.map(([x, y]): Pt => [x * inset, y * inset]), [Math.cos(a) * inner, Math.sin(a) * inner]];

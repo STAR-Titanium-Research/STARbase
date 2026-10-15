@@ -90,6 +90,7 @@ export interface TestRow {
 export interface SampleRec {
   id: string;
   code: string;
+  nickname: string | null;
   form: string | null;
   status: string | null;
   projectId: string | null;
@@ -127,7 +128,7 @@ export interface ProcessData {
    * Codes of samples that operations of the family made but that are outside it (the sibling pieces of a cut,
    * seen from one piece): they are drawn as small cards, "another piece" when the code was not read.
    */
-  pieces?: Record<string, { code: string; form: string | null }>;
+  pieces?: Record<string, { code: string; nickname?: string | null; form: string | null }>;
   /**
    * Codes of the recorded batches the rows above belong to, by batch id ("B-0003"). Only batches whose code was
    * read: a batch the person may not see the code of is still a group, headed "Batch".

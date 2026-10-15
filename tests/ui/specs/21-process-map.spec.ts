@@ -598,7 +598,7 @@ test.describe('Process map recorded batch (admin)', () => {
 			await openMap(page, SAMPLES, sampleId);
 			const container = page.locator('.vue-flow__node-container').filter({ has: page.locator('.ohead .m', { hasText: new RegExp(`^Batch ${batch.code}$`) }) });
 			await expect(container, 'one container for the recorded batch').toHaveCount(1);
-			await expect(container.locator('.orow:not(.fold):not(.bundle)'), 'one row per operation').toHaveCount(2);
+			await expect(container.locator('.rail .sock.out'), 'one output socket per operation').toHaveCount(2);
 			await expect(page.locator('body')).not.toContainText(/lineage graph/i);
 			expect(errors).toEqual([]);
 		} finally {
