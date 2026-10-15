@@ -19,7 +19,7 @@ import { usePinDrag } from './usePinDrag';
 import { useRowMenu } from './useRowMenu';
 import { useSidebarData } from './useSidebarData';
 import { useExplorerHost } from '../host';
-import { badgeText, inboxLabel } from '../inbox/inboxSummary';
+import { badgeText, newFilesText } from '../inbox/inboxSummary';
 import { useInboxSummary } from '../inbox/useInboxSummary';
 
 const props = withDefaults(defineProps<{ collapsible?: boolean; openSection?: SectionId | null }>(), { collapsible: false, openSection: null });
@@ -142,7 +142,7 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 			:pinned="false"
 			:current="isCurrent(INBOX_LINK.to)"
 			:badge="inboxBadge"
-			:badge-label="inboxLabel(inbox.newCount.value)"
+			:badge-label="newFilesText(inbox.newCount.value)"
 			plain
 		/>
 

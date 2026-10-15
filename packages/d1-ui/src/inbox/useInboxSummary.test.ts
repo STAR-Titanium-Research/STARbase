@@ -87,15 +87,31 @@ describe('useInboxSummary', () => {
 		expect(h0.api.get).toHaveBeenCalledTimes(1);
 		expect(win.count() + doc.count()).toBe(0);
 	});
-	it('a server with no d1-inbox (404) or a refusal takes the Inbox away without an error, and stops asking', async () => {
-		for (const status of [404, 403, 401]) {
-			const h0 = host(async () => { throw refused(status); });
+	it('a server with no d1-inbox (404) takes the Inbox away without an error, for good: it stops asking', async () => {
+		const h0 = host(async () => { throw refused(404); });
+		const { state, unmount } = mount(h0);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.absent.value).toBe(true);
+		expect(state.error.value).toBe('');
+		await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+		win.fire('focus');
+		await state.refresh();
+		expect(h0.api.get).toHaveBeenCalledTimes(1);
+		unmount();
+	});
+	it('a refusal (401 or 403) hides the Inbox but is not final: the next poll or focus asks again and shows it when it works', async () => {
+		for (const status of [403, 401]) {
+			let refusing = true;
+			const h0 = host(async () => { if (refusing) throw refused(status); return { data: body }; });
 			const { state, unmount } = mount(h0);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(state.absent.value).toBe(true);
 			expect(state.error.value).toBe('');
+			refusing = false;
 			await vi.advanceTimersByTimeAsync(POLL_MS);
-			expect(h0.api.get).toHaveBeenCalledTimes(1);
+			expect(h0.api.get).toHaveBeenCalledTimes(2);
+			expect(state.absent.value).toBe(false);
+			expect(state.newCount.value).toBe(3);
 			unmount();
 		}
 	});
@@ -111,12 +127,32 @@ describe('useInboxSummary', () => {
 		expect(state.error.value).toBe('no');
 		unmount();
 	});
-	it('joins a read already in flight', async () => {
+	it('a refresh asked while a read is in flight reads once more when it settles (the first may have started before the write)', async () => {
+		let n = 0;
+		let release: Array<() => void> = [];
+		const h0 = host(() => new Promise((resolve) => { n += 1; const mine = n; release.push(() => resolve({ data: { person: { new: mine, older_matches: 0 }, teams: [] } })); }));
+		const { state, unmount } = mount(h0);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(n).toBe(1);
+		// two asks during the read share ONE more read
+		const a = state.refresh();
+		const b = state.refresh();
+		release.splice(0).forEach((r) => r());
+		await vi.advanceTimersByTimeAsync(0);
+		expect(n).toBe(2);
+		release.splice(0).forEach((r) => r());
+		await Promise.all([a, b]);
+		expect(n).toBe(2);
+		expect(state.newCount.value).toBe(2);
+		unmount();
+	});
+	it('a refresh with nothing in flight is one read', async () => {
 		let n = 0;
 		const h0 = host(async () => { n += 1; return { data: body }; });
 		const { state, unmount } = mount(h0);
-		await Promise.all([state.refresh(), state.refresh()]);
-		expect(n).toBe(1);
+		await vi.advanceTimersByTimeAsync(0);
+		await state.refresh();
+		expect(n).toBe(2);
 		unmount();
 	});
 });

@@ -7,15 +7,16 @@ import { parseSummary, type InboxSummary } from './inboxSummary';
 // The Inbox's counts, polled calmly for the sidebar badge and the Home panel (spec section 10, decision D8): GET /d1-inbox/summary as
 // the caller. One state per host, so the sidebar's two modes and Home share one timer and one request. It reads once when the first
 // component asks, again every few minutes while the tab is visible, and when the window gets focus back (not more than once every 30 s).
-// A server with no d1-inbox yet (404), or an answer of 401 or 403, takes the Inbox out of the sidebar and Home instead of showing an
-// error: the front end must work before the server side is deployed. Any other failure keeps the last numbers and is kept in `error`.
+// A server with no d1-inbox yet (404) takes the Inbox out of the sidebar and Home for good, instead of showing an error: the front end must
+// work before the server side is deployed. A 401 or 403 hides it until a later read succeeds. Any other failure keeps the last numbers and is
+// kept in `error`.
 export const POLL_MS = 3 * 60_000;
 export const FOCUS_MIN_MS = 30_000;
 const TIMEOUT_MS = 15_000;
 
 export interface InboxSummaryState {
 	summary: Ref<InboxSummary | null>;
-	/** The server cannot say (no endpoint, or not allowed): draw no Inbox entry and no Inbox panel. */
+	/** The server cannot say (no endpoint, or the caller is refused): draw no Inbox entry and no Inbox panel. A refusal is asked again later; a 404 is not. */
 	absent: Ref<boolean>;
 	/** The last failure other than "absent"; cleared by the next good read. */
 	error: Ref<string>;
@@ -43,32 +44,56 @@ function create(host: ExplorerHost): Internal {
 	let lastAt = 0;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
-	function refresh(): Promise<void> {
-		if (absent.value) return Promise.resolve();
-		if (!inFlight) {
-			inFlight = (async () => {
-				try {
-					const res = await host.api.get('/d1-inbox/summary', { timeout: TIMEOUT_MS });
-					const next = parseSummary(res?.data);
-					if (next) {
-						summary.value = next;
-						error.value = '';
-					}
-				} catch (e: any) {
-					const status = e?.response?.status;
-					if (status === 404 || status === 403 || status === 401) {
-						absent.value = true;
-						summary.value = null;
-					} else {
-						error.value = errorText(e, 'Could not read the Inbox.');
-					}
-				} finally {
-					lastAt = Date.now();
-					loaded.value = true;
-					inFlight = null;
-				}
-			})();
+	// A refusal (401 or 403) hides the Inbox but is not permanent (a session can lapse and come back, a role can change): the next poll, focus
+	// or explicit refresh asks again. Only a 404 (this server has no d1-inbox) is final for the page's life.
+	let missing = false;
+	let dirty = false;
+
+	async function readOnce(): Promise<void> {
+		try {
+			const res = await host.api.get('/d1-inbox/summary', { timeout: TIMEOUT_MS });
+			const next = parseSummary(res?.data);
+			if (next) {
+				summary.value = next;
+				error.value = '';
+				absent.value = false;
+			}
+		} catch (e: any) {
+			const status = e?.response?.status;
+			if (status === 404) {
+				missing = true;
+				absent.value = true;
+				summary.value = null;
+			} else if (status === 403 || status === 401) {
+				absent.value = true;
+				summary.value = null;
+			} else {
+				error.value = errorText(e, 'Could not read the Inbox.');
+			}
+		} finally {
+			lastAt = Date.now();
+			loaded.value = true;
 		}
+	}
+
+	/**
+	 * Read now. A read already in flight is not enough after a write (it may have started before the write): asking while one runs makes it read
+	 * once more when it settles, and the returned promise resolves after that second read. Any number of asks during one read share that one more.
+	 */
+	function refresh(): Promise<void> {
+		if (missing) return Promise.resolve();
+		if (inFlight) {
+			dirty = true;
+			return inFlight;
+		}
+		inFlight = (async () => {
+			do {
+				dirty = false;
+				await readOnce();
+			} while (dirty && !missing);
+		})().finally(() => {
+			inFlight = null;
+		});
 		return inFlight;
 	}
 
