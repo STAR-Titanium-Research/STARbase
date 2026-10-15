@@ -83,9 +83,12 @@ function usedKeys(body: DraftBody): Set<string> {
 	return keys;
 }
 
-/** The key the next new item (or row) gets: 'n' and a counter that is above every key in the body. */
+/**
+ * The key the next new item (or row) gets: 'n' and a counter above every key in the body and above `body.seq`, the highest
+ * number ever handed out, so a key that was removed is never handed out again.
+ */
 export function nextKey(body: DraftBody, skip = 0): DraftKey {
-	let max = 0;
+	let max = body.seq ?? 0;
 	for (const k of usedKeys(body)) {
 		const m = /^n(\d+)$/.exec(k);
 		if (m) max = Math.max(max, Number(m[1]));
@@ -271,9 +274,10 @@ function put(w: Work, item: DraftItem, at?: Pos, index?: number) {
 	if (at) w.body.positions[item.key] = { x: at.x, y: at.y };
 }
 
-/** Takes `n` keys at once: the item's, then those of its rows. */
+/** Takes `n` keys at once: the item's, then those of its rows. Raises `seq` past them. */
 const takeKeys = (w: Work, n: number): DraftKey[] => {
 	const first = Number(nextKey(w.body).slice(1));
+	w.body.seq = first + n - 1;
 	return Array.from({ length: n }, (_, i) => `n${first + i}`);
 };
 

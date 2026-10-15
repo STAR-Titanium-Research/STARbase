@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Check, DraftBody, DraftRecord, HostApi } from '@d1/ui';
 import type { CheckCtx } from './checks';
 import { emptyBody } from './draft';
-import { CHANGED_ELSEWHERE, NETWORK_MESSAGE, SAVE_DELAY_MS, useDraft, type UseDraftOptions } from './useDraft';
+import { CHANGED_ELSEWHERE, CHECK_DELAY_MS, NETWORK_MESSAGE, SAVE_DELAY_MS, useDraft, type UseDraftOptions } from './useDraft';
 
 interface Call {
 	method: 'get' | 'post' | 'patch' | 'delete';
@@ -326,8 +326,9 @@ describe('useDraft: opening a draft and its checks', () => {
 		};
 		s.seed('a', body, 'Seeded');
 		s.checkAnswer = [
-			{ key: 'n1', level: 'warn', text: 'Changed since you added it. Review it before you create.' },
-			{ key: 'gone', level: 'block', text: 'a card that is not on the canvas' },
+			{ key: 'n1', level: 'warn', code: 'STALE_VERSION', text: 'Changed since you added it. Review it before you create.' },
+			{ key: 'gone', level: 'block', code: 'GONE', text: 'a card that is not on the canvas' },
+			{ key: 'n2', level: 'block', code: 'OTHER', text: 'Choose a method.' },
 		];
 		expect(await draft.open('a')).toBe(true);
 		expect(s.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['get /d1-build/drafts/a', 'post /d1-build/drafts/a/check']);
@@ -375,6 +376,179 @@ describe('useDraft: opening a draft and its checks', () => {
 		const second = draft.open('b');
 		await Promise.all([first, second]);
 		expect(draft.draftId.value).toBe('b');
+	});
+});
+
+describe('useDraft: server checks stay true', () => {
+	/** A draft with an existing sample n1 and a new operation n2 (row n3) wired from it. */
+	const withExisting = (): DraftBody => ({
+		...emptyBody(),
+		items: [
+			{ key: 'n1', kind: 'sample', existing: { id: 's', version: 1 }, values: {} },
+			{ key: 'n2', kind: 'operation', workState: 'planned', values: { method_id: 'm' }, rows: [{ key: 'n3' }] },
+		],
+		wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }],
+		seq: 3,
+	});
+	const stale: Check = { key: 'n1', level: 'warn', code: 'STALE_VERSION', text: 'Changed since you added it — review.' };
+	const texts = (d: ReturnType<typeof useDraft>) => d.checks.value.map((c) => c.text);
+
+	it('keeps only what the client cannot tell: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION', async () => {
+		const { s, draft } = make();
+		s.seed('a', withExisting());
+		const codes = ['GONE', 'NOT_ATTACHABLE', 'STALE_VERSION', 'REMOVE_BLOCKED', 'PERMISSION', 'OTHER', undefined];
+		s.checkAnswer = codes.map((code, i) => ({ key: 'n1', level: 'warn', ...(code ? { code } : {}), text: `t${i}` }));
+		await draft.open('a');
+		expect(draft.checks.value.filter((c) => c.key === 'n1').map((c) => c.text)).toEqual(['t0', 't1', 't2', 't3', 't4']);
+	});
+
+	it("drops a card's server checks as soon as the card changes", async () => {
+		const { s, draft } = make();
+		s.seed('a', withExisting());
+		s.checkAnswer = [stale, { key: 'n2', level: 'block', code: 'PERMISSION', text: 'You may not.' }];
+		await draft.open('a');
+		expect(texts(draft)).toContain(stale.text);
+		draft.apply({ type: 'setValues', key: 'n1', values: { notes: 'x' } });
+		expect(texts(draft)).not.toContain(stale.text);
+		expect(texts(draft)).toContain('You may not.');
+		// undo changes the card back: still not the card the server read
+		draft.undo();
+		expect(texts(draft)).not.toContain(stale.text);
+	});
+
+	it('drops the server checks of both ends of a wire that comes or goes', async () => {
+		const { s, draft } = make();
+		s.seed('a', withExisting());
+		s.checkAnswer = [stale, { key: 'n2', level: 'block', code: 'PERMISSION', text: 'You may not.' }];
+		await draft.open('a');
+		draft.apply({ type: 'unwire', from: { key: 'n1' }, to: { key: 'n2', row: 0 } });
+		expect(texts(draft)).not.toContain(stale.text);
+		expect(texts(draft)).not.toContain('You may not.');
+	});
+
+	it('moving a card does not drop them', async () => {
+		const { s, draft } = make();
+		s.seed('a', withExisting());
+		s.checkAnswer = [stale];
+		await draft.open('a');
+		draft.apply({ type: 'move', key: 'n1', x: 5, y: 5 });
+		expect(texts(draft)).toContain(stale.text);
+	});
+
+	it('an answer about a card that changed while it was on its way is not kept', async () => {
+		const { s, api, draft } = make();
+		s.seed('a', withExisting());
+		await draft.open('a');
+		const real = api.post.bind(api);
+		let release!: () => void;
+		(api as any).post = async (path: string, body: any, cfg: any) => {
+			if (path.endsWith('/check')) await new Promise<void>((r) => (release = r));
+			return real(path, body, cfg);
+		};
+		s.checkAnswer = [stale];
+		const asking = draft.checkNow();
+		await tick(0);
+		release();
+		draft.apply({ type: 'setValues', key: 'n1', values: { notes: 'x' } });
+		await asking;
+		expect(texts(draft)).not.toContain(stale.text);
+	});
+
+	it('checks again 1.5 s after a save when the draft has records that exist, and not when it has none', async () => {
+		const { s, draft } = make();
+		s.seed('a', withExisting());
+		await draft.open('a');
+		const checkCalls = () => s.calls.filter((c) => c.path.endsWith('/check')).length;
+		expect(checkCalls()).toBe(1);
+		draft.apply({ type: 'move', key: 'n1', x: 1, y: 1 });
+		await tick(SAVE_DELAY_MS);
+		expect(checkCalls()).toBe(1);
+		s.checkAnswer = [stale];
+		await tick(CHECK_DELAY_MS);
+		expect(checkCalls()).toBe(2);
+		expect(texts(draft)).toContain(stale.text);
+		// Changes in quick succession: one check after the last save.
+		draft.apply({ type: 'move', key: 'n1', x: 2, y: 2 });
+		await tick(SAVE_DELAY_MS);
+		draft.apply({ type: 'move', key: 'n1', x: 3, y: 3 });
+		await tick(SAVE_DELAY_MS + CHECK_DELAY_MS);
+		expect(checkCalls()).toBe(3);
+
+		const fresh = make();
+		await fresh.draft.start();
+		fresh.draft.apply({ type: 'addSample' });
+		await tick(SAVE_DELAY_MS + CHECK_DELAY_MS * 2);
+		expect(fresh.s.calls.some((c) => c.path.endsWith('/check'))).toBe(false);
+	});
+});
+
+describe('useDraft: a reload that fails, and edits while Create runs', () => {
+	it('a failed reload after a conflict shows its error, keeps the changes to send, and rejects nothing', async () => {
+		const { s, api, draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample' });
+		s.bump('d1', emptyBody());
+		const real = api.get.bind(api);
+		(api as any).get = async (path: string, cfg: any) => {
+			if (path === '/d1-build/drafts/d1') throw networkError();
+			return real(path, cfg);
+		};
+		const unhandled = vi.fn();
+		process.on('unhandledRejection', unhandled);
+		await tick();
+		await tick(10);
+		process.off('unhandledRejection', unhandled);
+		expect(unhandled).not.toHaveBeenCalled();
+		expect(draft.saveError.value).toMatch(/Could not reach the server/);
+		expect(draft.saving.value).toBe(false);
+		expect(draft.body.value.items).toHaveLength(1);
+		expect(draft.notice.value).toBe('');
+		// The next change tries again, now with a reload that works.
+		(api as any).get = real;
+		draft.apply({ type: 'addSample' });
+		await tick();
+		expect(draft.notice.value).toBe(CHANGED_ELSEWHERE);
+	});
+
+	it('Create does not go on when the save before it found the draft changed elsewhere', async () => {
+		const { s, draft } = make({ ctx: () => ({ alloyCode: () => 'A', methodCode: () => 'B' }) });
+		await draft.start();
+		draft.apply({ type: 'addSample', values: { material_id: 'm', primary_method_id: 'p' } });
+		s.bump('d1', { ...emptyBody(), projectId: 'elsewhere' });
+		const out = await draft.create();
+		expect(out).toEqual({ ok: false, reason: 'conflict', message: CHANGED_ELSEWHERE });
+		expect(s.calls.some((c) => c.path.endsWith('/create'))).toBe(false);
+		expect(draft.body.value.projectId).toBe('elsewhere');
+		expect(draft.draftId.value).toBe('d1');
+	});
+
+	it('apply, undo and redo do nothing while Create is running, and nothing is saved after it', async () => {
+		const { s, api, draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample' });
+		draft.apply({ type: 'addSample' });
+		draft.undo();
+		await draft.flush();
+		let release!: () => void;
+		const real = api.post.bind(api);
+		(api as any).post = async (path: string, body: any, cfg: any) => {
+			if (path.endsWith('/create')) await new Promise<void>((r) => (release = r));
+			return real(path, body, cfg);
+		};
+		s.createAnswer = { data: { created: {}, sampleIds: [] } };
+		const creating = draft.create();
+		await tick(0);
+		expect(draft.creating.value).toBe(true);
+		const before = draft.body.value;
+		expect(draft.apply({ type: 'addSample' })).toBe(before);
+		draft.redo();
+		draft.undo();
+		expect(draft.body.value).toBe(before);
+		release();
+		expect((await creating).ok).toBe(true);
+		const sent = patches(s.calls).length;
+		await tick(5000);
+		expect(patches(s.calls)).toHaveLength(sent);
 	});
 });
 

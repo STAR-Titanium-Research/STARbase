@@ -11,6 +11,8 @@ export interface DraftBody {
 	items: DraftItem[];
 	wires: DraftWire[];
 	positions: Record<DraftKey, { x: number; y: number }>;
+	/** The highest key number handed out so far, so a removed key is never handed out again. Optional: older drafts have none. */
+	seq?: number;
 }
 
 export type DraftItem = DraftSample | DraftOperation | DraftTest;
@@ -52,6 +54,11 @@ export interface DraftWire {
 
 /** One entry of Checks (E5, E13). `key` is the draft item it belongs to; `field` the field to fix, when there is one. */
 export interface Check {
+	/**
+	 * Why the server says it (d1-build): GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION are what only a re-read
+	 * of the records can tell; anything else (OTHER, or none) the client's own checks already cover. Client checks have none.
+	 */
+	code?: string;
 	key: DraftKey;
 	field?: string;
 	level: 'block' | 'warn';

@@ -215,5 +215,33 @@ export function mergeChecks(...lists: Check[][]): Check[] {
 	return [...out.filter((c) => c.level === 'block'), ...out.filter((c) => c.level === 'warn')];
 }
 
+/**
+ * What the server alone can tell (it re-reads the records): the client computes everything else itself. Checks of the server's
+ * answer with any other code (or none) are dropped, so one problem is not listed twice in two wordings.
+ */
+export const SERVER_ONLY_CODES: ReadonlySet<string> = new Set(['GONE', 'NOT_ATTACHABLE', 'STALE_VERSION', 'REMOVE_BLOCKED', 'PERMISSION']);
+
+/** The part of a server answer the client keeps. */
+export const keepServerChecks = (list: Check[]): Check[] => list.filter((c) => !!c.code && SERVER_ONLY_CODES.has(c.code));
+
+const wireId = (w: DraftBody['wires'][number]) => `${w.from.key}#${w.from.row ?? 0}>${w.to.key}#${w.to.row ?? 0}`;
+
+/**
+ * The cards that changed between two bodies: added, removed or edited (a different item object), and both ends of every wire
+ * that came or went. A server check about one of them describes a card that is not as it was, so it is dropped.
+ */
+export function changedKeys(before: DraftBody, after: DraftBody): Set<DraftKey> {
+	const out = new Set<DraftKey>();
+	const was = new Map(before.items.map((i) => [i.key, i]));
+	const is = new Map(after.items.map((i) => [i.key, i]));
+	for (const [k, item] of is) if (was.get(k) !== item) out.add(k);
+	for (const k of was.keys()) if (!is.has(k)) out.add(k);
+	const had = new Map(before.wires.map((w) => [wireId(w), w]));
+	const has = new Map(after.wires.map((w) => [wireId(w), w]));
+	for (const [id, w] of has) if (!had.has(id)) out.add(w.from.key).add(w.to.key);
+	for (const [id, w] of had) if (!has.has(id)) out.add(w.from.key).add(w.to.key);
+	return out;
+}
+
 /** True when the check belongs to a card that is in the body (a server check of an older draft may name one that is not). */
 export const onCanvas = (body: DraftBody, check: Check): boolean => !!itemOf(body, check.key);

@@ -11,13 +11,15 @@ import {
 	errorText, useExplorerHost, type Check, type CheckResponse, type CreateResponse, type DraftBody, type DraftListEntry, type DraftRecord, type HostApi,
 	type MarkDoneBody, type MarkDoneResponse,
 } from '@d1/ui';
-import { blocking, checks as clientChecks, mergeChecks, onCanvas, type CheckCtx } from './checks';
+import { blocking, changedKeys, checks as clientChecks, keepServerChecks, mergeChecks, onCanvas, type CheckCtx } from './checks';
 import { apply as reduce, emptyBody, type DraftAction } from './draft';
 import { canRedo, canUndo, clear, createHistory, push, redo, undo, type History } from './history';
 import { withSampleCodes } from './inherit';
 import { defaultName } from './summary';
 
 export const SAVE_DELAY_MS = 800;
+/** After a save, the server checks the draft again this long after the last one (it re-reads the existing records). */
+export const CHECK_DELAY_MS = 1500;
 export const CHANGED_ELSEWHERE = 'This draft changed in another tab; reloaded.';
 export const NETWORK_MESSAGE = 'Could not reach the server; nothing was created.';
 
@@ -85,16 +87,31 @@ export function useDraft(options: UseDraftOptions = {}) {
 	// ---- saving ----------------------------------------------------------------------------------
 
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	let checkTimer: ReturnType<typeof setTimeout> | null = null;
 	let inFlight: Promise<void> | null = null;
 	let dirty = false;
 	let nameDirty = false;
+	/** How many times the draft was reloaded after a conflict: Create reads it to tell that what it was about to create is gone. */
+	let reloads = 0;
+	let reloadFailed = false;
 
 	function schedule() {
 		if (!draftId.value) return;
 		dirty = true;
 		saving.value = true;
 		if (timer) clearTimeout(timer);
-		timer = setTimeout(() => void flush(), delay);
+		timer = setTimeout(() => void flush().catch(() => undefined), delay);
+	}
+
+	/** The server checks the draft again once saves have settled, when it holds records that exist (only the server can read those). */
+	function scheduleCheck() {
+		if (checkTimer) clearTimeout(checkTimer);
+		checkTimer = null;
+		if (!draftId.value || !history.value.present.items.some((i) => i.existing)) return;
+		checkTimer = setTimeout(() => {
+			checkTimer = null;
+			void checkNow().catch(() => undefined);
+		}, CHECK_DELAY_MS);
 	}
 
 	/** Sends what is waiting now, then anything that changed while it was on the wire. Resolves when the server has the latest. */
@@ -121,10 +138,11 @@ export function useDraft(options: UseDraftOptions = {}) {
 				const next = res.data?.data?.version;
 				version.value = typeof next === 'number' ? next : version.value + 1;
 				saveError.value = '';
+				scheduleCheck();
 			} catch (e) {
 				if (draftId.value !== id) return;
 				if (status(e) === 409) {
-					await reload(id);
+					await reload(id, withName);
 					return;
 				}
 				// Kept in the page: the next change sends it again.
@@ -139,17 +157,32 @@ export function useDraft(options: UseDraftOptions = {}) {
 			inFlight = null;
 		}
 		if (dirty && !saveError.value) return flush();
-		saving.value = dirty;
+		// A failed reload shows its error instead of "saving": the changes wait for the next change to try again.
+		saving.value = dirty && !reloadFailed;
+		reloadFailed = false;
 	}
 
 	/** The draft as the server has it, after a conflict: the page's changes and its undo history are dropped. */
-	async function reload(id: string): Promise<void> {
-		dirty = false;
-		nameDirty = false;
-		const res = await api.get(`/d1-build/drafts/${encodeURIComponent(id)}`);
-		take(res.data?.data as DraftRecord);
-		notice.value = CHANGED_ELSEWHERE;
-		saveError.value = '';
+	async function reload(id: string, withName: boolean): Promise<void> {
+		try {
+			const res = await api.get(`/d1-build/drafts/${encodeURIComponent(id)}`);
+			if (draftId.value !== id) return;
+			dirty = false;
+			nameDirty = false;
+			take(res.data?.data as DraftRecord);
+			reloads += 1;
+			serverChecks.value = [];
+			notice.value = CHANGED_ELSEWHERE;
+			saveError.value = '';
+		} catch (e) {
+			// The page's changes are still the page's: send them when a reload can be done.
+			if (draftId.value !== id) return;
+			dirty = true;
+			nameDirty = nameDirty || withName;
+			reloadFailed = true;
+			saving.value = false;
+			saveError.value = (e as any)?.response ? errorText(e, 'This draft changed elsewhere and could not be reloaded.') : 'Could not reach the server; your changes are kept here.';
+		}
 	}
 
 	function take(rec: DraftRecord) {
@@ -251,6 +284,8 @@ export function useDraft(options: UseDraftOptions = {}) {
 	function forget() {
 		if (timer) clearTimeout(timer);
 		timer = null;
+		if (checkTimer) clearTimeout(checkTimer);
+		checkTimer = null;
 		dirty = false;
 		nameDirty = false;
 		saving.value = false;
@@ -265,23 +300,44 @@ export function useDraft(options: UseDraftOptions = {}) {
 
 	/** Does one action on the draft. A change is undoable and kept on the server; an action that changes nothing is no step. */
 	function apply(action: DraftAction): DraftBody {
-		const next = reduce(history.value.present, action);
-		if (next !== history.value.present) {
+		// While Create runs the draft is what is being created: it does not change under it.
+		if (creating.value) return history.value.present;
+		const before = history.value.present;
+		const next = reduce(before, action);
+		if (next !== before) {
 			history.value = push(history.value, next);
+			dropStale(before, next);
 			schedule();
 		}
 		return next;
 	}
 
 	function undoStep() {
+		if (creating.value) return;
 		const before = history.value;
 		history.value = undo(before);
-		if (history.value !== before) schedule();
+		if (history.value !== before) {
+			dropStale(before.present, history.value.present);
+			schedule();
+		}
 	}
 	function redoStep() {
+		if (creating.value) return;
 		const before = history.value;
 		history.value = redo(before);
-		if (history.value !== before) schedule();
+		if (history.value !== before) {
+			dropStale(before.present, history.value.present);
+			schedule();
+		}
+	}
+
+	/** A server check describes a card as the server last read it: once the card, or a wire on it, changes, it no longer says anything. */
+	function dropStale(before: DraftBody, after: DraftBody) {
+		if (!serverChecks.value.length) return;
+		const changed = changedKeys(before, after);
+		if (!changed.size) return;
+		const kept = serverChecks.value.filter((c) => !changed.has(c.key));
+		if (kept.length !== serverChecks.value.length) serverChecks.value = kept;
 	}
 
 	/** Renames the draft (not an undoable step: the name is not part of the body). */
@@ -305,9 +361,12 @@ export function useDraft(options: UseDraftOptions = {}) {
 		if (!id) return [];
 		try {
 			await flush();
+			const asked = history.value.present;
 			const res = await api.post(`/d1-build/drafts/${encodeURIComponent(id)}/check`, {});
 			if (draftId.value !== id) return [];
-			serverChecks.value = ((res.data as CheckResponse | undefined)?.data?.checks ?? []) as Check[];
+			// Only what the client cannot tell, and only about cards that are still as they were when it was asked.
+			const changed = changedKeys(asked, history.value.present);
+			serverChecks.value = keepServerChecks(((res.data as CheckResponse | undefined)?.data?.checks ?? []) as Check[]).filter((c) => !changed.has(c.key));
 		} catch {
 			/* the client's checks stand; Create checks again */
 		}
@@ -329,12 +388,16 @@ export function useDraft(options: UseDraftOptions = {}) {
 		try {
 			const coded = withSampleCodes(history.value.present, ctxOf());
 			if (coded !== history.value.present) {
+				dropStale(history.value.present, coded);
 				history.value = { ...history.value, present: coded };
 				schedule();
 			}
+			const reloadedBefore = reloads;
 			await flush();
+			// The draft changed in another tab and was reloaded: what is on the page now is not what was about to be created.
+			if (reloads !== reloadedBefore) return { ok: false, reason: 'conflict', message: CHANGED_ELSEWHERE };
 			if (saveError.value) return { ok: false, reason: 'error', message: saveError.value };
-			if (draftId.value !== id) return { ok: false, reason: 'error', message: CHANGED_ELSEWHERE };
+			if (draftId.value !== id) return { ok: false, reason: 'conflict', message: CHANGED_ELSEWHERE };
 			const res = await api.post(`/d1-build/drafts/${encodeURIComponent(id)}/create`, {});
 			const data = (res.data as CreateResponse).data;
 			forget();
@@ -362,7 +425,9 @@ export function useDraft(options: UseDraftOptions = {}) {
 	if (getCurrentScope()) {
 		// Leaving the page with a change on its way: send it (the answer has nobody to tell).
 		onScopeDispose(() => {
-			if (dirty && draftId.value) void flush();
+			if (checkTimer) clearTimeout(checkTimer);
+			checkTimer = null;
+			if (dirty && draftId.value) void flush().catch(() => undefined);
 		});
 	}
 

@@ -26,9 +26,18 @@ describe('keys', () => {
 		expect(nextKey(b)).toBe('n5');
 	});
 
-	it('take the highest key plus one, so a removed last key comes round again', () => {
+	it('are never handed out again: a removed key stays used (body.seq)', () => {
 		const b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'remove', key: 'n2' }, { type: 'addSample' }]);
-		expect(kinds(b)).toEqual(['n1:sample', 'n2:sample']);
+		expect(kinds(b)).toEqual(['n1:sample', 'n3:sample']);
+		expect(b.seq).toBe(3);
+		expect(nextKey(b)).toBe('n4');
+	});
+
+	it('count on from a body with no seq (an older draft) and from rows', () => {
+		const old: DraftBody = { ...emptyBody(), items: [{ key: 'n7', kind: 'sample', values: {} }] };
+		expect(old.seq).toBeUndefined();
+		expect(nextKey(old)).toBe('n8');
+		expect(apply(old, { type: 'addSample' }).seq).toBe(8);
 	});
 
 	it('newKeys lists what an action added', () => {
