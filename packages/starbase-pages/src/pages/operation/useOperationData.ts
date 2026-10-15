@@ -16,6 +16,8 @@ const OPERATION_FIELDS = [
 	'project_id.project_id', 'project_id.project_code', 'project_id.project_name',
 	'campaign_id.campaign_id', 'campaign_id.campaign_code', 'campaign_id.name',
 	'owner_person_id.person_id', 'owner_person_id.full_name',
+	// the owning team, when a team owns the record (its managers act as the owner)
+	'owner_team_id.team_id', 'owner_team_id.name', 'owner_team_id.color', 'owner_team_id.logo',
 	'operator_person_id.person_id', 'operator_person_id.full_name',
 	// Input = the workpiece acted on; output = the sample this step produced (produced_by_operations
 	// is the same relation read from the sample side).

@@ -1128,6 +1128,7 @@ def test_owner_guards_cover_every_record_whose_update_is_wider_than_delete():
     for collection, g in guards.items():
         assert g["fields"] == [
             {"field": "owner_person_id", "valueKey": "person_id"},
+            {"field": "owner_team_id", "valueKey": "team_id"},
             {"field": "restricted"},
         ]
         # hooks that predate the list read the first field
@@ -1222,11 +1223,21 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
             f = RULES[(collection, action)]
             assert f["_and"][0] == READER_TERM, (collection, action)
             assert "_some" not in json.dumps(f), (collection, action)
-        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, OWN]}, collection
+    # a team-owned record (migration 183): the team's managers hold a derived `manage` row and act as the owner,
+    # its other members hold `edit` and act as editors (Ruling O1)
     edit_role = [
         {"access": {"person_id": {"user_id": U}}},
-        {"access": {"role": {"_in": ["edit"]}}},
+        {"access": {"role": {"_in": ["edit", "manage"]}}},
     ]
+    manage_role = [
+        {"access": {"person_id": {"user_id": U}}},
+        {"access": {"role": {"_in": ["manage"]}}},
+    ]
+    owner_term = {"_or": [OWN, {"_and": manage_role}]}
+    for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
+        assert RULES[(collection, "delete")] == {
+            "_and": [READER_TERM, owner_term]
+        }, collection
     assert RULES[("campaigns", "update")] == {
         "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
@@ -1235,7 +1246,7 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
         {"_and": edit_role},
     ]
     # samples and projects need no reader term: the editors and the PI are on the list, hence readers
-    assert RULES[("physical_samples", "delete")] == OWN
+    assert RULES[("physical_samples", "delete")] == owner_term
     assert (
         RULES[("projects", "update")]
         == RULES[("projects", "delete")]
@@ -1459,6 +1470,7 @@ def _directus(drop=(), restricted=True):
         "campaigns",
     ):
         m2o(t, "owner_person_id", "people")
+        m2o(t, "owner_team_id", "teams")
     m2o("projects", "principal_investigator_person", "people")
     m2o("physical_samples", "project_id", "projects", "samples")
     m2o("manufacturing_operations", "project_id", "projects", "operations")
@@ -1517,6 +1529,7 @@ def _directus(drop=(), restricted=True):
         "campaigns.campaign_id",
         "projects.project_id",
         "people.person_id",
+        "teams.team_id",
     }
     if restricted:
         cols |= {f"{t}.restricted" for t in RECORDS}
@@ -1539,6 +1552,7 @@ def test_resolver_accepts_a_complete_database():
     [
         (("physical_samples", "owner_person_id"), "physical_samples.owner_person_id"),
         (("campaigns", "owner_person_id"), "campaigns.owner_person_id"),
+        (("test_sessions", "owner_team_id"), "test_sessions.owner_team_id"),
         (("campaign_samples", "campaign_id"), "campaign_samples.campaign_id"),
         (("project_investigators", "project_id"), "projects.secondary_investigators"),
         (("sample_access", "sample_id"), "access"),
@@ -1770,3 +1784,97 @@ def test_no_update_delete_or_manage_filter_contains_a_some():
         assert "_some" not in json.dumps(g["filter"]), collection
     for collection, rec in gen.record_rules(DOC)["records"].items():
         assert "_some" not in json.dumps(rec["manage"]), collection
+
+
+# =================================================================================================
+# Team ownership (migration 183, Ruling O1): a team-owned record has no owner_person_id; the team's managers hold a
+# derived `manage` row and act as the owner, its other members hold `edit` and act as editors
+# =================================================================================================
+
+
+def _team_owned_world():
+    """Records with no person owner. `mgr` has a derived manage row, `member` an edit row, `viewer` a view row."""
+    w = World()
+    base_people(w)
+    for name in ("mgr", "member"):
+        if f"p_{name}" not in {r["person_id"] for r in w.t["people"]}:
+            w.person(name)
+    w.sample("S")
+    w.campaign("C")
+    w.op("O", sample="S")
+    w.test("T", sample="S")
+    w.add("sample_co_owners", sample_id="S", user_id="u_coowner")
+    for kind, key in (
+        ("sample", "S"),
+        ("campaign", "C"),
+        ("operation", "O"),
+        ("test", "T"),
+    ):
+        w.grant(kind, key, "mgr", "manage")
+        w.grant(kind, key, "member", "edit")
+        w.grant(kind, key, "viewer", "view")
+    for table, key in (
+        ("physical_samples", "S"), ("campaigns", "C"), ("manufacturing_operations", "O"), ("test_sessions", "T"),
+    ):  # fmt: skip
+        w.readers(table, key, "mgr", "member", "viewer", "coowner")
+    return w
+
+
+TEAM_OWNED = (
+    ("physical_samples", "S"),
+    ("campaigns", "C"),
+    ("manufacturing_operations", "O"),
+    ("test_sessions", "T"),
+)
+
+
+def test_a_manager_of_the_owning_team_updates_and_deletes_a_team_owned_record():
+    w = _team_owned_world()
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_mgr", table, "update") == {key}, table
+        assert _can(w, "u_mgr", table, "delete") == {key}, table
+
+
+def test_a_plain_member_of_the_owning_team_updates_but_does_not_delete_or_manage():
+    w = _team_owned_world()
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_member", table, "update") == {key}, table
+        assert _can(w, "u_member", table, "delete") == set(), table
+        assert _can(w, "u_viewer", table, "update") == set(), table
+        assert _can(w, "u_viewer", table, "delete") == set(), table
+        assert _can(w, "u_stranger", table, "delete") == set(), table
+    # the manage rule the endpoint ships is the delete rule: a member cannot share, transfer or restrict
+    for table, rec in gen.record_rules(DOC)["records"].items():
+        if table in dict(TEAM_OWNED):
+            assert rec["manage"] == RULES[(table, "delete")], table
+
+
+def test_a_manager_owns_the_children_a_sample_owner_would():
+    """sample_co_owners rows are owner-only (link.sample.owner); a manager of the owning team counts as the owner."""
+    w = _team_owned_world()
+    row = {w.t["sample_co_owners"][0]["_n"]}
+    assert _can(w, "u_mgr", "sample_co_owners", "update") == row
+    assert _can(w, "u_member", "sample_co_owners", "update") == set()
+
+
+def test_a_demoted_manager_loses_the_owner_powers_at_once():
+    """Demotion rewrites the derived role from manage to edit (migration 183): the same rules then refuse delete."""
+    w = _team_owned_world()
+    for row in (
+        w.t["sample_access"]
+        + w.t["operation_access"]
+        + w.t["test_access"]
+        + w.t["campaign_access"]
+    ):
+        if row["person_id"] == "p_mgr":
+            row["role"] = "edit"
+    for table, key in TEAM_OWNED:
+        assert _can(w, "u_mgr", table, "update") == {key}, table
+        assert _can(w, "u_mgr", table, "delete") == set(), table
+
+
+def test_manage_is_never_a_project_role():
+    """project_access has no manage level (Ruling O1): the project rules do not name it."""
+    text = json.dumps([RULES[("projects", a)] for a in ("update", "delete")])
+    assert "manage" not in text
+    assert "access" not in text

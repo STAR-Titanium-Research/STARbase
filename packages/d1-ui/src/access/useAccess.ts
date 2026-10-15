@@ -101,10 +101,11 @@ export function useAccess(api: AccessApi, target: () => AccessTarget, onChanged:
 			return res.ok ? { ok: true as const } : res;
 		});
 
-	const transferTo = (personId: string) =>
+	/** To a person (an id or `{ person_id }`) or to a team (`{ team_id }`: the four ownable types). */
+	const transferTo = (to: string | { person_id: string } | { team_id: string }) =>
 		write(async () => {
 			const t = target();
-			const res = await transfer(api, t.collection, t.id, personId);
+			const res = await transfer(api, t.collection, t.id, to);
 			if (!res.ok) return res;
 			// the change is made either way; a new owner who cannot read the record yet is told so, as on add
 			const blocked = blockedText({ name: res.data.owner?.name ?? 'The new owner', blocked_by: res.data.blocked_by });

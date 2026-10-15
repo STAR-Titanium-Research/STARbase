@@ -69,10 +69,12 @@ describe('cellText', () => {
 		expect(extraFields(indexDefBySlug('equipment')!)).toEqual(['image']);
 		expect(extraFields(indexDefBySlug('manufacturers')!)).toEqual(['Logo']);
 	});
-	it('asks for the owner of a campaign when people are readable', () => {
+	it('asks for the owner (person or team) of a campaign when those are readable', () => {
 		const campaigns = indexDefBySlug('campaigns')!;
-		expect(extraFields(campaigns)).toEqual(['owner_person_id.full_name']);
+		expect(extraFields(campaigns)).toEqual(['owner_person_id.full_name', 'owner_team_id.name']);
 		expect(extraFields(campaigns, new Set(['people']))).toEqual(['owner_person_id.full_name']);
+		expect(extraFields(campaigns, new Set(['people', 'teams']))).toEqual(['owner_person_id.full_name', 'owner_team_id.name']);
+		expect(extraFields(campaigns, new Set(['teams']))).toEqual(['owner_team_id.name']);
 		expect(extraFields(campaigns, new Set(['projects']))).toEqual([]);
 	});
 });

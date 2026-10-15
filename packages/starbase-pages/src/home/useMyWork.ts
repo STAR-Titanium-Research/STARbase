@@ -1,13 +1,15 @@
 import { onBeforeUnmount, ref } from 'vue';
 import {
 	CURRENT_USER, campaignsMine, isFilterRefused, ownedByMe, projectsMine, samplesMine, useItems,
-	useRequestGate, useSections,
+	useRequestGate, useSections, withMyTeams,
 } from '@d1/ui';
+import { MY_TEAMS_UNREAD, loadMyTeamIds } from './myTeams';
 
 // "My work" on Home: the projects where I am PI or investigator, the campaigns I own and my newest samples, read as the
 // signed-in user with explicit "mine" filters (see packages/d1-ui/src/mine.ts): a PI can read more
 // than they own (ADR-0011), and "my work" is the narrower, personal list. Each list loads and fails
-// on its own.
+// on its own. The campaigns and samples are also those owned by a team I belong to (owner_team_id in my team ids, read once from
+// /items/team_members); when the memberships cannot be read the lists show my own records and a note says so.
 
 export const CARD_LIMIT = 12;
 export const SAMPLE_LIMIT = 10;
@@ -27,6 +29,7 @@ export function useMyWork() {
 	// not read the junction): that list then shows ownership / PI only. One note per list.
 	const partialProjects = ref('');
 	const partialSamples = ref('');
+	const partialTeams = ref('');
 
 	// Try the full filter; if the server refuses it (400, 403, 404 or a 5xx: a role that may not read the
 	// junction, or a filter Directus rejects), fall back to the owner-only half and set the note, so a bad
@@ -53,6 +56,12 @@ export function useMyWork() {
 		const token = gate.begin();
 		partialProjects.value = '';
 		partialSamples.value = '';
+		partialTeams.value = '';
+		// my teams, read beside everything else; the campaign and sample reads wait for it (it never rejects)
+		const myTeams = loadMyTeamIds(getItems).then((t) => {
+			if (t.unread && gate.isCurrent(token)) partialTeams.value = MY_TEAMS_UNREAD;
+			return t.ids;
+		});
 		await Promise.all([
 			(async () => {
 				try {
@@ -75,31 +84,32 @@ export function useMyWork() {
 					() => { if (gate.isCurrent(token)) partialProjects.value = 'Projects where you are an investigator may be missing: you cannot read the investigator list.'; },
 				),
 			),
-			fill(campaigns, token, 'your campaigns', () =>
+			fill(campaigns, token, 'your campaigns', async () =>
 				getItems('campaigns', {
-					filter: campaignsMine,
+					filter: withMyTeams(campaignsMine, await myTeams),
 					fields: ['campaign_id', 'campaign_code', 'name', 'campaign_type', 'status', 'project_id.project_code'],
 					sort: ['-updated_at'],
 					limit: CARD_LIMIT,
 				}),
 			),
-			fill(samples, token, 'your samples', () =>
-				withFallback(
+			fill(samples, token, 'your samples', async () => {
+				const teams = await myTeams;
+				return withFallback(
 					'physical_samples',
-					samplesMine,
-					ownedByMe,
+					withMyTeams(samplesMine, teams),
+					withMyTeams(ownedByMe, teams),
 					{
 						fields: ['sample_id', 'sample_code', 'form', 'current_status', 'updated_at', 'material_id.common_name'],
 						sort: ['-updated_at'],
 						limit: SAMPLE_LIMIT,
 					},
 					() => { if (gate.isCurrent(token)) partialSamples.value = 'Samples you co-own may be missing: you cannot read the co-owner list.'; },
-				),
-			),
+				);
+			}),
 		]);
 	}
 
 	load();
 	onBeforeUnmount(() => gate.cancel());
-	return { projects, campaigns, samples, hasPerson, partialProjects, partialSamples, reload: load };
+	return { projects, campaigns, samples, hasPerson, partialProjects, partialSamples, partialTeams, reload: load };
 }

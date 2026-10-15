@@ -75,7 +75,9 @@ const hasForce: FilterDef = {
 };
 
 // Records with no owner (what the admin Home's "Ownerless records" panel counts and links to).
-const noOwner: FilterDef = { field: 'no_owner', label: 'No owner', options: { kind: 'flag', filter: { owner_person_id: { _null: true } } } };
+// A record a team owns has an owner too (owner_team_id), so ownerless is neither column set.
+const neitherOwner = [{ owner_person_id: { _null: true } }, { owner_team_id: { _null: true } }];
+const noOwner: FilterDef = { field: 'no_owner', label: 'No owner', options: { kind: 'flag', filter: { _and: neitherOwner } } };
 // The operations list counts only machining ones, as the panel does: no owner, and not sintering, NULL
 // categories kept (a plain `_neq` would drop them). The legacy FAST imports never get an owner.
 const noOwnerMachining: FilterDef = {
@@ -84,7 +86,7 @@ const noOwnerMachining: FilterDef = {
 		kind: 'flag',
 		filter: {
 			_and: [
-				{ owner_person_id: { _null: true } },
+				...neitherOwner,
 				{ _or: [{ process_category: { _null: true } }, { process_category: { _neq: 'sintering' } }] },
 			],
 		},

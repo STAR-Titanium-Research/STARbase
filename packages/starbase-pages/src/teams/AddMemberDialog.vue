@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Add a person to a team (people only; teams never contain teams). Search by name, pick one, optionally make them a manager, Add. The
 // dialog then stays open and says what the endpoint answered: how many owners will be asked to approve the records already shared with the
-// team (the new member is a pending member on those until the owner decides; Ruling D2), and the records the team owns. A person with no
+// team (the new member is a pending member on those until the owner decides; Ruling D2), and the records the team owns (the member can edit those at once; a manager also acts as their owner). A person with no
 // login can be added: they get access the day a login is linked, and the list says so.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { addMember, useExplorerHost, useRequestGate } from '@d1/ui';
@@ -87,7 +87,7 @@ async function add() {
 	err.value = '';
 	try {
 		const r = await addMember(host.api, props.team.team_id, p.person_id, asManager.value);
-		const lines = addedLines(p.full_name, props.team.name, r);
+		const lines = addedLines(p.full_name, props.team.name, r, asManager.value);
 		if (!p.user_id) lines.push(`${p.full_name} has no login yet; the access starts working when an administrator links one.`);
 		result.value = lines;
 		picked.value = null;
@@ -125,7 +125,7 @@ async function add() {
 						</div>
 						<label class="tg"><v-checkbox v-model="asManager" /> Make manager</label>
 					</div>
-					<p class="hint">Owners of records already shared with {{ team.name }} are asked to approve the new member; nothing changes for them until they do.</p>
+					<p class="hint">Owners of records already shared with {{ team.name }} are asked to approve the new member; nothing changes for them until they do. On the records {{ team.name }} owns, a new member can edit at once, and a manager can also share, transfer and delete them.</p>
 					<p v-if="err" class="err" role="alert">{{ err }}</p>
 				</template>
 				<div v-else role="status">

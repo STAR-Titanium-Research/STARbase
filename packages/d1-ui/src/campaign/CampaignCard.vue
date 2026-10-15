@@ -9,6 +9,7 @@
 import { computed } from 'vue';
 import { formatDate } from '../format';
 import { recordRoute } from '../recordRoute';
+import { ownerName } from '../record/facts';
 import { campaignTypeLabel } from './campaignType';
 import type { CampaignStats } from './campaignCardStats';
 import ProgressBar from '../components/ProgressBar.vue';
@@ -30,6 +31,7 @@ const dates = computed(() => {
 	const b = formatDate(props.campaign.end_date);
 	return a && b ? `${a} to ${b}` : a ? `From ${a}` : b ? `Until ${b}` : 'No dates set';
 });
+const owner = computed(() => ownerName(props.campaign));
 const progress = computed(() => props.stats?.progress ?? null);
 const show = (n: number | undefined) => (n === undefined ? '–' : n.toLocaleString('en-GB'));
 </script>
@@ -47,7 +49,7 @@ const show = (n: number | undefined) => (n === undefined ? '–' : n.toLocaleStr
 		</template>
 		<template #meta>
 			<!-- Undefined: the owner was not asked for (the campaigns index skips it when people is unreadable). -->
-			<span v-if="campaign.owner_person_id !== undefined">Owner: {{ campaign.owner_person_id?.full_name || 'not set' }}</span>
+			<span v-if="campaign.owner_person_id !== undefined || campaign.owner_team_id !== undefined">Owner: {{ owner || 'not set' }}</span>
 			<span>{{ dates }}</span>
 		</template>
 		<span class="d1-counts" title="Counts only what you can see">

@@ -1148,13 +1148,13 @@ run_eq "campaign_type CHECK restricts to the known kinds" \
     "1"
 # owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
 # project_id link and the two campaign_id links of operations and tests that migration 141 registers
-# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`).
-run_eq "Directus relations for campaigns are registered (8)" \
+# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`) and the owner_team_id link to teams (migration 183).
+run_eq "Directus relations for campaigns are registered (9)" \
     "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
      FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
+    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.owner_team_id->teams,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -3140,7 +3140,7 @@ SELECT 'params_tables_present:' || count(*) FROM information_schema.tables WHERE
    'hardness_test_params','charpy_test_params','compression_test_params','sem_params','xrd_params');
 SELECT 'co_owner_rows_owner_only:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'sample_co_owners' AND action IN ('update','delete')
-   AND permissions::jsonb = '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
+   AND permissions::jsonb = '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["manage"]}}}}]}]}'::jsonb;
 SELECT 'rollup_read:' || permissions::text FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
 SELECT 'people_update_own_row:' || count(*) FROM directus_permissions
@@ -3157,7 +3157,7 @@ rl_check "unlisted:0" "every Lab Member (collection, action) row in the database
 rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
-rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
+rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only (the person owner, or a manager of the owning team)"
 rl_check "reference_filtered:0" "reference data, people (but its own-row update) and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -3401,6 +3401,15 @@ tm_down=$(awk '/-- migrate:down/{f=1;next}f' "$TM")
 # functions (its down puts them back), so its down goes first of all, before 181's.
 TA=db/migrations/20261014000182_team_access.sql
 ta_down=$(awk '/-- migrate:down/{f=1;next}f' "$TA")
+# 20261014000183 (team ownership) replaces functions of 182 and 166 and adds functions in d1_private; its down puts them back, so it goes first of all, before 182's.
+TO=db/migrations/20261014000183_team_ownership.sql
+to_down=$(awk '/-- migrate:down/{f=1;next}f' "$TO")
+# 20261014000184 (team ownership rules) only changes Lab Member rows (its backup table lives in d1_private); its down goes before 183's. The up is replayed wherever
+# the rows are compared with the generator (the temp table it creates lives until commit, so a second replay drops it first).
+TR=db/migrations/20261014000184_team_ownership_rules.sql
+tr_down=$(awk '/-- migrate:down/{f=1;next}f' "$TR")
+tr_up="DROP TABLE IF EXISTS _lm_team_ownership_rules;
+$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$TR")"
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3441,6 +3450,8 @@ DROP TABLE IF EXISTS d1_private.form_values_175_backup;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$tr_down
+$to_down
 $ta_down
 $tm_down
 $pa_down
@@ -3475,6 +3486,7 @@ $jr_up
 $la_up
 $rr_up
 $ll_up
+$tr_up
 -- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
   SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
@@ -3482,6 +3494,7 @@ SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$tr_down
 $ll_down
 $rr_down
 $la_down
@@ -3789,6 +3802,8 @@ rd_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 RDK=d0000000-0000-4000-8000-0000000000
 rd_dangling=$($PSQL -v ON_ERROR_STOP=0 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -3810,6 +3825,8 @@ grep -q "^applied" <<<"$rd_clean_apply" && ok "scripts/a1_clean_dangling_legacy_
 # the same two DELETEs, then 166 applies and adds both foreign keys
 rd_after=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -3836,6 +3853,8 @@ SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
   UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
 -- down removes everything it created
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -3888,6 +3907,7 @@ CREATE TEMP TABLE _main AS
   SELECT * FROM json_to_recordset(\$m\$$rules_main_json\$m\$::json) AS x(collection text, action text, permissions jsonb);
 CREATE TEMP TABLE head_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 SELECT 'head_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+$tr_down
 $ll_down
 $rr_down
 $la_down
@@ -3898,6 +3918,8 @@ SELECT 'dn_matches_main:' || count(*) FROM _main m JOIN directus_permissions p
 SELECT 'dn_access_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection LIKE '%\_access';
 CREATE TEMP TABLE old_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 $la_up
+-- 184 (team ownership rules) only rewrites rows 166 wrote: 166 + 184 give the generated rules
+$tr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3909,13 +3931,16 @@ SELECT 'up_backup_commented:' || (obj_description('d1_private.lab_member_access_
 SELECT 'up_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.lab_member_access_rules_backup', 'SELECT');
 SELECT 'up_in_dictionary:' || count(*) FROM v_schema_dictionary WHERE object_name LIKE 'lab\_member\_access%';
 CREATE TEMP TABLE up_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+$tr_down
 DROP TABLE _lm_access_rules;
 $la_up
+$tr_up
 SELECT 'up2_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
 SELECT 'up2_unchanged:' || count(*) FROM ((SELECT to_jsonb(r) FROM up_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
   UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM up_rows r)) x;
 SELECT 'up2_backup_still_old:' || count(*) FROM d1_private.lab_member_access_rules_backup b JOIN old_rows o ON o.id = b.id
  WHERE b.permissions::jsonb IS DISTINCT FROM o.permissions::jsonb;
+$tr_down
 $la_down
 SELECT 'dn2_exact:' || count(*) FROM ((SELECT to_jsonb(r) FROM old_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
   UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM old_rows r)) x;
@@ -3924,6 +3949,7 @@ DROP TABLE _lm_access_rules;
 $la_up
 $rr_up
 $ll_up
+$tr_up
 SELECT 'up3_exact_as_head:' || count(*) FROM ((SELECT permissions::jsonb, collection, action FROM head_rows EXCEPT SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM')
   UNION ALL (SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM' EXCEPT SELECT permissions::jsonb, collection, action FROM head_rows)) x;
 SELECT 'final_exact:' || count(*) FROM _gen g JOIN directus_permissions p
@@ -3941,7 +3967,7 @@ la_check "dn_access_rows:0" "down: the five access table rows it inserted are go
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
 [[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
-    && ok "166 alone: every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+    && ok "166 (with 184's rule rows): every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
@@ -5240,6 +5266,8 @@ ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 -- 167 and 166 depend on 165's columns and tables, so they go down first (as on a real rollback)
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -5264,6 +5292,8 @@ grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus 
 grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -5276,6 +5306,8 @@ SQL
 grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$tr_down
+$to_down
 $ll_down
 $rr_down
 $la_down

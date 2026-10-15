@@ -29,6 +29,8 @@ export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null 
 	// Which dashboard an operation belongs to (a sintering run has no force figure).
 	if (def.collection === 'manufacturing_operations') out.push('process_category');
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
+	// The owning team's name (a team-owned campaign has no owner person); a role that cannot read teams does not ask for it.
+	if (def.collection === 'campaigns' && (!readable || readable.has('teams'))) out.push('owner_team_id.name');
 	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
 	out.push(...thumbFields(def.collection));
 	// The row's accent colour (the ISO classes' colour_hex).

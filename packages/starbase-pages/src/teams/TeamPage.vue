@@ -2,14 +2,15 @@
 // A team's page (/teams/:id): the team (tile, name, description, "N members · M records"), its Members (a manager badge; Add member, Make
 // manager / Remove manager and Remove for managers and administrators; Leave for oneself), its Records (the counts per level are for
 // everyone; the list holds only the records the viewer may read, then "and N you can't see") and its History (the last 20, "Show all").
-// Every change goes through the d1-teams endpoint; its own words (LAST_MANAGER, a refused delete) are shown as they come.
+// Every change goes through the d1-teams endpoint; its own words (LAST_MANAGER, a refused delete) are shown as they come. A team that owns
+// records (they show as "Owns", with the owner grant listed as role Owns) cannot be deleted: Delete says what it owns (TEAM_OWNS_RECORDS).
 import ExplorerView from '../ExplorerView.vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { AppLink, PageShell, RecordLink, Section, TeamTile, deleteTeam, formatDate, getTeam, removeMember, setManager, useExplorerHost, useRequestGate } from '@d1/ui';
 import type { TeamDetail, TeamMember } from '@d1/ui';
 import AddMemberDialog from './AddMemberDialog.vue';
 import TeamEditDialog from './TeamEditDialog.vue';
-import { canManage, hiddenLine, historyLabel, levelCounts, managersLine, membersAndRecords, tileOf } from './teamPage';
+import { canManage, deleteRefusal, hiddenLine, historyLabel, levelCounts, managersLine, membersAndRecords, tileOf } from './teamPage';
 import { kindLabel, levelLabel } from '../people/personPanel';
 
 const props = defineProps<{ id: string }>();
@@ -36,6 +37,10 @@ const members = computed(() => detail.value?.members ?? []);
 const manage = computed(() => canManage(team.value, isAdmin.value));
 const levels = computed(() => (detail.value ? levelCounts(detail.value.counts) : []));
 const summary = computed(() => (detail.value ? membersAndRecords(detail.value.members.length, detail.value.counts) : ''));
+const recordsTotal = computed(() => {
+	const c = detail.value?.counts;
+	return c ? c.view + c.edit + c.investigator + (c.owns ?? 0) : 0;
+});
 const hidden = computed(() => hiddenLine(detail.value?.hidden_count ?? 0));
 const events = computed(() => detail.value?.events ?? []);
 const canShowAll = computed(() => !showAll.value && events.value.length >= 20);
@@ -86,14 +91,14 @@ async function showEverything() {
 	loadingAll.value = false;
 }
 
-async function act(work: () => Promise<unknown>) {
+async function act(work: () => Promise<unknown>, words: (e: any) => string = (e) => e?.message || 'That did not work.') {
 	busy.value = true;
 	actionError.value = '';
 	try {
 		await work();
 		return true;
 	} catch (e: any) {
-		actionError.value = e?.message || 'That did not work.';
+		actionError.value = words(e);
 		return false;
 	} finally {
 		busy.value = false;
@@ -118,7 +123,7 @@ async function removeTeam() {
 	const t = team.value;
 	if (!t) return;
 	if (!confirm(`Delete the team ${t.name}? Its access to records goes with it; the owners of those records are told.`)) return;
-	if (await act(() => deleteTeam(host.api, props.id))) host.navigate(BACK);
+	if (await act(() => deleteTeam(host.api, props.id), (e) => deleteRefusal(t.name, e))) host.navigate(BACK);
 }
 </script>
 
@@ -166,7 +171,7 @@ async function removeTeam() {
 					<p v-if="managersLine(team.managers) === ''" class="d1-note warn pad">This team has no manager. An administrator can add one.</p>
 				</Section>
 
-				<Section title="Records" :count="detail.counts.view + detail.counts.edit + detail.counts.investigator">
+				<Section title="Records" :count="recordsTotal">
 					<ul class="levels" aria-label="Records by access level">
 						<li v-for="l in levels" :key="l.key"><strong>{{ l.n }}</strong> {{ l.label }}</li>
 					</ul>

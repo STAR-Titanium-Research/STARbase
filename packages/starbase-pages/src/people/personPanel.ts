@@ -61,6 +61,8 @@ export function waitingLine(a: Pick<PersonAccess, 'waiting' | 'waiting_owners'> 
 
 const LEVELS: Record<string, string> = {
 	owner: 'Owner',
+	own: 'Owns', // a record the team owns (its owner grant)
+	manage: 'Manages (team owner)', // a manager of the team that owns the record (a manage row)
 	pi: 'Principal investigator',
 	view: 'Can view',
 	edit: 'Can edit',
@@ -90,6 +92,8 @@ export function sourceNote(rec: AccessRecord, admin: boolean): SourceNote {
 			return { remove: false, text: 'change on the project' };
 		case 'team':
 			return { remove: false, text: 'through the team' };
+		case 'team_owner':
+			return { remove: false, text: 'through the team that owns it' };
 		default:
 			return { remove: false, text: `change on the ${(rec.kind ?? 'record').toLowerCase()}` };
 	}

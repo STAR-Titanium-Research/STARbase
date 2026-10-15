@@ -65,6 +65,11 @@ describe('coOwnerText', () => {
 });
 
 describe('sampleRailFacts', () => {
+	it('shows the owning team as the Owner of a team-owned sample', () => {
+		const facts = sampleRailFacts({ ...sample, owner_person_id: null, owner_team_id: { team_id: 't1', name: 'Additive', color: 'teal', logo: null } }, '', [], {});
+		expect(byLabel(facts, 'Owner')?.value).toBe('Additive');
+	});
+
 	it('has material, dimensions, mass, location, owners, project and campaigns, in order', () => {
 		const facts = sampleRailFacts(sample, 'Ø10 · L50 mm', [camp('c1', 'C-6')], {});
 		expect(facts.map((f) => f.label)).toEqual(['Material', 'Dimensions', 'Mass', 'Location', 'Owner', 'Co-owners', 'Project', 'Campaigns']);

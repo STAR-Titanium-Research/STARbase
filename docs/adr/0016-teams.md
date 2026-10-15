@@ -5,6 +5,7 @@
 - **Deciders:** Maintainer + Claude (spec `docs/superpowers/specs/2026-10-14-people-and-teams-design.md`)
 - **Amends:** [ADR-0014](./0014-record-access.md)
 - **Amended 2026-10-14 (plan 2, while building PR 2):** decisions 2 and 3 as built, see below and spec section 10 (E10 to E14).
+- **Amended 2026-10-14 (plan 3, while building PR 3):** decision 4 (team ownership) as built, see below and spec section 11 (E23 to E31).
 
 ## Context
 
@@ -46,6 +47,14 @@ express "through a team" in those filters: the hop from a team to its members is
    and the managers a new `manage` level through an `owner` pseudo-grant, so the owner and delete rules gain one item kind, not a table family.
 4. A team can **own** a sample, campaign, operation or test, and its managers act as the owner. It can be an **Investigator**
    on a project but never its PI. A team that owns records cannot be deleted.
+   **As built (PR 3, Rulings O1 and O2):** ownership is an `owner_team_id` column on the four record tables (never on a project; at most one
+   of `owner_person_id` and `owner_team_id`, the team's foreign key `ON DELETE RESTRICT`) that the database turns into a hidden **owner
+   grant** (`<type>_team_access.role = 'own'`), expanded like any team grant: the team's members get `edit` and its managers a new access
+   level **`manage`**, written only by the bookkeeping. Wherever a rule tests the owner, a `manage` row counts as the owner (the Lab Member
+   delete and manage filters, the owner guards, the readers' owner paths, the approval test); wherever `edit` counts, `manage` counts. So
+   no new table family and no new Directus item kind: the rules gain `role [manage]` beside the person owner. The owner grant is never
+   shown as a team entry in Who has access (the owner row names the team). A record becomes team-owned only through Transfer ownership
+   (Ruling O3), and not to a team with no manager (Ruling O4).
 
 ## Considered options
 

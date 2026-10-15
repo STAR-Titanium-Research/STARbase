@@ -12,6 +12,15 @@
 //   PATCH  /d1-record-access/:collection/:id/entries/:person_id { role }              -> { entry }
 //   DELETE /d1-record-access/:collection/:id/entries/:person_id                        -> { removed: true }
 //   POST   /d1-record-access/:collection/:id/transfer           { person_id }         -> { owner, email, blocked_by }
+//   Team ownership (migration 183): GET answers owner as { kind: 'person', person_id, name, can_sign_in } or, on a record a team owns,
+//   { kind: 'team', team_id, name, color, logo, managers: [{ person_id, full_name }] } (null with no owner). Transfer also takes
+//   POST   /d1-record-access/:collection/:id/transfer           { team_id }           -> { owner, email, emails, blocked_by: null }
+//   for samples, operations, tests and campaigns (409 NOT_OWNABLE_BY_TEAM on a project): owner_team_id is set and owner_person_id cleared in
+//   ONE update (the CHECK forbids both), the previous person owner stays on as Can edit, and the team's managers are mailed. A transfer
+//   { person_id } of a team-owned record clears owner_team_id in the same update. The database then keeps the owner grant (role 'own') and
+//   its derived rows (manage for a manager, edit for a member). Ruling O2: that grant is never listed in teams, entries or members, and no
+//   route changes it (409 TEAM_OWNS_RECORD, or 404 where a route only reads): the team shows as the owner. A record becomes team-owned
+//   ONLY through this transfer (d1-access-guard refuses owner_team_id on create, Ruling O3).
 //   Teams (migration 182): GET also answers teams: [{ team_access_id, team_id, name, color, logo, member_count, role,
 //   trust_new_members, waiting, declined }] (waiting = pending joiners worth asking about, Ruling D2; declined = declined joiners).
 //   POST   /d1-record-access/:collection/:id/entries            { team_id, role }     -> { team, email: 'sent'|'skipped'|'failed', emails }
@@ -32,7 +41,7 @@
 //
 // Errors (the Directus shape { errors: [{ message, extensions: { code, source: 'd1-record-access' } }] }): 401 no user;
 // 400 unknown collection, bad uuid, role or person; 404 a record the caller cannot read (or that does not exist); 403 FORBIDDEN
-// when the caller may not manage it; 409 adding or transferring to the owner.
+// when the caller may not manage it; 409 adding or transferring to the owner (CONFLICT), NOT_OWNABLE_BY_TEAM, TEAM_HAS_NO_MANAGER (a team with no manager cannot own a record, Ruling O4), TEAM_OWNS_RECORD.
 //
 // How a request runs:
 //   * readable = ItemsService.readOne as the caller (the real read rule decides), manage = the record's DELETE rule (rules.json
@@ -74,14 +83,15 @@ const PARENTS = {
   sample_id: { collection: 'physical_samples', kind: 'sample', key: 'sample_id', readers: 'sample_readers', access: 'sample_access', ownerField: 'owner_person_id', code: ['sample_code'] },
 };
 const DETAILS = {
-  physical_samples: { readers: 'sample_readers', kind: 'sample', segment: 'samples', code: ['sample_code'], title: ['nickname'], parents: ['project_id'], legacy: { table: 'sample_co_owners', fk: 'sample_id', role: 'edit' } },
-  manufacturing_operations: { readers: 'operation_readers', kind: 'operation', segment: 'operations', code: ['pass_code'], title: [], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
-  test_sessions: { readers: 'test_readers', kind: 'test', segment: 'tests', code: ['test_code'], title: ['test_type'], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
-  campaigns: { readers: 'campaign_readers', kind: 'campaign', segment: 'campaigns', code: ['campaign_code', 'name'], title: [], parents: ['project_id'], legacy: null },
-  projects: { readers: 'project_readers', kind: 'project', segment: 'projects', code: ['project_code', 'project_name'], title: ['project_name'], parents: [], legacy: { table: 'project_investigators', fk: 'project_id', role: 'investigator' } },
+  physical_samples: { ownerTeam: true, readers: 'sample_readers', kind: 'sample', segment: 'samples', code: ['sample_code'], title: ['nickname'], parents: ['project_id'], legacy: { table: 'sample_co_owners', fk: 'sample_id', role: 'edit' } },
+  manufacturing_operations: { ownerTeam: true, readers: 'operation_readers', kind: 'operation', segment: 'operations', code: ['pass_code'], title: [], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
+  test_sessions: { ownerTeam: true, readers: 'test_readers', kind: 'test', segment: 'tests', code: ['test_code'], title: ['test_type'], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
+  campaigns: { ownerTeam: true, readers: 'campaign_readers', kind: 'campaign', segment: 'campaigns', code: ['campaign_code', 'name'], title: [], parents: ['project_id'], legacy: null },
+  projects: { ownerTeam: false, readers: 'project_readers', kind: 'project', segment: 'projects', code: ['project_code', 'project_name'], title: ['project_name'], parents: [], legacy: { table: 'project_investigators', fk: 'project_id', role: 'investigator' } },
 };
 
-// collection -> { kind, segment, table, fk, key, ownerField, roles, manage, code, title, parents, legacy }
+// collection -> { kind, segment, table, fk, key, ownerField, ownerTeam, roles, manage, code, title, parents, legacy }
+// ownerTeam: the record has an owner_team_id column (the four ownable types; a project's owner is its PI, never a team)
 export const COLLECTIONS = Object.fromEntries(
   Object.entries(DETAILS).map(([collection, d]) => {
     const rule = RECORDS[collection];
@@ -152,13 +162,14 @@ const oneLine = (value) => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 // ('parent'), or they have no login ('no_login'). The mail then says who added them, the record's kind and code, and the GENERIC
 // wording for the reason. It carries NO title, NO link (the title is the record's content, the link would only fail) and nothing of
 // the parents above the record (their kind, code or the PI): the recipient may not be allowed to know they exist.
-export function mailContent({ adder, role, kind, code, title, link, transfer = false, blockedReason = null, via = null }) {
+export function mailContent({ adder, role, kind, code, title, link, transfer = false, blockedReason = null, via = null, ownerTeam = null }) {
   const who = oneLine(adder) || 'Someone';
   const what = [oneLine(kind), oneLine(code)].filter(Boolean).join(' ') || 'a record';
-  const verb = transfer ? 'made you the owner of' : 'gave you access to';
+  const owning = oneLine(ownerTeam); // a team was made the owner: the mail goes to its managers
+  const verb = owning ? `made the team ${owning} the owner of` : transfer ? 'made you the owner of' : 'gave you access to';
   const team = oneLine(via);
   const viaText = team ? ` via ${team}` : ''; // access that comes through a team
-  const subject = `${who} ${verb} ${what}${viaText}`;
+  const subject = owning ? `${who} made ${owning} the owner of ${what}` : `${who} ${verb} ${what}${viaText}`;
   const blocked = Boolean(blockedReason);
   const named = blocked ? '' : oneLine(title);
   const openLink = blocked ? null : link;
@@ -170,6 +181,7 @@ export function mailContent({ adder, role, kind, code, title, link, transfer = f
       : 'You cannot open it yet. You will be able to once the owner of what it sits under gives you access.';
   const text = [
     `${who} ${verb} the ${what}${named ? ` (${named})` : ''}${viaText}.`,
+    owning ? `As a manager of ${owning} you can share it, transfer it and delete it.` : null,
     roleLine ? `Your role: ${roleLine}.` : null,
     wait,
     openLink ? `Open it here: ${openLink}` : null,
@@ -179,7 +191,8 @@ export function mailContent({ adder, role, kind, code, title, link, transfer = f
     .filter((line) => line !== null)
     .join('\n');
   const html = [
-    `<p><strong>${escapeHtml(who)}</strong> ${verb} the ${escapeHtml(what)}${named ? ` (${escapeHtml(named)})` : ''}${escapeHtml(viaText)}.</p>`,
+    `<p><strong>${escapeHtml(who)}</strong> ${escapeHtml(verb)} the ${escapeHtml(what)}${named ? ` (${escapeHtml(named)})` : ''}${escapeHtml(viaText)}.</p>`,
+    owning ? `<p>${escapeHtml(`As a manager of ${owning} you can share it, transfer it and delete it.`)}</p>` : '',
     roleLine ? `<p>Your role: <strong>${escapeHtml(roleLine)}</strong>.</p>` : '',
     wait ? `<p>${escapeHtml(wait)}</p>` : '',
     openLink ? `<p><a href="${escapeHtml(openLink)}">Open it in D1</a><br>${escapeHtml(openLink)}</p>` : '',
@@ -300,7 +313,7 @@ export default {
       person ? { person_id: person.person_id, name: personName(person), can_sign_in: !isBlank(person.user_id) } : null;
 
     async function loadRecord(db, cfg, id) {
-      const columns = [cfg.key, cfg.ownerField, 'restricted', ...cfg.parents, ...cfg.code, ...cfg.title];
+      const columns = [cfg.key, cfg.ownerField, ...(cfg.ownerTeam ? ['owner_team_id'] : []), 'restricted', ...cfg.parents, ...cfg.code, ...cfg.title];
       const row = await db(cfg.collection).where(cfg.key, id).first(...new Set(columns));
       if (!row) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
       return row;
@@ -461,7 +474,7 @@ export default {
     // 'sent' | 'skipped' | 'failed'. Never throws.
     // `blocked`: the person's blocked_by when the caller already has it (the transfer answers with it), else it is looked up here.
     // `via`: the team the access comes through ("via <team name>" in the mail).
-    async function sendMail({ req, acc, cfg, id, record, person, role, transfer, blocked, via = null }) {
+    async function sendMail({ req, acc, cfg, id, record, person, role, transfer, blocked, via = null, ownerTeam = null }) {
       try {
         if (isBlank(person?.person_id) || String(person.user_id ?? '') === String(acc.user)) return 'skipped'; // never mail the adder
         const user = isBlank(person.user_id) ? null : await database('directus_users').where('id', person.user_id).first('email');
@@ -473,7 +486,7 @@ export default {
         const stop = blocked === undefined ? await blockedFor(database, cfg, id, record, person, acc) : blocked;
         const content = mailContent({
           adder: name, role, kind: cfg.kind, code: firstOf(record, cfg.code), title: firstOf(record, cfg.title) !== firstOf(record, cfg.code) ? firstOf(record, cfg.title) : null,
-          link: recordLink(env?.PUBLIC_URL, cfg.collection, id, env?.STARBASE_URL), transfer, blockedReason: stop?.reason ?? null, via,
+          link: recordLink(env?.PUBLIC_URL, cfg.collection, id, env?.STARBASE_URL), transfer, blockedReason: stop?.reason ?? null, via, ownerTeam,
         });
         const mail = new services.MailService({ schema: req.schema, knex: database });
         await withTimeout(mail.send({ to, subject: content.subject, html: content.html, text: content.text }), MAIL_TIMEOUT_MS);
@@ -497,15 +510,20 @@ export default {
     async function grantOf(db, cfg, id, teamId) {
       return (await db(grantTable(cfg)).where({ [cfg.fk]: id, team_id: teamId }).first('team_access_id', 'team_id', 'role', 'trust_new_members')) ?? null;
     }
-    async function requireGrant(db, cfg, id, teamId) {
+    // The grant a route reads or changes: a team that only OWNS the record has none (the owner grant is not a team entry, Ruling O2).
+    const NOT_LISTED = () => new HttpError(404, 'NOT_FOUND', 'That team does not have access to this record.');
+    const OWNING = () => new HttpError(409, 'TEAM_OWNS_RECORD', 'That team owns this record, so its access follows the owner. Use Transfer ownership to change it.');
+    async function requireGrant(db, cfg, id, teamId, { owning = NOT_LISTED } = {}) {
       const grant = await grantOf(db, cfg, id, teamId);
-      if (!grant) throw new HttpError(404, 'NOT_FOUND', 'That team does not have access to this record.');
+      if (!grant) throw NOT_LISTED();
+      if (grant.role === 'own') throw owning();
       return grant;
     }
 
     // The team entries of a record: [{ team_access_id, team_id, name, color, logo, member_count, role, trust_new_members, waiting, declined }]
     async function buildTeams(db, cfg, id) {
-      const grants = await db(grantTable(cfg)).where(cfg.fk, id).select('team_access_id', 'team_id', 'role', 'trust_new_members');
+      // Ruling O2: the owner grant (role own) is the owner row, never a team entry
+      const grants = (await db(grantTable(cfg)).where(cfg.fk, id).select('team_access_id', 'team_id', 'role', 'trust_new_members')).filter((g) => g.role !== 'own');
       if (!grants.length) return [];
       const teamIds = [...new Set(grants.map((g) => g.team_id))];
       const teams = new Map((await db('teams').whereIn('team_id', teamIds).select('team_id', 'name', 'color', 'logo')).map((t) => [String(t.team_id), t]));
@@ -537,18 +555,34 @@ export default {
       }
     }
 
+    // The owner as the page shows it: a person, a team (with its managers, who act as the owner), or null.
+    async function teamOwnerRef(db, teamId) {
+      const team = await db('teams').where('team_id', teamId).first('team_id', 'name', 'color', 'logo');
+      if (!team) return null;
+      const managerIds = (await db('team_members').where('team_id', teamId).where('is_manager', true).select('person_id')).map((m) => m.person_id);
+      const people = managerIds.length ? await db('people').whereIn('person_id', managerIds).select('person_id', 'full_name') : [];
+      const managers = people.map((p) => ({ person_id: p.person_id, full_name: personName(p) })).sort((a, b) => a.full_name.localeCompare(b.full_name));
+      return { kind: 'team', team_id: team.team_id, name: team.name, color: team.color ?? null, logo: team.logo ?? null, managers };
+    }
+    async function ownerOf(db, cfg, record) {
+      if (cfg.ownerTeam && !isBlank(record.owner_team_id)) return teamOwnerRef(db, record.owner_team_id);
+      if (isBlank(record[cfg.ownerField])) return null;
+      const person = await personById(db, record[cfg.ownerField]);
+      return person ? { kind: 'person', ...personRef(person) } : null;
+    }
+
     // -- the routes ------------------------------------------------------------------------------------------
     router.get('/:collection/:id', route(async (args) => {
       const { res, cfg, id, acc } = args;
       await requireReadable(args);
       const record = await loadRecord(database, cfg, id);
-      const owner = isBlank(record[cfg.ownerField]) ? null : await personById(database, record[cfg.ownerField]);
+      const owner = await ownerOf(database, cfg, record);
       // the project's PI is named only to a caller who can read that project (a sample reader need not): no hidden parent's details
       const pi = (await callerReadsParent(args, 'project_id', record)) ? await projectPi(database, cfg, record) : null;
       const manage = await canManage(args);
       const entries = await buildEntries(database, cfg, id, record, acc);
       const teams = await buildTeams(database, cfg, id);
-      res.json({ restricted: toBool(record.restricted), owner: personRef(owner), project_pi: personRef(pi), can_manage: manage, entries, teams });
+      res.json({ restricted: toBool(record.restricted), owner, project_pi: personRef(pi), can_manage: manage, entries, teams });
     }));
 
     const parseRole = (cfg, body) => {
@@ -692,7 +726,9 @@ export default {
         const team = await trx('teams').where('team_id', teamId).first('team_id', 'name');
         if (!team) throw new HttpError(400, 'INVALID_PAYLOAD', 'That team does not exist.');
         const listed = () => new HttpError(409, 'TEAM_ALREADY_LISTED', 'That team already has access to this record.');
-        if (await grantOf(trx, cfg, id, teamId)) throw listed();
+        const held = await grantOf(trx, cfg, id, teamId);
+        if (held?.role === 'own') throw OWNING(); // the owning team is the owner, not a share
+        if (held) throw listed();
         const caller = await callerName(trx, acc);
         try {
           await trx(grantTable(cfg)).insert({ [cfg.fk]: id, team_id: teamId, role, added_by_person_id: caller.personId });
@@ -733,7 +769,7 @@ export default {
       await requireReadable(args);
       await inTransaction(acc, async (trx) => {
         await requireManage(args, trx);
-        if (!(await grantOf(trx, cfg, id, teamId))) throw new HttpError(404, 'NOT_FOUND', 'That team does not have access to this record.');
+        await requireGrant(trx, cfg, id, teamId, { owning: OWNING });
         await trx(grantTable(cfg)).where({ [cfg.fk]: id, team_id: teamId }).update(patch); // the triggers move the derived and pending rows
       });
       await clearDataCache(req);
@@ -746,7 +782,7 @@ export default {
       await requireReadable(args);
       await inTransaction(acc, async (trx) => {
         await requireManage(args, trx);
-        if (!(await grantOf(trx, cfg, id, teamId))) throw new HttpError(404, 'NOT_FOUND', 'That team does not have access to this record.');
+        await requireGrant(trx, cfg, id, teamId, { owning: OWNING });
         await trx(grantTable(cfg)).where({ [cfg.fk]: id, team_id: teamId }).del(); // the derived and pending rows go with it
       });
       await clearDataCache(req);
@@ -819,21 +855,39 @@ export default {
       res.json({ decision, email });
     }));
 
+    // Transfer ownership: to a person ({ person_id }) or, for the four ownable types, to a team ({ team_id }, Ruling O3: the only way a
+    // record becomes team-owned). owner_person_id and owner_team_id change in ONE update, because the CHECK allows at most one of them.
     router.post('/:collection/:id/transfer', route(async (args) => {
       const { req, res, acc, cfg, id } = args;
       if (!isObject(req.body)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body.');
-      const personId = parsePersonId(req.body.person_id);
+      const toTeam = req.body.team_id !== undefined;
+      if (toTeam && req.body.person_id !== undefined) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a person_id or a team_id, not both.');
+      const targetId = toTeam ? parseTeamId(req.body.team_id) : parsePersonId(req.body.person_id);
+      if (toTeam && !cfg.ownerTeam) throw new HttpError(409, 'NOT_OWNABLE_BY_TEAM', 'A team cannot own this kind of record.');
       await requireReadable(args);
       const keepRole = cfg.collection === 'projects' ? 'investigator' : 'edit';
       const done = await inTransaction(acc, async (trx) => {
         await requireManage(args, trx);
         const record = await loadRecord(trx, cfg, id);
-        const next = await requireActivePerson(trx, personId);
-        const previousId = record[cfg.ownerField];
-        if (!isBlank(previousId) && String(previousId) === String(next.person_id)) throw new HttpError(409, 'CONFLICT', 'That person is the owner already.');
         const caller = await callerName(trx, acc);
-        await trx(cfg.collection).where(cfg.key, id).update({ [cfg.ownerField]: next.person_id });
-        // the previous owner stays on the record (Can edit; Secondary investigator on a project) ...
+        const previousId = record[cfg.ownerField];
+        let next = null;
+        let team = null;
+        if (toTeam) {
+          team = await trx('teams').where('team_id', targetId).first('team_id', 'name');
+          if (!team) throw new HttpError(400, 'INVALID_PAYLOAD', 'That team does not exist.');
+          if (!isBlank(record.owner_team_id) && String(record.owner_team_id) === String(team.team_id)) throw new HttpError(409, 'CONFLICT', 'That team is the owner already.');
+          // Ruling O4: a record owned by a team nobody manages could be changed by administrators only
+          if (!(await trx('team_members').where('team_id', team.team_id).where('is_manager', true).first('person_id'))) {
+            throw new HttpError(409, 'TEAM_HAS_NO_MANAGER', 'That team has no manager to look after the record — add a manager first');
+          }
+          await trx(cfg.collection).where(cfg.key, id).update({ owner_team_id: team.team_id, [cfg.ownerField]: null });
+        } else {
+          next = await requireActivePerson(trx, targetId);
+          if (!isBlank(previousId) && String(previousId) === String(next.person_id)) throw new HttpError(409, 'CONFLICT', 'That person is the owner already.');
+          await trx(cfg.collection).where(cfg.key, id).update({ [cfg.ownerField]: next.person_id, ...(cfg.ownerTeam ? { owner_team_id: null } : {}) });
+        }
+        // the previous PERSON owner stays on the record (Can edit; Secondary investigator on a project) ...
         if (!isBlank(previousId)) {
           const previous = await personById(trx, previousId);
           if (previous) {
@@ -841,12 +895,16 @@ export default {
             await dropLegacy(trx, cfg, id, previous);
           }
         }
-        // ... and the new owner needs no list entry
-        await trx(cfg.table).where({ [cfg.fk]: id, person_id: next.person_id }).whereNull('team_access_id').del(); // derived team rows stay
-        await dropLegacy(trx, cfg, id, next);
-        return { record, next };
+        // ... and a new person owner needs no list entry (a team owner's members get their rows from the database)
+        if (next) {
+          await trx(cfg.table).where({ [cfg.fk]: id, person_id: next.person_id }).whereNull('team_access_id').del(); // derived team rows stay
+          await dropLegacy(trx, cfg, id, next);
+        }
+        return { record, next, team };
       });
       await clearDataCache(req);
+      if (toTeam) return transferredToTeam(args, done);
+
       // blocked_by of the new owner (the spec: the dialog says so "on add and on transfer"); the change is made either way. A failed
       // lookup answers null here and the generic mail wording (the safe side).
       let blocked_by = null;
@@ -858,7 +916,32 @@ export default {
         logger?.error?.(`${SOURCE}: blocked_by of the new owner of ${cfg.collection} ${id} could not be read: ${err?.stack || err?.message || err}`);
       }
       const email = await sendMail({ req, acc, cfg, id, record: done.record, person: done.next, role: ownerLabel(cfg.collection), transfer: true, blocked: blockedKnown ? blocked_by : { reason: 'parent' } });
-      res.json({ owner: personRef(done.next), email, blocked_by });
+      res.json({ owner: { kind: 'person', ...personRef(done.next) }, email, blocked_by });
     }));
+
+    // After a transfer to a team: the team's managers (they act as the owner) are mailed once each; the answer names the team as the owner.
+    async function transferredToTeam({ req, res, acc, cfg, id }, done) {
+      const emails = { sent: 0, skipped: 0, failed: 0 };
+      try {
+        const managerIds = (await database('team_members').where('team_id', done.team.team_id).where('is_manager', true).select('person_id')).map((m) => m.person_id);
+        const managers = managerIds.length ? await database('people').whereIn('person_id', managerIds).select(...PERSON_COLUMNS) : [];
+        const results = await Promise.all(
+          managers
+            .filter((p) => p.active !== false && !isBlank(p.user_id))
+            .map((person) => sendMail({ req, acc, cfg, id, record: done.record, person, role: null, transfer: true, ownerTeam: done.team.name })),
+        );
+        for (const r of results) emails[r] += 1;
+      } catch (err) {
+        warn(`could not list the managers to mail for ${cfg.collection} ${id}: ${err?.message || err}`);
+      }
+      const email = emails.sent ? 'sent' : emails.failed ? 'failed' : 'skipped';
+      let owner = { kind: 'team', team_id: done.team.team_id, name: done.team.name, color: null, logo: null, managers: [] };
+      try {
+        owner = (await teamOwnerRef(database, done.team.team_id)) ?? owner;
+      } catch (err) {
+        logger?.error?.(`${SOURCE}: the change to ${cfg.collection} ${id} is committed but reading its team owner back failed: ${err?.stack || err?.message || err}`);
+      }
+      res.json({ owner, email, emails, blocked_by: null });
+    }
   },
 };
