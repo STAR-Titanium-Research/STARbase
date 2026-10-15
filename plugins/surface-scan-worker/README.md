@@ -22,18 +22,31 @@ MinIO, `surface-scans/<cache_key>/`:
 | `meta.json` | `width, height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, source_width, source_height, source_format, decimation` (written last) |
 | `thumb.png` | height map in a perceptual ramp, at most 320 px, no-data transparent |
 
-Cache key: the crawler's `file_fingerprints.content_sha256` when its status is `done` and its size matches
-the file, else `p-<directus_files_id>-<size>-<mtime>`. **The worker never hashes a file and never writes
-`file_fingerprints`** (it only reads one row of it).
+Cache key: the crawler's `file_fingerprints.content_sha256` when its status is `done` and BOTH halves of
+its staleness key match the file on disk (`size_bytes` and `source_mtime`, within 2 s), else
+`p-<directus_files_id>-<size>-<mtime>`. A file re-exported in place with the same size therefore gets a new
+key. **The worker never hashes a file and never writes `file_fingerprints`** (it reads one row of it, with a
+filtered list query, so an empty list means "no fingerprint" and a 403 means "no permission").
 
 ## Safety rules (each has a test)
 
-- The archive is mounted `:ro`; the only `open` of a scan file is `archive.open_readonly` (`'rb'`).
+- The archive is mounted `:ro`; the only open of a scan file is `archive.open_readonly`:
+  `os.open(O_RDONLY | O_NOFOLLOW)` on the resolved path, then `fstat` on the descriptor, which must match
+  the `stat` the cache key was built from (device, inode, size, mtime) or the render fails with "changed on
+  the share". SurfaceTopography reads from that descriptor's file object (it accepts file objects), never
+  from the path again, so a link or file swapped in after the check cannot redirect the read.
 - `archive_path` must be a clean relative path that resolves, after symlinks, inside `ARCHIVE_ROOT`,
   which must be inside `ARCHIVE_MOUNT`.
-- Only extensions of SurfaceTopography readers are opened, minus `archive.NOT_TOPOGRAPHY` (`mat`, `txt`,
-  `csv`, `dat`, `xlsx`, `zip`, `nc`); documents are never opened.
+- Only the extensions in `archive.ALLOWED_EXTENSIONS` are opened (36 topography instrument formats:
+  `al3d opd opdx x3p ibw h5 datx sur plu apx plux vk3 vk4 vk6 vk7 lext zon os3d sdf frt mnt gwy mdt nms oir
+  poir ezd nid bcr bcrf tmd zmg mi jpk qep spm`), intersected with the readers the installed
+  SurfaceTopography has. `.tif`, `.xyz`, `.asc`, `.npy`, `.hdf5`, `.sxm`, `.mat` and every generic or text
+  format are refused; so is a link whose target is of another type. STARbase's "Add a surface scan" dialog
+  offers the same list; change both together.
 - A file with no stated length unit, or that is not a 2D uniform height map, is refused, not guessed.
+- A `rendering` row whose rq job is gone, failed or owned by a dead worker (the OOM killer usually takes
+  the forked work-horse, so `except` never runs) is failed by the poller within one poll with an
+  out-of-memory message; it does not wait for the timeout.
 
 ## Layout
 
