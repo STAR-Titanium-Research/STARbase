@@ -93,7 +93,7 @@ const toggleFan = stopping(() => {
 .slot.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); }
 .slot:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
 .si { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; flex: none; }
-.sr { font-size: var(--fs-xs, 11px); color: var(--d1-dim); width: 64px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr { font-size: var(--fs-xs, 11px); color: var(--d1-dim); max-width: 64px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm, 12px); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .sc.none { color: var(--d1-dim); font-weight: 500; }
 .vals:focus-visible, .vlist .sc:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; border-radius: 4px; }

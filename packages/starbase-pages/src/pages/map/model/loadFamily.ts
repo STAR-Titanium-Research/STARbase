@@ -172,6 +172,7 @@ async function loadSamples(api: HostApi, trace: TraceResponse, ids: string[]): P
       read.get(id) ?? {
         id,
         code: fromTrace.get(id)?.code ?? id,
+        nickname: null,
         form: fromTrace.get(id)?.form ?? null,
         status: null,
         projectId: null,
@@ -191,9 +192,10 @@ async function loadPieces(api: HostApi, operations: OpRow[], family: string[]): 
   if (!outside.length) return undefined;
   const out: NonNullable<ProcessData['pieces']> = {};
   try {
-    const build = (chunk: string[]) => ({ filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: ['sample_id', 'sample_code', 'form'], limit: -1 });
+    const build = (chunk: string[]) => ({ filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: ['sample_id', 'sample_code', 'nickname', 'form'], limit: -1 });
     const pages = await Promise.all(chunkByBudget(outside, build).map((chunk) => getList(api, 'physical_samples', build(chunk))));
-    for (const page of pages) for (const r of page.rows) out[String(r.sample_id)] = { code: str(r.sample_code) ?? String(r.sample_id), form: str(r.form) };
+    for (const page of pages)
+      for (const r of page.rows) out[String(r.sample_id)] = { code: str(r.sample_code) ?? String(r.sample_id), nickname: str(r.nickname), form: str(r.form) };
   } catch {
     return undefined; // a code is a nicety: the card says "another piece"
   }

@@ -43,7 +43,7 @@ watch(() => [props.target, props.info.id, props.preview], place);
 			<template #kind-icon><v-icon :name="style.icon" x-small /></template>
 			<template #status><StatusBadge :kind="statusKindOf(info.kind)" :value="info.status" /></template>
 			<template v-if="drawable || (preview && preview.kind !== 'none')" #extra>
-				<div v-if="drawable" class="geo"><SampleGeometry :dims="dims" /></div>
+				<div v-if="drawable" class="geo"><SampleGeometry :dims="dims" :label-size="15" /></div>
 				<DataThumb :preview="preview" />
 			</template>
 			<template #after-facts>
@@ -74,7 +74,8 @@ watch(() => [props.target, props.info.id, props.preview], place);
 	color: color-mix(in srgb, var(--k) 62%, var(--theme--foreground));
 	background: color-mix(in srgb, var(--k) 14%, transparent);
 }
-.geo { width: 96px; margin: 0 auto 6px; }
+/* Most of the card's width, so the shape and its dimensions read at a glance (labels sized for ~200px). */
+.geo { width: 100%; max-width: 220px; margin: 0 auto 6px; }
 .counts { display: flex; flex-wrap: wrap; gap: 0 14px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .counts b { font-size: var(--fs-md, 13px); color: var(--theme--foreground); font-variant-numeric: tabular-nums; }
 .hint { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--d1-line); font-size: var(--fs-sm, 12px); color: var(--d1-dim); }

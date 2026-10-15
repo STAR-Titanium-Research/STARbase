@@ -81,7 +81,7 @@ function sampleInfo(id: string, data: ProcessData, rec: SampleRec): RecordInfo {
     kind: 'sample',
     ref: { collection: 'physical_samples', id: rec.id, code: rec.code },
     code: rec.code,
-    title: rec.form ? humanise(rec.form) : undefined,
+    title: [rec.nickname, rec.form ? humanise(rec.form) : null].filter(Boolean).join(' · ') || undefined,
     status: rec.status,
     facts,
     counts: [

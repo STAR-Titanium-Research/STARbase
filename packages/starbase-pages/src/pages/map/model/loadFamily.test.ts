@@ -312,7 +312,7 @@ describe('loadFamily', () => {
       powderBatch: 'TIMET 45-150',
       projectId: 'p1',
     });
-    expect(op.relations.equipment_id).toEqual({ collection: 'equipment', id: 'e1', code: 'FAST25', label: 'FAST 25' });
+    expect(op.relations.equipment_id).toEqual({ collection: 'equipment', id: 'e1', code: 'FAST 25', label: 'FAST25' });
     expect(op.relations.fast_recipe_id).toMatchObject({ collection: 'fast_recipes', id: 'fr1', code: 'Recipe A' });
     expect(op.relations.force_file_id).toEqual({ collection: 'force_file', id: 'C:\\force\\run7.mat', code: 'run7.mat' });
     expect(op.relations.tool_id).toBeNull();
@@ -824,7 +824,7 @@ describe('loadFamily: the pieces outside the family (C1)', () => {
     const { api, calls } = fakeApi((path, params) => cutsOfS(path, params));
     const data = await loadFamily(api, 'a');
     expect(data.samples.map((s) => s.id).sort()).toEqual(['a', 's']);
-    expect(data.pieces).toEqual({ b: { code: 'CODE-b', form: 'disc' }, c: { code: 'CODE-c', form: 'disc' } });
+    expect(data.pieces).toEqual({ b: { code: 'CODE-b', nickname: null, form: 'disc' }, c: { code: 'CODE-c', nickname: null, form: 'disc' } });
     const asked = calls.filter((c) => c.path === '/items/physical_samples').map((c) => JSON.parse(c.params.filter).sample_id._in.slice().sort());
     expect(asked).toEqual(expect.arrayContaining([['b', 'c']]));
   });

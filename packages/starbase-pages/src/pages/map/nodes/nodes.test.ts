@@ -65,14 +65,15 @@ describe('refKey', () => {
 });
 
 describe('ContainerNode', () => {
-	it('renders header, 2 rows + "+2 more samples" for 4 rows, the tray with majors then "+N more from the form"', async () => {
+	it('renders header, a rail with "+2 more" for 4 rows, the tray with majors then "+N more from the form"', async () => {
 		const [c] = containers(cutOf(4), true, () => [machine('NLX-1'), minor('operator', 'Operator', 'Ada'), minor('owner', 'Owner', 'Bob')]);
 		const html = await render(ContainerNode, { id: c.id, data: c });
 		const t = text(html);
 
 		expect(t).toContain('Probable batch · Wire cut');
 		expect(html).toContain('aria-label="Expand"');
-		expect(t).toContain('+2 more samples');
+		expect(t).toContain('1 sample → 4 pieces'); // counted over every row, folded ones too
+		expect(t).toContain('+2 more');
 		expect(t).not.toContain('Inside'); // the tray has no label: its chips say what they are
 		expect(t).toContain('NLX-1');
 		expect(t).toContain('+2 more from the form');
@@ -91,6 +92,35 @@ describe('ContainerNode', () => {
 		expect(all).toContain('batch:B1:in:b');
 		expect(all.filter((i) => i === 'batch:B1:in:b')).toHaveLength(1);
 		expect(new Set(all).size).toBe(all.length);
+	});
+
+	it('a cut is one summary line, its shared input drawn once, no per-row labels', async () => {
+		const [c] = containers(cutOf(3), true);
+		const unfolded: ContainerData = { ...c, bundled: false };
+		const html = await render(ContainerNode, { id: c.id, data: unfolded });
+		const t = text(html);
+		expect(t).toContain('1 sample → 3 pieces');
+		expect(t).not.toMatch(/Sample \d/);
+		expect(ids(html)).toEqual([`${c.id}:in:0`, `${c.id}:out:0`, `${c.id}:out:1`, `${c.id}:out:2`]);
+	});
+
+	it('samples processed in place say so', async () => {
+		const data = mkData({ samples: sam('a', 'b'), operations: ['a', 'b'].map((s) => mkOp({ id: `h${s}`, sampleId: s, batchId: 'B1' })) });
+		const [c] = containers(data);
+		expect(text(await render(ContainerNode, { id: c.id, data: c }))).toContain('2 samples · in place');
+	});
+
+	it('an operation that makes a sample from nothing says what it makes', async () => {
+		const op = mkOp({ id: 'f1', sampleId: null, outputSampleId: 's1', methodName: 'FAST sintering' });
+		const [c] = containers(mkData({ samples: sam('s1'), operations: [op] }));
+		expect(text(await render(ContainerNode, { id: c.id, data: c }))).toContain('Makes 1 sample');
+	});
+
+	it('more than three unfolded rows offer "fold"', async () => {
+		const [c] = containers(cutOf(4), true);
+		const html = await render(ContainerNode, { id: c.id, data: { ...c, bundled: false } });
+		expect(text(html)).toContain('fold');
+		expect(text(html)).not.toContain('more');
 	});
 
 	it('shows the minor slots once the page has opened them', async () => {
@@ -126,16 +156,16 @@ describe('ContainerNode', () => {
 		expect(ids(html).filter((i) => i.includes(':out:'))).toEqual([]);
 		expect(ids(html).filter((i) => i.includes(':in:'))).toHaveLength(1);
 		expect(html).toMatch(/class="[^"]*\btest\b/);
+		expect(text(html)).toContain('1 sample tested');
 	});
 
-	it('an in-place row draws the dashed pass-through line', async () => {
+	it('an in-place row says "in place"; a cut does not', async () => {
 		const data = mkData({ samples: sam('s1'), operations: [mkOp({ id: 'turn', sampleId: 's1', outputSampleId: null })] });
 		const [c] = containers(data);
 		expect(c.rows[0].inPlace).toBe(true);
-		const html = await render(ContainerNode, { id: c.id, data: c });
-		expect(html).toContain('class="pass"');
+		expect(text(await render(ContainerNode, { id: c.id, data: c }))).toContain('1 sample · in place');
 		const [cut] = containers(cutOf(2), true);
-		expect(await render(ContainerNode, { id: cut.id, data: cut })).not.toContain('class="pass"');
+		expect(text(await render(ContainerNode, { id: cut.id, data: cut }))).not.toContain('in place');
 	});
 
 	it('shows key settings and offers to fold an unfolded batch', async () => {
@@ -144,7 +174,7 @@ describe('ContainerNode', () => {
 		const t = text(await render(ContainerNode, { id: c.id, data: unfolded }));
 		expect(t).toContain('Feed');
 		expect(t).toContain('0.2 mm/rev');
-		expect(t).toContain('Fold samples');
+		expect(t).toContain('fold');
 	});
 
 	it('DOWN direction puts handles on Top/Bottom', async () => {
@@ -426,14 +456,14 @@ describe('controls inside cards do not start a Vue Flow drag or pan', () => {
 		expect(m![0]).toMatch(/\bnopan\b/);
 	};
 
-	it('the ＋ button, bundle row, fold row and "+N more from the form" toggle', async () => {
+	it('the ＋ button, the rail\'s "+N more" / "fold" and "+N more from the form" toggle', async () => {
 		const [folded] = containers(cutOf(4), true, () => [machine('NLX-1'), minor('operator', 'Operator', 'Ada')]);
 		const html = await render(ContainerNode, { id: folded.id, data: folded });
 		noDrag(html, /<button class="xbtn[^"]*"/);
-		noDrag(html, /class="orow bundle[^"]*"/);
+		noDrag(html, /<button class="rtoggle[^"]*"/);
 		noDrag(html, /class="slot more-toggle[^"]*"/);
 		const unfolded: ContainerData = { ...folded, bundled: false };
-		noDrag(await render(ContainerNode, { id: folded.id, data: unfolded }), /class="orow fold[^"]*"/);
+		noDrag(await render(ContainerNode, { id: folded.id, data: unfolded }), /<button class="rtoggle[^"]*"/);
 	});
 
 	it('the ＋ button of a record card and every slot row', async () => {
@@ -615,7 +645,7 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 		expect(html).toMatch(/class="[^"]*\bstacked\b/);
 		expect(text(html)).toContain('×3');
 		expect(text(html)).toContain('3 passes');
-		expect(text(html)).toContain('Unstack 3 passes');
+		expect(html).toContain('aria-label="Unstack 3 passes"');
 		expect(ids(html)).toEqual([`${c.id}:in:0`, `${c.id}:out:0`]);
 	});
 

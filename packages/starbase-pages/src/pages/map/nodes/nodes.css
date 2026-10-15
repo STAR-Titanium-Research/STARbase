@@ -16,7 +16,20 @@
 }
 .d1-process-map .node:hover { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: var(--d1-shadow-lg, var(--d1-shadow)); }
 .d1-process-map .node.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
-.d1-process-map .node.dashed { border-style: dashed; }
+/* A dashed card (probable batch, lineage junction) draws its outline on ::after: the width follows the
+   zoom (--pm-px, one screen pixel in flow units, set on .pm-canvas) without resizing the card, and the
+   colour is darker than --d1-line, which vanished when zoomed out. */
+.d1-process-map .node.dashed { border-color: transparent; }
+.d1-process-map .node.dashed::after {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border: max(1px, calc(1.25 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--d1-dim, var(--theme--foreground-subdued)) 75%, transparent);
+	border-radius: inherit;
+	pointer-events: none;
+	transition: border-color 0.12s;
+}
+.d1-process-map .node.dashed:hover::after { border-color: var(--d1-accent, var(--theme--primary)); }
 
 .d1-process-map .kind {
 	display: inline-flex;
@@ -77,6 +90,11 @@
 .d1-process-map .sock.row.out { right: -21px; }
 .d1-process-map .sock.row.fat.in { left: -23px; }
 .d1-process-map .sock.row.fat.out { right: -23px; }
+/* A container's socket rail: stacked on the card's edge, `top` set inline (ContainerNode). */
+.d1-process-map .sock.rail-sock { transform: translate(-50%, -50%); }
+.d1-process-map .sock.rail-sock:hover { transform: translate(-50%, -50%) scale(1.35); }
+.d1-process-map .sock.rail-sock.in { left: 0; right: auto; }
+.d1-process-map .sock.rail-sock.out { left: 100%; right: auto; }
 
 /* Keyboard focus (spec D23): the card's Vue Flow wrapper is the tab stop, so its ring is drawn on the card; sockets get a ring too. */
 .d1-process-map .vue-flow__node:focus { outline: none; }
