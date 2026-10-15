@@ -18,6 +18,10 @@ const owners = computed(() => [
 	...(props.hasOwn ? [{ value: 'me', text: 'My folder' }] : []),
 	...props.teams.map((t) => ({ value: `team:${t.team_id}`, text: `${t.name} team folder` })),
 ]);
+// A link can carry a list that is not one of the choices ("code,none"): the menu then shows it as such instead of a blank.
+const strengths = computed(() =>
+	STRENGTH_FILTER_ITEMS.some((o) => o.value === props.filters.strength) ? STRENGTH_FILTER_ITEMS : [...STRENGTH_FILTER_ITEMS, { value: props.filters.strength, text: 'Several kinds of match' }],
+);
 const showOwner = computed(() => props.teams.length > 0 || props.filters.owner !== 'any');
 const active = computed(() => hasActiveFilters(props.filters));
 const on = (e: Event) => (e.target as HTMLInputElement).value;
@@ -32,7 +36,7 @@ const on = (e: Event) => (e.target as HTMLInputElement).value;
 		</label>
 		<label class="lf-field">Match
 			<select :value="filters.strength" data-test="filter-strength" @change="emit('patch', { strength: on($event) })">
-				<option v-for="o in STRENGTH_FILTER_ITEMS" :key="o.value" :value="o.value">{{ o.text }}</option>
+				<option v-for="o in strengths" :key="o.value" :value="o.value">{{ o.text }}</option>
 			</select>
 		</label>
 		<label v-if="showOwner" class="lf-field">Folder of

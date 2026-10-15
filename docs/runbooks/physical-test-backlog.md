@@ -2094,6 +2094,24 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   link it instead: expect the copy to disappear. When both copies are in the same person's (or team's) Inbox,
   dismissing the original hides the copy too. A copy of another person's file must not say whose Inbox holds the
   original (only your own folder and your teams are named). Since: found files inbox, final review fixes (server).
+- [ ] **IF43 — The Home "older files" link and the copy wording, on real data.** With older found files in a
+  personal folder (some naming a record by short ID or code, some not, some by insert edge code only), open Home and
+  click *N older files match a record*: expect the Inbox on the *Older files* tab with *Match* set to **Exact
+  match** and only the short-ID and record-code files listed (the count on Home equals the list's total). Choose
+  *Exact short ID*, *Record code*, *Insert edge code (weaker)* and *No match* in turn: each still filters, and the
+  URL carries `strength=` (a comma list for Exact match). For a copy whose original is in another person's Inbox
+  that you have no part in, expect *Copy of a file someone else also has* and no name anywhere in the row; for a copy
+  of a file in your own folder, a team of yours, or (as an administrator) anyone's: *Copy of a file in <name>'s
+  Inbox*. Since: found files inbox, final review fixes (UI).
+- [ ] **IF44 — Team folder: Undo by another member, a race, and Accept all over 500.** With two members of one team
+  that has a share folder: member A links a file from the team folder; member B (who sees the row under *Recently
+  linked*) presses **Undo**: expect the refusal *Only the person who linked this, or an administrator, can undo it.*
+  and nothing changed (the list rows carry only the linker's name, so the button is shown to B; an administrator
+  can undo). Then A and B both open the same *New* team file and press Link: the second one expects *Someone already
+  dealt with that file.* (a file in a personal folder says *That file was already linked.*). With more than 500 exact
+  short-ID files for records you can edit, open **Accept all**: expect the confirm to say it links about 500 at a time
+  (never more than 999) and that you can run it again, the batch to link no more than 999, and a second run to take the
+  rest. Since: found files inbox, final review fixes (UI).
 
 ## Done
 

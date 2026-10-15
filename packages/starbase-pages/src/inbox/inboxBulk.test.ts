@@ -26,7 +26,11 @@ describe('Accept all', () => {
 		expect(acceptConfirmText({ count: 12, hasMore: false, mayRead: false })).toBe('Link 12 found files to the record that each short ID names? Only exact short-ID matches to a record you can edit are linked. You can undo the whole batch afterwards.');
 		expect(acceptConfirmText({ count: 1, hasMore: false, mayRead: true })).toContain('Link 1 found file to the record that its short ID names?');
 		expect(acceptConfirmText({ count: 5, hasMore: false, mayRead: true })).toContain('Any documents or other files among them are read once to fingerprint them.');
-		expect(acceptConfirmText({ count: 500, hasMore: true, mayRead: false })).toContain('this links the first 500, and you can run it again afterwards');
+		// the server reads 500 candidates at a time and stops once it has 500 or more to link (never more than 999 in a call): say that, not "the first 500"
+		const more = acceptConfirmText({ count: 612, hasMore: true, mayRead: false });
+		expect(more).toContain('More files match than one run takes: it links about 500 at a time (never more than 999), and you can run it again afterwards for the rest.');
+		expect(more).not.toContain('first 500');
+		expect(acceptConfirmText({ count: 612, hasMore: false, mayRead: false })).not.toContain('at a time');
 	});
 	it('a filter on pictures cannot read a document; any other can', () => {
 		expect([mayReadDocuments(DEFAULT_FILTERS), mayReadDocuments({ ...DEFAULT_FILTERS, kind: 'sem_image' }), mayReadDocuments({ ...DEFAULT_FILTERS, kind: 'document' })]).toEqual([true, false, true]);

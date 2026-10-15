@@ -91,6 +91,8 @@ export interface FakeInboxOptions {
 	scanTableMissing?: boolean;
 	/** May the caller delete a scan they added (undo)? Default yes; false is 403 FORBIDDEN and nothing is undone. */
 	scanUndoAllowed?: boolean;
+	/** The caller is not the person who linked a batch (and not an administrator): undo is 403 FORBIDDEN with no candidate_id, as the server's own check answers. */
+	undoByLinkerOnly?: boolean;
 }
 
 /** One surface_scans row the fake made. */
@@ -363,6 +365,7 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 			const id = (c.body as any).link_batch_id;
 			const rows = files.filter((f) => f.link_batch_id === id && f.state === 'linked');
 			if (!rows.length) throw err(404, 'NOT_FOUND', 'That batch does not exist or was already undone.');
+			if (opts.undoByLinkerOnly) throw err(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
 			// the caller may no longer delete a scan they added: nothing is undone (administrators are not substituted)
 			const noDelete = rows.find((f) => f.linked_collection === 'surface_scans' && opts.scanUndoAllowed === false);
 			if (noDelete) throw err(403, 'FORBIDDEN', 'You can no longer delete that surface scan, so adding it cannot be undone.', { candidate_id: noDelete.candidate_id });

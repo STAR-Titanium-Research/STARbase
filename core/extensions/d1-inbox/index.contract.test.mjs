@@ -216,6 +216,14 @@ test('a surface scan item always carries a condition the person chose: the fixtu
   assert.match(linked.linked_label, /worn/);
 });
 
+test('a copy of a file in an Inbox the caller has no part in carries { kind: other } and no name; a copy in their own or their team folder carries the name', () => {
+  const rows = built.get('files_team_folder.json').body.data;
+  const other = rows.find((r) => r.candidate_id === '00000000-0000-4000-8000-000000001013');
+  assert.deepEqual(other.duplicate_of_owner, { kind: 'other' });
+  assert.ok(!JSON.stringify(other).includes('Bob B'), "the other person's name is not in the row");
+  assert.equal(rows.find((r) => r.candidate_id === '00000000-0000-4000-8000-000000001002').duplicate_of_owner, 'Alice A');
+});
+
 test('the folder filter reads the folder part of the path, not the file name (the client words it that way)', () => {
   const { sql, bindings } = buildListQuery(SCOPE, parseFileFilters({ folder: 'SEM' }));
   assert.match(sql, /strpos\(lower\(regexp_replace\(c\.rel_path, '\[\^\/\]\*\$', ''\)\), lower\(\?\)\) > 0/);

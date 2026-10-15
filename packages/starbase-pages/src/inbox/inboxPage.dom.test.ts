@@ -37,7 +37,7 @@ const OPERATIONS = [{ operation_id: '00000000-0000-4000-8000-000000000102', pass
 const ITEMS: Record<string, unknown[]> = { cutting_inserts: INSERTS, insert_edges: EDGES, manufacturing_operations: OPERATIONS };
 let itemReads: Array<{ path: string; params: any }> = [];
 
-async function mount(files = defaultFiles(), opts: FakeInboxOptions = {}) {
+async function mount(files = defaultFiles(), opts: FakeInboxOptions = {}, url = '/inbox') {
 	fake = createFakeInbox({ files, ...opts });
 	const base = fake.api;
 	// /items reads (the record picker) answer from a tiny table; everything else is the fake endpoint.
@@ -56,7 +56,7 @@ async function mount(files = defaultFiles(), opts: FakeInboxOptions = {}) {
 	configureLinks(starbaseLinks('https://d1.example'));
 	setPageFrame(defineComponent({ props: { title: String }, setup: (_p, { slots }) => () => h('div', [slots.default?.()]) }));
 	router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/inbox', component: InboxView }] });
-	await router.push('/inbox');
+	await router.push(url);
 	app = createApp({ render: () => h('div', [h(RouterView)]) });
 	app.use(router);
 	registerStubs(app);
@@ -94,6 +94,28 @@ afterEach(() => {
 });
 
 describe('the Inbox page', () => {
+	it('opens the Home link to older exact matches with the Match filter set and the list asked for exactly those', async () => {
+		const older = (o: Partial<Parameters<typeof foundFile>[0]>, token: string) => exactMatch({ origin: 'backlog', ...o }, token, 'S-1');
+		await mount(
+			[
+				older({ rel_path: 'Users/ab1cd/old/aaaa1111_x.tif' }, 'aaaa1111'),
+				older({ rel_path: 'Users/ab1cd/old/bbbb2222_x.tif', match_strength: 'code' }, 'bbbb2222'),
+				foundFile({ origin: 'backlog', rel_path: 'Users/ab1cd/old/nothing.tif' }),
+				older({ rel_path: 'Users/ab1cd/old/cccc3333_x.tif', match_strength: 'edge_code' }, 'cccc3333'),
+			],
+			{},
+			'/inbox?tab=older&strength=short_id,code&owner=me',
+		);
+		expect(names()).toEqual(['aaaa1111_x.tif', 'bbbb2222_x.tif']);
+		const select = document.querySelector<HTMLSelectElement>('[data-test="filter-strength"]')!;
+		expect(select.value).toBe('short_id,code');
+		expect(select.selectedOptions[0]?.textContent).toBe('Exact match');
+		const asked = fake.calls.filter((c) => c.path === '/d1-inbox/files');
+		expect(asked.length).toBeGreaterThan(0);
+		for (const c of asked) expect(c.params).toMatchObject({ tab: 'older', strength: 'short_id,code', owner: 'me' });
+		expect(router.currentRoute.value.query).toMatchObject({ tab: 'older', strength: 'short_id,code', owner: 'me' });
+	});
+
 	it('lists the pictures as rows with what the crawler thinks and why, and the documents collapsed under Other files', async () => {
 		await mount();
 		expect(names()).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif', 'plain.tif', 'edge1.al3d']);
