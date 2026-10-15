@@ -3514,7 +3514,7 @@ rl_check "people_update_own_row:1" "Lab Member updates only their own People row
 rl_check "people_actions:create,read,update" "Lab Member can create, read and update people but not delete them"
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
-rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
+rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,scan_while_former,uni_alias,user_id" "people.update leaves out exactly the key, the login, the legacy id, the timestamp and the inbox alias columns (migration 193: administrators only)"
 rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
 rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
@@ -3807,6 +3807,11 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DROP TABLE IF EXISTS d1_private.form_values_175_backup;
 DROP TABLE IF EXISTS d1_private.process_templates;
 DROP TABLE IF EXISTS d1_private.process_drafts;
+DROP TABLE IF EXISTS d1_private.inbox_prefs;
+DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
+DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
+DROP TABLE IF EXISTS d1_private.inbox_dirs;
+DROP TABLE IF EXISTS d1_private.file_candidates;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
@@ -6135,6 +6140,293 @@ lvx_check "up2_stored:$lvx_n" "up again: no more and no fewer rows"
 lvx_check "up2_objects:true/4" "up again: the view and four triggers are back"
 lvx_check "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
 lvx_check "up2_drift:0" "up again: readers_drift() is empty"
+
+echo "== Found files inbox: uni alias, share folder, candidates, folder cache, scan requests, crawler state, prefs =="
+# Spec docs/superpowers/specs/2026-10-15-found-files-inbox-design.md section 4. Each check is its own rolled-back
+# transaction (ids prefix a2000000-0000-4000-8000-). A rejected statement aborts psql (ON_ERROR_STOP), so the error
+# text is what is asserted on. The CI database has the stub directus_files and directus_users (id only), so the
+# fixture rows set just the id.
+FI_MIG=$(ls db/migrations/*_found_files_inbox.sql 2>/dev/null | head -1)
+[[ -n "$FI_MIG" && -f "$FI_MIG" ]] && ok "found the found files inbox migration (${FI_MIG:-none})" || bad "the found files inbox migration is missing (db/migrations/*_found_files_inbox.sql)"
+FI_P1='a2000000-0000-4000-8000-0000000000a1'
+FI_P2='a2000000-0000-4000-8000-0000000000a2'
+FI_T1='a2000000-0000-4000-8000-0000000000b1'
+FI_F1='a2000000-0000-4000-8000-0000000000c1'
+FI_F2='a2000000-0000-4000-8000-0000000000c2'
+FI_F3='a2000000-0000-4000-8000-0000000000c3'
+FI_U1='a2000000-0000-4000-8000-0000000000d1'
+FI_U2='a2000000-0000-4000-8000-0000000000d2'
+FI_A65=$(printf 'a%.0s' $(seq 1 65))
+FI_A64=$(printf 'a%.0s' $(seq 1 64))
+fi_sql() { # fi_sql <statements>: run them after fixture people, a team, files and users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One'), ('$FI_P2', 'Inbox Test Two');
+INSERT INTO teams (team_id, name) VALUES ('$FI_T1', 'Inbox Test Team');
+INSERT INTO directus_files (id) VALUES ('$FI_F1'), ('$FI_F2'), ('$FI_F3');
+INSERT INTO directus_users (id) VALUES ('$FI_U1'), ('$FI_U2');
+$1
+ROLLBACK;
+SQL
+}
+fi_new_tables="'file_candidates', 'inbox_dirs', 'inbox_scan_requests', 'inbox_crawler_state', 'inbox_prefs'"
+run_eq "the five new tables are in d1_private" \
+    "SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname IN ($fi_new_tables)" \
+    "file_candidates,inbox_crawler_state,inbox_dirs,inbox_prefs,inbox_scan_requests"
+run_eq "none of them is in public, v_schema_dictionary, directus_collections or directus_fields (not exposed in Directus)" \
+    "SELECT (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ($fi_new_tables)) || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name IN ($fi_new_tables)) || ',' || (SELECT count(*) FROM directus_collections WHERE collection IN ($fi_new_tables)) || ',' || (SELECT count(*) FROM directus_fields WHERE collection IN ($fi_new_tables))" "0,0,0,0"
+run_eq "d1_llm_readonly cannot read candidates, folders, requests, crawler state or prefs" \
+    "SELECT bool_or(has_table_privilege('d1_llm_readonly', 'd1_private.' || t, 'SELECT')) FROM unnest(ARRAY['file_candidates', 'inbox_dirs', 'inbox_scan_requests', 'inbox_crawler_state', 'inbox_prefs']) AS t" "f"
+# people.uni_alias / people.scan_while_former
+run_eq "people.uni_alias is nullable text and scan_while_former is boolean NOT NULL" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')" \
+    "scan_while_former:boolean:NO,uni_alias:text:YES"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'a' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias 'a' (one character) is rejected" || bad "one-character uni_alias was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'a/b' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias 'a/b' (a slash) is rejected" || bad "uni_alias with a slash was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'a\\b' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias with a backslash is rejected" || bad "uni_alias with a backslash was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = '$FI_A65' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "a 65-character uni_alias is rejected" || bad "65-character uni_alias was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = '..' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias '..' is rejected (it would walk out of Users/)" || bad "uni_alias '..' was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'a b' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias with a space is rejected" || bad "uni_alias with a space was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'abc12de' WHERE person_id = '$FI_P1';
+UPDATE people SET uni_alias = '$FI_A64' WHERE person_id = '$FI_P2';
+SELECT 'fi_alias:' || uni_alias || ':' || scan_while_former FROM people WHERE person_id = '$FI_P1';")
+grep -q 'fi_alias:abc12de:false' <<<"$fi_out" && ok "uni_alias 'abc12de' (and a 64-character one) is accepted; scan_while_former defaults to false" || bad "valid uni_alias failed (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'ab.c_d-1' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_chars:' || uni_alias FROM people WHERE person_id = '$FI_P1';")
+grep -q 'fi_alias_chars:ab.c_d-1' <<<"$fi_out" && ok "uni_alias may contain dot, underscore and hyphen" || bad "uni_alias with . _ - failed (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = 'Abc12de' WHERE person_id = '$FI_P1';
+UPDATE people SET uni_alias = 'aBC12DE' WHERE person_id = '$FI_P2';")
+grep -q 'duplicate key' <<<"$fi_out" && ok "a uni_alias that differs only in case is rejected (unique on lower)" || bad "case-different duplicate uni_alias was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "SELECT 'fi_nulls:' || count(*) FROM people WHERE person_id IN ('$FI_P1', '$FI_P2') AND uni_alias IS NULL;")
+grep -q 'fi_nulls:2' <<<"$fi_out" && ok "two people without an alias are fine (the unique index skips NULL)" || bad "two NULL aliases failed (output: $fi_out)"
+# teams.share_folder
+run_eq "teams.share_folder is nullable text" \
+    "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'teams' AND column_name = 'share_folder'" "text:YES"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = 'x/y' WHERE team_id = '$FI_T1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "share_folder 'x/y' is rejected" || bad "share_folder with a slash was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = 'x\\y' WHERE team_id = '$FI_T1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "share_folder 'x\\y' is rejected" || bad "share_folder with a backslash was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = '' WHERE team_id = '$FI_T1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "an empty share_folder is rejected" || bad "empty share_folder was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = '   ' WHERE team_id = '$FI_T1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "a blank share_folder is rejected" || bad "blank share_folder was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = '..' WHERE team_id = '$FI_T1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "share_folder '..' is rejected (it would walk out of Shared/)" || bad "share_folder '..' was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = 'Alloy Group 2026' WHERE team_id = '$FI_T1';
+SELECT 'fi_folder:' || share_folder FROM teams WHERE team_id = '$FI_T1';")
+grep -q 'fi_folder:Alloy Group 2026' <<<"$fi_out" && ok "a share_folder with spaces is accepted" || bad "valid share_folder failed (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO teams (team_id, name, share_folder) VALUES ('a2000000-0000-4000-8000-0000000000b2', 'Inbox Test Team Two', 'Shared Lab');
+UPDATE teams SET share_folder = 'SHARED LAB' WHERE team_id = '$FI_T1';")
+grep -q 'duplicate key' <<<"$fi_out" && ok "a share_folder that differs only in case is rejected (unique on lower)" || bad "case-different duplicate share_folder was not rejected (output: $fi_out)"
+# file_candidates
+FI_C="INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'Users/abc12de/a.tif');
+SELECT 'fi_cand:' || state || ':' || match_strength || ':' || extracted || ':' || matches || ':' || (candidate_id IS NOT NULL) || ':' || (first_seen_at IS NOT NULL) || ':' || coalesce(decided_at::text, '<null>') FROM d1_private.file_candidates;")
+grep -q 'fi_cand:new:none:{}:\[\]:true:true:<null>' <<<"$fi_out" && ok "a candidate inserts with state new, match_strength none, empty extracted and matches" || bad "candidate defaults are wrong (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_team_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_T1', 'document', 'backlog', 'Shared/Lab/a.pdf');
+SELECT 'fi_team_cand:' || count(*) FROM d1_private.file_candidates;")
+grep -q 'fi_team_cand:1' <<<"$fi_out" && ok "a candidate owned by a team inserts" || bad "team-owned candidate failed (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', '$FI_T1', 'image', 'new', 'x.tif');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a candidate with both a person and a team owner is rejected" || bad "candidate with two owners was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, kind, origin, rel_path) VALUES ('$FI_F1', 'image', 'new', 'x.tif');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a candidate with no owner is rejected" || bad "candidate with no owner was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'video', 'new', 'x.tif');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown candidate kind is rejected" || bad "bad kind was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'old', 'x.tif');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown candidate origin is rejected" || bad "bad origin was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'deleted');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown candidate state is rejected" || bad "bad state was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, match_strength) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'strong');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown match_strength is rejected" || bad "bad match_strength was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, link_kind) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'magic');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown link_kind is rejected" || bad "bad link_kind was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif'), ('$FI_F2', '$FI_P1', 'surface_scan', 'backlog', 'b.al3d'), ('$FI_F3', '$FI_P1', 'other', 'new', 'c.mat');
+UPDATE d1_private.file_candidates SET state = 'linked', link_kind = 'bulk', match_strength = 'edge_code' WHERE directus_files_id = '$FI_F1';
+UPDATE d1_private.file_candidates SET state = 'dismissed', match_strength = 'code' WHERE directus_files_id = '$FI_F2';
+UPDATE d1_private.file_candidates SET state = 'gone', match_strength = 'short_id', link_kind = 'auto' WHERE directus_files_id = '$FI_F3';
+SELECT 'fi_values:' || count(*) FROM d1_private.file_candidates;")
+grep -q 'fi_values:3' <<<"$fi_out" && ok "every allowed kind, origin, state, match_strength and link_kind value is accepted" || bad "allowed values were refused (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif'), ('$FI_F1', '$FI_P2', 'image', 'new', 'a.tif');")
+grep -q 'duplicate key' <<<"$fi_out" && ok "directus_files_id is unique: one candidate per file" || bad "second candidate for a file was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('a2000000-0000-4000-8000-0000000000ff', '$FI_P1', 'image', 'new', 'a.tif');")
+grep -q 'foreign key' <<<"$fi_out" && ok "a candidate for a directus_files row that does not exist is rejected" || bad "candidate without a file was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
+DELETE FROM directus_files WHERE id = '$FI_F1';
+SELECT 'fi_cascade_file:' || count(*) FROM d1_private.file_candidates;")
+grep -q 'fi_cascade_file:0' <<<"$fi_out" && ok "deleting the directus_files row removes its candidate (cascade)" || bad "candidate survived its file's deletion (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif'), ('$FI_F2', '$FI_P2', 'image', 'new', 'b.tif');
+DELETE FROM people WHERE person_id = '$FI_P1';
+SELECT 'fi_cascade_person:' || count(*) FROM d1_private.file_candidates;")
+grep -q 'fi_cascade_person:1' <<<"$fi_out" && ok "deleting a person removes their candidates and only theirs" || bad "candidates did not follow their person (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_team_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_T1', 'image', 'new', 'a.tif');
+DELETE FROM teams WHERE team_id = '$FI_T1';
+SELECT 'fi_cascade_team:' || count(*) FROM d1_private.file_candidates;")
+grep -q 'fi_cascade_team:0' <<<"$fi_out" && ok "deleting a team removes its candidates" || bad "candidates did not follow their team (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, duplicate_of) SELECT '$FI_F2', '$FI_P2', 'image', 'new', 'copy.tif', candidate_id FROM d1_private.file_candidates;
+SELECT 'fi_dup_set:' || count(*) FROM d1_private.file_candidates WHERE duplicate_of IS NOT NULL;
+DELETE FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';
+SELECT 'fi_dup_cleared:' || count(*) || ':' || count(*) FILTER (WHERE duplicate_of IS NULL) FROM d1_private.file_candidates;")
+grep -q 'fi_dup_set:1' <<<"$fi_out" && grep -q 'fi_dup_cleared:1:1' <<<"$fi_out" && ok "duplicate_of points at another candidate and is cleared when that one goes (ON DELETE SET NULL)" || bad "duplicate_of did not behave (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
+UPDATE d1_private.file_candidates SET duplicate_of = candidate_id;")
+grep -q 'check constraint' <<<"$fi_out" && ok "a candidate cannot be a duplicate of itself" || bad "self-duplicate was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, kind_confidence) VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif', 1.5);")
+grep -q 'check constraint' <<<"$fi_out" && ok "a kind_confidence above 1 is rejected" || bad "kind_confidence 1.5 was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, kind_confidence, size_bytes, matches, extracted, suggested_collection, suggested_record_id) VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif', 0.875, 1234, '[{\"collection\":\"physical_samples\",\"record_id\":\"$FI_F2\",\"via\":\"short_id\",\"token\":\"3fa9c1d2\"}]', '{\"kv\": 15}', 'physical_samples', '$FI_F2');
+SELECT 'fi_conf:' || kind_confidence || ':' || size_bytes || ':' || suggested_collection FROM d1_private.file_candidates;")
+grep -q 'fi_conf:0.875:1234:physical_samples' <<<"$fi_out" && ok "a candidate with a confidence, a size, matches and a suggestion inserts" || bad "full candidate row failed (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, size_bytes) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', -1);")
+grep -q 'check constraint' <<<"$fi_out" && ok "a negative size_bytes is rejected" || bad "negative size_bytes was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, matches) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', '{}');")
+grep -q 'check constraint' <<<"$fi_out" && ok "matches must be a JSON array" || bad "non-array matches was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, extracted) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', '[]');")
+grep -q 'check constraint' <<<"$fi_out" && ok "extracted must be a JSON object" || bad "non-object extracted was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, suggested_collection) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', 'physical_samples');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a suggested collection without a suggested record is rejected" || bad "half a suggestion was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', NULL);")
+grep -q 'not-null' <<<"$fi_out" && ok "rel_path is required" || bad "NULL rel_path was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, decided_by) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', 'a2000000-0000-4000-8000-0000000000ff');")
+grep -q 'foreign key' <<<"$fi_out" && ok "decided_by must be a directus user" || bad "decided_by without a user was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, decided_by) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif', '$FI_U1');
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'fi_decider:' || count(*) || ':' || count(decided_by) FROM d1_private.file_candidates;")
+grep -q 'fi_decider:1:0' <<<"$fi_out" && ok "deleting the user who decided keeps the candidate and clears decided_by" || bad "decided_by did not clear (output: $fi_out)"
+run_eq "file_candidates indexes cover (owner_person_id, state), (owner_team_id, state), (link_batch_id), (suggested_record_id), (duplicate_of)" \
+    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'file_candidates' AND (indexdef LIKE '%(owner_person_id, state)%' OR indexdef LIKE '%(owner_team_id, state)%' OR indexdef LIKE '%(link_batch_id)%' OR indexdef LIKE '%(suggested_record_id)%' OR indexdef LIKE '%(duplicate_of)%')" "5"
+# inbox_dirs
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at) VALUES ('Users/abc12de', '$FI_P1', now(), now());
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_team_id) VALUES ('Shared/Lab', '$FI_T1');
+SELECT 'fi_dirs:' || count(*) || ':' || count(baselined_at) FROM d1_private.inbox_dirs;")
+grep -q 'fi_dirs:2:0' <<<"$fi_out" && ok "folder cache rows insert for a person and for a team; baselined_at starts NULL" || bad "inbox_dirs insert failed (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, owner_team_id) VALUES ('Users/x', '$FI_P1', '$FI_T1');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a folder row with both owners is rejected" || bad "inbox_dirs with two owners was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path) VALUES ('Users/x');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a folder row with no owner is rejected" || bad "inbox_dirs with no owner was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/x', '$FI_P1'), ('Users/x', '$FI_P2');")
+grep -q 'duplicate key' <<<"$fi_out" && ok "rel_path is the primary key of the folder cache" || bad "duplicate rel_path was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/x', '$FI_P1');
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_team_id) VALUES ('Shared/y', '$FI_T1');
+DELETE FROM people WHERE person_id = '$FI_P1';
+SELECT 'fi_dirs_cascade:' || count(*) FROM d1_private.inbox_dirs;
+DELETE FROM teams WHERE team_id = '$FI_T1';
+SELECT 'fi_dirs_cascade_team:' || count(*) FROM d1_private.inbox_dirs;")
+grep -q 'fi_dirs_cascade:1' <<<"$fi_out" && grep -q 'fi_dirs_cascade_team:0' <<<"$fi_out" && ok "folder rows go with their person and their team" || bad "inbox_dirs did not cascade (output: $fi_out)"
+# inbox_scan_requests
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id, requested_by) VALUES ('person', '$FI_P1', '$FI_U1');
+INSERT INTO d1_private.inbox_scan_requests (scope, requested_by) VALUES ('all', '$FI_U2');
+SELECT 'fi_req:' || count(*) || ':' || count(*) FILTER (WHERE status = 'queued') || ':' || count(requested_at) || ':' || count(started_at) FROM d1_private.inbox_scan_requests;")
+grep -q 'fi_req:2:2:2:0' <<<"$fi_out" && ok "scan requests insert as queued with requested_at set (person and all scope)" || bad "scan request defaults are wrong (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, requested_by) VALUES ('team', '$FI_U1');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown scan request scope is rejected" || bad "bad scope was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, status, requested_by) VALUES ('all', 'cancelled', '$FI_U1');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an unknown scan request status is rejected" || bad "bad status was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, requested_by) VALUES ('person', '$FI_U1');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a person-scope request without a person is rejected" || bad "person scope without a person was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id, requested_by) VALUES ('all', '$FI_P1', '$FI_U1');")
+grep -q 'check constraint' <<<"$fi_out" && ok "an all-scope request with a person is rejected" || bad "all scope with a person was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, status, requested_by) VALUES ('all', 'running', '$FI_U1'), ('all', 'done', '$FI_U1'), ('all', 'failed', '$FI_U1');
+SELECT 'fi_req_status:' || count(*) FROM d1_private.inbox_scan_requests;")
+grep -q 'fi_req_status:3' <<<"$fi_out" && ok "running, done and failed are accepted statuses" || bad "allowed statuses were refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id, requested_by) VALUES ('person', '$FI_P1', '$FI_U1');
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'fi_req_user:' || count(*) || ':' || count(requested_by) FROM d1_private.inbox_scan_requests;
+DELETE FROM people WHERE person_id = '$FI_P1';
+SELECT 'fi_req_person:' || count(*) FROM d1_private.inbox_scan_requests;")
+grep -q 'fi_req_user:1:0' <<<"$fi_out" && grep -q 'fi_req_person:0' <<<"$fi_out" && ok "a request keeps its row when the user goes and goes with its person" || bad "scan request foreign keys did not behave (output: $fi_out)"
+run_eq "scan requests have an index for claiming queued rows and one for the per-person rate limit" \
+    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_scan_requests' AND (indexdef LIKE '%(status, requested_at)%' OR indexdef LIKE '%(person_id, requested_at%')" "2"
+# inbox_crawler_state (singleton)
+run_eq "inbox_crawler_state is seeded with exactly one row" "SELECT count(*) FROM d1_private.inbox_crawler_state" "1"
+run_eq "the seeded state row has the defaults (interval 30 minutes, 60 MB/s, zero counters, no unmatched folders, never heartbeated)" \
+    "SELECT interval_minutes || ':' || read_mb_per_s::int || ':' || files_registered || ':' || error_count || ':' || unmatched_folders || ':' || (last_heartbeat_at IS NULL) || ':' || (desired_state IN ('running', 'paused')) FROM d1_private.inbox_crawler_state" "30:60:0:0:[]:true:true"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('a2000000-0000-4000-8000-0000000000ee');")
+grep -q 'check constraint' <<<"$fi_out" && ok "a second inbox_crawler_state row with another id is rejected (singleton check)" || bad "second state row was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('00000000-0000-0000-0000-000000000001');")
+grep -q 'duplicate key' <<<"$fi_out" && ok "a second inbox_crawler_state row with the singleton id is rejected (primary key)" || bad "duplicate singleton row was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE d1_private.inbox_crawler_state SET desired_state = 'stopped';")
+grep -q 'check constraint' <<<"$fi_out" && ok "desired_state other than running / paused is rejected" || bad "bad desired_state was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE d1_private.inbox_crawler_state SET interval_minutes = 0;")
+grep -q 'check constraint' <<<"$fi_out" && ok "an interval of 0 minutes is rejected" || bad "interval 0 was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE d1_private.inbox_crawler_state SET read_mb_per_s = 0;")
+grep -q 'check constraint' <<<"$fi_out" && ok "a read throttle of 0 MB/s is rejected" || bad "read_mb_per_s 0 was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused', interval_minutes = 5, read_mb_per_s = 12.5, unmatched_folders = '[\"Users/zz\"]', last_heartbeat_at = now(), files_registered = 40, error_count = 2, last_error = 'x';
+SELECT 'fi_state_upd:' || desired_state || ':' || interval_minutes || ':' || unmatched_folders FROM d1_private.inbox_crawler_state;")
+grep -q 'fi_state_upd:paused:5:\["Users/zz"\]' <<<"$fi_out" && ok "the state row takes the admin settings and the daemon's status" || bad "state row update failed (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE d1_private.inbox_crawler_state SET unmatched_folders = '{}';")
+grep -q 'check constraint' <<<"$fi_out" && ok "unmatched_folders must be a JSON array" || bad "non-array unmatched_folders was not rejected (output: $fi_out)"
+# inbox_prefs (the auto-link opt-in; migration 170's user_prefs.prefs is validated by the d1-usage endpoint and owned by it)
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_prefs (user_id) VALUES ('$FI_U1');
+SELECT 'fi_prefs:' || auto_link || ':' || (updated_at IS NOT NULL) FROM d1_private.inbox_prefs;")
+grep -q 'fi_prefs:false:true' <<<"$fi_out" && ok "auto-link is off by default" || bad "inbox_prefs default is wrong (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_prefs (user_id) VALUES ('$FI_U1'), ('$FI_U1');")
+grep -q 'duplicate key' <<<"$fi_out" && ok "one inbox_prefs row per user" || bad "second prefs row was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_prefs (user_id) VALUES ('a2000000-0000-4000-8000-0000000000ff');")
+grep -q 'foreign key' <<<"$fi_out" && ok "prefs for a user that does not exist are rejected" || bad "prefs without a user were not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES ('$FI_U1', true), ('$FI_U2', false);
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'fi_prefs_cascade:' || count(*) FROM d1_private.inbox_prefs;")
+grep -q 'fi_prefs_cascade:1' <<<"$fi_out" && ok "deleting a user removes their inbox prefs, and only theirs" || bad "inbox prefs did not follow their user (output: $fi_out)"
+# Comments on every new table, column and index, and on the new people and teams columns.
+run_eq "every new table, column and index has a comment (without: none)" \
+    "SELECT coalesce(string_agg(x, ', ' ORDER BY x), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables) AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables) AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT i.indexname FROM pg_indexes i JOIN pg_class ic ON ic.relname = i.indexname AND ic.relnamespace = to_regnamespace(i.schemaname)
+         WHERE i.schemaname = 'd1_private' AND i.tablename IN ($fi_new_tables) AND coalesce(obj_description(ic.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT 'people.' || a.attname FROM pg_attribute a
+         WHERE a.attrelid = 'public.people'::regclass AND a.attname IN ('uni_alias', 'scan_while_former') AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT 'teams.' || a.attname FROM pg_attribute a
+         WHERE a.attrelid = 'public.teams'::regclass AND a.attname = 'share_folder' AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT i.indexname FROM pg_indexes i JOIN pg_class ic ON ic.relname = i.indexname AND ic.relnamespace = to_regnamespace(i.schemaname)
+         WHERE i.schemaname = 'public' AND i.indexname IN ('people_uni_alias_key', 'teams_share_folder_key') AND coalesce(obj_description(ic.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT 'missing index ' || n FROM unnest(ARRAY['people_uni_alias_key', 'teams_share_folder_key']) AS n WHERE to_regclass('public.' || n) IS NULL) q" ""
+# Down and up again, inside one rolled-back transaction: down removes everything (the alias and folder columns with their data),
+# up brings it all back, including the seeded singleton row.
+if [[ -n "$FI_MIG" && -f "$FI_MIG" ]]; then
+    fi_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FI_MIG")
+    fi_down=$(awk '/-- migrate:down/{f=1;next}f' "$FI_MIG")
+    fi_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name, uni_alias, scan_while_former) VALUES ('$FI_P1', 'Inbox Test One', 'abc12de', true);
+INSERT INTO teams (team_id, name, share_folder) VALUES ('$FI_T1', 'Inbox Test Team', 'Alloy Group');
+INSERT INTO directus_files (id) VALUES ('$FI_F1');
+INSERT INTO directus_users (id) VALUES ('$FI_U1');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
+INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES ('$FI_U1', true);
+$fi_down
+SELECT 'fi_dn_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables);
+SELECT 'fi_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
+SELECT 'fi_dn_indexes:' || count(*) FROM pg_indexes WHERE indexname IN ('people_uni_alias_key', 'teams_share_folder_key');
+SELECT 'fi_dn_people:' || count(*) FROM people WHERE person_id = '$FI_P1';
+SELECT 'fi_dn_files:' || count(*) FROM directus_files WHERE id = '$FI_F1';
+$fi_up
+SELECT 'fi_up_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname IN ($fi_new_tables);
+SELECT 'fi_up_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
+SELECT 'fi_up_state:' || count(*) FROM d1_private.inbox_crawler_state;
+SELECT 'fi_up_alias:' || coalesce(uni_alias, '<null>') || ':' || scan_while_former FROM people WHERE person_id = '$FI_P1';
+ROLLBACK;
+SQL
+)
+    grep -q 'fi_dn_tables:0' <<<"$fi_out" && grep -q 'fi_dn_columns:0' <<<"$fi_out" && grep -q 'fi_dn_indexes:0' <<<"$fi_out" && ok "down drops the five tables, the three columns and both unique indexes" || bad "down left objects behind (output: $fi_out)"
+    grep -q 'fi_dn_people:1' <<<"$fi_out" && grep -q 'fi_dn_files:1' <<<"$fi_out" && ok "down keeps the people and files rows (only the new columns and tables go)" || bad "down removed people or files rows (output: $fi_out)"
+    grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
 
 echo "== Cleanup test rows =="
 $PSQL -c "

@@ -54,47 +54,76 @@ Files stay on the share. Nothing is uploaded, moved or changed (§3).
 ## 4. Data model (the contract all streams build against)
 
 Migrations are written by stream A. Names below are binding; column types are binding unless a constraint
-forces a change (then the worker updates this table in the same commit).
+forces a change (then the worker updates this table in the same commit). Implemented by migration
+`20261015000193_found_files_inbox.sql`; where it differs from the first draft of this section the text below
+already says so (changes marked *as built*).
 
 **public**
 
-- `people.uni_alias TEXT` — nullable; `CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$')`; unique on
-  `lower(uni_alias)` where not null. `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`.
-- `teams.share_folder TEXT` — nullable; `CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> '')`; unique on
-  `lower(share_folder)` where not null.
+- `people.uni_alias TEXT` — nullable; `CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$')` and (*as built*)
+  `CHECK (uni_alias !~ '^[.]+$')` so `..` cannot walk out of `Users/`; unique on `lower(uni_alias)` where not null
+  (`people_uni_alias_key`). `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`. Not in the Lab Member
+  `people` update field list, so only administrators set them.
+- `teams.share_folder TEXT` — nullable; `CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> '')` and (*as built*)
+  `CHECK (btrim(share_folder) !~ '^[.]+$')`; unique on `lower(share_folder)` where not null
+  (`teams_share_folder_key`).
+- *As built:* teams are keyed by `team_id` (not `id`), so every team foreign key below is `teams (team_id)`.
 
 **d1_private** (not exposed in Directus; reached only through the `d1-inbox` extension, like pins and drafts)
 
 - `file_candidates`
   - `candidate_id UUID PK DEFAULT uuid_generate_v4()`, `directus_files_id UUID NOT NULL UNIQUE REFERENCES
     directus_files(id) ON DELETE CASCADE`
-  - `owner_person_id UUID REFERENCES people(person_id)`, `owner_team_id UUID REFERENCES teams(id)`;
+  - `owner_person_id UUID REFERENCES people(person_id) ON DELETE CASCADE`,
+    `owner_team_id UUID REFERENCES teams(team_id) ON DELETE CASCADE`;
     `CHECK (num_nonnulls(owner_person_id, owner_team_id) = 1)`
   - `kind TEXT NOT NULL CHECK (kind IN ('sem_image','surface_scan','image','document','other'))`,
-    `kind_confidence NUMERIC(4,3)`, `extracted JSONB NOT NULL DEFAULT '{}'`
+    `kind_confidence NUMERIC(4,3)` (*as built:* `CHECK (kind_confidence BETWEEN 0 AND 1)`),
+    `extracted JSONB NOT NULL DEFAULT '{}'` (*as built:* must be a JSON object)
   - `origin TEXT NOT NULL CHECK (origin IN ('new','backlog'))`,
     `state TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new','linked','dismissed','gone'))`
   - `match_strength TEXT NOT NULL DEFAULT 'none' CHECK (match_strength IN ('short_id','code','edge_code','none'))`,
-    `matches JSONB NOT NULL DEFAULT '[]'` (array of `{collection, record_id, via, token}`),
-    `suggested_collection TEXT`, `suggested_record_id UUID` (set only when exactly one record matches)
-  - `duplicate_of UUID REFERENCES file_candidates(candidate_id) ON DELETE SET NULL`
-  - `rel_path TEXT NOT NULL` (relative to `star_group1`), `size_bytes BIGINT`, `source_mtime TIMESTAMPTZ`
-  - `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `decided_at TIMESTAMPTZ`, `decided_by UUID` (directus user)
+    `matches JSONB NOT NULL DEFAULT '[]'` (array of `{collection, record_id, via, token}`; *as built:* must be a
+    JSON array), `suggested_collection TEXT`, `suggested_record_id UUID` (set only when exactly one record matches;
+    *as built:* both set or both null)
+  - `duplicate_of UUID REFERENCES file_candidates(candidate_id) ON DELETE SET NULL` (*as built:* not its own id)
+  - `rel_path TEXT NOT NULL` (relative to `star_group1`), `size_bytes BIGINT` (*as built:* `>= 0`),
+    `source_mtime TIMESTAMPTZ`
+  - `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `decided_at TIMESTAMPTZ`,
+    `decided_by UUID REFERENCES directus_users(id) ON DELETE SET NULL` (*as built:* a real foreign key)
   - undo bookkeeping: `link_kind TEXT CHECK (link_kind IN ('manual','bulk','auto'))`, `linked_collection TEXT`,
     `linked_junction_id UUID`, `link_batch_id UUID`
-  - indexes: `(owner_person_id, state)`, `(owner_team_id, state)`, `(link_batch_id)`, `(suggested_record_id)`
-- `inbox_dirs` — the folder cache: `rel_path TEXT PK`, `owner_person_id`, `owner_team_id` (same check),
+  - *As built:* `adopted_at TIMESTAMPTZ` — set by `d1-inbox` when a person links a document or other non-image
+    file; it is the "flag the crawler reads" (plan B2/C6): the crawler hashes rows with `adopted_at IS NOT NULL`
+    that have no `file_fingerprints` row yet (`open_rb(..., adopted=True)`). Stays set after an undo.
+  - indexes: `(owner_person_id, state)`, `(owner_team_id, state)`, and, partial on not-null, `(link_batch_id)`,
+    `(suggested_record_id)`; *as built* also partial `(duplicate_of)` and `(adopted_at)`
+- `inbox_dirs` — the folder cache: `rel_path TEXT PK`, `owner_person_id`, `owner_team_id` (same check and
+  `ON DELETE CASCADE` foreign keys; each owner column is indexed),
   `dir_mtime TIMESTAMPTZ`, `last_listed_at`, `baselined_at TIMESTAMPTZ` (set on the owner's root row when their
   first complete scan ends; files first seen before that are `origin='backlog'`).
 - `inbox_scan_requests` — `request_id UUID PK`, `scope TEXT CHECK (scope IN ('person','all'))`,
-  `person_id UUID`, `requested_by UUID`, `requested_at`, `started_at`, `finished_at`, `status TEXT CHECK
-  (status IN ('queued','running','done','failed'))`, `error TEXT`.
-- `inbox_crawler_state` — singleton like `force_crawler_state`: `desired_state` (`running`/`paused`),
-  `interval_minutes INT DEFAULT 30`, `read_mb_per_s NUMERIC DEFAULT 60`, `last_heartbeat_at`, `daemon_started_at`,
-  `current_activity`, `last_scan_started_at`, `last_scan_finished_at`, `files_registered`, `error_count`,
-  `last_error`.
-- Auto-link opt-in: a per-person flag stored with the person's prefs (`d1_private.user_prefs`, migration 170)
-  if its shape fits, else one boolean column on a new `d1_private.inbox_prefs`.
+  `person_id UUID REFERENCES people ON DELETE CASCADE` (*as built:* required exactly when `scope = 'person'`),
+  `requested_by UUID REFERENCES directus_users ON DELETE SET NULL`, `requested_at NOT NULL DEFAULT now()`,
+  `started_at`, `finished_at`, `status TEXT NOT NULL DEFAULT 'queued' CHECK
+  (status IN ('queued','running','done','failed'))`, `error TEXT`. Indexes `(status, requested_at)` (the daemon's
+  claim) and partial `(person_id, requested_at DESC)` (the rate limit).
+- `inbox_crawler_state` — singleton like `force_crawler_state` (`id` fixed to
+  `00000000-0000-0000-0000-000000000001`, one seeded row): `desired_state` (`running`/`paused`, default
+  `running`: the daemon is already opt-in through the compose profile and the admin tab has no start switch),
+  `interval_minutes INT NOT NULL DEFAULT 30` (`>= 1`), `read_mb_per_s NUMERIC NOT NULL DEFAULT 60` (`> 0`),
+  `last_heartbeat_at`, `daemon_started_at`, `current_activity`, `last_scan_started_at`, `last_scan_finished_at`,
+  `files_registered BIGINT NOT NULL DEFAULT 0`, `error_count INT NOT NULL DEFAULT 0`, `last_error`.
+  *As built:* `unmatched_folders JSONB NOT NULL DEFAULT '[]'` — a JSON array of share-relative paths
+  (`"Users/zz9"`, `"Shared/Old project"`) of folders directly under `Users/` and `Shared/` that match no alias and
+  no share folder, rewritten by the crawler each scan (`inbox_dirs` rows need an owner, so they cannot hold these);
+  and `updated_at`.
+- Auto-link opt-in: **decided: a new table `d1_private.inbox_prefs`** (`user_id UUID PK REFERENCES
+  directus_users ON DELETE CASCADE`, `auto_link BOOLEAN NOT NULL DEFAULT false`, `updated_at`), not
+  `d1_private.user_prefs` (migration 170): `user_prefs.prefs` is a JSON document owned by the `d1-usage` endpoint,
+  which rejects keys it does not know, so a flag written by `d1-inbox` would be refused or dropped there; and
+  "who opted in" stays a plain indexed column for the crawler. The row is keyed by Directus user; the crawler
+  maps a person to their login through `people.user_id`.
 
 **Reused unchanged:** `directus_files` (`storage='star'` pointer rows, uuid5-of-relative-path ids, written by
 the crawler with the indexer's rule so ids agree), `directus_folders`, `file_fingerprints` (the crawler writes
