@@ -158,7 +158,7 @@ describe('loadFamily', () => {
     await loadFamily(api, 'root');
     const call = calls.find((c) => c.path === '/items/test_sessions')!;
     expect(filterOf(call)).toEqual({
-      subject: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: ['root'] } }] } },
+      subject: { _some: { 'item:physical_samples': { sample_id: { _in: ['root'] } } } },
     });
   });
 
