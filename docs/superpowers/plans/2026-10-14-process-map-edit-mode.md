@@ -24,7 +24,7 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 | D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | built; reviewed (1 blocking, 12 should-fix); porting onto the socket-rail base + fixes in progress (2026-10-15) |
 | D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | reviewed, fixed, **merged** (2026-10-15) |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
-| PRs | coordinator | -server → #305 (1/4), -form → #306 (2/4), this branch → #304 (3/4), canvas → part 4 | #304 CI green; #305, #306 open (2026-10-15) |
+| PRs | coordinator | -server → #305 (1/4), -form → #306 (2/4), this branch → #304 (3/4), canvas → part 4 | #305 and #306 **merged**; #304 CI green, in review (2026-10-15) |
 
 ## Global constraints
 
