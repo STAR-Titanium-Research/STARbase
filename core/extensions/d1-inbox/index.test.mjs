@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary,
+  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -42,6 +42,7 @@ const cand = (overrides = {}) => {
     suggested_collection: 'physical_samples', suggested_record_id: S1, duplicate_of: null,
     rel_path: `Users/ali1/img${seq}.tif`, size_bytes: 1000, source_mtime: null, first_seen_at: '2026-10-14T10:00:00.000Z',
     decided_at: null, decided_by: null, link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null, adopted_at: null,
+    auto_undone_at: null,
     ...overrides,
   };
 };
@@ -172,7 +173,9 @@ function statement(w, sql, b, txId) {
       for (const id of csv(b[0])) {
         const c = w.candidates.get(id);
         if (c && c.link_batch_id === b[1] && c.state === 'linked') {
-          Object.assign(c, { state: 'new', decided_at: null, decided_by: null, link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null });
+          // as the SQL does: an undone AUTO link is remembered (auto_undone_at), so the crawler's auto-link never links the file again
+          Object.assign(c, { state: 'new', decided_at: null, decided_by: null, auto_undone_at: c.link_kind === 'auto' ? w.now.toISOString() : c.auto_undone_at,
+            link_kind: null, linked_collection: null, linked_junction_id: null, link_batch_id: null });
           out.push({ candidate_id: id });
         }
       }
@@ -2096,6 +2099,78 @@ test('POST /auto-link never links a document, an ambiguous match, a code match, 
   ]);
   assert.equal(w.junctions.sample_data_files.length, 0);
   assert.equal(w.junctions.operation_data_files.length + w.junctions.session_data_files.length, 0);
+});
+
+test('unfit: an undone auto-link is UNDONE for auto-link only; a person\'s own Link and Accept all of that file stay allowed', () => {
+  const undone = cand({ auto_undone_at: '2026-10-15T10:00:00.000Z' });
+  assert.equal(unfit(undone, { auto: true }), 'UNDONE');
+  assert.equal(unfit(undone, { auto: false }), null, 'accept-all is a person acting: allowed');
+  assert.equal(unfit(cand(), { auto: true }), null);
+  assert.equal(unfit(cand({ state: 'dismissed', auto_undone_at: '2026-10-15T10:00:00.000Z' }), { auto: true }), 'NOT_NEW', 'the state comes first');
+});
+
+test('POST /undo of an AUTO batch marks the files undone: the next auto-link skips them as UNDONE, nothing is linked', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const s = setup(w);
+  w.prefs.set(U.alice, true);
+  const first = await auto(w, [c.candidate_id], undefined, { setup: s });
+  const batch = first.body.data.results[0].link_batch_id;
+  assert.equal(c.link_kind, 'auto');
+  assert.equal(c.auto_undone_at, null, 'linked, not undone');
+  const undo = await s.call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(undo.statusCode, 200);
+  assert.equal(c.state, 'new');
+  assert.equal(c.link_kind, null, 'all four link columns cleared together as before');
+  assert.equal(c.auto_undone_at, w.now.toISOString(), 'the undo of an auto batch is remembered');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  const again = await auto(w, [c.candidate_id], undefined, { setup: s });
+  assert.deepEqual(again.body.data.results.map((r) => [r.status, r.reason]), [['skipped', 'UNDONE']]);
+  assert.equal(c.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0, 'no second junction row');
+});
+
+test('an undone auto-link file is still the person\'s to link: a manual Link and Accept all work and clear nothing; undoing that manual batch keeps the mark', async () => {
+  const w = newWorld();
+  const c = add(w, candFor('physical_samples', S1, { auto_undone_at: '2026-10-15T10:00:00.000Z' }));
+  w.acceptIds = [c.candidate_id];
+  const s = setup(w);
+  const preview = await s.call('POST /accept-all', { user: U.alice, body: { dry_run: true } });
+  assert.deepEqual(preview.body.data.ids, [c.candidate_id], 'Accept all considers it');
+  const manual = await s.call('POST /link', { user: U.alice, body: { items: [link(c)] } });
+  assert.equal(manual.statusCode, 200, JSON.stringify(manual.body));
+  assert.equal(c.state, 'linked');
+  assert.equal(c.link_kind, 'manual');
+  assert.equal(c.auto_undone_at, '2026-10-15T10:00:00.000Z', 'a manual link clears nothing');
+  const undo = await s.call('POST /undo', { user: U.alice, body: { link_batch_id: manual.body.data.link_batch_id } });
+  assert.equal(undo.statusCode, 200);
+  assert.equal(c.auto_undone_at, '2026-10-15T10:00:00.000Z', 'and undoing it does not clear the mark');
+  const all = await s.call('POST /accept-all', { user: U.alice, body: {} });
+  assert.equal(all.body.data.linked, 1, 'Accept all links it');
+  assert.equal(c.link_kind, 'bulk');
+});
+
+test('POST /undo of a MANUAL or bulk batch does not set auto_undone_at: the file is a plain new file again', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const s = setup(w);
+  const one = await s.call('POST /link', { user: U.alice, body: { items: [link(a)] } });
+  const two = await s.call('POST /link', { user: U.alice, body: { items: [link(b), link(add(w, cand()))] } });
+  for (const [res, c] of [[one, a], [two, b]]) {
+    await s.call('POST /undo', { user: U.alice, body: { link_batch_id: res.body.data.link_batch_id } });
+    assert.equal(c.state, 'new');
+    assert.equal(c.auto_undone_at, null);
+  }
+  w.prefs.set(U.alice, true);
+  assert.equal((await auto(w, [a.candidate_id], undefined, { setup: s })).body.data.results[0].status, 'linked', 'nothing remembers a manual undo');
+});
+
+test('the SQL: undo remembers an undone auto link in the same UPDATE that clears the link columns, and the candidate reads carry it', () => {
+  assert.match(SQL.resetBatch, /auto_undone_at = CASE WHEN link_kind = 'auto' THEN now\(\) ELSE auto_undone_at END/);
+  assert.match(SQL.resetBatch, /link_kind = NULL, linked_collection = NULL, linked_junction_id = NULL, link_batch_id = NULL/);
+  for (const name of ['candidatesForUpdate', 'candidatesById', 'batchForUpdate']) assert.match(SQL[name], /c\.auto_undone_at/, name);
+  for (const name of ['restore', 'dismiss', 'markLinked']) assert.doesNotMatch(SQL[name], /auto_undone_at/, `${name} neither sets nor clears it`);
 });
 
 test('POST /auto-link refuses a record the person cannot edit (view-only, Restricted) and never uses another identity', async () => {

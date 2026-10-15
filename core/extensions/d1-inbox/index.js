@@ -178,7 +178,7 @@ const isUuid = (v) => typeof v === 'string' && UUID.test(v);
 
 const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_id, c.owner_team_id, c.kind, c.state, c.origin, c.match_strength, c.matches,'
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
-  + ' c.link_batch_id, c.adopted_at';
+  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at';
 const IDS = "string_to_array(?, ',')::uuid[]";
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // A copy (duplicate_of) drops out of the new and older lists once its original was linked or dismissed.
@@ -216,9 +216,11 @@ export const SQL = {
     + ' linked_junction_id = ?, link_batch_id = ?,'
     + ' adopted_at = CASE WHEN ?::boolean THEN coalesce(adopted_at, now()) ELSE adopted_at END'
     + " WHERE candidate_id = ? AND state = 'new' RETURNING candidate_id",
-  // Undo clears the four link columns together (the table's CHECK). adopted_at stays: the crawler may already have hashed the file.
+  // Undo clears the four link columns together (the table's CHECK). adopted_at stays: the crawler may already have hashed the file. An undone AUTO
+  // link is remembered in auto_undone_at (the SET list sees the old link_kind), so the crawler's auto-link never links that file again.
   resetBatch:
-    "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL, link_kind = NULL, linked_collection = NULL,"
+    "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL,"
+    + " auto_undone_at = CASE WHEN link_kind = 'auto' THEN now() ELSE auto_undone_at END, link_kind = NULL, linked_collection = NULL,"
     + ` linked_junction_id = NULL, link_batch_id = NULL WHERE candidate_id = ANY(${IDS}) AND link_batch_id = ? AND state = 'linked'`
     + ' RETURNING candidate_id',
   dismiss:
@@ -571,6 +573,8 @@ export function fileOut(row, info) {
 // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
 export const unfit = (cand, { auto }) => {
   if (cand.state !== 'new') return 'NOT_NEW';
+  // a person undid an auto-link of this file: automation never links it again (their own Link or Accept all of it stays allowed)
+  if (auto && cand.auto_undone_at) return 'UNDONE';
   if (auto && cand.owner_team_id) return 'TEAM_FILE';
   if (cand.duplicate_of) return 'COPY';
   if (auto && cand.origin === 'backlog') return 'BACKLOG';

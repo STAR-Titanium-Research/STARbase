@@ -6371,6 +6371,16 @@ SELECT 'fi_decider:' || count(*) || ':' || count(decided_by) FROM d1_private.fil
 grep -q 'fi_decider:1:0' <<<"$fi_out" && ok "deleting the user who decided keeps the candidate and clears decided_by" || bad "decided_by did not clear (output: $fi_out)"
 run_eq "file_candidates indexes cover (owner_person_id, state), (owner_team_id, state), (link_batch_id), (suggested_record_id), (duplicate_of)" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'file_candidates' AND (indexdef LIKE '%(owner_person_id, state)%' OR indexdef LIKE '%(owner_team_id, state)%' OR indexdef LIKE '%(link_batch_id)%' OR indexdef LIKE '%(suggested_record_id)%' OR indexdef LIKE '%(duplicate_of)%')" "5"
+# auto_undone_at: an undone auto-link is remembered so the crawler's auto-link never links the file again (Opus review B1)
+run_eq "file_candidates.auto_undone_at is nullable timestamptz" \
+    "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_candidates' AND column_name = 'auto_undone_at'" "timestamp with time zone:YES"
+fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif'), ('$FI_F2', '$FI_P1', 'image', 'new', 'y.tif');
+UPDATE d1_private.file_candidates SET auto_undone_at = now() WHERE directus_files_id = '$FI_F1';
+SELECT 'fi_undone:' || count(*) || ':' || count(auto_undone_at) FROM d1_private.file_candidates;
+$FI_CL VALUES ('$FI_F3', '$FI_P1', 'image', 'new', 'z.tif', 'linked', 'manual', $FI_LINK);
+UPDATE d1_private.file_candidates SET auto_undone_at = now() WHERE directus_files_id = '$FI_F3';
+SELECT 'fi_undone_linked:' || state || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F3';")
+grep -q 'fi_undone:2:1' <<<"$fi_out" && grep -q 'fi_undone_linked:linked:true' <<<"$fi_out" && ok "auto_undone_at is NULL by default, can be set on a new file, and does not disturb the link bookkeeping CHECKs on a linked one" || bad "auto_undone_at behaved wrongly (output: $fi_out)"
 # A changed alias or share folder starts the owner's folder over: the old cache rows and the undecided / dismissed / gone
 # candidates go, linked ones stay, and an UPDATE that does not change the value deletes nothing.
 fi_seed_person="UPDATE people SET uni_alias = 'old01' WHERE person_id = '$FI_P1';
@@ -6646,6 +6656,17 @@ SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)'
 SELECT 'ib_linked_twice:' || :ib_n2;
 SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_a', :'ib_b')) AS ib_n3 \gset
 SELECT 'ib_undone:' || :ib_n3 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || coalesce(link_batch_id::text, '-') FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+SELECT 'ib_manual_undo_mark:' || (auto_undone_at IS NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+-- an undone AUTO link is remembered (auto_undone_at), also when a person later links the file by hand and undoes that
+SELECT candidate_id AS ib_h FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/h.tif' \gset
+SELECT gen_random_uuid() AS ib_hj, gen_random_uuid() AS ib_hb, gen_random_uuid() AS ib_hb2 \gset
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'auto', 'physical_samples', :'ib_hj', :'ib_hb', :'ib_h')) AS ib_n7 \gset
+SELECT 'ib_auto_linked_mark:' || (auto_undone_at IS NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_h', :'ib_hb')) AS ib_n8 \gset
+SELECT 'ib_auto_undone:' || :ib_n8 || ':' || state || ':' || coalesce(link_kind, '-') || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
+SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'manual', 'physical_samples', :'ib_hj', :'ib_hb2', :'ib_h')) AS ib_n9 \gset
+SELECT pg_temp.ib_run(format('EXECUTE resetbatch(%L, %L)', :'ib_h', :'ib_hb2')) AS ib_n10 \gset
+SELECT 'ib_auto_undone_kept:' || :ib_n9 || ':' || :ib_n10 || ':' || state || ':' || (auto_undone_at IS NOT NULL) FROM d1_private.file_candidates WHERE candidate_id = :'ib_h';
 SELECT pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_a')) AS ib_n4 \gset
 SELECT 'ib_dismissed:' || :ib_n4 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
 SELECT pg_temp.ib_run(format('EXECUTE restore(%L)', :'ib_a')) AS ib_n5 \gset
@@ -6686,6 +6707,10 @@ SQL
     ib_check "ib_linked:1:linked:manual" "link bookkeeping passes the table's CHECKs (state, kind, collection, junction and batch together)"
     ib_check "ib_linked_twice:0" "a second link of a file no longer new changes nothing"
     ib_check "ib_undone:1:new:-:-" "undo clears all four link columns together"
+    ib_check "ib_manual_undo_mark:true" "undo of a manual link leaves auto_undone_at NULL"
+    ib_check "ib_auto_linked_mark:true" "an auto link does not set auto_undone_at"
+    ib_check "ib_auto_undone:1:new:-:true" "undo of an AUTO link clears the link columns and sets auto_undone_at, in one UPDATE"
+    ib_check "ib_auto_undone_kept:1:1:new:true" "a later manual link and its undo neither clear nor re-set the mark (a person may link the file; automation never does)"
     ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
     ib_check "ib_restored:1:new" "restore moves it back to new"
     ib_check "ib_scan_table:true" "the surface_scans feature check (information_schema) answers yes where the table exists"

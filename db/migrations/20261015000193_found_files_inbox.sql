@@ -35,7 +35,8 @@
 --     kind_confidence between 0 and 1, matches a JSON array, extracted a JSON object, a suggestion names both a collection and
 --     a record, size not negative, a candidate is not its own duplicate, a person-scope request names a person;
 --   * extra columns: file_candidates.adopted_at (the "linking a document sets a flag the crawler reads to hash it once" of
---     plan task B2, which the spec had no column for), inbox_crawler_state.unmatched_folders (where the crawler records the
+--     plan task B2, which the spec had no column for), file_candidates.auto_undone_at (an undone auto-link must not be linked
+--     again by the next scan: the final review's B1), inbox_crawler_state.unmatched_folders (where the crawler records the
 --     folders under Users/ and Shared/ that match nobody, for the admin list: inbox_dirs rows must have an owner) and
 --     updated_at on the state and prefs rows;
 --   * decided_by and requested_by are real foreign keys to directus_users (ON DELETE SET NULL), not bare uuids;
@@ -111,6 +112,7 @@ CREATE TABLE d1_private.file_candidates (
     linked_junction_id  UUID,
     link_batch_id       UUID,
     adopted_at          TIMESTAMPTZ,
+    auto_undone_at      TIMESTAMPTZ,
     CONSTRAINT file_candidates_pkey PRIMARY KEY (candidate_id),
     CONSTRAINT file_candidates_directus_files_id_key UNIQUE (directus_files_id),
     CONSTRAINT file_candidates_directus_files_id_fkey FOREIGN KEY (directus_files_id) REFERENCES directus_files (id) ON DELETE CASCADE,
@@ -169,6 +171,7 @@ COMMENT ON COLUMN d1_private.file_candidates.linked_collection IS 'The record co
 COMMENT ON COLUMN d1_private.file_candidates.linked_junction_id IS 'The id of the junction row the link created (sample_data_files, operation_data_files or session_data_files), so an undo removes exactly that row; NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.link_batch_id IS 'Shared by every file linked in one Link, Accept all or auto-link run; one Undo per batch removes exactly the junction rows of the batch. NULL unless state is linked.';
 COMMENT ON COLUMN d1_private.file_candidates.adopted_at IS 'When a person linked a document or other non-image file: the signal for the crawler to read the file once, hash it and write file_fingerprints (open_rb with adopted=True). NULL for files never linked. Stays set after an undo, since the hash is wanted only once.';
+COMMENT ON COLUMN d1_private.file_candidates.auto_undone_at IS 'When a person undid an AUTO link of this file (an undo of a batch whose link_kind was auto sets it; NULL otherwise, and a manual or bulk undo leaves it NULL). The crawler''s auto-link and POST /d1-inbox/auto-link skip a file that has it (reason UNDONE), so an undone auto-link is not linked again by the next scan. A person''s own Link or Accept all of the file is still allowed and clears nothing. Stays set for the life of the row.';
 COMMENT ON INDEX d1_private.file_candidates_pkey IS 'Primary key of the found file.';
 COMMENT ON INDEX d1_private.file_candidates_directus_files_id_key IS 'One candidate per directus_files pointer row.';
 COMMENT ON INDEX d1_private.idx_file_candidates_owner_person_state IS 'A person''s inbox tabs and counts: their candidates by state.';
