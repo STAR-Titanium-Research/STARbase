@@ -327,9 +327,10 @@ row); a batch of scans is titled *Added as a surface scan, 1 file*. Live checks:
 
 - The read-only, never-open-a-document guarantee (§3) is the **inbox crawler's**. Other tools can still read files
   under `Users/`: `scripts/index_archive.py --fingerprint` and `scripts/file_fingerprints.py` hash documents they
-  find there. The crawler worker keeps `file_fingerprints.py --phase all` away from the crawler's own unlinked
-  rows (so an unlinked document is not read by that route either), but a person running the indexer by hand reads
-  whatever the indexer's rules cover.
+  find there. `file_fingerprints.py --phase all` skips a document or other non-image file the crawler found that
+  nobody has linked or adopted (it keys on the candidate row in `d1_private.file_candidates`, not on the pointer
+  row's metadata, which the indexer rewrites and any Lab Member can edit), so an unlinked document is not read by
+  that route either, but a person running the indexer by hand reads whatever the indexer's rules cover.
 - **Rolling back the migrations: roll back 194 before 193** (194 lists fields that 193 adds). Rolling back 193
   drops every alias (`people.uni_alias`, `people.scan_while_former`), every share folder (`teams.share_folder`),
   every candidate (so every dismissal and every Inbox undo record), every scan request, the crawler state row and

@@ -370,13 +370,30 @@ _LINKED_SQL = """f.id IN (
 
 # The inbox crawler (scripts/inbox_crawler) registers a pointer row for every file it finds on a person's
 # or team's share folder, documents included, but reads only images and surface scans (ADR-0020): a
-# document's content is read once, after a person links it. So under --phase all a row it registered
-# (metadata.found_by = 'inbox_crawler', which db.register_file writes) that is not linked yet is left alone.
-_UNLINKED_CRAWLER_FIND_SQL = (
-    "(COALESCE(f.metadata::jsonb->>'found_by', '') = 'inbox_crawler' AND NOT ("
-    + _LINKED_SQL
-    + "))"
-)
+# document's content is read once, after a person links it. So under --phase all a document or other
+# non-image file the crawler found (a d1_private.file_candidates row) that nobody has linked or adopted is
+# left alone. The exclusion keys on the candidate row, not on the pointer row's metadata: the indexer
+# rewrites `metadata` of the files it walks, and any Lab Member can edit it, while a candidate row is
+# written by the crawler and the d1-inbox extension only. A file in a junction is always linked, so `all`
+# stays a superset of `linked`.
+CANDIDATES_TABLE = "d1_private.file_candidates"  # tests point it at a throwaway schema
+
+
+def _unlinked_crawler_find_sql(table: str) -> str:
+    return (
+        "(f.id IN (SELECT c.directus_files_id FROM "
+        + table
+        + " c WHERE c.state <> 'linked' AND c.adopted_at IS NULL AND c.kind IN ('document', 'other')) "
+        "AND NOT (" + _LINKED_SQL + "))"
+    )
+
+
+def _all_phase_sql(cur) -> str:
+    """The `all` filter. A database without the inbox migration has no candidates, so excludes nothing."""
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (CANDIDATES_TABLE,))
+    if not cur.fetchone()[0]:
+        return "TRUE"
+    return f"NOT {_unlinked_crawler_find_sql(CANDIDATES_TABLE)}"
 
 
 def select_files(
@@ -391,7 +408,7 @@ def select_files(
     if phase not in ("linked", "all"):
         raise ValueError(f"phase must be 'linked' or 'all', not {phase!r}")
     storages = ["star", "local"] if include_local else ["star"]
-    linked = _LINKED_SQL if phase == "linked" else f"NOT {_UNLINKED_CRAWLER_FIND_SQL}"
+    linked = _LINKED_SQL if phase == "linked" else _all_phase_sql(cur)
     permanent = "starts_with(COALESCE(fp.error_message, ''), %s)"
     sql = f"""
         SELECT f.id::text, f.storage, f.metadata::jsonb->>'archive_path', f.filename_disk,
@@ -863,7 +880,7 @@ def _parser() -> argparse.ArgumentParser:
         "--phase",
         choices=("linked", "all"),
         required=True,
-        help="linked: files attached to operations/samples/sessions/force analyses; all: every file except one the inbox crawler found that nobody has linked yet",
+        help="linked: files attached to operations/samples/sessions/force analyses; all: every file except a document the inbox crawler found that nobody has linked yet",
     )
     p.add_argument(
         "--workers", type=int, default=1, help="parallel hashing threads (default 1)"

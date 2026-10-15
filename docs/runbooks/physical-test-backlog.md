@@ -1968,12 +1968,17 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
   `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
   nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
-  (ADR-0020), and `file_fingerprints.py --phase all` now skips a row the crawler registered (`metadata.found_by
-  = 'inbox_crawler'`) until it is linked. The indexer's own walk (`make index-archive`, with or without
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a document or other non-image file the crawler
+  found (a `d1_private.file_candidates` row of kind document or other, not linked, never adopted) until it is
+  linked. The exclusion keys on that candidate row, not on `directus_files.metadata.found_by`, which the
+  indexer's next run overwrites and any Lab Member can edit; a pointer row with `found_by` but no candidate
+  row is read like any other file. The indexer's own walk (`make index-archive`, with or without
   `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
-  unchanged, and a document the indexer registered earlier is not marked `found_by`. Run `make index-archive
-  --fingerprint` on a test folder with a document in it, check what was read, and decide: restrict both tools
-  to the folders the lab agreed to index, or accept it. Since: found files inbox, final review (S5).
+  unchanged. Run `make index-archive --fingerprint` on a test folder with a document in it, check what was
+  read, and decide: restrict both tools to the folders the lab agreed to index, or accept it. To check the
+  exclusion: after the crawler found a document and the indexer ran over its folder, `file_fingerprints.py
+  --phase all --dry-run` must not list it, and must list it once a person has linked it. Since: found files
+  inbox, final review (S5), re-review fix (S3).
 - [ ] **IF16 — An undone auto-link stays undone (live).** With auto-link on for a test person, save an image
   with an exact short ID of a sample they can edit; let the crawler auto-link it, then **Undo** it in the Inbox
   (*Recently auto-linked*). Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
