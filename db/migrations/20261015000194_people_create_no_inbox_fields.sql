@@ -1,6 +1,7 @@
 -- migrate:up
 -- Found files and the Inbox (docs/superpowers/specs/2026-10-15-found-files-inbox-design.md section 4, ADR-0020): close the alias squat on
--- People CREATE.
+-- People CREATE. This is defence in depth over migration 193's insert trigger people_inbox_columns_insert (which already rejects a non-null
+-- uni_alias or scan_while_former on INSERT): the permission row now refuses the fields before the database does.
 --
 -- Migration 193 added people.uni_alias (whose folder under Users/ is theirs) and people.scan_while_former. Only an administrator may set them:
 -- the Lab Member people UPDATE row already lists its fields and leaves them out. The Lab Member people CREATE row, however, has fields '*',

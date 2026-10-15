@@ -491,7 +491,7 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   assert.match(count.sql, /^SELECT count\(\*\)/);
   assert.doesNotMatch(count.sql, /LIMIT/);
   const accept = buildListQuery(scope, parseFileFilters({ tab: 'new' }), { accept: true });
-  assert.match(accept.sql, /^SELECT c\.candidate_id FROM/);
+  assert.match(accept.sql, /^SELECT c\.candidate_id, c\.first_seen_at FROM/);
   assert.match(accept.sql, /c\.match_strength = 'short_id'/);
   assert.match(accept.sql, /c\.suggested_record_id IS NOT NULL/);
 });

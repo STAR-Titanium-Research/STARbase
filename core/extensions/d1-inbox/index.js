@@ -11,18 +11,27 @@
 //   GET  /d1-inbox/summary          -> { data: { person: {person_id, new, older_matches, has_alias} | null, teams: [{team_id, name, new,
 //                                                older_matches}] (teams with a share folder), new, older_matches } }
 //                                                new = origin 'new' (not backlog); older_matches = backlog files that name exactly one record by
-//                                                short ID or code; a copy of a file already linked or dismissed is not counted
+//                                                short ID or code. A COPY of a file that is still in another inbox is not counted (D11: the badge
+//                                                counts a file once; the list shows the copy, marked), nor is a file already on the record it
+//                                                names (linked in Data Studio): neither is something new to link
 //   GET  /d1-inbox/files?tab=new|older|linked|dismissed&kind=a,b&strength=a,b&folder=&from=&to=&owner=me|team:<id>&link_kind=&limit=&offset=
 //                                   -> { data: FoundFile[], meta: { total, limit, offset, acceptable } }   FoundFile = the file_candidates columns
 //                                      plus name, suggested_label, suggested_can_edit, duplicate_of_owner, linked_record_id, linked_label,
 //                                      decided_by_name and owner {kind, id, name}. A record is named (suggestion, matches, linked record) only
-//                                      to a caller who can READ it. meta.acceptable = how many rows Accept all would link for the same filter.
+//                                      to a caller who can READ it. meta.acceptable (null unless the query has acceptable=1: it reads
+//                                      candidates and checks edit rights) = how many rows Accept all would link for the same filter.
 //   POST /d1-inbox/link             { items: [{ candidate_id, collection, record_id }] }  (1 to 200, one transaction)
-//                                   -> { data: { link_batch_id, linked: <count>, items: [{ candidate_id, collection, record_id, junction_id,
-//                                                adopted, already_linked? }] } }
-//   POST /d1-inbox/accept-all       { filter?, dry_run? }   links the exact short-ID suggestions the caller can edit (images, and documents or
-//                                   other files, never surface scans) -> { data: { link_batch_id, linked: <count>, items, skipped: [{
-//                                   candidate_id, reason }], has_more } }
+//                                   -> { data: { link_batch_id, linked: <count of newly linked>, items: [{ candidate_id, collection, record_id,
+//                                                junction_id, adopted, already_linked? }] } }   link_batch_id is null and linked 0 when every item
+//                                                was already linked by the same person (a repeat). A surface scan is refused 409 SURFACE_SCAN.
+//   POST /d1-inbox/accept-all       { filter?, dry_run?, candidate_ids?, cursor? }   links the exact short-ID suggestions the caller can edit
+//                                   (images, and documents or other files, never surface scans) -> { data: { link_batch_id, linked: <count>,
+//                                   items, skipped: [{ candidate_id, reason }] (the first 200), skipped_total, has_more, next_cursor } }.
+//                                   dry_run -> { data: { count, ids, skipped, skipped_total, has_more, next_cursor } } and nothing is written.
+//                                   With candidate_ids (the ids of a preview) exactly those are re-checked under the row locks and linked if
+//                                   they still qualify; the filter is ignored. Without them it reads the filter's rows a page at a time (keyset
+//                                   on first_seen_at, candidate_id) so a page of rows it must skip never hides linkable rows behind it;
+//                                   has_more is true only when the last page it read was full, and next_cursor (sent back as `cursor`) goes on.
 //   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
 //   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created -> { data: { undone: <count> } }
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
@@ -64,13 +73,21 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest } from '../d1-record-access/index.js';
+import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE, isWriteRequest } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-inbox';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CURRENT_USER = '$CURRENT_USER';
 const MAX_BATCH = 200;
-const ACCEPT_LIMIT = 500;
+// Accept-all reads candidates a page at a time (keyset on first_seen_at, candidate_id): a page of rows it must skip (a record the caller cannot
+// edit) must not hide the linkable rows behind it. One call reads at most ACCEPT_MAX_PAGES pages and stops once it has ACCEPT_MAX_ENTRIES to link
+// (soft: the page that crosses it is finished); a cursor carries on from there.
+const ACCEPT_PAGE = 500;
+const ACCEPT_MAX_PAGES = 10;
+const ACCEPT_MAX_ENTRIES = 500;
+const ACCEPT_MAX_IDS = 1000;
+const SKIPPED_SHOWN = 200;
+const MIN_SECRET_LENGTH = 32;
 const MAX_PAGE = 200;
 const DEFAULT_PAGE = 50;
 const MAX_TEXT = 500;
@@ -140,6 +157,12 @@ const IDS = "string_to_array(?, ',')::uuid[]";
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // A copy (duplicate_of) drops out of the new and older lists once its original was linked or dismissed.
 const COPY_HIDDEN = "NOT (c.duplicate_of IS NOT NULL AND o.state IN ('linked', 'dismissed'))";
+// The badge counts a file once (D11): a copy of a file still in another inbox is not counted (the list shows it, marked), until its original is gone.
+const NOT_A_COUNTED_COPY = "(c.duplicate_of IS NULL OR o.state = 'gone')";
+// A file that is already on the record it names (linked in Data Studio) is not a new thing to link: not counted, not accepted in bulk.
+const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
+  .map(([collection, t]) => `NOT (c.suggested_collection = '${collection}' AND EXISTS (SELECT 1 FROM ${t.junction} j WHERE j.${t.fk} = c.suggested_record_id AND j.directus_files_id = c.directus_files_id))`)
+  .join(' AND ');
 
 export const SQL = {
   setActor: "SELECT set_config('d1.actor_identity', ?, true)",
@@ -153,7 +176,8 @@ export const SQL = {
     'SELECT c.owner_person_id, c.owner_team_id, c.origin,'
     + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
     + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
-    + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS})) AND ${COPY_HIDDEN}`
+    + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
+    + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}`
     + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact',
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
   candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
@@ -217,7 +241,8 @@ export const SQL = {
     "SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE status = 'running')::int AS running"
     + " FROM d1_private.inbox_scan_requests WHERE status IN ('queued', 'running')",
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
-  junctionFind: perTarget((t) => `SELECT id FROM ${t.junction} WHERE ${t.fk} = ? AND directus_files_id = ?`),
+  // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
+  junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
   junctionById: perTarget((t) => `SELECT id, ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE id = ?`),
 };
 
@@ -232,6 +257,12 @@ export function safeEqual(a, b) {
 }
 
 // scope = { personId, teamIds, admin }: who is asking, and which folders are theirs.
+// Is this caller a Lab Viewer? By role id only, from the role and the roles list (as d1-access-guard's isViewerCaller), whatever the login says.
+export function isViewerAccountability(acc) {
+  const ids = [acc?.role, ...(Array.isArray(acc?.roles) ? acc.roles : [])].filter((id) => typeof id === 'string');
+  return ids.some((id) => id.toLowerCase() === LAB_VIEWER_ROLE_ID);
+}
+
 export function canSee(scope, candidate) {
   if (scope.admin === true) return true;
   if (scope.personId && candidate.owner_person_id === scope.personId) return true;
@@ -290,8 +321,11 @@ export function parseFileFilters(source, { defaultTab = 'new' } = {}) {
   }
   const linkKind = text(q.link_kind, 'link_kind');
   if (linkKind !== null && !LINK_KINDS.includes(linkKind)) throw badInput('Unknown link kind.');
+  const acceptableText = text(q.acceptable, 'acceptable');
+  if (acceptableText !== null && !['1', '0', 'true', 'false'].includes(acceptableText)) throw badInput('acceptable must be 1 or 0.');
   return {
     tab, kinds, strengths, folder, date_from: dateFrom, date_to: dateTo, owner, link_kind: linkKind,
+    acceptable: acceptableText === '1' || acceptableText === 'true',
     limit: intParam(q.limit, 'limit', { min: 1, max: MAX_PAGE, fallback: DEFAULT_PAGE }),
     offset: intParam(q.offset, 'offset', { min: 0, max: 1_000_000, fallback: 0 }),
   };
@@ -316,7 +350,7 @@ const LIST_FROM = ' FROM d1_private.file_candidates c'
 const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of';
 
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers). Everything a client chose is a binding.
-export function buildListQuery(scope, f, { count = false, accept = false } = {}) {
+export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE } = {}) {
   const where = [];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
@@ -338,8 +372,12 @@ export function buildListQuery(scope, f, { count = false, accept = false } = {})
   if (f.date_to) { where.push('coalesce(c.source_mtime, c.first_seen_at) < (?::date + 1)'); bindings.push(f.date_to); }
   if (f.link_kind) { where.push('c.link_kind = ?'); bindings.push(f.link_kind); }
   if (accept) {
-    where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL');
-    return { sql: `SELECT c.candidate_id${SLIM_FROM} WHERE ${where.join(' AND ')} ORDER BY c.first_seen_at, c.candidate_id LIMIT ${ACCEPT_LIMIT}`, bindings };
+    // What accept-all can ever link: exact short ID naming one record, not a surface scan, not a copy, not already on its record
+    where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL', "c.kind <> 'surface_scan'", 'c.duplicate_of IS NULL',
+      'jsonb_array_length(c.matches) = 1', NOT_ON_RECORD);
+    if (after) { where.push('(c.first_seen_at, c.candidate_id) > (?::timestamptz, ?::uuid)'); bindings.push(after.at, after.id); }
+    const size = Math.max(1, Math.floor(Number(pageSize)) || ACCEPT_PAGE);
+    return { sql: `SELECT c.candidate_id, c.first_seen_at${SLIM_FROM} WHERE ${where.join(' AND ')} ORDER BY c.first_seen_at, c.candidate_id LIMIT ${size}`, bindings };
   }
   if (count) return { sql: `SELECT count(*)::int AS total${SLIM_FROM} WHERE ${where.join(' AND ')}`, bindings };
   const order = f.tab === 'linked' || f.tab === 'dismissed'
@@ -430,8 +468,10 @@ export function mount(router, context, deps = {}) {
   const { database, logger, services, getSchema, env } = context;
   const clock = deps.clock ?? (() => new Date());
   const newId = deps.uuid ?? (() => randomUUID());
-  const secret = typeof env?.D1_INBOX_CRAWLER_SECRET === 'string' ? env.D1_INBOX_CRAWLER_SECRET : '';
-  if (secret === '') logger?.warn?.(`${SOURCE}: D1_INBOX_CRAWLER_SECRET is not set, so POST /d1-inbox/auto-link refuses every call`);
+  // A secret under 32 characters is as good as none (fail closed): auto-link refuses every call. openssl rand -hex 32 makes 64.
+  const configured = typeof env?.D1_INBOX_CRAWLER_SECRET === 'string' ? env.D1_INBOX_CRAWLER_SECRET : '';
+  const secret = configured.length >= MIN_SECRET_LENGTH ? configured : '';
+  if (secret === '') logger?.warn?.(`${SOURCE}: D1_INBOX_CRAWLER_SECRET is not set or shorter than ${MIN_SECRET_LENGTH} characters, so POST /d1-inbox/auto-link refuses every call`);
 
   const sendError = (res, err) => {
     const known = err instanceof HttpError;
@@ -449,7 +489,7 @@ export function mount(router, context, deps = {}) {
     try {
       const acc = req.accountability;
       if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
-      if (isWriteRequest(req) && (await isLabViewer(database, acc.user))) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
+      if (isWriteRequest(req) && isViewerAccountability(acc)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
       await fn({ req, res, acc });
     } catch (err) {
       sendError(res, err);
@@ -504,9 +544,9 @@ export function mount(router, context, deps = {}) {
     if (f.owner?.kind === 'person' && f.owner.id !== scope.personId) throw new HttpError(403, 'FORBIDDEN', 'That folder is not yours.');
     if (f.owner?.kind === 'team' && !scope.teamIds.includes(f.owner.id)) throw new HttpError(403, 'FORBIDDEN', 'That folder is not your team\'s.');
   };
-  const requireIds = (v, what) => {
-    if (!Array.isArray(v) || v.length < 1 || v.length > MAX_BATCH || v.some((id) => !isUuid(id))) {
-      throw badInput(`${what} must be 1 to ${MAX_BATCH} ids.`);
+  const requireIds = (v, what, max = MAX_BATCH) => {
+    if (!Array.isArray(v) || v.length < 1 || v.length > max || v.some((id) => !isUuid(id))) {
+      throw badInput(`${what} must be 1 to ${max} ids.`);
     }
     return [...new Set(v.map((id) => id.toLowerCase()))];
   };
@@ -572,8 +612,19 @@ export function mount(router, context, deps = {}) {
 
   // -- linking -------------------------------------------------------------------------------------------------------------------
 
-  const junctionExists = async (trx, collection, recordId, fileId) =>
-    rowsOf(await trx.raw(SQL.junctionFind[collection], [recordId, fileId]))[0] ?? null;
+  // Which of `entries` ({ collection, recordId, fileId }) are ALREADY linked: one query per collection. Returns a set of "collection:record:file".
+  async function existingLinks(db, entries) {
+    const by = new Map();
+    for (const e of entries) (by.get(e.collection) ?? by.set(e.collection, []).get(e.collection)).push(e);
+    const found = new Set();
+    for (const [collection, list] of by) {
+      const rows = rowsOf(await db.raw(SQL.junctionFindMany[collection], [list.map((e) => e.recordId).join(','), list.map((e) => e.fileId).join(',')]));
+      for (const r of rows) found.add(`${collection}:${r.record_id}:${r.directus_files_id}`);
+    }
+    return found;
+  }
+  const linkKey = (collection, recordId, fileId) => `${collection}:${recordId}:${fileId}`;
+  const alreadyOnRecord = (candidateId) => new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record. Dismiss clears it.', { candidate_id: candidateId });
 
   // Writes the links of `entries` ({ cand, collection, recordId }) in the open transaction: the junction row as the caller, then the candidate.
   // The caller has already locked the candidates, checked their state and the edit rights.
@@ -585,7 +636,7 @@ export function mount(router, context, deps = {}) {
       try {
         junctionId = await itemsFor(schema, acc, target.junction, trx).createOne({ [target.fk]: recordId, directus_files_id: cand.directus_files_id });
       } catch (err) {
-        if (isUnique(err)) throw new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record.', { candidate_id: cand.candidate_id });
+        if (isUnique(err)) throw alreadyOnRecord(cand.candidate_id);
         if (isDenied(err)) throw notEditable(cand.candidate_id, collection, recordId);
         throw err;
       }
@@ -619,13 +670,18 @@ export function mount(router, context, deps = {}) {
       for (const w of wanted) {
         const cand = rows.get(w.id);
         if (!cand || !canSee(scope, cand)) throw new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: w.id });
-        if (cand.state === 'new') { fresh.push({ cand, collection: w.collection, recordId: w.recordId }); continue; }
+        if (cand.state === 'new') {
+          // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test
+          if (cand.kind === 'surface_scan') throw new HttpError(409, 'SURFACE_SCAN', 'A surface scan is added to an insert or edge, not linked. That is not available yet.', { candidate_id: w.id });
+          fresh.push({ cand, collection: w.collection, recordId: w.recordId });
+          continue;
+        }
         if (cand.state === 'linked') {
           // the same person repeating the same link: nothing more to do
           const same = cand.decided_by === acc.user && cand.linked_collection === w.collection && cand.linked_junction_id
             && rowsOf(await trx.raw(SQL.junctionById[w.collection], [cand.linked_junction_id]))[0]?.record_id === w.recordId;
           if (!same) throw new HttpError(409, 'ALREADY_LINKED', 'That file was already linked.', { candidate_id: w.id });
-          again.push({ candidate_id: w.id, collection: w.collection, record_id: w.recordId, junction_id: cand.linked_junction_id, adopted: !IMAGE_KINDS.includes(cand.kind), already_linked: true, link_batch_id: cand.link_batch_id });
+          again.push({ candidate_id: w.id, collection: w.collection, record_id: w.recordId, junction_id: cand.linked_junction_id, adopted: !IMAGE_KINDS.includes(cand.kind), already_linked: true });
           continue;
         }
         if (cand.state === 'gone') throw new HttpError(409, 'FILE_GONE', 'That file is no longer on the share.', { candidate_id: w.id });
@@ -634,17 +690,15 @@ export function mount(router, context, deps = {}) {
       // The edit check, before anything is written: all or nothing.
       const editable = await editableSet(trx, acc, schema, fresh.map((e) => [e.collection, e.recordId]));
       for (const e of fresh) if (!editable.has(`${e.collection}:${e.recordId}`)) throw notEditable(e.cand.candidate_id, e.collection, e.recordId);
-      for (const e of fresh) {
-        if (await junctionExists(trx, e.collection, e.recordId, e.cand.directus_files_id)) {
-          throw new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record.', { candidate_id: e.cand.candidate_id });
-        }
-      }
-      const batchId = fresh.length ? newId() : (again[0]?.link_batch_id ?? null);
+      const there = await existingLinks(trx, fresh.map((e) => ({ collection: e.collection, recordId: e.recordId, fileId: e.cand.directus_files_id })));
+      for (const e of fresh) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw alreadyOnRecord(e.cand.candidate_id);
+      // nothing newly linked (the same person repeating a link): no batch, a count of 0, never the old batch id
+      const batchId = fresh.length ? newId() : null;
       const linked = fresh.length ? await performLink(trx, { acc, schema, entries: fresh, linkKind, batchId }) : [];
-      return { schema, link_batch_id: batchId, items: [...linked, ...again.map(({ link_batch_id: _b, ...rest }) => rest)], wrote: fresh.length > 0 };
+      return { link_batch_id: batchId, newly: linked.length, items: [...linked, ...again], wrote: fresh.length > 0 };
     });
     if (out.wrote) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.link_batch_id, linked: out.items.length, items: out.items } });
+    res.json({ data: { link_batch_id: out.link_batch_id, linked: out.newly, items: out.items } });
   }));
 
   // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
@@ -658,60 +712,109 @@ export function mount(router, context, deps = {}) {
     if (auto && !AUTO_KINDS.includes(cand.kind)) return 'KIND_NOT_ALLOWED';
     if (cand.match_strength !== 'short_id') return 'NOT_EXACT';
     const matches = asJson(cand.matches);
-    // two or more records named: never a suggestion (the crawler leaves suggested_* null, but a row that says otherwise is still refused)
-    if (auto && Array.isArray(matches) && matches.length > 1) return 'AMBIGUOUS';
+    // two or more records named: never a suggestion (the crawler leaves suggested_* null, but a row that says otherwise is still refused), in bulk too (D9)
+    if (Array.isArray(matches) && matches.length > 1) return 'AMBIGUOUS';
     if (!cand.suggested_record_id || !cand.suggested_collection) return 'NO_SUGGESTION';
-    if (auto && (!Array.isArray(matches) || matches.length !== 1 || matches[0].record_id !== cand.suggested_record_id || matches[0].collection !== cand.suggested_collection)) return 'AMBIGUOUS';
+    if (!Array.isArray(matches) || matches.length !== 1 || matches[0].record_id !== cand.suggested_record_id || matches[0].collection !== cand.suggested_collection) return 'AMBIGUOUS';
     if (!isTarget(cand.suggested_collection)) return 'COLLECTION_NOT_SUPPORTED';
     return null;
   };
 
-  // What accept-all would do for `f`: the candidates it links (`entries`) and the ones it leaves (`skipped`, with a reason). `lock` takes the row
-  // locks of a real run; a dry run and the list's "acceptable" count read without them. Candidates the caller cannot see are dropped silently.
-  async function planAccept(db, { acc, schema, scope, f, lock }) {
-    const query = buildListQuery(scope, f, { accept: true });
-    const ids = rowsOf(await db.raw(query.sql, query.bindings)).map((r) => r.candidate_id);
+  // A keyset cursor is { at, id } of the last row read, passed around as base64url JSON.
+  const encodeCursor = (row) => Buffer.from(JSON.stringify([toIso(row.first_seen_at), row.candidate_id])).toString('base64url');
+  function decodeCursor(text) {
+    if (text === undefined || text === null || text === '') return null;
+    try {
+      const [at, id] = JSON.parse(Buffer.from(String(text), 'base64url').toString('utf8'));
+      if (typeof at === 'string' && !Number.isNaN(new Date(at).getTime()) && isUuid(id)) return { at, id };
+    } catch { /* falls through */ }
+    throw badInput('cursor is not valid.');
+  }
+  const acceptPage = deps.acceptPage ?? ACCEPT_PAGE;
+  const acceptMaxPages = deps.acceptMaxPages ?? ACCEPT_MAX_PAGES;
+
+  // Sorts `cands` (candidate rows, already locked or read) into what accept-all links (`entries`) and what it leaves (`skipped`, with a reason):
+  // the candidate's own data, then what the caller may edit (one read a collection), then what is already on its record (one query a collection).
+  async function classify(db, { acc, schema, scope, cands }) {
     const skipped = [];
     const fit = [];
-    if (ids.length) {
-      for (const cand of rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [ids.join(',')]))) {
-        if (!canSee(scope, cand)) continue;
-        const why = unfit(cand, { auto: false });
-        if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
-        else fit.push(cand);
-      }
+    for (const cand of cands) {
+      if (!canSee(scope, cand)) continue;
+      const why = unfit(cand, { auto: false });
+      if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
+      else fit.push(cand);
     }
     const editable = await editableSet(db, acc, schema, fit.map((c) => [c.suggested_collection, c.suggested_record_id]));
-    const entries = [];
+    const editableFit = [];
     for (const cand of fit) {
-      if (!editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_EDITABLE' }); continue; }
-      if (await junctionExists(db, cand.suggested_collection, cand.suggested_record_id, cand.directus_files_id)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'ALREADY_ON_RECORD' }); continue; }
-      entries.push({ cand, collection: cand.suggested_collection, recordId: cand.suggested_record_id });
+      if (editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`)) editableFit.push(cand);
+      else skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_EDITABLE' });
     }
-    return { entries, skipped, has_more: ids.length >= ACCEPT_LIMIT };
+    const there = await existingLinks(db, editableFit.map((c) => ({ collection: c.suggested_collection, recordId: c.suggested_record_id, fileId: c.directus_files_id })));
+    const entries = [];
+    for (const cand of editableFit) {
+      if (there.has(linkKey(cand.suggested_collection, cand.suggested_record_id, cand.directus_files_id))) skipped.push({ candidate_id: cand.candidate_id, reason: 'ALREADY_ON_RECORD' });
+      else entries.push({ cand, collection: cand.suggested_collection, recordId: cand.suggested_record_id });
+    }
+    return { entries, skipped };
   }
+
+  // What accept-all would do. With `ids` (the candidate ids of an earlier preview) exactly those are re-checked, nothing is selected. Otherwise it
+  // reads the filter's candidates a page at a time from `cursor`, until it has enough to link, has read its page cap, or runs out; `has_more` says
+  // whether rows may remain (the last page was full), and `next_cursor` carries on. `lock` takes the row locks of a real run.
+  async function planAccept(db, { acc, schema, scope, f, lock, ids = null, cursor = null }) {
+    if (ids) {
+      const rows = new Map(rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [ids.join(',')])).map((r) => [r.candidate_id, r]));
+      const missing = ids.filter((id) => !rows.get(id) || !canSee(scope, rows.get(id))).map((id) => ({ candidate_id: id, reason: 'NOT_FOUND' }));
+      const planned = await classify(db, { acc, schema, scope, cands: ids.map((id) => rows.get(id)).filter(Boolean) });
+      return { entries: planned.entries, skipped: [...planned.skipped, ...missing], has_more: false, next_cursor: null };
+    }
+    const entries = [];
+    const skipped = [];
+    let after = cursor;
+    let exhausted = false;
+    let last = null;
+    for (let page = 0; page < acceptMaxPages; page += 1) {
+      const query = buildListQuery(scope, f, { accept: true, after, pageSize: acceptPage });
+      const found = rowsOf(await db.raw(query.sql, query.bindings));
+      if (found.length) {
+        const cands = rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [found.map((r) => r.candidate_id).join(',')]));
+        const planned = await classify(db, { acc, schema, scope, cands });
+        entries.push(...planned.entries);
+        skipped.push(...planned.skipped);
+        last = found[found.length - 1];
+        after = { at: toIso(last.first_seen_at), id: last.candidate_id };
+      }
+      if (found.length < acceptPage) { exhausted = true; break; }
+      if (entries.length >= ACCEPT_MAX_ENTRIES) break;
+    }
+    return { entries, skipped, has_more: !exhausted, next_cursor: exhausted || !last ? null : encodeCursor(last) };
+  }
+  const skippedOut = (skipped) => ({ skipped: skipped.slice(0, SKIPPED_SHOWN), skipped_total: skipped.length });
 
   router.post('/accept-all', route(async ({ req, res, acc }) => {
     const body = req.body === undefined || req.body === null ? {} : bodyOf(req);
     if (!body) throw badInput('The request is not valid.');
     if (body.dry_run !== undefined && typeof body.dry_run !== 'boolean') throw badInput('dry_run must be true or false.');
     const f = parseFileFilters(body.filter, { defaultTab: 'open' });
+    const cursor = decodeCursor(body.cursor);
+    const ids = body.candidate_ids === undefined ? null : requireIds(body.candidate_ids, 'candidate_ids', ACCEPT_MAX_IDS);
     const schema = await schemaOf(req);
     const scope = await scopeOf(acc);
     requireOwnerVisible(scope, f);
     if (body.dry_run === true) {
-      const found = await planAccept(database, { acc, schema, scope, f, lock: false });
-      res.json({ data: { link_batch_id: null, linked: 0, acceptable: found.entries.length, items: [], skipped: found.skipped, has_more: found.has_more, dry_run: true } });
+      const found = await planAccept(database, { acc, schema, scope, f, lock: false, ids, cursor });
+      res.json({ data: { count: found.entries.length, ids: found.entries.map((e) => e.cand.candidate_id), ...skippedOut(found.skipped), has_more: found.has_more, next_cursor: found.next_cursor, dry_run: true } });
       return;
     }
     const out = await inTransaction(acc.user, async (trx) => {
-      const found = await planAccept(trx, { acc, schema, scope, f, lock: true });
+      const found = await planAccept(trx, { acc, schema, scope, f, lock: true, ids, cursor });
       if (!found.entries.length) return { ...found, batchId: null, items: [] };
       const batchId = newId();
       return { ...found, batchId, items: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
     });
     if (out.batchId) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.batchId, linked: out.items.length, items: out.items, skipped: out.skipped, has_more: out.has_more } });
+    res.json({ data: { link_batch_id: out.batchId, linked: out.items.length, items: out.items, ...skippedOut(out.skipped), has_more: out.has_more, next_cursor: out.next_cursor } });
   }));
 
   // -- dismiss, restore, undo ---------------------------------------------------------------------------------------------
@@ -753,7 +856,8 @@ export function mount(router, context, deps = {}) {
         // Only the junction row this batch created, and only if it is still there (someone may have removed it in Data Studio meanwhile).
         if (!row.linked_junction_id || !isTarget(row.linked_collection)) continue;
         const stillThere = rowsOf(await trx.raw(SQL.junctionById[row.linked_collection], [row.linked_junction_id]))[0];
-        if (!stillThere) continue;
+        // gone, or repointed at another file in Data Studio since: not this batch's row any more, leave it alone
+        if (!stillThere || stillThere.directus_files_id !== row.directus_files_id) continue;
         try {
           await itemsFor(schema, acc, LINK_TARGETS[row.linked_collection].junction, trx).deleteOne(row.linked_junction_id);
         } catch (err) {
@@ -791,8 +895,9 @@ export function mount(router, context, deps = {}) {
     ]);
     const info = await recordInfo(database, acc, schema, pairs, rows.filter((r) => r.state === 'new').map((r) => [r.suggested_collection, r.suggested_record_id]));
     // how many of the rows this filter matches Accept all would link (the same plan, nothing locked or written)
+    // only when asked for (acceptable=1): it reads candidates and checks edit rights, which a plain list load must not do
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
-    const acceptable = open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
+    const acceptable = f.acceptable && open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
     res.json({ data: rows.map((r) => fileOut(r, info)), meta: { total: Number(count), limit: f.limit, offset: f.offset, acceptable } });
   }));
 
@@ -841,12 +946,13 @@ export function mount(router, context, deps = {}) {
   // -- auto-link (the crawler) ------------------------------------------------------------------------------------------------
 
   // What Directus's getAccountabilityForToken builds for a login: the role and its parents, and whether any policy is admin or app access.
+  // NOT verified against Directus's own fetchRolesTree: the SQL.roleTree order (the role first, then its parents) and the exact accountability fields
+  // Directus 11.17 reads are from memory of its source (backlog F20 checks it on a live Directus).
   async function accountabilityFor(db, user) {
     const roles = isBlank(user.role) ? [] : rowsOf(await db.raw(SQL.roleTree, [user.role])).map((r) => r.id);
     const [access] = rowsOf(await db.raw(SQL.globalAccess, [user.id, roles.join(',')]));
     return { user: user.id, role: user.role ?? null, roles, admin: access?.admin === true, app: access?.app === true, ip: null };
   }
-  const isViewerAccountability = (acc) => [acc.role, ...acc.roles].some((r) => typeof r === 'string' && r.toLowerCase() === LAB_VIEWER_ROLE_ID);
 
   async function autoLinkOne(candidateId, schema) {
     const skip = (reason) => ({ candidate_id: candidateId, status: 'skipped', reason });
@@ -867,7 +973,8 @@ export function mount(router, context, deps = {}) {
         // the edit check as the person, then the link as the person
         const editable = await editableSet(trx, acc, schema, [[cand.suggested_collection, cand.suggested_record_id]]);
         if (!editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`)) return skip('NOT_EDITABLE');
-        if (await junctionExists(trx, cand.suggested_collection, cand.suggested_record_id, cand.directus_files_id)) return skip('ALREADY_ON_RECORD');
+        const there = await existingLinks(trx, [{ collection: cand.suggested_collection, recordId: cand.suggested_record_id, fileId: cand.directus_files_id }]);
+        if (there.size) return skip('ALREADY_ON_RECORD');
         await trx.raw(SQL.setActor, [String(user.id)]);
         const batchId = newId();
         await performLink(trx, { acc, schema, linkKind: 'auto', batchId, entries: [{ cand, collection: cand.suggested_collection, recordId: cand.suggested_record_id }] });
