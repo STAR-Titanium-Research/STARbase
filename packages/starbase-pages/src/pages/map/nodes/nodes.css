@@ -17,14 +17,15 @@
 .d1-process-map .node:hover { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: var(--d1-shadow-lg, var(--d1-shadow)); }
 .d1-process-map .node.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
 /* A dashed card (probable batch, lineage junction) draws its outline on ::after: the width follows the
-   zoom (--pm-px, one screen pixel in flow units, set on .pm-canvas) without resizing the card, and the
+   zoom (--pm-px, one screen pixel in flow units, set on .pm-canvas) so it is the same on screen at every
+   zoom, zoomed in or out, without resizing the card, and the
    colour is darker than --d1-line, which vanished when zoomed out. */
 .d1-process-map .node.dashed { border-color: transparent; }
 .d1-process-map .node.dashed::after {
 	content: '';
 	position: absolute;
 	inset: -1px;
-	border: max(1px, calc(1.25 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--d1-dim, var(--theme--foreground-subdued)) 75%, transparent);
+	border: calc(1.25 * var(--pm-px, 1px)) dashed color-mix(in srgb, var(--d1-dim, var(--theme--foreground-subdued)) 75%, transparent);
 	border-radius: inherit;
 	pointer-events: none;
 	transition: border-color 0.12s;

@@ -378,19 +378,20 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   // ---- the pointer, and ＋ ------------------------------------------------------------------------
   const { hovered, hover, holdHover, clearHover, tooltip, focusOfHover: hoverOnly, socketHighlight, card } = useMapHover({ graph, nodeById, nodes, info });
-  // The selected card lights up its chain: upstream, downstream or both (the card's right-click menu; both
-  // when the map opens). Hovering another card shows that card's neighbours (useMapHover); hovering a wire or
-  // socket adds its wires to the chain.
+  // A card lights up its chain: upstream, downstream or both, the way the right-click menu last said (both
+  // when the map opens). The hovered card while the pointer is on one, else the selected card, so hover and
+  // selection always agree. Hovering a wire or socket adds its wires to the selection's chain; hovering a
+  // record in an Inside tray keeps the neighbour rule (useMapHover).
   const chainDir = ref<ChainDir>('both');
   const setChainDir = (d: ChainDir) => void (chainDir.value = d);
   const chain = computed(() => (graph.value ? chainFocus(graph.value, selectedId.value, chainDir.value) : null));
   const focusOfHover = computed<HoverFocus | null>(() => {
     const h = hoverOnly.value;
+    const id = hovered.value?.id;
+    if (graph.value && id && nodeById.value.has(id)) return chainFocus(graph.value, id, chainDir.value) ?? h;
     const c = chain.value;
-    if (!c) return h;
-    if (!h || hovered.value?.id === selectedId.value) return c;
-    if (!h.dim) return { ...c, wires: new Set([...c.wires, ...h.wires]) };
-    return h;
+    if (!c || (h && h.dim)) return h ?? c;
+    return h ? { ...c, wires: new Set([...c.wires, ...h.wires]) } : c;
   });
   const expansion = useMapExpand({ api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding });
 
