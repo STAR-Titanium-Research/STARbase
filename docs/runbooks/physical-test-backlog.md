@@ -1855,39 +1855,47 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   photos). Decide whether to switch the OCR flag on.
 - [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
   from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract.
-- [ ] **F10 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
-  `uni_alias`. Expect: rows for the found files with kind, folder, size and date; a flagged file reading
-  *short ID `…` in the file name* with a link to the record; **thumbnails**: the page asks Directus's asset
-  route for image kinds, but archive files are pointer rows with no bytes in Directus (`STORAGE_LOCATIONS:
-  local`), so expect the kind icon instead of a picture. Record what you see; if the asset route cannot
-  serve them, the endpoint must serve a thumbnail some other way (open question for the endpoint stream).
-  Link, Change (search by code, nickname and short ID in the picker), Dismiss, Restore, *Show more* past 50
-  files, the Other files section (collapsed, with its count; open it and link a document: the dialog says
-  linking reads the file once), a surface-scan row whose Link is off with *Surface scans can be added soon*,
-  and *Rescan my folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
-- [ ] **F11 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
+- [ ] **F30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
+  thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
+  `/assets/` request; check the browser's network tab shows none); a flagged file reading *short ID `…` in the
+  file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
+  Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
+  past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
+  says linking reads the file once); a surface-scan row whose button reads *Add a surface scan*, is off and
+  says *Surface scans can be added soon*. *Accept all* on a real list: the dialog opens on the server's dry run
+  (Confirm waits for it), names the count and the first few *file to record* pairs and what would be left, and
+  Confirm links exactly those; try it with a record you can only view (it is left, with the reason). *Rescan my
+  folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
+- [ ] **F31 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
   under Home (rail and expanded) with the count of *new* files only (backlog excluded), the same numbers in
-  Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once;
-  save a file and, without reloading, expect the badge to catch up within about three minutes or when the
-  window regains focus. On a server without `d1-inbox`, the entry and the panel are absent and nothing errors.
-  Since: Inbox stream D.
-- [ ] **F12 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
+  Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once (even
+  if a poll was in flight); save a file and, without reloading, expect the badge to catch up within about three
+  minutes or when the window regains focus. On a server without `d1-inbox`, the entry and the panel are absent
+  and nothing errors; sign out and in as someone refused (a 403) and expect the entry to come back once the
+  account can read it. Since: Inbox stream D.
+- [ ] **F32 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
   People page: *Uni alias* and *Scan while Former* show the stored values and the note *Changing this resets
   the Inbox for this folder; linked files stay linked.* Set an alias, save, reopen: it is kept. Try `a/b`, one
   character and `.ab` (refused in the form), and an alias another person already has in a different case (the
-  server refuses; the form says *That alias is already used by another person* and names no one). Add a
-  **new** person with an alias: the person is created and the alias is set by a second request (the database
-  refuses an alias on insert); check the Directus request log shows a POST without it then a PATCH. On a
-  team, set *Share folder* the same way (try `x/y`, blank, a name another team has). Change an alias after
-  that person has found files and confirm the undecided and dismissed ones are gone while linked ones stay.
-  A Lab Member sees neither field. Since: Inbox stream D.
-- [ ] **F13 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
-  expect *Online, running*, the interval, the last scan times and the file count; stop the daemon and expect
-  *Offline* within about two minutes. A folder created under `Users/` or `Shared/` that no alias or share
-  folder names shows under *Folders no one owns*, and a person with no alias under *People without an alias*
-  (linking to the People page); give them an alias and expect them to leave the list after the next scan. Press
-  *Scan all* and expect the request to be claimed within about 30 seconds. A Lab Member who opens
-  `/crawler?tab=inbox` is told it is for administrators. Since: Inbox stream D.
+  server refuses; the form says *That alias is already used by another person* and names no one; check Directus
+  answers `RECORD_NOT_UNIQUE` with `extensions.field` naming the alias, since the page tells it by that field:
+  if it names another field or none, report it). Link a login already linked to another person and expect the
+  server's own words, not the alias message. Add a **new** person with an alias: the person is created and the
+  alias is set by a second request (the database refuses an alias on insert); check the Directus request log
+  shows a POST without it then a PATCH. On a team, set *Share folder* the same way (try `x/y`, blank, a name
+  another team has; a refusal on a **new** team must leave the dialog open with the message and a second Save
+  must not create a second team). Change an alias after that person has found files and confirm the undecided
+  and dismissed ones are gone while linked ones stay. A Lab Member sees neither field. Since: Inbox stream D.
+- [ ] **F33 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
+  expect *Online, running*, the interval, the last scan times and the file count, and that it never flips to
+  Offline during a long scan; stop the daemon and expect *Offline* after about five minutes (the endpoint's
+  rule). A scan error appears once under *Errors*. A folder created under `Users/` or `Shared/` that no alias or
+  share folder names shows under *Folders no one owns*, and a person with no alias under *People without a uni
+  alias* (linking to the People page); give them an alias and expect them to leave the list after the next
+  scan. Press *Scan all* and expect the request to be claimed within about 30 seconds, and a second press while
+  one waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
+  administrators. Since: Inbox stream D.
 
 ## Done
 

@@ -17,14 +17,14 @@ const cors = {
 
 export type InboxStub = ReturnType<typeof createFakeInbox>;
 
-/** A small inbox: two exact short-ID images, an unflagged image, a surface scan, a document and one older file that names a record. */
+/** A small inbox: two exact short-ID images, an unflagged image, an exact surface scan (Accept all leaves it), a document and one older file that names a record. */
 export const sampleFiles = () => [
 	exactMatch({ rel_path: 'Users/ab1cd/sem/3fa9c1d2_A1.tif' }, '3fa9c1d2', 'S-0042'),
 	exactMatch({ rel_path: 'Users/ab1cd/sem/9ab3c4d5_B2.tif', extracted: { kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' } }, '9ab3c4d5', 'S-0043'),
 	foundFile({ rel_path: 'Users/ab1cd/misc/plain.tif' }),
-	foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/edge1.al3d' }),
+	exactMatch({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/edge1.al3d' }, '77aa88bb', 'S-9'),
 	foundFile({ kind: 'document', rel_path: 'Users/ab1cd/notes.pdf' }),
-	exactMatch({ origin: 'backlog', rel_path: 'Users/ab1cd/old/77aa88bb_old.tif' }, '77aa88bb', 'S-0010'),
+	exactMatch({ origin: 'backlog', rel_path: 'Users/ab1cd/old/55ee66ff_old.tif' }, '55ee66ff', 'S-0010'),
 ];
 
 export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions = {}): Promise<InboxStub> {
@@ -52,7 +52,5 @@ export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions 
 		}
 		return route.fallback();
 	});
-	// Archive files are pointer rows with no bytes in Directus, so the asset route cannot draw them: answer like Directus does.
-	await context.route(`${D1_BASE}/assets/**`, (route) => route.fulfill({ status: 404, headers: cors, json: { errors: [{ message: 'File not found' }] } }));
 	return fake;
 }

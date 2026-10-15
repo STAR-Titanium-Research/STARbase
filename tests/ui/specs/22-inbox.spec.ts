@@ -13,6 +13,7 @@ import { foundFile, stubInbox, type InboxStub } from '../starbase/stubInbox';
 test.use({ trace: 'off' });
 
 const SHOTS = process.env.INBOX_SHOTS;
+const assetRequests: string[] = [];
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 const shot = async (page: Page, name: string) => {
 	if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
@@ -21,8 +22,9 @@ const shot = async (page: Page, name: string) => {
 async function start(browser: Browser, path: string, width = 1280, opts: Parameters<typeof stubInbox>[1] = {}): Promise<{ page: Page; inbox: InboxStub; errors: string[] }> {
 	const context = await browser.newContext({ viewport: { width, height: 900 } });
 	const page = await context.newPage();
-	// A refused asset read is a 404 the page handles (the Inbox falls back to an icon): not a failure here.
-	const errors = watchErrors(page, [/\/assets\//]);
+	const errors = watchErrors(page);
+	// No thumbnails in v1 (Directus cannot serve a pointer row): the page must never ask the asset route for a found file.
+	page.on('request', (r) => { if (r.url().startsWith(`${D1_BASE}/assets/`)) assetRequests.push(r.url()); });
 	await stubD1(context);
 	const inbox = await stubInbox(context, opts);
 	await page.goto(STAR_BASE + path);
@@ -71,11 +73,13 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan i
 	await expect(row(page, '9ab3c4d5_B2.tif')).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
 	await expect(row(page, 'plain.tif').locator('[data-test="suggestion"]')).toHaveCount(0);
 
-	// Thumbnails come from the asset route, which cannot draw a pointer row: the icon takes over, never a broken image.
-	await expect(first.locator('img')).toHaveCount(0);
+	// No thumbnail: every row shows the icon of its kind, and nothing was asked of the asset route.
+	await expect(page.locator('[data-test="inbox-row"] img')).toHaveCount(0);
+	expect(assetRequests).toEqual([]);
 
 	const scan = row(page, 'edge1.al3d');
-	await expect(scan.getByRole('button', { name: 'Link', exact: true })).toBeDisabled();
+	await expect(scan.getByRole('button', { name: 'Add a surface scan' })).toBeDisabled();
+	await expect(scan.getByRole('button', { name: 'Link', exact: true })).toHaveCount(0);
 	await expect(scan.locator('[data-test="scan-notice"]')).toHaveText('Surface scans can be added soon');
 
 	const other = page.locator('[data-test="other-files"]');
@@ -121,19 +125,37 @@ test('Change: the record picker finds a sample by its code, and choosing it link
 	await page.context().close();
 });
 
-test('Accept all confirms with the count, links the exact matches in one batch, and one Undo reverses it', async ({ browser }) => {
+test('Accept all opens on a dry run, names the count and where files go, links exactly those in one batch, and one Undo reverses it', async ({ browser }) => {
 	const { page, inbox } = await start(browser, '/inbox');
 	const accept = page.locator('[data-test="accept-all"]');
-	await expect(accept).toHaveText('Accept all (2)');
+	await expect(accept).toBeEnabled();
 	await accept.click();
 	const confirm = page.locator('[data-test="accept-confirm"]');
 	await expect(confirm).toContainText('Link 2 found files to the record that each short ID names?');
+	await expect(page.locator('[data-test="accept-pairs"]')).toContainText('3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="accept-pairs"]')).toContainText('S-0042');
+	await expect(page.locator('[data-test="accept-left"]')).toContainText('1 surface scan');
+	// the dry run changed nothing, and asked with dry_run
+	expect(inbox.files.every((f) => f.state === 'new')).toBe(true);
+	expect(inbox.calls.filter((c) => c.path === '/d1-inbox/accept-all').map((c) => (c.body as { dry_run?: boolean }).dry_run === true)).toEqual([true]);
 	await shot(page, 'accept-confirm');
 	await page.locator('[data-test="accept-confirm-button"]').click();
 	await expect(page.locator('[data-test="notice"]')).toContainText('Linked 2 found files.');
+	const real = inbox.calls.filter((c) => c.path === '/d1-inbox/accept-all').at(-1)!;
+	expect((real.body as { candidate_ids?: string[] }).candidate_ids).toHaveLength(2);
 	expect(inbox.files.filter((f) => f.link_kind === 'bulk')).toHaveLength(2);
 	await page.locator('[data-test="undo"]').click();
 	await expect.poll(() => inbox.files.filter((f) => f.state === 'linked').length).toBe(0);
+	await page.context().close();
+});
+
+test('after a Link, focus moves to the next row; the status region is one element that holds the message', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox');
+	const region = page.locator('[data-test="status"]');
+	await expect(region).toHaveAttribute('role', 'status');
+	await row(page, '3fa9c1d2_A1.tif').getByRole('button', { name: 'Link', exact: true }).click();
+	await expect(region).toContainText('Linked 1 found file.');
+	await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-test="inbox-row"]')?.textContent?.includes('9ab3c4d5_B2.tif') ?? false)).toBe(true);
 	await page.context().close();
 });
 
@@ -141,7 +163,7 @@ test('tabs and filters live in the URL: Older files, then Dismissed with Restore
 	const { page } = await start(browser, '/inbox');
 	await page.locator('[data-test="tab-older"]').click();
 	await expect(page).toHaveURL(/tab=older/);
-	await expect.poll(() => names(page)).toEqual(['77aa88bb_old.tif']);
+	await expect.poll(() => names(page)).toEqual(['55ee66ff_old.tif']);
 	await page.locator('[data-test="tab-new"]').click();
 	await row(page, 'plain.tif').getByRole('button', { name: 'Dismiss' }).click();
 	await expect.poll(() => names(page)).not.toContain('plain.tif');
@@ -215,6 +237,7 @@ test('the Inbox crawler tab on /crawler (admin): daemon, last scan, folders no o
 	await expect(page.locator('[data-test="ic-daemon"]')).toHaveText('Online, running');
 	await expect(page.locator('[data-test="ic-unmatched"]')).toContainText('Users/zz9');
 	await expect(page.locator('[data-test="ic-no-alias"]')).toContainText('Bo Chan');
+	await expect(page.locator('[data-test="inbox-crawler"]')).toContainText('People without a uni alias');
 	await page.locator('[data-test="ic-scan-all"]').click();
 	await expect(page.locator('[data-test="inbox-crawler"]')).toContainText('Scan of every folder requested.');
 	expect(inbox.calls.some((c) => c.path === '/d1-inbox/admin/scan-all')).toBe(true);
