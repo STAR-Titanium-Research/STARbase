@@ -31,10 +31,19 @@ button.d1-tstage-pill:focus-visible { outline: 2px solid var(--d1-accent, var(--
 .d1-tstage-pill[data-tone='accent'] .d1-tstage-pill__dot { background: var(--d1-accent, var(--theme--primary)); }
 .d1-tstage-pill[data-tone='none'] .d1-tstage-pill__dot { display: none; }
 .d1-tstage-pill[data-tone='none'] { padding-inline: 8px; color: var(--d1-dim, var(--theme--foreground-subdued)); }
-.d1-tstage-pill.is-selected {
-	border-color: var(--d1-accent, var(--theme--primary));
-	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 16%, var(--d1-surface, var(--theme--background)));
+/* The selected edge's letter: filled with the same blue as the edge in the scene (the palette's `select`), white
+   text, a little larger than the rest. Its position is an inline transform, so it grows by size, not by scale. */
+.d1-tstage-pill.is-selected, button.d1-tstage-pill.is-selected:hover {
+	height: 26px;
+	padding-inline: 8px 10px;
+	border: 2px solid #fff;
+	background: var(--d1-select, royalblue);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--d1-select, royalblue) 45%, transparent), var(--d1-shadow, 0 2px 6px rgb(0 0 0 / 0.1));
+	color: #fff;
+	font-size: calc(var(--fs-xs, 11px) + 3px);
+	font-weight: 700;
 }
+.d1-tstage-pill.is-selected .d1-tstage-pill__dot { background: #fff; }
 .d1-tstage-pill.is-occluded:not(.is-selected):not(:hover) { opacity: 0.4; transform-origin: center; filter: saturate(0.4); }
 .d1-tstage-tip {
 	position: absolute;

@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PerspectiveCamera, Vector3 } from 'three';
 import { buildToolingModel } from '@d1/ui';
 import {
-	easeInOutCubic, easeStep, frameBox, frameEdge, frameInsert, FramingTween, framingAt, framingFromCamera,
-	interpolateFraming, moveDuration, MOVE_MS, orbitLimits, POLAR_MAX, POLAR_MIN, prefersReducedMotion, ZOOM_IN, ZOOM_OUT,
+	AZIMUTH_RANGE, easeFraction, easeInOutCubic, easeStep, easeToBounds, frameBox, frameEdge, frameInsert, FramingTween, framingAt, framingFromCamera,
+	boundsContaining, hardBounds, interpolateFraming, MIN_ELEVATION, moveDuration, MOVE_MS, orbitLimits, POLAR_FLOOR, POLAR_MAX, POLAR_MIN,
+	POLAR_RANGE, prefersReducedMotion, rotationBounds, ZOOM_IN, ZOOM_OUT,
 	type Vec3,
 } from './cameraRig';
 import { trayLayout } from './trayMesh';
@@ -25,6 +26,20 @@ describe('framings', () => {
 		// the whole tray width fits the horizontal view
 		const halfH = Math.atan(Math.tan((32 * Math.PI) / 360) * 2.2);
 		expect(f.distance * Math.tan(halfH)).toBeGreaterThan(layout.width / 2);
+	});
+
+	it('looks down steeply at a tray, close to a plan view (within 18 to 34 degrees of straight down), never flat-on', () => {
+		const grid = (n: number) => trayLayout(buildToolingModel(box, { iso_designation: 'CNMG 12 04 08-MF' }, Array.from({ length: n }, (_, i) => ({ insert_id: `i${i}`, insert_code: `X-${i}`, insert_number: i + 1, is_depleted: false })), []));
+		const toDeg = (r: number) => (r * 180) / Math.PI;
+		for (const l of [layout, grid(4), grid(50)]) {
+			for (const aspect of [360 / 560, 1, 2.2]) {
+				const f = frameBox(l, aspect);
+				expect(toDeg(f.polar)).toBeGreaterThanOrEqual(18 - 1e-9);
+				expect(toDeg(f.polar)).toBeLessThanOrEqual(34 + 1e-9);
+				expect(f.azimuth).toBe(0); // still from the +z side, so the etched text reads the right way up
+			}
+		}
+		expect(toDeg(frameBox(layout, 360 / 560).polar)).toBeLessThan(36); // steeper than the old 36 to 52
 	});
 
 	// The tray's eight corners seen through the framing's camera: the box they span in normalised screen space.
@@ -146,11 +161,10 @@ describe('framings', () => {
 		expect(bottom.polar).toBeLessThanOrEqual(POLAR_MAX);
 	});
 
-	it('orbit limits are 15 to 80 degrees and 0.5x to 3x the framing', () => {
+	it('orbit limits are 0.5x to 3x the framing in distance, and the framing\'s hard rotation bounds', () => {
 		const f = frameInsert(centre, model.geometry, model.outline, 2);
 		const l = orbitLimits(f);
-		expect(l.minPolar).toBeCloseTo((15 * Math.PI) / 180, 9);
-		expect(l.maxPolar).toBeCloseTo((80 * Math.PI) / 180, 9);
+		expect(l).toMatchObject(hardBounds(f));
 		expect(l.minDistance).toBeCloseTo(f.distance * ZOOM_IN, 9);
 		expect(l.maxDistance).toBeCloseTo(f.distance * ZOOM_OUT, 9);
 	});
@@ -164,6 +178,182 @@ describe('framings', () => {
 			expect(f.polar).toBeGreaterThanOrEqual(POLAR_MIN);
 			expect(f.polar).toBeLessThanOrEqual(POLAR_MAX);
 		}
+	});
+});
+
+const RAD = Math.PI / 180;
+const deg = (r: number) => r / RAD;
+
+describe('limited rotation', () => {
+	const views = () => [
+		frameBox(layout, 2),
+		frameBox(layout, 360 / 560),
+		frameInsert(centre, model.geometry, model.outline, 2),
+		frameEdge(centre, model.geometry, model.outline, { face: 'top', corner: 0 }, 2),
+		frameEdge(centre, model.geometry, model.outline, { face: 'top', corner: 2 }, 2),
+		frameEdge(centre, model.geometry, model.outline, { face: 'bottom', corner: 1 }, 2),
+	];
+
+	it('turns about 10 degrees left or right of the framing\'s own view', () => {
+		for (const f of views()) {
+			const b = rotationBounds(f);
+			expect(b.minAzimuth).toBeCloseTo(f.azimuth - 10 * RAD, 9);
+			expect(b.maxAzimuth).toBeCloseTo(f.azimuth + 10 * RAD, 9);
+		}
+		expect(AZIMUTH_RANGE).toBeCloseTo(10 * RAD, 9);
+		expect(POLAR_RANGE).toBeCloseTo(8 * RAD, 9);
+	});
+
+	it('tilts about 8 degrees up or down of the framing\'s own view, so the box, an insert and an edge each have their own range', () => {
+		const box = frameBox(layout, 2);
+		const b = rotationBounds(box);
+		expect(b.maxPolar - box.polar).toBeCloseTo(8 * RAD, 9);
+		expect(box.polar - b.minPolar).toBeGreaterThan(0);
+		const insert = frameInsert(centre, model.geometry, model.outline, 2);
+		const i = rotationBounds(insert);
+		expect(i.minPolar).toBeCloseTo(insert.polar - POLAR_RANGE, 9);
+		expect(i.maxPolar).toBeCloseTo(insert.polar + POLAR_RANGE, 9);
+		expect(i.minPolar).not.toBeCloseTo(b.minPolar, 3);
+	});
+
+	it('never goes lower than 15 degrees above the tray plane, nor past straight down', () => {
+		for (const f of views()) {
+			const b = rotationBounds(f);
+			expect(b.maxPolar).toBeLessThanOrEqual(Math.max(f.polar, 90 * RAD - MIN_ELEVATION) + 1e-9);
+			expect(b.minPolar).toBeGreaterThanOrEqual(Math.min(f.polar, POLAR_FLOOR) - 1e-9);
+			expect(b.minPolar).toBeGreaterThan(0);
+		}
+		// A view near the plane or near straight down keeps the bounds inside the limits.
+		const steep = rotationBounds(framingAt([0, 0, 0], 50, 10 * RAD, 0));
+		expect(steep.minPolar).toBeCloseTo(POLAR_FLOOR, 9);
+		const flat = rotationBounds(framingAt([0, 0, 0], 50, 70 * RAD, 0));
+		expect(deg(flat.maxPolar)).toBeCloseTo(75, 9); // 15 degrees above the plane
+	});
+
+	it('keeps the framing\'s own view inside its bounds, even a bottom edge looking along the plane', () => {
+		for (const f of [...views(), framingAt([0, 0, 0], 20, 80 * RAD, 1), framingAt([0, 0, 0], 20, 1 * RAD, 0)]) {
+			const b = rotationBounds(f);
+			expect(f.polar).toBeGreaterThanOrEqual(b.minPolar);
+			expect(f.polar).toBeLessThanOrEqual(b.maxPolar);
+			expect(f.azimuth).toBeGreaterThan(b.minAzimuth);
+			expect(f.azimuth).toBeLessThan(b.maxAzimuth);
+		}
+	});
+
+	it('lets a drag overshoot the soft bounds by a few degrees, and no more', () => {
+		for (const f of views()) {
+			const b = rotationBounds(f);
+			const h = hardBounds(f);
+			expect(h.minAzimuth).toBeLessThan(b.minAzimuth);
+			expect(h.maxAzimuth).toBeGreaterThan(b.maxAzimuth);
+			expect(b.minAzimuth - h.minAzimuth).toBeLessThanOrEqual(3 * RAD); // a small slack
+			expect(h.maxPolar - b.maxPolar).toBeLessThanOrEqual(3 * RAD);
+			expect(h.maxPolar).toBeGreaterThanOrEqual(b.maxPolar);
+			expect(h.maxPolar).toBeLessThan(90 * RAD); // never to the plane itself
+			expect(h.minPolar).toBeGreaterThan(0); // never exactly straight down
+		}
+	});
+
+	describe('easeToBounds', () => {
+		const home = framingAt([1, 2, 3], 40, 0.6, 0.3);
+		const b = rotationBounds(home);
+
+		it('is null inside the bounds, at the edge, and for a view a hair past it', () => {
+			expect(easeToBounds(home, b, 0.5)).toBeNull();
+			expect(easeToBounds(framingAt(home.target, 40, b.maxPolar, b.maxAzimuth), b, 0.5)).toBeNull();
+			expect(easeToBounds(framingAt(home.target, 40, b.maxPolar + 0.0001, b.maxAzimuth + 0.0001), b, 0.5)).toBeNull();
+		});
+
+		it('eases a view back by a fraction of the way, keeping the target and the distance', () => {
+			const past = framingAt(home.target, 40, b.maxPolar + 0.1, b.maxAzimuth + 0.2);
+			const half = easeToBounds(past, b, 0.5)!;
+			expect(half.polar).toBeCloseTo(b.maxPolar + 0.05, 9);
+			expect(half.azimuth).toBeCloseTo(b.maxAzimuth + 0.1, 9);
+			expect(half.target).toEqual(home.target);
+			expect(half.distance).toBe(40);
+			const all = easeToBounds(past, b, 1)!;
+			expect(all.polar).toBeCloseTo(b.maxPolar, 9);
+			expect(all.azimuth).toBeCloseTo(b.maxAzimuth, 9);
+		});
+
+		it('converges without overshooting or jitter: the distance to the bound only ever shrinks', () => {
+			let v: ReturnType<typeof framingAt> | null = framingAt(home.target, 40, b.minPolar - 0.08, b.minAzimuth - 0.1);
+			let last = Infinity;
+			let steps = 0;
+			while (v && steps < 200) {
+				const gap = Math.abs(v.polar - b.minPolar) + Math.abs(v.azimuth - b.minAzimuth);
+				expect(gap).toBeLessThan(last);
+				expect(v.polar).toBeLessThanOrEqual(b.minPolar + 1e-9); // never crosses the bound
+				last = gap;
+				v = easeToBounds(v, b, easeFraction(16));
+				steps++;
+			}
+			expect(v).toBeNull(); // it settled
+			expect(steps).toBeLessThan(120); // in about a second or less
+		});
+
+		it('takes the short way across the +-pi seam for a view that looks from behind', () => {
+			const behind = framingAt([0, 0, 0], 20, 1, 179 * RAD);
+			const bb = rotationBounds(behind);
+			// 20 degrees past the +10 bound, as the camera reports it (azimuth wrapped into -pi..pi, here about -126)
+			const raw = framingAt([0, 0, 0], 20, 1, behind.azimuth + AZIMUTH_RANGE + 20 * RAD);
+			const past = framingFromCamera(raw.position, raw.target);
+			expect(past.azimuth).toBeLessThan(0);
+			const next = easeToBounds(past, bb, 1)!;
+			expect(Math.abs(Math.sin(next.azimuth - (behind.azimuth + AZIMUTH_RANGE)))).toBeLessThan(1e-6);
+			expect(Math.cos(next.azimuth - (behind.azimuth + AZIMUTH_RANGE))).toBeGreaterThan(0.999);
+		});
+
+		it('eases only the angle that is out: a view past the azimuth bound keeps its tilt', () => {
+			const tilted = framingAt(home.target, 40, home.polar + 0.1, b.maxAzimuth + 0.2);
+			const out = easeToBounds(tilted, b, 1)!;
+			expect(out.polar).toBeCloseTo(tilted.polar, 9);
+			expect(out.azimuth).toBeCloseTo(b.maxAzimuth, 9);
+		});
+	});
+
+	describe('boundsContaining', () => {
+		const home = framingAt([0, 0, 0], 40, 0.6, 0.3);
+		const b = hardBounds(home);
+
+		it('is the bounds themselves for a view inside them', () => {
+			const w = boundsContaining(b, home);
+			for (const k of ['minAzimuth', 'maxAzimuth', 'minPolar', 'maxPolar'] as const) expect(w[k]).toBeCloseTo(b[k], 9);
+		});
+
+		it('widens the bounds to hold a view far outside them, so grabbing the camera mid-move cannot make it jump', () => {
+			const far = framingAt([0, 0, 0], 40, 1.2, 0.3 + 50 * RAD); // a mid-move view 50 degrees round and 35 degrees down from home
+			const w = boundsContaining(b, far);
+			expect(w.maxAzimuth).toBeGreaterThanOrEqual(far.azimuth);
+			expect(w.maxPolar).toBeGreaterThanOrEqual(far.polar);
+			expect(w.minAzimuth).toBeCloseTo(b.minAzimuth, 9); // the other sides stay put
+			expect(w.minPolar).toBeCloseTo(b.minPolar, 9);
+			// every azimuth and polar from the view back to home lies inside the window: nothing clamps on the way in
+			const toward = easeToBounds(far, rotationBounds(home), 0.5)!;
+			expect(toward.azimuth).toBeLessThan(far.azimuth);
+			expect(toward.azimuth).toBeGreaterThan(rotationBounds(home).maxAzimuth);
+			expect(toward.azimuth).toBeLessThanOrEqual(w.maxAzimuth);
+		});
+
+		it('takes the short way round the seam for a view from behind', () => {
+			const behind = framingAt([0, 0, 0], 20, 1, 179 * RAD);
+			const raw = framingAt([0, 0, 0], 20, 1, behind.azimuth - 40 * RAD);
+			const view = framingFromCamera(raw.position, raw.target);
+			const w = boundsContaining(hardBounds(behind), view);
+			expect(w.maxAzimuth - w.minAzimuth).toBeLessThan(Math.PI);
+			expect(w.minAzimuth).toBeLessThan(behind.azimuth - 40 * RAD + 1e-6);
+		});
+	});
+
+	it('easeFraction is the same feel at any frame rate, instant under reduced motion, and bounded', () => {
+		expect(easeFraction(0)).toBe(0);
+		expect(easeFraction(16, true)).toBe(1);
+		expect(easeFraction(16)).toBeGreaterThan(0);
+		expect(easeFraction(16)).toBeLessThan(0.3);
+		// two 8 ms steps cover the same ground as one 16 ms step
+		const two = 1 - (1 - easeFraction(8)) ** 2;
+		expect(two).toBeCloseTo(easeFraction(16), 9);
+		expect(easeFraction(5000)).toBeLessThan(1); // a stalled frame does not snap
 	});
 });
 

@@ -36,6 +36,7 @@ export interface ToolingInsert {
 
 export interface ToolingModel {
 	boxId: string; boxCode: string;
+	typeCode: string | null; // the insert type's code (else its ISO designation), for the label on the tray; null when unknown
 	geometry: InsertGeometry; outline: InsertOutline;
 	grid: SlotGrid; inserts: ToolingInsert[]; // sorted by number
 }
@@ -63,6 +64,15 @@ const byLetter = (a: ToolingEdge, b: ToolingEdge): number => {
 };
 
 const validSlot = (n: number | null): n is number => n !== null && Number.isInteger(n) && n >= 1 && n <= MAX_SLOT_NUMBER;
+
+// The name of the insert type: its type_code, trimmed, else its iso_designation, else null.
+export function insertTypeCode(type: InsertTypeRow | null): string | null {
+	for (const v of [type?.type_code, type?.iso_designation]) {
+		const t = typeof v === 'string' ? v.trim() : '';
+		if (t) return t;
+	}
+	return null;
+}
 
 export function buildToolingModel(box: BoxRow, type: InsertTypeRow | null, inserts: InsertRow[], edges: EdgeRow[]): ToolingModel {
 	const geometry = resolveInsertGeometry(type);
@@ -109,7 +119,7 @@ export function buildToolingModel(box: BoxRow, type: InsertTypeRow | null, inser
 		};
 	});
 
-	return { boxId: box.tool_box_id, boxCode: box.tool_box_code, geometry, outline, grid, inserts: modelInserts };
+	return { boxId: box.tool_box_id, boxCode: box.tool_box_code, typeCode: insertTypeCode(type), geometry, outline, grid, inserts: modelInserts };
 }
 
 // Spec Q10: the lowest-numbered non-depleted insert that already has a used edge (and still a fresh

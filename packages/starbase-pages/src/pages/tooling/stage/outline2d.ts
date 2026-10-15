@@ -2,6 +2,7 @@
 // The top view has y up; SVG has y down, so y is flipped. Units are millimetres.
 
 import type { EdgePlacement, InsertGeometry, InsertOutline } from '@d1/ui';
+import { markDistance, markVertices } from './markPlacement';
 
 export interface Outline2D {
 	path: string;
@@ -31,15 +32,12 @@ export function outline2d(geom: InsertGeometry, outline: InsertOutline): Outline
 
 	const c0 = outline.corners[0];
 	let mark = '';
-	if (c0) {
-		const a = (c0.bisectorDeg * Math.PI) / 180;
-		const dir: [number, number] = [Math.cos(a), Math.sin(a)];
-		const side: [number, number] = [-dir[1], dir[0]];
-		const holeR = geom.holeDiameterMm ? geom.holeDiameterMm / 2 : 0;
-		const d = Math.max((holeR * 1.5 + Math.hypot(c0.x, c0.y) + geom.noseRadiusMm) / 2, holeR * 1.6);
-		const p = (along: number, across: number) =>
-			`${f(dir[0] * along + side[0] * across)} ${f(-(dir[1] * along + side[1] * across))}`;
-		mark = `M${p(d + 0.6, 0)} L${p(d - 0.4, -0.45)} L${p(d - 0.4, 0.45)} Z`;
+	const placed = c0 ? markDistance(geom, outline) : null; // the same size and place as the 3D mark (markPlacement.ts)
+	if (c0 && placed) {
+		const { size, centre } = placed;
+		const p = ([x, y]: [number, number]) => `${f(x)} ${f(-y)}`;
+		const [tip, left, right] = markVertices(c0.bisectorDeg, size, centre);
+		mark = `M${p(tip)} L${p(left)} L${p(right)} Z`;
 	}
 	return { path, viewBox, hole: geom.holeDiameterMm ? { r: geom.holeDiameterMm / 2 } : null, mark, nose };
 }

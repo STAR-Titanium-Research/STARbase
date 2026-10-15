@@ -5,7 +5,7 @@
 // so a shape is just its list of interior angles. The nose fillets then sit at (r - RE) / cos(ext / 2)
 // from the centre along each corner's bisector.
 
-import { parseIsoDesignation, SHAPE_ANGLE_DEG, type IsoInsert, type ShapeLetter } from './isoDesignation';
+import { parseIsoDesignation, parseMillingDesignation, SHAPE_ANGLE_DEG, type IsoInsert, type MillingInsert, type ShapeLetter } from './isoDesignation';
 
 type Num = number | string | null | undefined;
 
@@ -30,8 +30,9 @@ export interface InsertTypeRow {
 export type TipMaterial = 'pcd' | 'cbn';
 
 export interface InsertGeometry {
-	shape: ShapeLetter | 'polygon'; // 'polygon' = fallback from edge_count
+	shape: ShapeLetter | 'polygon' | 'rect'; // 'polygon' = fallback from edge_count; 'rect' = a milling insert (lengthMm x icMm)
 	recognised: boolean;
+	lengthMm: number | null; // rect only: the long side, the short side being icMm
 	includedAngleDeg: number;
 	cornerCount: number;
 	cuttingCorners: number[];
@@ -64,6 +65,7 @@ export const DEFAULT_IC_MM = 12.7;
 export const DEFAULT_THICKNESS_MM = 4.76;
 export const DEFAULT_NOSE_RADIUS_MM = 0.8;
 const MAX_POLYGON_CORNERS = 24;
+const MAX_ANGLE_OVERRIDE_DEG = 15;
 const MAX_FILLET_STEP_DEG = 10;
 const ROUND_STEP_DEG = 5;
 
@@ -141,8 +143,29 @@ function range(n: number): number[] {
 	return Array.from({ length: n }, (_, i) => i);
 }
 
+function resolveMilling(type: InsertTypeRow | null, mill: MillingInsert): InsertGeometry {
+	const edgeCountRaw = positive(type?.edge_count);
+	const edgeCount = edgeCountRaw === null ? null : Math.round(edgeCountRaw);
+	let cuttingCorners = [0, 2];
+	if (edgeCount !== null && edgeCount < cuttingCorners.length) cuttingCorners = cuttingCorners.slice(0, edgeCount);
+	const nose = num(type?.nose_radius_mm);
+	return {
+		shape: 'rect', recognised: true, lengthMm: mill.lengthMm, includedAngleDeg: 90, cornerCount: 4, cuttingCorners,
+		icMm: mill.widthMm, thicknessMm: mill.thicknessMm,
+		noseRadiusMm: nose !== null && nose >= 0 ? nose : mill.noseRadiusMm,
+		clearanceDeg: 0, doubleSided: edgeCount !== null && edgeCount >= 2 * cuttingCorners.length,
+		holeDiameterMm: positive(type?.fixing_hole_diameter_mm) ?? mill.holeDiameterMm, holeCountersunk: true,
+		edgesPerFace: cuttingCorners.length, tipMaterial: detectTipMaterial(type),
+	};
+}
+
 export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometry {
-	const iso: IsoInsert | null = parseIsoDesignation(type?.iso_designation);
+	// iso_designation is often empty; the ISO code is then usually the start of type_code ("CNMG 12 04 08-SM H13A").
+	const iso: IsoInsert | null = parseIsoDesignation(type?.iso_designation) ?? parseIsoDesignation(type?.type_code);
+	if (!iso) {
+		const mill = parseMillingDesignation(type?.iso_designation) ?? parseMillingDesignation(type?.type_code);
+		if (mill) return resolveMilling(type, mill);
+	}
 	const edgeCountRaw = positive(type?.edge_count);
 	const edgeCount = edgeCountRaw === null ? null : Math.round(edgeCountRaw);
 
@@ -157,7 +180,10 @@ export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometr
 		cuttingCorners = range(cornerCount);
 		includedAngleDeg = SHAPE_ANGLE_DEG.R;
 	} else if (iso) {
-		includedAngleDeg = isRhombic(iso.shape) ? (positive(type?.included_angle_deg) ?? SHAPE_ANGLE_DEG[iso.shape]) : SHAPE_ANGLE_DEG[iso.shape];
+		const nominal = SHAPE_ANGLE_DEG[iso.shape];
+		const override = positive(type?.included_angle_deg);
+		// The shape letter fixes the angle; an override only nudges it (a live CNMG row said 0.010, which drew a needle).
+		includedAngleDeg = isRhombic(iso.shape) && override !== null && Math.abs(override - nominal) <= MAX_ANGLE_OVERRIDE_DEG ? override : nominal;
 		cornerCount = { C: 4, D: 4, V: 4, S: 4, T: 3, W: 3 }[iso.shape as Exclude<ShapeLetter, 'R'>];
 		cuttingCorners = isRhombic(iso.shape) ? [0, 2] : range(cornerCount);
 	} else {
@@ -184,6 +210,7 @@ export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometr
 	return {
 		shape,
 		recognised: iso !== null,
+		lengthMm: null,
 		includedAngleDeg,
 		cornerCount,
 		cuttingCorners,
@@ -222,8 +249,32 @@ function roundOutline(geom: InsertGeometry): InsertOutline {
 	return { points, corners };
 }
 
+// A rectangle (a milling insert) with all four corners filleted, clockwise from the top-right corner.
+function rectOutline(geom: InsertGeometry): InsertOutline {
+	const hl = (geom.lengthMm ?? geom.icMm) / 2;
+	const hw = geom.icMm / 2;
+	const re = Math.min(Math.max(geom.noseRadiusMm, 0), hw * 0.99);
+	const centres: Array<[number, number, number]> = [[hl - re, hw - re, 45], [hl - re, re - hw, 315], [re - hl, re - hw, 225], [re - hl, hw - re, 135]];
+	const points: Array<[number, number]> = [];
+	const corners: InsertCorner[] = [];
+	centres.forEach(([cx, cy, bisector], index) => {
+		if (re <= 0) points.push([cx, cy]);
+		else {
+			const segments = Math.ceil(90 / MAX_FILLET_STEP_DEG - 1e-9);
+			for (let s = 0; s <= segments; s++) {
+				const a = (bisector + 45 - (90 * s) / segments) * RAD; // clockwise
+				points.push([cx + re * Math.cos(a), cy + re * Math.sin(a)]);
+			}
+		}
+		// The bearing from the centre to the fillet centre, not the true 45 degree bisector: the pages step out from the middle along it.
+		corners.push({ index, x: cx, y: cy, bisectorDeg: norm360((Math.atan2(cy, cx) * 180) / Math.PI), angleDeg: 90, cuts: geom.cuttingCorners.includes(index) });
+	});
+	return { points, corners };
+}
+
 export function insertOutline(geom: InsertGeometry): InsertOutline {
 	if (geom.shape === 'R') return roundOutline(geom);
+	if (geom.shape === 'rect') return rectOutline(geom);
 	const plan = polygonPlan(geom.shape, geom.cornerCount, geom.includedAngleDeg);
 	const r = geom.icMm / 2;
 	const re = Math.min(Math.max(geom.noseRadiusMm, 0), r * 0.99);

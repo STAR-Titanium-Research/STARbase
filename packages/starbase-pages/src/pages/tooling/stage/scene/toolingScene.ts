@@ -1,8 +1,8 @@
 // The 3D view of a tool box. Imperative and outside Vue reactivity; ToolingStage.vue loads this module with a
 // dynamic import() so three.js stays out of the entry chunk. Render on demand: a frame is drawn when something
 // changed (an input, an ease, a theme change, new data), and nothing runs at rest. The one exception is the
-// gentle pulse on the next fresh edge: about 30 fps for three cycles after a focus, model or next-fresh change
-// while the stage is on screen, then one static frame at full strength (pulse.ts).
+// gentle pulse on the next fresh edge and on the glow around a selected edge: about 30 fps for three cycles after
+// a focus, model or next-fresh change while the stage is on screen, then one static frame at full strength (pulse.ts).
 
 import {
 	DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Raycaster, Scene,
@@ -15,8 +15,8 @@ import { BoxView } from './boxView';
 import { shadowTexture, SHADOW_FILL } from './groundShadow';
 import { liftTargets, LIFT_MM, stepLifts } from './lifts';
 import {
-	frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, FramingTween, moveDuration, orbitLimits,
-	prefersReducedMotion, POLAR_MAX, POLAR_MIN, type Framing, type Vec3,
+	boundsContaining, easeFraction, easeToBounds, frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, FramingTween,
+	hardBounds, moveDuration, orbitLimits, prefersReducedMotion, rotationBounds, type Framing, type Vec3,
 } from './cameraRig';
 import { LabelLayer } from './labels';
 import { SceneMaterials, TONE_MAPPING } from './materials';
@@ -54,6 +54,9 @@ export class ToolingScene {
 	private liftTo = new Map<string, number>();
 	private finalFraming: Framing | null = null;
 	private userMoved = false;
+	private dragging = false; // a pointer is down on the orbit: no easing back to the bounds yet
+	private lastAdvance = 0;
+	private limitsWidened = false; // the orbit limits were widened to hold a view grabbed mid-move
 	private width = 0;
 	private height = 0;
 
@@ -110,8 +113,6 @@ export class ToolingScene {
 		this.controls.enablePan = false;
 		this.controls.rotateSpeed = 0.7;
 		this.controls.zoomSpeed = 0.8;
-		this.controls.minPolarAngle = POLAR_MIN;
-		this.controls.maxPolarAngle = POLAR_MAX;
 
 		this.labels = new LabelLayer(overlay, (t) => this.pickCb?.(t));
 		this.io = typeof IntersectionObserver === 'function'
@@ -144,11 +145,18 @@ export class ToolingScene {
 		const onChange = () => this.requestRender();
 		const onStart = () => {
 			this.userMoved = true;
+			this.dragging = true;
 			this.settle();
 		};
+		const onEnd = () => { this.dragging = false; this.requestRender(); }; // released: the view may ease back inside the bounds
 		this.controls.addEventListener('change', onChange);
 		this.controls.addEventListener('start', onStart);
-		this.cleanups.push(() => { this.controls.removeEventListener('change', onChange); this.controls.removeEventListener('start', onStart); });
+		this.controls.addEventListener('end', onEnd);
+		this.cleanups.push(() => {
+			this.controls.removeEventListener('change', onChange);
+			this.controls.removeEventListener('start', onStart);
+			this.controls.removeEventListener('end', onEnd);
+		});
 		const onVis = () => { if (document.visibilityState === 'visible') this.requestRender(); };
 		document.addEventListener('visibilitychange', onVis);
 		this.cleanups.push(() => document.removeEventListener('visibilitychange', onVis));
@@ -165,7 +173,7 @@ export class ToolingScene {
 		const sameBox = this.model?.boxId === model.boxId;
 		this.model = model;
 		this.view?.dispose();
-		this.view = new BoxView(model, this.mats);
+		this.view = new BoxView(model, this.mats, () => this.requestRender());
 		this.scene.add(this.view.root);
 		const l = this.view.layout;
 		this.shadow.scale.set(l.width / SHADOW_FILL, l.depth / SHADOW_FILL, 1);
@@ -250,12 +258,18 @@ export class ToolingScene {
 		this.camera.lookAt(this.controls.target);
 	}
 
-	private applyLimits(f: Framing): void {
+	// The orbit limits of a framing. With `around` (the camera was grabbed mid-move and is not yet inside them), they are
+	// widened to hold that view, so nothing jumps; `easeBack` then draws it in and restores the plain limits.
+	private applyLimits(f: Framing, around: Framing | null = null): void {
 		const l = orbitLimits(f);
-		this.controls.minDistance = l.minDistance;
-		this.controls.maxDistance = l.maxDistance;
-		this.controls.minPolarAngle = l.minPolar;
-		this.controls.maxPolarAngle = l.maxPolar;
+		const r = around ? boundsContaining(hardBounds(f), around) : l;
+		this.controls.minDistance = around ? Math.min(l.minDistance, around.distance) : l.minDistance;
+		this.controls.maxDistance = around ? Math.max(l.maxDistance, around.distance) : l.maxDistance;
+		this.controls.minPolarAngle = r.minPolar;
+		this.controls.maxPolarAngle = r.maxPolar;
+		this.controls.minAzimuthAngle = r.minAzimuth;
+		this.controls.maxAzimuthAngle = r.maxAzimuth;
+		this.limitsWidened = around !== null;
 	}
 
 	// Ease the camera (and the lifted insert) to a focus; instantly when asked or under reduced motion.
@@ -278,6 +292,8 @@ export class ToolingScene {
 			this.controls.maxDistance = Infinity;
 			this.controls.minPolarAngle = 0;
 			this.controls.maxPolarAngle = Math.PI;
+			this.controls.minAzimuthAngle = -Infinity;
+			this.controls.maxAzimuthAngle = Infinity;
 			this.tween.start(framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3), to, performance.now(), duration);
 		}
 		this.requestRender();
@@ -286,9 +302,10 @@ export class ToolingScene {
 	// The user grabbed the camera mid-move: stop where it is, with the insert already at its destination.
 	private settle(): void {
 		if (!this.tween.active) return;
+		const view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
 		this.tween.cancel();
 		this.lifts = new Map(this.liftTo);
-		if (this.finalFraming) this.applyLimits(this.finalFraming);
+		if (this.finalFraming) this.applyLimits(this.finalFraming, view);
 		this.requestRender();
 	}
 
@@ -323,10 +340,12 @@ export class ToolingScene {
 		this.loop.request();
 	}
 
-	// Pulsing only while the stage is on screen, motion is allowed, and the next fresh edge is not the focused one.
+	// Pulsing only while the stage is on screen and motion is allowed: the glow of a selected edge, and the halo of the
+	// next fresh edge when that is not the focused one.
 	private pulseAllowed(): boolean {
-		return this.nextFresh !== null && this.visible && document.visibilityState !== 'hidden' && !prefersReducedMotion()
-			&& !(this.focus.kind === 'edge' && this.focus.edgeId === this.nextFresh.edgeId);
+		if (!this.visible || document.visibilityState === 'hidden' || prefersReducedMotion()) return false;
+		if (this.focus.kind === 'edge') return true;
+		return this.nextFresh !== null;
 	}
 
 	// Everything that moves on its own: the queued hover pick, the camera ease and lifts, orbit damping.
@@ -352,7 +371,24 @@ export class ToolingScene {
 			this.loop.request();
 		}
 		if (this.controls.update()) busy = true; // damping keeps going after the pointer is released
+		if (this.easeBack(now)) busy = true;
 		return busy;
+	}
+
+	// Past the soft rotation bounds (a drag may overshoot them a little) and let go: ease back to the bound.
+	private easeBack(now: number): boolean {
+		const dt = now - this.lastAdvance;
+		this.lastAdvance = now;
+		if (this.dragging || this.tween.active || !this.finalFraming) return false;
+		const view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
+		const next = easeToBounds(view, rotationBounds(this.finalFraming), easeFraction(dt, prefersReducedMotion()));
+		if (!next) {
+			if (this.limitsWidened) this.applyLimits(this.finalFraming); // back inside: the plain limits again
+			return false;
+		}
+		this.camera.position.set(...next.position);
+		this.camera.lookAt(this.controls.target);
+		return true;
 	}
 
 	private draw(pulse: number): void {
