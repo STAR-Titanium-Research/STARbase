@@ -431,6 +431,14 @@ describe('remove', () => {
 		expect(apply(marked, { type: 'remove', key: 'n1', deleteRecord: true })).toBe(marked);
 		expect(apply(b, { type: 'remove', key: 'n1' }).items).toHaveLength(0);
 	});
+
+	it('marking an existing record for deletion takes its wires off (d1-build refuses a wire to a removed card)', () => {
+		const b = run([{ type: 'addSample' }, { type: 'attach', operation: { id: 'o', version: 1 }, workState: 'planned', from: { key: 'n1' } }]);
+		expect(b.wires).toHaveLength(1);
+		const marked = apply(b, { type: 'remove', key: 'n2', deleteRecord: true });
+		expect(marked.wires).toEqual([]);
+		expect(marked.items.find((i) => i.key === 'n2')?.remove).toBe(true);
+	});
 });
 
 describe('move / project / campaign', () => {

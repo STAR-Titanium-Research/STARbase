@@ -104,7 +104,12 @@ function staleChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	if (item.kind === 'operation' && item.attach && (loaded.hasInput ?? !empty(loaded.values.sample_id))) {
 		out.push(block(item.key, 'This operation has a sample going in now, so it can no longer be attached.'));
 	}
-	if (loaded.version !== item.existing.version) out.push(warn(item.key, 'Changed since you added it. Review it before you create.'));
+	if (loaded.version !== item.existing.version) {
+		// Edits (or an attach) were made against the version the card was added at: Create would refuse them (OCC), so they block.
+		const editing = !item.remove && (item.attach === true || Object.keys(item.values).length > 0);
+		if (editing) out.push(block(item.key, 'Changed since you added it. Your edits were made against an older version, so review it first.'));
+		else out.push(warn(item.key, 'Changed since you added it. Review it before you create.'));
+	}
 	return out;
 }
 
@@ -120,7 +125,7 @@ function samplePlanned(body: DraftBody, key: DraftKey | null, ctx: CheckCtx): bo
 }
 
 function sampleChecks(item: DraftSample, body: DraftBody, ctx: CheckCtx): Check[] {
-	if (item.existing || item.remove) return [];
+	if (item.existing) return item.remove ? removeChecks(item, ctx) : [];
 	const out: Check[] = [];
 	const inherited = inheritedValues(body, item.key, ctx).values;
 	const all = { ...inherited, ...item.values };
@@ -188,10 +193,24 @@ function testChecks(item: DraftItem & { kind: 'test' }, body: DraftBody, ctx: Ch
 /** E18: only planned records are deleted from the map. */
 function removeChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	const loaded = loadedOf(item, ctx);
-	if (loaded && loaded.values.work_state === 'done') {
-		return [block(item.key, `A done ${WORDS[item.kind]} is never deleted from the map.`)];
+	// A sample is planned by its status, an operation or test by its work state.
+	const state = loaded?.values[item.kind === 'sample' ? 'current_status' : 'work_state'];
+	if (typeof state === 'string' && state !== 'planned') {
+		return [block(item.key, item.kind === 'sample' ? 'Only a planned sample can be deleted from the map.' : `A done ${WORDS[item.kind]} is never deleted from the map.`)];
 	}
 	return [];
+}
+
+/** E18 as d1-build holds it: a wire that touches a card being removed blocks the card on its other end (take the wire off first). */
+function removedWireChecks(body: DraftBody): Check[] {
+	const out: Check[] = [];
+	for (const w of body.wires) {
+		const from = itemOf(body, w.from.key);
+		const to = itemOf(body, w.to.key);
+		if (!from || !to || (!from.remove && !to.remove)) continue;
+		out.push(block(from.remove ? to.key : from.key, 'This card is wired to something that is being removed. Take the wire off first.'));
+	}
+	return out;
 }
 
 /** Every check of a draft, blocking first, each group in the order of the cards. */
@@ -203,6 +222,7 @@ export function checks(body: DraftBody, ctx: CheckCtx = {}): Check[] {
 		else if (item.kind === 'operation') out.push(...operationChecks(item, body, ctx));
 		else out.push(...testChecks(item, body, ctx));
 	}
+	out.push(...removedWireChecks(body));
 	// A card that is gone cannot be edited: its other checks would only be noise.
 	const gone = new Set(out.filter((c) => c.level === 'block' && /is gone/.test(c.text)).map((c) => c.key));
 	const rest = out.filter((c) => !gone.has(c.key) || /is gone/.test(c.text));

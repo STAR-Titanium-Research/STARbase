@@ -571,10 +571,15 @@ export function apply(body: DraftBody, action: DraftAction): DraftBody {
 		case 'remove': {
 			const item = itemOf(body, action.key);
 			if (!item) return body;
-			// A planned record that exists is deleted at Create (E18): it stays in the draft, marked, with its wires.
+			// A planned record that exists is deleted at Create (E18): it stays in the draft, marked. Its wires go: d1-build refuses a
+			// wire to a card that is being removed, so the draft never holds one.
 			if (item.existing && action.deleteRecord) {
 				if (item.remove) return body;
-				return { ...body, items: body.items.map((i) => (i === item ? { ...item, remove: true as const } : i)) };
+				return {
+					...body,
+					items: body.items.map((i) => (i === item ? { ...item, remove: true as const } : i)),
+					wires: body.wires.filter((x) => x.from.key !== item.key && x.to.key !== item.key),
+				};
 			}
 			return removeKey(body, action.key);
 		}

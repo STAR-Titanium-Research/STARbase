@@ -207,9 +207,19 @@ describe('existing records (E13)', () => {
 		expect(blocking(checks(attached(), { ...ctx, records: {} }))).toEqual([]);
 	});
 
-	it('changed since added is a warning', () => {
-		const list = checks(attached(), { ...ctx, records: { [key]: { version: 4, values: { method_id: 'mc', equipment_id: 'e' } } } });
-		expect(texts(list, 'n2')).toEqual(['warn:-:Changed since you added it. Review it before you create.']);
+	it('changed since added is a warning for a card that only sits there, a block when it is attached or carries edits', () => {
+		const records = { [key]: { version: 4, values: { method_id: 'mc', equipment_id: 'e' } } };
+		// attached: the draft gives it an input, against version 3
+		const attachedList = checks(attached(), { ...ctx, records });
+		expect(texts(attachedList, 'n2')).toEqual(['block:-:Changed since you added it. Your edits were made against an older version, so review it first.']);
+		// edited
+		const edited = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'setValues', key: 'n1', values: { notes: 'x' } }]);
+		const sampleRecords = { [recordKey('physical_samples', 's')]: { version: 2, values: {} } };
+		expect(texts(checks(edited, { ...ctx, records: sampleRecords }))).toEqual(['block:-:Changed since you added it. Your edits were made against an older version, so review it first.']);
+		// only there
+		const plain = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }]);
+		const list = checks(plain, { ...ctx, records: sampleRecords });
+		expect(texts(list)).toEqual(['warn:-:Changed since you added it. Review it before you create.']);
 		expect(blocking(list)).toEqual([]);
 	});
 
@@ -249,6 +259,23 @@ describe('existing records (E13)', () => {
 		const list = checks(b, { ...ctx, records: { [key]: { version: 3, values: { work_state: 'done' } } } });
 		expect(texts(blocking(list))).toEqual(['block:-:A done operation is never deleted from the map.']);
 		expect(blocking(checks(b, { ...ctx, records: { [key]: { version: 3, values: { work_state: 'planned' } } } }))).toEqual([]);
+	});
+
+	it('deleting a sample that is not planned is refused, a planned one is not', () => {
+		const b = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }]);
+		const gone = apply(b, { type: 'remove', key: 'n1', deleteRecord: true });
+		const at = (status: string) => ({ ...ctx, records: { [recordKey('physical_samples', 's')]: { version: 1, values: { current_status: status } } } });
+		expect(texts(blocking(checks(gone, at('active'))))).toEqual(['block:-:Only a planned sample can be deleted from the map.']);
+		expect(blocking(checks(gone, at('planned')))).toEqual([]);
+		expect(blocking(checks(gone, ctx))).toEqual([]); // not read yet
+	});
+
+	it('a wire that touches a card being removed blocks the card on its other end', () => {
+		// A body from elsewhere can hold the wire (the reducer takes them off): the check says so, as d1-build does.
+		const base = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } }]);
+		const b: DraftBody = { ...base, items: base.items.map((i) => (i.key === 'n2' ? { ...i, remove: true as const } : i)) };
+		expect(texts(blocking(checks(b, ctx)))).toEqual(['block:-:This card is wired to something that is being removed. Take the wire off first.']);
+		expect(blocking(checks(b, ctx))[0].key).toBe('n1');
 	});
 });
 
