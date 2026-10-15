@@ -18,19 +18,15 @@
       "items": [],
       "skipped": [
         {
-          "candidate_id": "00000000-0000-4000-8000-000000001002",
-          "reason": "COPY"
-        },
-        {
-          "candidate_id": "00000000-0000-4000-8000-000000001003",
-          "reason": "SURFACE_SCAN"
-        },
-        {
           "candidate_id": "00000000-0000-4000-8000-000000001005",
+          "reason": "NOT_EDITABLE"
+        },
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001006",
           "reason": "NOT_EDITABLE"
         }
       ],
-      "skipped_total": 3,
+      "skipped_total": 2,
       "has_more": false,
       "next_cursor": null
     }

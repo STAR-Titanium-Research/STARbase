@@ -301,9 +301,9 @@ describe('POST /d1-inbox/accept-all', () => {
 		const { api, calls } = only(f);
 		const r = await acceptAll(api, acceptFilter(FILTER), { dryRun: true });
 		expect(calls[0].body).toEqual(f.request.body);
-		expect(r).toMatchObject({ dry_run: true, acceptable: 2, linked: 0, link_batch_id: '', has_more: false, ids: [ID(1001), ID(1004)], items: [] });
+		expect(r).toMatchObject({ dry_run: true, acceptable: 2, linked: 0, link_batch_id: '', has_more: false, ids: [ID(1001), ID(1011)], items: [], skippedTotal: 2 });
 		expect(r.skipped).toEqual(f.body.data.skipped);
-		expect(skippedText(r.skipped)).toBe('Left for you to decide: 1 copy of another file, 1 surface scan (added one by one), 1 file whose record you cannot edit.');
+		expect(skippedText(r.skipped, r.skippedTotal)).toBe('Left for you to decide: 2 files whose record you cannot edit.');
 		// the ids are the whole count, which is what makes the client trust them
 		expect(r.ids.length).toBe(r.acceptable);
 	});
@@ -317,7 +317,26 @@ describe('POST /d1-inbox/accept-all', () => {
 	it('a dry run with nothing to link', async () => {
 		const r = await acceptAll(only(fx('accept_all_dry_run_none')).api, acceptFilter(FILTER), { dryRun: true });
 		expect(r).toMatchObject({ dry_run: true, acceptable: 0, ids: [], has_more: false });
-		expect(r.skipped).toHaveLength(1);
+		expect(r.skipped).toHaveLength(2);
+	});
+
+	it('the page\'s own estimate of what Accept all links is the endpoint\'s answer for the same rows (a copy, a surface scan and a file it cannot edit are not counted)', async () => {
+		const rows = (await loadFiles(only(fx('files_new')).api, {})).rows;
+		const dry = await acceptAll(only(fx('accept_all_dry_run')).api, acceptFilter(FILTER), { dryRun: true });
+		expect(ids(rows.filter(isAcceptable))).toEqual(dry.ids);
+		expect(dry.ids).not.toContain(ID(1002));
+	});
+
+	it('the endpoint names at most 200 of the files it left: skipped_total is the whole count and the text says how many are not listed', async () => {
+		const f = fx('accept_all_real');
+		const body = { data: { ...f.body.data, skipped_total: 250 } };
+		const r = await acceptAll(only({ ...f, body }).api, acceptFilter(FILTER));
+		expect(r.skippedTotal).toBe(250);
+		expect(skippedText(r.skipped, r.skippedTotal)).toBe('Left for you to decide: 2 files whose record you cannot edit. 248 more are not listed.');
+		// an answer that leaves it out (an older draft) counts the listed ones
+		const bare = { data: { ...f.body.data } };
+		delete (bare.data as any).skipped_total;
+		expect((await acceptAll(only({ ...f, body: bare }).api, acceptFilter(FILTER))).skippedTotal).toBe(2);
 	});
 
 	it('the real run: the batch Undo works on, the count, the items, what was left', async () => {
@@ -327,8 +346,9 @@ describe('POST /d1-inbox/accept-all', () => {
 		expect(calls[0].body).toEqual(f.request.body);
 		expect(r).toMatchObject({ link_batch_id: BATCH, linked: 2, dry_run: false, has_more: false, acceptable: 2 });
 		expect(r.items).toEqual(f.body.data.items);
-		expect(r.ids).toEqual([ID(1001), ID(1004)]);
-		expect(r.skipped).toHaveLength(3);
+		expect(r.items[1]).toMatchObject({ candidate_id: ID(1011), adopted: true });
+		expect(r.ids).toEqual([ID(1001), ID(1011)]);
+		expect(r.skipped).toHaveLength(2);
 	});
 
 	it('the real run for exactly the previewed files sends candidate_ids and nothing else new', async () => {
@@ -415,9 +435,9 @@ describe('the Inbox page (createInbox) against the fixtures', () => {
 		await inbox.openAccept();
 		const d = inbox.acceptDialog.value;
 		expect(calls.find((c) => c.path === '/d1-inbox/accept-all')!.body).toEqual(fx('accept_all_dry_run').request.body);
-		expect(d).toMatchObject({ open: true, loading: false, error: '', count: 2, hasMore: false, ids: [ID(1001), ID(1004)], pairsExact: true });
-		expect(d.skipped.map((s) => s.reason)).toEqual(['COPY', 'SURFACE_SCAN', 'NOT_EDITABLE']);
-		expect(d.pairs).toEqual([{ file: '3fa9c1d2_A1.tif', record: 'S-0042' }, { file: 'S-0042_notes.pdf', record: 'S-0042' }]);
+		expect(d).toMatchObject({ open: true, loading: false, error: '', count: 2, hasMore: false, ids: [ID(1001), ID(1011)], pairsExact: true, skippedTotal: 2 });
+		expect(d.skipped.map((s) => s.reason)).toEqual(['NOT_EDITABLE', 'NOT_EDITABLE']);
+		expect(d.pairs).toEqual([{ file: '3fa9c1d2_A1.tif', record: 'S-0042' }, { file: '3fa9c1d2_report.pdf', record: 'S-0042' }]);
 		expect(await inbox.confirmAccept()).toEqual({ ok: true });
 		const real = calls.filter((c) => c.path === '/d1-inbox/accept-all')[1];
 		expect(real.body).toEqual(fx('accept_all_real_candidate_ids').request.body);

@@ -485,6 +485,25 @@ export function fileOut(row, info) {
   return out;
 }
 
+// Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
+export const unfit = (cand, { auto }) => {
+  if (cand.state !== 'new') return 'NOT_NEW';
+  if (auto && cand.owner_team_id) return 'TEAM_FILE';
+  if (cand.duplicate_of) return 'COPY';
+  if (auto && cand.origin === 'backlog') return 'BACKLOG';
+  // a surface scan is ADDED to an insert or edge with a condition only a person chooses (stream F1): never accepted in bulk, never automatic
+  if (cand.kind === 'surface_scan') return 'SURFACE_SCAN';
+  if (auto && !AUTO_KINDS.includes(cand.kind)) return 'KIND_NOT_ALLOWED';
+  if (cand.match_strength !== 'short_id') return 'NOT_EXACT';
+  const matches = asJson(cand.matches);
+  // two or more records named: never a suggestion (the crawler leaves suggested_* null, but a row that says otherwise is still refused), in bulk too (D9)
+  if (Array.isArray(matches) && matches.length > 1) return 'AMBIGUOUS';
+  if (!cand.suggested_record_id || !cand.suggested_collection) return 'NO_SUGGESTION';
+  if (!Array.isArray(matches) || matches.length !== 1 || matches[0].record_id !== cand.suggested_record_id || matches[0].collection !== cand.suggested_collection) return 'AMBIGUOUS';
+  if (!isTarget(cand.suggested_collection)) return 'COLLECTION_NOT_SUPPORTED';
+  return null;
+};
+
 // ---- the answers, as the typed client in STARbase reads them ---------------------------------------------------------------------
 // One function per route's body (the routes call these; contract_fixtures.mjs writes their output to tests/fixtures/d1-inbox/ for the client's tests).
 
@@ -787,25 +806,6 @@ export function mount(router, context, deps = {}) {
     if (out.wrote) await clearDataCache(schema);
     res.json({ data: shapeLink(out) });
   }));
-
-  // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
-  const unfit = (cand, { auto }) => {
-    if (cand.state !== 'new') return 'NOT_NEW';
-    if (auto && cand.owner_team_id) return 'TEAM_FILE';
-    if (cand.duplicate_of) return 'COPY';
-    if (auto && cand.origin === 'backlog') return 'BACKLOG';
-    // a surface scan is ADDED to an insert or edge with a condition only a person chooses (stream F1): never accepted in bulk, never automatic
-    if (cand.kind === 'surface_scan') return 'SURFACE_SCAN';
-    if (auto && !AUTO_KINDS.includes(cand.kind)) return 'KIND_NOT_ALLOWED';
-    if (cand.match_strength !== 'short_id') return 'NOT_EXACT';
-    const matches = asJson(cand.matches);
-    // two or more records named: never a suggestion (the crawler leaves suggested_* null, but a row that says otherwise is still refused), in bulk too (D9)
-    if (Array.isArray(matches) && matches.length > 1) return 'AMBIGUOUS';
-    if (!cand.suggested_record_id || !cand.suggested_collection) return 'NO_SUGGESTION';
-    if (!Array.isArray(matches) || matches.length !== 1 || matches[0].record_id !== cand.suggested_record_id || matches[0].collection !== cand.suggested_collection) return 'AMBIGUOUS';
-    if (!isTarget(cand.suggested_collection)) return 'COLLECTION_NOT_SUPPORTED';
-    return null;
-  };
 
   // A keyset cursor is { at, id } of the last row read, passed around as base64url JSON.
   const encodeCursor = (row) => Buffer.from(JSON.stringify([toIso(row.first_seen_at), row.candidate_id])).toString('base64url');

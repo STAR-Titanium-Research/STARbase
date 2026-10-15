@@ -11,7 +11,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { FIXTURE_DIR, buildFixtures, fixtureText } from './contract_fixtures.mjs';
-import { FILTER_KEYS, FILTER_VALUES, LINK_TARGETS, buildListQuery, parseFileFilters } from './index.js';
+import { FILTER_KEYS, FILTER_VALUES, LINK_TARGETS, buildListQuery, parseFileFilters, shapeAcceptAll } from './index.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const built = buildFixtures();
@@ -154,4 +154,47 @@ test('filter_keys.json values are the ones the server accepts, and nothing else'
   for (const owner of ['me', `team:${TEAM}`, `person:${TEAM}`]) assert.doesNotThrow(() => parseFileFilters({ owner }), owner);
   assert.throws(() => parseFileFilters({ owner: 'team' }), { status: 400 });
   assert.throws(() => parseFileFilters({ owner: 'everyone' }), { status: 400 });
+});
+
+// ---- what the client leans on beyond the shapes ----------------------------------------------------------------------------------
+
+test('an accept-all dry run lists exactly the files it counts, and the real run for them asks for those ids', () => {
+  const dry = built.get('accept_all_dry_run.json').body.data;
+  assert.equal(dry.count, dry.ids.length);
+  assert.equal(dry.dry_run, true);
+  assert.ok(dry.count > 0 && dry.skipped.length > 0);
+  assert.deepEqual(built.get('accept_all_real_candidate_ids.json').request.body.candidate_ids, dry.ids);
+  const real = built.get('accept_all_real_candidate_ids.json').body.data;
+  assert.deepEqual(real.items.map((i) => i.candidate_id), dry.ids);
+  assert.equal(real.linked, dry.count);
+  // every id is a file of the list the client was looking at
+  const listed = built.get('files_new.json').body.data.map((r) => r.candidate_id);
+  for (const id of dry.ids) assert.ok(listed.includes(id), id);
+  // a dry run writes nothing, so it has no batch; a run that linked nothing has none either
+  assert.equal('link_batch_id' in dry, false);
+  assert.equal(built.get('accept_all_real_none.json').body.data.link_batch_id, null);
+  assert.equal(built.get('accept_all_real.json').body.data.link_batch_id, real.link_batch_id);
+});
+
+test('accept-all names at most 200 skipped files and says how many there were in all (the client shows both)', () => {
+  const many = Array.from({ length: 250 }, (_, n) => ({ candidate_id: `c${n}`, reason: 'NOT_EDITABLE' }));
+  const out = shapeAcceptAll({ batchId: null, items: [], skipped: many, has_more: false, next_cursor: null });
+  assert.equal(out.skipped.length, 200);
+  assert.equal(out.skipped_total, 250);
+});
+
+test('the folder filter reads the folder part of the path, not the file name (the client words it that way)', () => {
+  const { sql, bindings } = buildListQuery(SCOPE, parseFileFilters({ folder: 'SEM' }));
+  assert.match(sql, /strpos\(lower\(regexp_replace\(c\.rel_path, '\[\^\/\]\*\$', ''\)\), lower\(\?\)\) > 0/);
+  assert.ok(bindings.includes('SEM'));
+});
+
+test('every row the list shows names its owner as { kind, id, name }, and a copy names whose Inbox the original is in', () => {
+  for (const name of ['files_new.json', 'files_older.json', 'files_linked.json', 'files_dismissed.json']) {
+    for (const row of built.get(name).body.data) {
+      assert.ok(['person', 'team'].includes(row.owner.kind), name);
+      assert.equal(typeof row.owner.name, 'string', name);
+      assert.equal(row.duplicate_of === null, row.duplicate_of_owner === null, `${name}: duplicate_of and duplicate_of_owner go together`);
+    }
+  }
 });

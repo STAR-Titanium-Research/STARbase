@@ -259,10 +259,53 @@
           "name": "Alice A"
         },
         "adopted": false
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001011",
+        "directus_files_id": "00000000-0000-4000-8000-000000003011",
+        "name": "3fa9c1d2_report.pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+        "kind_confidence": null,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/reports/3fa9c1d2_report.pdf",
+        "size_bytes": 88000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
       }
     ],
     "meta": {
-      "total": 6,
+      "total": 7,
       "limit": 50,
       "offset": 0,
       "acceptable": null

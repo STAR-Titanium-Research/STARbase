@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, parseFileFilters, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
-  shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo,
+  shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo, unfit,
 } from './index.js';
 
 export const FIXTURE_DIR = fileURLToPath(new URL('../../../tests/fixtures/d1-inbox/', import.meta.url));
@@ -93,6 +93,10 @@ const LINKED_MANUAL = row({
   match_strength: 'code', matches: named(S_EDIT, 'S-0042', 'code'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/S-0042_final.pdf', decided_at: at('2026-10-14T17:30:00.000Z'),
   link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
 });
+const DOC_EXACT = row({
+  candidate_id: ID(1011), directus_files_id: ID(3011), name: '3fa9c1d2_report.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null,
+  match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/3fa9c1d2_report.pdf', size_bytes: '88000',
+});
 const DISMISSED = row({
   candidate_id: ID(1010), directus_files_id: ID(3010), name: 'IMG_0001.jpg', mime_type: 'image/jpeg', kind: 'image', state: 'dismissed', rel_path: 'Users/ali1/IMG_0001.jpg',
   decided_at: at('2026-10-13T09:00:00.000Z'), decided_by_name: 'Alice A',
@@ -104,6 +108,24 @@ const INFO = {
   labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
 };
+// What accept-all does with `rows`: the rows its query reads (an exact short ID naming one record: buildListQuery's accept filter), sorted by the
+// endpoint's own unfit() and the caller's edit rights into what it links and what it leaves.
+const reads = (c) => c.state === 'new' && c.match_strength === 'short_id' && c.suggested_record_id && c.kind !== 'surface_scan' && !c.duplicate_of && c.matches.length === 1;
+function acceptPlan(rows) {
+  const entries = [];
+  const skipped = [];
+  for (const cand of rows.filter(reads)) {
+    const why = unfit(cand, { auto: false }) ?? (INFO.editable.has(`${cand.suggested_collection}:${cand.suggested_record_id}`) ? null : 'NOT_EDITABLE');
+    if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
+    else entries.push({ cand });
+  }
+  return { entries, skipped };
+}
+const IMAGE_KINDS = ['sem_image', 'image', 'surface_scan'];
+const linkedItems = (entries) => entries.map(({ cand }) => ({
+  candidate_id: cand.candidate_id, collection: cand.suggested_collection, record_id: cand.suggested_record_id, junction_id: ID(5000 + (Number(cand.candidate_id.slice(-4)) - 1000)),
+  adopted: !IMAGE_KINDS.includes(cand.kind),
+}));
 const list = (rows, query, total = rows.length, acceptable = null) => {
   const f = parseFileFilters(query);
   return ok(`GET ${LIST_PATH}?${new URLSearchParams(query)}`, request('GET', LIST_PATH, { query }), shapeFiles(rows, INFO, { total, limit: f.limit, offset: f.offset, acceptable }));
@@ -123,13 +145,8 @@ const summary = (description, rows, scope, teams, person) => ok(description, req
 
 // ---- accept-all --------------------------------------------------------------------------------------------------------------
 
+const ALL_NEW = [NEW_ORIGINAL, COPY, SURFACE_SCAN, DOCUMENT, NOT_EDITABLE, HIDDEN_RECORD, DOC_EXACT];
 const FILTER = { tab: 'new', strength: 'short_id' };
-const linkedItem = (n, record = S_EDIT, adopted = false) => ({
-  candidate_id: ID(1000 + n), collection: 'physical_samples', record_id: record, junction_id: ID(5000 + n), adopted,
-});
-const entry = (n) => ({ cand: { candidate_id: ID(1000 + n) } });
-const SKIPPED = [{ candidate_id: ID(1002), reason: 'COPY' }, { candidate_id: ID(1003), reason: 'SURFACE_SCAN' }, { candidate_id: ID(1005), reason: 'NOT_EDITABLE' }];
-
 // ---- the admin page ----------------------------------------------------------------------------------------------------------
 
 const crawlerState = (over) => ({
@@ -152,8 +169,8 @@ export function buildFixtures() {
   const put = (name, fixture) => out.set(`${name}.json`, fixture);
 
   // GET /files
-  put('files_new', list([NEW_ORIGINAL, COPY, SURFACE_SCAN, DOCUMENT, NOT_EDITABLE, HIDDEN_RECORD], { tab: 'new', kind: 'sem_image,surface_scan,image,document,other', limit: '50', offset: '0' }));
-  put('files_new_acceptable', list([NEW_ORIGINAL, NOT_EDITABLE], { tab: 'new', strength: 'short_id', acceptable: '1', limit: '50' }, 2, 1));
+  put('files_new', list(ALL_NEW, { tab: 'new', kind: 'sem_image,surface_scan,image,document,other', limit: '50', offset: '0' }));
+  put('files_new_acceptable', list([NEW_ORIGINAL, NOT_EDITABLE], { tab: 'new', strength: 'short_id', acceptable: '1', limit: '50' }, 2, acceptPlan([NEW_ORIGINAL, NOT_EDITABLE]).entries.length));
   put('files_older', list([BACKLOG_EXACT], { tab: 'older', owner: 'me', limit: '50' }));
   put('files_linked', list([LINKED_AUTO, LINKED_MANUAL], { tab: 'linked', link_kind: 'auto', limit: '20' }, 2));
   put('files_dismissed', list([DISMISSED], { tab: 'dismissed', limit: '50' }));
@@ -172,11 +189,11 @@ export function buildFixtures() {
   // POST /link
   const linkReq = (items) => request('POST', '/d1-inbox/link', { body: { items } });
   const oneLink = [{ candidate_id: ID(1001), collection: 'physical_samples', record_id: S_EDIT }];
-  put('link_ok', ok('one file linked', linkReq(oneLink), { data: shapeLink({ link_batch_id: BATCH, newly: 1, items: [linkedItem(1)] }) }));
-  put('link_ok_bulk', ok('two files linked in one batch', linkReq([...oneLink, { candidate_id: ID(1004), collection: 'physical_samples', record_id: S_EDIT }]),
-    { data: shapeLink({ link_batch_id: BATCH, newly: 2, items: [linkedItem(1), linkedItem(4, S_EDIT, true)] }) }));
+  put('link_ok', ok('one file linked', linkReq(oneLink), { data: shapeLink({ link_batch_id: BATCH, newly: 1, items: linkedItems([{ cand: NEW_ORIGINAL }]) }) }));
+  put('link_ok_bulk', ok('two files linked in one batch', linkReq([...oneLink, { candidate_id: ID(1011), collection: 'physical_samples', record_id: S_EDIT }]),
+    { data: shapeLink({ link_batch_id: BATCH, newly: 2, items: linkedItems([{ cand: NEW_ORIGINAL }, { cand: DOC_EXACT }]) }) }));
   put('link_already_linked', ok('the same person repeats the same link: no new batch, a count of 0', linkReq(oneLink),
-    { data: shapeLink({ link_batch_id: null, newly: 0, items: [{ ...linkedItem(1), already_linked: true }] }) }));
+    { data: shapeLink({ link_batch_id: null, newly: 0, items: linkedItems([{ cand: NEW_ORIGINAL }]).map((i) => ({ ...i, already_linked: true })) }) }));
   put('link_403_not_editable', failure('the caller cannot edit the record', linkReq(oneLink), ERRORS.notEditable(ID(1001), 'physical_samples', S_EDIT)));
   put('link_409_already_linked', failure('someone else linked the file first', linkReq(oneLink), ERRORS.alreadyLinked(ID(1001))));
   put('link_409_already_on_record', failure('the file is already on the record (linked in Data Studio)', linkReq(oneLink), ERRORS.alreadyOnRecord(ID(1001))));
@@ -184,18 +201,22 @@ export function buildFixtures() {
 
   // POST /accept-all
   const acceptReq = (extra) => request('POST', '/d1-inbox/accept-all', { body: { filter: FILTER, ...extra } });
+  const plan = acceptPlan(ALL_NEW);
+  const planIds = plan.entries.map((e) => e.cand.candidate_id);
+  // the keyset cursor accept-all hands back (the last row read: its first_seen_at and id), as base64url JSON
+  const cursor = Buffer.from(JSON.stringify(['2026-10-11T09:00:00.000Z', ID(1011)])).toString('base64url');
   put('accept_all_dry_run', ok('a dry run: what would be linked and what would be left', acceptReq({ dry_run: true }),
-    { data: shapeAcceptDryRun({ entries: [entry(1), entry(4)], skipped: SKIPPED, has_more: false, next_cursor: null }) }));
+    { data: shapeAcceptDryRun({ ...plan, has_more: false, next_cursor: null }) }));
   put('accept_all_dry_run_has_more', ok('a dry run that stopped at its page cap: has_more and a cursor to carry on', acceptReq({ dry_run: true }),
-    { data: shapeAcceptDryRun({ entries: [entry(1), entry(4)], skipped: SKIPPED, has_more: true, next_cursor: 'WyIyMDI2LTEwLTExVDA5OjAwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAzZTkiXQ' }) }));
+    { data: shapeAcceptDryRun({ ...plan, has_more: true, next_cursor: cursor }) }));
   put('accept_all_dry_run_none', ok('a dry run with nothing to link', acceptReq({ dry_run: true }),
-    { data: shapeAcceptDryRun({ entries: [], skipped: SKIPPED.slice(0, 1), has_more: false, next_cursor: null }) }));
+    { data: shapeAcceptDryRun({ ...acceptPlan([NOT_EDITABLE, HIDDEN_RECORD]), has_more: false, next_cursor: null }) }));
   put('accept_all_real', ok('accept-all for a filter', acceptReq({}),
-    { data: shapeAcceptAll({ batchId: BATCH, items: [linkedItem(1), linkedItem(4, S_EDIT, true)], skipped: SKIPPED, has_more: false, next_cursor: null }) }));
-  put('accept_all_real_candidate_ids', ok('accept-all for exactly the files a dry run listed', acceptReq({ candidate_ids: [ID(1001), ID(1004)] }),
-    { data: shapeAcceptAll({ batchId: BATCH, items: [linkedItem(1), linkedItem(4, S_EDIT, true)], skipped: [], has_more: false, next_cursor: null }) }));
+    { data: shapeAcceptAll({ batchId: BATCH, items: linkedItems(plan.entries), skipped: plan.skipped, has_more: false, next_cursor: null }) }));
+  put('accept_all_real_candidate_ids', ok('accept-all for exactly the files a dry run listed', acceptReq({ candidate_ids: planIds }),
+    { data: shapeAcceptAll({ batchId: BATCH, items: linkedItems(plan.entries), skipped: [], has_more: false, next_cursor: null }) }));
   put('accept_all_real_none', ok('accept-all that linked nothing: no batch', acceptReq({}),
-    { data: shapeAcceptAll({ batchId: null, items: [], skipped: SKIPPED, has_more: false, next_cursor: null }) }));
+    { data: shapeAcceptAll({ batchId: null, items: [], skipped: acceptPlan([NOT_EDITABLE, HIDDEN_RECORD]).skipped, has_more: false, next_cursor: null }) }));
 
   // POST /dismiss, /restore, /undo
   put('dismiss_ok', ok('one file dismissed, one already was', request('POST', '/d1-inbox/dismiss', { body: { candidate_ids: [ID(1001), ID(1010)] } }),
