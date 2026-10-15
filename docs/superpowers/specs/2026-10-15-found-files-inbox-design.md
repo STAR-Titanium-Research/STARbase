@@ -62,8 +62,10 @@ already says so (changes marked *as built*).
 
 - `people.uni_alias TEXT` — nullable; `CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$')` and (*as built*)
   `CHECK (uni_alias !~ '^[.]+$')` so `..` cannot walk out of `Users/`; unique on `lower(uni_alias)` where not null
-  (`people_uni_alias_key`). `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`. Not in the Lab Member
-  `people` update field list, so only administrators set them.
+  (`people_uni_alias_key`). `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`. Kept out of Lab
+  Member create and update: not in their `people` update field list, and a `BEFORE INSERT` trigger on `people`
+  refuses a new row that sets either column (*as built*; error `uni_alias and scan_while_former can only be set by
+  an update`), so only an administrator's UPDATE sets them. Stream B also narrows the Lab Member create field list.
 - `teams.share_folder TEXT` — nullable; `CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> '')` and (*as built*)
   `CHECK (btrim(share_folder) !~ '^[.]+$')`; unique on `lower(share_folder)` where not null
   (`teams_share_folder_key`).

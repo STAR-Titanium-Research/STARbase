@@ -6205,6 +6205,17 @@ UPDATE people SET uni_alias = 'aBC12DE' WHERE person_id = '$FI_P2';")
 grep -q 'duplicate key' <<<"$fi_out" && ok "a uni_alias that differs only in case is rejected (unique on lower)" || bad "case-different duplicate uni_alias was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "SELECT 'fi_nulls:' || count(*) FROM people WHERE person_id IN ('$FI_P1', '$FI_P2') AND uni_alias IS NULL;")
 grep -q 'fi_nulls:2' <<<"$fi_out" && ok "two people without an alias are fine (the unique index skips NULL)" || bad "two NULL aliases failed (output: $fi_out)"
+# A new people row cannot carry an alias or the Former switch (a Lab Member can create people; only an administrator may UPDATE these)
+fi_out=$(fi_sql "INSERT INTO people (full_name, uni_alias) VALUES ('Inbox Squatter', 'squat1');")
+grep -q 'uni_alias and scan_while_former can only be set by an update' <<<"$fi_out" && ok "inserting a person with a uni_alias is refused (an alias can only be set by an update)" || bad "insert with uni_alias was not refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO people (full_name, scan_while_former) VALUES ('Inbox Squatter', true);")
+grep -q 'uni_alias and scan_while_former can only be set by an update' <<<"$fi_out" && ok "inserting a person with scan_while_former true is refused" || bad "insert with scan_while_former was not refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO people (full_name, scan_while_former) VALUES ('Inbox Plain', false);
+UPDATE people SET uni_alias = 'plain01', scan_while_former = true WHERE full_name = 'Inbox Plain';
+SELECT 'fi_ins_upd:' || uni_alias || ':' || scan_while_former FROM people WHERE full_name = 'Inbox Plain';")
+grep -q 'fi_ins_upd:plain01:true' <<<"$fi_out" && ok "a person inserted without them can be given an alias and the Former switch by an update" || bad "insert-then-update of alias failed (output: $fi_out)"
+run_eq "the insert guard is a BEFORE INSERT row trigger on people" \
+    "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.people'::regclass AND tgname = 'people_inbox_columns_insert' AND (tgtype & 2) = 2 AND (tgtype & 4) = 4 AND (tgtype & 1) = 1" "1"
 # teams.share_folder
 run_eq "teams.share_folder is nullable text" \
     "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'teams' AND column_name = 'share_folder'" "text:YES"
@@ -6403,7 +6414,8 @@ if [[ -n "$FI_MIG" && -f "$FI_MIG" ]]; then
     fi_down=$(awk '/-- migrate:down/{f=1;next}f' "$FI_MIG")
     fi_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
-INSERT INTO people (person_id, full_name, uni_alias, scan_while_former) VALUES ('$FI_P1', 'Inbox Test One', 'abc12de', true);
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One');
+UPDATE people SET uni_alias = 'abc12de', scan_while_former = true WHERE person_id = '$FI_P1';
 INSERT INTO teams (team_id, name, share_folder) VALUES ('$FI_T1', 'Inbox Test Team', 'Alloy Group');
 INSERT INTO directus_files (id) VALUES ('$FI_F1');
 INSERT INTO directus_users (id) VALUES ('$FI_U1');

@@ -62,6 +62,27 @@ COMMENT ON COLUMN teams.share_folder IS 'The name of this team''s folder on the 
 COMMENT ON INDEX people_uni_alias_key IS 'Two people cannot share a uni alias, ignoring case; people without an alias are not constrained.';
 COMMENT ON INDEX teams_share_folder_key IS 'Two teams cannot share a share folder, ignoring case; teams without a folder are not constrained.';
 
+-- A new person row cannot carry an alias or the Former switch. The Lab Member create permission on people lists no fields
+-- (everything is allowed), so without this guard any Lab Member could create a login-less person that squats on a folder
+-- name before an administrator assigns it. An administrator sets both columns afterwards with an UPDATE, which Lab Members
+-- cannot do (their people update field list leaves these columns out).
+CREATE FUNCTION d1_private.people_inbox_columns_insert_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    IF NEW.uni_alias IS NOT NULL OR NEW.scan_while_former THEN
+        RAISE EXCEPTION 'uni_alias and scan_while_former can only be set by an update'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END
+$$;
+COMMENT ON FUNCTION d1_private.people_inbox_columns_insert_guard() IS 'Trigger function (migration 193): refuses a new people row that sets uni_alias or scan_while_former, so only an update (an administrator; Lab Members cannot update these columns) can give a person an inbox folder.';
+CREATE TRIGGER people_inbox_columns_insert BEFORE INSERT ON people
+    FOR EACH ROW EXECUTE FUNCTION d1_private.people_inbox_columns_insert_guard();
+
 -- 2. Found files.
 CREATE TABLE d1_private.file_candidates (
     candidate_id        UUID          NOT NULL DEFAULT gen_random_uuid(),
@@ -290,6 +311,8 @@ ALTER TABLE teams
     DROP CONSTRAINT IF EXISTS teams_share_folder_format_check,
     DROP COLUMN IF EXISTS share_folder;
 
+DROP TRIGGER IF EXISTS people_inbox_columns_insert ON people;
+DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard();
 DROP INDEX IF EXISTS people_uni_alias_key;
 ALTER TABLE people
     DROP CONSTRAINT IF EXISTS people_uni_alias_not_dots_check,

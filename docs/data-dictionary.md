@@ -419,7 +419,7 @@ tags what they look like and which record they name; people link them in STARbas
 `v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers (derived bookkeeping; the link is
 audited on its junction row). Files stay on the share.
 
-**New columns on existing tables** (set by an administrator; not in the Lab Member `people` update field list)
+**New columns on existing tables** (set by an administrator with an UPDATE: kept out of the Lab Member `people` update field list, and a `BEFORE INSERT` trigger on `people` refuses a new row that sets `uni_alias` or `scan_while_former`, so a Lab Member cannot create a person that squats on a folder name)
 
 | Column | Type | Description |
 |---|---|---|
