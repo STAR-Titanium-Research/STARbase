@@ -1,19 +1,21 @@
-// Which fields STARbase's form shows for one draft item (spec E15, E17), and what the card shows inline as key settings. Pure,
-// no Vue: DraftItemForm.vue is thin over this.
+// Which fields STARbase's form shows for one draft item (spec E15, E17), what the card shows inline as key settings, and how
+// the form's answer becomes a change of the draft. Pure, no Vue: DraftItemForm.vue is thin over this.
 
+import { isReserved } from '@d1/ui';
 import type { DraftItem, FieldDef, FormField } from '@d1/ui';
 import { KEY_SETTING_FIELDS } from '../model/formSlots';
 
-/** Fields the draft fills in by itself (wires, the work state, who and when it was done, a batch, the sequence); never asked for. */
-export const SET_BY_THE_DRAFT: ReadonlySet<string> = new Set([
-	'sample_id', 'output_sample_id', 'operation_id', 'session_id', 'work_state', 'done_by_person_id', 'done_at', 'batch_id', 'operation_sequence',
-]);
+/**
+ * Fields the draft fills in by itself where the server has no rule of its own (`@d1/ui` RESERVED_FIELDS is what d1-build
+ * refuses and is always left out too): the back-references of the child records and the order of passes.
+ */
+export const SET_BY_THE_DRAFT: ReadonlySet<string> = new Set(['operation_id', 'session_id', 'operation_sequence']);
 
 /** Codes the database numbers at Create: not asked for on a new record, shown read-only on one that exists. */
 export const CODE_FIELDS: ReadonlySet<string> = new Set(['sample_code', 'pass_code', 'test_code']);
 
-/** A new sample's status is the draft's too (planned while the operation that makes it is planned). */
-const NEW_SAMPLE_ONLY = new Set(['current_status']);
+/** When it happened: only a record that is done has one (a planned record has `planned_date`). */
+export const DONE_DATE_FIELDS: ReadonlySet<string> = new Set(['operation_date', 'session_date']);
 
 /**
  * The field changes the form applies on top of the generated model: these have a custom Data Studio interface that only
@@ -38,29 +40,59 @@ export interface FormDefsOptions {
 }
 
 /**
- * The definitions to draw for `item`: without what the draft sets itself (and, on a new record, the codes), and for a
- * compact form only `keyFields`. A field group whose fields are all left out draws nothing (FieldForm hides empty groups).
+ * The definitions to draw for `item`: without what the server refuses in a draft (`isReserved`: wires, work state, a sample's
+ * status, a test's subject, stamps) or the draft fills in itself, without the codes on a new record, without the date it was done
+ * while it is planned, and for a compact form only `keyFields`. A field group whose fields are all left out draws nothing
+ * (FieldForm hides empty groups).
  */
 export function formDefsFor(defs: readonly unknown[], item: DraftItem, opts: FormDefsOptions = {}): FieldDef[] {
 	const keep = opts.compact ? new Set(opts.keyFields ?? []) : null;
 	const isNew = !item.existing;
+	const planned = item.kind !== 'sample' && item.workState === 'planned';
 	const out: FieldDef[] = [];
 	for (const d of defs) {
 		const def = d as FieldDef | null;
 		if (!def || typeof def.field !== 'string') continue;
 		const name = def.field;
-		if (SET_BY_THE_DRAFT.has(name)) continue;
-		if (isNew && (CODE_FIELDS.has(name) || (item.kind === 'sample' && NEW_SAMPLE_ONLY.has(name)))) continue;
+		if (isReserved(item.kind, name) || SET_BY_THE_DRAFT.has(name)) continue;
+		if (isNew && CODE_FIELDS.has(name)) continue;
+		if (planned && DONE_DATE_FIELDS.has(name)) continue;
 		if (keep && !keep.has(name)) continue;
 		out.push(def);
 	}
 	return out;
 }
 
+// ---- what the form changes ----------------------------------------------------------------------------------------------
+
+/**
+ * The change of the draft for the form's new values, ready for `setValues` (which merges): everything the form has now, and
+ * every key the item had that the form dropped (FieldForm drops a cleared field's key) as `undefined`, which removes it from a
+ * new record, or `null` for an existing record, where a cleared field has to be written as empty at Create.
+ */
+export function patchOf(item: DraftItem, next: Record<string, unknown>): Record<string, unknown> {
+	const patch: Record<string, unknown> = { ...next };
+	for (const key of Object.keys(item.values)) {
+		if (!(key in next)) patch[key] = item.existing ? null : undefined;
+	}
+	return patch;
+}
+
+/**
+ * What the form greys as inherited, without the fields the person has cleared on an existing record (`null` in its changes):
+ * those show empty, not the value the record still has until Create.
+ */
+export function inheritedFor(item: DraftItem, inherited: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	if (!inherited || !item.existing) return inherited;
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(inherited)) if (item.values[k] !== null) out[k] = v;
+	return out;
+}
+
 // ---- key settings ----------------------------------------------------------------------------------------------------
 
 /**
- * Per test type, what a test shows inline: its type, the standard it follows and its headline result. The map's own table
+ * Per test type, what a test shows inline besides its type: the standard it follows and its headline result. The map's own table
  * (`KEY_SETTING_FIELDS.test`) lists one of each for any test; the form knows the type, so it asks for that type's fields only.
  */
 const TEST_KEY_FIELDS: Record<string, readonly string[]> = {
@@ -73,14 +105,13 @@ const TEST_KEY_FIELDS: Record<string, readonly string[]> = {
 
 /**
  * The field names of a container's key settings (map spec §6.4), the ones its card shows inline and the compact form edits.
- * Give an operation's `process_category` ('machining', 'sintering', ...) or a test's `test_type` ('tensile', 'charpy', ...);
- * read from the table the map already draws key settings from (`KEY_SETTING_FIELDS`), so the card and the form agree.
- * A category with none (sample prep) or no value gives none; a test type with no headline result gives just `test_type`.
+ * An operation gives its `process_category` ('machining', 'sintering', ...), read from the table the map already draws key
+ * settings from (`KEY_SETTING_FIELDS`), so the card and the form agree; a category with none (sample prep) or no value gives
+ * none. A test gives its `test_type` ('tensile', 'charpy', ...) and always starts with `test_type` itself, even while it is
+ * unset, so the type can be chosen: then that type's standard and headline result.
  */
-export function keySettingsFor(processCategoryOrTestType: string | null | undefined): string[] {
-	const key = processCategoryOrTestType;
-	if (!key || key === 'test') return [];
-	const category = (KEY_SETTING_FIELDS as Record<string, { fields: { field: string }[] }[]>)[key];
-	if (category) return category.flatMap((def) => def.fields.map((f) => f.field));
-	return ['test_type', ...(TEST_KEY_FIELDS[key] ?? [])];
+export function keySettingsFor(kind: 'operation' | 'test', value: string | null | undefined): string[] {
+	if (kind === 'test') return ['test_type', ...(value ? (TEST_KEY_FIELDS[value] ?? []) : [])];
+	const category = value ? (KEY_SETTING_FIELDS as Record<string, { fields: { field: string }[] }[]>)[value] : undefined;
+	return category && value !== 'test' ? category.flatMap((def) => def.fields.map((f) => f.field)) : [];
 }

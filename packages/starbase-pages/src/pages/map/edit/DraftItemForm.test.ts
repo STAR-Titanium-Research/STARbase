@@ -39,6 +39,8 @@ const OPERATION_DEFS = [
 	def('machining_cutting_speed_m_per_min', { hidden: true, conditions: showWhenMachining, sort: 6, options: { suffix: 'm/min' } }, { type: 'decimal', schema: { data_type: 'numeric' } }),
 	def('machining_feed_mm_per_rev', { hidden: true, conditions: showWhenMachining, sort: 7 }, { type: 'decimal', schema: { data_type: 'numeric' } }),
 	def('notes', { interface: 'input-multiline', sort: 8 }, { type: 'text' }),
+	def('operation_date', { interface: 'datetime', sort: 9 }, { type: 'date', schema: { data_type: 'date' } }),
+	def('machine_note', { required: true, sort: 10, translations: [{ language: 'en-US', translation: 'Machine note' }] }),
 ];
 const SAMPLE_DEFS = [
 	def('sample_code', { interface: 'd1-sample-code', sort: 1 }),
@@ -105,7 +107,7 @@ describe('DraftItemForm', () => {
 			item: operation({ process_category: 'machining' }),
 			fieldDefs: OPERATION_DEFS,
 			compact: true,
-			keyFields: keySettingsFor('machining'),
+			keyFields: keySettingsFor('operation', 'machining'),
 		});
 		expect(html).toContain('data-field="machining_cutting_speed_m_per_min"');
 		expect(html).toContain('data-field="machining_feed_mm_per_rev"');
@@ -123,6 +125,18 @@ describe('DraftItemForm', () => {
 		const html = await render({ item: operation({ process_category: 'machining' }), fieldDefs: OPERATION_DEFS, readonly: true });
 		expect(row(html, 'notes')).toContain('disabled');
 		expect(row(html, 'planned_date')).toContain('disabled');
+	});
+
+	it('shows the date it was done only once the operation is done', async () => {
+		expect(await render({ item: operation(), fieldDefs: OPERATION_DEFS })).not.toContain('data-field="operation_date"');
+		expect(await render({ item: operation({}, { workState: 'done' }), fieldDefs: OPERATION_DEFS })).toContain('data-field="operation_date"');
+	});
+
+	it('marks every empty required field when showMissing is set', async () => {
+		const quiet = await render({ item: operation(), fieldDefs: OPERATION_DEFS });
+		expect(text(row(quiet, 'machine_note'))).not.toContain('Required.');
+		const loud = await render({ item: operation(), fieldDefs: OPERATION_DEFS, showMissing: true });
+		expect(text(row(loud, 'machine_note'))).toContain('Required.');
 	});
 
 	it('gives each card its own input ids, so two forms on one canvas do not clash', async () => {
