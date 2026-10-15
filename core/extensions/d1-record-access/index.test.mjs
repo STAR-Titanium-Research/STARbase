@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import ext, { COLLECTIONS, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from './index.js';
+import ext, { COLLECTIONS, LAB_VIEWER_ROLE_ID, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from './index.js';
 
 // ---- ids and the world ----------------------------------------------------------------------------------
 
@@ -1748,4 +1748,30 @@ test('Lab Viewer: GET /:collection/:id answers a viewer with the list as everyon
   const members = await call(handlers['GET /:collection/:id/entries/team/:team_id/members'], { acc: owner, params: { team_id: T.alpha }, method: 'GET' });
   assert.notEqual(members.status, 403);
   assert.notEqual(errorOf(members)?.extensions?.code, 'READ_ONLY_ROLE');
+});
+
+// ---- one Lab Viewer role id ---------------------------------------------------------------------------------------------------
+
+test('one Lab Viewer role id: scripts/access_rules.json, the extensions, @d1/ui, migration 185 and the SQL scripts all name the same one', () => {
+  const root = new URL('../../../', import.meta.url);
+  const read = (path) => readFileSync(new URL(path, root), 'utf8');
+  const id = JSON.parse(read('scripts/access_rules.json')).viewer.role;
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // the extension constant (d1-record-access exports it; d1-teams, d1-people-admin and d1-access-guard import it, none writes it again)
+  assert.equal(LAB_VIEWER_ROLE_ID, id);
+  for (const ext of ['d1-teams', 'd1-people-admin', 'd1-access-guard']) {
+    const source = read(`core/extensions/${ext}/index.js`);
+    assert.doesNotMatch(source, new RegExp(id), `${ext} writes the viewer role id again`);
+    assert.match(source, /from '\.\.\/d1-record-access\/index\.js'/, `${ext} imports the shared constant`);
+  }
+  // the front end
+  assert.match(read('packages/d1-ui/src/hostAdmin.ts'), new RegExp(`export const LAB_VIEWER_ROLE_ID = '${id}'`));
+  // migration 185: d1_private.lab_viewer_role() is the one place SQL names it
+  const definition = read('db/migrations/20261015000185_lab_viewer.sql')
+    .split(/\r?\n/)
+    .find((line) => line.includes('FUNCTION d1_private.lab_viewer_role()'));
+  assert.ok(definition, 'lab_viewer_role() is defined');
+  assert.ok(definition.includes(`SELECT '${id}'::uuid`), 'lab_viewer_role() returns the one id');
+  // the generated role row of the account script
+  assert.ok(read('scripts/configure_users_and_policies.sql').includes(id));
 });
