@@ -58,4 +58,4 @@ export const inboxLabel = (newCount: number): string => (newCount > 0 ? `Inbox, 
 
 /** Where the Home panel sends you: the Inbox, on the Older files tab only when nothing is new and older files match a record. */
 export const inboxTarget = (s: Pick<InboxSummary, 'newCount' | 'olderMatches'> | null): string =>
-	s && s.newCount === 0 && s.olderMatches > 0 ? '/inbox?tab=older' : '/inbox';
+	s && s.newCount === 0 && s.olderMatches > 0 ? '/inbox?tab=older&strength=short_id,code' : '/inbox';

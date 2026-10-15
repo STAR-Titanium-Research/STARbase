@@ -44,7 +44,7 @@ describe('the words', () => {
 	it('sends to Older files only when nothing is new and older files match', () => {
 		expect(inboxTarget(null)).toBe('/inbox');
 		expect(inboxTarget({ newCount: 2, olderMatches: 5 })).toBe('/inbox');
-		expect(inboxTarget({ newCount: 0, olderMatches: 5 })).toBe('/inbox?tab=older');
+		expect(inboxTarget({ newCount: 0, olderMatches: 5 })).toBe('/inbox?tab=older&strength=short_id,code');
 		expect(inboxTarget({ newCount: 0, olderMatches: 0 })).toBe('/inbox');
 	});
 });

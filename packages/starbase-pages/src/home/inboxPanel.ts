@@ -18,10 +18,10 @@ export function inboxLines(s: InboxSummary | null): InboxLine[] {
 	if (!s) return [];
 	const lines: InboxLine[] = [];
 	if (s.person?.new) lines.push({ key: 'me-new', text: newFilesText(s.person.new), to: '/inbox?owner=me', scope: '' });
-	if (s.person?.older_matches) lines.push({ key: 'me-older', text: olderFilesText(s.person.older_matches), to: '/inbox?tab=older&owner=me', scope: '' });
+	if (s.person?.older_matches) lines.push({ key: 'me-older', text: olderFilesText(s.person.older_matches), to: '/inbox?tab=older&strength=short_id,code&owner=me', scope: '' });
 	for (const t of s.teams) {
 		if (t.new) lines.push({ key: `${t.team_id}-new`, text: newFilesText(t.new), to: `/inbox?${folder(t.team_id)}`, scope: t.name });
-		if (t.older_matches) lines.push({ key: `${t.team_id}-older`, text: olderFilesText(t.older_matches), to: `/inbox?tab=older&${folder(t.team_id)}`, scope: t.name });
+		if (t.older_matches) lines.push({ key: `${t.team_id}-older`, text: olderFilesText(t.older_matches), to: `/inbox?tab=older&strength=short_id,code&${folder(t.team_id)}`, scope: t.name });
 	}
 	return lines;
 }
