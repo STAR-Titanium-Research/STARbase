@@ -31,6 +31,9 @@ MAX_CONSECUTIVE_FAILURES = 25
 _ACTIVITY_EVERY_S = 5.0
 # A directory whose mtime is newer than this (or in the future: a skewed clock) is listed again next scan.
 RACY_WINDOW_S = 2.0
+# New files are committed in batches of this many inside a folder, so a kill loses at most one batch of
+# work in a big one. The folder's cache row is still written last, so an unfinished folder is listed again.
+COMMIT_EVERY = 50
 
 _IGNORED_NAMES = frozenset({"thumbs.db", "desktop.ini", ".ds_store"})
 _IGNORED_PREFIXES = (".", "~$")
@@ -453,6 +456,7 @@ class Scanner:
             if c.state == "new" and c.rel_path not in present:
                 gone.append(c)
         complete = True
+        batch = 0
         for e in files:
             rel = f"{d}/{e.name}"
             known = cands.get(rel)
@@ -488,6 +492,10 @@ class Scanner:
                 cands[rel] = f.cand
                 by_dir.setdefault(d, []).append(f.cand)
                 fresh.append(f)
+                batch += 1
+                if batch >= COMMIT_EVERY:
+                    store.commit()  # candidates are idempotent; the folder's own row still comes last
+                    batch = 0
         for n in subdirs:
             child = f"{d}/{n}"
             if child not in children.get(d, ()):

@@ -51,6 +51,17 @@ def connect(dsn: str, private_schema: str = "d1_private"):
     return conn
 
 
+def _owner_eq(owner: Owner, prefix: str = "") -> str:
+    """The owner filter as one plain equality on the owner's own column (one branch per owner kind), so
+    the owner indexes are usable; the id is the single parameter. A person owner has no team and vice
+    versa (a table CHECK), so the other column needs no test."""
+    return (
+        f"{prefix}owner_person_id = %s"
+        if owner.kind == "person"
+        else f"{prefix}owner_team_id = %s"
+    )
+
+
 def to_datetime(mtime_ns: int) -> datetime:
     """A file's modification time as an exact (microsecond) timestamp, so equal times compare equal."""
     return _EPOCH + timedelta(microseconds=mtime_ns // 1000)
@@ -294,9 +305,9 @@ class Store:
 
     def load_dirs(self, owner: Owner) -> dict[str, DirRow]:
         rows = self._all(
-            "SELECT rel_path, dir_mtime, last_listed_at FROM inbox_dirs "
-            "WHERE owner_person_id IS NOT DISTINCT FROM %s AND owner_team_id IS NOT DISTINCT FROM %s",
-            (owner.person_id, owner.team_id),
+            "SELECT rel_path, dir_mtime, last_listed_at FROM inbox_dirs WHERE "
+            + _owner_eq(owner),
+            (owner.id,),
         )
         return {r[0]: DirRow(r[1], r[2]) for r in rows}
 
@@ -323,9 +334,9 @@ class Store:
         """Drop cache rows of directories that no longer exist (and everything below them)."""
         for p in prefixes:
             self._run(
-                "DELETE FROM inbox_dirs WHERE (rel_path = %s OR left(rel_path, %s) = %s) "
-                "AND owner_person_id IS NOT DISTINCT FROM %s AND owner_team_id IS NOT DISTINCT FROM %s",
-                (p, len(p) + 1, p + "/", owner.person_id, owner.team_id),
+                "DELETE FROM inbox_dirs WHERE (rel_path = %s OR left(rel_path, %s) = %s) AND "
+                + _owner_eq(owner),
+                (p, len(p) + 1, p + "/", owner.id),
             )
 
     def mark_baselined(self, owner: Owner) -> None:
@@ -341,9 +352,8 @@ class Store:
         what vanished and what came back from this in memory)."""
         rows = self._all(
             "SELECT rel_path, candidate_id::text, directus_files_id::text, state, kind "
-            "FROM file_candidates "
-            "WHERE owner_person_id IS NOT DISTINCT FROM %s AND owner_team_id IS NOT DISTINCT FROM %s",
-            (owner.person_id, owner.team_id),
+            "FROM file_candidates WHERE " + _owner_eq(owner),
+            (owner.id,),
         )
         return {r[0]: Cand(r[1], r[2], r[0], r[3], r[4]) for r in rows}
 
@@ -352,11 +362,7 @@ class Store:
         The indexer re-points a moved file's references, the candidate included, to the pointer row at the
         new path but cannot touch rel_path, which would then name a path that is gone. Only candidates of
         this owner, and only paths that are under the owner's folder, are changed."""
-        owner_filter = (
-            "c.owner_person_id = %s"
-            if owner.kind == "person"
-            else "c.owner_team_id = %s"
-        )
+        owner_filter = _owner_eq(owner, "c.")
         return self._run(
             "UPDATE file_candidates c SET rel_path = df.metadata::jsonb->>'archive_path' "
             "FROM directus_files df WHERE df.id = c.directus_files_id AND "
@@ -558,9 +564,9 @@ class Store:
         while it was still there). Returns objects with .cand, .size, .mtime."""
         rows = self._all(
             "SELECT candidate_id::text, directus_files_id::text, rel_path, kind, size_bytes, source_mtime "
-            "FROM file_candidates WHERE duplicate_of = %s AND state = 'new' "
-            "AND owner_person_id IS NOT DISTINCT FROM %s AND owner_team_id IS NOT DISTINCT FROM %s",
-            (original.candidate_id, owner.person_id, owner.team_id),
+            "FROM file_candidates WHERE duplicate_of = %s AND state = 'new' AND "
+            + _owner_eq(owner),
+            (original.candidate_id, owner.id),
         )
         return [
             Copy(Cand(r[0], r[1], r[2], "new", r[3]), r[4] or 0, r[5]) for r in rows
