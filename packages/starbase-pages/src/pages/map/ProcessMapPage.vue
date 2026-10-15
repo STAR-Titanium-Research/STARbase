@@ -92,7 +92,7 @@ const DIRECTIONS: { value: Dir; label: string }[] = [
 const finderOpen = ref(false);
 // The records this person used lately, offered as starting points while no record is picked (read once, when that state first shows).
 const recent = useRecentRecords(host.api);
-watch(() => map.status.value, (s) => { if (s === 'empty') void recent.load(); }, { immediate: true });
+watch(() => map.status.value, (s) => { if (s === 'empty') recent.load().catch(() => {}); }, { immediate: true });
 
 const frameLabel = computed(() => {
 	const p = map.project.value;

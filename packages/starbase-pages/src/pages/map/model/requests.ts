@@ -64,6 +64,8 @@ export async function getList(api: HostApi, collection: string, params: Record<s
 
 /** Directus saying no to the request (a field the role may not read, a relation it cannot expand): 400, 403, 404. Not a 5xx or a network failure. */
 export const isRefusal = (e: any): boolean => [400, 403, 404].includes(e?.response?.status);
+/** Only a 403 says "the role may not read this"; a 400 or 404 is a broken request, never a reason to mark records hidden. */
+export const isForbidden = (e: any): boolean => e?.response?.status === 403;
 
 // The recorded batch of an operation or test (spec D14). `batch_id` is only asked for when the runtime field defs of
 // the collection list it (a database not yet migrated has no such column, and asking would refuse the whole read).

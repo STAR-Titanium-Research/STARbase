@@ -669,14 +669,24 @@ describe('loadUsedIn', () => {
     expect(res).toEqual({ items: [], total: null, more: false });
   });
 
-  it('campaign: a refused nested read retries with bare ids: no cards, hidden, "more" from the page size (D21)', async () => {
+  it('campaign: a refused nested read retries with bare ids: no cards, hidden, and nothing more to draw (D21)', async () => {
     const { api, calls } = fakeApi((path, params) =>
       (params.fields as string[]).some((f) => f.startsWith('sample_id.')) ? httpError(403) : { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })) },
     );
     const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
     expect(calls).toHaveLength(2);
     expect(calls[1].params.fields).toEqual(['sample_id']);
-    expect(res).toMatchObject({ items: [], total: null, more: true, hidden: true });
+    expect(res).toMatchObject({ items: [], total: null, more: false, hidden: true });
+  });
+
+  it('a 400 or 404 on the nested read is rethrown: only a 403 means "not allowed to read", so no false hidden marker', async () => {
+    for (const status of [400, 404]) {
+      for (const collection of ['campaigns', 'raw_stock_lots']) {
+        const { api, calls } = fakeApi(() => httpError(status));
+        await expect(loadUsedIn(api, { collection, id: 'x' }, 1)).rejects.toThrow(`HTTP ${status}`);
+        expect(calls).toHaveLength(1);
+      }
+    }
   });
 
   it('a server error on the nested read is rethrown, not retried (D21)', async () => {

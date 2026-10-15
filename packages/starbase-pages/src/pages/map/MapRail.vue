@@ -110,7 +110,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			<template #status><StatusBadge :kind="statusKindOf(info.kind)" :value="info.status" /></template>
 			<template #actions>
 				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
-				<AppLink v-if="mapTo" :to="mapTo" class="pm-maplink"><v-icon name="account_tree" small left />Process map of {{ info.code }}</AppLink>
+				<AppLink v-if="mapTo" :to="mapTo" class="pm-maplink"><v-icon name="account_tree" small left />Process map of {{ info.code || style?.label }}</AppLink>
 				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 			</template>

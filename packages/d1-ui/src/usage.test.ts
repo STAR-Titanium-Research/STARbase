@@ -272,12 +272,12 @@ describe('loadRecordLabels', () => {
 
 	it('reads one request per collection and answers in the order of the items, skipping what is not a record collection', async () => {
 		const get = vi.fn(async (path: string, config: { params: any }) => {
-			if (path === '/items/physical_samples') {
-				await new Promise((r) => setTimeout(r, 5)); // answers after the campaigns, but keeps its place
-				const ids: string[] = JSON.parse(config.params.filter).sample_id._in;
-				return { data: { data: ids.map((id) => ({ sample_id: id, sample_code: `S-${id.slice(0, 2)}` })) } };
+			if (path === '/items/campaigns') {
+				await new Promise((r) => setTimeout(r, 5)); // the earlier item answers last, but keeps its place
+				return { data: { data: [{ campaign_id: C1, campaign_code: 'C-1' }] } };
 			}
-			return { data: { data: [{ campaign_id: C1, campaign_code: 'C-1' }] } };
+			const ids: string[] = JSON.parse(config.params.filter).sample_id._in;
+			return { data: { data: ids.map((id) => ({ sample_id: id, sample_code: `S-${id.slice(0, 2)}` })) } };
 		});
 		const out = await loadRecordLabels(get, items);
 		expect(out.map((e) => e.label)).toEqual(['C-1', 'S-11', 'S-22']);

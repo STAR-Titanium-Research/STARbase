@@ -89,6 +89,11 @@ describe('MapRail', () => {
       expect(text(await render(MapRail, railProps({ focus: { collection: 'physical_samples', id: 'other' } })))).toContain(`${label}S-1`);
     });
 
+    it('with no code falls back to the kind word', async () => {
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', ''), focus: { collection: 'physical_samples', id: 'p' } }));
+      expect(text(html)).toContain(`${label}Sample`);
+    });
+
     it('is not offered when the record already is the focus', async () => {
       expect(text(await render(MapRail, railProps({ focus: { collection: 'physical_samples', id: 'p' } })))).not.toContain(label);
     });
