@@ -227,7 +227,8 @@ function statement(w, sql, b, txId) {
       w.scanRequests.push(row);
       return [copy(row)];
     }
-    case 'summary': return copy(w.summaryRows);
+    case 'summary': case 'summaryWithScans': return copy(w.summaryRows);
+    case 'scansOfFiles': return [...new Set(csv(b[0]))].filter((id) => w.scans.some((r) => r.directus_files_id === id)).map((id) => ({ directus_files_id: id }));
     case 'scanTableExists': return [{ available: w.scanTable }];
     case 'scanById': return copy(w.scans.filter((r) => r.scan_id === b[0]).map((r) => ({ id: r.scan_id, insert_id: r.insert_id ?? null, edge_id: r.edge_id ?? null, directus_files_id: r.directus_files_id })));
     case 'userForAccountability': return w.users.has(b[0]) ? [copy(w.users.get(b[0]))] : [];
@@ -707,7 +708,7 @@ test('GET /summary: the person and each of their teams, new vs older with a matc
   assert.deepEqual(res.body.data.teams, [{ team_id: TEAM, name: 'SEM team', new: 1, older_matches: 0 }]);
   assert.equal(res.body.data.new, 3);
   assert.equal(res.body.data.older_matches, 3);
-  const q = w.log.find((l) => l.name === 'summary');
+  const q = w.log.find((l) => l.name === 'summaryWithScans');
   assert.equal(q.bindings[0], P.alice, 'the person');
   assert.equal(q.bindings[1], TEAM, 'only the teams Alice is an active member of');
   // a person with no alias yet says so (the UI shows "ask an administrator")
@@ -720,17 +721,17 @@ test('GET /summary: a Former (inactive) person is a member of no team; a login w
   const { call } = setup(w);
   const former = await call('GET /summary', { user: U.former });
   assert.deepEqual(former.body.data.teams, []);
-  assert.equal(w.log.find((l) => l.name === 'summary').bindings[1], '');
+  assert.equal(w.log.find((l) => l.name === 'summaryWithScans').bindings[1], '');
   w.log.length = 0;
   const nobody = await call('GET /summary', { user: U.nobody });
   assert.equal(nobody.statusCode, 200);
   assert.equal(nobody.body.data.person, null);
   assert.deepEqual(nobody.body.data.teams, []);
   assert.equal(nobody.body.data.new, 0);
-  assert.equal(w.log.some((l) => l.name === 'summary'), false, 'no scope, no query');
+  assert.equal(w.log.some((l) => l.name?.startsWith('summary')), false, 'no scope, no query');
   w.log.length = 0;
   await call('GET /summary', { user: U.admin, admin: true });
-  const q = w.log.find((l) => l.name === 'summary');
+  const q = w.log.find((l) => l.name === 'summaryWithScans');
   assert.equal(q.bindings[0], P.admin, 'an administrator counts their own folders, not everyone');
 });
 
@@ -1310,9 +1311,11 @@ test('POST /link, surface scan: a unique violation (the file is already a scan o
   assert.equal(img.state, 'new');
   assert.equal(scan.state, 'new');
   assert.equal(scan.link_batch_id, null);
-  // the same file on the EDGE of that insert is a different pair: allowed
-  const ok = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
-  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  // a file that already has a scan is treated like an already-linked file (S5): another insert or edge is refused the same way
+  const other = await call('POST /link', { user: U.alice, body: { items: [scanItem(scan, { insert_id: undefined, edge_id: EDGE1 })] } });
+  assert.equal(other.statusCode, 409);
+  assert.equal(codeOf(other), 'ALREADY_ADDED');
+  assert.equal(w.scans.length, 1);
   // the raw Postgres code is the same answer
   const w2 = newWorld();
   const scan2 = add(w2, scanCand());
@@ -1355,6 +1358,91 @@ test('POST /link, surface scan: a Lab Viewer is refused as for any link (READ_ON
   assert.equal(w.scans.length, 0);
   assert.equal(w.txCount, 0);
   assert.equal(scan.state, 'new');
+});
+
+// S5: a found .al3d that someone added through the Alicona feature's own dialog has a surface_scans row. The Inbox treats it like a file already linked.
+test('POST /link, surface scan: a file that already has a scan (added through the Alicona dialog) is 409 ALREADY_ADDED up front, before any record is read or written', async () => {
+  const w = newWorld();
+  const done = add(w, scanCand());
+  const fresh = add(w, scanCand());
+  w.scans.push({ scan_id: ID(4802), edge_id: EDGE1, directus_files_id: done.directus_files_id, condition: 'worn', render_status: 'done' });
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh, { condition: 'new' }), scanItem(done, { insert_id: INS2 })] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'ALREADY_ADDED');
+  assert.equal(errorOf(res).extensions.candidate_id, done.candidate_id);
+  assert.equal(w.items.filter((i) => i.collection === 'cutting_inserts').length, 0, 'refused before the insert or edge was even read');
+  assert.equal(writesTo(w, 'surface_scans').length, 0);
+  assert.equal(w.scans.length, 1);
+  assert.equal(done.state, 'new');
+  assert.equal(fresh.state, 'new', 'all or nothing');
+  assert.equal(w.log.filter((l) => l.name === 'scansOfFiles').length, 1, 'one query for the whole request');
+  // the other file alone is fine, and a repeat of ITS add is the idempotent answer, not this refusal
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh)] } })).statusCode, 200);
+  assert.equal((await call('POST /link', { user: U.alice, body: { items: [scanItem(fresh)] } })).body.data.items[0].already_linked, true);
+});
+
+test('POST /link: a surface scan file that already has a scan is still never linked to a sample, operation or test (409 SURFACE_SCAN)', async () => {
+  const w = newWorld();
+  const done = add(w, scanCand());
+  w.scans.push({ scan_id: ID(4803), insert_id: INS1, directus_files_id: done.directus_files_id, condition: 'worn', render_status: 'done' });
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(done)] } });
+  assert.equal(codeOf(res), 'SURFACE_SCAN');
+});
+
+test('GET /summary: counts exclude undecided surface scan files that already have a scan, where the table exists; an older database uses the old query', async () => {
+  const w = newWorld();
+  const { call } = setup(w);
+  await call('GET /summary', { user: U.alice });
+  assert.equal(w.log.filter((l) => l.name === 'summaryWithScans').length, 1);
+  assert.equal(w.log.filter((l) => l.name === 'summary').length, 0);
+  assert.match(SQL.summaryWithScans, /NOT \(c\.kind = 'surface_scan' AND EXISTS \(SELECT 1 FROM surface_scans s WHERE s\.directus_files_id = c\.directus_files_id\)\)/);
+  assert.doesNotMatch(SQL.summary, /surface_scans/, 'the plain query must run where the table does not exist yet');
+  // a database without the table (an older one): the plain query, and no read of surface_scans anywhere
+  const old = newWorld();
+  old.scanTable = false;
+  await setup(old).call('GET /summary', { user: U.alice });
+  assert.equal(old.log.filter((l) => l.name === 'summary').length, 1);
+  assert.equal(old.log.filter((l) => l.name === 'summaryWithScans').length, 0);
+  assert.equal(old.log.some((l) => /surface_scans/.test(l.sql) && l.name !== 'scanTableExists'), false);
+});
+
+test('GET /files: the new, older and open lists (and their totals) leave out undecided surface scan files that already have a scan; linked and dismissed keep them', async () => {
+  const w = newWorld();
+  const { call } = setup(w);
+  const clause = /NOT \(c\.kind = 'surface_scan' AND EXISTS \(SELECT 1 FROM surface_scans s WHERE s\.directus_files_id = c\.directus_files_id\)\)/;
+  const sqlOf = () => w.log.filter((l) => !l.name && /^SELECT /.test(l.sql)).map((l) => l.sql);
+  for (const tab of ['new', 'older', 'open']) {
+    w.log.length = 0;
+    assert.equal((await call('GET /files', { user: U.alice, query: { tab } })).statusCode, 200);
+    const queries = sqlOf();
+    assert.equal(queries.length, 2, `${tab}: the page and its total`);
+    for (const q of queries) assert.match(q, clause, tab);
+  }
+  for (const tab of ['linked', 'dismissed']) {
+    w.log.length = 0;
+    await call('GET /files', { user: U.alice, query: { tab } });
+    for (const q of sqlOf()) assert.doesNotMatch(q, /FROM surface_scans/, tab);
+  }
+  // an older database: no table, so the clause is not in the SQL at all
+  const old = newWorld();
+  old.scanTable = false;
+  await setup(old).call('GET /files', { user: U.alice, query: { tab: 'new' } });
+  for (const l of old.log.filter((x) => !x.name && /^SELECT /.test(x.sql))) assert.doesNotMatch(l.sql, /FROM surface_scans/);
+});
+
+test('the SQL: buildListQuery adds the scan exclusion only when asked, for undecided tabs only, and never to accept-all (it never takes a scan)', () => {
+  const scope = { personId: P.alice, teamIds: [], admin: false };
+  const clause = /surface_scans s WHERE s\.directus_files_id = c\.directus_files_id/;
+  for (const tab of ['new', 'older', 'open']) {
+    const f = parseFileFilters({ tab });
+    assert.doesNotMatch(buildListQuery(scope, f).sql, clause, 'off by default (older databases)');
+    assert.match(buildListQuery(scope, f, { scans: true }).sql, clause);
+    assert.match(buildListQuery(scope, f, { scans: true, count: true }).sql, clause);
+  }
+  for (const tab of ['linked', 'dismissed']) assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab }), { scans: true }).sql, clause);
+  assert.doesNotMatch(buildListQuery(scope, parseFileFilters({}, { defaultTab: 'open' }), { accept: true, scans: true }).sql, clause);
 });
 
 test('POST /link, surface scan: a missing insert, edge or operation (or one the caller cannot read) is 404; a refused read or create is 403; nothing stays written', async () => {
