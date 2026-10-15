@@ -144,7 +144,7 @@ services:
       FLOWS_ENV_ALLOW_LIST: WORKER_WEBHOOK_SECRET
       # The container runs in UTC; d1-report prints label dates in this IANA zone instead.
       D1_TIMEZONE: ${D1_TIMEZONE:-Europe/London}
-      # Read-only use of the heavy-data bucket by d1-surface-scan (ADR-0020): it streams the rendered height grids, metadata
+      # Read-only use of the heavy-data bucket by d1-surface-scan (ADR-0021): it streams the rendered height grids, metadata
       # and thumbnails of surface scans (prefix surface-scans/) to signed-in users, so browsers never reach MinIO. The same
       # settings the workers use; the endpoint only ever issues GETs under that prefix. Unset: it answers 503.
       MINIO_ENDPOINT: http://minio:9000
@@ -258,7 +258,7 @@ services:
       start_period: 30s
     networks: [d1net]
 
-  # Surface-scan render worker (ADR-0020, docs/runbooks/surface-scan-worker.md).
+  # Surface-scan render worker (ADR-0021, docs/runbooks/surface-scan-worker.md).
   # Renders a topography file (.al3d and the other SurfaceTopography formats) from the SMB archive
   # into a decimated height grid + thumbnail in MinIO (surface-scans/<cache_key>/), triggered by a
   # Directus Flow on surface_scans plus a poll. It is the only service besides the archive indexer
@@ -597,7 +597,7 @@ volumes:
 
   # Read-only mount of the university SMB archive (Z: → \\uosfstore.shef.ac.uk\shared).
   # Used only by the `archive-indexer` service (profile `archive`, run by `make index-archive`) and the
-  # `surface-scan-worker` (same profile, `:ro`, ADR-0020); the other workers and Directus do not mount it. The whole `shared` export is mounted; only the
+  # `surface-scan-worker` (same profile, `:ro`, ADR-0021); the other workers and Directus do not mount it. The whole `shared` export is mounted; only the
   # star_group1 subtree is used (STORAGE_STAR_ROOT and the indexer point at
   # /mnt/archive/star_group1). Credentials live in .env (SMB_USER / SMB_PASS). The mount is
   # read-only twice over: `ro` in the options AND `:ro` on the service mount.

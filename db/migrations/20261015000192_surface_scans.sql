@@ -1,5 +1,5 @@
 -- migrate:up
--- Surface scans (docs/superpowers/specs/2026-10-15-surface-scans-design.md, docs/adr/0020-surface-scans-on-inserts-and-edges.md):
+-- Surface scans (docs/superpowers/specs/2026-10-15-surface-scans-design.md, docs/adr/0021-surface-scans-on-inserts-and-edges.md):
 -- one topography file (Alicona .al3d, or any file SurfaceTopography reads) of one cutting insert or one insert edge,
 -- with the condition the item was in, optionally the date and the operation that wore it. It is not a Test.
 --

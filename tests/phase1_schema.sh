@@ -6138,7 +6138,7 @@ lvx_check "up2_objects:true/4" "up again: the view and four triggers are back"
 lvx_check "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
 lvx_check "up2_drift:0" "up again: readers_drift() is empty"
 
-echo "== Surface scans migration (ADR-0020) =="
+echo "== Surface scans migration (ADR-0021) =="
 # One topography scan of one insert or one edge. Down and up run inside a rolled-back transaction; the Directus tables
 # are stubs here, so the metadata is asserted by reading what the SQL wrote.
 SS=db/migrations/20261015000192_surface_scans.sql

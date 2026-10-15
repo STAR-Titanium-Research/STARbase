@@ -1,6 +1,6 @@
 // Directus endpoint: d1-surface-scan  (mounted at /d1-surface-scan)
 //
-// The server half of the surface-scan viewer (ADR-0020; spec docs/superpowers/specs/2026-10-15-surface-scans-design.md,
+// The server half of the surface-scan viewer (ADR-0021; spec docs/superpowers/specs/2026-10-15-surface-scans-design.md,
 // "Derived data" and the routes below). A surface scan is one topography file of one cutting insert or insert edge
 // (table surface_scans, migration 192); the surface-scan worker renders it into three objects in MinIO and fills the row.
 // Browsers never reach MinIO: they ask here, and this endpoint serves the objects after reading the scan row as the caller.

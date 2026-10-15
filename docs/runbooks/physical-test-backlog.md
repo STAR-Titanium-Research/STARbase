@@ -1268,7 +1268,7 @@ checks can be run from `/map?edit=new`.
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
 
-### Surface scans on inserts and edges (migration 192, ADR-0020)
+### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
   the file library. Expect: the scan goes pending, rendering, done within about a minute, and the row shows a grid of at most
@@ -1285,7 +1285,7 @@ checks can be run from `/map?edit=new`.
   surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
   legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
   the insert and edge pages. Also open it on a laptop with only an integrated GPU: it must still draw (slower is fine), and where
-  float textures are missing it says so instead of showing a blank canvas. Since: surface scans PR (pending).
+  float textures are missing it says so instead of showing a blank canvas. Same check as **SCAN-UI2**; tick both together. Since: surface scans PR (pending).
 - [ ] **SS3 — Count the Alicona Tests whose subject is an edge (dry run, before any migration).** Nothing is migrated by this PR.
   On the live database, in a read-only transaction (`BEGIN READ ONLY;` ... `ROLLBACK;`), run
   `SELECT count(*) FROM test_sessions t WHERE t.test_type = 'alicona' AND (t.insert_edge_id IS NOT NULL OR EXISTS (SELECT 1 FROM

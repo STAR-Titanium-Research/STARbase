@@ -407,7 +407,7 @@ Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy
 
 ### `surface_scans`
 
-One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0020). Not a Test: an Alicona
+One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona
 Test on a sample surface stays a Test. The file is a `directus_files` pointer row on the read-only archive share; the
 `surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and fills the `render_*` and
 derived columns. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO. Reference data like

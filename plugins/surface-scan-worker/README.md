@@ -3,7 +3,7 @@
 Renders a topography scan (Alicona `.al3d`, or any format [SurfaceTopography](https://pypi.org/project/SurfaceTopography/)
 reads, MIT) of a cutting insert or an insert edge into a decimated height grid and a thumbnail in MinIO,
 for the STARbase 3D viewer. Design: `docs/superpowers/specs/2026-10-15-surface-scans-design.md`;
-decision: ADR-0020; operations: `docs/runbooks/surface-scan-worker.md`.
+decision: ADR-0021; operations: `docs/runbooks/surface-scan-worker.md`.
 
 Scaffolded from `plugins/plugin-template` (webhook + rq worker, `check_secret`, fail-closed secret),
 with `heavy-data-worker`'s OCC write pattern.

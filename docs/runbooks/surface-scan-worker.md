@@ -4,7 +4,7 @@
 **Scope:** `plugins/surface-scan-worker` (render pipeline for `surface_scans`), its Directus Flow, its
 compose service and what to do when a scan will not render.
 **Design:** [`2026-10-15-surface-scans-design.md`](../superpowers/specs/2026-10-15-surface-scans-design.md),
-[ADR-0020](../adr/0020-surface-scans-on-inserts-and-edges.md).
+[ADR-0021](../adr/0021-surface-scans-on-inserts-and-edges.md).
 
 ## 1. What it does
 
