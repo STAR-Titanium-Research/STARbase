@@ -295,6 +295,8 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       settings: mergeSettings(records.map((r) => keySettings(r, category))),
       bundled: folded,
       probable: !!group.batch && !group.batch.recorded,
+      ...(records.length && records.every((r) => r.workState === 'planned') ? { planned: true as const } : {}),
+      ...(records.length && records.every((r) => r.draft) ? { draft: true as const } : {}),
     });
   }
 
@@ -424,6 +426,8 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       ins,
       outs: [`${nodeId}:out:0`],
       projectId: s.projectId,
+      ...(s.status === 'planned' ? { planned: true as const } : {}),
+      ...('draft' in s && s.draft ? { draft: true as const } : {}),
     };
   });
 

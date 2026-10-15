@@ -4,7 +4,7 @@ import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
 import { chainFocus } from './model/hoverFocus';
 import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
-import { loadFamily, loadRelationDefs } from './model/loadFamily';
+import { loadFamily, loadFormRead } from './model/loadFamily';
 import { loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFans';
 import { HOVER_DELAY_MS } from './useMapHover';
 import { useProcessMap } from './useProcessMap';
@@ -12,7 +12,7 @@ import { useProcessMap } from './useProcessMap';
 vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
   loadFamily: vi.fn(),
-  loadRelationDefs: vi.fn(async () => null),
+  loadFormRead: vi.fn(async () => ({ defs: null, work: [] as string[] })),
 }));
 vi.mock('./model/loadFans', async (orig) => ({
   ...(await orig<typeof import('./model/loadFans')>()),
@@ -83,7 +83,7 @@ beforeEach(() => {
   stepRow.mockReset();
   recordRef.mockReset();
   usedIn.mockReset();
-  vi.mocked(loadRelationDefs).mockResolvedValue(null);
+  vi.mocked(loadFormRead).mockResolvedValue({ defs: null, work: [] });
   vi.unstubAllGlobals();
 });
 
@@ -1432,7 +1432,7 @@ describe('the form relations reach the loader (I7)', () => {
   }
 
   it('with the relations of the forms read at runtime, loadFamily is given them, for a focus and for a plus', async () => {
-    vi.mocked(loadRelationDefs).mockResolvedValue(runtime);
+    vi.mocked(loadFormRead).mockResolvedValue({ defs: runtime, work: [] });
     family.mockResolvedValue(mkData({ samples: [mkSample('s1')], operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z' })] }));
     const { mine, map } = own({ focus: 'physical_samples:s1' });
     await settle();
@@ -1443,8 +1443,16 @@ describe('the form relations reach the loader (I7)', () => {
     expect(family).toHaveBeenLastCalledWith(mine, 's2', { operation: runtime, test: runtime });
   });
 
+  it('the work-state fields a form lists reach the loader with the defs (planned work, ADR-0019)', async () => {
+    vi.mocked(loadFormRead).mockImplementation(async (_api, collection) => ({ defs: runtime, work: collection === 'test_sessions' ? [] : ['work_state', 'planned_date'] }));
+    family.mockResolvedValue(small());
+    const { mine } = own({ focus: 'physical_samples:s1' });
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(mine, 's1', { operation: runtime, test: runtime, workFields: { operation: ['work_state', 'planned_date'], test: [] } });
+  });
+
   it('with the relations refused, loadFamily is called as before and the fallback list is used', async () => {
-    vi.mocked(loadRelationDefs).mockResolvedValue(null);
+    vi.mocked(loadFormRead).mockResolvedValue({ defs: null, work: [] });
     family.mockResolvedValue(small());
     const { mine } = own({ focus: 'physical_samples:s1' });
     await settle();

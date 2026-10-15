@@ -71,11 +71,17 @@ export const isForbidden = (e: any): boolean => e?.response?.status === 403;
 // the collection list it (a database not yet migrated has no such column, and asking would refuse the whole read).
 export const BATCH_FIELDS = ['batch_id.batch_id', 'batch_id.code'];
 export const hasBatch = (defs: RelationDef[] | undefined): boolean => !!defs?.some((d) => d.field === 'batch_id' && !d.alias);
+/** Planned work (ADR-0019): whether an operation or test is planned or done, and when it is meant to happen. */
+export const WORK_FIELDS = ['work_state', 'planned_date'];
+/** Which of `WORK_FIELDS` a list of field names holds (asked for only when `/fields` lists them, like `batch_id`). */
+export const listedWork = (names: string[] | undefined): string[] => WORK_FIELDS.filter((f) => names?.includes(f));
 
-/** What a read adds to the fixed field list: the extra relations, and the batch when the defs list it. */
+/** What a read adds to the fixed field list: the extra relations, and the batch and work state when the defs list them. */
 export interface Optional {
   extras: Extra[];
   batch: boolean;
+  /** Work-state fields the defs list (`WORK_FIELDS`); none when left out. */
+  work?: string[];
 }
 
 /** Most encoded bytes the extra relation fields may add to a request (the rest of the budget is for the ids). */
@@ -104,9 +110,9 @@ export function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): E
 }
 const extraFields = (extras: Extra[]): string[] => extras.map((e) => `${e.field}.*`);
 
-/** `fields` of a read with the optional ones: the fixed list, then the batch, then the extra relations. */
-export function fieldsWith(fields: string[], { extras, batch }: Optional): string[] {
-  return [...fields, ...(batch ? BATCH_FIELDS : []), ...extraFields(extras)];
+/** `fields` of a read with the optional ones: the fixed list, then the batch, the work state, then the extra relations. */
+export function fieldsWith(fields: string[], { extras, batch, work = [] }: Optional): string[] {
+  return [...fields, ...(batch ? BATCH_FIELDS : []), ...work, ...extraFields(extras)];
 }
 
 /**
@@ -117,10 +123,12 @@ export function fieldsWith(fields: string[], { extras, batch }: Optional): strin
  */
 export async function readList(api: HostApi, collection: string, params: Record<string, unknown>, optional: Optional): Promise<{ rows: Json[]; total: number | null }> {
   const fixed = params.fields as string[];
-  const { extras, batch } = optional;
+  const { extras, batch, work = [] } = optional;
+  // The batch and the work state are the "light" optional fields: a refusal drops them together, then the extras.
+  const light = batch || work.length > 0;
   const tiers: string[][] = [fieldsWith(fixed, optional)];
-  if (batch && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false }), fieldsWith(fixed, { extras: [], batch }));
-  if (batch || extras.length) tiers.push(fixed);
+  if (light && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false, work: [] }), fieldsWith(fixed, { extras: [], batch, work }));
+  if (light || extras.length) tiers.push(fixed);
   for (const fields of tiers.slice(0, -1)) {
     try {
       return await getList(api, collection, { ...params, fields });

@@ -214,6 +214,15 @@ function genericRef(extra: Extra, value: unknown): Ref | null {
 
 // ---- row mappers -----------------------------------------------------------------------------
 
+/**
+ * Planned work (ADR-0019) of a row as read. Only a row that says `planned` is planned: without the field (not asked for,
+ * or a database without the migration) a record is done, which is what every record was before the column existed.
+ */
+function workOf(r: Json): { workState?: 'planned'; plannedDate?: string | null } {
+  if (r.work_state !== 'planned') return {};
+  return { workState: 'planned', plannedDate: str(r.planned_date) };
+}
+
 export function mapOperation(r: Json, extras: Extra[] = []): OpRow {
   const id = String(r.operation_id);
   const fast = refOf('fast_recipe_id', r.fast_recipe_id);
@@ -222,13 +231,15 @@ export function mapOperation(r: Json, extras: Extra[] = []): OpRow {
   relations.force_file_id = forceFileRef(r.force_file_id);
   for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
   const category = CATEGORIES.includes(r.process_category) ? (r.process_category as ProcessCategory) : null;
+  const work = workOf(r);
   return {
     id,
     code: operationLabel({ pass_code: str(r.pass_code), operation_sequence: num(r.operation_sequence) }),
     methodId: idOf(r.method_id?.method_id) ?? '',
     methodName: str(r.method_id?.method_name) ?? '',
     category,
-    date: str(r.operation_date),
+    // A planned operation has no operation date: the day it is meant to happen stands in, so it sorts and reads as one.
+    date: str(r.operation_date) ?? (work.plannedDate ?? null),
     sequence: num(r.operation_sequence),
     // manufacturing_operations has no status column
     status: null,
@@ -242,6 +253,7 @@ export function mapOperation(r: Json, extras: Extra[] = []): OpRow {
     relations,
     settings: settingsOf(r, OPERATION_SETTING_FIELDS),
     projectId: relations.project_id?.id ?? null,
+    ...work,
   };
 }
 
@@ -266,12 +278,13 @@ export function mapTest(r: Json, extras: Extra[] = []): TestRow {
   const subjectSampleIds = subjects.length ? subjects : primary ? [primary] : [];
 
   const category = (TEST_CATEGORIES as readonly string[]).includes(r.test_category) ? (r.test_category as TestRow['category']) : null;
+  const work = workOf(r);
   return {
     id,
     code: str(r.test_code) ?? str(r.test_type) ?? 'Test',
     testType: str(r.test_type),
     category,
-    date: str(r.session_date),
+    date: str(r.session_date) ?? (work.plannedDate ?? null),
     status: str(r.status),
     subjectSampleIds,
     equipmentId: relations.equipment_id?.id ?? null,
@@ -279,6 +292,7 @@ export function mapTest(r: Json, extras: Extra[] = []): TestRow {
     relations,
     settings: settingsOf(r, TEST_SETTING_FIELDS),
     projectId: relations.project_id?.id ?? null,
+    ...work,
   };
 }
 

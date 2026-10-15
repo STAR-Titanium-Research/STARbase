@@ -21,10 +21,10 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 | A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | reviewed, fixed, **merged** (2026-10-15); migrations renumbered 189–191 |
 | B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | reviewed, fixed, **merged** (2026-10-15) |
 | C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | reviewed, fixed, **merged** (2026-10-15) |
-| D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | built (all 6 steps); in review; must be ported onto the split map base (2026-10-15) |
+| D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` | built; reviewed (1 blocking, 12 should-fix); porting onto the socket-rail base + fixes in progress (2026-10-15) |
 | D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | reviewed, fixed, **merged** (2026-10-15) |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
-| Review + merge + PR | coordinator | `claude/keen-brahmagupta-nmo9oy` | not started |
+| PRs | coordinator | -server → #305 (1/4), -form → #306 (2/4), this branch → #304 (3/4), canvas → part 4 | #305 and #306 **merged**; #304 CI green, in review (2026-10-15) |
 
 ## Global constraints
 

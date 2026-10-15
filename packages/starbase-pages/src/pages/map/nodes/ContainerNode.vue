@@ -129,7 +129,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 <template>
 	<div
 		class="node op"
-		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, stacked: data.stacked, focal: selected }"
+		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, stacked: data.stacked, planned: data.planned, draft: data.draft, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': 'var(--k-sample)' }"
 		@click="card.select"
 		@mouseenter="card.enter"

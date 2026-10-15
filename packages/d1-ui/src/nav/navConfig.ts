@@ -52,6 +52,9 @@ export const NAV_GROUPS: NavGroup[] = [
 			{ label: 'Force plotter', icon: 'activity', to: '/d1-force-dashboard' },
 			{ label: 'FAST plotter', icon: 'zap', to: '/d1-fast-dashboard' },
 			{ label: 'Process map', icon: 'workflow', to: '/map' },
+			// The same page in edit mode, on a blank canvas (spec 2026-10-14 E1). A query in `to` is supported: usage.ts
+			// `pageTarget` reads ?edit as this page's key, and navState `linkActive` lights it only while editing.
+			{ label: 'Build a process', icon: 'circle-plus', to: '/map?edit=new' },
 		],
 	},
 	{

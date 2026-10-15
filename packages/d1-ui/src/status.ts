@@ -67,6 +67,7 @@ export const DIAG_STATUS: Record<string, StatusStyle> = {
 };
 
 export const SAMPLE_STATUS: Record<string, StatusStyle> = {
+	planned: { label: 'Planned', tone: 'info' },
 	active: { label: 'Active', tone: 'success' },
 	consumed: { label: 'Consumed', tone: 'warning' },
 	destroyed: { label: 'Destroyed', tone: 'danger' },

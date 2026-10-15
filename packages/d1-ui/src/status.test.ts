@@ -26,7 +26,7 @@ describe('vocabularies', () => {
 	});
 
 	it('covers the sample statuses', () => {
-		expect(Object.keys(SAMPLE_STATUS)).toEqual(['active', 'consumed', 'destroyed', 'archived']);
+		expect(Object.keys(SAMPLE_STATUS)).toEqual(['planned', 'active', 'consumed', 'destroyed', 'archived']);
 	});
 
 	it('marks failures as danger and finished work as success', () => {
