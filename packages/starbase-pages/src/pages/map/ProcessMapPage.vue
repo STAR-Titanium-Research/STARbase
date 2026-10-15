@@ -138,6 +138,7 @@ const railSelect = (id: string) => {
 /** The rail's props, one object for its two homes: the left column, and on a phone the bottom sheet. */
 const railProps = computed(() => ({
 	info: map.selectedInfo.value,
+	focus: map.focus.value,
 	preview: selectedPreview.value,
 	onMap: map.selectedOnMap.value,
 	connections: map.connections.value,

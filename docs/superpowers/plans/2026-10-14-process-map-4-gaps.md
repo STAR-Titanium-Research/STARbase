@@ -51,7 +51,7 @@
 
 ### Task 4: Member E2E scenarios run
 
-**Files:** `tests/ui/specs/19-process-map.spec.ts`, maybe `tests/ui/starbase/target.ts`.
+**Files:** `tests/ui/specs/21-process-map.spec.ts`, maybe `tests/ui/starbase/target.ts`.
 
 - [ ] **Step 1:** In spec 19's member setup, through `adminApi` on the preview copy: pick a sample with operations and make it readable to the preview member the way the record-access rules allow (owner or reader — read ADR-0014 / migration 166 for the supported way, e.g. add the member to the sample's readers or set `owner_person_id` to the member's person); restore it in `finally`.
 - [ ] **Step 2:** Run specs 13 + 19 on the preview (`D1_PREVIEW_NAME=d1-starbase-map D1_PREVIEW_PORT=18059`, vite 5192) `--retries=0` → 0 skipped for the member map scenarios, 0 failed. Stop the preview.

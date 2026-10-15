@@ -10,8 +10,8 @@ import { STAR_BASE, account, adminApi, signInStarbase, watchErrors } from '../st
 // A fresh copy gives the Lab Member no readable sample, so the member run lists a few family samples as "Can view"
 // for the member's person (sample_access, role view: the supported way to share, ADR-0014) and removes exactly the
 // rows it added afterwards.
-//   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials-<name>.txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
-//      npx playwright test specs/19-process-map.spec.ts --retries=0)
+//   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials[-<name>].txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
+//      npx playwright test specs/21-process-map.spec.ts --retries=0)
 // Needs the d1-starbase preview and STARbase under vite preview running (tests/ui/README.md, spec 14 section).
 // Origins come from the credentials file (`url`) and D1_ROUTES_STARBASE, like spec 13, so a preview under another
 // name or port works the same.
@@ -63,7 +63,7 @@ const familySample = async (api: APIRequestContext, readable?: APIRequestContext
 /**
  * Refuse to write unless this run is plainly against a throwaway preview copy. All three must hold:
  * the Directus host is loopback (127.0.0.1, localhost or [::1]); its port is neither 8055 (the live Directus' port) nor
- * $DIRECTUS_PORT when that is set; and the credentials file is a `preview-credentials-<name>.txt` (what the preview script writes).
+ * $DIRECTUS_PORT when that is set; and the credentials file is a `preview-credentials.txt` or `preview-credentials-<name>.txt` (what the preview scripts write).
  */
 function assertPreviewWrites(what: string): void {
 	const u = new URL(SERVER);
@@ -71,7 +71,7 @@ function assertPreviewWrites(what: string): void {
 	const problems: string[] = [];
 	if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) problems.push(`host ${u.hostname} is not loopback`);
 	if (port === '8055' || (process.env.DIRECTUS_PORT && port === process.env.DIRECTUS_PORT)) problems.push(`port ${port} is a live Directus port`);
-	if (!/preview-credentials-.+\.txt$/.test(credsFile.replace(/\\/g, '/'))) problems.push(`credentials file ${credsFile} is not preview-credentials-<name>.txt`);
+	if (!/preview-credentials(-.+)?\.txt$/.test(credsFile.replace(/\\/g, '/'))) problems.push(`credentials file ${credsFile} is not preview-credentials[-<name>].txt`);
 	if (problems.length) throw new Error(`refusing to ${what} on ${SERVER}: ${problems.join('; ')}`);
 }
 
