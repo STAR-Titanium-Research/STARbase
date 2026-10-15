@@ -191,8 +191,9 @@ key they came from. The Directus data cache is cleared after a successful write 
 | `PATCH /d1-build/drafts/:id` | `{name?, body?, version}`; 409 on version mismatch |
 | `DELETE /d1-build/drafts/:id` | discard |
 | `POST /d1-build/drafts/:id/check` | server-side checks: re-reads existing records (versions, attachability), required-for-done from `directus_fields.required` |
-| `POST /d1-build/drafts/:id/create` | §6.1; `200 {created: {key → {collection, id, code}}, labels: sampleIds[]}`; `409 {checks}` |
-| `POST /d1-build/mark-done` | `{collection, id, date?, personId?}` (E6) |
+| `POST /d1-build/drafts/:id/create` | §6.1; `200 {created: {key → {collection, id, code}}, sampleIds[]}`; `409 {checks}` |
+| `POST /d1-build/mark-done` | `{collection, ids[], date?, personId?}` (E6): every row of a container (or every pass of a stack) in one transaction |
+| `POST /d1-build/mark-planned` | `{collection, ids[]}`: back to planned, owner or admin only; clears the done date, who and when; outputs back to planned unless something done hangs off them |
 | `GET/POST/PATCH/DELETE /d1-build/templates[/:id]` | E11 (slice 5) |
 
 ### 6.1 Create, in one transaction

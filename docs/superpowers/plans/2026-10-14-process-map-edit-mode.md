@@ -18,8 +18,8 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | built (12 commits); follow-ups + review in progress (2026-10-15) |
-| B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | built; reviewed; review fixes in progress (2026-10-15) |
+| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | built; reviewed (no blockers); review fixes in progress (2026-10-15) |
+| B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | reviewed, fixed, **merged** (2026-10-15) |
 | C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | built; reviewed (4 blocking); fixes in progress (2026-10-15) |
 | D — canvas editor UI (needs A-contract, B, C merged) | agent worktree | `pm-edit/d-canvas` | not started |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
@@ -58,8 +58,9 @@ Glossary: `CONTEXT.md` → "Building on the process map".
   - create 200: `{ data: { created: Record<DraftKey, { collection: string; id: string; code: string | null }>, sampleIds: string[] } }`;
     409: `{ errors: [{ message, extensions: { code: 'CHECKS', checks: Check[] } }] }`; failed write:
     `{ errors: [{ message, extensions: { code: 'WRITE_FAILED', key: DraftKey } }] }`.
-  - mark-done body `{ collection: 'manufacturing_operations'|'test_sessions', id, date?: 'YYYY-MM-DD', personId? }`
-    → `{ data: { id, work_state: 'done' } }`; 409 `CHECKS` as above.
+  - mark-done body `{ collection: 'manufacturing_operations'|'test_sessions', ids: string[], date?: 'YYYY-MM-DD', personId? }`
+    (one transaction) → `{ data: { ids, work_state: 'done' } }`; 409 `CHECKS` as above. mark-planned `{ collection, ids }` likewise.
+  - every check carries `code`: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION, REQUIRED, STRUCTURE, OTHER.
   - templates: `{ data: { id, name, scope, role_id, collection, values, user_id, updated_at, version }[] }`.
 - New sample values carry `sample_code` as the template string `{seq}-…` composed by
   `sampleCodeTemplate({ alloyCode, methodCode, date })` from `@d1/ui` (stream C extracts it from
