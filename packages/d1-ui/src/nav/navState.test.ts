@@ -61,6 +61,12 @@ describe('linkActive for the edit mode of a page (?edit in the entry)', () => {
 		expect(linkActive('/map', '/map', { edit: 'new' })).toBe(false);
 	});
 
+	it('reads an empty ?edit= as not editing, as pageTarget does', () => {
+		expect(linkActive('/map?edit=new', '/map', { edit: '' })).toBe(false);
+		expect(linkActive('/map', '/map', { edit: '' })).toBe(true);
+		expect(linkActive('/map', '/map', { edit: [''] })).toBe(true);
+	});
+
 	it('leaves other pages alone: ?edit means nothing on them', () => {
 		expect(linkActive('/home/samples', '/home/samples', { edit: 'x' })).toBe(true);
 	});

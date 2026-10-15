@@ -63,7 +63,8 @@ export function linkActive(to: string, routePath: string, query: Record<string, 
 	const [base, qs = ''] = to.split('?');
 	const bookmark = new URLSearchParams(qs).get('bookmark');
 	if (bookmark !== null) return path === base && queryValue(query, 'bookmark') === bookmark;
-	const editing = queryValue(query, 'edit') !== null;
+	// An empty ?edit= is not edit mode (usage.ts pageTarget reads it the same way).
+	const editing = !!queryValue(query, 'edit');
 	if (new URLSearchParams(qs).has('edit')) return path === base && editing;
 	if (editing && EDITABLE_PAGES.has(base) && (path === base || path.startsWith(`${base}/`))) return false;
 	if (base === '/home') return path === base;

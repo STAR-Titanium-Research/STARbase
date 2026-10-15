@@ -1139,8 +1139,8 @@ migration 141 prints about ownerless records.
   process category / test type / geometry, Related records and Legacy / system hidden on a new item, required fields
   starred, units after the numbers (rpm, mm, °C), choices with their readable text (Machining sub-type "Turning –
   Facing"); Material, Method, Equipment, Owner and Input sample are pickers that show the code or name (not an id),
-  search as you type and list only what your role may read; a field the form cannot draw (Process Category, the
-  operation code, data file links) shows its value and **Open in Data Studio**. Change the category: the groups
+  search as you type and list only what your role may read; a field the form cannot draw (data file links)
+  shows its value and **Open in Data Studio**; Process Category and the operation code show as read-only text. Change the category: the groups
   swap live. Check light and dark. Since: Process map edit mode, stream B (PR pending).
 - [ ] **PME-B2 — Sample picker over the map.** Press **Pick samples** in edit mode. Expect: the Samples list opens
   over the canvas with its search, saved views, filters and paging; typing, filtering and paging do not change the
@@ -1167,7 +1167,10 @@ migration 141 prints about ownerless records.
   read-only text (not "Open in Data Studio"); no code, wire, work-state or batch field is asked for on a new item;
   values a new output sample inherits (material, form) show greyed with an "inherited" tag and typing replaces them;
   the compact form of a container shows only its key settings (machining: cutting speed, feed, depth of cut,
-  coolant). Since: Process map edit mode, stream D2 (PR pending).
+  coolant). Clear a field you filled (a feed rate) on a new item: it is empty and Create does not send it. Clear a
+  field of an existing planned operation: it shows empty, and after Create the record's field is empty too. An
+  existing sample's Status is not offered (d1-build refuses it), and the date done is not offered on a planned
+  operation or test. Since: Process map edit mode, stream D2 (PR pending).
 
 #### Process map edit mode, server side (migrations 185 and 186, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
 
