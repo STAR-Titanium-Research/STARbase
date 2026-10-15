@@ -4,8 +4,9 @@
 //
 // No ELK offsets are involved. The cards on one side of the container (the ones that are not dragged) keep the cross-axis places
 // they already occupy, as a set, and are dealt them again in the order of the sockets; each card keeps its own flow-axis place,
-// so it stays in its own area of the map. A dragged card keeps its place and its slot is left out of the dealing. Only if a
-// card now lies on another (cards of different sizes in each other's slots) is it stepped along the cross axis past what it lies on.
+// so it stays in its own area of the map. A dragged card keeps its place and its slot is left out of the dealing, and so does a
+// card that is also on the sockets of another container with several (it would break that one's order). The cards are placed one
+// after the other in socket order, each at its slot or just clear of the one before, and never on a card that stays.
 
 import type { Dir } from './elkInput';
 import { GAP, cross, overlaps, type Box, type Point } from './placeMerged';
@@ -21,6 +22,8 @@ export interface ReslotInput {
   /** Cards the person dragged: they stay where they are. */
   dragged: ReadonlySet<string>;
   dir: Dir;
+  /** Every container drawn: a card that is also on another one's sockets is not dealt again here. */
+  containers?: ContainerNode[];
 }
 
 /** The sockets of one side in row order, each once, the bundle socket last (the order the container draws and ELK is given). */
@@ -38,6 +41,21 @@ function socketsOf(container: ContainerNode, side: 'in' | 'out'): string[] {
 export function reslot(input: ReslotInput): Record<string, Point> {
   const { container, wires, boxes, dragged, dir } = input;
   const axis = cross(dir);
+
+  // A neighbour on a socket of another container whose order matters there (it has several sockets on that side) is left where
+  // it is, like a dragged one: dealing it again here could cross that container's wires.
+  const shared = new Set<string>();
+  for (const other of input.containers ?? []) {
+    if (other.id === container.id) continue;
+    for (const side of ['in', 'out'] as const) {
+      const sockets = socketsOf(other, side);
+      if (sockets.length < 2) continue;
+      for (const w of wires) {
+        if (sockets.includes(side === 'in' ? w.to : w.from)) shared.add(nodeOfSocket(side === 'in' ? w.from : w.to));
+      }
+    }
+  }
+
   const sides = (['in', 'out'] as const).map((side) => {
     const sockets = socketsOf(container, side);
     const rank = new Map(sockets.map((s, i) => [s, i]));
@@ -54,32 +72,29 @@ export function reslot(input: ReslotInput): Record<string, Point> {
   });
   // A card on both sides (a loop) belongs to neither: it stays.
   const both = new Set(sides[0].filter((id) => sides[1].includes(id)));
+  const lists = sides.map((side) => side.filter((id) => !dragged.has(id) && !both.has(id) && !shared.has(id)));
 
+  // Cards that are dealt again leave the obstacles; each is put back where it lands. Everything else stays an obstacle.
+  const dealt = new Set(lists.flat());
+  const obstacles: Box[] = Object.entries(boxes).filter(([id]) => !dealt.has(id)).map(([, b]) => ({ ...b }));
   const out: Record<string, Point> = {};
-  const now = new Map<string, Box>(Object.entries(boxes).map(([id, b]) => [id, { ...b }]));
-  const moved: string[] = [];
-  for (const side of sides) {
-    const list = side.filter((id) => !dragged.has(id) && !both.has(id));
+  for (const list of lists) {
     const slots = list.map((id) => axis.start(boxes[id])).sort((a, b) => a - b);
+    // In socket order, one after the other: a card takes its slot unless the one before it reaches past that, and never lies on
+    // what stays. So the order of the sockets is the order along the axis, whatever the sizes.
+    let prevEnd = -Infinity;
     list.forEach((id, i) => {
-      if (axis.start(boxes[id]) === slots[i]) return;
-      axis.set(now.get(id)!, slots[i]);
-      moved.push(id);
+      const box = { ...boxes[id] };
+      axis.set(box, Math.max(slots[i], prevEnd + GAP));
+      for (let guard = 0; guard < obstacles.length + 1; guard++) {
+        const hit = obstacles.filter((o) => overlaps(box, o)).sort((x, y) => axis.end(y) - axis.end(x))[0];
+        if (!hit) break;
+        axis.set(box, axis.end(hit) + GAP);
+      }
+      prevEnd = axis.end(box);
+      obstacles.push(box);
+      if (box.x !== boxes[id].x || box.y !== boxes[id].y) out[id] = { x: box.x, y: box.y };
     });
-  }
-
-  // Nothing on top of anything: a card that now lies on another steps along the cross axis past it.
-  const placed = new Set(moved);
-  const obstacles: Box[] = [...now].filter(([id]) => !placed.has(id)).map(([, b]) => b);
-  for (const id of [...moved].sort((a, b) => axis.start(now.get(a)!) - axis.start(now.get(b)!))) {
-    const box = now.get(id)!;
-    for (let guard = 0; guard < obstacles.length + 1; guard++) {
-      const hit = obstacles.filter((o) => overlaps(box, o)).sort((a, b) => axis.end(b) - axis.end(a))[0];
-      if (!hit) break;
-      axis.set(box, axis.end(hit) + GAP);
-    }
-    obstacles.push(box);
-    out[id] = { x: box.x, y: box.y };
   }
   return out;
 }

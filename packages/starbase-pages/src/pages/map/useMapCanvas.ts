@@ -238,7 +238,7 @@ export function useMapCanvas(map: ProcessMap) {
             const at = positions[n.id] ?? n.position;
             if (sizes[n.id]) boxes[n.id] = { x: at.x, y: at.y, ...sizes[n.id] };
           }
-          positions = { ...positions, ...reslot({ container, wires: graph.wires, boxes, dragged, dir: map.dir.value }) };
+          positions = { ...positions, ...reslot({ container, wires: graph.wires, boxes, dragged, dir: map.dir.value, containers: graph.nodes.filter((n): n is typeof container => n.type === 'container') }) };
         }
       }
       for (const n of vf.getNodes.value) {
