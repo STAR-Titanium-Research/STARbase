@@ -75,7 +75,7 @@ already says so (changes marked *as built*).
 **d1_private** (not exposed in Directus; reached only through the `d1-inbox` extension, like pins and drafts)
 
 - `file_candidates`
-  - `candidate_id UUID PK DEFAULT uuid_generate_v4()`, `directus_files_id UUID NOT NULL UNIQUE REFERENCES
+  - `candidate_id UUID PK DEFAULT gen_random_uuid()` (*as built*, was `uuid_generate_v4()`; the same for `inbox_scan_requests.request_id`, as migration 181 does), `directus_files_id UUID NOT NULL UNIQUE REFERENCES
     directus_files(id) ON DELETE CASCADE`
   - `owner_person_id UUID REFERENCES people(person_id) ON DELETE CASCADE`,
     `owner_team_id UUID REFERENCES teams(team_id) ON DELETE CASCADE`;
