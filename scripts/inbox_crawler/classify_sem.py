@@ -17,8 +17,8 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Callable
-from io import BytesIO
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Protocol
 
 from .kinds import Classification

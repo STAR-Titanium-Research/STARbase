@@ -289,6 +289,9 @@ class Scanner:
         self._owner_ok(owner, bases)
         self._bases = bases
         store = self.store
+        store.resync_paths(
+            owner
+        )  # the indexer may have moved files: its pointer rows say where
         dirs = store.load_dirs(owner)
         cands = store.load_candidates(owner)
         origin = "new" if store.owner_baselined(owner) else "backlog"

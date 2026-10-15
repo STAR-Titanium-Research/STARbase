@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from . import identity, recognise
+from .fs_readonly import extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
 from .owners import Owner
@@ -346,6 +347,27 @@ class Store:
         )
         return {r[0]: Cand(r[1], r[2], r[0], r[3], r[4]) for r in rows}
 
+    def resync_paths(self, owner: Owner) -> int:
+        """Re-read each of the owner's candidates' rel_path from its pointer row (metadata.archive_path).
+        The indexer re-points a moved file's references, the candidate included, to the pointer row at the
+        new path but cannot touch rel_path, which would then name a path that is gone. Only candidates of
+        this owner, and only paths that are under the owner's folder, are changed."""
+        owner_filter = (
+            "c.owner_person_id = %s"
+            if owner.kind == "person"
+            else "c.owner_team_id = %s"
+        )
+        return self._run(
+            "UPDATE file_candidates c SET rel_path = df.metadata::jsonb->>'archive_path' "
+            "FROM directus_files df WHERE df.id = c.directus_files_id AND "
+            + owner_filter
+            + " "
+            "AND df.metadata::jsonb->>'archive_path' IS NOT NULL "
+            "AND c.rel_path <> df.metadata::jsonb->>'archive_path' "
+            "AND left(df.metadata::jsonb->>'archive_path', %s) = %s",
+            (owner.id, len(owner.root) + 1, owner.root + "/"),
+        )
+
     def mark_gone(self, candidate_ids: list[str]) -> int:
         """Undecided candidates that vanished from the share. Decided ones (linked, dismissed) are
         never touched. Copies of a vanished original become originals again."""
@@ -458,9 +480,8 @@ class Store:
             meta = {
                 "archive_path": rel,
                 "source": "uosfstore/shared/star_group1",
-                "extension": ("." + name.rsplit(".", 1)[1].lower())
-                if "." in name
-                else "",
+                # lower-cased with its dot, as the indexer writes it (its sweep keys on this)
+                "extension": "" if extension(name) == "." else extension(name),
                 "size_bytes": size,
                 "modified": mtime.isoformat(),
                 "indexed_on": now.isoformat(),
