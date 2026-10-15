@@ -134,6 +134,7 @@ export const SUBJECT_FIELDS = [`${SUBJECT_ALIAS}.collection`, `${SUBJECT_ALIAS}.
 export const SAMPLE_FIELDS = [
   'sample_id',
   'sample_code',
+  'nickname',
   'form',
   'current_status',
   'mass_grams',
@@ -291,6 +292,7 @@ export function mapSample(r: Json): SampleRec {
   return {
     id,
     code: str(r.sample_code) ?? id,
+    nickname: str(r.nickname),
     form: str(r.form),
     status: str(r.current_status),
     projectId: idOf(r.project_id && typeof r.project_id === 'object' ? r.project_id.project_id : r.project_id),

@@ -824,7 +824,7 @@ describe('loadFamily: the pieces outside the family (C1)', () => {
     const { api, calls } = fakeApi((path, params) => cutsOfS(path, params));
     const data = await loadFamily(api, 'a');
     expect(data.samples.map((s) => s.id).sort()).toEqual(['a', 's']);
-    expect(data.pieces).toEqual({ b: { code: 'CODE-b', form: 'disc' }, c: { code: 'CODE-c', form: 'disc' } });
+    expect(data.pieces).toEqual({ b: { code: 'CODE-b', nickname: null, form: 'disc' }, c: { code: 'CODE-c', nickname: null, form: 'disc' } });
     const asked = calls.filter((c) => c.path === '/items/physical_samples').map((c) => JSON.parse(c.params.filter).sample_id._in.slice().sort());
     expect(asked).toEqual(expect.arrayContaining([['b', 'c']]));
   });

@@ -51,6 +51,7 @@ const hiddenSides = useHiddenSides(() => props.id);
 				<button class="xbtn nodrag nopan" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
 			</div>
 			<div class="code">{{ data.ref.code }}</div>
+			<div v-if="data.kind === 'sample' && data.ref.label" class="nick" :title="data.ref.label">{{ data.ref.label }}</div>
 			<div v-if="data.meta" class="meta">{{ data.meta }}</div>
 		</div>
 		<Handle
@@ -73,5 +74,6 @@ const hiddenSides = useHiddenSides(() => props.id);
 .ntop .st { margin-left: auto; }
 .ntop .kind + .xbtn { margin-left: auto; }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nick { font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta { font-size: var(--fs-sm, 12px); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
