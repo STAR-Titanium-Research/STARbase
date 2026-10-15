@@ -1,0 +1,32 @@
+{
+  "description": "both an insert and an edge: exactly one is needed",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn",
+          "edge_id": "00000000-0000-4000-8000-000000000202"
+        }
+      ]
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "A surface scan is added to an insert or an edge: send insert_id or edge_id, not both and not neither.",
+        "extensions": {
+          "field": "edge_id",
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

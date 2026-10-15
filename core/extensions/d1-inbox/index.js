@@ -592,6 +592,11 @@ export const unfit = (cand, { auto }) => {
 
 const skippedOut = (skipped) => ({ skipped: skipped.slice(0, SKIPPED_SHOWN), skipped_total: skipped.length });
 
+// One answer item of POST /link for a thing newly linked: a junction row (record_id is the record) or a surface scan (record_id is the new scan's id, which
+// is also junction_id; the insert or edge it was added to is named, the other is null).
+export const linkedItemOut = ({ cand, collection, recordId, scan }, junctionId, adopted) => (collection === SURFACE_SCANS
+  ? { candidate_id: cand.candidate_id, collection, record_id: junctionId, junction_id: junctionId, insert_id: scan.insertId, edge_id: scan.edgeId, adopted }
+  : { candidate_id: cand.candidate_id, collection, record_id: recordId, junction_id: junctionId, adopted });
 // POST /link: { link_batch_id | null, newly, items }
 export const shapeLink = (out) => ({ link_batch_id: out.link_batch_id, linked: out.newly, items: out.items });
 // POST /accept-all, dry run: found = { entries: [{ cand }], skipped, has_more, next_cursor }
@@ -910,9 +915,7 @@ export function mount(router, context, deps = {}) {
       const adopt = !IMAGE_KINDS.includes(cand.kind);
       const done = rowsOf(await trx.raw(SQL.markLinked, [acc.user, linkKind, collection, junctionId, batchId, adopt, cand.candidate_id]));
       if (!done.length) throw ERRORS.dealtWith(cand.candidate_id);
-      linked.push(collection === SURFACE_SCANS
-        ? { candidate_id: cand.candidate_id, collection, record_id: junctionId, junction_id: junctionId, insert_id: scan.insertId, edge_id: scan.edgeId, adopted: adopt }
-        : { candidate_id: cand.candidate_id, collection, record_id: recordId, junction_id: junctionId, adopted: adopt });
+      linked.push(linkedItemOut({ cand, collection, recordId, scan }, junctionId, adopt));
     }
     return linked;
   }
@@ -962,10 +965,7 @@ export function mount(router, context, deps = {}) {
           if (mine && w.collection === SURFACE_SCANS) {
             const [scanRow] = rowsOf(await trx.raw(SQL.scanById, [cand.linked_junction_id]));
             if (!scanRow || (scanRow.insert_id ?? null) !== w.scan.insertId || (scanRow.edge_id ?? null) !== w.scan.edgeId) throw ERRORS.alreadyLinked(w.id);
-            again.push({
-              candidate_id: w.id, collection: w.collection, record_id: cand.linked_junction_id, junction_id: cand.linked_junction_id,
-              insert_id: w.scan.insertId, edge_id: w.scan.edgeId, adopted: false, already_linked: true,
-            });
+            again.push({ ...linkedItemOut({ cand, collection: w.collection, scan: w.scan }, cand.linked_junction_id, false), already_linked: true });
             continue;
           }
           const same = mine && w.collection !== SURFACE_SCANS
