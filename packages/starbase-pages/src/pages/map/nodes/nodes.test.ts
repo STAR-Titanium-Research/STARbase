@@ -92,6 +92,22 @@ describe('ContainerNode', () => {
 		expect(new Set(all).size).toBe(all.length);
 	});
 
+	it('a cut labels its shared input once and numbers only the outputs', async () => {
+		const [c] = containers(cutOf(3), true);
+		const unfolded: ContainerData = { ...c, bundled: false };
+		const html = await render(ContainerNode, { id: c.id, data: unfolded });
+		const rows = [...html.matchAll(/<div class="orow"[^>]*>([\s\S]*?)<\/div>/g)].map((m) => text(m[1]).trim());
+		expect(rows).toEqual(['Sample Sample 1', 'Sample 2', 'Sample 3']);
+	});
+
+	it('rows of different samples keep numbered inputs and outputs', async () => {
+		const data = mkData({ samples: sam('a', 'b'), operations: ['a', 'b'].map((s) => mkOp({ id: `h${s}`, sampleId: s, batchId: 'B1' })) });
+		const [c] = containers(data);
+		const t = text(await render(ContainerNode, { id: c.id, data: c }));
+		expect(t).toContain('Sample 1');
+		expect(t).toContain('Sample 2');
+	});
+
 	it('shows the minor slots once the page has opened them', async () => {
 		const [c] = containers(cutOf(1), false, () => [machine('NLX-1'), minor('operator', 'Operator', 'Ada')]);
 		const html = await render(ContainerNode, { id: c.id, data: c }, { moreOpen: ref(new Set([c.id])) });

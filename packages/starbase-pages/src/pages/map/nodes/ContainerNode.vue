@@ -31,20 +31,30 @@ const showCode = computed(() => !!props.data.code && !props.data.probable && !pr
 
 interface RowView {
 	row: SampleRow;
-	label: string;
+	/** Labels of the sides that show a sample on this row; null leaves that side blank. */
+	inLabel: string | null;
+	outLabel: string | null;
 	in: string | null;
 	out: string | null;
 }
-const several = computed(() => props.data.rows.length > 1);
+// Inputs and outputs are numbered apart: a cut has one input shared by every row and several outputs, and
+// that input is labelled once (on the row that draws its socket), not repeated on every output's row.
+const distinct = (sockets: (string | undefined)[]) => new Set(sockets.filter((s): s is string => !!s)).size;
+const severalIn = computed(() => distinct(props.data.rows.map((r) => r.in)) > 1);
+const severalOut = computed(() => distinct(props.data.rows.map((r) => r.out)) > 1);
 const shown = computed<RowView[]>(() => {
 	const seen = new Set<string>();
 	const rows = props.data.bundled ? props.data.rows.slice(0, SHOWN_WHEN_FOLDED) : props.data.rows;
-	return rows.map((row, i) => {
+	let nIn = 0;
+	let nOut = 0;
+	return rows.map((row) => {
 		const input = row.in && !isBundleSocket(row.in) && !seen.has(row.in) ? row.in : null;
 		if (input) seen.add(input);
 		const out = row.out && !isBundleSocket(row.out) && !seen.has(row.out) ? row.out : null;
 		if (out) seen.add(out);
-		return { row, label: several.value ? `Sample ${i + 1}` : 'Sample', in: input, out };
+		const inLabel = input ? (severalIn.value ? `Sample ${++nIn}` : 'Sample') : null;
+		const outLabel = row.out ? (severalOut.value ? `Sample ${++nOut}` : 'Sample') : null;
+		return { row, inLabel, outLabel, in: input, out };
 	});
 });
 const hidden = computed(() => (props.data.bundled ? props.data.rows.slice(SHOWN_WHEN_FOLDED) : []));
@@ -103,11 +113,11 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<div v-for="(r, i) in shown" :key="i" class="orow">
 				<span>
 					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" v-bind="sockProps(r.in, 'in')" />
-					<template v-if="r.row.in">{{ r.label }}</template>
+					<template v-if="r.inLabel">{{ r.inLabel }}</template>
 				</span>
 				<span :class="{ pass: r.row.inPlace }"></span>
 				<span>
-					<template v-if="r.row.out">{{ r.label }}</template>
+					<template v-if="r.outLabel">{{ r.outLabel }}</template>
 					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" v-bind="sockProps(r.out, 'out')" />
 				</span>
 			</div>
