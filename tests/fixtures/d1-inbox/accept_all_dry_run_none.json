@@ -1,0 +1,31 @@
+{
+  "description": "a dry run with nothing to link",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/accept-all",
+    "body": {
+      "filter": {
+        "tab": "new",
+        "strength": "short_id"
+      },
+      "dry_run": true
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "count": 0,
+      "ids": [],
+      "skipped": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001002",
+          "reason": "COPY"
+        }
+      ],
+      "skipped_total": 1,
+      "has_more": false,
+      "next_cursor": null,
+      "dry_run": true
+    }
+  }
+}

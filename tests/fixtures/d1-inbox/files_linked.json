@@ -1,0 +1,109 @@
+{
+  "description": "GET /d1-inbox/files?tab=linked&link_kind=auto&limit=20",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "linked",
+      "link_kind": "auto",
+      "limit": "20"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001008",
+        "directus_files_id": "00000000-0000-4000-8000-000000003008",
+        "name": "3fa9c1d2_A2.tif",
+        "mime_type": "image/tiff",
+        "kind": "sem_image",
+        "kind_confidence": 0.95,
+        "extracted": {},
+        "origin": "new",
+        "state": "linked",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/sem/3fa9c1d2_A2.tif",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": "2026-10-14T16:00:00.000Z",
+        "link_kind": "auto",
+        "link_batch_id": "00000000-0000-4000-8000-000000000901",
+        "linked_collection": "physical_samples",
+        "linked_record_id": "00000000-0000-4000-8000-000000000101",
+        "linked_label": "S-0042",
+        "decided_by_name": "Alice A",
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001009",
+        "directus_files_id": "00000000-0000-4000-8000-000000003009",
+        "name": "S-0042_notes.pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+        "kind_confidence": null,
+        "extracted": {},
+        "origin": "new",
+        "state": "linked",
+        "match_strength": "code",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "code",
+            "token": "S-0042"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/reports/S-0042_final.pdf",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": "2026-10-14T17:30:00.000Z",
+        "link_kind": "manual",
+        "link_batch_id": "00000000-0000-4000-8000-000000000902",
+        "linked_collection": "physical_samples",
+        "linked_record_id": "00000000-0000-4000-8000-000000000101",
+        "linked_label": "S-0042",
+        "decided_by_name": "Alice A",
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": true,
+        "suggested_can_edit": true
+      }
+    ],
+    "meta": {
+      "total": 2,
+      "limit": 20,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

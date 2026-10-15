@@ -1,0 +1,44 @@
+{
+  "description": "two files linked in one batch",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101"
+        },
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001004",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101"
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000901",
+      "linked": 2,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101",
+          "junction_id": "00000000-0000-4000-8000-000000005001",
+          "adopted": false
+        },
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001004",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101",
+          "junction_id": "00000000-0000-4000-8000-000000005004",
+          "adopted": true
+        }
+      ]
+    }
+  }
+}
