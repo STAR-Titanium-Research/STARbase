@@ -419,13 +419,13 @@ tags what they look like and which record they name; people link them in STARbas
 `v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers (derived bookkeeping; the link is
 audited on its junction row). Files stay on the share.
 
-**New columns on existing tables** (set by an administrator; not in the Lab Member `people` update field list)
+**New columns on existing tables** (set by an administrator with an UPDATE: kept out of the Lab Member `people` update field list, and a `BEFORE INSERT` trigger on `people` refuses a new row that sets `uni_alias` or `scan_while_former`, so a Lab Member cannot create a person that squats on a folder name)
 
 | Column | Type | Description |
 |---|---|---|
-| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, never only dots. Unique ignoring case (`people_uni_alias_key`) |
+| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, not starting with a dot (no `..`, no `.snapshot`). Unique ignoring case (`people_uni_alias_key`) |
 | `people.scan_while_former` | BOOLEAN NOT NULL | Default false. True: keep scanning the folder after the person is inactive |
-| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, not only dots. Unique ignoring case (`teams_share_folder_key`) |
+| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, no leading or trailing blanks, not only dots. Unique ignoring case (`teams_share_folder_key`) |
 
 **`d1_private.file_candidates`**: one row per found file, until linked, dismissed or gone. `directus_files_id` is
 unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id` (both cascade).
@@ -447,11 +447,16 @@ unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id`
 | `rel_path` | TEXT NOT NULL | Path relative to the share root (`star_group1`) |
 | `size_bytes`, `source_mtime` | BIGINT, TIMESTAMPTZ | Size (>= 0) and modification time when found |
 | `first_seen_at`, `decided_at`, `decided_by` | TIMESTAMPTZ, TIMESTAMPTZ, UUID FK | First seen; when and by which Directus user (`ON DELETE SET NULL`) it was linked or dismissed |
-| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes |
+| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes. All four are set when `state = 'linked'` and all NULL otherwise (two CHECKs), so an undo clears all four with the state; `linked_collection` has no list, so a later link target needs no migration |
 | `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
 
 Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
-`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`.
+`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`, `(decided_by)`.
+
+**When an alias or share folder changes** (triggers `people_inbox_alias_changed`, `teams_inbox_folder_changed`,
+only when the value really changes, `NULL` included): that owner's `inbox_dirs` rows and their `file_candidates` in
+state `new`, `gone` and `dismissed` are deleted; `linked` candidates are kept. The next scan is a first scan of the
+new folder (everything is backlog).
 
 **`d1_private.inbox_dirs`**: the folder cache. `rel_path` PK; one owner (person or team, cascade); `dir_mtime`,
 `last_listed_at`; `baselined_at` is set on an owner's root row when their first complete scan ends.
@@ -459,7 +464,9 @@ Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-nu
 **`d1_private.inbox_scan_requests`**: the queue behind "Rescan my folder" and "Scan all". `scope`
 (`person` / `all`; `person_id` required exactly for `person`), `requested_by`, `requested_at`, `started_at`,
 `finished_at`, `status` (`queued` default, `running`, `done`, `failed`), `error`. Indexes `(status, requested_at)`
-and partial `(person_id, requested_at DESC)`.
+and partial `(person_id, requested_at DESC)`. A partial unique index
+(`inbox_scan_requests_one_open_per_person_key`) allows at most one queued or running person-scope request per
+person, closing the race between the endpoint's rate-limit check and its insert. Partial index on `(requested_by)` for the user foreign key.
 
 **`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
 settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default

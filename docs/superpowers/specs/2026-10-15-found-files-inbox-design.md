@@ -61,18 +61,21 @@ already says so (changes marked *as built*).
 **public**
 
 - `people.uni_alias TEXT` — nullable; `CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$')` and (*as built*)
-  `CHECK (uni_alias !~ '^[.]+$')` so `..` cannot walk out of `Users/`; unique on `lower(uni_alias)` where not null
-  (`people_uni_alias_key`). `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`. Not in the Lab Member
-  `people` update field list, so only administrators set them.
+  the regex is tightened to `'^[A-Za-z0-9_-][A-Za-z0-9._-]{1,63}$'` (no leading dot: `..` cannot walk out of `Users/`
+  and a hidden folder such as `.snapshot` is impossible); unique on `lower(uni_alias)` where not null
+  (`people_uni_alias_key`). `people.scan_while_former BOOLEAN NOT NULL DEFAULT false`. Kept out of Lab
+  Member create and update: not in their `people` update field list, and a `BEFORE INSERT` trigger on `people`
+  refuses a new row that sets either column (*as built*; error `uni_alias and scan_while_former can only be set by
+  an update`), so only an administrator's UPDATE sets them. Stream B also narrows the Lab Member create field list.
 - `teams.share_folder TEXT` — nullable; `CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> '')` and (*as built*)
-  `CHECK (btrim(share_folder) !~ '^[.]+$')`; unique on `lower(share_folder)` where not null
+  `CHECK (share_folder = btrim(share_folder))` and `CHECK (share_folder !~ '^[.]+$')`; unique on `lower(share_folder)` where not null
   (`teams_share_folder_key`).
 - *As built:* teams are keyed by `team_id` (not `id`), so every team foreign key below is `teams (team_id)`.
 
 **d1_private** (not exposed in Directus; reached only through the `d1-inbox` extension, like pins and drafts)
 
 - `file_candidates`
-  - `candidate_id UUID PK DEFAULT uuid_generate_v4()`, `directus_files_id UUID NOT NULL UNIQUE REFERENCES
+  - `candidate_id UUID PK DEFAULT gen_random_uuid()` (*as built*, was `uuid_generate_v4()`; the same for `inbox_scan_requests.request_id`, as migration 181 does), `directus_files_id UUID NOT NULL UNIQUE REFERENCES
     directus_files(id) ON DELETE CASCADE`
   - `owner_person_id UUID REFERENCES people(person_id) ON DELETE CASCADE`,
     `owner_team_id UUID REFERENCES teams(team_id) ON DELETE CASCADE`;
@@ -92,12 +95,15 @@ already says so (changes marked *as built*).
   - `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `decided_at TIMESTAMPTZ`,
     `decided_by UUID REFERENCES directus_users(id) ON DELETE SET NULL` (*as built:* a real foreign key)
   - undo bookkeeping: `link_kind TEXT CHECK (link_kind IN ('manual','bulk','auto'))`, `linked_collection TEXT`,
-    `linked_junction_id UUID`, `link_batch_id UUID`
+    `linked_junction_id UUID`, `link_batch_id UUID`; *as built:* all four are NOT NULL when `state = 'linked'` and
+    all NULL otherwise (two CHECKs, `file_candidates_linked_bookkeeping_check` and
+    `file_candidates_unlinked_bookkeeping_check`), so an undo must clear all four together with the state;
+    `linked_collection` has no value list
   - *As built:* `adopted_at TIMESTAMPTZ` — set by `d1-inbox` when a person links a document or other non-image
     file; it is the "flag the crawler reads" (plan B2/C6): the crawler hashes rows with `adopted_at IS NOT NULL`
     that have no `file_fingerprints` row yet (`open_rb(..., adopted=True)`). Stays set after an undo.
   - indexes: `(owner_person_id, state)`, `(owner_team_id, state)`, and, partial on not-null, `(link_batch_id)`,
-    `(suggested_record_id)`; *as built* also partial `(duplicate_of)` and `(adopted_at)`
+    `(suggested_record_id)`; *as built* also partial `(duplicate_of)`, `(adopted_at)` and `(decided_by)`
 - `inbox_dirs` — the folder cache: `rel_path TEXT PK`, `owner_person_id`, `owner_team_id` (same check and
   `ON DELETE CASCADE` foreign keys; each owner column is indexed),
   `dir_mtime TIMESTAMPTZ`, `last_listed_at`, `baselined_at TIMESTAMPTZ` (set on the owner's root row when their
@@ -107,7 +113,10 @@ already says so (changes marked *as built*).
   `requested_by UUID REFERENCES directus_users ON DELETE SET NULL`, `requested_at NOT NULL DEFAULT now()`,
   `started_at`, `finished_at`, `status TEXT NOT NULL DEFAULT 'queued' CHECK
   (status IN ('queued','running','done','failed'))`, `error TEXT`. Indexes `(status, requested_at)` (the daemon's
-  claim) and partial `(person_id, requested_at DESC)` (the rate limit).
+  claim), partial `(person_id, requested_at DESC)` (the rate limit) and, *as built*, a partial UNIQUE index on
+  `(person_id) WHERE scope = 'person' AND status IN ('queued','running')`: at most one open request per person, so
+  two concurrent `rescan` calls cannot both pass the endpoint's check (the loser gets a unique violation, reported
+  as 429), and partial `(requested_by)` (the user foreign key).
 - `inbox_crawler_state` — singleton like `force_crawler_state` (`id` fixed to
   `00000000-0000-0000-0000-000000000001`, one seeded row): `desired_state` (`running`/`paused`, default
   `running`: the daemon is already opt-in through the compose profile and the admin tab has no start switch),
@@ -160,6 +169,14 @@ the junction itself.
 
 **Hash after adoption.** When a person links a document, the extension marks the candidate; the crawler reads
 it once (`open_rb(..., adopted=True)`), hashes it and writes `file_fingerprints`.
+
+**When an alias or share folder changes.** Triggers on `people` (`AFTER UPDATE OF uni_alias`) and `teams`
+(`AFTER UPDATE OF share_folder`), firing only when the value really changes (`IS DISTINCT FROM`; setting it to
+`NULL` counts), delete that owner's `inbox_dirs` rows and that owner's `file_candidates` in state `new`, `gone`
+and `dismissed`. Candidates in state `linked` are kept (the link is a decision and its undo bookkeeping must
+survive). The cache and the undecided rows described the old folder, so left alone they would strand. The owner's
+next scan is a first scan of the new folder: everything in it is backlog and `baselined_at` is set again. An
+UPDATE that leaves the value as it was deletes nothing.
 
 ## 6. Recognition (`recognise.py`, pure functions)
 
