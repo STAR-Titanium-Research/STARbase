@@ -117,7 +117,7 @@ const day = (v: unknown): string => {
 	return DAY.test(t) && !Number.isNaN(Date.parse(t)) ? t : '';
 };
 
-/** A comma list of strengths: the known ones once each, in the server's order; 'any' when none is known (or 'any' is in it with others). */
+/** A comma list of strengths: only the known ones, once each, in the server's order; 'any' when none is known ('any,short_id' becomes 'short_id'). */
 function strengthList(v: string): string {
 	const asked = v.split(',').map((x) => x.trim());
 	const known = STRENGTHS.filter((s) => asked.includes(s));

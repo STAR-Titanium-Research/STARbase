@@ -963,7 +963,7 @@ export function mount(router, context, deps = {}) {
     } catch (err) {
       if (isUnique(err)) throw ERRORS.alreadyAdded(cand.candidate_id);
       if (isDenied(err)) throw ERRORS.scanNotAllowed(cand.candidate_id);
-      if (err?.code === 'INVALID_FOREIGN_KEY' || err?.code === '23503') throw new HttpError(404, 'NOT_FOUND', 'That insert, edge, operation or file no longer exists.', { candidate_id: cand.candidate_id });
+      if (err?.code === 'INVALID_FOREIGN_KEY' || err?.code === '23503') throw new HttpError(404, 'NOT_FOUND', 'That insert, edge, operation or file no longer exists.', { candidate_id: cand.candidate_id, collection: SURFACE_SCANS });
       if (err?.status === 400 && typeof err.message === 'string') throw badInput(err.message);
       throw err;
     }

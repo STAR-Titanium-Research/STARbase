@@ -1445,6 +1445,23 @@ test('the SQL: buildListQuery adds the scan exclusion only when asked, for undec
   assert.doesNotMatch(buildListQuery(scope, parseFileFilters({}, { defaultTab: 'open' }), { accept: true, scans: true }).sql, clause);
 });
 
+test('POST /link, surface scan: a foreign key violation at create (the insert, edge, operation or file vanished) is 404 NOT_FOUND naming collection surface_scans, as the client reads it', async () => {
+  const w = newWorld();
+  const scan = add(w, scanCand());
+  w.failCreateFor = (collection) => { if (collection === 'surface_scans') throw Object.assign(new Error('fk'), { code: 'INVALID_FOREIGN_KEY' }); };
+  const res = await setup(w).call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } });
+  assert.equal(res.statusCode, 404);
+  assert.equal(codeOf(res), 'NOT_FOUND');
+  assert.equal(errorOf(res).extensions.collection, 'surface_scans');
+  // a file that is not the caller's to see is a 404 too, but without it: the client says "not in your inbox"
+  const other = add(w, scanCand({ owner_person_id: P.carol }));
+  w.failCreateFor = null;
+  const gone = await setup(w).call('POST /link', { user: U.alice, body: { items: [scanItem(other)] } });
+  assert.equal(codeOf(gone), 'NOT_FOUND');
+  assert.equal(errorOf(gone).extensions.collection, undefined);
+  assert.equal(errorOf(gone).message, 'That file is not in your inbox.');
+});
+
 test('POST /link, surface scan: a missing insert, edge or operation (or one the caller cannot read) is 404; a refused read or create is 403; nothing stays written', async () => {
   const w = newWorld();
   const scan = add(w, scanCand());

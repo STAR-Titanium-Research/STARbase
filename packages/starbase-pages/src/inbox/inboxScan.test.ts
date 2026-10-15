@@ -94,7 +94,6 @@ describe('every refusal has words, and none says a surface scan is linked or att
 	const err = (code: string, status: number, extensions: Record<string, unknown> = {}, message = 'server words') => new InboxApiError(message, { status, code, extensions: { ...extensions, code } });
 
 	it.each([
-		['NOT_FOUND', 404, 'That insert, edge or operation does not exist, or you cannot see it. Choose another.'],
 		['FORBIDDEN', 403, 'You are not allowed to add surface scans.'],
 		['READ_ONLY_ROLE', 403, 'Your role is read-only, so you cannot add surface scans.'],
 		['ALREADY_ADDED', 409, 'That file is already added as a surface scan of this insert or edge.'],
@@ -105,6 +104,15 @@ describe('every refusal has words, and none says a surface scan is linked or att
 		['ALREADY_LINKED', 409, 'Someone already dealt with that file.'],
 	])('%s (%i)', (code, status, text) => {
 		expect(scanErrorText(err(code, status))).toEqual({ message: text, field: null });
+	});
+
+	it('NOT_FOUND names the insert, edge or operation only when the endpoint says it is a surface scan reference; for the file itself it says the file is not in the inbox', () => {
+		const ref = 'That insert, edge or operation does not exist, or you cannot see it. Choose another.';
+		// d1-inbox's scanRefMissing sends collection 'surface_scans'; notInInbox sends only the candidate id
+		expect(scanErrorText(err('NOT_FOUND', 404, { collection: 'surface_scans', candidate_id: 'c1', record_id: 'i1' }))).toEqual({ message: ref, field: null });
+		expect(scanErrorText(err('NOT_FOUND', 404, { candidate_id: 'c1' }, 'That file is not in your inbox.'))).toEqual({ message: 'That file is not in your inbox.', field: null });
+		expect(scanErrorText(err('NOT_FOUND', 404))).toEqual({ message: 'That file is not in your inbox.', field: null });
+		expect(scanErrorText(new InboxApiError('x', { status: 404, code: 'NOT_FOUND' }))).toEqual({ message: 'That file is not in your inbox.', field: null });
 	});
 
 	it.each([
