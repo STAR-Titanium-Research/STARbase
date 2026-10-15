@@ -17,7 +17,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useExplorerHost } from '../host';
 import type { ExplorerHost } from '../host';
 import { linkHref } from '../links';
-import { recordRoute } from '../recordRoute';
+import { dataStudioRoute, recordRoute } from '../recordRoute';
 import AppLink from '../components/AppLink.vue';
 import DataTable from '../components/DataTable.vue';
 import EditDrawer from '../components/EditDrawer.vue';
@@ -38,7 +38,7 @@ import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE, toggledBookmark } from './indexQuery';
 import { plotKind } from './plotData';
-import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
+import { SELECT_MAX, cellText, hasNextPage, rangeText, rowOpen, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
 import { useRowSelection } from './useRowSelection';
@@ -106,9 +106,13 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 const drawerOpen = ref(false);
 const drawerKey = ref('');
 
+// A Lab Viewer is never given the edit drawer (an editable form): its row opens the record in Data Studio, read-only (see rowOpen).
+const viewer = computed(() => host.canViewAllAccess?.value === true);
 function openRow(row: Record<string, unknown>): void {
 	const pk = rowKey(row);
-	if (props.def.rowTarget === 'record') host.navigate(recordRoute(props.def.collection, pk));
+	const open = rowOpen(props.def.rowTarget, viewer.value, props.def.collection, pk);
+	if (open.kind === 'navigate') host.navigate(open.to);
+	else if (open.kind === 'studio') host.openDataStudio(open.to);
 	else {
 		drawerKey.value = pk;
 		drawerOpen.value = true;
@@ -120,6 +124,11 @@ watch(
 	() => state.value.open,
 	(pk) => {
 		if (pk && props.def.rowTarget === 'drawer') {
+			if (viewer.value) {
+				host.openDataStudio(dataStudioRoute(props.def.collection, pk));
+				closeOpen();
+				return;
+			}
 			drawerKey.value = pk;
 			drawerOpen.value = true;
 		}
@@ -399,7 +408,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 			</div>
 
 			<EditDrawer
-				v-if="def.rowTarget === 'drawer'"
+				v-if="def.rowTarget === 'drawer' && !viewer"
 				:model-value="drawerOpen"
 				:collection="def.collection"
 				:primary-key="drawerKey"

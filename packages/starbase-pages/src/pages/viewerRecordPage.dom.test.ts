@@ -8,13 +8,21 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { setExplorerHostFactory } from '@d1/ui';
 import { setPageFrame } from '../frame';
 import SamplePage from './SamplePage.vue';
+import ToolingPage from './tooling/ToolingPage.vue';
 
 const SAMPLE = '00000000-0000-4000-8000-000000000001';
+const BOX = '00000000-0000-4000-8000-0000000000b1';
+
+// the 3D stage is WebGL: not part of what is tested here
+vi.mock('./tooling/stage/ToolingStage.vue', () => ({ default: { render: () => null } }));
 
 function fakeApi() {
 	return {
 		get: vi.fn(async (url: string) => {
 			if (url === `/items/physical_samples/${SAMPLE}`) return { data: { data: { sample_id: SAMPLE, sample_code: 'SM-001', nickname: 'Bar A', form: 'bar' } } };
+			if (url === `/items/tool_boxes/${BOX}`) {
+				return { data: { data: { tool_box_id: BOX, tool_box_code: 'TB-1', description: 'Box', insert_type_id: { insert_type_id: 'it1', type_code: 'CNMG' } } } };
+			}
 			if (url.startsWith('/permissions/me/')) return { data: { data: { update: { access: true }, delete: { access: true }, share: { access: true } } } };
 			if (url.startsWith('/d1-trace/')) {
 				return { data: { sample: { sample_id: SAMPLE, sample_code: 'SM-001', form: 'bar' }, stock_origins: [], ancestors: [], descendants: [], events: [], hidden: { stock_origins: 0, ancestors: 0, events: 0, descendants: 0 }, truncated: {} } };
@@ -38,7 +46,7 @@ function registerStubs(app: App) {
 let app: App | null = null;
 let api: ReturnType<typeof fakeApi>;
 
-async function mountSample(viewer: boolean) {
+async function mountPage(viewer: boolean, page: any, props: Record<string, unknown>) {
 	window.matchMedia = ((q: string) => ({ matches: q.includes('min-width: 1000px'), addEventListener() {}, removeEventListener() {} })) as any;
 	api = fakeApi();
 	setExplorerHostFactory(() => ({
@@ -49,13 +57,13 @@ async function mountSample(viewer: boolean) {
 	setPageFrame(defineComponent({ props: { title: String }, setup: (_p, { slots }) => () => h('div', Object.values(slots).flatMap((s) => (s ? s() : []))) }));
 	const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Nothing }, { path: '/:pathMatch(.*)*', component: Nothing }] });
 	await router.push('/');
-	app = createApp({ render: () => h(SamplePage, { id: SAMPLE }) });
+	app = createApp({ render: () => h(page, props) });
 	app.use(router);
 	registerStubs(app);
 	const el = document.createElement('div');
 	document.body.appendChild(el);
 	app.mount(el);
-	await vi.waitFor(() => expect(document.body.textContent).toContain('Who has access'));
+	await vi.waitFor(() => expect(document.querySelector('[aria-label="Data Studio"]')).not.toBeNull());
 	await nextTick();
 }
 
@@ -74,7 +82,7 @@ afterEach(() => {
 
 describe('the Sample page for a Lab Viewer', () => {
 	it('offers no Edit (and never asks Directus whether it may), but still offers Who has access and Data Studio', async () => {
-		await mountSample(true);
+		await mountPage(true, SamplePage, { id: SAMPLE });
 		expect(editButtons()).toHaveLength(0);
 		expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/permissions/me/'))).toBe(false);
 		expect(document.querySelector('[aria-label="Who has access"]')).not.toBeNull();
@@ -82,9 +90,23 @@ describe('the Sample page for a Lab Viewer', () => {
 	});
 
 	it('the same page for a member is the control: Edit is offered', async () => {
-		await mountSample(false);
+		await mountPage(false, SamplePage, { id: SAMPLE });
 		await vi.waitFor(() => expect(editButtons()).toHaveLength(1));
 		expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/permissions/me/'))).toBe(true);
+	});
+});
+
+describe('the Tooling page for a Lab Viewer', () => {
+	it('offers no Edit on a tool box (and never asks Directus), where a member gets it', async () => {
+		await mountPage(true, ToolingPage, { kind: 'tool-boxes', id: BOX });
+		await vi.waitFor(() => expect(document.querySelector('[aria-label="Data Studio"]')).not.toBeNull());
+		await nextTick();
+		expect(editButtons()).toHaveLength(0);
+		expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/permissions/me/'))).toBe(false);
+		document.body.innerHTML = '';
+		app?.unmount();
+		await mountPage(false, ToolingPage, { kind: 'tool-boxes', id: BOX });
+		await vi.waitFor(() => expect(editButtons()).toHaveLength(1));
 	});
 });
 

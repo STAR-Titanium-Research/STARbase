@@ -145,7 +145,7 @@ export default {
         const caller = await accountAdmin(database, acc.user, labAdminRoleId);
         const admin = acc.admin === true || caller.admin;
         // `admin` stays the right to CHANGE things (a viewer has none); `readAll` is the right to LOOK at everyone's access: an administrator, or a Lab Viewer
-        await fn({ req, res, acc, admin, accounts: caller.accounts, readAll: admin || viewer });
+        await fn({ req, res, acc, admin, accounts: caller.accounts, readAll: admin || viewer, unfiltered: admin && !viewer });
       } catch (err) {
         return sendError(res, err);
       }
@@ -488,7 +488,7 @@ export default {
       res.json({ email_sent: emailSent });
     }));
 
-    router.get('/people/:person_id/access', route(async ({ req, res, acc, admin, readAll }) => {
+    router.get('/people/:person_id/access', route(async ({ req, res, acc, unfiltered, readAll }) => {
       const personId = req.params?.person_id;
       if (typeof personId !== 'string' || !UUID.test(personId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The person id is not valid.');
       const person = await database('people').where('person_id', personId).first('person_id', 'user_id');
@@ -509,7 +509,7 @@ export default {
         waiting,
         waiting_owners: waiting ? await waitingOwners(personId) : 0,
       };
-      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: admin ? null : String(acc.user) });
+      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: unfiltered ? null : String(acc.user) });
       res.json(body);
     }));
 

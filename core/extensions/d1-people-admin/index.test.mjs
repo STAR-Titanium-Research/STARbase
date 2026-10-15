@@ -1094,6 +1094,23 @@ test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) is counted but
   assert.deepEqual(db.log.tx, []);
 });
 
+test('Lab Viewer: a viewer who ALSO holds an admin policy is still listed only what its readers rows allow, and still refused writes', async () => {
+  const t = suspendedViewerTables();
+  t.directus_access.push({ role: null, user: VIEWER_USER, policy: POLICY.admin }); // an administrator by a user policy
+  const { handlers } = mount({ tables: t, raw: accessRaw() });
+  const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.records, []);
+  const r = await call(handlers['PATCH /logins/:user_id'], { acc: viewer, body: { status: 'active' }, params: { user_id: VIEWER_USER }, method: 'PATCH' });
+  assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE');
+  // the same admin policy on a Lab Member is the unfiltered path: every record listed
+  const m = viewerTables();
+  m.directus_users.find((u) => u.id === VIEWER_USER).role = '10000001-0000-0000-0000-000000000002';
+  m.directus_access.push({ role: null, user: VIEWER_USER, policy: POLICY.admin });
+  const adm = await call(mount({ tables: m, raw: accessRaw() }).handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.deepEqual(adm.body.records.map((r) => r.id), [SAMPLE, SAMPLE_GONE, PROJECT]);
+});
+
 test('Lab Viewer: no environment override: another D1_LAB_VIEWER_ROLE_ID changes nothing', async () => {
   const other = ID(778);
   const t = viewerTables();

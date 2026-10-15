@@ -1408,3 +1408,26 @@ test('Lab Viewer: GET /mine/recent lists the records of the teams of a viewer th
   assert.equal(recent.status, 200);
   assert.ok(recent.body.items.length > asMember.body.items.length);
 });
+
+test('Lab Viewer: a viewer who ALSO holds an admin policy is still filtered by its readers rows (no unfiltered administrator read path)', async () => {
+  const tables = suspendedViewerWorld(); // role Lab Viewer, no readers rows
+  tables.directus_access.push({ role: null, user: SUSPENDED_VIEWER, policy: POLICY.admin }); // an administrator by a user policy
+  const { handlers } = mount({ tables });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  assert.deepEqual((await call(handlers['GET /mine/recent'], { acc, method: 'GET' })).body.items, []);
+  // the write rule still refuses it by role
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+  // the same admin policy on a plain Lab Member is the unfiltered administrator path
+  const plain = recordsWorld();
+  plain.directus_access.push({ role: null, user: U.stranger, policy: POLICY.admin });
+  const adm = await call(mount({ tables: plain }).handlers['GET /:id'], { acc: member(U.stranger), params: { id: T.additive }, method: 'GET' });
+  assert.equal(adm.body.hidden_count, 0);
+  assert.ok(adm.body.records.length > 0);
+});
