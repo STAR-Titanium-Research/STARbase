@@ -1,0 +1,354 @@
+"""Classification of found files (spec section 7): surface scans by extension, SEM images by a profile.
+
+Every image here is SYNTHETIC, generated in the test. No research image is ever committed.
+"""
+
+from __future__ import annotations
+
+import io
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+PIL = pytest.importorskip("PIL")
+from inbox_crawler import classify_scan as cscan  # noqa: E402
+from inbox_crawler import classify_sem as csem  # noqa: E402
+from inbox_crawler import kinds  # noqa: E402
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+
+# ---- synthetic fixtures ------------------------------------------------------------------
+
+BAR_TEXT = "15.0kV x5,000 5um WD 10.0mm"
+
+
+def _font(px):
+    try:
+        return ImageFont.load_default(size=px)
+    except TypeError:  # an old Pillow: the fixed bitmap font
+        return ImageFont.load_default()
+
+
+def make_sem(
+    w=1280,
+    h=960,
+    bar_frac=0.09,
+    text=True,
+    line=True,
+    bar=True,
+    above=None,
+    bar_at_top=False,
+):
+    """A grey noisy 'micrograph' with a black data bar (white text, a scale-bar line) along the bottom."""
+    img = Image.effect_noise((w, h), 30).convert("L")
+    if above is not None:  # a darker or brighter image area
+        img = img.point(lambda v: max(0, min(255, v - 128 + above)))
+    if bar:
+        bar_h = int(h * bar_frac)
+        y0 = 0 if bar_at_top else h - bar_h
+        d = ImageDraw.Draw(img)
+        d.rectangle((0, y0, w, y0 + bar_h), fill=0)
+        if text:
+            f = _font(max(10, int(bar_h * 0.4)))
+            for i, x in enumerate((20, 360, 700, 960)):
+                d.text(
+                    (x, y0 + 6 + (i % 2) * int(bar_h * 0.45)),
+                    BAR_TEXT[i * 6 : i * 6 + 14],
+                    fill=255,
+                    font=f,
+                )
+        if line:
+            ly = y0 + bar_h // 2
+            d.line((w - 330, ly, w - 200, ly), fill=255, width=3)
+    return img
+
+
+def encode(img, fmt="TIFF", **kw):
+    b = io.BytesIO()
+    img.save(b, fmt, **kw)
+    b.seek(0)
+    return b
+
+
+def classify(img, fmt="TIFF", **kw):
+    ck = {k: kw.pop(k) for k in ("ocr", "profiles", "ocr_func") if k in kw}
+    return csem.classify_image(encode(img, fmt, **kw), **ck)
+
+
+# ---- surface scans -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["scan.al3d", "SCAN.AL3D", "a b/c.Al3d"])
+def test_an_al3d_file_is_a_surface_scan_by_extension(name):
+    c = cscan.classify_scan(name)
+    assert (c.kind, c.confidence, c.extracted) == ("surface_scan", 1.0, {})
+
+
+@pytest.mark.parametrize("name", ["a.tif", "a.al3d.txt", "al3d", "a.pdf"])
+def test_other_names_are_not_surface_scans(name):
+    assert cscan.classify_scan(name) is None
+
+
+def test_the_extension_list_is_configurable():
+    assert cscan.classify_scan("a.xyz", extensions=(".xyz",)).kind == "surface_scan"
+    assert cscan.classify_scan("a.al3d", extensions=(".xyz",)) is None
+
+
+# ---- kinds by name -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("ext", [".pdf", ".docx", ".xlsx", ".csv", ".txt", ".pptx"])
+def test_documents_are_documents(ext):
+    c = kinds.kind_by_name("x" + ext)
+    assert (c.kind, c.confidence, c.extracted) == ("document", None, {})
+
+
+@pytest.mark.parametrize("ext", [".mat", ".m", ".nef", ".h5", ".dat", ""])
+def test_everything_else_is_other(ext):
+    assert kinds.kind_by_name("x" + ext).kind == "other"
+
+
+@pytest.mark.parametrize("ext", [".tif", ".TIFF", ".jpg", ".jpeg", ".png", ".bmp"])
+def test_an_image_by_name_is_just_an_image(ext):
+    assert kinds.kind_by_name("x" + ext).kind == "image"
+
+
+def test_al3d_by_name_is_a_surface_scan():
+    assert kinds.kind_by_name("x.al3d").kind == "surface_scan"
+
+
+# ---- the JEOL profile on synthetic data bars ---------------------------------------------
+
+
+@pytest.mark.parametrize("fmt", ["TIFF", "PNG", "BMP", "JPEG"])
+def test_a_jeol_like_data_bar_makes_a_sem_image(fmt):
+    c = classify(make_sem(), fmt)
+    assert c.kind == "sem_image", c.reason
+    assert c.confidence >= 0.9
+
+
+def test_nothing_is_extracted_that_was_not_read():
+    c = classify(make_sem())
+    assert c.extracted == {}  # no metadata, OCR off: not even "instrument"
+
+
+def test_a_bar_without_a_scale_line_is_a_weaker_sem_guess():
+    c = classify(make_sem(line=False))
+    assert c.kind == "sem_image" and c.confidence == pytest.approx(0.6)
+
+
+def test_a_bar_works_on_a_large_and_on_a_small_image():
+    assert classify(make_sem(w=5120, h=3840)).kind == "sem_image"
+    assert classify(make_sem(w=640, h=480)).kind == "sem_image"
+
+
+def test_a_dark_micrograph_above_the_bar_still_finds_the_bar():
+    assert classify(make_sem(above=45)).kind == "sem_image"
+
+
+@pytest.mark.parametrize(
+    "img",
+    [
+        make_sem(bar=False),  # a plain noisy picture
+        make_sem(text=False, line=False),  # a black strip with nothing in it
+        make_sem(text=False),  # a black strip with only a line
+        make_sem(bar_at_top=True),  # the bar is on the wrong edge
+        Image.new("L", (1280, 960), 0),  # all black
+        Image.new("L", (1280, 960), 255),  # all white
+        Image.linear_gradient("L").resize((1280, 960)),  # a smooth gradient
+        Image.new("L", (32, 32), 0),  # too small to judge
+    ],
+    ids=[
+        "noise",
+        "empty-strip",
+        "line-only",
+        "top-bar",
+        "black",
+        "white",
+        "gradient",
+        "tiny",
+    ],
+)
+def test_pictures_without_a_data_bar_stay_plain_images(img):
+    c = classify(img)
+    assert c.kind == "image"
+    assert c.confidence is None and c.extracted == {}
+
+
+def test_a_white_page_of_text_is_not_a_sem_image():
+    img = Image.new("L", (1280, 960), 255)
+    d = ImageDraw.Draw(img)
+    f = _font(20)
+    for y in range(20, 940, 30):
+        d.text((20, y), "Some lab notes about the sample " * 3, fill=0, font=f)
+    assert classify(img).kind == "image"
+
+
+def test_a_colour_image_works():
+    c = classify(make_sem().convert("RGB"), "PNG")
+    assert c.kind == "sem_image"
+
+
+def test_a_corrupt_file_is_an_image_not_an_error():
+    c = csem.classify_image(io.BytesIO(b"not an image at all"))
+    assert c.kind == "image" and c.confidence is None
+    assert "not decoded" in c.reason
+
+
+def test_the_classifier_takes_a_handle_never_a_path(tmp_path):
+    with pytest.raises(TypeError):
+        csem.classify_image(str(tmp_path / "a.tif"))
+    with pytest.raises(TypeError):
+        csem.classify_image(tmp_path / "a.tif")
+
+
+# ---- embedded metadata ---------------------------------------------------------------------
+
+
+def tiff_with_description(img, text):
+    b = io.BytesIO()
+    img.save(b, "TIFF", description=text)
+    b.seek(0)
+    return b
+
+
+def test_metadata_that_is_present_is_read():
+    fh = tiff_with_description(make_sem(), "JEOL JSM-7800F  AccV 15.0kV  x5,000")
+    c = csem.classify_image(fh)
+    assert c.kind == "sem_image"
+    assert c.extracted == {"instrument": "JEOL", "kv": 15.0, "magnification": 5000}
+    assert c.confidence == pytest.approx(1.0)
+
+
+def test_jeol_metadata_alone_is_a_sem_guess_but_only_reads_what_it_has():
+    fh = tiff_with_description(make_sem(bar=False), "JEOL JSM-7800F")
+    c = csem.classify_image(fh)
+    assert c.kind == "sem_image" and c.confidence == pytest.approx(0.65)
+    assert c.extracted == {"instrument": "JEOL"}
+
+
+def test_metadata_from_another_instrument_does_not_claim_jeol():
+    fh = tiff_with_description(make_sem(bar=False), "Nikon D90 15kV")
+    assert csem.classify_image(fh).kind == "image"
+
+
+# ---- OCR: off unless asked ---------------------------------------------------------------
+
+
+def boom(_img):  # an OCR that must not be called
+    raise AssertionError("OCR ran while switched off")
+
+
+def test_ocr_is_off_by_default():
+    c = classify(make_sem(), ocr_func=boom)
+    assert c.kind == "sem_image" and c.extracted == {}
+
+
+def test_ocr_text_is_parsed_when_switched_on():
+    seen = {}
+
+    def fake(bar):
+        seen["size"] = bar.size
+        return "JSM-7800F 15.0kV x5,000 5µm WD 10.0mm"
+
+    c = classify(make_sem(), ocr=True, ocr_func=fake)
+    assert c.extracted == {
+        "kv": 15.0,
+        "magnification": 5000,
+        "working_distance_mm": 10.0,
+        "scale_bar": "5 µm",
+    }
+    assert seen["size"][1] < 960 * 0.2  # it was given the bar, not the picture
+
+
+def test_a_failing_ocr_keeps_the_tag_and_invents_nothing():
+    def broken(_bar):
+        raise RuntimeError("tesseract missing")
+
+    c = classify(make_sem(), ocr=True, ocr_func=broken)
+    assert c.kind == "sem_image" and c.extracted == {}
+
+
+def test_ocr_without_the_package_installed_keeps_the_tag(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pytesseract", None)  # import raises ImportError
+    c = classify(make_sem(), ocr=True)
+    assert c.kind == "sem_image" and c.extracted == {}
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "15.0kV x5,000 5um WD 10.0mm",
+            {
+                "kv": 15.0,
+                "magnification": 5000,
+                "working_distance_mm": 10.0,
+                "scale_bar": "5 µm",
+            },
+        ),
+        (
+            "5.0 kV  x 250  100 nm",
+            {"kv": 5.0, "magnification": 250, "scale_bar": "100 nm"},
+        ),
+        ("WD 8.5mm", {"working_distance_mm": 8.5}),
+        ("garbage ~~ 1234", {}),
+        ("", {}),
+    ],
+)
+def test_parse_text_reads_only_what_is_stated(text, expected):
+    assert csem.parse_text(text, scale_bar=True) == expected
+
+
+def test_the_scale_bar_is_not_taken_from_metadata_text():
+    assert "scale_bar" not in csem.parse_text("15kV x500 5um")
+
+
+# ---- pluggable profiles --------------------------------------------------------------------
+
+
+class FixedProfile:
+    def __init__(self, name, conf, extracted=None):
+        self.name, self.conf, self.extracted = name, conf, extracted or {}
+
+    def inspect(self, img, ocr, ocr_func):
+        return csem.ProfileResult(self.conf, self.extracted, self.name)
+
+
+class BrokenProfile:
+    name = "broken"
+
+    def inspect(self, img, ocr, ocr_func):
+        raise ValueError("bug in a profile")
+
+
+def test_the_default_profile_list_is_jeol():
+    assert [p.name for p in csem.PROFILES] == ["JEOL"]
+
+
+def test_another_profile_can_claim_an_image():
+    plain = Image.new("L", (200, 200), 100)
+    c = classify(plain, profiles=[FixedProfile("Zeiss", 0.8, {"instrument": "Zeiss"})])
+    assert (c.kind, c.confidence, c.extracted, c.reason) == (
+        "sem_image",
+        0.8,
+        {"instrument": "Zeiss"},
+        "Zeiss",
+    )
+
+
+def test_the_most_confident_profile_wins_and_a_weak_one_does_not_count():
+    plain = Image.new("L", (200, 200), 100)
+    c = classify(plain, profiles=[FixedProfile("a", 0.7), FixedProfile("b", 0.9)])
+    assert c.reason == "b"
+    assert classify(plain, profiles=[FixedProfile("a", 0.4)]).kind == "image"
+
+
+def test_a_broken_profile_does_not_stop_the_others():
+    plain = Image.new("L", (200, 200), 100)
+    c = classify(plain, profiles=[BrokenProfile(), FixedProfile("ok", 0.9)])
+    assert c.kind == "sem_image"
+    assert classify(plain, profiles=[BrokenProfile()]).kind == "image"
