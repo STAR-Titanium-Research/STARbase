@@ -96,12 +96,12 @@ describe('Surface scans panel', () => {
 		await vi.waitFor(() => expect(document.querySelector('.thumb img')?.getAttribute('src')).toBe('blob:thumb'));
 		expect(api.get.mock.calls.some(([u]) => u === '/d1-surface-scan/s-done/thumb')).toBe(true);
 		expect(button(/Open in 3D/)).toBeDefined();
-		expect(button(/Render again/)).toBeUndefined();
+		expect(button(/Render again/)).toBeDefined(); // a finished render can be rendered again too (its files may be gone)
 		const read = listReads()[0][1] as any;
 		expect(read.params.filter).toEqual({ insert_id: { _eq: INSERT } });
 	});
 
-	it("asks an edge page for the edge's scans and its insert's, tags the insert's, and offers Render again only on the failed one", async () => {
+	it("asks an edge page for the edge's scans and its insert's, tags the insert's, and offers Render again on a failed and on a finished render, never Open on a failed one", async () => {
 		await mountPanel([DONE, FAILED], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge CNMG12-1-3B' });
 		const read = listReads()[0][1] as any;
 		expect(read.params.filter).toEqual({ _or: [{ edge_id: { _eq: EDGE } }, { insert_id: { _eq: INSERT } }] });
@@ -113,7 +113,7 @@ describe('Surface scans panel', () => {
 		expect(failed.querySelector('.tag')).toBeNull();
 		expect(failed.textContent).toContain('Cannot read this file');
 		expect(failed.textContent).toContain('Render again');
-		expect(done.textContent).not.toContain('Render again');
+		expect(done.textContent).toContain('Render again');
 		expect(failed.textContent).not.toContain('Open in 3D');
 	});
 

@@ -3,11 +3,19 @@
 
 import { SCAN_CONDITIONS, type ScanCondition } from './scanModel';
 
-// File types the library search offers: the common SurfaceTopography formats (Alicona .al3d first). The render
-// worker has the last word: it builds its own list from SurfaceTopography's readers, minus mat, txt, csv, dat, xlsx,
-// zip and nc (documents, tables and force recordings on the share; plugins/surface-scan-worker app/lib/archive.py),
-// and a file it refuses fails its render with the reason, which "Render again" shows. Keep this list inside that one.
-export const TOPOGRAPHY_EXTENSIONS = ['.al3d', '.opd', '.opdx', '.x3p', '.ibw', '.h5', '.hdf5', '.sxm', '.datx'] as const;
+// File types the library search offers: topography formats of SurfaceTopography 1.25 (Alicona .al3d first), without the
+// generic ones (.tif .tiff .xyz .asc .hfm .npy, plain text and arrays). The render worker has the last word: it builds
+// its own list from SurfaceTopography's readers minus its exclusions (plugins/surface-scan-worker app/lib/archive.py),
+// and a file it refuses fails its render with the reason, which "Render again" shows. THIS LIST MUST STAY INSIDE THE
+// WORKER'S LIST: a file offered here that the worker refuses is a scan that can only fail.
+export const TOPOGRAPHY_EXTENSIONS = [
+	'.al3d', '.opd', '.opdx', '.x3p', '.ibw', '.h5', '.datx', '.sur', '.plu', '.apx', '.plux', '.vk3', '.vk4', '.vk6', '.vk7', '.lext', '.zon',
+	'.os3d', '.sdf', '.frt', '.mnt', '.gwy', '.mdt', '.nms', '.oir', '.poir', '.ezd', '.nid', '.bcr', '.bcrf', '.tmd', '.zmg', '.mi', '.jpk',
+	'.qep', '.spm',
+] as const;
+
+/** Only files on the archive share (a pointer row, `storage = 'star'`): the worker reads them by metadata.archive_path and refuses the rest. */
+export const ARCHIVE_STORAGE = 'star';
 
 /** The visible warning of the dialog (spec decision 6). */
 export const VISIBILITY_WARNING =
@@ -21,12 +29,15 @@ export interface LibraryFile {
 	size: number | null;
 }
 
-/** The /files filter for the picker: a topography extension, and the typed text in the name or title. */
+/** The /files filter for the picker: an archive file with a topography extension, and the typed text in the name or title. */
 export function fileFilter(text: string): Record<string, unknown> {
-	const byExtension = { _or: TOPOGRAPHY_EXTENSIONS.map((ext) => ({ filename_download: { _iends_with: ext } })) };
+	const clauses: Record<string, unknown>[] = [
+		{ storage: { _eq: ARCHIVE_STORAGE } },
+		{ _or: TOPOGRAPHY_EXTENSIONS.map((ext) => ({ filename_download: { _iends_with: ext } })) },
+	];
 	const t = text.trim();
-	if (!t) return byExtension;
-	return { _and: [byExtension, { _or: [{ filename_download: { _icontains: t } }, { title: { _icontains: t } }] }] };
+	if (t) clauses.push({ _or: [{ filename_download: { _icontains: t } }, { title: { _icontains: t } }] });
+	return { _and: clauses };
 }
 
 export const FILE_FIELDS = ['id', 'filename_download', 'title', 'filesize', 'metadata'];

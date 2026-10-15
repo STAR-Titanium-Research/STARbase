@@ -54,9 +54,9 @@ describe('scanFilter', () => {
 });
 
 describe('what can be done with a scan', () => {
-	it('opens a finished render only, and renders again a failed one only', () => {
+	it('opens a finished render only, and renders again a failed or a finished one (never one in progress)', () => {
 		for (const [status, open, again, busy] of [
-			['pending', false, false, true], ['rendering', false, false, true], ['done', true, false, false], ['failed', false, true, false],
+			['pending', false, false, true], ['rendering', false, false, true], ['done', true, true, false], ['failed', false, true, false],
 		] as const) {
 			const r = row({ status });
 			expect([canOpenScan(r), canRenderAgain(r), isInProgress(r)]).toEqual([open, again, busy]);

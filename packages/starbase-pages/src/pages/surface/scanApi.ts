@@ -11,8 +11,33 @@ export async function fetchMeta(api: HostApi, scanId: string): Promise<ScanMeta>
 	return parseMeta(res.data);
 }
 
+export const OBJECT_MISSING_MESSAGE = 'The rendered data is missing; render the scan again.';
+
+// A request made with responseType arraybuffer fails with the error body as bytes too; read it back as JSON so the
+// code and the message of the endpoint's answer are there to see.
+function readErrorBody(e: unknown): void {
+	const r = (e as any)?.response;
+	if (!r || !(r.data instanceof ArrayBuffer)) return;
+	try {
+		r.data = JSON.parse(new TextDecoder().decode(r.data));
+	} catch {
+		/* not JSON: leave it */
+	}
+}
+
+/** The endpoint's own code for "this scan says done, but its files are gone from the object store" (404 OBJECT_MISSING). */
+export function isObjectMissing(e: unknown): boolean {
+	return (e as any)?.response?.status === 404 && (e as any)?.response?.data?.errors?.some?.((x: any) => x?.extensions?.code === 'OBJECT_MISSING') === true;
+}
+
 export async function fetchGrid(api: HostApi, scanId: string, meta: ScanMeta): Promise<Float32Array> {
-	const res = await api.get(scanPath(scanId, 'grid'), { responseType: 'arraybuffer', timeout: 120_000 });
+	let res;
+	try {
+		res = await api.get(scanPath(scanId, 'grid'), { responseType: 'arraybuffer', timeout: 120_000 });
+	} catch (e) {
+		readErrorBody(e);
+		throw e;
+	}
 	const body = res.data;
 	if (!(body instanceof ArrayBuffer)) throw new ScanDataError('The grid did not arrive as binary data.');
 	return decodeGrid(body, meta);
@@ -34,6 +59,7 @@ export async function renderAgain(api: HostApi, scanId: string): Promise<void> {
 export function scanErrorText(e: unknown): string {
 	if (e instanceof ScanDataError) return e.message;
 	const status = (e as any)?.response?.status;
+	if (isObjectMissing(e)) return OBJECT_MISSING_MESSAGE;
 	if (status === 404) return 'This scan has not been rendered yet, or you cannot see it.';
 	if (status === 403) return forbiddenReason(e) ?? 'You do not have permission to do that with this scan.';
 	return errorText(e, 'The scan could not be loaded.');

@@ -108,8 +108,11 @@ export const renderStatusStyle = (s: RenderStatus | null): { label: string; tone
 /** Only a finished render can be looked at in 3D (the endpoint answers 404 until then). */
 export const canOpenScan = (row: ScanRow): boolean => row.status === 'done';
 
-/** "Render again" is offered on a failed render only. */
-export const canRenderAgain = (row: ScanRow): boolean => row.status === 'failed';
+/**
+ * "Render again" is offered on a failed render, and on a finished one (its rendered files may be gone from the object
+ * store: the endpoint then says so, OBJECT_MISSING). Not while a render is queued or running.
+ */
+export const canRenderAgain = (row: ScanRow): boolean => row.status === 'failed' || row.status === 'done';
 
 export const isInProgress = (row: ScanRow): boolean => row.status === 'pending' || row.status === 'rendering';
 

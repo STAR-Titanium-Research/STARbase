@@ -38,7 +38,8 @@ const actionError = ref<Record<string, string>>({});
 // Another insert or edge: the open scan belonged to the last one.
 watch(() => [props.insertId, props.edgeId], () => { openId.value = null; });
 
-const opened = computed(() => rows.value.find((r) => r.id === openId.value) ?? null);
+// Only a finished render can be shown: a scan sent to render again closes its view.
+const opened = computed(() => rows.value.find((r) => r.id === openId.value && canOpenScan(r)) ?? null);
 const takenFileIds = computed(() => rows.value.filter((r) => scanOwner(r, edge.value) === 'own' && r.file).map((r) => r.file!.id));
 const emptyText = computed(() => (edge.value ? 'No surface scan of this edge or its insert.' : 'No surface scan of this insert.'));
 const fileName = (r: ScanRow) => r.file?.name ?? 'File not visible to you';
@@ -64,6 +65,12 @@ async function again(r: ScanRow): Promise<void> {
 		next.delete(r.id);
 		busy.value = next;
 	}
+}
+
+function onRerendered(): void {
+	openId.value = null;
+	retry();
+	void reload();
 }
 
 function onAdded(): void {
@@ -117,7 +124,7 @@ function onAdded(): void {
 				<span class="spacer" />
 				<v-button small secondary @click="openId = null">Close</v-button>
 			</div>
-			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" />
+			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" @rerendered="onRerendered" />
 		</div>
 	</Section>
 
