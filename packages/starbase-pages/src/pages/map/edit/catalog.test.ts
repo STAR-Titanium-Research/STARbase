@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkFieldsOf, existingIds, loadedRecordOf, methodsOf, testTypesOf } from './catalog';
+import { checkFieldsOf, existingIds, loadedRecordOf, methodsOf, testTypesOf, writableValues } from './catalog';
 
 describe('methods', () => {
 	it('are sorted by name, with the category when it is one the map knows', () => {
@@ -65,5 +65,40 @@ describe('existing records', () => {
 			{ kind: 'test', existing: { id: 't1' } },
 		]);
 		expect(out).toEqual({ physical_samples: ['s1'], manufacturing_operations: ['o1'], test_sessions: ['t1'] });
+	});
+});
+
+describe('what a copy of an existing record may carry', () => {
+	// A row read with fields=* : the columns, the keys and stamps the server refuses, and the alias arrays of the form.
+	const row = {
+		sample_id: 'real-1', sample_code: 'PS-001', short_id: 'ab12cd', code_sort: 'PS-000001', restricted: false, version: 4, created_at: '2026-10-01', created_by: 'u1',
+		form: 'disc', mass_grams: 12.5, notes: null, material_id: 'mat1', co_owners: [{ user_id: 'u2' }], project_items: [1, 2], current_status: 'active',
+	};
+	const defs = [
+		{ field: 'sample_id', type: 'uuid', schema: { is_primary_key: true }, meta: {} },
+		{ field: 'sample_code', type: 'string', schema: {}, meta: {} },
+		{ field: 'form', type: 'string', schema: {}, meta: {} },
+		{ field: 'mass_grams', type: 'decimal', schema: {}, meta: {} },
+		{ field: 'notes', type: 'text', schema: {}, meta: {} },
+		{ field: 'material_id', type: 'uuid', schema: { foreign_key_table: 'materials' }, meta: { special: ['m2o'] } },
+		{ field: 'short_id', type: 'string', schema: {}, meta: {} },
+		{ field: 'co_owners', type: 'alias', meta: { special: ['m2m'] } },
+		{ field: 'project_items', type: 'alias', meta: { special: ['o2m'] } },
+		{ field: 'report_button', type: 'alias', meta: { special: ['no-data'] } },
+	];
+
+	it('is the real columns the draft may set: not the keys, stamps and codes the server refuses, not the alias arrays', () => {
+		expect(writableValues('sample', row, defs)).toEqual({ sample_code: 'PS-001', form: 'disc', mass_grams: 12.5, notes: null, material_id: 'mat1' });
+	});
+
+	it('drops what each kind reserves (an operation\'s sample and work state, a test\'s subject)', () => {
+		const op = { operation_id: 'o', sample_id: 's', output_sample_id: 't', work_state: 'planned', batch_id: 'b', method_id: 'm', short_id: 'x', feed: 1 };
+		expect(writableValues('operation', op)).toEqual({ method_id: 'm', feed: 1 });
+		expect(writableValues('test', { session_id: 's', subject: [1], work_state: 'done', test_type: 'tensile' })).toEqual({ test_type: 'tensile' });
+	});
+
+	it('without field definitions keeps plain values only (no arrays, no relations read as objects)', () => {
+		expect(writableValues('sample', row)).toEqual({ sample_code: 'PS-001', form: 'disc', mass_grams: 12.5, notes: null, material_id: 'mat1' });
+		expect(writableValues('sample', { form: 'd', material: { id: 1 } })).toEqual({ form: 'd' });
 	});
 });

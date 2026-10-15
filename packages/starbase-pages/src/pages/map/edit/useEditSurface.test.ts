@@ -73,6 +73,18 @@ describe('Duplicate', () => {
 		expect(copy.values.sample_code).toBeUndefined(); // the code is made at Create
 	});
 
+	it('copies only what a new record may carry: the row read with * also has short_id, code_sort, restricted and alias arrays', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
+		await settle();
+		edit.catalog.records.set('physical_samples:s1', {
+			version: 4,
+			values: { sample_id: 's1', sample_code: 'PS-001', short_id: 'ab12cd', code_sort: 'x', restricted: false, form: 'disc', co_owners: [{ user_id: 'u' }], current_status: 'active', material_id: 'mat1' },
+		});
+		surface.duplicateSelected(1);
+		const copy = edit.body.value.items[1];
+		expect(Object.keys(copy.values).sort()).toEqual(['form', 'material_id']);
+	});
+
 	it('says so when the record of an existing item is not read yet, and copies nothing', async () => {
 		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
 		edit.catalog.records.clear();

@@ -7,7 +7,8 @@ import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, shallowR
 import type { DraftItem } from '@d1/ui';
 import type { useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
-import { recordKey, collectionOf } from './checks';
+import { collectionOf, recordKey } from './checks';
+import { writableValues } from './catalog';
 import { connectTargets, type ConnectEntry, type ConnectNames } from './connectModel';
 import { sampleLabel } from './menuModel';
 import { draftKeysOfNode } from './socketRefs';
@@ -117,7 +118,9 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	function duplicateSelected(n = 1): boolean {
 		const item = selectedItem();
 		if (!item) return false;
-		const record = item.existing ? edit.catalog.records.get(recordKey(collectionOf(item), item.existing.id))?.values : undefined;
+		const loaded = item.existing ? edit.catalog.records.get(recordKey(collectionOf(item), item.existing.id))?.values : undefined;
+		// Only what a new record may carry: the row read with `*` also holds short_id, code_sort, restricted and the alias arrays, which the server refuses.
+		const record = loaded ? writableValues(item.kind, loaded, edit.catalog.rawFields.value[collectionOf(item)]) : undefined;
 		if (item.existing && !record) {
 			build.problem.value = 'That record is still being read, so it cannot be copied yet. Try again in a moment.';
 			return true;
