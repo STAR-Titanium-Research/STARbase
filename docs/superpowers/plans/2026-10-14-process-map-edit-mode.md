@@ -18,9 +18,9 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | in progress (2026-10-14) |
-| B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | in progress (2026-10-14) |
-| C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | in progress (2026-10-14) |
+| A — server: migrations, `d1-build`, access guard | agent worktree | `pm-edit/a-server` | built (12 commits); follow-ups + review in progress (2026-10-15) |
+| B — d1-ui: generated form, index-page picker mode | agent worktree | `pm-edit/b-form` | built; reviewed; review fixes in progress (2026-10-15) |
+| C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | built; reviewed (4 blocking); fixes in progress (2026-10-15) |
 | D — canvas editor UI (needs A-contract, B, C merged) | agent worktree | `pm-edit/d-canvas` | not started |
 | E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
 | Review + merge + PR | coordinator | `claude/keen-brahmagupta-nmo9oy` | not started |
