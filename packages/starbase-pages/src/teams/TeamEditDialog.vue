@@ -5,13 +5,18 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { DEFAULT_TEAM_COLOR, TEAM_COLORS, TeamTile, createTeam, lightDark, updateTeam, uploadTeamLogo, useExplorerHost } from '@d1/ui';
 import type { TeamColor, TeamEdit, TeamSummary } from '@d1/ui';
+import { FOLDER_CHANGE_NOTE, SHARE_FOLDER_HINT } from '../inbox/folderModel';
 import { LOGO_TYPES, logoProblem, tileOf } from './teamPage';
+import { createTeamFolder } from './teamFolder';
 
 const props = defineProps<{ modelValue: boolean; team: TeamSummary | null }>();
 const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void; (e: 'saved', team: TeamSummary): void }>();
 
 const host = useExplorerHost();
 const isNew = computed(() => !props.team);
+// The share folder (the inbox crawler's team folder under Shared/): administrators only, saved after the team (see teamFolder.ts).
+const folder = createTeamFolder(host.api);
+const shareFolder = folder.folder;
 
 const name = ref('');
 const description = ref('');
@@ -42,6 +47,8 @@ watch(
 		removed.value = false;
 		err.value = '';
 		dropPreview();
+		folder.reset(!!props.team);
+		if (props.team && host.isAdmin.value) void folder.load(props.team.team_id);
 	},
 	{ immediate: true },
 );
@@ -77,6 +84,10 @@ async function save() {
 		err.value = 'Name is required.';
 		return;
 	}
+	if (host.isAdmin.value && folder.issue.value) {
+		err.value = folder.issue.value;
+		return;
+	}
 	saving.value = true;
 	err.value = '';
 	try {
@@ -89,6 +100,14 @@ async function save() {
 			if (file.value) patch.logo = await uploadTeamLogo(host.api, file.value);
 			else if (removed.value) patch.logo = null;
 			saved = await updateTeam(host.api, props.team.team_id, patch);
+		}
+		// The share folder is a second request, after the team exists. If it fails the team is saved and the list learns of it; the dialog
+		// stays open with the reason (a duplicate folder names no other team).
+		const failure = host.isAdmin.value ? await folder.apply(saved.team_id, saved.name || n) : null;
+		if (failure) {
+			err.value = failure;
+			emit('saved', saved);
+			return;
 		}
 		close();
 		emit('saved', saved);
@@ -126,6 +145,14 @@ async function save() {
 						/>
 					</div>
 				</div>
+				<div v-if="host.isAdmin.value" class="fld" data-test="team-folder">
+					<label for="team-share-folder">Share folder</label>
+					<input id="team-share-folder" v-model="shareFolder" class="plain" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. Additive" :disabled="!folder.ready.value" :aria-invalid="!!folder.issue.value" data-test="team-share-folder" />
+					<span class="hint">{{ SHARE_FOLDER_HINT }}</span>
+					<span v-if="folder.issue.value" class="err" role="alert" data-test="team-share-folder-issue">{{ folder.issue.value }}</span>
+					<span class="hint warn" data-test="team-share-folder-note">{{ FOLDER_CHANGE_NOTE }}</span>
+					<span v-if="folder.loadError.value" class="err" role="alert">{{ folder.loadError.value }}</span>
+				</div>
 				<div v-if="!isNew" class="fld">
 					<span class="lbl">Logo</span>
 					<div class="logo">
@@ -158,6 +185,12 @@ async function save() {
 .hint { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .err { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-bad); }
 .spacer { flex: 1; }
+.plain {
+	height: 36px; padding: 0 10px; box-sizing: border-box; border: 1px solid var(--theme--border-color, #d1d5db); border-radius: var(--theme--border-radius, 8px);
+	background: var(--theme--form--field--input--background, var(--theme--background)); color: var(--theme--foreground); font: inherit;
+}
+.plain[aria-invalid='true'] { border-color: var(--d1-bad); }
+.hint.warn { color: var(--d1-warn); }
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .sw { width: 28px; height: 28px; border-radius: 8px; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .sw.on { outline: 2px solid var(--theme--foreground); outline-offset: 2px; }
