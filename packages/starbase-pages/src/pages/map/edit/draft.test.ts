@@ -161,6 +161,35 @@ describe('attach', () => {
 	});
 });
 
+describe('addExisting', () => {
+	it('brings an existing operation or test onto the draft as it is: existing, not attached, no values', () => {
+		const b = run([
+			{ type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 4 }, workState: 'planned', at: { x: 1, y: 2 } },
+			{ type: 'addExisting', kind: 'test', record: { id: 't-1', version: 2 }, workState: 'done' },
+		]);
+		expect(b.items[0]).toEqual({ key: 'n1', kind: 'operation', workState: 'planned', existing: { id: 'op-1', version: 4 }, values: {}, rows: [{ key: 'n2' }] });
+		expect(b.items[0]).not.toHaveProperty('attach');
+		expect(b.items[1]).toEqual({ key: 'n3', kind: 'test', workState: 'done', existing: { id: 't-1', version: 2 }, values: {} });
+		expect(b.positions.n1).toEqual({ x: 1, y: 2 });
+		// once only
+		expect(apply(b, { type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 4 }, workState: 'planned' })).toBe(b);
+	});
+
+	it('lets E14 edits and E18 removes be said, and takes no wires', () => {
+		let b = run([{ type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 4 }, workState: 'planned' }, { type: 'addSample' }]);
+		b = apply(b, { type: 'setValues', key: 'n1', values: { machining_feed_mm_per_rev: 0.2 } });
+		expect(b.items[0].values).toEqual({ machining_feed_mm_per_rev: 0.2 });
+		expect(wireProblem(b, { key: 'n3' }, { key: 'n1', row: 0 })).toMatch(/attached/);
+		const gone = apply(b, { type: 'remove', key: 'n1', deleteRecord: true });
+		expect(gone.items[0].remove).toBe(true);
+	});
+
+	it('is not added again when the same operation is attached', () => {
+		const b = run([{ type: 'attach', operation: { id: 'op-1', version: 1 }, workState: 'planned' }]);
+		expect(apply(b, { type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 1 }, workState: 'planned' })).toBe(b);
+	});
+});
+
 describe('rows', () => {
 	it('addOutputRow adds a row that takes the same input sample', () => {
 		const b = apply(sampleAndOp(), { type: 'addOutputRow', key: 'n2' });
@@ -379,6 +408,17 @@ describe('duplicate', () => {
 		expect(copy.existing).toBeUndefined();
 		expect(copy.attach).toBeUndefined();
 		expect(copy.values).toEqual({ method_id: 'm', feed_rate: 0.4 });
+	});
+
+	it('duplicating an existing item without its full record does nothing', () => {
+		const b = run([{ type: 'addExisting', kind: 'operation', record: { id: 'o', version: 1 }, workState: 'done' }, { type: 'setValues', key: 'n1', values: { feed_rate: 0.4 } }]);
+		expect(apply(b, { type: 'duplicate', key: 'n1' })).toBe(b);
+		expect(apply(b, { type: 'duplicate', key: 'n1', n: 3 })).toBe(b);
+		const s = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }]);
+		expect(apply(s, { type: 'duplicate', key: 'n1' })).toBe(s);
+		// with the record it is new from
+		const c = apply(b, { type: 'duplicate', key: 'n1', record: { method_id: 'm', feed_rate: 0.3, notes: 'n' } });
+		expect(c.items[1].values).toEqual({ method_id: 'm', feed_rate: 0.4 });
 	});
 
 	it('N is at least 1 and at most 99', () => {

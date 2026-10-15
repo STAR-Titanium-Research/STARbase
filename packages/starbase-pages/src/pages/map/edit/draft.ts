@@ -37,6 +37,8 @@ export type ContainerSource =
 export type DraftAction =
 	| { type: 'addSample'; values?: Record<string, unknown>; at?: Pos; from?: WireEnd }
 	| { type: 'addExistingSamples'; samples: { id: string; version: number; values?: Record<string, unknown> }[]; at?: Pos }
+	/** An existing operation or test brought onto the draft as it is (not attached): its fields can be edited (E14) or it removed (E18). */
+	| { type: 'addExisting'; kind: 'operation' | 'test'; record: { id: string; version: number }; workState: WorkState; at?: Pos }
 	| { type: 'addContainer'; kind: 'operation' | 'test'; source: ContainerSource; workState?: WorkState; rows?: number; at?: Pos; from?: WireEnd }
 	| { type: 'attach'; operation: { id: string; version: number }; workState: WorkState; values?: Record<string, unknown>; at?: Pos; from?: WireEnd }
 	| { type: 'addOutputRow'; key: DraftKey }
@@ -55,6 +57,7 @@ export type DraftAction =
 	| { type: 'unwire'; from: WireEnd; to: WireEnd }
 	| { type: 'setValues'; key: DraftKey; values: Record<string, unknown> }
 	| { type: 'setWorkState'; key: DraftKey; workState: WorkState }
+	/** `record`: the full values of an existing item (required for one: duplicating a record that exists is "new from"). */
 	| { type: 'duplicate'; key: DraftKey; n?: number; record?: Record<string, unknown> }
 	| { type: 'remove'; key: DraftKey; deleteRecord?: boolean }
 	| { type: 'move'; key: DraftKey; x: number; y: number }
@@ -338,7 +341,7 @@ function newSample(w: Work, values: Record<string, unknown>, at?: Pos, index?: n
 
 function newOperation(
 	w: Work,
-	p: { values: Record<string, unknown>; workState: WorkState; rows?: number; attach?: DraftOperation['existing']; at?: Pos; index?: number },
+	p: { values: Record<string, unknown>; workState: WorkState; rows?: number; attach?: DraftOperation['existing']; existing?: DraftOperation['existing']; at?: Pos; index?: number },
 ): DraftOperation {
 	const rows = Math.max(1, Math.floor(p.rows ?? 1));
 	const [key, ...rowKeys] = takeKeys(w, 1 + rows);
@@ -348,7 +351,7 @@ function newOperation(
 		workState: p.workState,
 		values: { ...p.values },
 		rows: rowKeys.map((k) => ({ key: k })),
-		...(p.attach ? { existing: p.attach, attach: true as const } : {}),
+		...(p.attach ? { existing: p.attach, attach: true as const } : p.existing ? { existing: p.existing } : {}),
 	};
 	put(w, item, p.at, p.index);
 	return item;
@@ -466,6 +469,17 @@ export function apply(body: DraftBody, action: DraftAction): DraftBody {
 			}
 			return placed ? w.body : body;
 		}
+		case 'addExisting': {
+			if (body.items.some((i) => i.kind === action.kind && i.existing?.id === action.record.id)) return body;
+			const w = copyBody(body);
+			if (action.kind === 'operation') {
+				newOperation(w, { values: {}, workState: action.workState, existing: { ...action.record }, at: action.at });
+			} else {
+				const test: DraftTest = { key: takeKeys(w, 1)[0], kind: 'test', workState: action.workState, existing: { ...action.record }, values: {} };
+				put(w, test, action.at);
+			}
+			return w.body;
+		}
 		case 'addContainer': {
 			const w = copyBody(body);
 			const workState = action.workState ?? DEFAULT_WORK_STATE;
@@ -563,6 +577,8 @@ export function apply(body: DraftBody, action: DraftAction): DraftBody {
 		case 'duplicate': {
 			const source = itemOf(body, action.key);
 			if (!source || source.remove) return body;
+			// A record that exists holds only the fields the draft changes: a copy needs its full values.
+			if (source.existing && !action.record) return body;
 			const n = Math.min(99, Math.max(1, Math.floor(action.n ?? 1)));
 			const w = copyBody(body);
 			duplicateItem(w, source, n, action.record);
