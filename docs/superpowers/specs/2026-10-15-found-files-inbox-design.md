@@ -94,7 +94,10 @@ already says so (changes marked *as built*).
   - `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `decided_at TIMESTAMPTZ`,
     `decided_by UUID REFERENCES directus_users(id) ON DELETE SET NULL` (*as built:* a real foreign key)
   - undo bookkeeping: `link_kind TEXT CHECK (link_kind IN ('manual','bulk','auto'))`, `linked_collection TEXT`,
-    `linked_junction_id UUID`, `link_batch_id UUID`
+    `linked_junction_id UUID`, `link_batch_id UUID`; *as built:* all four are NOT NULL when `state = 'linked'` and
+    all NULL otherwise (two CHECKs, `file_candidates_linked_bookkeeping_check` and
+    `file_candidates_unlinked_bookkeeping_check`), so an undo must clear all four together with the state;
+    `linked_collection` has no value list
   - *As built:* `adopted_at TIMESTAMPTZ` — set by `d1-inbox` when a person links a document or other non-image
     file; it is the "flag the crawler reads" (plan B2/C6): the crawler hashes rows with `adopted_at IS NOT NULL`
     that have no `file_fingerprints` row yet (`open_rb(..., adopted=True)`). Stays set after an undo.

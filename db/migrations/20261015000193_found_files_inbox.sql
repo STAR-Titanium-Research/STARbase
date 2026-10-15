@@ -128,7 +128,11 @@ CREATE TABLE d1_private.file_candidates (
     CONSTRAINT file_candidates_suggestion_pair_check CHECK ((suggested_collection IS NULL) = (suggested_record_id IS NULL)),
     CONSTRAINT file_candidates_not_own_duplicate_check CHECK (duplicate_of IS DISTINCT FROM candidate_id),
     CONSTRAINT file_candidates_size_bytes_check CHECK (size_bytes >= 0),
-    CONSTRAINT file_candidates_link_kind_check CHECK (link_kind IN ('manual', 'bulk', 'auto'))
+    CONSTRAINT file_candidates_link_kind_check CHECK (link_kind IN ('manual', 'bulk', 'auto')),
+    CONSTRAINT file_candidates_linked_bookkeeping_check CHECK (state <> 'linked' OR (link_kind IS NOT NULL AND linked_collection IS NOT NULL
+        AND linked_junction_id IS NOT NULL AND link_batch_id IS NOT NULL)),
+    CONSTRAINT file_candidates_unlinked_bookkeeping_check CHECK (state = 'linked' OR (link_kind IS NULL AND linked_collection IS NULL
+        AND linked_junction_id IS NULL AND link_batch_id IS NULL))
 );
 CREATE INDEX idx_file_candidates_owner_person_state ON d1_private.file_candidates (owner_person_id, state);
 CREATE INDEX idx_file_candidates_owner_team_state ON d1_private.file_candidates (owner_team_id, state);
@@ -158,7 +162,7 @@ COMMENT ON COLUMN d1_private.file_candidates.source_mtime IS 'The file''s modifi
 COMMENT ON COLUMN d1_private.file_candidates.first_seen_at IS 'When the crawler first saw the file.';
 COMMENT ON COLUMN d1_private.file_candidates.decided_at IS 'When a person linked or dismissed the file (or when it was linked automatically); NULL while undecided. Cleared by an undo or a restore.';
 COMMENT ON COLUMN d1_private.file_candidates.decided_by IS 'The directus_users.id of the person who linked or dismissed it (the opted-in person for an auto-link); NULL while undecided or when that user was deleted (ON DELETE SET NULL).';
-COMMENT ON COLUMN d1_private.file_candidates.link_kind IS 'How it was linked: manual (one file), bulk (Accept all or a batch of several) or auto (by the opted-in auto-link). NULL unless state is linked. Undo bookkeeping.';
+COMMENT ON COLUMN d1_private.file_candidates.link_kind IS 'How it was linked: manual (one file), bulk (Accept all or a batch of several) or auto (by the opted-in auto-link). The four link_* columns are all set when state is linked and all NULL otherwise (two CHECKs), so an undo must clear all four together with the state. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.linked_collection IS 'The record collection it was linked to (physical_samples, manufacturing_operations or test_sessions); NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.linked_junction_id IS 'The id of the junction row the link created (sample_data_files, operation_data_files or session_data_files), so an undo removes exactly that row; NULL unless state is linked. Undo bookkeeping.';
 COMMENT ON COLUMN d1_private.file_candidates.link_batch_id IS 'Shared by every file linked in one Link, Accept all or auto-link run; one Undo per batch removes exactly the junction rows of the batch. NULL unless state is linked.';

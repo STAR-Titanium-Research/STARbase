@@ -447,7 +447,7 @@ unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id`
 | `rel_path` | TEXT NOT NULL | Path relative to the share root (`star_group1`) |
 | `size_bytes`, `source_mtime` | BIGINT, TIMESTAMPTZ | Size (>= 0) and modification time when found |
 | `first_seen_at`, `decided_at`, `decided_by` | TIMESTAMPTZ, TIMESTAMPTZ, UUID FK | First seen; when and by which Directus user (`ON DELETE SET NULL`) it was linked or dismissed |
-| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes |
+| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes. All four are set when `state = 'linked'` and all NULL otherwise (two CHECKs), so an undo clears all four with the state; `linked_collection` has no list, so a later link target needs no migration |
 | `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
 
 Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,

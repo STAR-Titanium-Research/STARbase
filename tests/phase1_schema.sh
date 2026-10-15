@@ -6258,14 +6258,39 @@ fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owne
 grep -q 'check constraint' <<<"$fi_out" && ok "an unknown candidate state is rejected" || bad "bad state was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, match_strength) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'strong');")
 grep -q 'check constraint' <<<"$fi_out" && ok "an unknown match_strength is rejected" || bad "bad match_strength was not rejected (output: $fi_out)"
-fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, link_kind) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'magic');")
-grep -q 'check constraint' <<<"$fi_out" && ok "an unknown link_kind is rejected" || bad "bad link_kind was not rejected (output: $fi_out)"
-fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif'), ('$FI_F2', '$FI_P1', 'surface_scan', 'backlog', 'b.al3d'), ('$FI_F3', '$FI_P1', 'other', 'new', 'c.mat');
-UPDATE d1_private.file_candidates SET state = 'linked', link_kind = 'bulk', match_strength = 'edge_code' WHERE directus_files_id = '$FI_F1';
+fi_out=$(fi_sql "INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state, link_kind, linked_collection, linked_junction_id, link_batch_id) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'magic', 'physical_samples', gen_random_uuid(), gen_random_uuid());")
+grep -q 'file_candidates_link_kind_check' <<<"$fi_out" && ok "an unknown link_kind is rejected (by the link_kind check itself)" || bad "bad link_kind was not rejected (output: $fi_out)"
+FI_LINK="'physical_samples', gen_random_uuid(), gen_random_uuid()"
+FI_CL="INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state, link_kind, linked_collection, linked_junction_id, link_batch_id)"
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', NULL, $FI_LINK);")
+grep -q 'file_candidates_linked_bookkeeping_check' <<<"$fi_out" && ok "a linked candidate without a link_kind is rejected" || bad "linked without link_kind was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'manual', NULL, gen_random_uuid(), gen_random_uuid());")
+grep -q 'file_candidates_linked_bookkeeping_check' <<<"$fi_out" && ok "a linked candidate without a linked_collection is rejected" || bad "linked without linked_collection was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'manual', 'physical_samples', NULL, gen_random_uuid());")
+grep -q 'file_candidates_linked_bookkeeping_check' <<<"$fi_out" && ok "a linked candidate without a linked_junction_id is rejected" || bad "linked without linked_junction_id was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'manual', 'physical_samples', gen_random_uuid(), NULL);")
+grep -q 'file_candidates_linked_bookkeeping_check' <<<"$fi_out" && ok "a linked candidate without a link_batch_id is rejected" || bad "linked without link_batch_id was not rejected (output: $fi_out)"
+for fi_col in "link_kind = 'auto'" "linked_collection = 'test_sessions'" "linked_junction_id = gen_random_uuid()" "link_batch_id = gen_random_uuid()"; do
+    fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif');
+UPDATE d1_private.file_candidates SET $fi_col;")
+    grep -q 'file_candidates_unlinked_bookkeeping_check' <<<"$fi_out" && ok "a candidate that is not linked cannot carry link bookkeeping ($fi_col)" || bad "unlinked candidate with $fi_col was not rejected (output: $fi_out)"
+done
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'manual', 'any_future_collection', gen_random_uuid(), gen_random_uuid());
+SELECT 'fi_linked_any:' || linked_collection FROM d1_private.file_candidates;")
+grep -q 'fi_linked_any:any_future_collection' <<<"$fi_out" && ok "linked_collection is not limited to a list (a later link target needs no migration)" || bad "linked_collection was limited (output: $fi_out)"
+fi_out=$(fi_sql "$FI_CL VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'x.tif', 'linked', 'manual', $FI_LINK);
+UPDATE d1_private.file_candidates SET state = 'new', link_kind = NULL, linked_collection = NULL, linked_junction_id = NULL, link_batch_id = NULL, decided_at = NULL;
+SELECT 'fi_undo:' || state || ':' || (link_kind IS NULL) FROM d1_private.file_candidates;")
+grep -q 'fi_undo:new:true' <<<"$fi_out" && ok "an undo (state new, all four link columns cleared in one UPDATE) is accepted" || bad "undo update was refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO directus_files (id) VALUES ('a2000000-0000-4000-8000-0000000000c4'), ('a2000000-0000-4000-8000-0000000000c5');
+$FI_C VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif'), ('$FI_F2', '$FI_P1', 'surface_scan', 'backlog', 'b.al3d'), ('$FI_F3', '$FI_P1', 'other', 'new', 'c.mat'), ('a2000000-0000-4000-8000-0000000000c4', '$FI_P1', 'document', 'new', 'd.pdf');
+UPDATE d1_private.file_candidates SET state = 'linked', link_kind = 'bulk', linked_collection = 'test_sessions', linked_junction_id = gen_random_uuid(), link_batch_id = gen_random_uuid(), match_strength = 'edge_code' WHERE directus_files_id = '$FI_F1';
 UPDATE d1_private.file_candidates SET state = 'dismissed', match_strength = 'code' WHERE directus_files_id = '$FI_F2';
-UPDATE d1_private.file_candidates SET state = 'gone', match_strength = 'short_id', link_kind = 'auto' WHERE directus_files_id = '$FI_F3';
+UPDATE d1_private.file_candidates SET state = 'gone', match_strength = 'short_id' WHERE directus_files_id = '$FI_F3';
+UPDATE d1_private.file_candidates SET state = 'linked', link_kind = 'auto', linked_collection = 'manufacturing_operations', linked_junction_id = gen_random_uuid(), link_batch_id = gen_random_uuid() WHERE directus_files_id = 'a2000000-0000-4000-8000-0000000000c4';
+$FI_CL VALUES ('a2000000-0000-4000-8000-0000000000c5', '$FI_P1', 'image', 'new', 'e.tif', 'linked', 'manual', $FI_LINK);
 SELECT 'fi_values:' || count(*) FROM d1_private.file_candidates;")
-grep -q 'fi_values:3' <<<"$fi_out" && ok "every allowed kind, origin, state, match_strength and link_kind value is accepted" || bad "allowed values were refused (output: $fi_out)"
+grep -q 'fi_values:5' <<<"$fi_out" && ok "every allowed kind, origin, state, match_strength and link_kind value is accepted" || bad "allowed values were refused (output: $fi_out)"
 fi_out=$(fi_sql "$FI_C VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif'), ('$FI_F1', '$FI_P2', 'image', 'new', 'a.tif');")
 grep -q 'duplicate key' <<<"$fi_out" && ok "directus_files_id is unique: one candidate per file" || bad "second candidate for a file was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "$FI_C VALUES ('a2000000-0000-4000-8000-0000000000ff', '$FI_P1', 'image', 'new', 'a.tif');")
