@@ -2,6 +2,7 @@
 // Undo per batch, the rescan messages and the consent text of the auto-link switch. Split from inboxModel.ts, which has the rows.
 import type { FilesQuery, FoundFile, LinkedItem, Skipped } from './inboxApi';
 import { linkTarget, needsReadNotice, type InboxFilters } from './inboxModel';
+import { isAddedScan } from './inboxScan';
 
 /** What Accept all sends: the tab and the filters on screen, narrowed to exact short-ID matches (the endpoint links nothing else). */
 export function acceptFilter(f: InboxFilters): FilesQuery {
@@ -135,6 +136,8 @@ export interface Batch {
 	kind: 'manual' | 'bulk' | 'auto' | null;
 	/** The newest decision time of the batch (ISO). */
 	at: string | null;
+	/** How many of its files were added as surface scans (the rest were linked to records). */
+	scans: number;
 }
 
 /** The batches among linked rows, newest first. A row with no batch id (it cannot be undone as a batch) is not in any. */
@@ -142,8 +145,9 @@ export function batchesOf(rows: readonly FoundFile[]): Batch[] {
 	const by = new Map<string, Batch>();
 	for (const f of rows) {
 		if (f.state !== 'linked' || !f.link_batch_id) continue;
-		const b = by.get(f.link_batch_id) ?? { id: f.link_batch_id, count: 0, kind: f.link_kind, at: null };
+		const b = by.get(f.link_batch_id) ?? { id: f.link_batch_id, count: 0, kind: f.link_kind, at: null, scans: 0 };
 		b.count += 1;
+		if (isAddedScan(f)) b.scans += 1;
 		if (f.decided_at && (!b.at || f.decided_at > b.at)) b.at = f.decided_at;
 		by.set(f.link_batch_id, b);
 	}
@@ -153,8 +157,11 @@ export function batchesOf(rows: readonly FoundFile[]): Batch[] {
 export const BATCH_KIND_TEXT: Record<'manual' | 'bulk' | 'auto', string> = { manual: 'Linked by you', bulk: 'Accepted in bulk', auto: 'Linked automatically' };
 
 export function batchTitle(b: Batch): string {
+	const n = `${b.count} file${b.count === 1 ? '' : 's'}`;
+	// a surface scan is added, never linked: a batch of scans says so, and a mixed batch says how many
+	if (b.scans > 0 && b.scans === b.count) return `Added as ${b.count === 1 ? 'a surface scan' : 'surface scans'}, ${n}`;
 	const how = b.kind ? BATCH_KIND_TEXT[b.kind] : 'Linked';
-	return `${how}, ${b.count} file${b.count === 1 ? '' : 's'}`;
+	return b.scans > 0 ? `${how}, ${n} (${b.scans} added as ${b.scans === 1 ? 'a surface scan' : 'surface scans'})` : `${how}, ${n}`;
 }
 
 export interface LinkedGroup {

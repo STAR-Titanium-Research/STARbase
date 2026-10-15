@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { LoadState, Section, formatDate, useExplorerHost, useInboxSummary } from '@d1/ui';
 import AcceptDialog from './AcceptDialog.vue';
+import AddScanDialog from './AddScanDialog.vue';
 import InboxFilters from './InboxFilters.vue';
 import InboxRow from './InboxRow.vue';
 import InboxTabs from './InboxTabs.vue';
@@ -10,6 +11,7 @@ import LinkDialog from './LinkDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
 import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
+import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import '../labels/form.css';
 
@@ -99,6 +101,33 @@ async function choose(rec: { collection: string; id: string }) {
 	else dialogError.value = r.message;
 }
 
+// ---- the Add a surface scan dialog (a surface scan is ADDED to an insert or an edge, never linked) ----
+const scanFile = ref<FoundFile | null>(null);
+const scanOpen = ref(false);
+const scanBusy = ref(false);
+const scanError = ref('');
+const scanField = ref('');
+function openScan(f: FoundFile) {
+	scanFile.value = f;
+	scanError.value = '';
+	scanField.value = '';
+	scanOpen.value = true;
+}
+async function addScan(form: ScanAddForm) {
+	const f = scanFile.value;
+	if (!f || scanBusy.value) return; // a second click while the first is running does nothing
+	scanBusy.value = true;
+	scanError.value = '';
+	scanField.value = '';
+	const r = await keepPlace(f, () => inbox.addScan(f, form));
+	scanBusy.value = false;
+	if (r.ok) scanOpen.value = false;
+	else {
+		scanError.value = r.message;
+		scanField.value = r.field ?? '';
+	}
+}
+
 // ---- Accept all: its confirm opens on a dry run ----
 const acceptable = computed(() => (tab.value === 'new' || tab.value === 'older'));
 async function accept() {
@@ -157,6 +186,7 @@ async function accept() {
 					:show-owner="showOwner"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
+					@scan="openScan(f)"
 					@change="openDialog(f)"
 					@dismiss="dismissRow(f)"
 					@restore="restoreRow(f)"
@@ -188,6 +218,7 @@ async function accept() {
 							:show-owner="showOwner"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
+							@scan="openScan(f)"
 							@change="openDialog(f)"
 							@dismiss="dismissRow(f)"
 							@restore="restoreRow(f)"
@@ -199,6 +230,8 @@ async function accept() {
 		</Section>
 
 		<LinkDialog v-model="dialogOpen" :file="dialogFile" :busy="dialogBusy" :error="dialogError" @choose="choose" />
+
+		<AddScanDialog v-model="scanOpen" :file="scanFile" :busy="scanBusy" :error="scanError" :error-field="scanField" @submit="addScan" />
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>

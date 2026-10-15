@@ -7,6 +7,7 @@ import {
 	primaryAction, sizeText, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
+import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
 
 // One found file: the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
 // (and why), and the buttons. The row only reports what was asked; the page does it (useInbox).
@@ -21,6 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
 	(e: 'link'): void;
 	(e: 'pick'): void;
+	(e: 'scan'): void;
 	(e: 'change'): void;
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
@@ -40,6 +42,12 @@ const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan:
 
 const linkedTo = computed(() => (props.file.linked_collection && props.file.linked_record_id ? recordRoute(props.file.linked_collection, props.file.linked_record_id) : null));
 const suggestedTo = computed(() => (props.file.suggested_collection && props.file.suggested_record_id ? recordRoute(props.file.suggested_collection, props.file.suggested_record_id) : null));
+// A file added as a surface scan has no record page of its own: it routes to the insert or edge it was added to.
+const addedScan = computed(() => isAddedScan(props.file));
+const scanTo = computed(() => {
+	const t = scanTarget(props.file);
+	return t ? recordRoute(t.collection, t.id) : null;
+});
 const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.link_kind] : 'Linked'));
 </script>
 
@@ -61,20 +69,23 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			<div v-if="read" class="read">{{ read }}</div>
 			<div v-if="copy" class="copy">{{ copy }}</div>
 
-			<div v-if="tab === 'linked'" class="why" data-test="linked-to">
+			<div v-if="tab === 'linked' && addedScan" class="why" data-test="linked-to">
+				{{ ADDED_SCAN_LEAD }}<template v-if="file.linked_label"> of <AppLink v-if="scanTo" :to="scanTo" class="rec">{{ file.linked_label }}</AppLink><template v-else>{{ file.linked_label }}</template></template><template v-if="file.decided_at"> on {{ formatDate(file.decided_at) }}</template>
+			</div>
+			<div v-else-if="tab === 'linked'" class="why" data-test="linked-to">
 				{{ how }}<template v-if="file.linked_label"> to <AppLink v-if="linkedTo" :to="linkedTo" class="rec">{{ file.linked_label }}</AppLink><template v-else>{{ file.linked_label }}</template></template><template v-if="file.decided_at"> on {{ formatDate(file.decided_at) }}</template>
 			</div>
 			<div v-else-if="suggestion" class="why" data-test="suggestion">
 				Looks like <AppLink v-if="suggestedTo" :to="suggestedTo" class="rec">{{ suggestion.record }}</AppLink><template v-else>{{ suggestion.record }}</template>:
 				<span class="reason">{{ suggestion.text }}</span>
 			</div>
-			<div v-if="tab !== 'linked' && tab !== 'dismissed' && file.kind === 'surface_scan'" class="note" data-test="scan-notice">{{ action.kind === 'disabled' ? action.reason : '' }}</div>
+			<div v-if="tab !== 'linked' && tab !== 'dismissed' && file.kind === 'surface_scan'" class="note" data-test="scan-notice">{{ SCAN_ROW_NOTICE }}</div>
 			<div v-else-if="tab !== 'linked' && tab !== 'dismissed' && reads" class="note">{{ DOCUMENT_NOTICE }}</div>
 		</div>
 
 		<div class="buttons">
 			<template v-if="tab === 'new' || tab === 'older'">
-				<v-button v-if="action.kind === 'disabled'" small disabled :title="action.reason">{{ action.label }}</v-button>
+				<v-button v-if="action.kind === 'scan'" small :disabled="busy" data-test="add-scan" @click="emit('scan')">{{ action.label }}</v-button>
 				<v-button v-else-if="action.kind === 'link'" small :disabled="busy" @click="reads ? emit('pick') : emit('link')">{{ action.label }}</v-button>
 				<v-button v-else small :disabled="busy" @click="emit('pick')">{{ action.label }}</v-button>
 				<v-button v-if="canChange(file)" small secondary :disabled="busy" @click="emit('change')">Change</v-button>

@@ -1,6 +1,7 @@
 // The "Add a surface scan" form's pure parts: which library files are offered, what a form must hold before it can
 // be sent, and the words of the lab-wide warning. No Vue.
 
+import { formatDate, operationLabel, processLabel } from '@d1/ui';
 import { SCAN_CONDITIONS, type ScanCondition } from './scanModel';
 
 // File types the library search offers: topography formats of SurfaceTopography 1.25 (Alicona .al3d first), without the
@@ -110,3 +111,12 @@ export function operationFilter(target: { insertId?: string | null; edgeId?: str
 	if (target.edgeId) return { insert_edge_id: { _eq: target.edgeId } };
 	return { insert_edge_id: { insert_id: { _eq: target.insertId ?? '' } } };
 }
+
+/** The columns the operation picker reads (shared with the Inbox's form). */
+export const OPERATION_FIELDS = ['operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'process_category', 'sample_id.sample_code'];
+
+/** One row of the operation picker: "S-0042 · pass 2 · Turning · 12 Oct 2026". */
+export const operationOption = (o: any): { value: string; text: string } => ({
+	value: String(o.operation_id),
+	text: [operationLabel(o), processLabel(o.process_category), formatDate(o.operation_date)].filter(Boolean).join(' · '),
+});

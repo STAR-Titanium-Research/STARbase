@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // The Inbox page, behaviourally, against the fake d1-inbox (d1-inbox's own shapes): rows with what the crawler thinks and why, Link / Change /
-// Dismiss and where focus goes after them, Accept all with its dry-run confirm and one Undo, the surface-scan row with its button off,
+// Dismiss and where focus goes after them, Accept all with its dry-run confirm and one Undo, the surface-scan row with its Add a surface scan dialog,
 // documents collapsed under Other files, Rescan and its 429 message, the tabs as links, and the one status region.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, ref, type App } from 'vue';
@@ -30,12 +30,26 @@ let router: Router;
 let fake: ReturnType<typeof createFakeInbox>;
 
 const SAMPLES = [{ sample_id: 's-picked', sample_code: 'S-0099', nickname: 'Chosen bar' }];
+const INSERTS = [{ insert_id: '00000000-0000-4000-8000-000000000201', insert_code: 'H13A-#2' }];
+const EDGES = [{ edge_id: '00000000-0000-4000-8000-000000000202', edge_code: 'H13A-#2-fC', insert_id: { insert_code: 'H13A-#2' } }];
+const OPERATIONS = [{ operation_id: '00000000-0000-4000-8000-000000000102', pass_code: 'P2', operation_sequence: 2, operation_date: '2026-10-12', process_category: 'turning', sample_id: { sample_code: 'S-0042' } }];
+/** What each /items read answers (the dialogs search through /items as the signed-in user). */
+const ITEMS: Record<string, unknown[]> = { cutting_inserts: INSERTS, insert_edges: EDGES, manufacturing_operations: OPERATIONS };
+let itemReads: Array<{ path: string; params: any }> = [];
 
 async function mount(files = defaultFiles(), opts: FakeInboxOptions = {}) {
 	fake = createFakeInbox({ files, ...opts });
 	const base = fake.api;
 	// /items reads (the record picker) answer from a tiny table; everything else is the fake endpoint.
-	const api: HostApi = { ...base, get: (path, config) => (path.startsWith('/items/') ? (Promise.resolve({ data: { data: SAMPLES } }) as any) : base.get(path, config)) };
+	itemReads = [];
+	const api: HostApi = {
+		...base,
+		get: (path, config) => {
+			if (!path.startsWith('/items/')) return base.get(path, config);
+			itemReads.push({ path, params: config?.params });
+			return Promise.resolve({ data: { data: ITEMS[path.slice('/items/'.length)] ?? SAMPLES } }) as any;
+		},
+	};
 	setExplorerHostFactory(() => ({
 		api, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true), canViewAllAccess: ref(false), user: ref({ id: 'u-me' }),
 	}));
@@ -96,14 +110,14 @@ describe('the Inbox page', () => {
 		expect(other.textContent).toContain('Linking reads this file once to fingerprint it.');
 	});
 
-	it('a surface scan is found, but its button is off, is not called Link, and says why', async () => {
+	it('a surface scan has an enabled Add a surface scan button, is not called Link, and says what it does', async () => {
 		await mount();
 		const scan = rowOf('edge1.al3d');
-		const off = button(scan, /^Add a surface scan$/);
-		expect(off.disabled).toBe(true);
-		expect(scan.querySelector('[data-test="scan-notice"]')?.textContent).toBe('Surface scans can be added soon');
+		expect(button(scan, /^Add a surface scan$/).disabled).toBe(false);
+		expect(scan.querySelector('[data-test="scan-notice"]')?.textContent).toBe('Added to an insert or an edge, with the condition you choose.');
 		expect([...scan.querySelectorAll('button')].some((b) => /^Link$/.test((b.textContent ?? '').trim()))).toBe(false);
-		expect(scan.textContent).not.toMatch(/attach/i);
+		expect([...scan.querySelectorAll('button')].some((b) => /^Change$/.test((b.textContent ?? '').trim()))).toBe(false);
+		expect(scan.textContent).not.toMatch(/attach|soon/i);
 	});
 
 	it('draws no thumbnail and asks for no asset: every row shows the icon of its kind', async () => {
@@ -250,5 +264,201 @@ describe('the Inbox page', () => {
 	it('says an empty tab in words, never a blank page', async () => {
 		await mount([]);
 		await vi.waitFor(() => expect(document.querySelector('[data-test="empty"]')?.textContent).toContain('Nothing new.'));
+	});
+
+	// ---- Add a surface scan ----
+
+	const dialog = () => document.querySelector<HTMLElement>('[data-test="add-scan-dialog"]')!;
+	const fill = async (input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) => {
+		input.value = value;
+		input.dispatchEvent(new Event(input instanceof HTMLSelectElement ? 'change' : 'input'));
+	};
+	const openScanDialog = async (name = 'edge1.al3d') => {
+		click(button(rowOf(name), /^Add a surface scan$/));
+		await vi.waitFor(() => expect(dialog()).not.toBeNull());
+	};
+	const pickItem = async (code: string, text: string) => {
+		await fill(dialog().querySelector<HTMLInputElement>('[data-test="scan-item-search"]')!, text);
+		await vi.waitFor(() => expect(dialog().textContent).toContain(code), { timeout: 2000 });
+		click(dialog().querySelector('input[type="radio"][name="scan-item"]'));
+		await vi.waitFor(() => expect(button(dialog(), /^Add a surface scan to /)).toBeTruthy());
+	};
+	const confirm = () => dialog().querySelector<HTMLButtonElement>('[data-test="scan-confirm"]')!;
+	const sentLinks = () => fake.calls.filter((c) => c.path === '/d1-inbox/link');
+
+	it('the Add a surface scan dialog: the lab-wide warning, the four conditions with none chosen, and Confirm off until an item and a condition are set', async () => {
+		await mount();
+		await openScanDialog();
+		const d = dialog();
+		expect(d.getAttribute('aria-labelledby')).toBe('add-scan-title');
+		expect(document.getElementById('add-scan-title')?.textContent).toBe('Add a surface scan: edge1.al3d');
+		expect(d.querySelector('[data-test="visibility-warning"]')?.textContent).toContain('Adding a surface scan makes this file visible to every lab member');
+		expect(d.querySelector('[data-test="scan-item-search"]')?.hasAttribute('autofocus')).toBe(true);
+		const conditions = [...d.querySelectorAll<HTMLInputElement>('input[name="scan-condition"]')];
+		expect(conditions.map((c) => c.parentElement?.textContent?.trim())).toEqual(['New', 'Worn', 'Cleaned', 'Other']);
+		expect(conditions.some((c) => c.checked)).toBe(false);
+		expect(d.querySelector('[role="radiogroup"][aria-required="true"]')).not.toBeNull();
+		expect(confirm().disabled).toBe(true);
+		// a condition alone is not enough: the item is still missing
+		click(d.querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(d.querySelector('[data-test="scan-problems"]')?.textContent).toContain('Choose the insert or edge'));
+		expect(confirm().disabled).toBe(true);
+		expect(sentLinks()).toHaveLength(0);
+		expect(d.textContent).not.toMatch(/attach|\blink/i);
+	});
+
+	it('choose an insert and a condition, Confirm adds the scan: the row goes, the notice says where, and Undo brings the file back', async () => {
+		await mount();
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		expect(itemReads.find((r) => r.path === '/items/cutting_inserts')?.params.filter).toBe(JSON.stringify({ insert_code: { _icontains: 'H13' } }));
+		click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		expect(confirm().textContent).toBe('Add a surface scan to H13A-#2');
+		click(confirm());
+		await vi.waitFor(() => expect(names()).not.toContain('edge1.al3d'));
+		expect(document.querySelector('[data-test="add-scan-dialog"]')).toBeNull();
+		expect(sentLinks()[0].body).toEqual({ items: [{ candidate_id: fake.files[3].candidate_id, collection: 'surface_scans', insert_id: '00000000-0000-4000-8000-000000000201', condition: 'worn' }] });
+		expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('Added as a surface scan of H13A-#2. It is now visible to every lab member.');
+		expect(fake.scans).toHaveLength(1);
+		click(document.querySelector('[data-test="undo"]'));
+		await vi.waitFor(() => expect(names()).toContain('edge1.al3d'));
+		expect(fake.scans).toHaveLength(0);
+		expect(fake.files[3].state).toBe('new');
+	});
+
+	it('an edge with an operation, a date, a condition note and notes: the operation is read for that edge, and all of it is sent', async () => {
+		await mount();
+		await openScanDialog();
+		click([...dialog().querySelectorAll('[role="radio"]')].find((b) => /^Edge$/.test((b.textContent ?? '').trim())));
+		await pickItem('H13A-#2-fC', 'fC');
+		expect(dialog().textContent).toContain('Insert H13A-#2');
+		await vi.waitFor(() => expect(itemReads.some((r) => r.path === '/items/manufacturing_operations')).toBe(true));
+		expect(JSON.parse(itemReads.find((r) => r.path === '/items/manufacturing_operations')!.params.filter)).toEqual({ insert_edge_id: { _eq: '00000000-0000-4000-8000-000000000202' } });
+		const op = dialog().querySelector<HTMLSelectElement>('[data-test="scan-operation"]')!;
+		await vi.waitFor(() => expect(op.disabled).toBe(false));
+		await fill(op, '00000000-0000-4000-8000-000000000102');
+		await fill(dialog().querySelector<HTMLInputElement>('[data-test="scan-date"]')!, '2026-10-14');
+		await fill(dialog().querySelector<HTMLTextAreaElement>('[data-test="scan-condition-note"]')!, ' ultrasonic bath ');
+		await fill(dialog().querySelector<HTMLTextAreaElement>('[data-test="scan-notes"]')!, 'after pass 3');
+		click(dialog().querySelector('[data-test="scan-condition-cleaned"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		click(confirm());
+		await vi.waitFor(() => expect(sentLinks()).toHaveLength(1));
+		expect(sentLinks()[0].body).toEqual({
+			items: [{ candidate_id: fake.files[3].candidate_id, collection: 'surface_scans', edge_id: '00000000-0000-4000-8000-000000000202', condition: 'cleaned', operation_id: '00000000-0000-4000-8000-000000000102', scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: 'after pass 3' }],
+		});
+		await vi.waitFor(() => expect(document.querySelector('[data-test="add-scan-dialog"]')).toBeNull());
+	});
+
+	it('switching between Insert and Edge clears the item chosen for the other', async () => {
+		await mount();
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		click([...dialog().querySelectorAll('[role="radio"]')].find((b) => /^Edge$/.test((b.textContent ?? '').trim())));
+		await vi.waitFor(() => expect(button(dialog(), /^Add a surface scan$/)).toBeTruthy());
+		expect(confirm().disabled).toBe(true);
+	});
+
+	it('"other" needs a note saying what the condition is (the Alicona dialog\'s rule)', async () => {
+		await mount();
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		click(dialog().querySelector('[data-test="scan-condition-other"]'));
+		await vi.waitFor(() => expect(dialog().querySelector('[data-test="scan-problems"]')?.textContent).toContain('Say in the note what the condition is.'));
+		expect(confirm().disabled).toBe(true);
+		await fill(dialog().querySelector<HTMLTextAreaElement>('[data-test="scan-condition-note"]')!, 'chipped corner');
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+	});
+
+	it('a file whose path names an edge starts with it chosen, and still has no condition', async () => {
+		const edgeId = '00000000-0000-4000-8000-000000000202';
+		await mount([foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/H13A-2_fC.al3d', match_strength: 'edge_code', suggested_collection: 'insert_edges', suggested_record_id: edgeId, suggested_label: 'H13A-#2-fC' })]);
+		await openScanDialog('H13A-2_fC.al3d');
+		expect(button(dialog(), /^Add a surface scan to H13A-#2-fC$/)).toBeTruthy();
+		expect(dialog().textContent).toContain("named in the file's path");
+		expect([...dialog().querySelectorAll<HTMLInputElement>('input[name="scan-condition"]')].some((c) => c.checked)).toBe(false);
+		expect(confirm().disabled).toBe(true);
+	});
+
+	it('a second click on Confirm while the first runs sends one request', async () => {
+		await mount();
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		click(confirm());
+		click(confirm());
+		await vi.waitFor(() => expect(names()).not.toContain('edge1.al3d'));
+		expect(sentLinks()).toHaveLength(1);
+		expect(fake.scans).toHaveLength(1);
+	});
+
+	it('a refusal shows in the dialog in the page\'s own words, keeps the dialog open and the row in the list', async () => {
+		await mount(defaultFiles(), { scanAllowed: false });
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		click(confirm());
+		await vi.waitFor(() => expect(dialog().querySelector('[data-test="scan-error"]')?.textContent).toBe('You are not allowed to add surface scans.'));
+		expect(dialog().querySelector('[data-test="scan-error"]')?.getAttribute('role')).toBe('alert');
+		expect(names()).toContain('edge1.al3d');
+		expect(fake.scans).toHaveLength(0);
+	});
+
+	it('a 400 that names a control marks it (an operation the endpoint does not read as an id)', async () => {
+		OPERATIONS.push({ operation_id: 'not-an-id', pass_code: 'P9', operation_sequence: 9, operation_date: '2026-10-13', process_category: 'turning', sample_id: { sample_code: 'S-0042' } });
+		try {
+			await mount();
+			await openScanDialog();
+			await pickItem('H13A-#2', 'H13');
+			const op = dialog().querySelector<HTMLSelectElement>('[data-test="scan-operation"]')!;
+			await vi.waitFor(() => expect(op.disabled).toBe(false));
+			await fill(op, 'not-an-id');
+			click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+			await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+			click(confirm());
+			await vi.waitFor(() => expect(dialog().querySelector('[data-test="scan-error"]')?.textContent).toBe('That operation is not valid. Choose another operation, or none.'));
+			expect(op.getAttribute('aria-invalid')).toBe('true');
+			expect(dialog().querySelector('[data-test="scan-notes"]')?.getAttribute('aria-invalid')).toBeNull();
+		} finally {
+			OPERATIONS.pop();
+		}
+	});
+
+	it('Recently linked says "Added as a surface scan of <label>" with a route to the edge, under a batch that says so, and the batch Undo works', async () => {
+		const edgeId = '00000000-0000-4000-8000-000000000202';
+		await mount(defaultFiles(), { scanItems: { edges: { [edgeId]: 'H13A-#2-fC' } } });
+		await openScanDialog();
+		click([...dialog().querySelectorAll('[role="radio"]')].find((b) => /^Edge$/.test((b.textContent ?? '').trim())));
+		await pickItem('H13A-#2-fC', 'fC');
+		click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		click(confirm());
+		await vi.waitFor(() => expect(names()).not.toContain('edge1.al3d'));
+		await router.replace({ path: '/inbox', query: { tab: 'linked' } });
+		await vi.waitFor(() => expect(names()).toEqual(['edge1.al3d']));
+		const row = rowOf('edge1.al3d');
+		expect(row.querySelector('[data-test="linked-to"]')?.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/^Added as a surface scan of H13A-#2-fC \(worn\) on /);
+		expect(row.querySelector('[data-test="linked-to"] a')?.getAttribute('href')).toContain(`/edges/${edgeId}`);
+		expect(row.textContent).not.toMatch(/attach|Linked by you/);
+		expect(document.querySelector('[data-test="batch"]')?.textContent).toContain('Added as a surface scan, 1 file');
+		click(document.querySelector('[data-test="undo-batch"]'));
+		await vi.waitFor(() => expect(fake.files[3].state).toBe('new'));
+		expect(fake.scans).toHaveLength(0);
+	});
+
+	it('an Undo the person may no longer do shows the endpoint\'s words verbatim', async () => {
+		await mount(defaultFiles(), { scanUndoAllowed: false });
+		await openScanDialog();
+		await pickItem('H13A-#2', 'H13');
+		click(dialog().querySelector('[data-test="scan-condition-worn"]'));
+		await vi.waitFor(() => expect(confirm().disabled).toBe(false));
+		click(confirm());
+		await vi.waitFor(() => expect(document.querySelector('[data-test="undo"]')).not.toBeNull());
+		click(document.querySelector('[data-test="undo"]'));
+		await vi.waitFor(() => expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('You can no longer delete that surface scan, so adding it cannot be undone.'));
+		expect(fake.scans).toHaveLength(1);
 	});
 });

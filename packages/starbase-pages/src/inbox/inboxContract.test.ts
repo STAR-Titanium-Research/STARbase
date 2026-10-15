@@ -8,7 +8,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { badgeText, parseSummary, type HostApi } from '@d1/ui';
+import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
 	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
@@ -19,9 +19,10 @@ import {
 } from './inboxBulk';
 import { daemonView, adminFacts, aliasRows, isOnline, scanState, unmatchedRows } from './adminView';
 import {
-	DEFAULT_FILTERS, KIND_FILTER_ITEMS, STRENGTH_FILTER_ITEMS, TABS, duplicateText, extractedText, filtersToQuery, linkTarget, listPlan, needsReadNotice, ownerText, primaryAction, suggestionOf,
+	DEFAULT_FILTERS, KIND_FILTER_ITEMS, STRENGTH_FILTER_ITEMS, TABS, canChange, duplicateText, extractedText, filtersToQuery, linkTarget, listPlan, needsReadNotice, ownerText, primaryAction, suggestionOf,
 	type InboxFilters,
 } from './inboxModel';
+import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem, scanTarget, type ScanAddForm, type ScanItemOption } from './inboxScan';
 import { createAutoLink, RECENT_LIMIT } from './useAutoLink';
 import { createInbox } from './useInbox';
 import { createInboxAdmin } from './useInboxAdmin';
@@ -136,10 +137,10 @@ describe('GET /d1-inbox/files', () => {
 		expect(rows.find((r) => r.candidate_id === ID(1001))!.duplicate_of).toBeNull();
 	});
 
-	it('a surface scan has no Link, a document is read once, a file the caller cannot edit asks for a record, a hidden record has no suggestion', async () => {
+	it('a surface scan has Add a surface scan and no Link, a document is read once, a file the caller cannot edit asks for a record, a hidden record has no suggestion', async () => {
 		const rows = (await loadFiles(only(fx('files_new')).api, {})).rows;
 		const by = (n: number) => rows.find((r) => r.candidate_id === ID(n))!;
-		expect(primaryAction(by(1003))).toMatchObject({ kind: 'disabled' });
+		expect(primaryAction(by(1003))).toEqual({ kind: 'scan', label: 'Add a surface scan' });
 		expect(isAcceptable(by(1003))).toBe(false);
 		expect(by(1004).kind).toBe('document');
 		expect(needsReadNotice(by(1004).kind)).toBe(true);
@@ -707,6 +708,217 @@ describe('the client sends only filters the server reads', () => {
 
 	it('the file-list queries the client builds elsewhere (Recently auto-linked) are read too', () => {
 		expect(problems({ tab: 'linked', link_kind: 'auto', limit: RECENT_LIMIT })).toEqual([]);
+	});
+});
+
+// ---- adding a surface scan (stream F2): POST /link with a surface_scans item, its refusals, its undo, the Recently linked row ------------
+
+describe('adding a surface scan', () => {
+	const INSERT = ID(201);
+	const EDGE = ID(202);
+	const OP = ID(102);
+	const SCAN = ID(1003);
+	const SCAN_ID = ID(6001);
+	const insert: ScanItemOption = { kind: 'insert', id: INSERT, label: 'H13A-#2', detail: '' };
+	const edge: ScanItemOption = { kind: 'edge', id: EDGE, label: 'H13A-#2-fC', detail: '' };
+	const worn = (): ScanAddForm => ({ ...emptyScanAdd(insert), condition: 'worn' });
+
+	function page(link: Fixture, extra: Record<string, Route> = {}) {
+		const r = replay({
+			'GET /d1-inbox/files': fx('files_new'),
+			'POST /d1-inbox/link': link,
+			'POST /d1-inbox/undo': fx('undo_ok_surface_scan'),
+			...extra,
+		});
+		const inbox = createInbox({ api: r.api, getFilters: () => FILTER });
+		return { ...r, inbox };
+	}
+	const scanRow = (inbox: ReturnType<typeof createInbox>) => inbox.main.value.rows.find((r) => r.candidate_id === SCAN)!;
+	const sent = (calls: Call[]) => calls.filter((c) => c.path === '/d1-inbox/link');
+
+	it('the surface scan row of the New tab has an enabled "Add a surface scan" and no Link', async () => {
+		const { inbox } = page(fx('link_surface_scan_ok'));
+		await inbox.load();
+		const file = scanRow(inbox);
+		expect(file.kind).toBe('surface_scan');
+		expect(primaryAction(file)).toEqual({ kind: 'scan', label: 'Add a surface scan' });
+		expect(canChange(file)).toBe(false);
+	});
+
+	it.each([
+		['link_surface_scan_ok', worn(), 'Added as a surface scan of H13A-#2. It is now visible to every lab member.'],
+		[
+			'link_surface_scan_ok_edge',
+			{ item: edge, condition: 'cleaned', operationId: OP, date: '2026-10-14', conditionNote: 'ultrasonic bath', notes: 'after pass 3' } as ScanAddForm,
+			'Added as a surface scan of H13A-#2-fC. It is now visible to every lab member.',
+		],
+	])('%s: the client sends the fixture\'s request, key for key, and the answer is read as sent', async (name, form, said) => {
+		const f = fx(name);
+		const { inbox, calls } = page(f);
+		await inbox.load();
+		expect(await inbox.addScan(scanRow(inbox), form)).toEqual({ ok: true });
+		expect(sent(calls)[0].body).toEqual(f.request.body);
+		// the linkFiles call alone reads the same answer
+		const r = await linkFiles(only(f).api, f.request.body.items);
+		expect(r.link_batch_id).toBe(f.body.data.link_batch_id);
+		expect(r.linked).toBe(f.body.data.linked);
+		expect(r.items).toEqual(f.body.data.items);
+		expect(r.items[0]).toMatchObject({ collection: 'surface_scans', record_id: SCAN_ID, junction_id: SCAN_ID, adopted: false });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: said, undo: { kind: 'batch', id: f.body.data.link_batch_id } });
+	});
+
+	it('an edge item names edge_id and an insert item insert_id, never both', async () => {
+		expect(fx('link_surface_scan_ok').body.data.items[0]).toMatchObject({ insert_id: INSERT, edge_id: null });
+		expect(fx('link_surface_scan_ok_edge').body.data.items[0]).toMatchObject({ insert_id: null, edge_id: EDGE });
+		const f = fx('link_surface_scan_ok_edge');
+		const item = f.request.body.items[0];
+		expect(item).not.toHaveProperty('insert_id');
+		expect(item).not.toHaveProperty('record_id');
+	});
+
+	it('link_surface_scan_ok_mixed: a sample link and a scan in one batch, each item as the fixture sends it', async () => {
+		const f = fx('link_surface_scan_ok_mixed');
+		const rows = (await loadFiles(only(fx('files_new')).api, {})).rows;
+		const item = scanLinkItem(rows.find((r) => r.candidate_id === SCAN)!, worn());
+		const { api, calls } = only(f);
+		const r = await linkFiles(api, [{ candidate_id: ID(1001), collection: 'physical_samples', record_id: ID(101) }, item!]);
+		expect(calls[0].body).toEqual(f.request.body);
+		expect(r.linked).toBe(2);
+		expect(r.items.map((i) => i.collection)).toEqual(['physical_samples', 'surface_scans']);
+		expect(r.items[1]).toMatchObject({ record_id: SCAN_ID, insert_id: INSERT, edge_id: null, adopted: false });
+	});
+
+	it('link_surface_scan_already_linked: the same add again is "That file was already added." with no batch and so no Undo', async () => {
+		const f = fx('link_surface_scan_already_linked');
+		const { inbox, calls } = page(f);
+		await inbox.load();
+		expect(await inbox.addScan(scanRow(inbox), worn())).toEqual({ ok: true });
+		expect(sent(calls)[0].body).toEqual(f.request.body);
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'That file was already added.' });
+		expect(inbox.notice.value?.undo).toBeUndefined();
+		const r = await linkFiles(only(f).api, []);
+		expect(r).toMatchObject({ link_batch_id: '', linked: 0 });
+		expect(r.items[0]).toMatchObject({ already_linked: true, record_id: SCAN_ID, insert_id: INSERT, edge_id: null });
+	});
+
+	it('undo of a batch that added a scan: the request is the fixture\'s and the answer says one file is back in the Inbox', async () => {
+		const f = fx('undo_ok_surface_scan');
+		const { api, calls } = only(f);
+		expect(await undoBatch(api, ID(903))).toBe(1);
+		expect(calls[0].body).toEqual(f.request.body);
+		const { inbox, calls: pageCalls } = page(fx('link_surface_scan_ok'));
+		await inbox.load();
+		await inbox.addScan(scanRow(inbox), worn());
+		await inbox.undo({ kind: 'batch', id: ID(903) });
+		expect(pageCalls.find((c) => c.path === '/d1-inbox/undo')!.body).toEqual(f.request.body);
+		expect(inbox.notice.value?.text).toBe('Undone: 1 found file back in your Inbox.');
+	});
+
+	it('undo_403_surface_scan: the endpoint\'s words are shown verbatim, with the file in extensions', async () => {
+		const f = fx('undo_403_surface_scan');
+		const e: any = await undoBatch(only(f).api, ID(903)).catch((x) => x);
+		expect(e).toBeInstanceOf(InboxApiError);
+		expect(e).toMatchObject({ status: 403, code: 'FORBIDDEN', message: 'You can no longer delete that surface scan, so adding it cannot be undone.' });
+		expect(e.extensions).toMatchObject({ source: 'd1-inbox', candidate_id: SCAN });
+		const { inbox } = page(fx('link_surface_scan_ok'), { 'POST /d1-inbox/undo': f });
+		await inbox.load();
+		await inbox.addScan(scanRow(inbox), worn());
+		expect(await inbox.undo({ kind: 'batch', id: ID(903) })).toEqual({ ok: false, message: f.body.errors[0].message });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: f.body.errors[0].message });
+	});
+
+	it.each([
+		['link_surface_scan_400_condition', 400, 'INVALID_PAYLOAD', 'condition', 'Choose the condition: new, worn, cleaned or other.'],
+		['link_surface_scan_400_date', 400, 'INVALID_PAYLOAD', 'scanned_on', 'The scan date is not a valid day. Use the date box, or leave it empty.'],
+		['link_surface_scan_400_item', 400, 'INVALID_PAYLOAD', 'edge_id', 'Choose one insert or one edge for the surface scan, not both and not neither.'],
+		['link_surface_scan_403_not_allowed', 403, 'FORBIDDEN', null, 'You are not allowed to add surface scans.'],
+		['link_surface_scan_404_not_found', 404, 'NOT_FOUND', null, 'That insert, edge or operation does not exist, or you cannot see it. Choose another.'],
+		['link_surface_scan_409_already_added', 409, 'ALREADY_ADDED', null, 'That file is already added as a surface scan of this insert or edge.'],
+		['link_surface_scan_409_unavailable', 409, 'SURFACE_SCANS_UNAVAILABLE', null, 'Surface scans are not available yet.'],
+		['link_409_not_a_surface_scan', 409, 'NOT_A_SURFACE_SCAN', null, 'Only a surface scan file can be added to an insert or an edge.'],
+		['link_409_surface_scan', 409, 'SURFACE_SCAN', null, 'A surface scan is added to an insert or an edge.'],
+	])('%s: an InboxApiError with status, code and extensions, said in the page\'s own words', async (name, status, code, field, said) => {
+		const f = fx(name);
+		const { api, calls } = only(f);
+		const e: any = await linkFiles(api, f.request.body.items).catch((x) => x);
+		expect(calls[0].body).toEqual(f.request.body);
+		expect(e).toBeInstanceOf(InboxApiError);
+		expect(e).toMatchObject({ status, code, message: f.body.errors[0].message });
+		expect(e.extensions).toMatchObject({ source: 'd1-inbox', code });
+		if (field) expect(e.extensions.field).toBe(field);
+		expect(scanErrorText(e)).toEqual({ message: said, field });
+		expect(said).not.toMatch(/\blink|attach/i);
+	});
+
+	it('a refusal of the page\'s own add shows the mapped words, names the control, and leaves the row', async () => {
+		for (const name of ['link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'link_surface_scan_404_not_found']) {
+			const f = fx(name);
+			const { inbox, calls } = page(f);
+			await inbox.load();
+			const out = await inbox.addScan(scanRow(inbox), worn());
+			expect(out).toEqual({ ok: false, message: scanErrorText(new InboxApiError(f.body.errors[0].message, { status: f.status, code: f.body.errors[0].extensions.code, extensions: f.body.errors[0].extensions })).message });
+			expect(out).not.toHaveProperty('field');
+			expect(sent(calls)[0].body).toEqual(f.request.body);
+			expect(scanRow(inbox)).toBeDefined();
+		}
+		// a 400 the endpoint raises names its field (the date a form let through)
+		const { inbox } = page(fx('link_surface_scan_400_date'));
+		await inbox.load();
+		expect(await inbox.addScan(scanRow(inbox), { ...worn(), date: '2026-02-31' })).toMatchObject({ ok: false, field: 'scanned_on' });
+	});
+
+	it('the 400s of the fixtures are things the form never sends: no condition, a bad date, both an insert and an edge', () => {
+		const file = { candidate_id: SCAN, directus_files_id: ID(3003), rel_path: 'Users/ali1/alicona/H13A-2.al3d' };
+		// no condition: the form is not complete, so there is no item to send
+		expect(scanAddProblems(emptyScanAdd(insert), file)).toEqual(['Choose the condition.']);
+		expect(scanLinkItem(file, emptyScanAdd(insert))).toBeNull();
+		// a date that is not a day: refused by the form first
+		expect(scanAddProblems({ ...worn(), date: fx('link_surface_scan_400_date').request.body.items[0].scanned_on }, file)).toEqual(['The date is not a date.']);
+		// the form holds one item: an insert or an edge, so its item never carries both
+		for (const item of [insert, edge]) {
+			const body = scanLinkItem(file, { ...emptyScanAdd(item), condition: 'worn' })!;
+			expect(['insert_id', 'edge_id'].filter((k) => k in body)).toHaveLength(1);
+		}
+	});
+
+	it('a file that is not a surface scan is never added as one (link_409_not_a_surface_scan is the endpoint\'s backstop)', async () => {
+		const f = fx('link_409_not_a_surface_scan');
+		const { inbox, calls } = page(f);
+		await inbox.load();
+		const image = inbox.main.value.rows.find((r) => r.candidate_id === ID(1001))!;
+		expect(await inbox.addScan(image, worn())).toEqual({ ok: false, message: 'Only a surface scan file can be added to an insert or an edge.' });
+		expect(sent(calls)).toHaveLength(0);
+	});
+
+	it('a surface scan is never sent to /link with a sample, operation or test (link_409_surface_scan is the endpoint\'s backstop)', async () => {
+		const f = fx('link_409_surface_scan');
+		const { inbox, calls } = page(f);
+		await inbox.load();
+		expect(await inbox.link(scanRow(inbox), 'physical_samples', ID(101))).toEqual({ ok: false, message: 'A surface scan is added to an insert or an edge.' });
+		expect(sent(calls)).toHaveLength(0);
+	});
+
+	it('files_linked_surface_scan: the row is read key for key, says what it was added to, and routes to the edge', async () => {
+		const f = fx('files_linked_surface_scan');
+		const raw: any[] = f.body.data;
+		const { api, calls } = only(f);
+		const page1 = await loadFiles(api, f.request.query as FilesQuery);
+		expect(stringified(calls[0].params)).toEqual(f.request.query);
+		expect(ids(page1.rows)).toEqual(raw.map((r) => r.candidate_id));
+		raw.forEach((r, i) => {
+			const parsed: any = page1.rows[i];
+			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort());
+			for (const k of Object.keys(r)) expect(parsed[k], `${r.candidate_id}.${k}`).toEqual(r[k]);
+		});
+		const [row] = page1.rows;
+		expect(isAddedScan(row)).toBe(true);
+		expect(row).toMatchObject({ linked_collection: 'surface_scans', linked_record_id: SCAN_ID, linked_label: 'H13A-#2-fC (worn)', linked_insert_id: null, linked_edge_id: EDGE });
+		expect(scanTarget(row)).toEqual({ collection: 'insert_edges', id: EDGE });
+		expect(recordRoute(scanTarget(row)!.collection, scanTarget(row)!.id)).toBe(`/home/edges/${EDGE}`);
+		const [batch] = batchesOf(page1.rows);
+		expect(batch).toMatchObject({ id: ID(903), count: 1, kind: 'manual', scans: 1 });
+		expect(batchTitle(batch)).toBe('Added as a surface scan, 1 file');
+		expect(groupLinked(page1.rows).every((g) => g.batch !== null)).toBe(true);
 	});
 });
 

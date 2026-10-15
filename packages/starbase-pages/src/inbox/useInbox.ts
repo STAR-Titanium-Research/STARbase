@@ -9,6 +9,7 @@ import {
 	type AcceptPair,
 } from './inboxBulk';
 import { listPlan, nameOf, suggestionOf, type InboxFilters } from './inboxModel';
+import { SCAN_ALREADY_TEXT, SCAN_NOT_LINKED, scanAddedText, scanErrorText, scanLinkItem, type ScanAddForm } from './inboxScan';
 
 // The confirm of Accept all: what the dry run said (the count, the files and where they go, what it would leave), and whether it is still asking.
 export interface AcceptDialog {
@@ -44,7 +45,8 @@ export interface Notice {
 	undo?: NoticeUndo;
 }
 
-export type Outcome = { ok: true } | { ok: false; message: string };
+/** A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. */
+export type Outcome = { ok: true } | { ok: false; message: string; field?: string };
 
 export interface InboxDeps {
 	api: HostApi;
@@ -176,14 +178,16 @@ export function createInbox(deps: InboxDeps) {
 	}
 
 	/** A refused or failed write: its own words, and a fresh list (a 409 means the row changed under us). */
-	async function failed(e: unknown, fallback: string): Promise<Outcome> {
-		const text = message(e, fallback);
+	async function failed(e: unknown, fallback: string, said?: { message: string; field: string | null }): Promise<Outcome> {
+		const text = said?.message ?? message(e, fallback);
 		say({ tone: 'bad', text });
 		if (e instanceof InboxApiError && (e.status === 409 || e.status === 404)) void load();
-		return { ok: false, message: text };
+		return said?.field ? { ok: false, message: text, field: said.field } : { ok: false, message: text };
 	}
 
 	async function link(file: FoundFile, collection: string, recordId: string): Promise<Outcome> {
+		// a surface scan is ADDED to an insert or an edge (addScan); the endpoint refuses it as a link to anything else, so it is never sent
+		if (file.kind === 'surface_scan') return { ok: false, message: SCAN_NOT_LINKED };
 		const items: LinkItem[] = [{ candidate_id: file.candidate_id, collection, record_id: recordId }];
 		return run([file.candidate_id], async () => {
 			try {
@@ -204,6 +208,30 @@ export function createInbox(deps: InboxDeps) {
 		const s = suggestionOf(file);
 		if (!s?.target || !file.suggested_record_id) return { ok: false, message: 'This file has no record to link to.' };
 		return link(file, s.target.collection, file.suggested_record_id);
+	}
+
+	/**
+	 * Add a surface scan: the found file to an insert or an edge, with the condition the person chose. Nothing is sent until the form can be (an item
+	 * and a condition), and a second click while the first runs does nothing. The answer says where it went (and offers one Undo for the batch), or that
+	 * the same person had already added it (no batch, no Undo); a refusal is said in the words of scanErrorText.
+	 */
+	async function addScan(file: FoundFile, form: ScanAddForm): Promise<Outcome> {
+		if (file.kind !== 'surface_scan') return { ok: false, message: scanErrorText(new InboxApiError('', { status: 409, code: 'NOT_A_SURFACE_SCAN' })).message };
+		const item = scanLinkItem(file, form);
+		if (!item || !form.item) return { ok: false, message: 'Choose the insert or edge and the condition first.' };
+		const label = form.item.label;
+		return run([file.candidate_id], async () => {
+			try {
+				const r = await linkFiles(api, [item]);
+				drop([file.candidate_id]);
+				// the same person repeating the same add: the server made no batch and added nothing new (linked 0, link_batch_id null)
+				say({ tone: 'ok', text: r.linked > 0 ? scanAddedText(label) : SCAN_ALREADY_TEXT, undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
+				deps.onChanged?.();
+				return { ok: true } as const;
+			} catch (e) {
+				return failed(e, 'Could not add that surface scan.', scanErrorText(e));
+			}
+		});
 	}
 
 	async function dismiss(file: FoundFile): Promise<Outcome> {
@@ -361,7 +389,7 @@ export function createInbox(deps: InboxDeps) {
 	return {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
 		preview, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
-		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
+		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
 		dismissNotice: () => say(null),
 		cancel: () => {
 			mainGate.cancel();
