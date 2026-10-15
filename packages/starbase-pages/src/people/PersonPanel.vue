@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The panel beside the People list (a bottom sheet on a narrow screen): who the person is (Edit opens the person dialog), their Account
+// The panel beside the People list (a full-height sheet below the wide layout, see PeopleView and panelSheet.ts): who the person is (Edit opens the person dialog), their Account
 // (an administrator's view: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
 // records their teams give them; a count opens its records, and a line says what they are still waiting to be approved on). A member sees their own
 // panel without the Account section. Words follow CONTEXT.md: account role, login, Suspended, Former; Researcher / Operator are kinds of work.
@@ -24,6 +24,8 @@ const props = defineProps<{
 	rows: PeopleRow[];
 	canAdministerAccounts: boolean;
 	roles: { id: string; name: string }[];
+	/** In PeopleView's sheet: the header is a bar that stays put and the body below it scrolls. Beside the list it is the plain card. */
+	sheet?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'close'): void;
@@ -178,8 +180,12 @@ async function remove(r: AccessRecord) {
 // The listener is in the CAPTURE phase on purpose: it reads which overlay is open before any overlay's own Esc handler has run. In the bubble
 // phase a select, dialog or menu that handled Esc first could already be gone from the DOM, and the panel would close under it too.
 // It never stops propagation, so those handlers (and PeopleView's attention-menu one) still run; the menu is covered by its data-open-menu marker.
+// The sheet this panel sits in is an aria-modal dialog itself (it holds the panel): that one is not "something over the panel".
+const root = ref<HTMLElement | null>(null);
 const overlayOpen = () =>
-	Array.from(document.querySelectorAll<HTMLElement>(ESC_OWNER_SELECTOR)).some((el) => !el.matches('.v-menu-content') || el.getClientRects().length > 0);
+	Array.from(document.querySelectorAll<HTMLElement>(ESC_OWNER_SELECTOR)).some(
+		(el) => !el.contains(root.value) && (!el.matches('.v-menu-content') || el.getClientRects().length > 0),
+	);
 const onKey = (e: KeyboardEvent) => {
 	if (escapeClosesPanel(e, (document.activeElement as HTMLElement | null)?.tagName, overlayOpen())) emit('close');
 };
@@ -188,7 +194,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 </script>
 
 <template>
-	<section v-if="person" class="person-panel" :aria-label="person.full_name">
+	<section v-if="person" ref="root" class="person-panel" :class="{ sheet }" :aria-label="person.full_name">
 		<header class="head">
 			<span class="av" aria-hidden="true">{{ initials }}</span>
 			<div class="who">
@@ -199,6 +205,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 			<button class="x" type="button" aria-label="Close" @click="emit('close')">&times;</button>
 		</header>
 
+		<div class="body">
 		<section v-if="isAdmin && line" class="sec" aria-label="Account">
 			<h3>Account</h3>
 			<div class="f">
@@ -285,6 +292,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 			</div>
 		</section>
 
+		</div>
+
 		<PersonEditDialog v-model="editOpen" :person="person" @saved="emit('changed')" />
 	</section>
 </template>
@@ -305,6 +314,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 .x { flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: var(--d1-dim);
 	font-size: 20px; line-height: 1; cursor: pointer; }
 .x:hover { background: var(--d1-tile); color: var(--theme--foreground); }
+
+/* In the sheet: the header is a bar that stays put and the body scrolls under it (the sheet is the viewport's height). Insets keep both clear of
+   a phone's notch and home bar. */
+.person-panel.sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+.sheet .head { flex: none; padding: calc(10px + env(safe-area-inset-top)) 8px 10px 16px; border-bottom: 1px solid var(--d1-line); background: var(--d1-surface); }
+.sheet .edit { height: 36px; padding: 0 14px; }
+.sheet .x { width: 40px; height: 40px; font-size: 24px; }
+.sheet .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 
 .sec { padding: 4px 16px 14px; }
 h3 { margin: 12px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); }

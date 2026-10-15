@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // One row of the People list: sparse on purpose (who, what kind of work, and for an administrator the account role and last sign-in).
 // A warning shows only when something is off. A login without a person is a row of its own with a "Link to a person…" action.
+// On a phone (< 768 px) the role / status line goes under the name and the last sign-in stays at the right, as the index cards do.
 import { computed } from 'vue';
 import { lastSeen } from './lastSeen';
 import type { PeopleRow } from './peopleQuery';
@@ -51,10 +52,12 @@ const accountRole = computed(() => {
 			<span class="nm">{{ row.full_name }}<span v-if="!row.active" class="former-tag">Former</span></span>
 			<span v-if="kinds" class="sub">{{ kinds }}</span>
 		</span>
-		<button v-if="isLogin && admin" type="button" class="link" @click="emit('link', row)">Link to a person…</button>
 		<template v-if="admin">
-			<span v-if="note" class="flag">{{ note }}</span>
-			<span v-else class="meta">{{ accountRole }}</span>
+			<span class="status">
+				<button v-if="isLogin" type="button" class="link" @click.stop="emit('link', row)">Link to a person…</button>
+				<span v-if="note" class="flag">{{ note }}</span>
+				<span v-else class="meta">{{ accountRole }}</span>
+			</span>
 			<span class="meta when">{{ lastSeen(row.login?.last_access) }}</span>
 		</template>
 	</component>
@@ -71,6 +74,8 @@ button.prow:hover { background: var(--d1-tile); }
 .av { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto; font-size: var(--fs-sm); font-weight: 700;
 	background: var(--d1-tint); color: var(--d1-accent, var(--theme--primary)); }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* Wide: the status is part of the row's own flex line, as if it had no wrapper. */
+.status { display: contents; }
 .nm { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .sub { font-size: var(--fs-sm); color: var(--d1-dim); overflow-wrap: anywhere; }
 .former-tag { font-size: var(--fs-xs); font-weight: 700; color: var(--d1-bad);
@@ -80,4 +85,15 @@ button.prow:hover { background: var(--d1-tile); }
 .flag { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-warn); white-space: nowrap; }
 .link { border: 0; background: transparent; padding: 2px 4px; font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
 	color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; white-space: nowrap; }
+/* Phone: avatar | name and kinds | last sign-in on the first line; the link and the role or warning under the name. */
+@media (max-width: 767px) {
+	.prow { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: 'av main when' 'av status status'; gap: 2px 12px; align-items: start; padding: 10px 14px; }
+	.av { grid-area: av; }
+	.main { grid-area: main; }
+	.when { grid-area: when; width: auto; padding-top: 2px; }
+	.status { grid-area: status; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; }
+	.status:empty { display: none; }
+	.meta, .flag, .link { white-space: normal; }
+	.link { padding: 6px 0; }
+}
 </style>
