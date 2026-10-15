@@ -18,6 +18,8 @@ export interface HostApi {
 	get(path: string, config?: HostRequestConfig): Promise<HostResponse>;
 	post(path: string, body?: unknown, config?: HostRequestConfig): Promise<HostResponse>;
 	patch(path: string, body?: unknown, config?: HostRequestConfig): Promise<HostResponse>;
+	// Both hosts' clients are axios and have it; optional so a fake client need not (the d1-inbox prefs route is the one PUT).
+	put?(path: string, body?: unknown, config?: HostRequestConfig): Promise<HostResponse>;
 	delete(path: string, config?: HostRequestConfig): Promise<HostResponse>;
 }
 // One field definition as Directus describes it (GET /fields/<collection>, or the app's fields store).

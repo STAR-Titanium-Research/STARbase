@@ -190,6 +190,12 @@ export type { FieldDef, FieldKind, FieldView, FormField, FormNode } from './form
 export { applyConditions, matchesRule } from './form/conditions';
 export type { FieldCondition, Values as FormValues } from './form/conditions';
 
+// The Inbox's counts (sidebar badge, Home panel; the endpoint is core/extensions/d1-inbox)
+export { badgeText, inboxLabel, inboxTarget, newFilesText, olderFilesText, parseSummary } from './inbox/inboxSummary';
+export type { InboxCounts, InboxSummary } from './inbox/inboxSummary';
+export { useInboxSummary } from './inbox/useInboxSummary';
+export type { InboxSummaryState } from './inbox/useInboxSummary';
+
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
 export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';
