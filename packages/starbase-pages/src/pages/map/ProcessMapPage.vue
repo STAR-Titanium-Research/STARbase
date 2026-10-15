@@ -14,6 +14,8 @@ import type { Dir } from './model/elkInput';
 import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
+import ChainMenu from './ChainMenu.vue';
+import type { ChainDir } from './model/hoverFocus';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
@@ -161,6 +163,27 @@ const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, s
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
 
+// Right-click on a card selects it and offers which way its chain is lit (upstream, downstream, both).
+// Not on touch: a long press there is the hover card (useLongPress).
+const chainMenu = ref<{ x: number; y: number } | null>(null);
+const MENU_W = 200;
+const MENU_H = 150;
+function onContextMenu(e: MouseEvent) {
+	input.onContextMenu(e);
+	if (pointerKind.touch || !canvasEl.value) return;
+	const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('.vue-flow__node')?.dataset.id;
+	if (!id) return;
+	e.preventDefault();
+	map.clearHover();
+	map.select(id);
+	const r = canvasEl.value.getBoundingClientRect();
+	chainMenu.value = { x: Math.min(e.clientX - r.left, r.width - MENU_W), y: Math.min(e.clientY - r.top, r.height - MENU_H) };
+}
+function pickChain(d: ChainDir) {
+	map.setChainDir(d);
+	chainMenu.value = null;
+}
+
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
 // The project frame is part of the picture only when it is drawn (the same test the template makes).
 const mapExport = useMapExport({ canvas, map, projectFrame: () => (frameStyle.value && frameLabel.value ? canvas.frame.value : null), person: () => personName(host.user.value) });
@@ -257,6 +280,7 @@ onBeforeUnmount(() => {
 							ref="canvasEl"
 							class="pm-canvas"
 							:class="{ pending: !canvas.laidOut.value }"
+							:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
 							@mouseleave="map.clearHover()"
 							@keydown="input.onKey"
 							@focusin="input.onFocusIn"
@@ -265,7 +289,7 @@ onBeforeUnmount(() => {
 							@pointerup.capture="input.onPointerEnd"
 							@pointercancel.capture="input.onPointerEnd"
 							@click.capture="input.onClickCapture"
-							@contextmenu="input.onContextMenu"
+							@contextmenu="onContextMenu"
 						>
 							<VueFlow
 								:node-types="canvas.nodeTypes"
@@ -291,6 +315,7 @@ onBeforeUnmount(() => {
 							</VueFlow>
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
+							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>
@@ -346,7 +371,8 @@ onBeforeUnmount(() => {
 	z-index: -1;
 	box-sizing: border-box;
 	pointer-events: none;
-	border: 1.5px dashed color-mix(in srgb, var(--k) 55%, transparent);
+	/* --pm-px is one screen pixel in flow units: the frame stays visible when zoomed out. */
+	border: max(1.5px, calc(1.5 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--k) 70%, transparent);
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }

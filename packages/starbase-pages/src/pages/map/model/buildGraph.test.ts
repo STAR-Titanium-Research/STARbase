@@ -32,6 +32,12 @@ describe('buildGraph: operations and samples', () => {
     expect(record(g, 's:s1').outs).toEqual(['s:s1:out:0']);
   });
 
+  it('a sample card carries its nickname as the ref label, and none when it has none', () => {
+    const g = build(mkData({ samples: [mkSample('s1', { nickname: 'F1E Cutoff' }), mkSample('s2')] }));
+    expect(record(g, 's:s1').ref.label).toBe('F1E Cutoff');
+    expect(record(g, 's:s2').ref.label).toBeUndefined();
+  });
+
   it('stock lot into the making op', () => {
     const op = mkOp({ id: 'f1', outputSampleId: 's1' });
     const g = build(mkData({ samples: sam('s1'), operations: [op], stock: [mkStock('l1', 's1')] }));

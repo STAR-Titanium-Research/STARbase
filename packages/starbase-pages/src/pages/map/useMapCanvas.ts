@@ -406,5 +406,8 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, whenSettled };
+  /** One screen pixel in flow units (capped), so dashed outlines stay visible when zoomed out. */
+  const screenPx = computed(() => Math.min(4, 1 / Math.max(vf.viewport.value.zoom, 0.01)));
+
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled };
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, watch } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
+import { chainFocus } from './model/hoverFocus';
 import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFans';
@@ -463,16 +464,24 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('hovering a card dims the rest; hovering a wire only highlights it', async () => {
+  it('the selection lights its chain (both ways by default); hovering another card shows its neighbours; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
+    expect(map.selectedId.value).toBe('s:s1');
+    expect(map.chainDir.value).toBe('both');
+    const chain = map.focusOfHover.value!;
+    expect(chain).toEqual(chainFocus(map.graph.value!, 's:s1', 'both'));
     map.hover('s:s2', {} as HTMLElement);
+    expect(map.focusOfHover.value).not.toEqual(chain);
     expect(map.focusOfHover.value).toMatchObject({ dim: true });
     map.hover(null);
-    expect(map.focusOfHover.value).toBeNull();
-    map.hover(map.graph.value!.wires[0].id, {} as HTMLElement);
-    expect(map.focusOfHover.value).toMatchObject({ dim: false });
+    expect(map.focusOfHover.value).toEqual(chain);
+    map.setChainDir('up');
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s1', 'up'));
+    const wire = map.graph.value!.wires[0].id;
+    map.hover(wire, {} as HTMLElement);
+    expect(map.focusOfHover.value!.wires.has(wire)).toBe(true);
   });
 
   it('hidden markers become the sides a node draws "some records hidden" on, even with no socket there', async () => {
