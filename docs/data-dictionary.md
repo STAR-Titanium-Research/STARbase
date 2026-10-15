@@ -453,6 +453,11 @@ unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id`
 Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
 `(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`.
 
+**When an alias or share folder changes** (triggers `people_inbox_alias_changed`, `teams_inbox_folder_changed`,
+only when the value really changes, `NULL` included): that owner's `inbox_dirs` rows and their `file_candidates` in
+state `new`, `gone` and `dismissed` are deleted; `linked` candidates are kept. The next scan is a first scan of the
+new folder (everything is backlog).
+
 **`d1_private.inbox_dirs`**: the folder cache. `rel_path` PK; one owner (person or team, cascade); `dir_mtime`,
 `last_listed_at`; `baselined_at` is set on an owner's root row when their first complete scan ends.
 

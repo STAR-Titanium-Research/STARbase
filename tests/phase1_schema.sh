@@ -3812,6 +3812,9 @@ DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
 DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
 DROP TABLE IF EXISTS d1_private.inbox_dirs;
 DROP TABLE IF EXISTS d1_private.file_candidates;
+DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard() CASCADE;
+DROP FUNCTION IF EXISTS d1_private.inbox_person_alias_changed() CASCADE;
+DROP FUNCTION IF EXISTS d1_private.inbox_team_folder_changed() CASCADE;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
@@ -6311,6 +6314,59 @@ SELECT 'fi_decider:' || count(*) || ':' || count(decided_by) FROM d1_private.fil
 grep -q 'fi_decider:1:0' <<<"$fi_out" && ok "deleting the user who decided keeps the candidate and clears decided_by" || bad "decided_by did not clear (output: $fi_out)"
 run_eq "file_candidates indexes cover (owner_person_id, state), (owner_team_id, state), (link_batch_id), (suggested_record_id), (duplicate_of)" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'file_candidates' AND (indexdef LIKE '%(owner_person_id, state)%' OR indexdef LIKE '%(owner_team_id, state)%' OR indexdef LIKE '%(link_batch_id)%' OR indexdef LIKE '%(suggested_record_id)%' OR indexdef LIKE '%(duplicate_of)%')" "5"
+# A changed alias or share folder starts the owner's folder over: the old cache rows and the undecided / dismissed / gone
+# candidates go, linked ones stay, and an UPDATE that does not change the value deletes nothing.
+fi_seed_person="UPDATE people SET uni_alias = 'old01' WHERE person_id = '$FI_P1';
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/old01', '$FI_P1'), ('Users/old01/sem', '$FI_P1');
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/other', '$FI_P2');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES
+  ('$FI_F1', '$FI_P1', 'image', 'new', 'Users/old01/a.tif', 'new'),
+  ('$FI_F2', '$FI_P1', 'image', 'backlog', 'Users/old01/b.tif', 'dismissed'),
+  ('$FI_F3', '$FI_P1', 'image', 'new', 'Users/old01/c.tif', 'gone');
+INSERT INTO directus_files (id) VALUES ('a2000000-0000-4000-8000-0000000000c4'), ('a2000000-0000-4000-8000-0000000000c5');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state, link_kind, linked_collection, linked_junction_id, link_batch_id)
+  VALUES ('a2000000-0000-4000-8000-0000000000c4', '$FI_P1', 'image', 'new', 'Users/old01/d.tif', 'linked', 'manual', 'physical_samples', gen_random_uuid(), gen_random_uuid());
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES
+  ('a2000000-0000-4000-8000-0000000000c5', '$FI_P2', 'image', 'new', 'Users/other/e.tif', 'new');"
+fi_out=$(fi_sql "$fi_seed_person
+UPDATE people SET uni_alias = 'new01' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_chg_dirs:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P2');
+SELECT 'fi_alias_chg_cands:' || coalesce(string_agg(state || '@' || (owner_person_id = '$FI_P1')::text, ',' ORDER BY state, owner_person_id), '') FROM d1_private.file_candidates;")
+grep -q 'fi_alias_chg_dirs:0:1' <<<"$fi_out" && ok "changing a uni_alias deletes the old owner's folder cache rows and nobody else's" || bad "alias change did not clear the folder cache (output: $fi_out)"
+grep -q 'fi_alias_chg_cands:linked@true,new@false' <<<"$fi_out" && ok "changing a uni_alias deletes the owner's new, gone and dismissed candidates; the linked one and other people's stay" || bad "alias change left or removed the wrong candidates (output: $fi_out)"
+fi_out=$(fi_sql "$fi_seed_person
+UPDATE people SET uni_alias = 'old01', notes = 'touched' WHERE person_id = '$FI_P1';
+UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P2';
+SELECT 'fi_alias_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the uni_alias as it was deletes nothing" || bad "an unchanged alias deleted rows (output: $fi_out)"
+fi_out=$(fi_sql "$fi_seed_person
+UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_clear:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_clear:0:1' <<<"$fi_out" && ok "clearing a uni_alias also starts the folder over (linked candidate kept)" || bad "clearing the alias did not clear the cache (output: $fi_out)"
+fi_seed_team="UPDATE teams SET share_folder = 'OldFolder' WHERE team_id = '$FI_T1';
+INSERT INTO teams (team_id, name, share_folder) VALUES ('a2000000-0000-4000-8000-0000000000b2', 'Inbox Test Team Two', 'OtherFolder');
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_team_id) VALUES ('Shared/OldFolder', '$FI_T1'), ('Shared/OldFolder/x', '$FI_T1'), ('Shared/OtherFolder', 'a2000000-0000-4000-8000-0000000000b2');
+INSERT INTO directus_files (id) VALUES ('a2000000-0000-4000-8000-0000000000c4'), ('a2000000-0000-4000-8000-0000000000c5');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_team_id, kind, origin, rel_path, state) VALUES
+  ('$FI_F1', '$FI_T1', 'image', 'new', 'Shared/OldFolder/a.tif', 'new'),
+  ('$FI_F2', '$FI_T1', 'image', 'backlog', 'Shared/OldFolder/b.tif', 'dismissed'),
+  ('$FI_F3', '$FI_T1', 'image', 'new', 'Shared/OldFolder/c.tif', 'gone');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_team_id, kind, origin, rel_path, state, link_kind, linked_collection, linked_junction_id, link_batch_id)
+  VALUES ('a2000000-0000-4000-8000-0000000000c4', '$FI_T1', 'image', 'new', 'Shared/OldFolder/d.tif', 'linked', 'bulk', 'test_sessions', gen_random_uuid(), gen_random_uuid());
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_team_id, kind, origin, rel_path, state) VALUES
+  ('a2000000-0000-4000-8000-0000000000c5', 'a2000000-0000-4000-8000-0000000000b2', 'image', 'new', 'Shared/OtherFolder/e.tif', 'new');"
+fi_out=$(fi_sql "$fi_seed_team
+UPDATE teams SET share_folder = 'NewFolder' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_chg_dirs:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = 'a2000000-0000-4000-8000-0000000000b2');
+SELECT 'fi_team_chg_cands:' || coalesce(string_agg(state || '@' || (owner_team_id = '$FI_T1')::text, ',' ORDER BY state, owner_team_id), '') FROM d1_private.file_candidates;")
+grep -q 'fi_team_chg_dirs:0:1' <<<"$fi_out" && ok "changing a share_folder deletes the old owner team's folder cache rows and no other team's" || bad "share folder change did not clear the folder cache (output: $fi_out)"
+grep -q 'fi_team_chg_cands:linked@true,new@false' <<<"$fi_out" && ok "changing a share_folder deletes the team's new, gone and dismissed candidates; the linked one and other teams' stay" || bad "share folder change left or removed the wrong candidates (output: $fi_out)"
+fi_out=$(fi_sql "$fi_seed_team
+UPDATE teams SET share_folder = 'OldFolder', description = 'touched' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');")
+grep -q 'fi_team_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the share_folder as it was deletes nothing" || bad "an unchanged share folder deleted rows (output: $fi_out)"
+run_eq "the alias and folder triggers are AFTER UPDATE OF row triggers with a WHEN condition" \
+    "SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgname IN ('people_inbox_alias_changed', 'teams_inbox_folder_changed') AND (tgtype & 1) = 1 AND (tgtype & 2) = 0 AND (tgtype & 16) = 16 AND tgqual IS NOT NULL" "people_inbox_alias_changed,teams_inbox_folder_changed"
 # inbox_dirs
 fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at) VALUES ('Users/abc12de', '$FI_P1', now(), now());
 INSERT INTO d1_private.inbox_dirs (rel_path, owner_team_id) VALUES ('Shared/Lab', '$FI_T1');
@@ -6425,17 +6481,20 @@ $fi_down
 SELECT 'fi_dn_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables);
 SELECT 'fi_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
 SELECT 'fi_dn_indexes:' || count(*) FROM pg_indexes WHERE indexname IN ('people_uni_alias_key', 'teams_share_folder_key');
+SELECT 'fi_dn_triggers:' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('people_inbox_columns_insert', 'people_inbox_alias_changed', 'teams_inbox_folder_changed')) || ',' || (SELECT count(*) FROM pg_proc WHERE proname IN ('people_inbox_columns_insert_guard', 'inbox_person_alias_changed', 'inbox_team_folder_changed'));
 SELECT 'fi_dn_people:' || count(*) FROM people WHERE person_id = '$FI_P1';
 SELECT 'fi_dn_files:' || count(*) FROM directus_files WHERE id = '$FI_F1';
 $fi_up
 SELECT 'fi_up_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname IN ($fi_new_tables);
 SELECT 'fi_up_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
+SELECT 'fi_up_triggers:' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('people_inbox_columns_insert', 'people_inbox_alias_changed', 'teams_inbox_folder_changed')) || ',' || (SELECT count(*) FROM pg_proc WHERE proname IN ('people_inbox_columns_insert_guard', 'inbox_person_alias_changed', 'inbox_team_folder_changed'));
 SELECT 'fi_up_state:' || count(*) FROM d1_private.inbox_crawler_state;
 SELECT 'fi_up_alias:' || coalesce(uni_alias, '<null>') || ':' || scan_while_former FROM people WHERE person_id = '$FI_P1';
 ROLLBACK;
 SQL
 )
     grep -q 'fi_dn_tables:0' <<<"$fi_out" && grep -q 'fi_dn_columns:0' <<<"$fi_out" && grep -q 'fi_dn_indexes:0' <<<"$fi_out" && ok "down drops the five tables, the three columns and both unique indexes" || bad "down left objects behind (output: $fi_out)"
+    grep -q 'fi_dn_triggers:0,0' <<<"$fi_out" && grep -q 'fi_up_triggers:3,3' <<<"$fi_out" && ok "down drops the three trigger functions and triggers; up brings them back" || bad "triggers did not round-trip (output: $fi_out)"
     grep -q 'fi_dn_people:1' <<<"$fi_out" && grep -q 'fi_dn_files:1' <<<"$fi_out" && ok "down keeps the people and files rows (only the new columns and tables go)" || bad "down removed people or files rows (output: $fi_out)"
     grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
 fi

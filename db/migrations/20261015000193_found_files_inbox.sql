@@ -293,8 +293,53 @@ COMMENT ON COLUMN d1_private.inbox_prefs.auto_link IS 'True when this person agr
 COMMENT ON COLUMN d1_private.inbox_prefs.updated_at IS 'When auto_link last changed (the time of the consent). Set by the endpoint on write.';
 COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 
+-- 7. A changed alias or share folder starts that owner's folder over.
+-- The crawler's folder cache (inbox_dirs) and the undecided candidates describe the OLD folder. Left alone they would
+-- strand: the cache says "already listed" for paths the new folder does not have, and new / gone / dismissed files of the
+-- old folder would sit in the Inbox for a folder that is no longer theirs. So when the value really changes (IS DISTINCT
+-- FROM, not on every UPDATE of the row) the owner's cache rows and their candidates in state new, gone or dismissed are
+-- deleted; linked candidates are kept (the link is a decision and its undo bookkeeping must survive). The owner's next
+-- scan is then a first scan of the new folder: everything in it is backlog, and baselined_at is set again.
+CREATE FUNCTION d1_private.inbox_person_alias_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    DELETE FROM d1_private.inbox_dirs WHERE owner_person_id = OLD.person_id;
+    DELETE FROM d1_private.file_candidates
+     WHERE owner_person_id = OLD.person_id AND state IN ('new', 'gone', 'dismissed');
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes, deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+CREATE TRIGGER people_inbox_alias_changed AFTER UPDATE OF uni_alias ON people
+    FOR EACH ROW WHEN (OLD.uni_alias IS DISTINCT FROM NEW.uni_alias)
+    EXECUTE FUNCTION d1_private.inbox_person_alias_changed();
+
+CREATE FUNCTION d1_private.inbox_team_folder_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    DELETE FROM d1_private.inbox_dirs WHERE owner_team_id = OLD.team_id;
+    DELETE FROM d1_private.file_candidates
+     WHERE owner_team_id = OLD.team_id AND state IN ('new', 'gone', 'dismissed');
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes, deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+CREATE TRIGGER teams_inbox_folder_changed AFTER UPDATE OF share_folder ON teams
+    FOR EACH ROW WHEN (OLD.share_folder IS DISTINCT FROM NEW.share_folder)
+    EXECUTE FUNCTION d1_private.inbox_team_folder_changed();
+
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
+DROP TRIGGER IF EXISTS teams_inbox_folder_changed ON teams;
+DROP TRIGGER IF EXISTS people_inbox_alias_changed ON people;
+DROP FUNCTION IF EXISTS d1_private.inbox_team_folder_changed();
+DROP FUNCTION IF EXISTS d1_private.inbox_person_alias_changed();
 -- The five tables go with their rows (found files, folder cache, requests, state, opt-ins: all derived or recomputable;
 -- a person's auto-link opt-in is lost, and they must agree again). A candidate's directus_files pointer row stays,
 -- as it is an ordinary file row. The new people and teams columns go with their data (aliases and share folders are
