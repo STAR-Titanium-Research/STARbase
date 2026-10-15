@@ -98,6 +98,8 @@ function newWorld() {
     labels: { [INS1]: 'INS-001', [EDGE1]: 'INS-001-E1' },
     denyScanCreate: false, denyRefRead: null,
     scanRequests: [],
+    // the crawler's folder cache (d1_private.inbox_dirs): { rel_path, owner_person_id, owner_team_id, dir_mtime, last_listed_at }
+    dirs: [],
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
       daemon_started_at: new Date('2026-10-15T08:00:00.000Z'), current_activity: 'idle', last_scan_started_at: new Date('2026-10-15T11:30:00.000Z'),
@@ -128,10 +130,10 @@ const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 const copy = (v) => structuredClone(v);
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs;
 };
 
 function statement(w, sql, b, txId) {
@@ -193,6 +195,17 @@ function statement(w, sql, b, txId) {
         }
       }
       return out;
+    }
+    case 'relistDirs': {
+      // the folder cache rows of the folders the given candidates sit in (same path, same owner): forgotten as "listed", so the next scan lists them
+      for (const id of csv(b[0])) {
+        const c = w.candidates.get(id);
+        const parent = c?.rel_path.replace(/\/[^/]*$/, '');
+        for (const d of w.dirs) {
+          if (c && d.rel_path === parent && d.owner_person_id === c.owner_person_id && d.owner_team_id === c.owner_team_id) Object.assign(d, { last_listed_at: null, dir_mtime: null });
+        }
+      }
+      return [];
     }
     case 'prefsGet': return w.prefs.has(b[0]) ? [{ auto_link: w.prefs.get(b[0]) }] : [];
     case 'prefsPut': w.prefs.set(b[0], b[1]); return [{ auto_link: b[1] }];
@@ -1793,6 +1806,74 @@ test('POST /dismiss then /restore: state changes, decided_by recorded, a team fi
   assert.equal(team.state, 'new');
   assert.equal(team.decided_by, null);
   assert.deepEqual(actorsOf(w).map((a) => a.bindings[0]).slice(0, 2), [U.alice, U.bob]);
+});
+
+// Restore and undo put a file back to new. If it vanished meanwhile the crawler's folder cache still says "listed, unchanged", so nothing would ever
+// mark it gone: the folder's cache row is cleared (last_listed_at and dir_mtime NULL) and the next scan lists the folder again.
+const dirRow = (rel_path, over = {}) => ({ rel_path, owner_person_id: P.alice, owner_team_id: null, dir_mtime: '2026-10-14T10:00:00.000Z', last_listed_at: '2026-10-14T10:05:00.000Z', ...over });
+const listed = (d) => d.last_listed_at !== null || d.dir_mtime !== null;
+
+test('POST /restore clears the folder cache of the restored file\'s folder (and only that folder, only for that owner) so the next scan lists it again', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ state: 'dismissed', rel_path: 'Users/ali1/sem/a.tif' }));
+  const t = add(w, cand({ state: 'dismissed', owner_person_id: null, owner_team_id: TEAM, rel_path: 'Shared/SEM/2026/t.tif' }));
+  const stays = add(w, cand({ state: 'dismissed', rel_path: 'Users/ali1/other/b.tif' }));
+  w.dirs = [dirRow('Users/ali1'), dirRow('Users/ali1/sem'), dirRow('Users/ali1/other'), dirRow('Shared/SEM/2026', { owner_person_id: null, owner_team_id: TEAM }),
+    dirRow('Shared/SEM', { owner_person_id: null, owner_team_id: TEAM }), dirRow('Users/bob2/sem', { owner_person_id: P.bob })];
+  const { call } = setup(w);
+  const res = await call('POST /restore', { user: U.alice, body: { candidate_ids: [a.candidate_id, t.candidate_id] } });
+  assert.equal(res.statusCode, 200);
+  const byPath = Object.fromEntries(w.dirs.map((d) => [d.rel_path, listed(d)]));
+  assert.deepEqual(byPath, {
+    'Users/ali1': true, 'Users/ali1/sem': false, 'Users/ali1/other': true, 'Shared/SEM/2026': false, 'Shared/SEM': true, 'Users/bob2/sem': true,
+  }, 'only the two parent folders are forgotten');
+  assert.equal(w.dirs.find((d) => d.rel_path === 'Users/ali1/sem').dir_mtime, null, 'dir_mtime too, as the crawler does when it keeps a folder "changed"');
+  assert.equal(stays.state, 'dismissed');
+  const calls = w.log.filter((l) => l.name === 'relistDirs');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].bindings[0].split(',').sort(), [a.candidate_id, t.candidate_id].sort(), 'for the candidates that changed');
+  assert.equal(calls[0].tx, w.log.find((l) => l.name === 'restore').tx, 'in the transaction of the restore');
+});
+
+test('POST /undo clears the folder cache of every undone file\'s folder, as restore does', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ rel_path: 'Users/ali1/sem/a.tif' }));
+  const b = add(w, cand({ rel_path: 'Users/ali1/scans/b.tif' }));
+  const keep = add(w, cand({ rel_path: 'Users/ali1/keep/c.tif' }));
+  w.dirs = [dirRow('Users/ali1/sem'), dirRow('Users/ali1/scans'), dirRow('Users/ali1/keep')];
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  await call('POST /link', { user: U.alice, body: { items: [link(keep)] } });
+  assert.ok(w.dirs.every(listed), 'linking touches no cache row');
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(w.dirs.map((d) => [d.rel_path, listed(d)]), [['Users/ali1/sem', false], ['Users/ali1/scans', false], ['Users/ali1/keep', true]]);
+});
+
+test('dismiss, a restore that changes nothing, and a failed undo leave the folder cache alone', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ rel_path: 'Users/ali1/sem/a.tif' }));
+  const fresh = add(w, cand({ rel_path: 'Users/ali1/sem/n.tif' }));
+  w.dirs = [dirRow('Users/ali1/sem')];
+  const { call } = setup(w);
+  await call('POST /dismiss', { user: U.alice, body: { candidate_ids: [a.candidate_id] } });
+  assert.ok(w.dirs.every(listed), 'dismiss never relists');
+  const none = await call('POST /restore', { user: U.alice, body: { candidate_ids: [fresh.candidate_id] } });
+  assert.equal(none.body.data.changed, 0);
+  assert.ok(w.dirs.every(listed), 'nothing restored, nothing cleared');
+  assert.equal(w.log.filter((l) => l.name === 'relistDirs').length, 0);
+  // an undo that is refused rolls back with everything else
+  const linked = (await call('POST /link', { user: U.alice, body: { items: [link(fresh)] } })).body.data.link_batch_id;
+  const refused = await call('POST /undo', { user: U.bob, body: { link_batch_id: linked } });
+  assert.notEqual(refused.statusCode, 200);
+  assert.ok(w.dirs.every(listed));
+});
+
+test('the SQL: the relist clears last_listed_at and dir_mtime of the folder (same path, same owner) of the given candidates, and nothing else', () => {
+  assert.match(SQL.relistDirs, /^UPDATE d1_private\.inbox_dirs d SET last_listed_at = NULL, dir_mtime = NULL FROM d1_private\.file_candidates c/);
+  assert.match(SQL.relistDirs, /d\.rel_path = regexp_replace\(c\.rel_path, '\/\[\^\/\]\*\$', ''\)/, 'the parent folder: the path without its last segment');
+  assert.match(SQL.relistDirs, /d\.owner_person_id IS NOT DISTINCT FROM c\.owner_person_id AND d\.owner_team_id IS NOT DISTINCT FROM c\.owner_team_id/, 'a folder cached for another owner is not touched');
+  assert.doesNotMatch(SQL.relistDirs, /baselined_at/, 'the baseline of an owner is never reset');
 });
 
 test('POST /dismiss: a linked file is 409; an unknown or someone else\'s is 404; bad bodies are 400; nothing changes on failure', async () => {

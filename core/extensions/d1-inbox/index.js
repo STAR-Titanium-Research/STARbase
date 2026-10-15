@@ -43,6 +43,7 @@
 //                                   on first_seen_at, candidate_id) so a page of rows it must skip never hides linkable rows behind it;
 //                                   has_more is true only when the last page it read was full, and next_cursor (sent back as `cursor`) goes on.
 //   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
+//                                   A restore (and an undo) also makes the crawler list the file's folder again (D12): see SQL.relistDirs.
 //   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created (and the surface_scans rows it added,
 //                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
@@ -229,6 +230,14 @@ export const SQL = {
   restore:
     "UPDATE d1_private.file_candidates SET state = 'new', decided_at = NULL, decided_by = NULL"
     + ` WHERE candidate_id = ANY(${IDS}) AND state = 'dismissed' RETURNING candidate_id`,
+  // Restore and undo put a file back to 'new'. If it vanished meanwhile, the crawler's folder cache still says "listed, unchanged" for its folder, so the
+  // file would stay 'new' for good: forget that the folder was listed (last_listed_at and dir_mtime NULL, as the crawler's own lost-file handling does:
+  // a NULL mtime never equals the share's) and the next scan lists it again and marks what is missing gone. Only the file's own folder row, only for
+  // its owner (a path cached for someone else is left alone), and never baselined_at. Binding: the candidate ids as one csv.
+  relistDirs:
+    'UPDATE d1_private.inbox_dirs d SET last_listed_at = NULL, dir_mtime = NULL FROM d1_private.file_candidates c'
+    + ` WHERE c.candidate_id = ANY(${IDS}) AND d.rel_path = regexp_replace(c.rel_path, '/[^/]*$', '')`
+    + ' AND d.owner_person_id IS NOT DISTINCT FROM c.owner_person_id AND d.owner_team_id IS NOT DISTINCT FROM c.owner_team_id',
   prefsGet: 'SELECT auto_link FROM d1_private.inbox_prefs WHERE user_id = ?',
   prefsPut:
     'INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES (?, ?)'
@@ -1112,6 +1121,8 @@ export function mount(router, context, deps = {}) {
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
       }
       const done = change.length ? rowsOf(await trx.raw(SQL[name], name === 'dismiss' ? [acc.user, change.join(',')] : [change.join(',')])).map((r) => r.candidate_id) : [];
+      // a restored file may have vanished while it was dismissed: have the crawler list its folder again (D12)
+      if (name === 'restore' && done.length) await trx.raw(SQL.relistDirs, [done.join(',')]);
       return shapeStateChange({ done, unchanged, change });
     });
     res.json({ data: out });
@@ -1156,6 +1167,8 @@ export function mount(router, context, deps = {}) {
         }
       }
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
+      // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
+      if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
       return shapeUndo(batch, done);
     });
     await clearDataCache(schema);

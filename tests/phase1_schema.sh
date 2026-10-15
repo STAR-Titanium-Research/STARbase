@@ -6671,6 +6671,18 @@ SELECT pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_a')) AS ib
 SELECT 'ib_dismissed:' || :ib_n4 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
 SELECT pg_temp.ib_run(format('EXECUTE restore(%L)', :'ib_a')) AS ib_n5 \gset
 SELECT 'ib_restored:' || :ib_n5 || ':' || state FROM d1_private.file_candidates WHERE candidate_id = :'ib_a';
+-- restore and undo forget that the file's folder was listed (the crawler then lists it again and can mark a vanished file gone), for that owner only
+INSERT INTO people (person_id, full_name) VALUES ('a1b00000-0000-4000-8000-000000000007', 'Inbox Other Owner');
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at, baselined_at) VALUES
+  ('Users/ibx1', '$IB_P', now(), now(), now()), ('Users/ibx1/other', '$IB_P', now(), now(), NULL), ('Users/ibx2', 'a1b00000-0000-4000-8000-000000000007', now(), now(), now());
+-- (ib_run's row count is 0 for this UPDATE through EXECUTE, so the rows themselves are checked)
+SELECT pg_temp.ib_run(format('EXECUTE relistdirs(%L)', :'ib_a')) AS ib_n11 \gset
+SELECT 'ib_relist:' || (last_listed_at IS NULL) || ':' || (dir_mtime IS NULL) || ':' || (baselined_at IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1';
+SELECT 'ib_relist_others:' || (last_listed_at IS NOT NULL AND dir_mtime IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1/other';
+UPDATE d1_private.file_candidates SET rel_path = 'Users/ibx2/z.tif' WHERE rel_path = 'Users/ibx1/j.tif';
+SELECT candidate_id AS ib_jj FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx2/z.tif' \gset
+SELECT pg_temp.ib_run(format('EXECUTE relistdirs(%L)', :'ib_jj')) AS ib_n12 \gset
+SELECT 'ib_relist_foreign:' || (last_listed_at IS NOT NULL AND dir_mtime IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx2';
 SELECT 'ib_prefs:' || pg_temp.ib_run(format('EXECUTE prefsput(%L, true)', '$IB_U'));
 SELECT 'ib_first_rescan:' || pg_temp.ib_run(format('EXECUTE rescaninsert(%L, %L)', '$IB_P', '$IB_U'));
 CREATE TEMP TABLE ib_flags (v text);
@@ -6713,6 +6725,9 @@ SQL
     ib_check "ib_auto_undone_kept:1:1:new:true" "a later manual link and its undo neither clear nor re-set the mark (a person may link the file; automation never does)"
     ib_check "ib_dismissed:1:dismissed" "dismiss moves a new file to dismissed"
     ib_check "ib_restored:1:new" "restore moves it back to new"
+    ib_check "ib_relist:true:true:true" "restore / undo: the file's folder row forgets it was listed (last_listed_at and dir_mtime NULL), its owner's baselined_at stays"
+    ib_check "ib_relist_others:true" "restore / undo: another folder of the same owner keeps its cache row"
+    ib_check "ib_relist_foreign:true" "restore / undo: a folder row cached for another owner is left alone"
     ib_check "ib_scan_table:true" "the surface_scans feature check (information_schema) answers yes where the table exists"
     ib_check "ib_scan_by_id:true:true:true" "the scan lookup undo and a repeated add use returns the item and the file"
     ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"
