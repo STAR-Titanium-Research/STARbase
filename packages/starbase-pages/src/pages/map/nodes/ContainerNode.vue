@@ -174,7 +174,8 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 .orow.bundle:hover, .orow.fold:hover { background: var(--d1-tint); }
 .orow.fold { grid-template-columns: 1fr auto 1fr; font-weight: 500; color: var(--d1-dim); }
 
-.slots { margin: 0 10px; padding: 6px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); display: flex; flex-direction: column; gap: 4px; cursor: default; }
+.slots { margin: 0 10px 10px; padding: 6px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); display: flex; flex-direction: column; gap: 4px; cursor: default; }
+.slots:has(+ .params) { margin-bottom: 0; }
 .lab { font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--d1-dim); padding: 2px 4px 0; }
 .more-toggle { text-align: center; padding: 5px 8px; border-radius: 8px; border: 1px dashed var(--d1-line); color: var(--d1-dim); font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; }
 .more-toggle:hover { color: var(--theme--foreground); }
