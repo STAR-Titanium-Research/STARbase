@@ -67,7 +67,7 @@ class World:
 
     def q(self, sql, params=()):
         with self.conn.cursor() as cur:
-            cur.execute(sql, params)
+            cur.execute(sql, params or None)
             return cur.fetchall() if cur.description else None
 
     def one(self, sql, params=()):

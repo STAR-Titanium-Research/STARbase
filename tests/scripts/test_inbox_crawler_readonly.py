@@ -408,3 +408,69 @@ def test_reading_leaves_the_tree_exactly_as_it_was(share):
     with sh.open_rb("Users/abc12de/sem/a.tif") as fh:
         fh.read()
     assert snapshot() == before
+
+
+# ---- a whole scan changes nothing on the share, and a vanishing share loses nothing ------------
+# (the DB-backed scan tests live in test_inbox_crawler_scan.py; these two are the read-only guarantees)
+
+from test_inbox_crawler_world import world  # noqa: E402, F401
+
+
+def _helpers():
+    """The scan tests' helpers; importing them skips the test (not the module) without psycopg2."""
+    pytest.importorskip("psycopg2")
+    import test_inbox_crawler_scan as t
+
+    return t
+
+
+def _tree(root):
+    out = {}
+    for p in sorted(Path(root).rglob("*")):
+        st = p.lstat()
+        out[str(p.relative_to(root))] = (st.st_mtime_ns, st.st_size, st.st_mode)
+    return out
+
+
+def test_a_whole_scan_leaves_the_share_exactly_as_it_was(world):  # noqa: F811
+    t = _helpers()
+    png, run, settle = t.png, t.run, t.settle
+    world.person("abc12de")
+    world.team("Machining")
+    for rel in (
+        "Users/abc12de/a.png",
+        "Users/abc12de/sem/b.png",
+        "Users/abc12de/notes.pdf",
+        "Users/abc12de/run.mat",
+        "Users/abc12de/scan.al3d",
+        "Shared/Machining/c.png",
+        "Users/stranger/x.png",
+    ):
+        world.write(rel, png() if rel.endswith(".png") else b"x" * 64)
+    settle(world)
+    before = _tree(world.root)
+    run(world)
+    world.write(
+        "Users/abc12de/later.png", png((1, 2, 3))
+    )  # the test itself changes the share here
+    before = _tree(world.root)
+    run(world)
+    assert _tree(world.root) == before
+
+
+def test_a_share_that_vanishes_mid_scan_aborts_and_marks_nothing_gone(world):  # noqa: F811
+    t = _helpers()
+    png, run, settle, make, cands = t.png, t.run, t.settle, t.make, t.cands
+    world.person("abc12de")
+    for i in range(3):
+        world.write(f"Users/abc12de/d{i}/f.png", png((i, i, i)))
+    settle(world)
+    run(world)
+    os.unlink(
+        Path(world.root, "Users/abc12de/d1/f.png")
+    )  # d1 changed: this scan will look for gone files
+    sc, spy, _ = make(world)
+    spy.vanish_after = 6
+    stats = sc.scan()
+    assert stats.aborted
+    assert set(cands(world).values()) == {("new", "backlog", "image")}
