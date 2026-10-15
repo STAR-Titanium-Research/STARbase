@@ -74,27 +74,54 @@ const answer = computed(() => answerOf(values.value));
 const lead = computed(() => leadText(props.ids.length, props.collection));
 const refusals = computed(() => props.checks ?? []);
 
+// Focus. On open it goes to the date; whenever the dialog closes (cancelled, or the page set `open` to false after a good Mark
+// done) it goes back to what had it, whoever closed it. Keys are read on the document while the dialog is open, so Tab cannot
+// leave it by any route and Escape works wherever focus is (the people list stops its own Escape).
+function focusFirst(): void {
+	const first = dialog.value?.querySelector<HTMLElement>('input');
+	(first ?? heading.value)?.focus();
+}
+function restoreFocus(): void {
+	const back = opener;
+	opener = null;
+	if (back?.isConnected) void nextTick(() => back.focus());
+}
+
 watch(
 	() => props.open,
-	async (open) => {
-		if (!open || typeof document === 'undefined') return; // (server-side render: nothing to focus or look up)
+	async (open, was) => {
+		if (typeof document === 'undefined') return; // (server-side render: nothing to focus or look up)
+		if (!open) {
+			document.removeEventListener('keydown', onKeydown);
+			if (was) restoreFocus();
+			return;
+		}
 		opener = document.activeElement as HTMLElement | null;
 		touchedPerson = false;
 		values.value = initialAnswer(me.value);
+		document.addEventListener('keydown', onKeydown);
 		void lookupMe();
 		await nextTick();
-		const first = dialog.value?.querySelector<HTMLElement>('input');
-		(first ?? heading.value)?.focus();
+		focusFirst();
 	},
 	{ immediate: true },
 );
+// While the request is out the buttons are aria-disabled (still focusable, so focus is not thrown out to the page behind): focus
+// goes to the heading, which the person can read, and stays inside.
+watch(() => props.busy, async (busy) => {
+	if (!busy || !props.open) return;
+	await nextTick();
+	heading.value?.focus();
+});
 watch(() => host.user.value?.id, () => { if (props.open) void lookupMe(); });
-onBeforeUnmount(() => { meFor = undefined; });
+onBeforeUnmount(() => {
+	meFor = undefined;
+	if (typeof document !== 'undefined') document.removeEventListener('keydown', onKeydown);
+});
 
 function cancel(): void {
 	if (props.busy) return;
 	emit('cancel');
-	if (opener?.isConnected) void nextTick(() => opener?.focus());
 }
 function confirm(): void {
 	if (props.busy || !answer.value) return;
@@ -103,6 +130,7 @@ function confirm(): void {
 
 const STOPS = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 function onKeydown(e: KeyboardEvent): void {
+	if (!props.open) return;
 	if (e.key === 'Escape') {
 		e.preventDefault();
 		e.stopPropagation();
@@ -113,7 +141,7 @@ function onKeydown(e: KeyboardEvent): void {
 		const first = stops[0];
 		const last = stops[stops.length - 1];
 		const at = document.activeElement as HTMLElement | null;
-		if (e.shiftKey && (at === first || !dialog.value?.contains(at))) {
+		if (e.shiftKey && (at === first || at === heading.value || !dialog.value?.contains(at))) {
 			e.preventDefault();
 			last.focus();
 		} else if (!e.shiftKey && (at === last || !dialog.value?.contains(at))) {
@@ -127,10 +155,10 @@ function onKeydown(e: KeyboardEvent): void {
 <template>
 	<Teleport to="body">
 		<div v-if="open" class="d1-kit pm-md-backdrop" @mousedown.self="cancel">
-			<div ref="dialog" class="pm-md" role="dialog" aria-modal="true" :aria-labelledby="`${uid}-title`" :aria-describedby="`${uid}-lead`" @keydown="onKeydown">
+			<div ref="dialog" class="pm-md" role="dialog" aria-modal="true" :aria-labelledby="`${uid}-title`" :aria-describedby="`${uid}-lead`">
 				<header class="top">
 					<h2 :id="`${uid}-title`" ref="heading" tabindex="-1">{{ title }}</h2>
-					<button type="button" class="x" aria-label="Close" :disabled="busy" @click="cancel">&times;</button>
+					<button type="button" class="x" aria-label="Close" :aria-disabled="busy ? 'true' : undefined" @click="cancel">&times;</button>
 				</header>
 				<div class="body">
 					<p :id="`${uid}-lead`" class="lead">{{ lead }}</p>
@@ -144,8 +172,8 @@ function onKeydown(e: KeyboardEvent): void {
 				</div>
 				<footer class="foot">
 					<span class="grow" />
-					<button type="button" class="btn" :disabled="busy" @click="cancel">Cancel</button>
-					<button type="button" class="btn primary" :disabled="busy || !answer" :aria-busy="busy ? 'true' : undefined" @click="confirm">
+					<button type="button" class="btn" :aria-disabled="busy ? 'true' : undefined" @click="cancel">Cancel</button>
+					<button type="button" class="btn primary" :disabled="!busy && !answer" :aria-disabled="busy ? 'true' : undefined" :aria-busy="busy ? 'true' : undefined" @click="confirm">
 						{{ busy ? 'Marking done…' : 'Mark done' }}
 					</button>
 				</footer>
@@ -161,16 +189,19 @@ function onKeydown(e: KeyboardEvent): void {
 }
 .pm-md {
 	width: min(460px, 100%); max-height: 84vh; display: flex; flex-direction: column;
-	border: 1px solid var(--d1-line); border-radius: var(--d1-radius); background: var(--d1-surface); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3); overflow: hidden;
+	border: 1px solid var(--d1-line); border-radius: var(--d1-radius); background: var(--d1-surface); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+	/* Not clipped: the people list drops out of the dialog's body, and may reach past its footer. The only thing that can grow is the
+	   refusal list, which scrolls inside itself. */
+	overflow: visible;
 }
 .top { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 10px; border-bottom: 1px solid var(--d1-line); }
 .top h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--fs-lg, 15px); font-weight: 600; overflow-wrap: anywhere; }
 .top h2:focus { outline: none; }
 .x { border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
-.x:hover:not(:disabled) { background: var(--d1-tile); }
-.body { overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.x:hover:not([aria-disabled='true']) { background: var(--d1-tile); }
+.body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .lead { margin: 0; font-size: var(--fs-md, 13px); color: var(--d1-dim); }
-.refused { padding: 8px 12px; border: 1px solid var(--d1-bad); border-radius: 8px; background: color-mix(in srgb, var(--theme--danger) 10%, var(--d1-surface)); font-size: var(--fs-sm, 12px); }
+.refused { max-height: 30vh; overflow-y: auto; padding: 8px 12px; border: 1px solid var(--d1-bad); border-radius: 8px; background: color-mix(in srgb, var(--theme--danger) 10%, var(--d1-surface)); font-size: var(--fs-sm, 12px); }
 .why { margin: 0 0 4px; font-weight: 650; color: var(--d1-bad); }
 .refused ul { margin: 0; padding-left: 18px; }
 .refused li.warn { color: var(--d1-warn); }
@@ -179,8 +210,8 @@ function onKeydown(e: KeyboardEvent): void {
 .btn {
 	padding: 6px 14px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); color: inherit; font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; cursor: pointer;
 }
-.btn:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
+.btn:hover:not(:disabled):not([aria-disabled='true']) { border-color: var(--d1-accent, var(--theme--primary)); }
 .btn.primary { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 .btn:focus-visible, .x:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
-.btn:disabled, .x:disabled { opacity: 0.55; cursor: default; }
+.btn:disabled, .x:disabled, [aria-disabled='true'] { opacity: 0.55; cursor: default; }
 </style>

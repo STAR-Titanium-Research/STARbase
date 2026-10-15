@@ -83,10 +83,18 @@ describe('MarkDoneDialog', () => {
 		expect(dialog).not.toContain('role="alert"');
 	});
 
-	it('while busy: the buttons are disabled and Mark done says it is working', async () => {
+	it('while busy: the buttons are aria-disabled (focus stays inside) and Mark done says it is working', async () => {
 		const { dialog } = await render({ ...base, busy: true });
 		expect(text(dialog)).toContain('Marking done…');
 		expect(dialog).toContain('aria-busy="true"');
-		for (const b of dialog.matchAll(/<button[^>]*>/g)) expect(b[0]).toContain('disabled');
+		for (const b of dialog.matchAll(/<button[^>]*>/g)) {
+			expect(b[0]).toContain('aria-disabled="true"');
+			expect(b[0]).not.toMatch(/\sdisabled(=|\s|>)/); // a disabled button cannot hold focus, so it would throw it out
+		}
+	});
+
+	it('is not aria-disabled when idle', async () => {
+		const { dialog } = await render(base);
+		expect(dialog).not.toContain('aria-disabled');
 	});
 });
