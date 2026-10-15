@@ -113,7 +113,7 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 	}
 
 	function existingSample(item: DraftSample, id: string, c: ToGraphCtx): SampleRec {
-		return c.samples?.[id] ?? { id, code: c.label?.('physical_samples', id) ?? id, form: null, status: null, projectId: null, materialRef: null, facts: {} };
+		return c.samples?.[id] ?? { id, code: c.label?.('physical_samples', id) ?? id, nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} };
 	}
 
 	function newSample(item: DraftSample, id: string): SampleRec {
@@ -131,6 +131,7 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 			id,
 			// {seq} is the number the database gives at Create: "?" until then, as on the Register a sample page.
 			code: code ? code.replace(/^\{seq\}/, '?') : 'New sample',
+			nickname: text(all.nickname),
 			form: text(all.form),
 			status: maker?.op.workState === 'planned' ? 'planned' : null,
 			projectId: project(own),

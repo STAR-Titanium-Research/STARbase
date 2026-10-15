@@ -28,7 +28,7 @@ describe('toGraph', () => {
 		const body = run([{ type: 'addSample', values: { material_id: 'ti', form: 'disc', sample_code: '{seq}-Ti64-MC-2026-10-14', diameter_mm: 20 } }]);
 		const data = toGraph(null, body, ctx);
 		expect(data.samples).toEqual([
-			{ id: 'draft:n1', code: '?-Ti64-MC-2026-10-14', form: 'disc', status: null, projectId: null, materialRef: { collection: 'materials', id: 'ti', code: 'Ti64' }, facts: { Diameter: '20 mm' }, draft: true },
+			{ id: 'draft:n1', code: '?-Ti64-MC-2026-10-14', nickname: null, form: 'disc', status: null, projectId: null, materialRef: { collection: 'materials', id: 'ti', code: 'Ti64' }, facts: { Diameter: '20 mm' }, draft: true },
 		]);
 		expect(data.focus).toMatchObject({ id: 'draft:n1', kind: 'sample' });
 		const g = draw(data);
