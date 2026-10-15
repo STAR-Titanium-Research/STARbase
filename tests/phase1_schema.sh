@@ -3514,7 +3514,7 @@ rl_check "people_update_own_row:1" "Lab Member updates only their own People row
 rl_check "people_actions:create,read,update" "Lab Member can create, read and update people but not delete them"
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
-rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
+rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,scan_while_former,uni_alias,user_id" "people.update leaves out exactly the key, the login, the legacy id, the timestamp and the inbox alias columns (migration 192: administrators only)"
 rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
 rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
@@ -3807,6 +3807,11 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DROP TABLE IF EXISTS d1_private.form_values_175_backup;
 DROP TABLE IF EXISTS d1_private.process_templates;
 DROP TABLE IF EXISTS d1_private.process_drafts;
+DROP TABLE IF EXISTS d1_private.inbox_prefs;
+DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
+DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
+DROP TABLE IF EXISTS d1_private.inbox_dirs;
+DROP TABLE IF EXISTS d1_private.file_candidates;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
