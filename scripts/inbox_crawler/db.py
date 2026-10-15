@@ -144,6 +144,7 @@ class Store:
                 pass
 
     def scan_started(self) -> None:
+        """A scan of everyone began (a one-person request does not move the schedule)."""
         self._run(
             "UPDATE inbox_crawler_state SET last_scan_started_at = now(), updated_at = now() "
             "WHERE id = %s",
@@ -159,18 +160,20 @@ class Store:
         last_error: str | None,
         unmatched: list[str] | None,
         completed: bool,
+        full: bool = True,
     ) -> None:
         """Counters always; last_scan_finished_at only for a scan that ran to its end (an aborted one,
         for example when the share dropped, leaves it where it was)."""
         self._run(
             "UPDATE inbox_crawler_state SET "
-            " last_scan_finished_at = CASE WHEN %s THEN now() ELSE last_scan_finished_at END,"
+            " last_scan_finished_at = CASE WHEN %s AND %s THEN now() ELSE last_scan_finished_at END,"
             " files_registered = files_registered + %s, error_count = error_count + %s,"
             " last_error = COALESCE(%s, last_error),"
             " unmatched_folders = COALESCE(%s::jsonb, unmatched_folders), updated_at = now() "
             "WHERE id = %s",
             (
                 completed,
+                full,
                 registered,
                 errors,
                 (last_error or None) and last_error[:900],

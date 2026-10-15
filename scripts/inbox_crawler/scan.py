@@ -47,6 +47,50 @@ def ignored_file(name: str) -> bool:
     )
 
 
+def still_the_same(
+    share, rel: str, st, hashed: hashing.HashOutcome
+) -> hashing.HashOutcome:
+    """The fingerprint row says "this hash is of a file of this size and mtime", and others (the
+    surface-scan renderer) rely on it. So a hash is kept as done only if the file is still what stat
+    said before it was read; a file that changed while it was read is recorded as an error and hashed
+    again later."""
+    if hashed.status != "done":
+        return hashed
+    try:
+        after = share.stat(rel)
+    except OSError as exc:
+        return hashing.HashOutcome(
+            "error", error=f"could not re-check the file ({type(exc).__name__})"
+        )
+    if hashed.size != st.size or (after.size, after.mtime_ns) != (st.size, st.mtime_ns):
+        return hashing.HashOutcome(
+            "error", error="the file changed while it was being hashed"
+        )
+    return hashed
+
+
+def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
+    """Stat, hash and re-check one file. Returns (outcome, stat or None, mtime or None). Used for a file a
+    person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints."""
+    try:
+        st = share.stat(rel)
+    except FileNotFoundError:
+        return (
+            hashing.HashOutcome("missing", error="the file is not on the share"),
+            None,
+            None,
+        )
+    except OSError as exc:
+        return (
+            hashing.HashOutcome("error", error=f"{type(exc).__name__}: {exc}"[:500]),
+            None,
+            None,
+        )
+    out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
+    out = still_the_same(share, rel, st, out)
+    return out, st, db.to_datetime(st.mtime_ns)
+
+
 class ShareUnavailable(Exception):  # noqa: N818 (a condition, not a bug)
     """The share is not there (or going away): abort, mark nothing gone."""
 
@@ -451,26 +495,7 @@ class Scanner:
     def _still_the_same(
         self, rel, st, hashed: hashing.HashOutcome
     ) -> hashing.HashOutcome:
-        """The fingerprint row says "this hash is of a file of this size and mtime", and others (the
-        surface-scan renderer) rely on it. So a hash is kept as done only if the file is still what
-        stat said before it was read; a file that changed while it was read is recorded as an error and
-        hashed again later."""
-        if hashed.status != "done":
-            return hashed
-        try:
-            after = self.share.stat(rel)
-        except OSError as exc:
-            return hashing.HashOutcome(
-                "error", error=f"could not re-check the file ({type(exc).__name__})"
-            )
-        if hashed.size != st.size or (after.size, after.mtime_ns) != (
-            st.size,
-            st.mtime_ns,
-        ):
-            return hashing.HashOutcome(
-                "error", error="the file changed while it was being hashed"
-            )
-        return hashed
+        return still_the_same(self.share, rel, st, hashed)
 
     @staticmethod
     def _file_id(rel):
