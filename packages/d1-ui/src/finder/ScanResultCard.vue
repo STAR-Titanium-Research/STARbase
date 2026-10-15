@@ -9,7 +9,7 @@ import { displayText } from './scan';
 import type { ScanOutcome } from './scan';
 
 const props = defineProps<{ outcome: Exclude<ScanOutcome, { kind: 'open' }> }>();
-const emit = defineEmits<{ (e: 'open', to: string): void }>();
+const emit = defineEmits<{ (e: 'open', to: string, record?: { collection: string; id: string }): void }>();
 
 const title = computed(() => {
 	const o = props.outcome;
@@ -28,7 +28,7 @@ const title = computed(() => {
 				{{ displayText(outcome.found.shortId) }}<template v-if="outcome.found.nickname"> ("{{ displayText(outcome.found.nickname) }}")</template>. Open it?
 			</p>
 			<pre v-if="outcome.lines.length" class="text">{{ displayText(outcome.lines.join('\n')) }}</pre>
-			<button type="button" class="open" @mousedown.prevent @click="emit('open', outcome.to)">Open sample</button>
+			<button type="button" class="open" @mousedown.prevent @click="emit('open', outcome.to, outcome.record)">Open sample</button>
 		</template>
 		<template v-else-if="outcome.kind === 'failed'">
 			<p class="reason">{{ outcome.message }}</p>

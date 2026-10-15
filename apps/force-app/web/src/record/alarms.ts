@@ -32,6 +32,12 @@ const DEFAULTS: AlarmConfig = {
 };
 const TONE_GAIN_DEFAULT = 0.35; // the tone's level while toneVolume is unset
 
+/** A usable force limit: a finite number above zero. Settings' `v-model.number` writes '' while the
+ * field is empty, and `v >= ''` is `v >= 0`, so an emptied (or zero) limit tripped on every frame (#289). */
+function validForceLimit(x: unknown): x is number {
+	return typeof x === 'number' && Number.isFinite(x) && x > 0;
+}
+
 /** Parse the persisted alarm config defensively: a missing, corrupt or hand-edited entry (wrong
  * types, NaN, out-of-range numbers) falls back to the default for that field only, so one bad key
  * never discards the operator's other thresholds. Exported for tests. */
@@ -48,7 +54,7 @@ export function parseAlarmConfig(raw: string | null | undefined): AlarmConfig {
 	};
 	return {
 		forceEnabled: bool('forceEnabled', DEFAULTS.forceEnabled),
-		forceThreshold: num('forceThreshold', DEFAULTS.forceThreshold, 0),
+		forceThreshold: num('forceThreshold', DEFAULTS.forceThreshold, Number.MIN_VALUE),
 		rpmEnabled: bool('rpmEnabled', DEFAULTS.rpmEnabled),
 		rpmThreshold: num('rpmThreshold', DEFAULTS.rpmThreshold, 0),
 		audioEnabled: bool('audioEnabled', DEFAULTS.audioEnabled),
@@ -97,11 +103,27 @@ export class AlarmController {
 
 	saveCfg() { try { localStorage.setItem(LS_KEY, JSON.stringify(this.config)); } catch { /* storage unavailable */ } }
 
+	// The last limit that was a usable number, so the alarm keeps protecting at it while the Settings
+	// field is empty mid-edit. Starts at the loaded value, which parseAlarmConfig has already validated.
+	private lastForceLimit = validForceLimit(this.config.forceThreshold) ? this.config.forceThreshold : DEFAULTS.forceThreshold;
+
+	/** The force limit in N that evaluate() trips at: the configured one, or the last usable one
+	 * while the field holds '' / 0 / a negative number. */
+	get forceLimit(): number {
+		return validForceLimit(this.config.forceThreshold) ? this.config.forceThreshold : this.lastForceLimit;
+	}
+	/** Called when the Settings field is committed (change): remember a usable limit, or put the
+	 * last usable one back into the field so the form never shows a limit the alarm isn't using. */
+	commitForceThreshold(): void {
+		if (validForceLimit(this.config.forceThreshold)) this.lastForceLimit = this.config.forceThreshold;
+		else this.config.forceThreshold = this.lastForceLimit;
+	}
+
 	/** The early-warning level in N, or null when the warning is off. */
 	get warnLevel(): number | null {
 		const c = this.config;
-		if (!c.forceEnabled || !c.warnEnabled || !(c.forceThreshold > 0)) return null;
-		return (c.forceThreshold * c.warnPercent) / 100;
+		if (!c.forceEnabled || !c.warnEnabled) return null;
+		return (this.forceLimit * c.warnPercent) / 100;
 	}
 	dismissWarnings(): void { this.warnings.splice(0); }
 	/** Clear only the early warnings and re-arm them for the next cut (the New button). Unlike
@@ -120,13 +142,14 @@ export class AlarmController {
 		let fired = false;
 		let forceFired = false;
 		if (this.config.forceEnabled) {
+			const limit = this.forceLimit;
 			const warnLevel = this.warnLevel;
 			for (const ax of ['Fx', 'Fy', 'Fz'] as const) {
 				const v = Math.abs(peaks[ax] ?? 0);
 				const key = `force:${ax}`;
-				if (v >= this.config.forceThreshold && !this.latched.has(key)) {
+				if (v >= limit && !this.latched.has(key)) {
 					this.latched.add(key);
-					this.active.push({ key, kind: 'force', label: `${ax} force`, value: v, threshold: this.config.forceThreshold, at: Date.now() });
+					this.active.push({ key, kind: 'force', label: `${ax} force`, value: v, threshold: limit, at: Date.now() });
 					fired = true;
 					forceFired = true;
 				}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordLink, Section, StatusBadge, asRecord } from '@d1/ui';
+import { RecordLink, Section, StatusBadge, asRecord, choiceLabel } from '@d1/ui';
 
 // The samples an operation consumed (sample_id: the workpiece it acted on) and produced
 // (output_sample_id: the new sample of an additive or FAST step). Machining modifies the input in
@@ -28,7 +28,7 @@ const rows = computed(() =>
 						{{ r.sample.sample_code || 'Sample' }}
 					</RecordLink>
 					<span v-if="r.sample.nickname" class="muted">{{ r.sample.nickname }}</span>
-					<span v-if="r.sample.form" class="muted">{{ r.sample.form }}</span>
+					<span v-if="r.sample.form" class="muted">{{ choiceLabel('geometry', r.sample.form) }}</span>
 					<StatusBadge kind="sample" :value="r.sample.current_status" />
 				</template>
 				<span v-else class="muted">Not visible to you</span>

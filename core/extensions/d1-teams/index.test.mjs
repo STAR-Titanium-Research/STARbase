@@ -158,7 +158,7 @@ function makeDb(tables, rawAnswers) {
       del: async () => {
         const hit = rows();
         log.statements.push({ op: 'delete', table });
-        // owner_team_id of the four record tables is a foreign key ON DELETE RESTRICT (migration 177): a team that owns a record stays
+        // owner_team_id of the four record tables is a foreign key ON DELETE RESTRICT (migration 183): a team that owns a record stays
         if (table === 'teams') {
           for (const t of hit) {
             for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']) {
@@ -196,7 +196,7 @@ function makeDb(tables, rawAnswers) {
     }
     return { rows: [] };
   };
-  // A transaction: the same tables, restored when the work throws. At COMMIT the deferred constraint of migration 175 is judged:
+  // A transaction: the same tables, restored when the work throws. At COMMIT the deferred constraint of migration 181 is judged:
   // a team with members and no manager rolls everything back with SQLSTATE 23514 (thrown by the transaction call, not the callback).
   db.transaction = async (work) => {
     const snapshot = structuredClone(tables);
@@ -1021,7 +1021,7 @@ test('decide: a mail failure never undoes the approval', async () => {
   assert.ok(warnings.length >= 1);
 });
 
-// ---- team ownership (migration 177, People 3 Task 3) ---------------------------------------------------------------------
+// ---- team ownership (migration 183, People 3 Task 3) ---------------------------------------------------------------------
 // Beta (manager Fay, member Bob) owns SM-004 and SM-005. Additive has a view grant on SM-004; Cy waits on it. The owner grant (role own)
 // is the database's: it is in the world so the endpoint's reads can skip it.
 

@@ -1,10 +1,10 @@
 import { test, expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
 import { D1_LOCAL, STAR_BASE, account, adminApi, pointAtD1 } from '../starbase/target';
 
-// Team ownership (People 3: migrations 177 and 178, the owner grant and the `manage` level, the guards, `d1-record-access` transfer to a
+// Team ownership (People 3: migrations 183 and 184, the owner grant and the `manage` level, the guards, `d1-record-access` transfer to a
 // team, the `d1-teams` delete guard, STARbase's Who has access with a team owner, the rails and the team page), in a real browser against
 // the d1-starbase preview, ports layout, same setup as spec 14 (tests/ui/README.md). The preview overlay needs d1-teams,
-// d1-record-access, d1-people-admin, d1-person-link, d1-owner-default and d1-access-guard (the migrations 177 and 178 are on the preview
+// d1-record-access, d1-people-admin, d1-person-link, d1-owner-default and d1-access-guard (the migrations 183 and 184 are on the preview
 // copy). Run: npx playwright test specs/19-team-ownership.spec.ts
 //
 // What it proves on real Directus and Postgres (the unit tests use fakes): the person and role conditions of the Lab Member delete and

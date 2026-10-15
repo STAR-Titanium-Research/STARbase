@@ -34,6 +34,11 @@ function positiveInt(v: string | undefined): number | null {
 	return n >= 1 && n <= MAX_INT ? n : null;
 }
 
+// A saved-view chip toggles: clicking the one that is on clears it (back to the whole list), any other turns it on.
+export function toggledBookmark(current: number | null, clicked: number): number | null {
+	return current === clicked ? null : clicked;
+}
+
 export function stateFromQuery(query: RawQuery): IndexState {
 	const bookmark = positiveInt(first(query.bookmark));
 	const page = positiveInt(first(query.page));

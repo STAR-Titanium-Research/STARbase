@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import type { ExplorerHost } from '../host';
 import { buildNav } from '../nav/navConfig';
 import { FINDER_DEBOUNCE_MS, SCAN_IDLE_MS, useFinder } from './useFinder';
+import { openHit } from './finderNav';
 
 const visible = new Set(['physical_samples', 'manufacturing_operations', 'campaigns']);
 
@@ -262,5 +263,29 @@ describe('useFinder retry', () => {
 		finder.readScanNow();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(opened).toEqual(['/home/samples/u1']);
+	});
+});
+
+describe('useFinder hands a scanned sample to onOpen as a record too', () => {
+	it('onOpen gets the route and the record, which the Finder routes through openHit', async () => {
+		const host = { api: { get: async () => ({ data: { data: [{ sample_id: 'u1', sample_code: 'S-1', short_id: '1a2b3c4d' }] } }) } } as unknown as ExplorerHost;
+		const calls: unknown[][] = [];
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), {
+			onOpen: (to, record) => {
+				// what Finder.vue does with it
+				openHit({ to, record }, (t) => calls.push(['navigate', t]), pick);
+			},
+		});
+		let pick: ((r: { collection: string; id: string }) => void) | undefined;
+		finder.query.value = 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(calls).toEqual([['navigate', '/home/samples/u1']]); // no pickRecord: navigates as before
+
+		calls.length = 0;
+		pick = (r) => calls.push(['pick', r]);
+		finder.query.value = '';
+		finder.query.value = 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 'u1' }]]);
 	});
 });

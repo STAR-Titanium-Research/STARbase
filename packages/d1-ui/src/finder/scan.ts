@@ -11,14 +11,20 @@ export interface ScanApi {
 
 export type FailReason = 'not_found' | 'no_access' | 'network' | 'error';
 
+// The sample a scan found, as collection and key: a host that wants the record (the Process map) takes it instead of `to`.
+export interface ScanRecord {
+	collection: string;
+	id: string;
+}
+
 export type ScanOutcome =
 	// The sample was found: go to `to`.
-	| { kind: 'open'; to: string; code: string }
+	| { kind: 'open'; to: string; code: string; record?: ScanRecord }
 	// A D1 label whose sample could not be opened. The decoded label text is kept so it can be shown.
 	| { kind: 'failed'; reason: FailReason; message: string; code: string; shortId: string; lines: string[] }
 	// The short ID matched nothing the user can see, but the code matches a sample. The code can have been
 	// reused or typed by hand, so this is shown for the user to confirm, never opened by itself.
-	| { kind: 'confirm'; to: string; code: string; shortId: string; lines: string[]; found: { shortId: string; nickname: string } }
+	| { kind: 'confirm'; to: string; record?: ScanRecord; code: string; shortId: string; lines: string[]; found: { shortId: string; nickname: string } }
 	// Not a D1 sample label (or an unreadable one): the text as scanned.
 	| { kind: 'text'; text: string; looksLikeD1: boolean };
 
@@ -107,7 +113,7 @@ export async function resolveLabel(api: ScanApi, text: string): Promise<ScanOutc
 		const rows = res.data?.data;
 		return Array.isArray(rows) ? rows[0] : undefined;
 	};
-	const open = (row: any): ScanOutcome => ({ kind: 'open', to: recordRoute('physical_samples', row.sample_id), code: String(row.sample_code ?? parsed.code) });
+	const open = (row: any): ScanOutcome => ({ kind: 'open', to: recordRoute('physical_samples', row.sample_id), record: { collection: 'physical_samples', id: String(row.sample_id) }, code: String(row.sample_code ?? parsed.code) });
 
 	try {
 		const byShortId = await find({ short_id: { _eq: parsed.shortId } });
@@ -115,7 +121,7 @@ export async function resolveLabel(api: ScanApi, text: string): Promise<ScanOutc
 		const byCode = await find({ sample_code: { _eq: parsed.code } });
 		if (byCode?.sample_id) {
 			const found = { shortId: String(byCode.short_id ?? ''), nickname: String(byCode.nickname ?? '') };
-			return { kind: 'confirm', to: recordRoute('physical_samples', byCode.sample_id), ...label, found };
+			return { kind: 'confirm', to: recordRoute('physical_samples', byCode.sample_id), record: { collection: 'physical_samples', id: String(byCode.sample_id) }, ...label, found };
 		}
 	} catch (err) {
 		return { kind: 'failed', ...failure(err), ...label };

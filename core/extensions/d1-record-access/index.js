@@ -12,7 +12,7 @@
 //   PATCH  /d1-record-access/:collection/:id/entries/:person_id { role }              -> { entry }
 //   DELETE /d1-record-access/:collection/:id/entries/:person_id                        -> { removed: true }
 //   POST   /d1-record-access/:collection/:id/transfer           { person_id }         -> { owner, email, blocked_by }
-//   Team ownership (migration 177): GET answers owner as { kind: 'person', person_id, name, can_sign_in } or, on a record a team owns,
+//   Team ownership (migration 183): GET answers owner as { kind: 'person', person_id, name, can_sign_in } or, on a record a team owns,
 //   { kind: 'team', team_id, name, color, logo, managers: [{ person_id, full_name }] } (null with no owner). Transfer also takes
 //   POST   /d1-record-access/:collection/:id/transfer           { team_id }           -> { owner, email, emails, blocked_by: null }
 //   for samples, operations, tests and campaigns (409 NOT_OWNABLE_BY_TEAM on a project): owner_team_id is set and owner_person_id cleared in
@@ -21,7 +21,7 @@
 //   its derived rows (manage for a manager, edit for a member). Ruling O2: that grant is never listed in teams, entries or members, and no
 //   route changes it (409 TEAM_OWNS_RECORD, or 404 where a route only reads): the team shows as the owner. A record becomes team-owned
 //   ONLY through this transfer (d1-access-guard refuses owner_team_id on create, Ruling O3).
-//   Teams (migration 176): GET also answers teams: [{ team_access_id, team_id, name, color, logo, member_count, role,
+//   Teams (migration 182): GET also answers teams: [{ team_access_id, team_id, name, color, logo, member_count, role,
 //   trust_new_members, waiting, declined }] (waiting = pending joiners worth asking about, Ruling D2; declined = declined joiners).
 //   POST   /d1-record-access/:collection/:id/entries            { team_id, role }     -> { team, email: 'sent'|'skipped'|'failed', emails }
 //   PATCH  /d1-record-access/:collection/:id/entries/team/:team_id   { role?, trust_new_members? }  -> { team }

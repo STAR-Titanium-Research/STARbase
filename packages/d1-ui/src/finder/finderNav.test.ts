@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, optionId, shouldOpenFinder, toSections } from './finderNav';
+import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, shouldOpenFinder, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -116,5 +116,33 @@ describe('shouldOpenFinder', () => {
 		const modal = press();
 		shouldOpenFinder(modal, false, doc(true));
 		expect([open.prevented, modal.prevented]).toEqual([1, 1]);
+	});
+});
+
+describe('openHit', () => {
+	const sample: FinderHit = { group: 'Samples', label: 'S-1', to: '/home/samples/s1', rank: 1, record: { collection: 'physical_samples', id: 's1' } };
+
+	it('navigates to the hit by default', () => {
+		const calls: unknown[] = [];
+		openHit(sample, (to) => calls.push(['navigate', to]));
+		expect(calls).toEqual([['navigate', '/home/samples/s1']]);
+	});
+
+	it('with pickRecord, a record hit goes to the callback as collection + id and does not navigate', () => {
+		const calls: unknown[] = [];
+		openHit(sample, (to) => calls.push(['navigate', to]), (r) => calls.push(['pick', r]));
+		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 's1' }]]);
+	});
+
+	it('a pickRecord that declines (returns false) leaves the hit to navigate, as if the host had none', () => {
+		const calls: unknown[] = [];
+		openHit(sample, (to) => calls.push(['navigate', to]), (r) => { calls.push(['pick', r]); return false; });
+		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 's1' }], ['navigate', '/home/samples/s1']]);
+	});
+
+	it('with pickRecord, a hit that is not a record (a page) still navigates', () => {
+		const calls: unknown[] = [];
+		openHit(hit('Pages', 'Samples'), (to) => calls.push(['navigate', to]), (r) => calls.push(['pick', r]));
+		expect(calls).toEqual([['navigate', '/x/Samples']]);
 	});
 });

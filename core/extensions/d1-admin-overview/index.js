@@ -24,7 +24,7 @@
 // who is not an admin. Each part is read on its own and fails soft (null, and a warning in the log),
 // so one broken query does not take the other panels down.
 //
-// Ownerless means neither a person (owner_person_id) nor a team (owner_team_id, migration 177) owns the record.
+// Ownerless means neither a person (owner_person_id) nor a team (owner_team_id, migration 183) owns the record.
 // Ownerless operations counts machining (non-sintering) operations only: the thousands of legacy FAST
 // imports will never get an owner and would swamp the panel.
 

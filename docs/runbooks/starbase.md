@@ -230,7 +230,7 @@ The STARbase tile stays first in the bar; remove it under Settings → Appearanc
 
 ## People admin (PR 1) (maintainer's step, approve separately)
 
-The admin People page: `d1-people-admin` (a Directus endpoint), migration 174 and STARbase's `/people` and `/accept-invite`.
+The admin People page: `d1-people-admin` (a Directus endpoint), migration 180 and STARbase's `/people` and `/accept-invite`.
 **No new `.env` keys.** `USER_INVITE_URL_ALLOW_LIST` is derived from `STARBASE_URL` in `docker-compose.yml`
 (`${STARBASE_URL}/accept-invite`), so `STARBASE_URL` must already be set (the STARbase rollout above); while it is blank the
 invite routes answer `503`.
@@ -238,7 +238,7 @@ invite routes answer `503`.
 1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`. d1-server has the maintainer's uncommitted
    `docker-compose.yml` edits (the `EMAIL_*` settings), so `git pull` may refuse or conflict: `git stash` first and `git stash pop`
    after (merge by hand if it conflicts), or merge the compose file yourself. Do not discard them: invites need that mail setup.
-2. `make migrate-status` (174 pending), then `make migrate` (migration 174: the SQL functions behind the attention line and a
+2. `make migrate-status` (180 pending), then `make migrate` (migration 180: the SQL functions behind the attention line and a
    person's access counts).
 3. `docker compose up -d --force-recreate directus`. The recreate is what makes Directus load `d1-people-admin` and pick up
    `USER_INVITE_URL_ALLOW_LIST`; a plain `restart` is not enough for a changed environment. Then
@@ -249,30 +249,30 @@ invite routes answer `503`.
 5. Smoke: People shows the "needs attention" line and the Role menu; a person's panel shows Account and Access;
    `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-people-admin/people` without a session is `401`.
 
-Rollback: `make migrate-down` (174), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
+Rollback: `make migrate-down` (180), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
 A login invited meanwhile stays (an invited user is an ordinary Directus user).
 
 ## Teams (PR 2) (maintainer's step, approve separately)
 
-Teams: migrations 175 (`teams`, `team_members`, `team_events`) and 176 (team grants, the derived access rows, the pending tables, the
+Teams: migrations 181 (`teams`, `team_members`, `team_events`) and 182 (team grants, the derived access rows, the pending tables, the
 SQL functions), the new `d1-teams` endpoint, the team routes of `d1-record-access` and STARbase's Teams view, team page, members card
 and Home "Waiting for you". **No new `.env` keys.**
 
-**Deploy `d1-record-access` together with migration 176.** 176 splits `UNIQUE (record, person_id)` on the five access tables into two
+**Deploy `d1-record-access` together with migration 182.** 182 splits `UNIQUE (record, person_id)` on the five access tables into two
 partial unique indexes, so the person-entry upsert of the old `d1-record-access` (`ON CONFLICT (record, person_id)`) no longer matches
-an index and every add-person call fails until the new build (its upsert names `WHERE team_access_id IS NULL`) is loaded. Never apply 176
+an index and every add-person call fails until the new build (its upsert names `WHERE team_access_id IS NULL`) is loaded. Never apply 182
 and leave the old extension running; the steps below do both in one go. `d1-teams` is a new extension folder inside the mounted
 `core/extensions` directory: it needs no registration, only the recreate in step 4.
 
 1. `git pull && npm ci && npm run build:starbase && npm run build:extensions` (same stash advice as the People admin section above).
-2. Back up (`docs/runbooks/backup-restore.md`), then `make migrate-status` (175 and 176 pending) and `make migrate`. 176 gives no team
+2. Back up (`docs/runbooks/backup-restore.md`), then `make migrate-status` (181 and 182 pending) and `make migrate`. 182 gives no team
    access to anybody (no grants exist yet), so existing readers do not change.
 3. Check the derived rows and the readers, both must be clean:
    ```sql
    SELECT * FROM d1_private.team_drift();            -- 0 rows
    SELECT d1_private.readers_drift_count();          -- 0
    ```
-4. Reload Directus on the new extensions and a clean permission cache. **Between `make migrate` (176) and this step the old
+4. Reload Directus on the new extensions and a clean permission cache. **Between `make migrate` (182) and this step the old
    `d1-record-access` is still running, and adding a person through Who has access fails (its upsert no longer matches an index): keep that
    window short, go straight from step 2 to here (step 3 is SQL only and can wait until Directus is back).** In order:
    ```bash
@@ -299,38 +299,38 @@ again from Who has access (the grant's triggers rebuild its derived rows); do no
 
 Performance: the write paths `team_join_100_records` and `team_grant_20_members` are in `scripts/dev/perf_writes.sql` and
 `scripts/dev/directus_perf_writes.mjs`. The gate (p95 < 300 ms per list request, writes at most 2x, the two team writers under 500 ms) was
-run on 2026-10-14 on the seeded copy of live, before (`--skip 20261014000174 --skip 20261014000175 --skip 20261014000176`, overlays
+run on 2026-10-14 on the seeded copy of live, before (`--skip 20261014000180 --skip 20261014000181 --skip 20261014000182`, overlays
 `d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview`) and after (the same plus `d1-teams d1-people-admin
 d1-person-link`), with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1 bash scripts/dev/directus_smoke.sh` and
 `py -3 scripts/dev/perf_compare.py before.log after.log`: GATE PASS, worst read p95 143 ms, worst write ratio x1.00,
 `team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 ms and 17 ms in SQL). Re-run it on the
 maintainer's machine if the copy of live has changed a lot; the procedure is in `docs/runbooks/a1-record-access-cutover.md`.
 
-Rollback: `make migrate-down` twice (176, then 175; 176's down deletes the derived rows and restores the old unique constraints),
+Rollback: `make migrate-down` twice (182, then 181; 182's down deletes the derived rows and restores the old unique constraints),
 `git checkout <previous commit>`, rebuild, then reload exactly as in step 4: `docker compose stop directus`, flush Redis only after `rq info`
 shows nothing queued, nothing failed and no busy worker (or, instead of the flush, start Directus and run `POST /utils/cache/clear` as an
-administrator at once), start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 175's down.
+administrator at once), start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 181's down.
 
 ## Team ownership (PR 3) (maintainer's step, approve separately)
 
 A team can own a sample, campaign, operation or test (never a project); its managers act as the owner and its members can edit. Migrations
-**177** (`owner_team_id`, the owner grant, the `manage` level, the readers and bookkeeping) and **178** (the regenerated Lab Member rules),
+**183** (`owner_team_id`, the owner grant, the `manage` level, the readers and bookkeeping) and **184** (the regenerated Lab Member rules),
 the new `d1-access-guard` and `d1-owner-default`, `d1-record-access` (transfer to a team, team owners in Who has access), `d1-teams`
 (delete guard, owned counts, owners' queue) and `d1-admin-overview` (ownerless counts), and STARbase (team owners in Who has access, the
 rails, the team page, My work). **No new `.env` keys.** Needs PR 2 ("Teams (PR 2)" above) deployed first.
 
-**Apply 177 and 178 together, and deploy the five extensions with them.** 177 alone would let any editor write `owner_team_id` through the
-API (the guard that refuses it is 178's rules plus `d1-access-guard`'s `rules.json`) and make their own team the owner, so a manager of
-their team would be handed `manage`. Never stop between the two migrations, and never leave the old extensions running with 177 applied:
+**Apply 183 and 184 together, and deploy the five extensions with them.** 183 alone would let any editor write `owner_team_id` through the
+API (the guard that refuses it is 184's rules plus `d1-access-guard`'s `rules.json`) and make their own team the owner, so a manager of
+their team would be handed `manage`. Never stop between the two migrations, and never leave the old extensions running with 183 applied:
 the old `d1-record-access` does not know `owner_team_id`, the old `d1-teams` would not turn the refusal of an owning team's delete into the 409 with counts, and the
 old `d1-admin-overview` counts team-owned records as ownerless (the new one needs the column and fails soft without it). That is why
 Directus is stopped before `make migrate` (step 2) and only started again on the new extensions (step 4).
 
 1. `git pull && npm ci && npm run build:starbase && npm run build:extensions` (same stash advice as the People admin section above).
-2. **Stop Directus first** (`docker compose stop directus`) so the old Directus and the old guard never serve against 177 without 178's
+2. **Stop Directus first** (`docker compose stop directus`) so the old Directus and the old guard never serve against 183 without 184's
    rules (a running Directus would let an editor write `owner_team_id` in that window). Back up (`docs/runbooks/backup-restore.md`), then
-   `make migrate-status` (177 and 178 pending) and `make migrate`. 177 changes no
-   access: no record has an `owner_team_id` yet, so existing readers do not change. 178 replaces 15 collections' Lab Member rows (a backup
+   `make migrate-status` (183 and 184 pending) and `make migrate`. 183 changes no
+   access: no record has an `owner_team_id` yet, so existing readers do not change. 184 replaces 15 collections' Lab Member rows (a backup
    of the old rows is in `d1_private.team_ownership_rules_backup`).
 3. Check, both must be clean:
    ```sql
@@ -343,7 +343,7 @@ Directus is stopped before `make migrate` (step 2) and only started again on the
    `docker compose exec -T redis redis-cli FLUSHALL`) and `docker compose up -d directus` (with `--force-recreate` for the changed
    extension folders), or start Directus and run `POST /utils/cache/clear` as an administrator **immediately after it starts and before
    anyone is let back in**; then `docker compose up -d --force-recreate proxy` for the new STARbase build. Directus is down from step 2
-   until here, so keep that window short (178's rules and the new extensions must be live together).
+   until here, so keep that window short (184's rules and the new extensions must be live together).
 5. Smoke: on a sample you own, Who has access → Transfer ownership… → pick a team you manage; the owner row now reads "<team> (managers)",
    the rail's Owner shows the team name, and you (the previous owner) stay on it as Can edit. A plain member of that team can edit the
    sample but sees "Only <team>'s managers can change who has access." and no controls; transfer a team with no manager and the dialog
@@ -361,17 +361,17 @@ rows by hand. Label owner initials, `d1-report`'s owner row, ForceDashboard "rel
 person owner only (spec section 11, E30).
 
 Preview and E2E: `npm run build:extensions && npm run build -w starbase-web`, then the preview with the overlay of `tests/ui/README.md`
-(it must include `d1-owner-default d1-access-guard`; the preview applies 177 and 178) and
+(it must include `d1-owner-default d1-access-guard`; the preview applies 183 and 184) and
 `cd tests/ui && npx playwright test specs/19-team-ownership.spec.ts`. It proves on real Directus that a plain member of the owning team is
 refused delete, share and transfer although a manager's `manage` row is on the same record.
 
 Performance: the gate of PR 2 (p95 below 300 ms per list request, writes at most 2x, the two team writers under 500 ms) was re-run on
-2026-10-14 on the seeded copy of live, before (`--skip 20261014000177 --skip 20261014000178`, overlays `d1-next-number d1-access-guard
+2026-10-14 on the seeded copy of live, before (`--skip 20261014000183 --skip 20261014000184`, overlays `d1-next-number d1-access-guard
 d1-trace d1-admin-overview d1-people-admin d1-person-link`: the new `d1-record-access` and `d1-teams` read `owner_team_id`, so the "before"
 runs without them) and after (the same plus `d1-owner-default d1-record-access d1-teams`), each with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1
 bash scripts/dev/directus_smoke.sh` and compared with `py -3 scripts/dev/perf_compare.py before.log after.log`. Result: worst read p95 144 ms
 (`co_owned_operation_all_fields` as a stranger, 38 to 144 ms, and `co_owned_operation_item` 13 to 39 ms: the reads that moved, x3.8 and x3.0;
-177 alone causes it, 178's rules add nothing; the member's own `co_owned_operation_*` reads are x1.9 to x2.1), every other read within x1.7; writes at most x1.53 (`link_login_big_pi`),
+183 alone causes it, 184's rules add nothing; the member's own `co_owned_operation_*` reads are x1.9 to x2.1), every other read within x1.7; writes at most x1.53 (`link_login_big_pi`),
 the importer and the cascades x1.0 to x1.1. The team writers: `team_grant_20_members` 30 ms in SQL (was 15) and 106 ms through Directus,
 `team_join_100_records` 71 ms in SQL (was 36) and 123 ms through Directus, all far under their 500 ms limit. `perf_compare.py` still prints
 `GATE: FAIL (2 problems)` for the two team writers, and the table behind it is not like for like: it keeps one line per scenario name (the last), the
@@ -379,14 +379,14 @@ the importer and the cascades x1.0 to x1.1. The team writers: `team_grant_20_mem
 (106 and 123 ms) with SQL-before (15 and 36 ms), x7.07 and x3.42. Like for like in SQL the ratios are x2.0 (30 / 15 ms) and x1.97 (71 / 36 ms), right
 at the 2x line and from millisecond medians of three repetitions; through Directus there is no "before". Spec section 10 (E20) judges the two
 writers against 500 ms, where both pass by a wide margin. Two earlier "after" runs on the same machine were uniformly 3 to 4x slower on every
-request, unrelated ones included (`force_replay_search` 8 to 24 ms), while a 177-only run, the "before" runs and a third "after" run were
+request, unrelated ones included (`force_replay_search` 8 to 24 ms), while a 183-only run, the "before" runs and a third "after" run were
 not: machine load, not the change; if a re-run looks like that, repeat it on a quiet machine. Re-run it when the copy of live has changed a lot
 (the procedure is in `docs/runbooks/a1-record-access-cutover.md`).
 
-Rollback: `docker compose stop directus` first, then `make migrate-down` twice (178, then 177), **after** transferring every team-owned record to a person (177's down refuses with
-0A000 while any record has an `owner_team_id`; 178's down restores the previous Lab Member rows from its backup table), `git checkout
+Rollback: `docker compose stop directus` first, then `make migrate-down` twice (184, then 183), **after** transferring every team-owned record to a person (183's down refuses with
+0A000 while any record has an `owner_team_id`; 184's down restores the previous Lab Member rows from its backup table), `git checkout
 <previous commit>`, rebuild, then reload exactly as in step 4 and deploy the previous `d1-access-guard`, `d1-owner-default`,
-`d1-record-access`, `d1-teams` and `d1-admin-overview` at the same time. Teams, members and history stay (175 and 176 are untouched).
+`d1-record-access`, `d1-teams` and `d1-admin-overview` at the same time. Teams, members and history stay (181 and 182 are untouched).
 
 ## My teams (PR 4) (maintainer's step, approve separately)
 
@@ -409,3 +409,55 @@ Rollback: `git checkout <previous commit>`, rebuild, redeploy `d1-teams` and STA
 Preview and E2E: `npm run build:extensions && npm run build -w starbase-web`, then the preview with the overlay of `tests/ui/README.md` and
 `cd tests/ui && npx playwright test specs/20-my-teams.spec.ts` (it makes its own logins, a team, 12 team-owned samples, a pending restricted
 sample and a team-shared project, and removes them afterwards).
+
+## Recorded batches (migration 177, process map slice 2)
+
+Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and
+`test_sessions`, the Lab Member permissions for `batches`, and the FAST press's `sintering_batch_number` field
+relabelled **Powder batch**. Maintainer's step, approve separately.
+
+**Order.** The map tolerates a missing `batch_id` (it asks for the field only when Directus reports it), so this STARbase
+build can be deployed before or after the migration. Migrating does not change what the map draws until someone sets a
+`batch_id`. The **Batch** field on an operation or test form, and the **Batches** collection, need steps 1 and 2 only; step 3 is for the map (its grouping by `batch_id`):
+
+1. `git pull`, then `make migrate-status` (177 pending) and `make migrate` (migration 177).
+2. `docker compose restart directus`: Directus reads its schema and permissions at start, and no Redis cache is configured for it, so the restart is the operative step. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
+   batch (it has no build step; `core/extensions` is mounted as it is). Without the restart a Lab Member's new batch has no
+   owner, and only an admin could then edit it.
+3. The STARbase build that groups by `batch_id` (only the map needs it): `git pull && npm ci && npm run build:starbase`, then
+   `docker compose up -d --force-recreate proxy` (see "Redeploying after a change" above). This step can come before
+   or after steps 1 and 2.
+
+Run the migration while no import is running: it sets a 10 s lock timeout, so on a lock timeout just run `make migrate` again.
+
+Check:
+- `GET /fields/batches` answers (admin token); `GET /fields/manufacturing_operations/sintering_batch_number` shows the
+  translation "Powder batch".
+- In Data Studio, create a batch with the **Code** field left alone: it saves as `B-0001`, `B-0002`, ... The form shows the
+  text `batches_next_code()` in that field before the first save (Directus prefills a column default it cannot evaluate);
+  it is never sent, and the database fills the code. Only a code someone types is kept. (An explicit `"code": null` through the API is refused by Directus with a 400; a blank code is filled.)
+- Set **Batch** on two operations of one sample and open the sample's Process map: one container, "Batch B-…".
+
+Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes). Restart Directus
+immediately afterwards: its cached schema still lists `batch_id`, so every read that asks for `fields=*` on operations or tests
+fails with a 500 until it restarts. `make migrate-down` rolls back only the latest applied migration, so it undoes 177 only
+while 177 is still the newest one applied.
+
+## Report a bug page (`/report-bug`)
+
+STARbase's own Report a bug page posts to the `d1-bug-report` Directus endpoint
+(`core/extensions/d1-bug-report-endpoint`), which looks the reporter up from the session and forwards
+`{title, body, labels}` to the bug-report relay (`apps/force-app/bug-report-relay`). Issues carry the labels
+`starbase-report`, `bug` or `enhancement`, and `area:starbase`; the area and page the reporter
+picked are in the body, never labels. The relay is unchanged, and there is no "already reported" list.
+
+Deploy (maintainer's step, approve separately). The endpoint is plain JavaScript, so it has no build of its own
+(`build:extensions` does not list it, like `d1-ask-endpoint`); the STARbase pages ship with `npm run build:starbase`.
+The same branch changes `@d1/ui`, which the Directus extensions bundle, so rebuild those too:
+
+1. Check out the branch; `npm run build:extensions` and `npm run build:starbase`. `core/extensions` is mounted
+   read-only into Directus, so the new folder is already there.
+2. `docker compose exec -T redis redis-cli FLUSHALL`, then `docker compose restart directus` (extensions load at start).
+3. `BUG_REPORT_RELAY_URL` can stay unset: the endpoint defaults to `http://bug-report-relay:8211`, the compose service.
+4. Smoke: sign in to STARbase, open Report a bug, send a test report; the page shows the issue number. An unreachable
+   relay shows "could not reach the bug-report relay" instead.

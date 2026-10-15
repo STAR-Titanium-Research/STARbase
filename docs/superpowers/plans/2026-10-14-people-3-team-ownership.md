@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- All of plan 2's Global Constraints apply (derived rows only, migrations numbered from **177**, phase1 down chain, no `d1_llm_readonly` grants, DB gate `ROUNDTRIP=2 bash scripts/dev/schema_test_docker.sh`, host-neutral UI, error shape, actor identity, mail never undoes).
+- All of plan 2's Global Constraints apply (derived rows only, migrations numbered from **183**, phase1 down chain, no `d1_llm_readonly` grants, DB gate `ROUNDTRIP=2 bash scripts/dev/schema_test_docker.sh`, host-neutral UI, error shape, actor identity, mail never undoes).
 - **Ruling O1:** the access level `manage` exists only on the four ownable types' `<T>_access` (not `project_access`) and is only ever written by the bookkeeping (derived rows of an owner grant). Wherever SQL or `scripts/access_rules.json` treats `edit` as an editor, `manage` counts too; wherever it tests the owner (`owner_person_id.user_id`, delete/manage/owner sets, owner guards, `team_pending_actionable`'s owner test), a `manage` row counts too.
 - **Ruling O2:** the owner grant (`role = 'own'`) is never shown as a team entry in Who has access; the owner row shows the team ("Additive (managers)").
 - `num_nonnulls(owner_person_id, owner_team_id) <= 1`; `owner_team_id` FK `ON DELETE RESTRICT` (deleting a team that owns records is refused).
@@ -28,9 +28,9 @@
 
 ---
 
-### Task 1: owner_team_id and the owner grant (migration 177)
+### Task 1: owner_team_id and the owner grant (migration 183)
 
-**Files:** Create `db/migrations/20261014000177_team_ownership.sql`; Modify `tests/teams.sh`, `tests/readers_matrix.sh` (cases `m.c_team_own_set`, `m.c_team_own_manager_flag`, `m.c_team_own_clear`), `tests/phase1_schema.sh` (down chain), `scripts/dev/access_matrix_oracle.sql` (`manage` ⊇ `edit`, team owner).
+**Files:** Create `db/migrations/20261014000183_team_ownership.sql`; Modify `tests/teams.sh`, `tests/readers_matrix.sh` (cases `m.c_team_own_set`, `m.c_team_own_manager_flag`, `m.c_team_own_clear`), `tests/phase1_schema.sh` (down chain), `scripts/dev/access_matrix_oracle.sql` (`manage` ⊇ `edit`, team owner).
 
 **Interfaces — produces:**
 - `owner_team_id uuid references teams on delete restrict` on `physical_samples`, `manufacturing_operations`, `test_sessions`, `campaigns` + index + `CHECK (num_nonnulls(owner_person_id, owner_team_id) <= 1)`; Directus M2O relation to `teams` (field `owner_team_id`, interface select-dropdown-m2o, readonly in forms — set only through Transfer).
@@ -42,11 +42,11 @@
 
 - [ ] **Step 1: failing tests** (`tests/teams.sh`): `owner_check_one_owner`; `set_owner_team_creates_grant_and_rows` (managers `manage`, members `edit`, readers rows); `manager_flag_changes_derived_role`; `clear_owner_team_removes_grant_and_rows`; `delete_team_owning_records_refused` (23503); `own_grant_has_no_pending` (a joiner of an owning team gets `edit` at once); `manage_counts_as_editor_in_readers` (child operation of a team-owned sample readable/editable exactly as for a person owner); `drift_covers_owner_grants`; `person_access_owns_team_owned`. Readers-matrix cases as listed.
 - [ ] **Step 2–4:** FAIL → migration (+ down) → `ROUNDTRIP=2 bash scripts/dev/schema_test_docker.sh` green (phase1 0, matrix 0, people_admin, teams).
-- [ ] **Step 5: Commit** `feat(db): team ownership as an owner grant with manage rows (migration 177)`
+- [ ] **Step 5: Commit** `feat(db): team ownership as an owner grant with manage rows (migration 183)`
 
 ### Task 2: rules, guard and owner default
 
-**Files:** Modify `scripts/access_rules.json` (owner/manage/delete sets gain `{"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["manage"]}}`; every `where role [edit]` editor item gains `manage`; `owner_guards` field lists gain `owner_team_id`), regenerate (`gen_access_rules.py --write`: `configure_users_and_policies.sql`, `core/extensions/d1-access-guard/rules.json`, `core/extensions/d1-record-access/rules.json`), Create `db/migrations/20261014000178_team_ownership_rules.sql` (snapshot of the regenerated Lab Member rows via `--values --only`, with backup table and down, as migration 166 §10 does); Modify `core/extensions/d1-owner-default/index.js` (+ new `index.test.mjs`): do not fill `owner_person_id` when the payload sets `owner_team_id`; `core/extensions/d1-access-guard` tests (changing `owner_team_id` needs the delete rule; a plain member of the owning team is refused, a manager allowed); `tests/scripts/test_access_rules.py` expectations.
+**Files:** Modify `scripts/access_rules.json` (owner/manage/delete sets gain `{"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["manage"]}}`; every `where role [edit]` editor item gains `manage`; `owner_guards` field lists gain `owner_team_id`), regenerate (`gen_access_rules.py --write`: `configure_users_and_policies.sql`, `core/extensions/d1-access-guard/rules.json`, `core/extensions/d1-record-access/rules.json`), Create `db/migrations/20261014000184_team_ownership_rules.sql` (snapshot of the regenerated Lab Member rows via `--values --only`, with backup table and down, as migration 166 §10 does); Modify `core/extensions/d1-owner-default/index.js` (+ new `index.test.mjs`): do not fill `owner_person_id` when the payload sets `owner_team_id`; `core/extensions/d1-access-guard` tests (changing `owner_team_id` needs the delete rule; a plain member of the owning team is refused, a manager allowed); `tests/scripts/test_access_rules.py` expectations.
 
 - [ ] **Step 1: failing tests** (pytest generator tests; guard and owner-default `node:test`; phase1 rules comparison). **Step 2–4.** `gen_access_rules.py --check`, all extension suites, DB gate.
 - [ ] **Step 5: Commit** `feat(access): team managers act as owner in the Lab Member rules`
@@ -67,7 +67,7 @@
 
 ### Task 5: E2E and docs
 
-**Files:** Create `tests/ui/specs/19-team-ownership.spec.ts`; Modify `tests/ui/README.md`, `docs/runbooks/starbase.md` ("Team ownership (PR 3)": migrations 177–178, Redis/permission cache per the PR 2 sequence, `team_drift()` and `readers_drift_count()` = 0), spec §10 errata (Rulings O1/O2), ADR-0016 note, `core/README.md`.
+**Files:** Create `tests/ui/specs/19-team-ownership.spec.ts`; Modify `tests/ui/README.md`, `docs/runbooks/starbase.md` ("Team ownership (PR 3)": migrations 183–184, Redis/permission cache per the PR 2 sequence, `team_drift()` and `readers_drift_count()` = 0), spec §10 errata (Rulings O1/O2), ADR-0016 note, `core/README.md`.
 
 - [ ] **Step 1: spec 19** (preview, overlay incl. `d1-owner-default d1-access-guard d1-record-access d1-teams`): owner transfers a sample to a team → a manager can open Who has access and share it, a plain member can edit but not share/delete (403 / no controls), demoting the manager removes sharing at once, the rail shows the team owner, deleting the team is refused with counts, transfer back to a person clears it; specs 13, 15, 17, 18 still pass.
 - [ ] **Step 2:** run on the preview → PASS; `perf` before/after if available (same gate).

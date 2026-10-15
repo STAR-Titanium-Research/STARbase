@@ -33,12 +33,13 @@ describe('linkActive', () => {
 		expect(linkActive('/home', '/home/samples', {})).toBe(false);
 	});
 
-	it('lights the bookmark entry, not its list, when a saved view is open', () => {
+	it('lights a pinned saved view only for its own bookmark, and the list entry whichever view is open', () => {
 		const q = { bookmark: '3' };
 		expect(linkActive('/home/samples?bookmark=3', '/home/samples', q)).toBe(true);
 		expect(linkActive('/home/samples?bookmark=4', '/home/samples', q)).toBe(false);
-		expect(linkActive('/home/samples', '/home/samples', q)).toBe(false);
 		expect(linkActive('/home/samples?bookmark=3', '/home/samples', {})).toBe(false);
+		expect(linkActive('/home/samples', '/home/samples', q)).toBe(true);
+		expect(linkActive('/home/samples', '/home/samples', {})).toBe(true);
 	});
 
 	it('takes the first value when the query repeats a key', () => {

@@ -41,8 +41,8 @@
 # D1_SMOKE_MODE=seed loads it and leaves the copy running for hand measurement. D1_SMOKE_MODE=perf loads scripts/dev/seed_access_fixture.sql (restricted records, access rows, big projects) into the
 # copy instead and runs scripts/dev/directus_perf.mjs: p50/p95 per list request for a stranger and a member
 # (use --skip 20261012000166 --skip 20261012000167 for "before"; the team scenarios of People 2 need the d1-teams and d1-record-access overlays
-# and migrations 175 and 176 and are reported only for "after", against the 500 ms of the spec: a "before" run for them is
-# --skip 20261014000175 --skip 20261014000176, where they do not run). D1_SMOKE_KEEP=1 leaves the copy running for debugging
+# and migrations 181 and 182 and are reported only for "after", against the 500 ms of the spec: a "before" run for them is
+# --skip 20261014000181 --skip 20261014000182, where they do not run). D1_SMOKE_KEEP=1 leaves the copy running for debugging
 # (docker rm -fv d1-smoke-directus d1-smoke-pg; docker network rm d1-smoke).
 #
 # Usage: [D1_SMOKE_REQUIRE_LM=1] bash scripts/dev/directus_smoke.sh [--skip <migration-version>...]   (from the repo root)

@@ -79,10 +79,12 @@ describe('INDEX_DEFS', () => {
 		}
 	});
 
-	it('opens the four core collections on their record page and the rest in the drawer', () => {
+	it('opens the core collections and the three tooling collections on their record page and the rest in the drawer', () => {
 		const record = INDEX_DEFS.filter((d) => d.rowTarget === 'record').map((d) => d.collection);
-		expect(record.sort()).toEqual(['campaigns', 'manufacturing_operations', 'physical_samples', 'test_sessions']);
-		expect(INDEX_DEFS.filter((d) => d.rowTarget === 'drawer')).toHaveLength(16);
+		expect(record.sort()).toEqual([
+			'campaigns', 'cutting_inserts', 'insert_edges', 'manufacturing_operations', 'physical_samples', 'test_sessions', 'tool_boxes',
+		]);
+		expect(INDEX_DEFS.filter((d) => d.rowTarget === 'drawer')).toHaveLength(13);
 	});
 
 	it('uses the spec primary keys', () => {

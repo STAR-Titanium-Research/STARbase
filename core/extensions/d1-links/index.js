@@ -35,6 +35,9 @@ export const RECORD_PAGES = {
 	test_sessions: 'tests',
 	campaigns: 'campaigns',
 	projects: 'projects',
+	tool_boxes: 'tool-boxes',
+	cutting_inserts: 'inserts',
+	insert_edges: 'edges',
 };
 
 const COLLECTION = /^[a-z][a-z0-9_]*$/;

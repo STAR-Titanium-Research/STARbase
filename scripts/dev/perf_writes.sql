@@ -142,7 +142,7 @@ SELECT 'PERFW cascade_change_pi_of_big_project ' || round(extract(epoch FROM clo
 SELECT 'PERFLOCKS cascade_change_pi_of_big_project ' || count(*) FROM pg_locks WHERE pid = pg_backend_pid();
 ROLLBACK;
 
--- 7. teams (People 2, migrations 175 and 176; skipped in a "before" run that withholds them). The grant of a team is expanded into one derived
+-- 7. teams (People 2, migrations 181 and 182; skipped in a "before" run that withholds them). The grant of a team is expanded into one derived
 -- <type>_access row per active member, and each such write recomputes the readers tables of the affected records (statement triggers, one
 -- recompute per statement). Two writers, spec section 6 (each under 500 ms):
 SELECT to_regclass('public.team_members') IS NOT NULL AS has_teams \gset

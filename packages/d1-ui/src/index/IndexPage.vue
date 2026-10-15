@@ -30,10 +30,13 @@ import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
+import { rowAccent } from './accent';
 import RowPlotButtons from './RowPlotButtons.vue';
+import RowMapButton from './RowMapButton.vue';
+import { MAP_ROW_COLLECTIONS } from '../mapLink';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { PAGE_SIZE } from './indexQuery';
+import { PAGE_SIZE, toggledBookmark } from './indexQuery';
 import { plotKind } from './plotData';
 import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
@@ -61,8 +64,12 @@ const initial = readListPrefs(props.def.slug);
 const view = ref<ListView>(initial.view);
 const density = ref<Density>(initial.density);
 const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+// A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
+const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
+// The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
+const hasMap = computed(() => MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // A sample's code is what its "Force (n)" button searches the operations list for.
 const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
 // The row's name, for its buttons' accessible names (its first column, else its key).
@@ -220,7 +227,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 						type="button"
 						class="chip-main"
 						:aria-pressed="state.bookmark === b.id"
-						@click="state.bookmark === b.id ? undefined : setBookmark(b.id)"
+						@click="setBookmark(toggledBookmark(state.bookmark, b.id))"
 					>{{ b.bookmark }}</button>
 					<button
 						v-if="state.bookmark === b.id"
@@ -275,12 +282,14 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				<button v-if="state.bookmark !== null" type="button" class="btn" @click="setBookmark(null)">Show the whole list</button>
 			</div>
 
-			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
+			<div v-else class="panel" :class="{ busy: loading && rows.length, bare: designedCards }" :aria-busy="loading">
 				<!-- Cards: the page's own `card` slot (campaigns), else a text card per row. Skeleton cards while the
-					first page loads, so the grid does not flip to a table and back. -->
+					first page loads, so the grid does not flip to a table and back. Designed cards sit on the page
+					ground in the Projects index's wider grid, not inside the panel. -->
 				<CardGrid
 					v-if="view === 'cards' && (loading || rows.length)"
 					:def="def"
+					:wide="designedCards"
 					:rows="rows"
 					:loading="loading"
 					:row-key="rowKey"
@@ -291,12 +300,13 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || def.selectAction" #footer="{ row }">
+					<template v-if="$slots.footer || hasPlots || hasMap || def.selectAction" #footer="{ row }">
 						<label v-if="def.selectAction" class="tick">
 							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="!sel.isPicked(row) && sel.full.value" @change="sel.toggle(row)" />
 							<span>Select</span>
 						</label>
 						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
+						<RowMapButton v-if="hasMap" size="card" :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 						<slot name="footer" :row="row" />
 					</template>
 				</CardGrid>
@@ -314,6 +324,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<template v-else>{{ c.label }}</template>
 							</th>
 							<th v-if="hasPlots" class="plots">Plots</th>
+							<th v-if="hasMap" class="plots"><span class="sr-only">Process map</span></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -323,6 +334,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 								<td v-if="hasPlots" class="plots" />
+								<td v-if="hasMap" class="plots" />
 							</tr>
 						</template>
 						<template v-else>
@@ -342,6 +354,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
+										<span v-if="rowAccent(def, row)" class="swatch" :style="{ background: rowAccent(def, row) as string }" aria-hidden="true" />
 										<a
 											v-if="def.rowTarget === 'record'"
 											class="cell-link"
@@ -361,6 +374,9 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								</td>
 								<td v-if="hasPlots" class="plots">
 									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
+								</td>
+								<td v-if="hasMap" class="plots">
+									<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 								</td>
 							</tr>
 						</template>
@@ -441,6 +457,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 	padding: 6px 16px 4px; box-shadow: var(--d1-shadow);
 }
 .panel { min-width: 0; }
+.panel.bare { background: none; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
 .panel.busy { opacity: 0.6; }
 .state-row { padding: 6px 0; }
 
@@ -454,6 +471,7 @@ th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
 .plots { text-align: right; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .tick { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); cursor: pointer; }
 .row td.plots { overflow: visible; }
 .flag {
@@ -466,6 +484,7 @@ th.num .sort { justify-content: flex-end; }
 	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
 	color: inherit; text-decoration: none; cursor: pointer;
 }
+.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent); }
 .cell-link:hover { color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; }
 .cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
@@ -476,7 +495,7 @@ th.num .sort { justify-content: flex-end; }
 	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load. */
+/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load; the picture inside is contained (IndexThumb), never cropped. */
 .thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
 .skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
 

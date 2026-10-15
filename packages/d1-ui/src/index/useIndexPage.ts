@@ -3,6 +3,7 @@
 // Typing in the search box replaces the URL (debounced), clicks push a history entry, so reload and
 // Back reproduce the view. Host-neutral: the API, navigation and route come in as arguments.
 import { computed, getCurrentInstance, onBeforeUnmount, ref, watch } from 'vue';
+import { choiceKindFor } from '../choiceLabels';
 import type { ExplorerHost } from '../host';
 import { errorText, isForbidden } from '../format';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -349,7 +350,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 				const hit = chipCacheFor(host).get(cacheKey);
 				if (hit) return setOptions(field, null, hit);
 				const res = await host.api.get(`/items/${def.collection}`, { params: enumOptionParams(field) });
-				setOptions(field, cacheKey, enumOptions(res.data?.data, field));
+				setOptions(field, cacheKey, enumOptions(res.data?.data, field, choiceKindFor(def.collection, field)));
 			}
 		} catch {
 			failedChips.value = [...failedChips.value, field];
