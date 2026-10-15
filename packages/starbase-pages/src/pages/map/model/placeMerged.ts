@@ -9,6 +9,9 @@
 // container that was opened) pushes the placed cards it now overlaps along the cross axis, instead of lying
 // on top of them. Only DRAGGED cards are guaranteed to stay where they are, so a grown card may itself be
 // pushed to keep the gap.
+//
+// Accepted limit: a card that grows onto a DRAGGED card is not helped. The dragged card does not move (the person's
+// drop wins), so the two overlap until Re-layout tidies the map.
 
 import type { Dir } from './elkInput';
 
