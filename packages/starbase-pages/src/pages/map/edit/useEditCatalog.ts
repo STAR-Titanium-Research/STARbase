@@ -113,6 +113,15 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 		return out;
 	}
 
+	/** The samples whose code or nickname contains `q`, for the menu's "Existing sample…" search (as the Finder asks, 5-8 rows). */
+	async function searchSamples(q: string): Promise<{ id: string; code: string; detail: string }[]> {
+		const text = q.trim();
+		if (text.length < 2) return [];
+		const filter = { _or: [{ sample_code: { _icontains: text } }, { nickname: { _icontains: text } }] };
+		const res = await api.get('/items/physical_samples', { params: { fields: ['sample_id', 'sample_code', 'nickname', 'form'], filter: JSON.stringify(filter), sort: 'sample_code', limit: 8 } });
+		return ((res.data?.data ?? []) as Row[]).map((r) => ({ id: String(r.sample_id), code: String(r.sample_code ?? 'Sample'), detail: [r.nickname, r.form].filter(Boolean).join(' · ') }));
+	}
+
 	const missingMaterials = new Set<string>();
 	/** Asks for the alloy code of these materials, once each (the sample code is made of it). */
 	async function ensureMaterials(ids: Iterable<string>): Promise<void> {
@@ -147,7 +156,7 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 
 	return {
 		methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
-		ensure, loadRecords, loadSamples, ensureMaterials, methodCode, alloyCode, ctx,
+		ensure, loadRecords, loadSamples, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};
 }

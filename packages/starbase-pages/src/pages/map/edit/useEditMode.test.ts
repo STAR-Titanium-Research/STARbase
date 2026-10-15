@@ -4,7 +4,7 @@ import type { DraftBody } from '@d1/ui';
 import type { MapNode } from '../model/types';
 import { emptyBody } from './draft';
 import { fakeServer } from './fakeBuildServer';
-import { isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
+import { UNAVAILABLE, isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
 
 const flush = async () => {
 	for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -57,7 +57,7 @@ describe('useEditMode: is it there', () => {
 		expect(edit.canBuild.value).toBe(false);
 		expect(edit.drafted.value).toBe(false);
 		expect(route.query.edit).toBeUndefined();
-		expect(edit.failed.value).toMatch(/not available/);
+		expect(edit.failed.value).toBe(UNAVAILABLE);
 	});
 
 	it('does not offer building on a phone (E20)', async () => {

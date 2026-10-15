@@ -37,6 +37,9 @@ export interface EditModeOptions {
 
 const first = (v: unknown): string | undefined => (Array.isArray(v) ? first(v[0]) : typeof v === 'string' ? v : undefined);
 
+/** What the map panel says when the address asks for edit mode and this server has no d1-build (the view-only map keeps working). */
+export const UNAVAILABLE = "Building processes isn't available on this server yet.";
+
 /** A draft with nothing in it is not worth keeping when edit mode ends. */
 export const isEmptyBody = (b: DraftBody): boolean => b.items.length === 0;
 
@@ -101,7 +104,7 @@ export function useEditMode(o: EditModeOptions) {
 		}
 		if (!draft.probed.value) return;
 		if (!draft.available.value) {
-			failed.value = 'Edit mode is not available on this server.';
+			failed.value = UNAVAILABLE;
 			writeQuery({ edit: null });
 			return;
 		}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from '../../ExplorerView.vue';
-import { computed, onBeforeUnmount, provide, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -15,9 +15,10 @@ import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
 import EditLid from './edit/EditLid.vue';
-import type { MenuTarget } from './edit/menuTarget';
-import { canvasEditOf, useEditCanvas } from './edit/useEditCanvas';
-import { provideEditMode, useEditMode } from './edit/useEditMode';
+import AddMenu from './edit/AddMenu.vue';
+import { canvasEditOf } from './edit/useEditCanvas';
+import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
+import { useEditSurface } from './edit/useEditSurface';
 import WirePreview from './edit/WirePreview.vue';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
@@ -59,9 +60,8 @@ const map = useProcessMap(host.api, route, router, edit.overlay);
 const canvas = useMapCanvas(map, canvasEditOf(edit));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
-/** The Add menu (E8): where it is open and what it is for; null while closed. */
-const menu = shallowRef<MenuTarget | null>(null);
-const build = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void (menu.value = t) });
+/** Edit mode on the canvas: socket clicks and drags, the Add menu, the sample picker, the keys. */
+const build = useEditSurface({ edit, map, canvas, canvasEl });
 provide(MAP_EDIT, build.mapEdit);
 const pointerKind = createPointerKind();
 
@@ -226,6 +226,7 @@ onBeforeUnmount(() => {
 			<Section v-else-if="map.status.value === 'empty'" title="Process map" class="d1-process-map">
 				<div class="pm-empty">
 					<h2>Pick a record to map</h2>
+					<p v-if="edit.failed.value === UNAVAILABLE" class="pm-note" role="status">{{ edit.failed.value }}</p>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
 				</div>
@@ -282,11 +283,13 @@ onBeforeUnmount(() => {
 							@undo="edit.undo()"
 							@redo="edit.redo()"
 							@rename="edit.draft.rename"
+							@add="build.addUnconnected"
+							@pick="build.pickerOpen.value = true"
 							@open="edit.openDraft"
 							@dismiss-notice="edit.draft.notice.value = ''"
 						/>
 						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
-						<div v-if="edit.failed.value" class="pm-banner pm-bad" role="alert">{{ edit.failed.value }}</div>
+						<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': edit.failed.value !== UNAVAILABLE }" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</div>
 						<div v-if="build.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
 							<span>{{ build.problem.value }}</span>
 							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''"><v-icon name="close" x-small /></button>
@@ -313,7 +316,7 @@ onBeforeUnmount(() => {
 							@pointerup.capture="input.onPointerEnd"
 							@pointercancel.capture="input.onPointerEnd"
 							@click.capture="input.onClickCapture"
-							@contextmenu="input.onContextMenu"
+							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || input.onContextMenu(e)"
 						>
 							<VueFlow
 								:node-types="canvas.nodeTypes"
@@ -347,6 +350,18 @@ onBeforeUnmount(() => {
 				<MapSheet v-if="phone" :title="map.selectedInfo.value?.code ?? 'Nothing selected'">
 					<MapRail v-bind="railProps" v-on="railEvents" />
 				</MapSheet>
+				<!-- Beside the layout, not in it: RecordLayout is a size container, which would make `position: fixed` relative to it. -->
+				<AddMenu
+					v-if="build.menu.target.value && edit.editing.value"
+					:target="build.menu.target.value"
+					:body="edit.body.value"
+					:methods="edit.catalog.methods.value"
+					:test-types="edit.catalog.testTypes.value"
+					:search="edit.catalog.searchSamples"
+					:code-of="(id: string) => edit.catalog.samples.get(id)?.code"
+					@choose="build.menu.choose"
+					@close="build.menu.close"
+				/>
 			</template>
 		</PageShell>
 		<Finder v-if="finderOpen" :pick-record="map.pickRecord" @close="finderOpen = false" />
@@ -357,6 +372,7 @@ onBeforeUnmount(() => {
 .pm-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 24px 8px; max-width: 560px; }
 .pm-empty h2 { margin: 0; font-size: var(--fs-xl, 18px); }
 .pm-empty p { margin: 0; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.pm-empty .pm-note { padding: 8px 12px; border-radius: 8px; background: var(--d1-tile, var(--theme--background-subdued)); }
 
 /* The canvas fills what is left of the window under the page header (the panel's head and the crumb line take
    about 130 px); the panel's body has no padding. */
