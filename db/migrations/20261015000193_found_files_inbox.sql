@@ -224,6 +224,10 @@ CREATE TABLE d1_private.inbox_scan_requests (
 );
 CREATE INDEX idx_inbox_scan_requests_status ON d1_private.inbox_scan_requests (status, requested_at);
 CREATE INDEX idx_inbox_scan_requests_person ON d1_private.inbox_scan_requests (person_id, requested_at DESC) WHERE person_id IS NOT NULL;
+-- At most one open request per person: the endpoint's "refused if one is queued" check is a read followed by an insert, so
+-- two concurrent clicks could both pass it; this index makes the second insert fail (the endpoint turns that into a 429).
+CREATE UNIQUE INDEX inbox_scan_requests_one_open_per_person_key ON d1_private.inbox_scan_requests (person_id)
+    WHERE scope = 'person' AND status IN ('queued', 'running');
 
 COMMENT ON TABLE d1_private.inbox_scan_requests IS 'The queue behind "Rescan my folder" (scope person) and the administrator''s "Scan all" (scope all), migration 193. The d1-inbox endpoint inserts a row (and refuses a person who has one queued or finished in the last 10 minutes); the crawler daemon claims queued rows about every 30 seconds with FOR UPDATE SKIP LOCKED, runs the scan and sets the status. Not audited: operational bookkeeping.';
 COMMENT ON COLUMN d1_private.inbox_scan_requests.request_id IS 'Surrogate key of the request.';
@@ -237,6 +241,7 @@ COMMENT ON COLUMN d1_private.inbox_scan_requests.status IS 'queued: waiting for 
 COMMENT ON COLUMN d1_private.inbox_scan_requests.error IS 'Why a failed request failed (for example the share was unreachable); NULL otherwise.';
 COMMENT ON INDEX d1_private.inbox_scan_requests_pkey IS 'One row per request.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_status IS 'The daemon''s claim: queued requests, oldest first.';
+COMMENT ON INDEX d1_private.inbox_scan_requests_one_open_per_person_key IS 'A person has at most one open (queued or running) person-scope request. Closes the race between the rate-limit read and the insert in the d1-inbox endpoint: the second of two concurrent requests fails with a unique violation, which the endpoint reports as 429. Partial: finished requests do not count.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_person IS 'The per-person rate limit: a person''s latest request. Partial: only person-scope requests.';
 
 -- 5. The crawler's control and status row.

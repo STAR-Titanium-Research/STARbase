@@ -113,7 +113,10 @@ already says so (changes marked *as built*).
   `requested_by UUID REFERENCES directus_users ON DELETE SET NULL`, `requested_at NOT NULL DEFAULT now()`,
   `started_at`, `finished_at`, `status TEXT NOT NULL DEFAULT 'queued' CHECK
   (status IN ('queued','running','done','failed'))`, `error TEXT`. Indexes `(status, requested_at)` (the daemon's
-  claim) and partial `(person_id, requested_at DESC)` (the rate limit).
+  claim), partial `(person_id, requested_at DESC)` (the rate limit) and, *as built*, a partial UNIQUE index on
+  `(person_id) WHERE scope = 'person' AND status IN ('queued','running')`: at most one open request per person, so
+  two concurrent `rescan` calls cannot both pass the endpoint's check (the loser gets a unique violation, reported
+  as 429).
 - `inbox_crawler_state` — singleton like `force_crawler_state` (`id` fixed to
   `00000000-0000-0000-0000-000000000001`, one seeded row): `desired_state` (`running`/`paused`, default
   `running`: the daemon is already opt-in through the compose profile and the admin tab has no start switch),

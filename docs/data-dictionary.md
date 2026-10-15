@@ -464,7 +464,9 @@ new folder (everything is backlog).
 **`d1_private.inbox_scan_requests`**: the queue behind "Rescan my folder" and "Scan all". `scope`
 (`person` / `all`; `person_id` required exactly for `person`), `requested_by`, `requested_at`, `started_at`,
 `finished_at`, `status` (`queued` default, `running`, `done`, `failed`), `error`. Indexes `(status, requested_at)`
-and partial `(person_id, requested_at DESC)`.
+and partial `(person_id, requested_at DESC)`. A partial unique index
+(`inbox_scan_requests_one_open_per_person_key`) allows at most one queued or running person-scope request per
+person, closing the race between the endpoint's rate-limit check and its insert.
 
 **`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
 settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default

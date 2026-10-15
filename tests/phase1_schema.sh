@@ -6446,6 +6446,23 @@ SELECT 'fi_req_user:' || count(*) || ':' || count(requested_by) FROM d1_private.
 DELETE FROM people WHERE person_id = '$FI_P1';
 SELECT 'fi_req_person:' || count(*) FROM d1_private.inbox_scan_requests;")
 grep -q 'fi_req_user:1:0' <<<"$fi_out" && grep -q 'fi_req_person:0' <<<"$fi_out" && ok "a request keeps its row when the user goes and goes with its person" || bad "scan request foreign keys did not behave (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id, requested_by) VALUES ('person', '$FI_P1', '$FI_U1');
+INSERT INTO d1_private.inbox_scan_requests (scope, person_id, requested_by) VALUES ('person', '$FI_P1', '$FI_U1');")
+grep -q 'inbox_scan_requests_one_open_per_person_key' <<<"$fi_out" && ok "a second queued request for the same person is refused (one open request per person)" || bad "second queued request was not refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id, status) VALUES ('person', '$FI_P1', 'running');
+INSERT INTO d1_private.inbox_scan_requests (scope, person_id) VALUES ('person', '$FI_P1');")
+grep -q 'inbox_scan_requests_one_open_per_person_key' <<<"$fi_out" && ok "a queued request is refused while the person's earlier one is running" || bad "queued request next to a running one was not refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id) VALUES ('person', '$FI_P1');
+UPDATE d1_private.inbox_scan_requests SET status = 'done', finished_at = now() WHERE person_id = '$FI_P1';
+INSERT INTO d1_private.inbox_scan_requests (scope, person_id) VALUES ('person', '$FI_P1');
+UPDATE d1_private.inbox_scan_requests SET status = 'failed' WHERE person_id = '$FI_P1' AND status = 'queued';
+INSERT INTO d1_private.inbox_scan_requests (scope, person_id) VALUES ('person', '$FI_P1');
+SELECT 'fi_open_ok:' || count(*) || ':' || count(*) FILTER (WHERE status = 'queued') FROM d1_private.inbox_scan_requests WHERE person_id = '$FI_P1';")
+grep -q 'fi_open_ok:3:1' <<<"$fi_out" && ok "once the first request is done (or failed) the person can queue another" || bad "new request after a finished one failed (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id) VALUES ('person', '$FI_P1'), ('person', '$FI_P2');
+INSERT INTO d1_private.inbox_scan_requests (scope) VALUES ('all'), ('all');
+SELECT 'fi_open_many:' || count(*) FROM d1_private.inbox_scan_requests;")
+grep -q 'fi_open_many:4' <<<"$fi_out" && ok "different people each have one open request, and scan-all requests are not limited by it" || bad "open-request index was too strict (output: $fi_out)"
 run_eq "scan requests have an index for claiming queued rows and one for the per-person rate limit" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_scan_requests' AND (indexdef LIKE '%(status, requested_at)%' OR indexdef LIKE '%(person_id, requested_at%')" "2"
 # inbox_crawler_state (singleton)
