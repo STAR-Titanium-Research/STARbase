@@ -41,6 +41,12 @@ const cand = (overrides = {}) => {
   };
 };
 
+// A candidate that names exactly one record (suggestion and matches agree).
+const candFor = (collection, record, over = {}) => cand({
+  suggested_collection: collection, suggested_record_id: record,
+  matches: [{ collection, record_id: record, via: 'short_id', token: 'abcd1234' }], ...over,
+});
+
 function newWorld() {
   const w = {
     now: NOW,
@@ -89,7 +95,7 @@ function newWorld() {
     },
     totals: [{ state: 'new', n: 5 }, { state: 'linked', n: 2 }],
     // canned answers for the dynamic queries and the grouped summary
-    listRows: [], listTotal: 0, acceptIds: [], summaryRows: [],
+    listRows: [], listTotal: 0, acceptIds: [], acceptQueries: [], summaryRows: [],
     // failure switches
     denyDelete: false, failCreateFor: null,
     log: [], items: [], txCount: 0, cacheCleared: 0, chain: Promise.resolve(),
@@ -122,7 +128,13 @@ function statement(w, sql, b, txId) {
   const name = NAMES.get(sql);
   if (!name) {
     if (/^SELECT count\(\*\)/.test(sql)) return [{ total: w.listTotal }];
-    if (/^SELECT c\.candidate_id FROM/.test(sql)) return w.acceptIds.map((candidate_id) => ({ candidate_id }));
+    if (/^SELECT c\.candidate_id, c\.first_seen_at FROM/.test(sql)) {
+      // accept-all's page: acceptIds in order, after the keyset cursor (its last binding is the candidate id), at most LIMIT n
+      w.acceptQueries.push({ sql, bindings: b });
+      const limit = Number(/LIMIT (\d+)/.exec(sql)[1]);
+      const ids = /\(c\.first_seen_at, c\.candidate_id\) >/.test(sql) ? w.acceptIds.slice(w.acceptIds.indexOf(b.at(-1)) + 1) : w.acceptIds;
+      return ids.slice(0, limit).map((candidate_id) => ({ candidate_id, first_seen_at: w.candidates.get(candidate_id)?.first_seen_at ?? '2026-10-14T10:00:00.000Z' }));
+    }
     if (/^SELECT c\.candidate_id, /.test(sql)) return copy(w.listRows);
     throw new Error(`unexpected SQL: ${sql}`);
   }
@@ -217,7 +229,12 @@ function statement(w, sql, b, txId) {
   const [kind, sub] = name.split('.');
   const target = LINK_TARGETS[sub];
   if (kind === 'recordsExist') return csv(b[0]).filter((id) => w.records[sub].has(id)).map((id) => ({ [target.pk]: id }));
-  if (kind === 'junctionFind') return copy(w.junctions[target.junction].filter((j) => j[target.fk] === b[0] && j.directus_files_id === b[1]));
+  if (kind === 'junctionFindMany') {
+    const records = csv(b[0]);
+    const files = csv(b[1]);
+    return w.junctions[target.junction].filter((j) => records.some((r, i) => r === j[target.fk] && files[i] === j.directus_files_id))
+      .map((j) => ({ record_id: j[target.fk], directus_files_id: j.directus_files_id }));
+  }
   if (kind === 'junctionById') {
     return copy(w.junctions[target.junction].filter((j) => j.id === b[0]).map((j) => ({ id: j.id, record_id: j[target.fk], directus_files_id: j.directus_files_id })));
   }
@@ -329,20 +346,20 @@ function fakeRes() {
 }
 
 let uuidSeq = 0;
-function setup(w, { env = { D1_INBOX_CRAWLER_SECRET: SECRET }, schema = {} } = {}) {
+function setup(w, { env = { D1_INBOX_CRAWLER_SECRET: SECRET }, schema = {}, deps = {} } = {}) {
   const router = fakeRouter();
   const errors = [];
   const context = {
     database: fakeDatabase(w), services: fakeServices(w), getSchema: async () => schema,
     logger: { warn() {}, error: (m) => errors.push(m), info() {} }, env,
   };
-  mount(router, context, { clock: () => w.now, uuid: () => ID(9000 + (uuidSeq += 1)) });
-  const call = async (key, { user, admin = false, role = ROLE_MEMBER, body, query, params, headers } = {}) => {
+  mount(router, context, { clock: () => w.now, uuid: () => ID(9000 + (uuidSeq += 1)), ...deps });
+  const call = async (key, { user, admin = false, role = ROLE_MEMBER, roles, body, query, params, headers } = {}) => {
     const handler = router.routes.get(key);
     assert.ok(handler, `route ${key} is registered`);
     const req = {
       method: key.split(' ')[0],
-      accountability: user ? { user, role, admin } : { user: null, role: null, admin: false },
+      accountability: user ? { user, role, ...(roles ? { roles } : {}), admin } : { user: null, role: null, admin: false },
       body, query: query ?? {}, params: params ?? {}, headers: headers ?? {}, schema,
     };
     const res = fakeRes();
@@ -479,6 +496,41 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   assert.match(accept.sql, /c\.suggested_record_id IS NOT NULL/);
 });
 
+test('the summary SQL counts neither a copy (an original is still in an inbox) nor a file already on the record it names', () => {
+  assert.match(SQL.summary, /\(c\.duplicate_of IS NULL OR o\.state = 'gone'\)/, 'a copy counts only when its original is gone');
+  assert.doesNotMatch(SQL.summary, /o\.state IN \('linked', 'dismissed'\)/, 'the list hides a copy of a decided file; the badge counts no copy at all');
+  for (const { junction, fk } of Object.values(LINK_TARGETS)) {
+    assert.match(SQL.summary, new RegExp(`EXISTS \\(SELECT 1 FROM ${junction} j WHERE j\\.${fk} = c\\.suggested_record_id AND j\\.directus_files_id = c\\.directus_files_id\\)`), junction);
+  }
+  // the list still shows a copy (marked), hiding it only once its original is decided
+  const list = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({})).sql;
+  assert.match(list, /o\.state IN \('linked', 'dismissed'\)/);
+});
+
+test('the accept query: no surface scan, no copy, nothing already on its record, exactly one match, keyset paging in (first_seen_at, candidate_id)', () => {
+  const scope = { personId: P.alice, teamIds: [], admin: false };
+  const f = parseFileFilters({}, { defaultTab: 'open' });
+  const first = buildListQuery(scope, f, { accept: true, pageSize: 100 });
+  assert.match(first.sql, /^SELECT c\.candidate_id, c\.first_seen_at FROM/);
+  assert.match(first.sql, /c\.kind <> 'surface_scan'/);
+  assert.match(first.sql, /c\.duplicate_of IS NULL/);
+  assert.match(first.sql, /jsonb_array_length\(c\.matches\) = 1/);
+  for (const { junction, fk } of Object.values(LINK_TARGETS)) assert.match(first.sql, new RegExp(`NOT \\(c\\.suggested_collection = '[a-z_]+' AND EXISTS \\(SELECT 1 FROM ${junction} j WHERE j\\.${fk} =`), junction);
+  assert.match(first.sql, /ORDER BY c\.first_seen_at, c\.candidate_id LIMIT 100$/);
+  assert.doesNotMatch(first.sql, /\(c\.first_seen_at, c\.candidate_id\) >/);
+  const next = buildListQuery(scope, f, { accept: true, pageSize: 100, after: { at: '2026-10-14T10:00:00.000Z', id: ID(5) } });
+  assert.match(next.sql, /\(c\.first_seen_at, c\.candidate_id\) > \(\?::timestamptz, \?::uuid\)/);
+  assert.deepEqual(next.bindings.slice(-2), ['2026-10-14T10:00:00.000Z', ID(5)]);
+});
+
+test('parseFileFilters: acceptable is a flag, off unless 1 or true', () => {
+  assert.equal(parseFileFilters({}).acceptable, false);
+  assert.equal(parseFileFilters({ acceptable: '1' }).acceptable, true);
+  assert.equal(parseFileFilters({ acceptable: 'true' }).acceptable, true);
+  assert.equal(parseFileFilters({ acceptable: '0' }).acceptable, false);
+  assert.throws(() => parseFileFilters({ acceptable: 'maybe' }), (e) => e instanceof HttpError && e.status === 400);
+});
+
 test('shapeSummary: new count and older-with-exact-match, per person and per team, in the shape inboxSummary.ts reads', () => {
   const scope = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
   const teams = [{ team_id: TEAM, name: 'SEM team', share_folder: 'SEM' }, { team_id: OTHER_TEAM, name: 'Other team', share_folder: 'Other' }, { team_id: ID(23), name: 'No folder', share_folder: null }];
@@ -556,6 +608,17 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
 
 // ---- summary ---------------------------------------------------------------------------------------------------------------
 
+test('a Lab Viewer is found from the caller role AND its roles list (as d1-access-guard does), whatever the login says', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const viaList = await call('POST /dismiss', { user: U.alice, roles: [ROLE_MEMBER, LAB_VIEWER_ROLE_ID.toUpperCase()], body: { candidate_ids: [c.candidate_id] } });
+  assert.equal(viaList.statusCode, 403);
+  assert.equal(codeOf(viaList), 'READ_ONLY_ROLE');
+  assert.equal(c.state, 'new');
+  assert.equal((await call('POST /dismiss', { user: U.alice, roles: [ROLE_MEMBER], body: { candidate_ids: [c.candidate_id] } })).statusCode, 200);
+});
+
 test('GET /summary: the person and each of their teams, new vs older with a match; asked for the caller scope only', async () => {
   const w = newWorld();
   w.summaryRows = [
@@ -614,11 +677,11 @@ test('GET /files: a page of FoundFile rows (the columns STARbase reads plus labe
   const a = cand();
   w.listRows = [listRow(a)];
   w.listTotal = 41;
-  w.acceptIds = [];
   const { call } = setup(w);
   const res = await call('GET /files', { user: U.alice, query: { tab: 'new', limit: '10' } });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.meta, { total: 41, limit: 10, offset: 0, acceptable: 0 });
+  assert.deepEqual(res.body.meta, { total: 41, limit: 10, offset: 0, acceptable: null }, 'acceptable is computed only when asked for');
+  assert.equal(w.acceptQueries.length, 0, 'no accept plan on a plain list load');
   const [row] = res.body.data;
   assert.equal(row.candidate_id, a.candidate_id);
   assert.equal(row.directus_files_id, a.directus_files_id);
@@ -638,21 +701,22 @@ test('GET /files: a page of FoundFile rows (the columns STARbase reads plus labe
   }
 });
 
-test('GET /files: meta.acceptable is what Accept all would link for the same filter (server-computed); not for linked or dismissed', async () => {
+test('GET /files: meta.acceptable (only with acceptable=1) is what Accept all would link for the same filter; not for linked or dismissed', async () => {
   const w = newWorld();
-  const ok = add(w, cand());
-  const noEdit = add(w, cand({ suggested_record_id: S3 }));
-  const doc = add(w, cand({ kind: 'document' }));
-  const scan = add(w, cand({ kind: 'surface_scan' }));
-  w.acceptIds = [ok, noEdit, doc, scan].map((c) => c.candidate_id);
+  const ok = add(w, candFor('physical_samples', S1));
+  const noEdit = add(w, candFor('physical_samples', S3));
+  const doc = add(w, candFor('physical_samples', S1, { kind: 'document' }));
+  w.acceptIds = [ok, noEdit, doc].map((c) => c.candidate_id);
   w.listRows = [];
   const { call } = setup(w);
-  const res = await call('GET /files', { user: U.alice, query: { tab: 'older' } });
-  assert.equal(res.body.meta.acceptable, 2, 'the image and the document; not the record Alice cannot edit, not the surface scan');
+  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'older' } })).body.meta.acceptable, null);
+  assert.equal(w.acceptQueries.length, 0);
+  const res = await call('GET /files', { user: U.alice, query: { tab: 'older', acceptable: '1' } });
+  assert.equal(res.body.meta.acceptable, 2, 'the image and the document; not the record Alice cannot edit');
   assert.equal(w.candidates.get(ok.candidate_id).state, 'new', 'nothing was written');
   assert.equal(w.log.some((l) => l.name === 'candidatesForUpdate'), false, 'and nothing was locked');
-  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.meta.acceptable, null);
-  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'dismissed' } })).body.meta.acceptable, null);
+  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'linked', acceptable: '1' } })).body.meta.acceptable, null);
+  assert.equal((await call('GET /files', { user: U.alice, query: { tab: 'dismissed', acceptable: '1' } })).body.meta.acceptable, null);
 });
 
 test('GET /files: a record the caller cannot READ is named nowhere (no id, no label, no match); one they can read but not edit says so', async () => {
@@ -936,8 +1000,10 @@ test('POST /link: the same person repeating the same link is idempotent (same ba
   const first = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
   const again = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
   assert.equal(again.statusCode, 200);
-  assert.equal(again.body.data.link_batch_id, first.body.data.link_batch_id);
+  assert.equal(again.body.data.link_batch_id, null, 'nothing new was linked: never the old batch id');
+  assert.equal(again.body.data.linked, 0, 'a count of the newly linked');
   assert.equal(again.body.data.items[0].already_linked, true);
+  assert.ok(first.body.data.link_batch_id);
   assert.equal(w.junctions.sample_data_files.length, 1);
   // a different record for an already linked file
   w.editable[U.alice].physical_samples.add(ID(106));
@@ -945,6 +1011,30 @@ test('POST /link: the same person repeating the same link is idempotent (same ba
   const other = await call('POST /link', { user: U.alice, body: { items: [link(c, 'physical_samples', ID(106))] } });
   assert.equal(other.statusCode, 409);
   assert.equal(codeOf(other), 'ALREADY_LINKED');
+});
+
+test('POST /link refuses a surface scan (409 SURFACE_SCAN) until stream F: nothing is written', async () => {
+  const w = newWorld();
+  const scan = add(w, cand({ kind: 'surface_scan' }));
+  const img = add(w, cand());
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(img), link(scan)] } });
+  assert.equal(res.statusCode, 409);
+  assert.equal(codeOf(res), 'SURFACE_SCAN');
+  assert.equal(errorOf(res).extensions.candidate_id, scan.candidate_id);
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(img.state, 'new');
+});
+
+test('POST /link looks for files already on their record with one query per collection, not one per row', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const c = add(w, cand({ suggested_collection: 'test_sessions', suggested_record_id: T1 }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(a), link(b), link(c, 'test_sessions', T1)] } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(w.log.filter((l) => l.name?.startsWith('junctionFindMany.')).map((l) => l.name).sort(), ['junctionFindMany.physical_samples', 'junctionFindMany.test_sessions']);
 });
 
 test('POST /link: a dismissed or gone file is 409 (restore it first), never linked', async () => {
@@ -969,6 +1059,7 @@ test('POST /link: a file already linked to that record (Data Studio) is 409 ALRE
   const res = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
   assert.equal(res.statusCode, 409);
   assert.equal(codeOf(res), 'ALREADY_ON_RECORD');
+  assert.match(errorOf(res).message, /Dismiss clears it/);
   assert.equal(w.junctions.sample_data_files.length, 1);
   assert.equal(c.state, 'new');
 });
@@ -1017,19 +1108,20 @@ test('POST /link: the data cache is cleared after the commit when CACHE_ENABLED,
 
 test('POST /accept-all links only exact short-ID suggestions to one record the caller can edit (images, documents and other files; never surface scans), and reports what it skipped', async () => {
   const w = newWorld();
-  const ok1 = add(w, cand());
-  const ok2 = add(w, cand({ suggested_collection: 'test_sessions', suggested_record_id: T1 }));
-  const doc = add(w, cand({ kind: 'document' }));
-  const other = add(w, cand({ kind: 'other' }));
-  const scan = add(w, cand({ kind: 'surface_scan' }));
-  const notEditable = add(w, cand({ suggested_record_id: S3 }));
-  const code = add(w, cand({ match_strength: 'code' }));
+  const ok1 = add(w, candFor('physical_samples', S1));
+  const ok2 = add(w, candFor('test_sessions', T1));
+  const doc = add(w, candFor('physical_samples', S1, { kind: 'document' }));
+  const other = add(w, candFor('physical_samples', S1, { kind: 'other' }));
+  const scan = add(w, candFor('physical_samples', S1, { kind: 'surface_scan' }));
+  const notEditable = add(w, candFor('physical_samples', S3));
+  const code = add(w, candFor('physical_samples', S1, { match_strength: 'code' }));
   const noSuggestion = add(w, cand({ suggested_collection: null, suggested_record_id: null, matches: [] }));
-  const copy = add(w, cand({ duplicate_of: ok1.candidate_id }));
-  const done = add(w, cand({ state: 'linked' }));
-  const onRecord = add(w, cand());
+  const ambiguous = add(w, cand({ matches: [{ collection: 'physical_samples', record_id: S1, via: 'short_id', token: 'x' }, { collection: 'physical_samples', record_id: S3, via: 'short_id', token: 'y' }] }));
+  const copy = add(w, candFor('physical_samples', S1, { duplicate_of: ok1.candidate_id }));
+  const done = add(w, candFor('physical_samples', S1, { state: 'linked' }));
+  const onRecord = add(w, candFor('physical_samples', S1));
   w.junctions.sample_data_files.push({ id: ID(4902), sample_id: S1, directus_files_id: onRecord.directus_files_id });
-  w.acceptIds = [ok1, ok2, doc, other, scan, notEditable, code, noSuggestion, copy, done, onRecord].map((c) => c.candidate_id);
+  w.acceptIds = [ok1, ok2, doc, other, scan, notEditable, code, noSuggestion, ambiguous, copy, done, onRecord].map((c) => c.candidate_id);
   const { call } = setup(w);
   const res = await call('POST /accept-all', { user: U.alice, body: { filter: { tab: 'new' } } });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
@@ -1042,9 +1134,11 @@ test('POST /accept-all links only exact short-ID suggestions to one record the c
   assert.equal(reasons[notEditable.candidate_id], 'NOT_EDITABLE');
   assert.equal(reasons[code.candidate_id], 'NOT_EXACT');
   assert.equal(reasons[noSuggestion.candidate_id], 'NO_SUGGESTION');
+  assert.equal(reasons[ambiguous.candidate_id], 'AMBIGUOUS', 'two records named: never linked in bulk either (D9)');
   assert.equal(reasons[copy.candidate_id], 'COPY');
   assert.equal(reasons[done.candidate_id], 'NOT_NEW');
   assert.equal(reasons[onRecord.candidate_id], 'ALREADY_ON_RECORD');
+  assert.equal(data.has_more, false);
   assert.equal(w.junctions.sample_data_files.length, 4, 'the Data Studio row, ok1, the document and the other file');
   assert.equal(w.junctions.session_data_files.length, 1);
   assert.equal(ok1.link_kind, 'bulk');
@@ -1054,28 +1148,82 @@ test('POST /accept-all links only exact short-ID suggestions to one record the c
   assert.equal(ok1.adopted_at, null);
   assert.equal(scan.state, 'new');
   assert.equal(notEditable.state, 'new');
+  // one junction lookup per collection for the whole page
+  assert.equal(w.log.filter((l) => l.name?.startsWith('junctionFindMany.')).length <= 2, true);
 });
 
-test('POST /accept-all: dry_run counts without writing; nothing to do is 200 with no batch; the filter is validated', async () => {
+test('POST /accept-all is not stalled by a page of rows it must skip: 600 skipped, then 50 linkable, all reached; has_more is honest', async () => {
   const w = newWorld();
-  const ok = add(w, cand());
-  w.acceptIds = [ok.candidate_id];
+  const skipped = Array.from({ length: 600 }, () => add(w, candFor('physical_samples', S3)));
+  const good = Array.from({ length: 50 }, () => add(w, candFor('physical_samples', S1)));
+  w.acceptIds = [...skipped, ...good].map((c) => c.candidate_id);
+  const { call } = setup(w);
+  const res = await call('POST /accept-all', { user: U.alice, body: { filter: {} } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.linked, 50, 'the second page was reached in the same call');
+  assert.equal(res.body.data.has_more, false);
+  assert.equal(res.body.data.skipped_total, 600);
+  assert.ok(res.body.data.skipped.length <= 200, 'the list of skipped rows is capped');
+  assert.equal(res.body.data.next_cursor, null);
+  assert.equal(w.acceptQueries.length, 2, 'two pages of the keyset');
+  assert.match(w.acceptQueries[1].sql, /\(c\.first_seen_at, c\.candidate_id\) > \(\?::timestamptz, \?::uuid\)/);
+  assert.equal(w.acceptQueries[1].bindings.at(-1), skipped[499].candidate_id, 'the cursor is the last row of the first page');
+});
+
+test('POST /accept-all: when the scan cap of one call is reached, has_more is true with a cursor; the next calls reach the rest', async () => {
+  const w = newWorld();
+  const skipped = Array.from({ length: 600 }, () => add(w, candFor('physical_samples', S3)));
+  const good = Array.from({ length: 50 }, () => add(w, candFor('physical_samples', S1)));
+  w.acceptIds = [...skipped, ...good].map((c) => c.candidate_id);
+  const { call } = setup(w, { deps: { acceptPage: 100, acceptMaxPages: 3 } });
+  const one = await call('POST /accept-all', { user: U.alice, body: { filter: {} } });
+  assert.equal(one.body.data.linked, 0);
+  assert.equal(one.body.data.has_more, true, 'rows remain that could still be linkable');
+  assert.ok(one.body.data.next_cursor);
+  assert.equal(w.acceptQueries.length, 3);
+  const two = await call('POST /accept-all', { user: U.alice, body: { filter: {}, cursor: one.body.data.next_cursor } });
+  assert.equal(two.body.data.linked, 0);
+  assert.equal(two.body.data.has_more, true);
+  const three = await call('POST /accept-all', { user: U.alice, body: { filter: {}, cursor: two.body.data.next_cursor } });
+  assert.equal(three.body.data.linked, 50, 'the linkable rows after 600 skipped ones');
+  assert.equal(three.body.data.has_more, false, 'the last page was short: nothing remains');
+  assert.equal(three.body.data.next_cursor, null);
+  assert.equal((await call('POST /accept-all', { user: U.alice, body: { filter: {}, cursor: 'not a cursor' } })).statusCode, 400);
+});
+
+test('POST /accept-all dry_run: { count, ids, skipped, has_more } and nothing written; a real run can take those candidate_ids and links exactly them', async () => {
+  const w = newWorld();
+  const a = add(w, candFor('physical_samples', S1));
+  const b = add(w, candFor('test_sessions', T1));
+  const c = add(w, candFor('physical_samples', S3));
+  const late = add(w, candFor('physical_samples', S1));
+  w.acceptIds = [a, b, c].map((x) => x.candidate_id);
   const { call } = setup(w);
   const dry = await call('POST /accept-all', { user: U.alice, body: { filter: {}, dry_run: true } });
   assert.equal(dry.statusCode, 200);
-  assert.equal(dry.body.data.acceptable, 1);
-  assert.equal(dry.body.data.linked, 0);
-  assert.equal(dry.body.data.link_batch_id, null);
-  assert.equal(ok.state, 'new');
+  assert.equal(dry.body.data.count, 2);
+  assert.deepEqual(dry.body.data.ids.sort(), [a.candidate_id, b.candidate_id].sort());
+  assert.deepEqual(dry.body.data.skipped, [{ candidate_id: c.candidate_id, reason: 'NOT_EDITABLE' }]);
+  assert.equal(dry.body.data.has_more, false);
+  assert.equal(a.state, 'new');
   assert.equal(w.junctions.sample_data_files.length, 0);
-  w.acceptIds = [];
-  const none = await call('POST /accept-all', { user: U.alice, body: { filter: {} } });
-  assert.equal(none.statusCode, 200);
-  assert.equal(none.body.data.linked, 0);
-  assert.equal(none.body.data.link_batch_id, null);
-  assert.equal((await call('POST /accept-all', { user: U.alice, body: { filter: { tab: 'bogus' } } })).statusCode, 400);
-  assert.equal((await call('POST /accept-all', { user: U.alice, body: { filter: 'x' } })).statusCode, 400);
-  assert.equal((await call('POST /accept-all', { user: U.alice, body: {} })).statusCode, 200, 'no filter means every new file');
+  // meanwhile one of the previewed files is dismissed by someone, and a NEW linkable file turns up
+  b.state = 'dismissed';
+  w.acceptIds = [a, b, c, late].map((x) => x.candidate_id);
+  const real = await call('POST /accept-all', { user: U.alice, body: { candidate_ids: dry.body.data.ids } });
+  assert.equal(real.statusCode, 200, JSON.stringify(real.body));
+  assert.deepEqual(real.body.data.items.map((i) => i.candidate_id), [a.candidate_id], 'only what was previewed and still qualifies');
+  assert.deepEqual(real.body.data.skipped, [{ candidate_id: b.candidate_id, reason: 'NOT_NEW' }]);
+  assert.equal(late.state, 'new', 'a file that was not previewed is not linked');
+  assert.equal(w.acceptQueries.length, 1, 'the real run did not select again (only the dry run did)');
+  // each id is re-checked under the locks, with the same rules, and a file the caller cannot see is not touched
+  const bobs = add(w, candFor('physical_samples', S1, { owner_person_id: P.bob }));
+  const again = await call('POST /accept-all', { user: U.alice, body: { candidate_ids: [bobs.candidate_id, ID(4044), c.candidate_id] } });
+  assert.deepEqual(again.body.data.skipped.map((s) => s.reason).sort(), ['NOT_EDITABLE', 'NOT_FOUND', 'NOT_FOUND']);
+  assert.equal(bobs.state, 'new');
+  assert.ok(w.log.some((l) => l.name === 'candidatesForUpdate'));
+  assert.equal((await call('POST /accept-all', { user: U.alice, body: { candidate_ids: ['x'] } })).statusCode, 400);
+  assert.equal((await call('POST /accept-all', { user: U.alice, body: { candidate_ids: [] } })).statusCode, 400);
 });
 
 test('POST /accept-all: a file the caller cannot see is never touched, even when the selection names it', async () => {
@@ -1184,6 +1332,24 @@ test('POST /undo after the record or the file was changed: only the junction row
   assert.equal(res.body.data.undone, 2);
   assert.equal(w.items.filter((i) => i.op === 'delete').length, 1, 'only the row that still exists is deleted');
   assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(a.state, 'new');
+  assert.equal(b.state, 'new');
+});
+
+test('POST /undo leaves alone a junction row that no longer holds the file it created (repointed in Data Studio); the candidate still goes back to new', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  // someone repoints a's junction row at another file in Data Studio
+  const row = w.junctions.sample_data_files.find((j) => j.directus_files_id === a.directus_files_id);
+  row.directus_files_id = ID(3999);
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.undone, 2);
+  assert.deepEqual(w.junctions.sample_data_files.map((j) => j.directus_files_id), [ID(3999)], 'the repointed row stays; b\'s row went');
+  assert.equal(w.items.filter((i) => i.op === 'delete').length, 1);
   assert.equal(a.state, 'new');
   assert.equal(b.state, 'new');
 });
@@ -1460,6 +1626,25 @@ async function w_undo(w, batch) {
   const { call } = setup(w);
   return call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
 }
+
+test('a crawler secret shorter than 32 characters is treated as not set: auto-link refuses every call, and a warning says so', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  w.prefs.set(U.alice, true);
+  const warned = [];
+  const short = setup(w, { env: { D1_INBOX_CRAWLER_SECRET: 'short-secret' } });
+  short.context.logger.warn = (m) => warned.push(m);
+  // mount ran before the spy: mount again to see the warning
+  const router = fakeRouter();
+  mount(router, { ...short.context, env: { D1_INBOX_CRAWLER_SECRET: 'x'.repeat(31) } });
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /D1_INBOX_CRAWLER_SECRET/);
+  const res = await short.call('POST /auto-link', { body: { candidate_ids: [c.candidate_id] }, headers: { 'x-inbox-crawler-secret': 'short-secret' } });
+  assert.equal(res.statusCode, 403);
+  assert.equal(c.state, 'new');
+  const ok = setup(w, { env: { D1_INBOX_CRAWLER_SECRET: 'y'.repeat(32) } });
+  assert.equal((await ok.call('POST /auto-link', { body: { candidate_ids: [c.candidate_id] }, headers: { 'x-inbox-crawler-secret': 'y'.repeat(32) } })).statusCode, 200);
+});
 
 test('POST /auto-link validates its body: 1 to 200 candidate ids', async () => {
   const w = newWorld();
