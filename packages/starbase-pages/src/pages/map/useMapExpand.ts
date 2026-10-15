@@ -21,11 +21,13 @@ export interface MergeHint {
   anchor?: string;
   /** The collapsed container `anchor` replaced (it has another id when it joined a batch): `anchor` takes its place and size. */
   from?: string;
-  /**
-   * Cards to lay out again from ELK's result, except the ones the person dragged (a "+N more" stub moves to the end of its
-   * column; the cards on a container's sockets follow the new order of those sockets when its rows fold or unfold).
-   */
+  /** Cards to lay out again from ELK's result (a "+N more" stub moves to the end of its column). */
   replace?: string[];
+  /**
+   * A container whose rows folded or unfolded: the cards on its sockets swap their places (not ELK's) until they are in the
+   * order of the sockets (model/reslot.ts). Dragged cards stay.
+   */
+  reslot?: string;
 }
 
 /** The state of `useProcessMap` an expand reads and changes. */
