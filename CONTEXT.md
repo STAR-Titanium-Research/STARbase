@@ -9,7 +9,8 @@ done to them and the tests run on them, and the people and projects behind that 
 
 **STARbase**:
 The group's own web app for reading, finding and moving between records. It is also the home of
-the lab's plotters. It reads, finds and navigates; creating and editing a record is done with
+the lab's plotters. It reads, finds and navigates, and on the **process map** it builds processes and
+fills their records in with its own form; elsewhere, creating and editing a record is done with
 **Data Studio**'s form.
 _Avoid_: Explorer (its working name), frontend, head, lab-web, d1-home
 
@@ -190,6 +191,79 @@ The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many ru
 names a raw stock lot but is only text: it is not linked to the lot.
 _Avoid_: batch (on its own), FAST batch, batch number
 
+**Stack of passes**:
+Several operations of the same method on the same machine, done one after another on one sample with
+nothing else in between (twelve turning passes), drawn as one container that can be unstacked. Each pass
+is still its own operation.
+_Avoid_: batch (a batch is done together on several samples; passes are done in turn on one), group
+
+### Building on the process map
+
+**Card**:
+One record drawn on the process map on its own: a sample, a raw stock lot, a material.
+_Avoid_: node, box
+
+**Container**:
+An operation or a test (or a batch of them) drawn as a box that samples enter and leave, with what
+was used inside it.
+_Avoid_: node, operation card
+
+**Socket**:
+The round connector on the edge of a card or container where a wire starts or ends: inputs on the
+left, outputs on the right.
+_Avoid_: node, port, handle, pin (a pin is a shortcut)
+
+**Wire**:
+The line from an output socket to an input socket. A wire carries one sample.
+_Avoid_: edge, link, connection
+
+**Edit mode**:
+The process map's mode for building a process: adding cards and containers, wiring them and filling
+them in. A blank canvas is edit mode with nothing on it yet.
+_Avoid_: builder, node editor (for the mode)
+
+**Draft**:
+What someone has built in edit mode and not yet created. A draft is kept for its owner automatically,
+survives closing the page, and has a name; a person can have several. Nothing in a draft is a record
+until it is created, and then all of it is at once, or none of it.
+_Avoid_: plan (a planned operation is a record), sketch, unsaved changes
+
+**Create**:
+Turning a draft into records, all together. It is refused while anything the records need is missing.
+_Avoid_: save (a draft is kept without saving), commit, publish
+
+**Planned** / **Done**:
+An operation or test is **planned** when it has been laid out but not carried out yet, and **done**
+once someone marks it done, saying when and who. Both are real records; a draft is neither. A sample an
+operation is planned to make is a **planned sample** until that operation is done.
+_Avoid_: draft (for a planned record), pending, scheduled
+
+**Attach**:
+To wire an operation that is already recorded to a sample in edit mode, making that sample its input.
+_Avoid_: import, link
+
+**New from**:
+To start a new operation as a copy of an existing one (same method, machine, tool and settings) and
+change what differs.
+_Avoid_: duplicate (that copies what is on the canvas), template (that is saved, not a record), clone, import
+
+**Duplicate**:
+To copy a card or container already on the canvas, with everything filled in on it, one or several times.
+Duplicating an in-place operation adds further passes to the same sample.
+_Avoid_: clone, copy-paste
+
+**Template**:
+A named, saved set of prefilled fields for a new operation or test (method, machine, tool, operator,
+settings), not tied to any record. It belongs to one person or is shared with their role or the whole
+group. Changing a template never changes what was made from it. A template may point to a recipe but
+is not one.
+_Avoid_: preset, recipe (a FAST or prep recipe is reference data), saved operation
+
+**Checks**:
+The list of what a draft is missing before it can be created, or a planned record before it can be
+marked done. Some entries block; the rest only warn.
+_Avoid_: supervisor (a person), validator, readiness
+
 ### Tooling
 
 **Tool box**:
@@ -263,3 +337,13 @@ _Avoid_: PCD box (for the insert), diamond insert
 - "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
   Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
   **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.
+- "Node" was used for the socket on a card ("press the free node on the sample") as well as for the cards
+  and containers themselves. Resolved: the connector is a **socket**, the line a **wire**, the boxes
+  **cards** and **containers**; "node" names none of them.
+- "Import an existing operation" meant both wiring an already-recorded operation to a sample and starting
+  a new operation from an existing one. Resolved: the first is **attach**, the second **new from**.
+- "Supervisor" was asked for as the thing that shows what a draft is missing, but in the lab a supervisor
+  is a person. Resolved: that list is **checks**.
+- "Template" was used both for starting from an existing operation and for a saved, reusable set of
+  prefilled fields. Resolved: the first is **new from**, the second a **template**; copying what is
+  already on the canvas is **duplicate**.
