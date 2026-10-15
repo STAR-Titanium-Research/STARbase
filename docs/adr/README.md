@@ -28,7 +28,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0017](./0017-batches-are-recorded.md) | Batches are recorded; probable batches are only shown | Proposed (2026-10-14) |
 | [0018](./0018-starbase-writes-records.md) | STARbase writes records on the process map: its own generated form and one transactional create endpoint | Proposed (2026-10-14); amends 0015 |
 | [0019](./0019-operations-and-tests-can-be-planned.md) | Operations and tests can be planned; samples an operation will make are planned samples | Proposed (2026-10-14) |
-| [0020](./0020-surface-scans-on-inserts-and-edges.md) | Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker | Proposed (2026-10-15) |
+| [0021](./0021-surface-scans-on-inserts-and-edges.md) | Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker | Proposed (2026-10-15) |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

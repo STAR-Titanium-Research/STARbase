@@ -5,7 +5,7 @@
 
 **Spec:** [`docs/superpowers/specs/2026-10-15-surface-scans-design.md`](../specs/2026-10-15-surface-scans-design.md)
 (the row contract, the derived-data layout and the endpoint routes are there; code against them).
-**ADR:** [0020](../../adr/0020-surface-scans-on-inserts-and-edges.md).
+**ADR:** [0021](../../adr/0021-surface-scans-on-inserts-and-edges.md).
 Read the spec, `CONTEXT.md` and the conventions skill of your area first.
 
 **Branch:** `ccr-6b593491-4alqyj` (the coordinator's branch; streams branch from it, the coordinator merges and

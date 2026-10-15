@@ -1,4 +1,4 @@
-# ADR-0020 — Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker
+# ADR-0021 — Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker
 
 - **Status:** Proposed (2026-10-15)
 - **Date:** 2026-10-15

@@ -1,7 +1,7 @@
 # Surface scans on inserts and edges: design
 
 Status: agreed with the maintainer in a design interview on 2026-10-15 (every decision below was confirmed
-by them unless it says "default"). ADR: [0020](../../adr/0020-surface-scans-on-inserts-and-edges.md).
+by them unless it says "default"). ADR: [0021](../../adr/0021-surface-scans-on-inserts-and-edges.md).
 Plan: [`2026-10-15-surface-scans.md`](../plans/2026-10-15-surface-scans.md).
 
 ## Problem
