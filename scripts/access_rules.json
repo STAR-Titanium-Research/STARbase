@@ -191,6 +191,12 @@
       "read": {},
       "update": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}, "fields": ["code", "batch_date", "notes", "owner_person_id"]},
       "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
+    },
+    "surface_scans": {
+      "create": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id"]},
+      "read": {},
+      "update": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id", "render_status", "render_error"]},
+      "delete": {}
     }
   },
   "guards": {

@@ -1111,6 +1111,28 @@ migration 141 prints about ownerless records.
   the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
   sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
+- [ ] **SCAN-UI1 — Surface scans panel and Add dialog on real data.** As a Lab Member, open a real cutting insert and
+  its edge in STARbase. Expect: a **Surface scans** panel under Details (empty at first: "No surface scan of this
+  insert."). Press **Add a surface scan**: the dialog warns that the file becomes visible to every lab member; the
+  file list shows real `.al3d` files from the library (an archive file also shows its path on the share), a file that
+  is already a scan of this item is greyed out, and Add is disabled until a file and a condition are chosen (and a
+  note when the condition is *other*). Save one scan of an edge, with a date and one of its operations: the dialog
+  closes, the row appears as *Waiting to render*, then *Rendering*, then *Ready* without a reload, and its thumbnail
+  loads (a height map, not a broken image). The insert page lists only the insert's scans; the edge page lists its
+  own and the insert's, the latter tagged *Insert*. Add the same file to the same edge again from another tab: the
+  dialog says it is already a scan of this item. Add a file that cannot be read (a renamed text file with an
+  allowed ending): the scan shows *Render failed* with the reason, and **Render again** puts it back to *Waiting to
+  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. Check light and dark and a phone
+  width. Since: surface scans, S3 (PR pending).
+- [ ] **SCAN-UI2 — The surface viewer on a real scan and a real GPU.** On a lab PC, open a rendered real `.al3d` scan
+  with **Open in 3D**. Expect: the surface draws within a second or two, with no jagged edge; dragging turns it
+  smoothly and the wheel zooms (no panning, no way to lose the surface); the **vertical exaggeration** slider
+  stretches the relief and Reset view restores the opening view; **Colour by height** switches between the ramp and
+  grey; the legend's lowest and highest heights match the instrument's own (or the file's) values in micrometres; the
+  size and pixel pitch under the view match the scan; cells the instrument did not measure show as holes (and are
+  counted under the view). Compare the shape with the Alicona software's view of the same file. The fan stays
+  quiet when the page sits idle. Turn WebGL off in the browser and reload: the view says it cannot draw and the facts
+  remain. Since: surface scans, S3 (PR pending).
 
 #### Process map card tweaks (plan `2026-10-14-process-map-4-card-tweaks.md`)
 
@@ -1245,6 +1267,40 @@ checks can be run from `/map?edit=new`.
 - [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
+
+### Surface scans on inserts and edges (migration 192, ADR-0021)
+- [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
+  share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
+  the file library. Expect: the scan goes pending, rendering, done within about a minute, and the row shows a grid of at most
+  1024 cells on the longer side, a pixel pitch and a height range that agree with the Alicona software's own numbers for that
+  file (the range will not match Sz exactly: it is the file's extremes, not a roughness value). In MinIO,
+  `mc ls local/d1-files/surface-scans/<cache_key>/` lists `grid.bin`, `meta.json` and `thumb.png`. With a session cookie,
+  `GET /d1-surface-scan/<scan_id>/grid` answers 200 with an `ETag` equal to the cache key and `Cache-Control: private, no-cache`; the
+  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a user who may not read the scan, and a request
+  without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
+  volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
+  and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
+  key, one it has not gets `p-<file id>-<size>-<mtime>`. Also check the least-privilege reader on the real MinIO: set
+  `MINIO_SURFACE_READER_PASSWORD` in `.env`, run `make bootstrap-minio` (creates the user `surface-reader` and its policy) and restart
+  Directus, which must not hold the root credentials (`docker compose exec directus env | grep MINIO` shows no `MINIO_ROOT_*`). As
+  that user (`mc alias set reader http://localhost:9000 surface-reader <password>`): `mc cat reader/d1-files/surface-scans/<cache_key>/meta.json`
+  works; a key under `surface-scans/` that does not exist answers 404 NoSuchKey, **not** 403 (this needs the `s3:ListBucket` statement
+  with the `surface-scans/*` prefix condition; the viewer's "render again" message depends on it); `mc cp` of any file into
+  `d1-files/surface-scans/`, `mc rm` of an object there, `mc ls reader/d1-files/` (no prefix), `mc cat` of an object under another prefix
+  and any access to `d1-backups` are all refused (403). With the password empty, `GET /d1-surface-scan/<id>/grid` answers 503, not a
+  crash. Since: surface scans PR (pending).
+- [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
+  surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
+  legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
+  the insert and edge pages. Also open it on a laptop with only an integrated GPU: it must still draw (slower is fine), and where
+  float textures are missing it says so instead of showing a blank canvas. Same check as **SCAN-UI2**; tick both together. Since: surface scans PR (pending).
+- [ ] **SS3 — Count the Alicona Tests whose subject is an edge (dry run, before any migration).** Nothing is migrated by this PR.
+  On the live database, in a read-only transaction (`BEGIN READ ONLY;` ... `ROLLBACK;`), run
+  `SELECT count(*) FROM test_sessions t WHERE t.test_type = 'alicona' AND (t.insert_edge_id IS NOT NULL OR EXISTS (SELECT 1 FROM
+  test_sessions_subject s WHERE s.test_sessions_id = t.session_id AND s.collection = 'insert_edges'));`
+  and the same count of those that have a linked file. Write both numbers after this item. They size the later script that
+  proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
+  surface scans PR (pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

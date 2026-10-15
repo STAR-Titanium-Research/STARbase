@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-surface-scan",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-surface-scan: serves the rendered height grid, meta and thumbnail of a surface scan (insert or edge topography) from MinIO after reading the scan row with the caller's permissions, and queues a scan for render again.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
