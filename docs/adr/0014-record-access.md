@@ -86,6 +86,8 @@ show a viewer everything with no special case:
 - **What a viewer can still write, on purpose** (none of it is lab data): their own presets and bookmarks (`directus_presets`, a Directus built-in), the status of their own
   notifications (read / archived), their own preferences, pins and usage through the `d1-usage` endpoints, and bug reports through the bug-report relay. Every item write on a lab
   collection, every comment, and every route of `d1-record-access`, `d1-teams` and `d1-people-admin` that changes something is refused.
+- A viewer is made by granting the **role** only. A policy attached to the user as well (the viewer policy, an admin policy, anything with write rows) would add the write rows the role lacks, and
+  Directus would let the user write through its items API; the runbook says so (`docs/runbooks/starbase.md`, Lab Viewer).
 - The role is recognised by **one rule everywhere, fail closed**: the caller's role id is the Lab Viewer role id (`scripts/access_rules.json` `viewer.role`, the same id in
   migration 185, the extensions and `@d1/ui`; a test keeps them equal), whatever the status. There is no environment override. The *read* side is not a second rule: a viewer's lists
   are filtered by the readers rows as that viewer (an active viewer is a reader of everything, so it sees the same as an administrator; a suspended one reads nothing Restricted);

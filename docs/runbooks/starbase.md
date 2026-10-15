@@ -425,7 +425,7 @@ and Teams pages of STARbase and of the Directus Explorer module. **No new `.env`
 3. Check: `SELECT d1_private.readers_drift_count();` is `0`; `SELECT name FROM directus_roles WHERE name = 'Lab Viewer';` returns one row; the policy has read rows only:
    `SELECT action, count(*) FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000003' GROUP BY 1;` returns `read` and nothing else.
 4. **Invite with the role Lab Viewer** (People → Invite, role Lab Viewer; only an Administrator can choose a role). The invite makes a People row marked Researcher as it does for
-   everyone; it changes nothing for a viewer. Sign in as the viewer and look at a Restricted record of someone else's: it is there, and every edit, share, transfer and
+   everyone; it changes nothing for a viewer. **Grant the Lab Viewer role only**: never attach the Lab Viewer policy, an admin policy or any other policy to the user as well (in the Directus app or with the items API). The viewer's write refusals come from the role's policy having no write rows; a second policy on the user would add rows and Directus would then let them write. The user's Policies list must stay empty, with the role as the only grant. Sign in as the viewer and look at a Restricted record of someone else's: it is there, and every edit, share, transfer and
    delete is refused.
 5. Smoke as the viewer, from a second device: Samples, Operations, Tests, Campaigns and Projects list every record, a Restricted one included; Who has access opens and every button
    that changes something answers 403 `READ_ONLY_ROLE`. **People, as the viewer sees it**: the whole page an administrator sees (every person, the Account section with the role as
