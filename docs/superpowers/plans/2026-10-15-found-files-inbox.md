@@ -29,9 +29,9 @@
 |---|---|---|---|---|
 | E | Spec, ADR-0020, glossary, backlog items F1–F9, this plan, the crawler profile and skill | coordinator | `ccr-f5ece72d-pvkcct` | **done** (PR #310) |
 | A | Migration `20261015000193_found_files_inbox.sql`: `uni_alias`, `share_folder`, five `d1_private` tables, schema tests | `d1-server-implementer` | `feat/inbox-a-schema` (final `76f6b15c`) | built; Opus review done, all findings fixed (final `43115a5c`, 1471 schema checks pass locally, CI green on the first version); merged into the integration branch |
-| B | `d1-inbox` extension (routes, edit-rights check, undo, rate limit, auto-link guard) and the alias-squat fix (people create `fields`, migration >= 194) | `d1-server-implementer` | `feat/inbox-b-endpoint` | in progress |
-| C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` | in progress |
-| D | STARbase: Inbox entry and badge, page, Home panel, People/Teams fields, admin tab | `directus-ui-implementer` | `feat/inbox-d-ui` | in progress |
+| B | `d1-inbox` extension (routes, edit-rights check, undo, rate limit, auto-link guard) and the alias-squat fix (people create `fields`, migration >= 194) | `d1-server-implementer` | `feat/inbox-b-endpoint` | in progress (told to match D's client contract; auto-link excludes surface scans) |
+| C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` (`dba6972c`) | built; Opus review done (1 conditional blocker, symlinks; 9 should-fix); fixes in progress |
+| D | STARbase: Inbox entry and badge, page, Home panel, People/Teams fields, admin tab | `directus-ui-implementer` | `feat/inbox-d-ui` (`a2379338`) | built; Opus UI review running |
 | F | Surface-scan confirm form (item, condition, operation) and the `surface_scans` link target in `d1-inbox` | `directus-ui-implementer` + `d1-server-implementer` | `feat/inbox-f-scan-form` | contract received (spec §8); builds with fakes; live link waits for the Alicona chat's `surface_scans` migration |
 | R | Opus review of A–D, fixes, CI | reviewers | — | not started |
 

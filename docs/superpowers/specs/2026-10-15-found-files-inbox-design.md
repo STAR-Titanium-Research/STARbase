@@ -34,7 +34,7 @@ Files stay on the share. Nothing is uploaded, moved or changed (§3).
 | D7 | Scan every 30 minutes, incrementally. A per-person **Rescan my folder** (rate-limited) and an admin **Scan all**. |
 | D8 | The inbox is a count badge on its own sidebar entry plus a Home panel. No general notification system (the count is generic, so one could consume it later). |
 | D9 | **Accept all** acts only on exact short-ID matches to one record the person can edit, with one undo per batch. |
-| D10 | **Auto-link** is per person, off by default, consent text on the switch; only exact short-ID, one record, one the person can edit; images and surface scans only; listed under "Recently auto-linked" with undo; audited. No team auto-linking, no group-wide switch in v1. |
+| D10 | **Auto-link** is per person, off by default, consent text on the switch; only exact short-ID, one record, one the person can edit; SEM images and other images only (never documents, and never surface scans, which need a condition chosen by a person); listed under "Recently auto-linked" with undo; audited. No team auto-linking, no group-wide switch in v1. |
 | D11 | The same image in two inboxes shows once (where first seen); the copy is marked "copy of" and drops out when the original is linked or dismissed. |
 | D12 | Dismissed files stay in a "Dismissed" view (undoable). A file that disappears before a decision is marked **gone**; a hash-matched move re-points the row. |
 | D13 | **Link** is the verb for samples, operations and tests. A surface scan is **added** (the Alicona chat's term, §8). |
@@ -163,7 +163,7 @@ A daemon like the force crawler: reads `inbox_crawler_state` each loop, writes i
 `all` scans everyone) with `FOR UPDATE SKIP LOCKED`. The rate limit is enforced by the extension (§9).
 
 **Auto-link.** After a scan, for each new file whose owner is a person with auto-link on, an exact single
-short-ID match, and kind in (`sem_image`,`image`,`surface_scan`): the crawler asks the `d1-inbox` extension
+short-ID match, and kind in (`sem_image`,`image`): the crawler asks the `d1-inbox` extension
 (`POST /d1-inbox/auto-link`, machine credential) to link it on the person's behalf. The crawler never writes
 the junction itself.
 
@@ -298,6 +298,8 @@ rate limit, auto-link guards. DB: schema checks in `tests/phase1_schema.sh`. UI:
 Things only the real share/rig can confirm go into `docs/runbooks/physical-test-backlog.md` (§ in the plan).
 
 ## 13. Out of scope (v1)
+
+Thumbnails of found files: Directus declares no `star` storage, so its asset route cannot serve pointer rows, and serving share bytes through Directus is out of scope. v1 shows the kind's icon and the extracted metadata; the UI falls back quietly. A follow-up could have the crawler write small derived thumbnails (not the share) as separate files.
 
 OCR validation, instruments beyond JEOL, force/`.D1*` file recognition, GitHub resources, a general
 notification centre, a group-wide auto-link switch, scanning `Shared/` root files, file editing of any kind,
