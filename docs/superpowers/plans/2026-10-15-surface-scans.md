@@ -22,10 +22,10 @@ Claude-Session: https://claude.ai/code/session_01NbxXFsBQbJUfCfYzsigV9M
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| S1 server (migration, Directus metadata, access rules, `d1-surface-scan` endpoint) | agent-a9c9789c5b0ea97a8 | worktree-agent-a9c9789c5b0ea97a8 | merged (413e312e) |
-| S2 worker (`plugins/surface-scan-worker`) | agent-aac804126f562fe79 | worktree-agent-aac804126f562fe79 | merged (9ec5e8d5) |
-| S3 STARbase (panel, add dialog, 3D viewer) | agent-a30cd28d6bc6b647b | worktree-agent-a30cd28d6bc6b647b | merged (6f5786fe) |
-| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | merged; merged-tree checks running; Opus review next |
+| S1 server (migration, Directus metadata, access rules, `d1-surface-scan` endpoint) | agent-a9c9789c5b0ea97a8 | worktree-agent-a9c9789c5b0ea97a8 | merged (413e312e); review fixes merged (3d443528) |
+| S2 worker (`plugins/surface-scan-worker`) | agent-aac804126f562fe79 | worktree-agent-aac804126f562fe79 | merged (9ec5e8d5); review fixes merged |
+| S3 STARbase (panel, add dialog, 3D viewer) | agent-a30cd28d6bc6b647b | worktree-agent-a30cd28d6bc6b647b | merged (6f5786fe); review fixes merged |
+| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | Opus review (server+worker, STARbase) done and its findings fixed; merged-tree checks green; PR next |
 
 Order: the three streams are independent (they share only the spec's contract), so they run in parallel.
 Then the coordinator merges them, runs the checks, has an Opus reviewer read the whole diff, fixes findings,

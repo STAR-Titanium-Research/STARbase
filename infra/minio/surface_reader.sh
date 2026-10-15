@@ -1,5 +1,5 @@
 #!/bin/sh
-# Creates the MinIO user that Directus (the d1-surface-scan endpoint, ADR-0020) reads rendered surface scans with.
+# Creates the MinIO user that Directus (the d1-surface-scan endpoint, ADR-0021) reads rendered surface scans with.
 # Run by `make bootstrap-minio` inside the minio/mc image (alias "local" comes from MC_HOST_local); idempotent.
 #
 # The policy allows exactly two things, both on the surface-scans/ prefix of the heavy-data bucket:
