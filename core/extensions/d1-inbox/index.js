@@ -294,6 +294,12 @@ const intParam = (v, what, { min, max, fallback }) => {
 // The filters of a list (query string) or of accept-all (an object), in the names STARbase's inboxApi.ts sends: tab, kind (comma list),
 // strength (comma list), folder (text the folder part of rel_path contains), from and to (YYYY-MM-DD), owner ('me', 'team:<id>', and for an
 // administrator 'person:<id>'), link_kind, limit and offset. Returns a clean object or throws 400.
+// The keys parseFileFilters reads (a list's query string, accept-all's `filter`); any other key is ignored. The cross-stream contract test
+// (contract.test.mjs) probes that each one changes the parse, and STARbase's tests check that the client sends no key outside this list.
+export const FILTER_KEYS = ['tab', 'kind', 'strength', 'folder', 'from', 'to', 'owner', 'link_kind', 'acceptable', 'limit', 'offset'];
+// The values the enumerated filters accept (for the same tests).
+export const FILTER_VALUES = { tab: TABS, kind: ALL_KINDS, strength: STRENGTHS, link_kind: LINK_KINDS, max_limit: MAX_PAGE, default_limit: DEFAULT_PAGE };
+
 export function parseFileFilters(source, { defaultTab = 'new' } = {}) {
   const q = source ?? {};
   if (!isObject(q)) throw badInput('The filter is not valid.');
@@ -419,7 +425,7 @@ function substitute(node, user) {
 // One row of the list as STARbase's FoundFile (inboxApi.ts): the file_candidates columns it uses plus resolved labels. A record is named only to
 // a caller who can READ it (`info.readable`, a set of "collection:id"; its code is in `info.labels`); for any other the suggestion, the matches
 // and the linked record are left empty, so no id of a Restricted record leaks. `suggested_can_edit` says whether Link would pass.
-function fileOut(row, info) {
+export function fileOut(row, info) {
   const matches = Array.isArray(asJson(row.matches)) ? asJson(row.matches) : [];
   const key = (collection, id) => `${collection}:${id}`;
   const seen = (collection, id) => Boolean(id) && info.readable.has(key(collection, id));
@@ -462,6 +468,77 @@ function fileOut(row, info) {
   return out;
 }
 
+// ---- the answers, as the typed client in STARbase reads them ---------------------------------------------------------------------
+// One function per route's body (the routes call these; contract_fixtures.mjs writes their output to tests/fixtures/d1-inbox/ for the client's tests).
+
+const skippedOut = (skipped) => ({ skipped: skipped.slice(0, SKIPPED_SHOWN), skipped_total: skipped.length });
+
+// POST /link: { link_batch_id | null, newly, items }
+export const shapeLink = (out) => ({ link_batch_id: out.link_batch_id, linked: out.newly, items: out.items });
+// POST /accept-all, dry run: found = { entries: [{ cand }], skipped, has_more, next_cursor }
+export const shapeAcceptDryRun = (found) => ({
+  count: found.entries.length, ids: found.entries.map((e) => e.cand.candidate_id), ...skippedOut(found.skipped), has_more: found.has_more, next_cursor: found.next_cursor, dry_run: true,
+});
+// POST /accept-all, real run: out = { batchId | null, items, skipped, has_more, next_cursor }
+export const shapeAcceptAll = (out) => ({
+  link_batch_id: out.batchId, linked: out.items.length, items: out.items, ...skippedOut(out.skipped), has_more: out.has_more, next_cursor: out.next_cursor,
+});
+// POST /dismiss | /restore
+export const shapeStateChange = ({ done, unchanged, change }) => ({
+  changed: done.length, changed_ids: done, unchanged_ids: [...unchanged, ...change.filter((id) => !done.includes(id))],
+});
+// POST /undo
+export const shapeUndo = (batch, done) => ({ link_batch_id: batch.toLowerCase(), undone: done.length });
+// POST /rescan and /admin/scan-all (202)
+export const shapeQueued = (row) => ({ queued: true, request_id: row.request_id, status: row.status, requested_at: toIso(row.requested_at) });
+// GET and PUT /prefs
+export const shapePrefs = (row) => ({ auto_link: row?.auto_link === true });
+// The error body of every refusal (Directus's shape); an unknown error is a 500 that says nothing of its cause.
+export function shapeError(err) {
+  const known = err instanceof HttpError;
+  return {
+    status: known ? err.status : 500,
+    body: {
+      errors: [{
+        message: known ? err.message : 'Something went wrong on the server.',
+        extensions: { ...(known ? err.extra : {}), code: known ? err.code : 'INTERNAL_SERVER_ERROR', source: SOURCE },
+      }],
+    },
+  };
+}
+// GET /admin. rows = { state, people, totals, failed, queue }; now = the clock.
+export function shapeAdmin({ state, people, totals, failed, queue }, now) {
+  const s = state ?? {};
+  const beat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
+  // never or stale FIRST: a daemon that stopped heartbeating is not "paused" just because its desired state says so
+  const daemon = beat === null ? 'never' : now.getTime() - beat > DAEMON_STALE_MS ? 'stale' : s.desired_state === 'paused' ? 'paused' : 'alive';
+  const unmatched = asJson(s.unmatched_folders);
+  // recent failures: the daemon's last error (its time is when the last scan ended) and the failed scan requests
+  const errors = [
+    ...(s.last_error ? [{ at: toIso(s.last_scan_finished_at ?? s.last_heartbeat_at), message: s.last_error }] : []),
+    ...failed.filter((r) => r.error).map((r) => ({ at: toIso(r.at), message: r.error })),
+  ];
+  const waiting = (num(queue?.queued) ?? 0) + (num(queue?.running) ?? 0);
+  return {
+    status: {
+      desired_state: s.desired_state ?? null, interval_minutes: num(s.interval_minutes), read_mb_per_s: num(s.read_mb_per_s), daemon,
+      last_heartbeat_at: toIso(s.last_heartbeat_at), daemon_started_at: toIso(s.daemon_started_at), current_activity: s.current_activity ?? null,
+      last_scan_started_at: toIso(s.last_scan_started_at), last_scan_finished_at: toIso(s.last_scan_finished_at),
+      files_registered: num(s.files_registered) ?? 0, error_count: num(s.error_count) ?? 0, last_error: s.last_error ?? null,
+    },
+    errors,
+    unmatched_folders: Array.isArray(unmatched) ? unmatched : [],
+    people_without_alias: people.map((p) => ({ person_id: p.person_id, full_name: p.full_name, active: p.active !== false, has_login: p.has_login === true })),
+    queued_requests: waiting,
+    queue: { queued: num(queue?.queued) ?? 0, running: num(queue?.running) ?? 0 },
+    candidates: Object.fromEntries(totals.map((t) => [t.state, Number(t.n)])),
+  };
+}
+// GET /files: the rows as FoundFile and the paging meta.
+export const shapeFiles = (rows, info, { total, limit, offset, acceptable }) => ({
+  data: rows.map((r) => fileOut(r, info)), meta: { total: Number(total), limit, offset, acceptable },
+});
+
 // ---- the endpoint ----------------------------------------------------------------------------------------------------------
 
 export function mount(router, context, deps = {}) {
@@ -477,12 +554,8 @@ export function mount(router, context, deps = {}) {
     const known = err instanceof HttpError;
     if (!known) logger?.error?.(`${SOURCE}: ${err?.stack || err?.message || err}`);
     if (known && err.status === 429 && err.extra.retry_after_seconds) res.setHeader?.('Retry-After', String(err.extra.retry_after_seconds));
-    return res.status(known ? err.status : 500).json({
-      errors: [{
-        message: known ? err.message : 'Something went wrong on the server.',
-        extensions: { ...(known ? err.extra : {}), code: known ? err.code : 'INTERNAL_SERVER_ERROR', source: SOURCE },
-      }],
-    });
+    const shaped = shapeError(err);
+    return res.status(shaped.status).json(shaped.body);
   };
   // A person's route: needs a signed-in user; a Lab Viewer changes nothing (every write is refused first).
   const route = (fn) => async (req, res) => {
@@ -698,7 +771,7 @@ export function mount(router, context, deps = {}) {
       return { link_batch_id: batchId, newly: linked.length, items: [...linked, ...again], wrote: fresh.length > 0 };
     });
     if (out.wrote) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.link_batch_id, linked: out.newly, items: out.items } });
+    res.json({ data: shapeLink(out) });
   }));
 
   // Why accept-all (and auto-link) would not link a candidate, or null when the candidate qualifies on its own data.
@@ -790,8 +863,6 @@ export function mount(router, context, deps = {}) {
     }
     return { entries, skipped, has_more: !exhausted, next_cursor: exhausted || !last ? null : encodeCursor(last) };
   }
-  const skippedOut = (skipped) => ({ skipped: skipped.slice(0, SKIPPED_SHOWN), skipped_total: skipped.length });
-
   router.post('/accept-all', route(async ({ req, res, acc }) => {
     const body = req.body === undefined || req.body === null ? {} : bodyOf(req);
     if (!body) throw badInput('The request is not valid.');
@@ -804,7 +875,7 @@ export function mount(router, context, deps = {}) {
     requireOwnerVisible(scope, f);
     if (body.dry_run === true) {
       const found = await planAccept(database, { acc, schema, scope, f, lock: false, ids, cursor });
-      res.json({ data: { count: found.entries.length, ids: found.entries.map((e) => e.cand.candidate_id), ...skippedOut(found.skipped), has_more: found.has_more, next_cursor: found.next_cursor, dry_run: true } });
+      res.json({ data: shapeAcceptDryRun(found) });
       return;
     }
     const out = await inTransaction(acc.user, async (trx) => {
@@ -814,7 +885,7 @@ export function mount(router, context, deps = {}) {
       return { ...found, batchId, items: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
     });
     if (out.batchId) await clearDataCache(schema);
-    res.json({ data: { link_batch_id: out.batchId, linked: out.items.length, items: out.items, ...skippedOut(out.skipped), has_more: out.has_more, next_cursor: out.next_cursor } });
+    res.json({ data: shapeAcceptAll(out) });
   }));
 
   // -- dismiss, restore, undo ---------------------------------------------------------------------------------------------
@@ -836,7 +907,7 @@ export function mount(router, context, deps = {}) {
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
       }
       const done = change.length ? rowsOf(await trx.raw(SQL[name], name === 'dismiss' ? [acc.user, change.join(',')] : [change.join(',')])).map((r) => r.candidate_id) : [];
-      return { changed: done.length, changed_ids: done, unchanged_ids: [...unchanged, ...change.filter((id) => !done.includes(id))] };
+      return shapeStateChange({ done, unchanged, change });
     });
     res.json({ data: out });
   });
@@ -866,7 +937,7 @@ export function mount(router, context, deps = {}) {
         }
       }
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
-      return { link_batch_id: batch.toLowerCase(), undone: done.length };
+      return shapeUndo(batch, done);
     });
     await clearDataCache(schema);
     res.json({ data: out });
@@ -898,7 +969,7 @@ export function mount(router, context, deps = {}) {
     // only when asked for (acceptable=1): it reads candidates and checks edit rights, which a plain list load must not do
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
     const acceptable = f.acceptable && open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
-    res.json({ data: rows.map((r) => fileOut(r, info)), meta: { total: Number(count), limit: f.limit, offset: f.offset, acceptable } });
+    res.json(shapeFiles(rows, info, { total: count, limit: f.limit, offset: f.offset, acceptable }));
   }));
 
   // -- rescan, prefs ----------------------------------------------------------------------------------------------------------
@@ -928,19 +999,19 @@ export function mount(router, context, deps = {}) {
         throw err;
       }
     });
-    res.status(202).json({ data: { queued: true, request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
+    res.status(202).json({ data: shapeQueued(out) });
   }));
 
   router.get('/prefs', route(async ({ res, acc }) => {
     const [row] = rowsOf(await database.raw(SQL.prefsGet, [acc.user]));
-    res.json({ data: { auto_link: row?.auto_link === true } });
+    res.json({ data: shapePrefs(row) });
   }));
 
   router.put('/prefs', route(async ({ req, res, acc }) => {
     const body = bodyOf(req);
     if (!body || Object.keys(body).length !== 1 || typeof body.auto_link !== 'boolean') throw badInput('The request must be { "auto_link": true or false }.');
     const row = await inTransaction(acc.user, async (trx) => rowsOf(await trx.raw(SQL.prefsPut, [acc.user, body.auto_link]))[0]);
-    res.json({ data: { auto_link: row?.auto_link === true } });
+    res.json({ data: shapePrefs(row) });
   }));
 
   // -- auto-link (the crawler) ------------------------------------------------------------------------------------------------
@@ -1007,33 +1078,7 @@ export function mount(router, context, deps = {}) {
     const totals = rowsOf(await database.raw(SQL.adminTotals, []));
     const failed = rowsOf(await database.raw(SQL.adminFailedRequests, []));
     const [queue] = rowsOf(await database.raw(SQL.adminQueue, []));
-    const s = state ?? {};
-    const beat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
-    // never or stale FIRST: a daemon that stopped heartbeating is not "paused" just because its desired state says so
-    const daemon = beat === null ? 'never' : clock().getTime() - beat > DAEMON_STALE_MS ? 'stale' : s.desired_state === 'paused' ? 'paused' : 'alive';
-    const unmatched = asJson(s.unmatched_folders);
-    // recent failures: the daemon's last error (its time is when the last scan ended) and the failed scan requests
-    const errors = [
-      ...(s.last_error ? [{ at: toIso(s.last_scan_finished_at ?? s.last_heartbeat_at), message: s.last_error }] : []),
-      ...failed.filter((r) => r.error).map((r) => ({ at: toIso(r.at), message: r.error })),
-    ];
-    const waiting = (num(queue?.queued) ?? 0) + (num(queue?.running) ?? 0);
-    res.json({
-      data: {
-        status: {
-          desired_state: s.desired_state ?? null, interval_minutes: num(s.interval_minutes), read_mb_per_s: num(s.read_mb_per_s), daemon,
-          last_heartbeat_at: toIso(s.last_heartbeat_at), daemon_started_at: toIso(s.daemon_started_at), current_activity: s.current_activity ?? null,
-          last_scan_started_at: toIso(s.last_scan_started_at), last_scan_finished_at: toIso(s.last_scan_finished_at),
-          files_registered: num(s.files_registered) ?? 0, error_count: num(s.error_count) ?? 0, last_error: s.last_error ?? null,
-        },
-        errors,
-        unmatched_folders: Array.isArray(unmatched) ? unmatched : [],
-        people_without_alias: people.map((p) => ({ person_id: p.person_id, full_name: p.full_name, active: p.active !== false, has_login: p.has_login === true })),
-        queued_requests: waiting,
-        queue: { queued: num(queue?.queued) ?? 0, running: num(queue?.running) ?? 0 },
-        candidates: Object.fromEntries(totals.map((t) => [t.state, Number(t.n)])),
-      },
-    });
+    res.json({ data: shapeAdmin({ state, people, totals, failed, queue }, clock()) });
   }));
 
   router.post('/admin/scan-all', adminRoute(async ({ res, acc }) => {
@@ -1043,7 +1088,7 @@ export function mount(router, context, deps = {}) {
       if (waiting) throw new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: waiting.request_id });
       return rowsOf(await trx.raw(SQL.scanAllInsert, [acc.user]))[0];
     });
-    res.status(202).json({ data: { queued: true, request_id: out.request_id, status: out.status, requested_at: toIso(out.requested_at) } });
+    res.status(202).json({ data: shapeQueued(out) });
   }));
 }
 
