@@ -1830,49 +1830,49 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 Needs the real share (`archive_share` mount on d1-server) and real Directus data. Spec:
 [found files and the Inbox](../superpowers/specs/2026-10-15-found-files-inbox-design.md), ADR-0020.
 
-- [ ] **F1 — The crawler cannot write to the share.** From inside the `inbox-crawler` container, try
+- [ ] **IF1 — The crawler cannot write to the share.** From inside the `inbox-crawler` container, try
   `touch /mnt/archive/star_group1/Users/<your alias>/x` and `rm` on a throwaway file. Expect both to fail.
   Record that the SMB account in `.env` is the maintainer's personal admin one and can write; follow-up:
   create a read-only SMB account for the service and re-run this check with it.
-- [ ] **F2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
+- [ ] **IF2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
   `stat` its parent and grandparent through the mount. Expect the parent's mtime to change (the grandparent's
   need not). If the parent's does not, the incremental scan misses files; report before enabling it.
   Also compare the share's clock with the server's: the crawler lists a directory again at every scan while
   its mtime is less than 2 seconds old or in the future, so a share clock running ahead makes every scan list
-  everything (correct, but slow: F4 would show it).
-- [ ] **F3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
+  everything (correct, but slow: IF4 would show it).
+- [ ] **IF3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
   there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
   minutes (or at once with *Rescan my folder*) expect it under *New* and the badge to read 1. A file saved in
   the last 5 seconds before a scan is left for the next one (it may still be being written).
-- [ ] **F4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
+- [ ] **IF4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
   watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
-- [ ] **F5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
+- [ ] **IF5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
   log (run it with `INBOX_LOG_LEVEL=DEBUG`, which logs every file it opens, and `docker compose logs
   inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
   it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
   and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
-- [ ] **F6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
+- [ ] **IF6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
   Expect it flagged with the reason *short ID … in the file name*; link it; open the sample page and see it.
   Try *Accept all* on a filtered list and *Undo* the batch. Try a view-only person: Link must be refused.
-- [ ] **F7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
+- [ ] **IF7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
   linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link. The
   crawler and Directus must have the same `D1_INBOX_CRAWLER_SECRET`; with it empty the crawler logs
   "auto-link is off" and makes no call, with a wrong one it logs "auto-link refused" (never the secret). Only
   images are auto-linked: an exact short ID on an `.al3d` surface scan or a document must stay in the Inbox. A
   file the person cannot edit the record of is refused by d1-inbox and offered again about an hour later.
-- [ ] **F8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
+- [ ] **IF8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
   record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
   photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
   from the text tags when present; the layout is a guess until seen). Decide whether to switch OCR on: it
   needs `INBOX_OCR=1`, the `pytesseract` package and the tesseract program in the container, none of which
   the service installs today.
-- [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
+- [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
   from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract. Check the pointer
   row has `storage = 'star'` and `metadata.archive_path`, and that its `file_fingerprints` row is `done` with
   `size_bytes` and `source_mtime` equal to the file's (the renderer trusts the hash only then). A scan is
   never auto-linked, whatever its name says.
 
-- [ ] **F10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
+- [ ] **IF10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
   candidate waiting in a folder that changes), disconnect the share from the server (stop the CIFS mount or
   the VPN). Expect the log to say `scan aborted`, no candidate to become `gone`, `last_scan_finished_at` not to
   advance, the admin tab to show the error, and the next scan after the share is back to carry on without
@@ -1880,11 +1880,11 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   the share is back, a file deleted while it was down is found *gone* by a later scan (no decision is lost).
   Also make one person's folder unreadable (a permission change by the file server's owner) and confirm the
   other people's folders are still scanned and the admin tab shows the error.
-- [ ] **F11 — Snapshot and hidden folders are not entered.** If the share exposes `.snapshot`, `~snapshot` or
+- [ ] **IF11 — Snapshot and hidden folders are not entered.** If the share exposes `.snapshot`, `~snapshot` or
   similar directories inside personal or team folders, confirm the crawler never lists them (DEBUG log, or
   the file server's access log) and no found file comes from them. Also confirm folders under `Users/` and
   `Shared/` with no alias or share folder appear in the admin tab's unmatched list and are not scanned.
-- [ ] **F12 — The indexer and the crawler agree on the pointer rows.** Run `make index-archive` after the
+- [ ] **IF12 — The indexer and the crawler agree on the pointer rows.** Run `make index-archive` after the
   crawler has registered files in a personal folder. The crawler also registers file types the indexer's
   `ALLOWED_EXT` does not cover (`.al3d`, unknown types); the indexer's missing-file sweep now judges only the
   types it walks, so expect those rows NOT to be flagged `metadata.missing` (rows flagged by an older run stay
@@ -1892,7 +1892,7 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   folder under the same name, run `make index-archive --fingerprint` and then a crawler scan: the candidate
   must follow the file (not turn *gone*). Found files the indexer does cover must keep one `directus_files`
   row each (same id). Since the inbox crawler PR.
-- [ ] **F13 — Links on the real share are refused.** Ask the file server's owner (or use a test folder) to
+- [ ] **IF13 — Links on the real share are refused.** Ask the file server's owner (or use a test folder) to
   create a symbolic link and, if the file server supports them, a junction or shortcut inside a scanned
   folder: one named `photo.tif` pointing at a `.pdf`, one pointing at a folder outside `Users/`, one pointing
   at another person's file. Through the CIFS mount, check whether each appears as a symlink (`ls -l`,
@@ -1900,12 +1900,12 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   for us). Expect the crawler to list and open none of the symlinks (DEBUG log shows no read of them, no
   found file). If a link shows up as an ordinary file or folder instead, record that: the crawler cannot
   tell it from a real one, and the only guard is that the mount is read-only and limited to this share.
-- [ ] **F14 — An alias change during a scan.** With the amended migration (its triggers clean up when
+- [ ] **IF14 — An alias change during a scan.** With the amended migration (its triggers clean up when
   `people.uni_alias` or `teams.share_folder` changes), change a person's alias while a scan of their folder
   runs (or between two scans), then give the old folder name to another person. Expect the old person's
   found files (not linked ones) to vanish from their Inbox, the new owner to get a first scan of that folder
   (everything *Older*, badge 0), and no found file of the folder in the old person's Inbox.
-- [ ] **F20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
+- [ ] **IF20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
   Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
   crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
   Expect `linked`, and in `audit_logs` the new `sample_data_files` row names that person, not an administrator.
@@ -1913,14 +1913,14 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   header (or with a wrong one, or with a secret under 32 characters configured) must be 401/403. This is the one thing the unit tests cannot prove: that the
   accountability `d1-inbox` builds for a login (role tree and policy flags read from the database) is accepted by
   Directus's ItemsService. Since: found files inbox, stream B.
-- [ ] **F21 — A member cannot squat a uni alias.** As a Lab Member in Data Studio, create a People row and try to
+- [ ] **IF21 — A member cannot squat a uni alias.** As a Lab Member in Data Studio, create a People row and try to
   set `uni alias` or `scan while Former` (the fields should not be offered; a direct API POST with them must be
   refused 403). Apply migration 194 first and flush Redis / restart Directus (permissions are cached). Since:
   found files inbox, stream B (migration 194).
-- [ ] **F22 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
+- [ ] **IF22 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
   then try to link the same found file to that sample in the Inbox: expect the refusal "already linked to that
   record. Dismiss clears it." (409 `ALREADY_ON_RECORD`) and no second row, and the Inbox badge not counting it. Since: found files inbox, stream B.
-- [ ] **F30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
+- [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
   `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
   thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
   `/assets/` request; check the browser's network tab shows none); a flagged file reading *short ID `…` in the
@@ -1932,14 +1932,14 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   (Confirm waits for it), names the count and the first few *file to record* pairs and what would be left, and
   Confirm links exactly those; try it with a record you can only view (it is left, with the reason). *Rescan my
   folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
-- [ ] **F31 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
+- [ ] **IF31 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
   under Home (rail and expanded) with the count of *new* files only (backlog excluded), the same numbers in
   Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once (even
   if a poll was in flight); save a file and, without reloading, expect the badge to catch up within about three
   minutes or when the window regains focus. On a server without `d1-inbox`, the entry and the panel are absent
   and nothing errors; sign out and in as someone refused (a 403) and expect the entry to come back once the
   account can read it. Since: Inbox stream D.
-- [ ] **F32 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
+- [ ] **IF32 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
   People page: *Uni alias* and *Scan while Former* show the stored values and the note *Changing this resets
   the Inbox for this folder; linked files stay linked.* Set an alias, save, reopen: it is kept. Try `a/b`, one
   character and `.ab` (refused in the form), and an alias another person already has in a different case (the
@@ -1952,7 +1952,7 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   another team has; a refusal on a **new** team must leave the dialog open with the message and a second Save
   must not create a second team). Change an alias after that person has found files and confirm the undecided
   and dismissed ones are gone while linked ones stay. A Lab Member sees neither field. Since: Inbox stream D.
-- [ ] **F33 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
+- [ ] **IF33 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
   expect *Online, running*, the interval, the last scan times and the file count, and that it never flips to
   Offline during a long scan; stop the daemon and expect *Offline* after about five minutes (the endpoint's
   rule). A scan error appears once under *Errors*. A folder created under `Users/` or `Shared/` that no alias or

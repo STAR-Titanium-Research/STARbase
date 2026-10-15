@@ -947,7 +947,7 @@ export function mount(router, context, deps = {}) {
 
   // What Directus's getAccountabilityForToken builds for a login: the role and its parents, and whether any policy is admin or app access.
   // NOT verified against Directus's own fetchRolesTree: the SQL.roleTree order (the role first, then its parents) and the exact accountability fields
-  // Directus 11.17 reads are from memory of its source (backlog F20 checks it on a live Directus).
+  // Directus 11.17 reads are from memory of its source (backlog IF20 checks it on a live Directus).
   async function accountabilityFor(db, user) {
     const roles = isBlank(user.role) ? [] : rowsOf(await db.raw(SQL.roleTree, [user.role])).map((r) => r.id);
     const [access] = rowsOf(await db.raw(SQL.globalAccess, [user.id, roles.join(',')]));

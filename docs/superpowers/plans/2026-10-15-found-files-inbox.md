@@ -21,13 +21,13 @@
 - Errors from `d1-inbox` use the d1-record-access shape `{ errors: [{ message, extensions: { code, source: 'd1-inbox' } }] }`: 401 no user, 403 not allowed, 404 unknown id, 409 refused state, 400 bad input, 429 rate limit.
 - Writes run in a knex transaction that starts with `SELECT set_config('d1.actor_identity', <user id>, true)`; clear the Directus cache after commit when `CACHE_ENABLED` (copy `d1-record-access`).
 - `@d1/starbase-pages` stays host-neutral (`src/hostNeutral.test.ts`).
-- Things only the real share, Directus data or a rig can confirm go in `docs/runbooks/physical-test-backlog.md` (items F1–F9 are already there; extend them, never remove).
+- Things only the real share, Directus data or a rig can confirm go in `docs/runbooks/physical-test-backlog.md` (items IF1–IF9 are already there; extend them, never remove).
 
 ## Status
 
 | Stream | What | Agent profile | Worktree / branch | State |
 |---|---|---|---|---|
-| E | Spec, ADR-0020, glossary, backlog items F1–F9, this plan, the crawler profile and skill | coordinator | `ccr-f5ece72d-pvkcct` | **done** (PR #310) |
+| E | Spec, ADR-0020, glossary, backlog items IF1–IF9, this plan, the crawler profile and skill | coordinator | `ccr-f5ece72d-pvkcct` | **done** (PR #310) |
 | A | Migration `20261015000193_found_files_inbox.sql`: `uni_alias`, `share_folder`, five `d1_private` tables, schema tests | `d1-server-implementer` | `feat/inbox-a-schema` (final `76f6b15c`) | built; Opus review done, all findings fixed (final `43115a5c`, 1471 schema checks pass locally, CI green on the first version); merged into the integration branch |
 | B | `d1-inbox` extension (routes, edit-rights check, undo, rate limit, auto-link guard) and the alias-squat fix (people create `fields`, migration >= 194) | `d1-server-implementer` | `feat/inbox-b-endpoint` | in progress (told to match D's client contract; auto-link excludes surface scans) |
 | C | `scripts/inbox_crawler/` daemon, classifiers, recognition, read-only tests, compose service | `inbox-crawler-implementer` | `feat/inbox-c-crawler` (`dba6972c`) | built; Opus review done (1 conditional blocker, symlinks; 9 should-fix); fixes in progress |
@@ -82,7 +82,7 @@ Copy the shape of `core/extensions/d1-build` (route wrapper, `HttpError`, Direct
 - [ ] **C4: Hashing and registration:** throttled streaming SHA-256 into `file_fingerprints`; pointer rows in `directus_files`/`directus_folders` using the indexer's id rule (import it from `scripts/index_archive.py`; do not change that script's behaviour; its tests must still pass).
 - [ ] **C5: Scan loop and owners:** owners from `people.uni_alias`/`teams.share_folder`; incremental scan via `inbox_dirs` (stat known dirs, list only changed ones); first complete scan of an owner sets `baselined_at` and marks that scan's files `origin='backlog'`; duplicates (hash) set `duplicate_of`; vanished files → `gone` or re-point on hash match; share-drop abort. Postgres-backed tests in the style of `tests/scripts/test_index_archive.py`.
 - [ ] **C6: Daemon:** `inbox_crawler_state` heartbeat and `desired_state`/interval/`read_mb_per_s`; scan requests claimed with `FOR UPDATE SKIP LOCKED`; after-scan auto-link calls to `d1-inbox` (`POST /d1-inbox/auto-link`, machine token from `.env`, tests with a fake HTTP server); adopted-document hashing loop.
-- [ ] **C7:** compose service, `make inbox-crawler`, docs line in `docs/runbooks/`, backlog items F1–F9 kept accurate; commit per task.
+- [ ] **C7:** compose service, `make inbox-crawler`, docs line in `docs/runbooks/`, backlog items IF1–IF9 kept accurate; commit per task.
 
 ## Stream D — STARbase (`directus-ui-implementer`, after A is merged)
 

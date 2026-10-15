@@ -34,7 +34,7 @@ administrators (admin tab on `/crawler`) and are not scanned.
 - **Read-only.** The share is mounted `ro` twice. In code, `fs_readonly.py` is the only module that touches
   it (list, stat, open for reading), and `tests/scripts/test_inbox_crawler_readonly.py` fails the build on any
   write, delete, rename or open-for-write call, on reflection and dynamic code, and on any import that is not on
-  a module's allow-list. The SMB account in `.env` can still write today (backlog F1).
+  a module's allow-list. The SMB account in `.env` can still write today (backlog IF1).
 - **Regular files only, never through a link.** A symbolic link is neither listed nor followed; `open_rb`
   refuses a link (also one swapped in between listing and opening), a FIFO, a device and a directory, and
   refuses to read at all on a platform that cannot refuse links. Hidden directories (`.…`), snapshot directories
@@ -83,7 +83,7 @@ administrators (admin tab on `/crawler`) and are not scanned.
 - A cross-owner move (a file moved from one person's folder to another's) shows as gone plus new.
 - A clock difference of more than a few seconds between the share and the server makes every scan list every
   folder (correct, but slow).
-- The SMB account in `.env` can write (ADR-0020, backlog F1); the guarantees above are code and mounts.
+- The SMB account in `.env` can write (ADR-0020, backlog IF1); the guarantees above are code and mounts.
 
 ## When something looks wrong
 
@@ -98,4 +98,4 @@ administrators (admin tab on `/crawler`) and are not scanned.
   differs from Directus's.
 - Tests: `python -m pytest tests/scripts/test_inbox_crawler_*.py` (the DB-backed ones need `DATABASE_URL`, see
   `tests/scripts/test_inbox_crawler_world.py`). What only the real share can show is in
-  [the physical test backlog](./physical-test-backlog.md) (F1 to F14).
+  [the physical test backlog](./physical-test-backlog.md) (IF1 to IF14).

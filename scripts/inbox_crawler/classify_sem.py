@@ -7,7 +7,7 @@ the bottom edge, with high-contrast text-like content and a scale-bar line in it
 metadata the profile knows.
 
 The tag is a guess until it has been validated on the maintainer's sample strips (physical-test backlog
-F8): the UI words it "possible SEM image". `extracted` carries only what was read from the file: embedded
+IF8): the UI words it "possible SEM image". `extracted` carries only what was read from the file: embedded
 metadata, and the data bar's text when OCR is switched on (default off). Never a value the picture merely
 suggests.
 """
