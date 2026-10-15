@@ -16,6 +16,8 @@ import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, refKey, type MapActions, type MapView 
 import { socketLabeller } from './nodes/a11y';
 import EditLid from './edit/EditLid.vue';
 import AddMenu from './edit/AddMenu.vue';
+import ConnectTo from './edit/ConnectTo.vue';
+import DuplicatePrompt from './edit/DuplicatePrompt.vue';
 import SamplePicker from './edit/SamplePicker.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
@@ -352,6 +354,8 @@ onBeforeUnmount(() => {
 					<MapRail v-bind="railProps" v-on="railEvents" />
 				</MapSheet>
 				<!-- Beside the layout, not in it: RecordLayout is a size container, which would make `position: fixed` relative to it. -->
+				<ConnectTo v-if="build.connecting.value && edit.editing.value" :entries="build.connectEntries.value" :from="build.connectFrom.value" :at="build.connecting.value.at" @choose="build.connectTo" @close="build.connecting.value = null" />
+				<DuplicatePrompt v-if="build.duplicating.value && edit.editing.value" :what="build.duplicating.value.what" @confirm="build.confirmDuplicate" @close="build.duplicating.value = null" />
 				<SamplePicker v-if="build.pickerOpen.value && edit.editing.value" :taken="build.picking.taken.value" @pick="build.picking.picked" @close="build.pickerOpen.value = false" />
 				<AddMenu
 					v-if="build.menu.target.value && edit.editing.value"

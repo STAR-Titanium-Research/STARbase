@@ -37,6 +37,8 @@ export type MenuChoice =
 	| { kind: 'existingSample' }
 	/** The sample picker, over the canvas. */
 	| { kind: 'pickSamples' }
+	/** "Connect to…": the sockets this one can be wired to, by code (E21). */
+	| { kind: 'connectTo' }
 	/** A sample that is in the draft, wired to the socket the menu is for. */
 	| { kind: 'wireSample'; key: DraftKey }
 	/** A sample found in the database: the page adds it to the draft (with its version), then it is a `wireSample`. */
@@ -102,8 +104,14 @@ export interface MenuCatalog {
 	templates?: readonly TemplateEntry[];
 }
 
-/** The entries of the menu when nothing has been typed. */
+/** The entries of the menu when nothing has been typed. A socket's menu ends with Connect to… (a test has no output to connect). */
 export function rootEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[] {
+	const entries = baseEntries(body, f, cat);
+	if (f.side === null || (f.side === 'out' && f.card === 'test')) return entries;
+	return [...entries, { id: 'connect', section: 'Wire', label: 'Connect to…', detail: 'a socket on the canvas, by code', choice: { kind: 'connectTo' } }];
+}
+
+function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[] {
 	const out: MenuEntry[] = [];
 	if (f.side === 'out' && (f.card === 'operation' || f.card === 'test')) {
 		if (f.card === 'test') return [];

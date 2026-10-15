@@ -18,6 +18,8 @@ export function useAddMenu(o: {
 	ensureSample: (recordId: string) => Promise<boolean>;
 	/** The sample picker over the canvas. */
 	pickSamples: () => void;
+	/** "Connect to…" for the socket the menu was opened on. */
+	connect: (t: MenuTarget) => void;
 	/** Saved templates for the menu (stream E); none until it lands. */
 	templates?: () => TemplateEntry[];
 }) {
@@ -46,6 +48,7 @@ export function useAddMenu(o: {
 		if (!t) return;
 		close();
 		if (choice.kind === 'pickSamples') return o.pickSamples();
+		if (choice.kind === 'connectTo') return void o.connect(t);
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		if (t.sock?.kind === 'sample' && !sampleItemOf(o.edit.body.value, t.sock.id) && !(await o.ensureSample(t.sock.id))) return;
 		let resolved = choice;

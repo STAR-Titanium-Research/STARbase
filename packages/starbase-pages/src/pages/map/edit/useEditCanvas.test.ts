@@ -54,8 +54,9 @@ async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [
 	const nodes: MapNode[] = [];
 	const map = { graph: reactive({ value: { nodes } }), clearHover: vi.fn() } as never;
 	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 10, y: y - 20 }), remeasure: async () => undefined } as never;
-	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t) });
-	return { edit, ec, opened, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
+	const connecting: MenuTarget[] = [];
+	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t) });
+	return { edit, ec, opened, connecting, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
 }
 
 const down = (sock: SocketRef, at: { x: number; y: number }, ec: { mapEdit: { socketDown: (s: SocketRef, e: PointerEvent) => void } }) => {
@@ -90,6 +91,16 @@ describe('a click on a socket', () => {
 		expect(opened).toHaveLength(1);
 		expect(Object.values(listeners).flat()).toHaveLength(0);
 		expect(style.userSelect).toBe('');
+	});
+
+	it('C on a focused socket opens Connect to… instead (E21), and Ctrl+C is left alone', async () => {
+		const { ec, opened, connecting } = await setup(twoCards());
+		const el = socketEl(SAMPLE_OUT, 300, 200);
+		const ev = (over: Record<string, unknown>) => ({ currentTarget: el, preventDefault() {}, stopPropagation() {}, ...over }) as unknown as KeyboardEvent;
+		ec.mapEdit.socketKey(SAMPLE_OUT, ev({ key: 'c' }));
+		ec.mapEdit.socketKey(SAMPLE_OUT, ev({ key: 'c', ctrlKey: true }));
+		expect(connecting).toEqual([{ sock: SAMPLE_OUT, at: { x: 300, y: 200 }, anchor: 'card:1' }]);
+		expect(opened).toHaveLength(0);
 	});
 
 	it('does nothing when the draft cannot be changed', async () => {

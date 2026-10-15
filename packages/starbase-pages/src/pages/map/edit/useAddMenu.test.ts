@@ -18,8 +18,9 @@ async function setup(editing = true) {
 	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 100, y: y - 50 }), remeasure: async () => undefined };
 	const picked = vi.fn();
 	const ec = useEditCanvas({ edit, map: { graph: { value: { nodes: [] } }, clearHover() {} } as never, canvas: canvas as never, canvasEl, openMenu: () => undefined });
-	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked });
-	return { edit, menu, picked };
+	const connect = vi.fn();
+	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked, connect });
+	return { edit, menu, picked, connect };
 }
 
 describe('the Add menu\'s state', () => {
@@ -64,6 +65,15 @@ describe('the Add menu\'s state', () => {
 		await menu.choose({ kind: 'pickSamples' });
 		expect(picked).toHaveBeenCalled();
 		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('Connect to… opens the list for the socket the menu was on', async () => {
+		const { menu, connect } = await setup();
+		const t: MenuTarget = { sock: { kind: 'sample', id: 'draft:n1', side: 'out' }, at: { x: 1, y: 1 }, anchor: 'card' };
+		menu.open(t);
+		await menu.choose({ kind: 'connectTo' });
+		expect(connect).toHaveBeenCalledWith(t);
+		expect(menu.target.value).toBeNull();
 	});
 
 	it('a sample found in the database is added to the draft with its version, then wired to the socket', async () => {

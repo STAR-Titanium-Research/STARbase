@@ -4,7 +4,7 @@
 // A click on a socket (a pointer that did not move) opens the Add menu there. A drag draws a wire preview that follows the pointer
 // and marks the socket it is over green when the draft takes the wire and red when it does not (with the reducer's reason as a
 // tooltip); dropped on a socket that fits it makes the wire, dropped on empty canvas it opens the Add menu at that point, and
-// anywhere else it does nothing. No gesture needs dragging: Enter on a focused socket opens its menu too (E21).
+// anywhere else it does nothing. No gesture needs dragging: Enter on a focused socket opens its menu too, and C its "Connect to…" (E21).
 
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import type { DraftKey } from '@d1/ui';
@@ -53,7 +53,7 @@ export interface WirePreview {
 	reason: string | null;
 }
 
-export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; openMenu: (t: MenuTarget) => void }) {
+export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; openMenu: (t: MenuTarget) => void; openConnect?: (t: MenuTarget) => void }) {
 	const { edit, map, canvas, canvasEl } = o;
 
 	const drop = ref<{ sock: string; ok: boolean } | null>(null);
@@ -185,14 +185,17 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 		stop = finish;
 	}
 
-	/** Enter on a focused socket opens its menu, as a click does (E21). */
+	/** Enter on a focused socket opens its menu, as a click does; C opens "Connect to…" (E21). */
 	function socketKey(sock: SocketRef, e: KeyboardEvent): void {
-		if (e.key !== 'Enter' || !edit.editing.value) return;
+		const connect = e.key === 'c' || e.key === 'C';
+		if ((e.key !== 'Enter' && !connect) || e.ctrlKey || e.metaKey || e.altKey || !edit.editing.value) return;
 		e.preventDefault();
 		e.stopPropagation();
 		const el = e.currentTarget as HTMLElement;
 		const r = el.getBoundingClientRect();
-		o.openMenu({ sock, at: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, anchor: (el.closest('.vue-flow__node') as HTMLElement | null)?.dataset.id });
+		const target: MenuTarget = { sock, at: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, anchor: (el.closest('.vue-flow__node') as HTMLElement | null)?.dataset.id };
+		if (connect) o.openConnect?.(target);
+		else o.openMenu(target);
 	}
 
 	// ---- badges and ＋ output ---------------------------------------------------------------------------------------

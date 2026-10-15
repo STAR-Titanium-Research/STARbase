@@ -49,8 +49,8 @@ describe('the entries', () => {
 	it('from a sample output: templates, operations by category (the lab\'s order, no category last), then the tests', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n1', 'out')), { ...catalog, templates: [tpl()] });
-		expect(sections(es)).toEqual(['Templates', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
-		expect(labels(es)).toEqual(['Rough turn', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD']);
+		expect(sections(es)).toEqual(['Templates', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+		expect(labels(es)).toEqual(['Rough turn', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
 		expect(es.find((e) => e.label === 'Turning')?.detail).toBe('MC');
 	});
 
@@ -63,7 +63,7 @@ describe('the entries', () => {
 	it('from an operation output: New sample, Same sample, Existing sample…', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('row', 'draft:n3', 'out')), catalog);
-		expect(labels(es)).toEqual(['New sample', 'Same sample', 'Existing sample…']);
+		expect(labels(es)).toEqual(['New sample', 'Same sample', 'Existing sample…', 'Connect to…']);
 		expect(es[1].disabled).toBeUndefined(); // the sample n1 feeds it
 	});
 
@@ -81,14 +81,14 @@ describe('the entries', () => {
 	it('from a free input of an operation or a test: New sample, Existing sample…', () => {
 		const b = body();
 		for (const id of ['draft:n3', 'draft:n4']) {
-			expect(labels(rootEntries(b, menuFor(b, sock('row', id, 'in')), catalog))).toEqual(['New sample', 'Existing sample…']);
+			expect(labels(rootEntries(b, menuFor(b, sock('row', id, 'in')), catalog))).toEqual(['New sample', 'Existing sample…', 'Connect to…']);
 		}
 	});
 
 	it('from a sample\'s input: the operations that could make it, no tests', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), catalog);
-		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods']);
+		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Wire']);
 	});
 
 	it('lists a template that cannot be used greyed, with its reason', () => {
@@ -230,6 +230,7 @@ describe('what a choice does', () => {
 		expect(actionsFor(target(b, sock('row', 'draft:n3', 'out')), { kind: 'operation', methodId: 'mt', category: null })).toEqual([]);
 		expect(actionsFor(target(b, null), { kind: 'pickSamples' })).toEqual([]);
 		expect(actionsFor(target(b, null), { kind: 'existingSample' })).toEqual([]);
+		expect(actionsFor(target(b, sock('sample', 'draft:n1', 'out')), { kind: 'connectTo' })).toEqual([]);
 		expect(actionsFor(target(b, sock('row', 'draft:n3', 'in')), { kind: 'wireSample', key: 'nope' })).toEqual([]);
 		expect(actionsFor(target(b, sock('row', 'draft:n3', 'in')), { kind: 'record', id: 'x', code: 'X' })).toEqual([]);
 	});
