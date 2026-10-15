@@ -47,6 +47,25 @@ describe('linkActive', () => {
 	});
 });
 
+describe('linkActive for the edit mode of a page (?edit in the entry)', () => {
+	it('lights Build a process only while the map is being edited, whatever the draft', () => {
+		expect(linkActive('/map?edit=new', '/map', { edit: 'new' })).toBe(true);
+		expect(linkActive('/map?edit=new', '/map', { edit: '0b9c5a3e-1f2d-4c6b-8a7e-123456789abc' })).toBe(true);
+		expect(linkActive('/map?edit=new', '/map', {})).toBe(false);
+		expect(linkActive('/map?edit=new', '/home/samples', { edit: 'new' })).toBe(false);
+	});
+
+	it('lights the plain Process map entry only while the map is not being edited', () => {
+		expect(linkActive('/map', '/map', {})).toBe(true);
+		expect(linkActive('/map', '/map', { focus: 'x' })).toBe(true);
+		expect(linkActive('/map', '/map', { edit: 'new' })).toBe(false);
+	});
+
+	it('leaves other pages alone: ?edit means nothing on them', () => {
+		expect(linkActive('/home/samples', '/home/samples', { edit: 'x' })).toBe(true);
+	});
+});
+
 describe('linkActive on the STARbase host (routes without the /home prefix)', () => {
 	afterEach(() => resetLinks());
 	it('reads the current route in its Directus form', () => {
@@ -56,5 +75,7 @@ describe('linkActive on the STARbase host (routes without the /home prefix)', ()
 		expect(linkActive('/home/samples', '/samples', {})).toBe(true);
 		expect(linkActive('/home/samples', '/samples/12', {})).toBe(true);
 		expect(linkActive('/home/samples?bookmark=3', '/samples', { bookmark: '3' })).toBe(true);
+		expect(linkActive('/map?edit=new', '/map', { edit: 'new' })).toBe(true);
+		expect(linkActive('/map', '/map', { edit: 'new' })).toBe(false);
 	});
 });

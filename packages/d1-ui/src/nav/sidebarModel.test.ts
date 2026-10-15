@@ -68,6 +68,23 @@ describe('sectionForPage', () => {
 		expect(sectionForPage(s, '/home/samples', { bookmark: '3' })).toBe('records');
 		expect(sectionForPage(s, '/home/equipment', {})).toBe('reference');
 		expect(sectionForPage(s, '/home', {})).toBeNull();
+		expect(sectionForPage(s, '/map', {})).toBe('analysis');
+	});
+});
+
+describe('Build a process in the sidebar', () => {
+	const link = () => section('analysis').groups[0].links.find((l) => l.label === 'Build a process')!;
+
+	it('sits in Analysis after Process map, to a blank canvas, and can be pinned', () => {
+		expect(section('analysis').groups[0].links.map((l) => l.label).slice(-2)).toEqual(['Process map', 'Build a process']);
+		expect(link().to).toBe('/map?edit=new');
+		expect(link().pin).toEqual({ kind: 'page', target: 'build-process' });
+	});
+
+	it('a pin of it resolves to its entry', () => {
+		const { shown, unavailable } = resolvePins([{ kind: 'page', target: 'build-process' }], full(), new Map());
+		expect(unavailable).toEqual([]);
+		expect(shown[0]).toMatchObject({ label: 'Build a process', to: '/map?edit=new', icon: link().icon });
 	});
 });
 
