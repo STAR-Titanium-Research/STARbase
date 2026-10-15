@@ -306,3 +306,70 @@ def test_reading_a_scan_leaves_the_file_untouched(share):
     before = (path.read_bytes(), path.stat().st_mtime_ns)
     topography.read_scan(path)
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+# --- the file id must be the one derived from its archive_path -------------------------------
+
+
+def test_expected_file_id_is_the_indexers_uuid5():
+    import uuid
+
+    ns = uuid.uuid5(uuid.NAMESPACE_DNS, "d1-database.archive-index.v1")
+    assert archive.expected_file_id("rig/insert-1.al3d") == str(
+        uuid.uuid5(ns, "file:rig/insert-1.al3d")
+    )
+
+
+def test_expected_file_id_matches_scripts_index_archive():
+    """The worker's copy of the namespace must not drift from the indexer's."""
+    import importlib.util
+    from pathlib import Path
+
+    script = next(
+        (
+            parent / "scripts" / "index_archive.py"
+            for parent in Path(__file__).resolve().parents
+            if (parent / "scripts" / "index_archive.py").exists()
+        ),
+        None,
+    )
+    if (
+        script is None
+    ):  # the plugin image tests run at /app without the rest of the repo
+        pytest.skip("scripts/index_archive.py is not next to the plugin")
+    spec = importlib.util.spec_from_file_location("index_archive_for_test", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for rel in ("rig/insert-1.al3d", "Users/ab1xy/edge A/scan.al3d", "x.al3d"):
+        assert archive.expected_file_id(rel) == str(module.file_id(rel))
+
+
+def test_check_identity_accepts_a_matching_id():
+    path = "rig/insert-1.al3d"
+    archive.check_identity(archive.expected_file_id(path), path)
+    archive.check_identity(archive.expected_file_id(path).upper(), path)
+
+
+@pytest.mark.parametrize(
+    "file_id, path",
+    [
+        (
+            "5d1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c01",
+            "rig/insert-1.al3d",
+        ),  # an unrelated id
+        (None, "rig/insert-1.al3d"),
+        ("", "rig/insert-1.al3d"),
+        ("5d1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c01", None),
+        ("5d1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c01", ""),
+    ],
+)
+def test_check_identity_refuses_a_mismatch_or_a_missing_part(file_id, path):
+    with pytest.raises(archive.RenderError):
+        archive.check_identity(file_id, path)
+
+
+def test_check_identity_refuses_a_path_repointed_to_another_file():
+    registered = "rig/insert-1.al3d"
+    registered_id = archive.expected_file_id(registered)
+    with pytest.raises(archive.RenderError, match="does not match its id"):
+        archive.check_identity(registered_id, "Users/someone-else/private.al3d")
