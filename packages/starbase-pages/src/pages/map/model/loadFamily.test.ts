@@ -312,7 +312,7 @@ describe('loadFamily', () => {
       powderBatch: 'TIMET 45-150',
       projectId: 'p1',
     });
-    expect(op.relations.equipment_id).toEqual({ collection: 'equipment', id: 'e1', code: 'FAST25', label: 'FAST 25' });
+    expect(op.relations.equipment_id).toEqual({ collection: 'equipment', id: 'e1', code: 'FAST 25', label: 'FAST25' });
     expect(op.relations.fast_recipe_id).toMatchObject({ collection: 'fast_recipes', id: 'fr1', code: 'Recipe A' });
     expect(op.relations.force_file_id).toEqual({ collection: 'force_file', id: 'C:\\force\\run7.mat', code: 'run7.mat' });
     expect(op.relations.tool_id).toBeNull();

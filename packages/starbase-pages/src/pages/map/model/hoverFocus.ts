@@ -50,74 +50,62 @@ export function hoverFocus(graph: ProcessGraph, id: string | null): HoverFocus |
 }
 
 /**
- * The sockets on the far side of a node from `socket`: walking `up`, the inputs that feed this output;
- * walking `down`, the outputs this input feeds. A container answers row by row, so a cut's piece leads back
- * to the one input and not across to its sibling pieces; any other card passes everything through.
+ * The inputs of a node that feed its output `socket`. A container answers row by row, so a cut's piece leads
+ * back to the one input and not across to its sibling pieces; any other card is fed by all its inputs.
  */
-function across(node: MapNode | undefined, socket: string, dir: 'up' | 'down'): string[] {
+function feeding(node: MapNode | undefined, socket: string): string[] {
   if (!node) return [];
   switch (node.type) {
     case 'container':
-      return node.rows.filter((r) => (dir === 'up' ? r.out : r.in) === socket).flatMap((r) => (dir === 'up' ? r.in : r.out) ?? []);
+      return node.rows.filter((r) => r.out === socket).flatMap((r) => r.in ?? []);
     case 'record':
-      return dir === 'up' ? node.ins : node.outs;
+      return node.ins;
     case 'junction':
-      return dir === 'up' ? [node.in] : node.outs.map((o) => o.socket);
+      return [node.in];
     default:
       return [];
   }
 }
 
-/** The sockets a walk starts from on the selected card itself. */
-function ownSockets(node: MapNode, dir: 'up' | 'down'): string[] {
+/** The input sockets of the card a walk starts from. */
+function inputsOf(node: MapNode): string[] {
   switch (node.type) {
     case 'container':
-      return node.rows.flatMap((r) => (dir === 'up' ? r.in : r.out) ?? []);
+      return node.rows.flatMap((r) => r.in ?? []);
     case 'record':
-      return dir === 'up' ? node.ins : node.outs;
+      return node.ins;
     case 'junction':
-      return dir === 'up' ? [node.in] : node.outs.map((o) => o.socket);
+      return [node.in];
     default:
       return [];
   }
 }
 
 /**
- * Everything a selected card's samples came from and went on to (the user's "whole chain"): walk the wires
- * upstream from its inputs and downstream from its outputs, through each card on the way. Unrelated
- * branches (a sibling piece of a cut and what was done to it) stay dim.
+ * Everything a card's samples came from (its chain behind it, not what came after): walk the wires upstream
+ * from its inputs through each card on the way. A sibling piece of a cut, and everything downstream, stays dim.
  */
 export function chainFocus(graph: ProcessGraph, id: string | null): HoverFocus | null {
   const start = id ? graph.nodes.find((n) => n.id === id) : undefined;
   if (!start) return null;
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const into = new Map<string, Wire[]>();
-  const outOf = new Map<string, Wire[]>();
-  for (const w of graph.wires) {
-    into.set(w.to, [...(into.get(w.to) ?? []), w]);
-    outOf.set(w.from, [...(outOf.get(w.from) ?? []), w]);
-  }
+  for (const w of graph.wires) into.set(w.to, [...(into.get(w.to) ?? []), w]);
   const nodes = new Set([start.id]);
   const wires = new Set<string>();
-
-  const walk = (dir: 'up' | 'down') => {
-    const seen = new Set<string>();
-    const queue = [...ownSockets(start, dir)]; // a copy: a record's own ins/outs must not be emptied
-    while (queue.length) {
-      const socket = queue.pop()!;
-      if (seen.has(socket)) continue;
-      seen.add(socket);
-      for (const w of (dir === 'up' ? into : outOf).get(socket) ?? []) {
-        wires.add(w.id);
-        const far = dir === 'up' ? w.from : w.to;
-        const farNode = nodeOfSocket(far);
-        nodes.add(farNode);
-        queue.push(...across(byId.get(farNode), far, dir));
-      }
+  const seen = new Set<string>();
+  const queue = [...inputsOf(start)]; // a copy: a record's own `ins` must not be emptied
+  while (queue.length) {
+    const socket = queue.pop()!;
+    if (seen.has(socket)) continue;
+    seen.add(socket);
+    for (const w of into.get(socket) ?? []) {
+      wires.add(w.id);
+      const from = nodeOfSocket(w.from);
+      nodes.add(from);
+      queue.push(...feeding(byId.get(from), w.from));
     }
-  };
-  walk('up');
-  walk('down');
+  }
   return { dim: true, nodes, wires };
 }
 

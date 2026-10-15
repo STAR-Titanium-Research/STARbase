@@ -17,7 +17,8 @@ export interface RelSpec {
 }
 
 export const RELATIONS = {
-  equipment_id: { collection: 'equipment', id: 'equipment_id', code: ['equipment_code'], label: 'equipment_name' },
+  // A machine reads by its name ("RDC Water Jet Cutter"), not its six-character code; the code is the label.
+  equipment_id: { collection: 'equipment', id: 'equipment_id', code: ['equipment_name', 'equipment_code'], label: 'equipment_code' },
   tool_id: { collection: 'tools', id: 'tool_id', code: ['tool_code'], label: 'tool_name' },
   insert_edge_id: { collection: 'insert_edges', id: 'edge_id', code: ['edge_code'] },
   project_id: { collection: 'projects', id: 'project_id', code: ['project_code'], label: 'project_name' },

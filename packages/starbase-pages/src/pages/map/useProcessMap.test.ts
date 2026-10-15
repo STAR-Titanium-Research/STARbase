@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, watch } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
+import { chainFocus } from './model/hoverFocus';
 import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFans';
@@ -463,7 +464,7 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('the selection lights its chain; hovering another card shows its neighbours; a wire adds to the chain', async () => {
+  it('the selection lights its chain; hovering another card lights that card\'s chain; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
@@ -472,7 +473,7 @@ describe('useProcessMap', () => {
     expect(chain).toMatchObject({ dim: true });
     expect(chain.nodes.has('s:s1')).toBe(true);
     map.hover('s:s2', {} as HTMLElement);
-    expect(map.focusOfHover.value).toMatchObject({ dim: true });
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2'));
     map.hover(null);
     expect(map.focusOfHover.value).toEqual(chain);
     const wire = map.graph.value!.wires[0].id;

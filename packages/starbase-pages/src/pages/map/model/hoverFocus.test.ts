@@ -18,18 +18,22 @@ describe('chainFocus', () => {
   const g = buildGraph(cut, groupsOf(cut, true), { slots: () => [] });
   const opOf = (row: string) => g.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(row))!.id;
 
-  it('a piece: back through its own row of the cut to the parent, on to what came after; siblings stay dim', () => {
+  it('a piece: back through its own row of the cut to the parent; siblings and what came after stay dim', () => {
     const f = chainFocus(g, 's:c0')!;
     expect(f.dim).toBe(true);
-    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0', opOf('pol-d'), 's:d'].sort());
-    expect(f.nodes.has('s:c1')).toBe(false);
-    expect(f.nodes.has('s:e')).toBe(false);
+    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0'].sort());
   });
 
-  it('the parent: everything downstream of it, every piece and branch', () => {
+  it('a later sample: its whole history, through the polish and the cut', () => {
+    const f = chainFocus(g, 's:d')!;
+    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0', opOf('pol-d'), 's:d'].sort());
+    expect(f.wires.size).toBe(4);
+  });
+
+  it('the root: only itself (nothing behind it)', () => {
     const f = chainFocus(g, 's:m')!;
-    for (const id of ['s:c0', 's:c1', 's:c2', 's:d', 's:e']) expect([...f.nodes]).toContain(id);
-    expect(f.wires.size).toBe(g.wires.length);
+    expect([...f.nodes]).toEqual(['s:m']);
+    expect(f.wires.size).toBe(0);
   });
 
   it('nothing selected, or an id not on the map: no chain', () => {
