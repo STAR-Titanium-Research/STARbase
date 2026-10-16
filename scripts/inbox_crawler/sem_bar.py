@@ -147,7 +147,9 @@ def cut_cells(bar) -> list[BarCell]:
 
 def scale_bar_length_px(bar, cells: list[BarCell] | None = None) -> int | None:
     """The scale bar's length in pixels, or None: the longest run of bright pixels of at least 20 px in any single
-    row of the rightmost cell. The top row is not looked at, and a run that spans the whole cell is a divider row,
+    row of the rightmost cell. A real FEI bar is drawn through its own label ("---- 50 um ----"), so a row with
+    two or more such runs is one bar broken by the label: it measures from the start of the first run to the end
+    of the last. The top row is not looked at, and a run that spans the whole cell is a divider row,
     not a scale bar. "Bright" is relative (200 of 255 of the bar's maximum) so a contrast-edited bar still reads.
     `cells` are the bar's `cut_cells` when the caller already has them."""
     if cells is None:
@@ -162,12 +164,16 @@ def scale_bar_length_px(bar, cells: list[BarCell] | None = None) -> int | None:
     best = 0
     for row in bright:
         edges = numpy.diff(numpy.pad(row.astype(numpy.int8), 1))
-        for start, end in zip(
-            numpy.nonzero(edges == 1)[0].tolist(),
-            numpy.nonzero(edges == -1)[0].tolist(),
-        ):
-            if end - start < width:  # a run from edge to edge is not a scale bar
-                best = max(best, end - start)
+        runs = [
+            (start, end)
+            for start, end in zip(
+                numpy.nonzero(edges == 1)[0].tolist(),
+                numpy.nonzero(edges == -1)[0].tolist(),
+            )
+            if SCALE_LINE_MIN_PX <= end - start < width
+        ]  # a run from edge to edge is not a scale bar; a shorter one is a glyph stroke
+        if runs:
+            best = max(best, runs[-1][1] - runs[0][0])
     return best if best >= SCALE_LINE_MIN_PX else None
 
 
@@ -330,7 +336,8 @@ def parse_bar(
     for cell, key in (("det", "detector"), ("mode", "mode")):
         if cell in read:
             text, conf = read[cell]
-            text = " ".join(text.split())
+            # a trailing full stop is the recogniser's, not the instrument's ("None." read from a bar that says "None")
+            text = " ".join(text.split()).rstrip(". ")
             if _TEXT_FIELD.fullmatch(text):
                 keep(key, text, conf)
             else:
