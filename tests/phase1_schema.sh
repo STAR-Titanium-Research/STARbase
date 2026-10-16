@@ -7060,7 +7060,34 @@ grep -q 'fo_deleted:0' <<<"$fo_out" && ok "a person whose files are no longer ow
 fo_backfill=$(awk '/^-- backfill:begin/{f=1;next}/^-- backfill:end/{f=0}f' "${FO_MIG:-/dev/null}")
 [[ -n "$fo_backfill" ]] && ok "the migration marks its back-fill statement (-- backfill:begin / -- backfill:end)" || bad "the migration has no marked back-fill statement"
 FO_CJ='a3000000-0000-4000-8000-0000000000e1'
+FO_F7='a3000000-0000-4000-8000-0000000000c7'
+FO_F8='a3000000-0000-4000-8000-0000000000c8'
+FO_F9='a3000000-0000-4000-8000-0000000000c9'
+FO_FA='a3000000-0000-4000-8000-0000000000ca'
+FO_S1='a3000000-0000-4000-8000-0000000000f1'
+FO_O1='a3000000-0000-4000-8000-0000000000f2'
+FO_X1='a3000000-0000-4000-8000-0000000000f3'
+FO_TB='a3000000-0000-4000-8000-0000000000f4'
+FO_CI='a3000000-0000-4000-8000-0000000000f5'
+# files that are linked somewhere (Data Studio's picker, the Alicona dialog) while their candidate is still dismissed, new or gone: the candidate
+# does not say so, the junction rows do (the crawler's own definition, inbox_crawler/db.py already_linked)
+fo_linked_elsewhere="INSERT INTO directus_files (id) VALUES ('$FO_F7'), ('$FO_F8'), ('$FO_F9'), ('$FO_FA');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$FO_S1', 'FOBF-S1');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id) VALUES ('$FO_O1', '$FO_S1', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1));
+INSERT INTO test_sessions (session_id) VALUES ('$FO_X1');
+INSERT INTO tool_boxes (tool_box_id, tool_box_code) VALUES ('$FO_TB', 'FOBF-BOX');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id) VALUES ('$FO_CI', 'FOBF-INS', '$FO_TB');
+INSERT INTO sample_data_files (sample_id, directus_files_id) VALUES ('$FO_S1', '$FO_F7');
+INSERT INTO operation_data_files (operation_id, directus_files_id) VALUES ('$FO_O1', '$FO_F8');
+INSERT INTO session_data_files (session_id, directus_files_id) VALUES ('$FO_X1', '$FO_F9');
+INSERT INTO surface_scans (insert_id, directus_files_id, condition) VALUES ('$FO_CI', '$FO_FA', 'worn');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, rel_path) VALUES
+  ('$FO_F7', '$FO_P1', NULL, 'image', 'new', 'dismissed', 'Users/a/7.png'),
+  ('$FO_F8', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/8.png'),
+  ('$FO_F9', NULL, '$FO_T1', 'image', 'new', 'gone', 'Shared/t/9.png'),
+  ('$FO_FA', '$FO_P2', NULL, 'image', 'new', 'new', 'Users/b/a.al3d');"
 fo_out=$(fo_sql "INSERT INTO directus_files (id) VALUES ('$FO_F1'), ('$FO_F2'), ('$FO_F3'), ('$FO_F4'), ('$FO_F5');
+$fo_linked_elsewhere
 INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F6', '$FO_P3');
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, rel_path, link_kind, linked_collection, linked_junction_id, link_batch_id) VALUES
   ('$FO_F1', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/1.png', NULL, NULL, NULL, NULL),
@@ -7079,6 +7106,9 @@ grep -qx 'fo_bf:c3:a2:-' <<<"$fo_out" && ok "back-fill: a gone candidate's file 
 grep -qx 'fo_bf:c4:-:-' <<<"$fo_out" && ok "back-fill: a linked candidate's file stays unowned (D10: nobody loses access they have)" || bad "back-fill: a linked file was stamped (output: $fo_out)"
 grep -qx 'fo_bf:c5:-:-' <<<"$fo_out" && ok "back-fill: a file with no candidate stays unowned" || bad "back-fill: a file without a candidate was stamped (output: $fo_out)"
 grep -qx 'fo_bf:c6:a3:-' <<<"$fo_out" && ok "back-fill: an existing stamp is never overwritten" || bad "back-fill: an existing owner was overwritten (output: $fo_out)"
+for fo_lk in "c7:a sample's file (dismissed candidate)" "c8:an operation's file (new candidate)" "c9:a test's file (gone candidate)" "ca:a surface scan's file (new candidate)"; do
+    grep -qx "fo_bf:${fo_lk%%:*}:-:-" <<<"$fo_out" && ok "back-fill: ${fo_lk#*:} stays unowned: linked anywhere means left alone (D10), whatever its candidate says" || bad "back-fill: ${fo_lk#*:} was stamped although it is linked (output: $fo_out)"
+done
 grep -qx 'fo_bf_again:4' <<<"$fo_out" && ok "back-fill: running it twice changes nothing more" || bad "back-fill is not idempotent (output: $fo_out)"
 
 # up, down, up inside one transaction: the stamp from the back-fill, the objects gone after down, the permission rows restored exactly
@@ -7100,7 +7130,9 @@ INSERT INTO directus_files (id) VALUES ('$FO_F1'), ('$FO_F2');
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, rel_path) VALUES
   ('$FO_F1', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/1.png'),
   ('$FO_F2', NULL, '$FO_T1', 'image', 'new', 'new', 'Shared/t/2.png');
+$fo_linked_elsewhere
 $fo_up
+SELECT 'fo_up_linked_elsewhere:' || count(*) FROM directus_files WHERE id IN ('$FO_F7', '$FO_F8', '$FO_F9', '$FO_FA') AND (owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL);
 SELECT 'fo_up_stamped:' || (SELECT right(owner_person_id::text, 2) FROM directus_files WHERE id = '$FO_F1') || ',' || (SELECT right(owner_team_id::text, 2) FROM directus_files WHERE id = '$FO_F2');
 $(fo_users "$FO_F1" fo_up_readers_f1)
 $(fo_users "$FO_F2" fo_up_readers_f2)
@@ -7119,6 +7151,7 @@ fo_check "fo_down_perms_extra:0" "down: no permission row remains that was not t
 fo_nrows=$(grep -o '^fo_down_perms_restored:[0-9]*' <<<"$fo_out" | cut -d: -f2)
 [[ "${fo_nrows:-0}" -ge 4 ]] && ok "down: the directus_files permission rows hold exactly their old filters, validation and fields (${fo_nrows} rows)" || bad "down did not restore the old permission rows (psql output: $fo_out)"
 fo_check "fo_up_stamped:a1,b1" "up: a found file is stamped from its candidate's person or team owner"
+fo_check "fo_up_linked_elsewhere:0" "up: no file with a junction row or a surface scan is stamped, whatever its candidate's state"
 fo_check "fo_up_readers_f1:u1" "up: a person-owned file's readers are that person's login"
 fo_check "fo_up_readers_f2:u2" "up: a team-owned file's readers are the logins of the team's members (the member without a login adds none)"
 fo_check "fo_up_drift:0" "up: the readers table has no drift from the owner columns"
@@ -7156,9 +7189,9 @@ fo_check "r_f1:u1" "a person-owned file: its owner reads it"
 fo_check "r_f2:u2" "a team-owned file: the team's members with a login read it"
 fo_check "r_f3:" "an unowned file has no readers row (the filter's first leaf opens it)"
 fo_check "r_f4:" "a file owned by a person with no login has no reader (only an administrator reads it)"
-fo_check "see_u1:c1,c3" "the owner of c1 sees c1 and the unowned c3, not the team's c2 nor c4"
-fo_check "see_u2:c2,c3" "a team member sees the team's c2 and the unowned c3, not another person's c1"
-fo_check "see_u3:c3" "a login that owns nothing and is in no team sees only the unowned file"
+fo_check "see_u1:c1,c3" "the owner of c1 sees (and, by the same test, may update and delete) c1 and the unowned c3, not the team's c2 nor c4"
+fo_check "see_u2:c2,c3" "a team member sees (and may update and delete) the team's c2 and the unowned c3, not another person's c1: a non-reader cannot touch an owned file"
+fo_check "see_u3:c3" "a login that owns nothing and is in no team sees (and may update and delete) only the unowned file, which any member can still change"
 fo_check "drift:0" "the readers table matches the owner columns after the inserts"
 fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
 INSERT INTO team_members (team_id, person_id) VALUES ('$FO_T1', '$FO_P1');
@@ -7199,9 +7232,12 @@ run_eq "d1_private.file_readers_drift_count exists and the live database has no 
     "SELECT d1_private.file_readers_drift_count()" "0"
 # the stored Directus rules
 FO_READ='{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}'
+FO_WRITE='{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}]}'
 fo_out=$($PSQL 2>&1 <<SQL
 SELECT 'lm_read:' || (permissions::jsonb = '$FO_READ'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'read';
 SELECT 'vw_read:' || (permissions::jsonb = '$FO_READ'::jsonb) FROM directus_permissions WHERE policy = '$VW' AND collection = 'directus_files' AND action = 'read';
+SELECT 'lm_update:' || (permissions::jsonb = '$FO_WRITE'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'update';
+SELECT 'lm_delete:' || (permissions::jsonb = '$FO_WRITE'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'delete';
 SELECT 'lm_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files';
 SELECT 'vw_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy = '$VW' AND collection = 'directus_files';
 SELECT 'readers_read:' || count(*) FROM directus_permissions WHERE policy IN ('$LM', '$VW') AND collection = 'file_readers' AND action = 'read'
@@ -7210,6 +7246,8 @@ SELECT 'readers_write:' || count(*) FROM directus_permissions WHERE policy IN ('
 SELECT 'update_delete_no_some:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action IN ('update', 'delete') AND permissions::text LIKE '%_some%';
 SQL
 )
+fo_check "lm_update:true" "Lab Member updates a file under the same test as reading it, in the bare-hop form (no _some): no owner, or the caller has a readers row"
+fo_check "lm_delete:true" "Lab Member deletes a file under the same test"
 fo_check "lm_read:true" "Lab Member reads a file when it has no owner or the caller is one of its readers"
 fo_check "vw_read:true" "Lab Viewer reads files under the same filter"
 fo_check "lm_actions:create,delete,read,update" "Lab Member still creates, reads, updates and deletes files"
@@ -7303,7 +7341,7 @@ se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb
 SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 5.0, \"spot\": 3.5}'::jsonb, 'sem-3');
 $(se_row se_second "$SE_F1")
 SELECT 'se_rows:' || count(*) FROM d1_private.sem_image_settings WHERE directus_files_id = '$SE_F1';")
-grep -qxF "se_second:$(se_exp 5.00 3.5 '' '' '' '' '' '' '' '' '' '{}' '{}' sem-3 -)" <<<"$se_out" && ok "a second call updates the row: the new read replaces the old one (fields it does not carry become absent), read_by follows" || bad "second save wrong (output: $se_out)"
+grep -qxF "se_second:$(se_exp 5.00 3.5 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"magnification": "derived"}' '{"check_this": true}' sem-3 -)" <<<"$se_out" && ok "a second call MERGES into the row: the keys it carries are updated (kv 5, spot 3.5; their old sources entries go, the new read gave none), the keys it does not carry keep their value, sources entry and flags, read_by follows" || bad "second save wrong (output: $se_out)"
 grep -qx 'se_rows:1' <<<"$se_out" && ok "a second call keeps one row per file" || bad "second save made another row (output: $se_out)"
 se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
 SELECT d1_private.correct_sem_setting('$SE_F1', 'kv', '20.5'::jsonb, '$SE_U1');
@@ -7312,8 +7350,8 @@ SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0, \"spot\": 4.0, \"wo
 $(se_row se_resave "$SE_F1")")
 grep -qxF "se_after_correct:$(se_exp 20.50 3.5 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "manual", "spot": "metadata", "magnification": "derived"}' '{"check_this": true}' sem-2 $SE_U1)" <<<"$se_out" \
     && ok "correct_sem_setting sets the value, marks sources.kv as manual and records who corrected" || bad "correction wrong (output: $se_out)"
-grep -qxF "se_resave:$(se_exp 20.50 4.0 10.00 '' '' '' '' '' '' '' '' '{"kv": "manual", "spot": "ocr"}' '{"check_this": true}' sem-3 $SE_U1)" <<<"$se_out" \
-    && ok "sem_settings: manual field survives a re-save (kv stays 20.5 and stays manual; the other fields follow the new read; a flag named after a manual field is not taken)" || bad "manual field did not survive a re-save (output: $se_out)"
+grep -qxF "se_resave:$(se_exp 20.50 4.0 10.00 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "manual", "spot": "ocr", "magnification": "derived"}' '{"check_this": true}' sem-3 $SE_U1)" <<<"$se_out" \
+    && ok "sem_settings: manual field survives a re-save (kv stays 20.5 and stays manual; the keys the new read carries are updated, the others keep their values; a flag named after a manual field is not taken)" || bad "manual field did not survive a re-save (output: $se_out)"
 se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 250, \"spot\": 3.5, \"working_distance_mm\": 15.92, \"magnification\": 40}'::jsonb, 'sem-2');
 $(se_row se_range "$SE_F1")")
 grep -qxF "se_range:$(se_exp '' 3.5 15.92 40 '' '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "kv 250 is dropped (outside 0.1 to 30) and the rest is saved" || bad "out-of-range kv was not dropped cleanly (output: $se_out)"
@@ -7332,6 +7370,32 @@ grep -qx 'se_empty_after:true' <<<"$se_out" && grep -qxF "se_empty_kept:$(se_exp
 se_out=$(se_sql "SELECT 'se_round:' || d1_private.save_sem_settings('$SE_F1', '{\"kv\": 0.104, \"spot\": 9.96, \"working_distance_mm\": 0.104, \"magnification\": 40.05, \"hfw_um\": 7460.004}'::jsonb, 'sem-2');
 $(se_row se_rounded "$SE_F1")")
 grep -qx 'se_round:true' <<<"$se_out" && grep -qxF "se_rounded:$(se_exp 0.10 10.0 0.10 40 7460.00 '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "values are rounded to their column's scale before the range test (kv 0.104 -> 0.10, spot 9.96 -> 10.0, magnification 40.05 -> 40), never an overflow or a CHECK error" || bad "rounding wrong (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
+SELECT 'se_keep:' || d1_private.save_sem_settings('$SE_F1', '{\"kv\": 250, \"spot\": 4.0, \"working_distance_mm\": null, \"magnification\": \"x\", \"sources\": {\"kv\": \"ocr\", \"spot\": \"ocr\"}}'::jsonb, 'sem-3');
+$(se_row se_kept "$SE_F1")")
+grep -qx 'se_keep:true' <<<"$se_out" && grep -qxF "se_kept:$(se_exp 2.00 4.0 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "metadata", "spot": "ocr", "magnification": "derived"}' '{"check_this": true}' sem-3 -)" <<<"$se_out" \
+    && ok "a key that is present but out of range (kv 250), null or of the wrong type does not erase the stored value or its source; the valid key (spot) is updated" || bad "a bad key erased a stored value (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 250}'::jsonb, 'sem-3');
+$(se_row se_all_bad "$SE_F1")")
+grep -qxF "se_all_bad:$(se_exp 2.00 3.5 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "metadata", "spot": "metadata", "magnification": "derived"}' '{"check_this": true}' sem-2 -)" <<<"$se_out" && ok "a re-read with nothing usable leaves the stored row exactly as it is (read_by too)" || bad "an unusable re-read changed the row (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0, \"spot\": 3.5, \"detector\": \"ETD\", \"flags\": {\"check_this\": true, \"detector\": \"unsure\"}, \"sources\": {\"detector\": \"ocr\"}}'::jsonb, 'sem-2');
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"mode\": \"SE\", \"sources\": {\"mode\": \"metadata\"}}'::jsonb, 'sem-3');
+$(se_row se_merge_new_key "$SE_F1")
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"detector\": \"BSE\", \"sources\": {\"detector\": \"metadata\"}}'::jsonb, 'sem-3');
+$(se_row se_merge_flag_follows "$SE_F1")")
+grep -qxF "se_merge_new_key:$(se_exp 2.00 3.5 '' '' '' '' '' ETD SE '' '' '{"mode": "metadata", "detector": "ocr"}' '{"check_this": true, "detector": "unsure"}' sem-3 -)" <<<"$se_out" && ok "a key the first read did not have is added, and the stored values, sources and flags of the other keys stay" || bad "merge of a new key wrong (output: $se_out)"
+grep -qxF "se_merge_flag_follows:$(se_exp 2.00 3.5 '' '' '' '' '' BSE SE '' '' '{"mode": "metadata", "detector": "metadata"}' '{"check_this": true}' sem-3 -)" <<<"$se_out" && ok "an updated key takes its new source and drops the flag that was named after it" || bad "source or flag of an updated key wrong (output: $se_out)"
+# a value just outside its range is dropped even when rounding would bring it inside (the raw value is tested, then rounded)
+for pair in "kv|0.095" "kv|30.004" "spot|0.95" "spot|10.04" "working_distance_mm|0.095" "working_distance_mm|50.004" "magnification|4.5" "magnification|1000000.4" "hfw_um|0.004"; do
+    f=${pair%%|*}; v=${pair#*|}
+    se_out=$(se_sql "SELECT 'se_raw:' || d1_private.save_sem_settings('$SE_F1', '{\"$f\": $v}'::jsonb, 'sem-2');
+SELECT 'se_raw_rows:' || count(*) FROM d1_private.sem_image_settings;")
+    grep -qx 'se_raw:false' <<<"$se_out" && grep -qx 'se_raw_rows:0' <<<"$se_out" && ok "save_sem_settings drops $f = $v (outside the range as given, although rounding would bring it inside)" || bad "save_sem_settings kept $f = $v (output: $se_out)"
+    se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', '$f', '$v'::jsonb, '$SE_U1');")
+    grep -qi 'out of range' <<<"$se_out" && ok "correct_sem_setting refuses $f = $v for the same reason" || bad "correct_sem_setting accepted $f = $v (output: $se_out)"
+done
 # pathological extracted: no exception, the field is omitted, the rest is saved
 se_out=$(se_sql "SELECT 'se_path:' || d1_private.save_sem_settings('$SE_F1', jsonb_build_object('kv', 'abc', 'spot', true, 'working_distance_mm', '[1]'::jsonb, 'magnification', 1e400, 'hfw_um', 1e12, 'pixel_size_nm', 1e9, 'scale_bar_um', 1e12, 'detector', repeat('x', 20000), 'mode', 7, 'instrument', 'Quanta', 'acquired_at', 'not a date', 'sources', '[1]'::jsonb, 'flags', '\"text\"'::jsonb), 'sem-2');
 $(se_row se_pathological "$SE_F1")")

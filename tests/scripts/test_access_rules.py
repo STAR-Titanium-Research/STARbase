@@ -22,6 +22,7 @@ The update/delete/manage tests use a small fixture evaluator that models Directu
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -648,7 +649,7 @@ def test_previously_granted_actions_are_kept():
 def test_directus_files_follow_their_provenance_owner_and_audit_logs_are_admin_only():
     """ADR-0022: a file is open when it has no owner (both owner columns null) and otherwise readable only by a login on its `readers` rows
     (the owning person's login, or the logins of the owning team's members). Create and update name their fields, leaving out the two owner
-    columns (only an administrator stamps or changes an owner); delete and the readers table's own read rule are as for any other row."""
+    columns (only an administrator stamps or changes an owner); update and delete carry the owner test too; the readers table's own read rule is own rows only."""
     owner = {"owner_person_id", "owner_team_id"}
     assert BY_KEY[("directus_files", "read")]["permissions"] == {
         "_or": [
@@ -662,11 +663,26 @@ def test_directus_files_follow_their_provenance_owner_and_audit_logs_are_admin_o
         ]
     }
     assert BY_KEY[("directus_files", "read")]["fields"] == "*"
-    assert BY_KEY[("directus_files", "delete")]["permissions"] == {}
+    # update and delete use the same test in its bare-hop form (no `_some`: a legal `_some` applies the readers table's own rule for the action),
+    # so a Lab Member cannot rewrite or delete (and so cascade away the settings of) a file they cannot read
+    write_filter = {
+        "_or": [
+            {
+                "_and": [
+                    {"owner_person_id": {"_null": True}},
+                    {"owner_team_id": {"_null": True}},
+                ]
+            },
+            {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}},
+        ]
+    }
+    assert BY_KEY[("directus_files", "delete")]["permissions"] == write_filter
+    assert BY_KEY[("directus_files", "update")]["permissions"] == write_filter
+    assert "_some" not in json.dumps(write_filter)
+    assert BY_KEY[("directus_files", "create")]["permissions"] == {}
     for action in ("create", "update"):
         row = BY_KEY[("directus_files", action)]
         listed = set(row["fields"].split(","))
-        assert row["permissions"] == {}
         assert not listed & owner, action
         # every column Directus 11 writes on a file is still allowed (db/schema.sql lists them)
         assert {
@@ -1258,6 +1274,26 @@ def test_the_readers_alias_is_never_under_a_some_in_a_child_rule_and_a_some_only
             assert text.startswith('{"_or": [{"_and": [{"owner_person_id"'), text
             continue
         assert '"readers": {"_some"' not in text, (collection, action)
+
+
+def test_directus_files_field_lists_are_the_schema_snapshot_minus_the_owner_columns():
+    """The Lab Member create and update field lists of directus_files name every column (Directus has no "all but"). They come from the production snapshot
+    db/schema.sql; a column Directus adds in a later version is unwritable for members until the lists (access_rules.json custom.directus_files, the
+    migration that applies them, the generated blocks) are extended, so this fails when the snapshot and the lists differ."""
+    schema = (SCRIPTS.parent / "db" / "schema.sql").read_text(encoding="utf-8")
+    body = re.search(
+        r"^CREATE TABLE public\.directus_files \((.*?)^\);", schema, re.S | re.M
+    )
+    assert body, "db/schema.sql has no CREATE TABLE public.directus_files"
+    columns = {
+        line.split()[0]
+        for line in body.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith(("CONSTRAINT", "--"))
+    }
+    assert {"id", "filename_download", "tus_data"} <= columns
+    for action in ("create", "update"):
+        listed = set(BY_KEY[("directus_files", action)]["fields"].split(","))
+        assert listed == columns - {"owner_person_id", "owner_team_id"}, action
 
 
 @pytest.mark.parametrize("collection,action,paths", list(_rule_paths()))
