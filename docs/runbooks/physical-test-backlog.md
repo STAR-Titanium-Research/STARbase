@@ -2145,6 +2145,31 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
   this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
   re-review fixes (server, S5).
+- [ ] **IF70 — An ignored folder is never listed, statted or opened on the real share.** Needs a test person with a
+  folder tree on the lab share that has a subfolder with files (and a sibling named like it plus a suffix, for
+  example `World-Ti Paper` and `World-Ti Paper 2`). Add the rule `World-Ti Paper` for that person (the Inbox's
+  *Ignore this folder*, or `INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) ...` as the
+  database owner), then run `make inbox-crawler-once` (or *Rescan my folder*) while watching the file server's
+  access log, or the crawler container with `strace -f -e trace=openat,getdents64,newfstatat -p <pid>`. Expect no
+  open, listing or stat of any path under `World-Ti Paper`, the lookalike `World-Ti Paper 2` scanned as before, and
+  the log line `N ignored folders were not scanned`. Time the scan against the same scan without the rule (like IF4):
+  it is not slower and is faster on a big ignored tree. Also try the rule spelled in another case
+  (`world-ti paper`): the real share is case-insensitive, so it must cover the folder the same. Since: ignored
+  folders (crawler, IB).
+- [ ] **IF71 — Not scanned is not gone, and removing a rule lists the folder again (real share).** With the rule from
+  IF70 in place and a file of that person's under the ignored folder that is still *New* (add the rule by SQL, not
+  the endpoint, so it is not dismissed), delete that whole folder on the share (or rename it) and scan: expect the
+  file to stay *New* in the Inbox (not *gone*, not removed) and the folder's `inbox_dirs` rows to stay. Disconnect
+  the share mid-scan as in IF10 with the rule in place: nothing is marked gone, as before. Then remove the rule and
+  scan: expect the folder to be listed again, the vanished file to become *gone* now, and a folder that was only
+  ignored (not deleted) to bring its files back in as *New* (files the rule had dismissed stay in *Dismissed*
+  until restored by hand). Add and remove a rule while a long scan runs: expect each change to show from the next
+  scan, not mid-scan. Since: ignored folders (crawler, IB).
+- [ ] **IF72 — A linked file under an ignored folder is still tracked.** Link a document (say a PDF) from a folder, then
+  ignore that folder for the person. Expect the document to be hashed once (a `file_fingerprints` row appears, as
+  in IF5) even though the folder is ignored, and its *Recently linked* row to stay; a found image under the same
+  folder that has a failed hash is not retried, and an exact short-ID image there is not offered to auto-link
+  (the crawler log with `INBOX_LOG_LEVEL=DEBUG` shows no open of it). Since: ignored folders (crawler, IB).
 
 ## Done
 

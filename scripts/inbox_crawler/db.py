@@ -1,7 +1,7 @@
 """Everything the crawler reads from and writes to Postgres, in one place.
 
 Tables: `d1_private.file_candidates`, `inbox_dirs`, `inbox_scan_requests`, `inbox_crawler_state`,
-`inbox_prefs` (migration 193), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
+`inbox_prefs` (migration 193), `inbox_ignored_dirs` (read only: the owners' ignore rules), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
 `teams`, `short_ids` and the record tables it reads for recognition. The crawler never writes a junction
 row or a link (invariant 5): that is the d1-inbox extension's job.
 
