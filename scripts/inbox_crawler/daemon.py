@@ -27,9 +27,11 @@ from . import autolink, db, hashing, scan, thumbs
 
 log = logging.getLogger("inbox_crawler.daemon")
 
-# Images whose thumbnails the backfill makes per tick (each is one throttled read), and how long it stays off
-# after the thumbnails table could not be read (migration 198 not applied yet).
-THUMB_BATCH = 10
+# Images whose thumbnails the backfill makes per tick at most (each is one throttled read), how long one tick's
+# backfill may run before it hands back to the loop (scan requests wait for it), and how long it stays off after
+# the thumbnails table could not be read (migration 198 not applied yet).
+THUMB_BATCH = 25
+THUMB_BUDGET_S = 20
 THUMB_RETRY_S = 600
 # Ids tried this process: an image Pillow cannot decode (or that changed on the share) would be offered every
 # tick otherwise. Cleared when it grows past this, so a long-lived daemon tries such files again.
@@ -108,7 +110,9 @@ class Daemon:
         elif self.scan_due(state):
             self.run_scan(None, full=True)
             did = "scheduled"
-        if self.hash_pending() == 0:  # fingerprints first: the backfill uses the ticks that are left
+        if (
+            self.hash_pending() == 0
+        ):  # fingerprints first: the backfill uses the ticks that are left
             self.thumbnail_pending()
         store.heartbeat("idle" if did == "idle" else f"idle (last: {did})")
         return did
@@ -239,7 +243,8 @@ class Daemon:
         only allow-listed images) at the shared throttle, and only if it is still the file the candidate
         describes (same size and modification time): a picture of a different file would not match its row.
         A file that vanished, cannot be read or cannot be decoded is skipped for the rest of the process; the
-        scan, not this step, decides what is gone. Returns how many were made."""
+        scan, not this step, decides what is gone. A call stops after THUMB_BUDGET_S seconds. Returns how many
+        were made."""
         if not self.config.thumbnails:
             return 0
         if self._thumbs_retry_at is not None and self._now() < self._thumbs_retry_at:
@@ -260,9 +265,12 @@ class Daemon:
             return 0
         self._thumbs_retry_at = None
         made = 0
+        started = self._now()
         for target in targets:
             if self.stop_event.is_set():
                 break
+            if self._now() - started >= timedelta(seconds=THUMB_BUDGET_S):
+                break  # the rest next tick
             if len(self._thumbs_tried) >= THUMB_TRIED_MAX:
                 self._thumbs_tried.clear()
             self._thumbs_tried.add(target.candidate_id)

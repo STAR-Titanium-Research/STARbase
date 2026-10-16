@@ -647,6 +647,22 @@ def test_the_backfill_is_bounded_per_call_and_finishes(folder):
     assert len(share.opens) == opened
 
 
+def test_one_call_hands_back_after_its_time_budget(folder):
+    world = folder
+    run_scan(world, thumbnails=False)
+    clock = [datetime(2026, 10, 16, 12, 0, tzinfo=UTC)]
+
+    def now():
+        clock[0] += timedelta(seconds=daemon.THUMB_BUDGET_S * 0.75)
+        return clock[0]
+
+    d, _, _ = make_daemon(world, now=now)
+    assert d.thumbnail_pending() == 1  # the second image would start past the budget
+    assert len(thumb_rows(world)) == 1
+    assert d.thumbnail_pending() == 1  # the next tick goes on with the rest
+    assert len(thumb_rows(world)) == 2
+
+
 def test_a_file_that_cannot_be_decoded_is_read_once_per_process_not_every_tick(folder):
     world = folder
     run_scan(world, thumbnails=False)
