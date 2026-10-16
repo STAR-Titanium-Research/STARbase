@@ -41,6 +41,8 @@ export interface TweenSpec {
   fresh?: ReadonlySet<string>;
   /** Where new cards start: the card that was expanded. */
   origin?: Point | null;
+  /** Place everything at once (the first layout of a family, which is not shown yet). */
+  instant?: boolean;
 }
 
 /** About a third of a second: long enough to follow, short enough not to wait for. */
@@ -148,7 +150,7 @@ export function createMapTween(deps: TweenDeps) {
     }
 
     movers = next;
-    const instant = (deps.reducedMotion?.() ?? false) || !deps.raf;
+    const instant = !!spec.instant || (deps.reducedMotion?.() ?? false) || !deps.raf;
     return new Promise<void>((resolve) => {
       release = resolve;
       // Everyone released together when this one ends; a promise per start so a replaced caller does not wait for the new tween.
@@ -180,9 +182,11 @@ export function createMapTween(deps: TweenDeps) {
   }
 
   const active = (): boolean => movers.size > 0;
+  /** How visible a card is while it fades in (undefined: not fading, fully visible). */
+  const opacityOf = (id: string): number | undefined => visible.get(id);
   const whenIdle = (): Promise<void> => (movers.size ? new Promise<void>((resolve) => void idle.push(resolve)) : Promise.resolve());
 
-  return { start, cancel, stop, active, whenIdle };
+  return { start, cancel, stop, active, whenIdle, opacityOf };
 }
 
 export type MapTween = ReturnType<typeof createMapTween>;

@@ -20,7 +20,7 @@ function setup(opts: { reduced?: boolean; noRaf?: boolean } = {}) {
       frames.push(list);
       for (const f of list) {
         nodes[f.id] = { ...f.position };
-        opacity[f.id] = f.opacity;
+        opacity[f.id] = f.opacity as number;
       }
     },
   });
