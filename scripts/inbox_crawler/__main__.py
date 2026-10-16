@@ -11,6 +11,7 @@ Environment:
     STORAGE_NAME, ROOT_FOLDER  as for scripts/index_archive.py (defaults star, star_group1).
     INBOX_LOG_LEVEL            DEBUG logs every file the crawler opens (default INFO).
     INBOX_PERSON_DIR           the top-level folder of the personal folders (default Users; the lab share's is User).
+    INBOX_ONLY_FOLDERS         trial runs: scan only these comma-separated folder names (default: everyone).
 """
 
 from __future__ import annotations
@@ -74,9 +75,15 @@ def main(argv=None) -> int:
         )
     try:
         owners.set_person_base(os.environ.get("INBOX_PERSON_DIR"))
+        owners.set_only_folders(os.environ.get("INBOX_ONLY_FOLDERS"))
     except ValueError as exc:
         log.error("%s", exc)
         return 2
+    if owners.ONLY_FOLDERS is not None:
+        log.warning(
+            "INBOX_ONLY_FOLDERS is set: scanning only %s",
+            ", ".join(sorted(owners.ONLY_FOLDERS)),
+        )
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         log.error("DATABASE_URL is required")

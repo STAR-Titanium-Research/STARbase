@@ -28,6 +28,23 @@ def set_person_base(name: str | None) -> None:
     PERSON_BASE = value
 
 
+# INBOX_ONLY_FOLDERS, for a trial run: when set, only these folder names (uni aliases or team share folders,
+# ignoring case) are scanned. Every other claimed folder is skipped like a Former person's: not walked and not
+# listed as unmatched. None (the default) scans everyone who has a folder.
+ONLY_FOLDERS: frozenset[str] | None = None
+
+
+def set_only_folders(raw: str | None) -> None:
+    """A comma-separated list of folder names; empty or None scans everyone."""
+    global ONLY_FOLDERS
+    names = [n.strip().lower() for n in (raw or "").split(",") if n.strip()]
+    ONLY_FOLDERS = frozenset(names) if names else None
+
+
+def _allowed(folder: str) -> bool:
+    return ONLY_FOLDERS is None or str(folder).lower() in ONLY_FOLDERS
+
+
 # Directories no scan enters, whatever their depth. Hidden ('.snapshot', '.git'), NetApp-style snapshots
 # ('~snapshot') that would expose every user's copies, and the usual file-server litter.
 _SKIP_EXACT = frozenset(
@@ -143,7 +160,8 @@ def person_claims(people: Iterable[dict]) -> list[tuple[str, str, str, bool]]:
             str(p["person_id"]),
             p["uni_alias"],
             p["uni_alias"],
-            bool(p.get("active", True)) or bool(p.get("scan_while_former", False)),
+            (bool(p.get("active", True)) or bool(p.get("scan_while_former", False)))
+            and _allowed(p["uni_alias"]),
         )
         for p in people
         if p.get("uni_alias")
@@ -152,7 +170,12 @@ def person_claims(people: Iterable[dict]) -> list[tuple[str, str, str, bool]]:
 
 def team_claims(teams: Iterable[dict]) -> list[tuple[str, str, str, bool]]:
     return [
-        (str(t["team_id"]), t["share_folder"], t.get("name") or t["share_folder"], True)
+        (
+            str(t["team_id"]),
+            t["share_folder"],
+            t.get("name") or t["share_folder"],
+            _allowed(t["share_folder"]),
+        )
         for t in teams
         if t.get("share_folder")
     ]
