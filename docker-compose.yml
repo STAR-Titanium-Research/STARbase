@@ -608,6 +608,8 @@ services:
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
       # The folder holding the personal folders: the lab share spells it `User` (Z:\star_group1\User).
       INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
+      # Trial runs: only these comma-separated folder names (uni aliases, share folders) are scanned. Empty: everyone.
+      INBOX_ONLY_FOLDERS: ${INBOX_ONLY_FOLDERS:-}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - ./scripts:/scripts:ro
