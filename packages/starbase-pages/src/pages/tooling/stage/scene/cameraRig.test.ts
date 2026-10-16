@@ -782,3 +782,26 @@ describe('prefers-reduced-motion', () => {
 		expect(prefersReducedMotion()).toBe(false);
 	});
 });
+
+describe('FramingTween.retarget', () => {
+	const f = (distance: number) => framingAt([0, 0, 0], distance, 0.6, 0);
+	it('carries on from the in-between framing to the new destination, without a jump', () => {
+		const t = new FramingTween();
+		t.start(f(100), f(40), 0, 400);
+		const before = t.sample(200)!.framing.distance; // half way, mid-ease
+		t.retarget(f(60), 200);
+		const after = t.sample(200)!.framing.distance;
+		expect(after).toBeCloseTo(before, 6);
+		const end = t.sample(200 + 400)!;
+		expect(end.done).toBe(true);
+		expect(end.framing.distance).toBeCloseTo(60, 6);
+	});
+	it('does nothing when no move is under way, and never finishes in under 160 ms', () => {
+		const t = new FramingTween();
+		t.retarget(f(60), 0);
+		expect(t.active).toBe(false);
+		t.start(f(100), f(40), 0, 400);
+		t.retarget(f(60), 399);
+		expect(t.sample(399 + 100)!.done).toBe(false);
+	});
+});
