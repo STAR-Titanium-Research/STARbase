@@ -43,7 +43,8 @@ export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions 
 			const res = await (fake.api[method] as any)(url.pathname, ...(method === 'get' || method === 'delete' ? [{ params, responseType: 'blob' }] : [body]));
 			// a picture is the image itself, not JSON
 			if (res.data instanceof Blob) return route.fulfill({ status: 200, headers: { ...cors, 'cache-control': 'private, max-age=3600' }, contentType: res.data.type, body: Buffer.from(await res.data.arrayBuffer()) });
-			return route.fulfill({ status: 200, headers: cors, json: res.data });
+			// adding an ignored folder answers 201, as the endpoint does
+			return route.fulfill({ status: method === 'post' && url.pathname === '/d1-inbox/ignored-folders' ? 201 : 200, headers: cors, json: res.data });
 		} catch (e: any) {
 			return route.fulfill({ status: e?.response?.status ?? 500, headers: cors, json: e?.response?.data ?? { errors: [{ message: String(e?.message ?? e) }] } });
 		}
