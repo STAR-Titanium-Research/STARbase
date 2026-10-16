@@ -163,6 +163,8 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "owners": frozenset({"collections.abc", "dataclasses"}),
     "recognise": frozenset({"re", "collections.abc", "dataclasses"}),
     "scan": frozenset({"io", "logging", "time", "dataclasses"}),
+    # pure functions of an in-memory image: standard library text and time maths only
+    "sem_meta": frozenset({"configparser", "math", "re", "datetime", "zoneinfo"}),
 }
 PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 # (module, imported name) -> the attributes of it that module may use; anything else is refused. `io` is
@@ -486,9 +488,9 @@ def test_package_is_there():
 
 def test_every_module_of_the_package_is_known_to_the_import_table():
     names = {module_name(p) for p in package_modules()}
-    assert (
-        names - {"fs_readonly"} == set(ALLOWED_IMPORTS)
-    ), "a new module needs a reviewed entry in ALLOWED_IMPORTS (and a removed one must leave it)"
+    assert names - {"fs_readonly"} == set(ALLOWED_IMPORTS), (
+        "a new module needs a reviewed entry in ALLOWED_IMPORTS (and a removed one must leave it)"
+    )
 
 
 @pytest.mark.parametrize("path", package_modules(), ids=module_name)
