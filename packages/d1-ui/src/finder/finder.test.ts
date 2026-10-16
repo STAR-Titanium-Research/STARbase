@@ -326,18 +326,18 @@ describe('the new sources', () => {
 		expect(source('directus_files').finderOnly).toBe(true);
 	});
 
-	it('files: asked of /files by filename and title, the filename as the label, the owner or kind as the detail', () => {
+	it('files: asked of /files by filename and title, the filename as the label, the file type as the detail', () => {
 		const files = source('directus_files');
 		expect(files.path).toBe('/files');
 		expect(JSON.parse(sourceParams(files, 'scan').filter as string)._or).toEqual([
 			{ filename_download: { _icontains: 'scan' } }, { title: { _icontains: 'scan' } },
 		]);
-		const [owned, plain, untitled] = toHits(files, 'scan', [
-			{ id: 'f1', filename_download: 'scan 01.tif', title: 'Scan', type: 'image/tiff', owner_person_id: { full_name: 'Jo Smith' } },
-			{ id: 'f 2', filename_download: 'scan.csv', type: 'text/csv', owner_person_id: null },
+		const [first, plain, untitled] = toHits(files, 'scan', [
+			{ id: 'f1', filename_download: 'scan 01.tif', title: 'Scan', type: 'image/tiff' },
+			{ id: 'f 2', filename_download: 'scan.csv', type: 'text/csv' },
 			{ id: 'f3', filename_download: '', title: 'Only a title' },
 		]);
-		expect(owned).toMatchObject({ group: 'Files', label: 'scan 01.tif', detail: 'Jo Smith', to: '/files/f1', record: { collection: 'directus_files', id: 'f1' } });
+		expect(first).toMatchObject({ group: 'Files', label: 'scan 01.tif', detail: 'image/tiff', to: '/files/f1', record: { collection: 'directus_files', id: 'f1' } });
 		expect(plain).toMatchObject({ label: 'scan.csv', detail: 'text/csv', to: '/files/f%202' });
 		expect(untitled.label).toBe('Only a title');
 	});

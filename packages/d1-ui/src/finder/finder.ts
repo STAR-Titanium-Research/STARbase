@@ -183,15 +183,16 @@ export const FINDER_SOURCES: FinderSource[] = [
 	},
 	// Files and SEM images, through /files: whatever Directus lets this user read (since migration 196 an owned file is owner-only), with no rule of the
 	// finder's own. The share path is not matched: it is not a column (directus_files keeps it in the metadata JSON as archive_path, which a filter cannot reach).
+	// The owner is not shown either: owner_person_id has a foreign key but no Directus relation, so owner_person_id.full_name is not a field /files can read.
 	{
 		group: 'Files',
 		collection: 'directus_files',
 		path: '/files',
 		finderOnly: true,
-		fields: ['id', 'filename_download', 'title', 'type', 'owner_person_id.full_name'],
+		fields: ['id', 'filename_download', 'title', 'type'],
 		match: ['filename_download', 'title'],
 		label: (r) => str(r.filename_download) || str(r.title) || 'File',
-		detail: (r) => str(r.owner_person_id?.full_name) || str(r.type),
+		detail: (r) => str(r.type),
 		// Directus's own file page (the Inbox has no page per file).
 		to: (r) => `/files/${encodeURIComponent(String(r.id))}`,
 		record: (r) => ({ collection: 'directus_files', id: String(r.id) }),
