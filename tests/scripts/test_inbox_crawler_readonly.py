@@ -5,7 +5,8 @@ Three layers are tested here:
 * an AST scan of the whole `scripts/inbox_crawler` package (subpackages too) that fails on any write, delete,
   rename, chmod, truncate, copy, move, exec or spawn call or reference, on reflection and dynamic code, on any
   `open` outside `fs_readonly.open_rb`, on an import that is not on the module's allow-list, and on Pillow
-  anywhere but classify_image's guarded BytesIO;
+  anywhere but classify_image's guarded BytesIO and thumbs.make_thumbnails' guarded bytes (its one `save` goes
+  to an in-memory BytesIO);
 * `open_rb` refuses every file type that is not on the read allow-list (documents, .mat, ...);
 * a share that vanishes mid-scan aborts the scan and marks nothing gone (see the end of this file).
 """
@@ -163,6 +164,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "owners": frozenset({"collections.abc", "dataclasses"}),
     "recognise": frozenset({"re", "collections.abc", "dataclasses"}),
     "scan": frozenset({"io", "logging", "time", "dataclasses"}),
+    "thumbs": frozenset({"warnings", "dataclasses", "io", "PIL"}),
 }
 PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 # (module, imported name) -> the attributes of it that module may use; anything else is refused. `io` is
@@ -176,7 +178,15 @@ ATTR_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
         {"Request", "build_opener", "ProxyHandler", "HTTPRedirectHandler", "urlopen"}
     ),
 }
-IMAGE_ATTRS = frozenset({"open", "BOX", "DecompressionBombWarning", "MAX_IMAGE_PIXELS"})
+IMAGE_ATTRS = frozenset(
+    {"open", "BOX", "DecompressionBombWarning", "MAX_IMAGE_PIXELS", "LANCZOS"}
+)
+# which `from PIL import ...` lines a module may have (one name per line)
+PIL_IMPORTS: dict[str, list[list[str]]] = {
+    "classify_sem": [["Image"]],
+    "thumbs": [["Image", "ImageOps"]],
+}
+IMAGEOPS_ATTRS = frozenset({"exif_transpose"})
 # What the package may use of the indexer: the id rule and the move re-pointing, nothing that walks or
 # writes (index_archive.main, fingerprint, ...).
 INDEX_ARCHIVE_ATTRS = frozenset(
@@ -273,8 +283,11 @@ def violations(source: str, module: str) -> list[str]:
                 if names != ["BytesIO"]:
                     bad(node, "from io import anything but BytesIO")
             elif mod == "PIL":
-                if names != ["Image"] or module != "classify_sem":
-                    bad(node, "from PIL import anything but Image (classify_sem only)")
+                if names not in PIL_IMPORTS.get(module, []):
+                    bad(
+                        node,
+                        "from PIL import anything but Image (classify_sem) or Image, ImageOps (thumbs)",
+                    )
             elif mod in ("os", "sys"):
                 ok = ATTR_ALLOWED.get((module, mod))
                 if mod not in allowed or ok is None or not set(names) <= ok:
@@ -284,6 +297,54 @@ def violations(source: str, module: str) -> list[str]:
                     node,
                     f"from {mod} import ... is not on {module}'s import allow-list",
                 )
+
+    # ---- thumbs: Pillow only inside make_thumbnails (on a BytesIO of `data`, which must be bytes) and
+    # _encode_jpeg (the one `save`, to a BytesIO it made itself)
+    thumbs_open_nodes: set[int] = set()
+    thumbs_guarded = False
+    save_nodes: set[int] = set()  # the `.save` attribute nodes that are allowed
+    for node in ast.walk(tree):
+        if module != "thumbs" or not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name == "make_thumbnails":
+            thumbs_open_nodes |= _descendants(node)
+            for n in ast.walk(node):
+                if (
+                    isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name)
+                    and n.func.id == "isinstance"
+                    and len(n.args) == 2
+                    and isinstance(n.args[0], ast.Name)
+                    and n.args[0].id == "data"
+                    and isinstance(n.args[1], ast.Name)
+                    and n.args[1].id == "bytes"
+                ):
+                    thumbs_guarded = True
+        elif node.name == "_encode_jpeg":
+            made_buf = any(
+                isinstance(n, ast.Assign)
+                and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id == "buf"
+                and isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Name)
+                and n.value.func.id == "BytesIO"
+                and not n.value.args
+                for n in ast.walk(node)
+            )
+            for n in ast.walk(node):
+                if (
+                    made_buf
+                    and isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "save"
+                    and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == "img"
+                    and n.args
+                    and isinstance(n.args[0], ast.Name)
+                    and n.args[0].id == "buf"
+                ):
+                    save_nodes.add(id(n.func))
 
     # ---- reflection, dynamic code, dunders, file-writing log handlers
     for node in ast.walk(tree):
@@ -316,7 +377,7 @@ def violations(source: str, module: str) -> list[str]:
             if isinstance(node, ast.Name)
             else None
         )
-        if name and _forbidden_name(name):
+        if name and _forbidden_name(name) and id(node) not in save_nodes:
             bad(node, f"{name} (write, delete, rename, copy, move, exec or spawn)")
 
     # ---- Pillow: only inside classify_image, only on `fh`, which is refused unless it is a BytesIO
@@ -361,7 +422,22 @@ def violations(source: str, module: str) -> list[str]:
                 and node.args[0].id == "fh"
                 and {k.arg for k in node.keywords} <= {"formats"}
             )
+            thumbs_image_open = (
+                isinstance(f.value, ast.Name)
+                and f.value.id == "Image"
+                and module == "thumbs"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Call)
+                and isinstance(node.args[0].func, ast.Name)
+                and node.args[0].func.id == "BytesIO"
+                and len(node.args[0].args) == 1
+                and isinstance(node.args[0].args[0], ast.Name)
+                and node.args[0].args[0].id == "data"
+                and {k.arg for k in node.keywords} <= {"formats"}
+            )
             if image_open and id(node) in classify_image_nodes and guarded:
+                ok_funcs.add(id(f))
+            elif thumbs_image_open and id(node) in thumbs_open_nodes and thumbs_guarded:
                 ok_funcs.add(id(f))
             elif (
                 module == "autolink"
@@ -388,7 +464,7 @@ def violations(source: str, module: str) -> list[str]:
             else:
                 bad(
                     node,
-                    "a .open() call (Pillow only on classify_image's guarded BytesIO)",
+                    "a .open() call (Pillow only on classify_image's or make_thumbnails' guarded BytesIO)",
                 )
     for node in ast.walk(tree):
         if (
@@ -430,6 +506,8 @@ def violations(source: str, module: str) -> list[str]:
                 bad(node, f"io.{node.attr} (only BytesIO)")
             elif head == "Image" and n == 2 and node.attr not in IMAGE_ATTRS:
                 bad(node, f"Image.{node.attr}")
+            elif head == "ImageOps" and n == 2 and node.attr not in IMAGEOPS_ATTRS:
+                bad(node, f"ImageOps.{node.attr}")
             elif parts[:2] == ["urllib", "request"] and n == 3:
                 if node.attr not in ATTR_ALLOWED.get(
                     (module, "urllib.request"), frozenset()
@@ -468,6 +546,36 @@ def violations(source: str, module: str) -> list[str]:
             bad(
                 tree,
                 "classify_image must refuse anything that is not a BytesIO (isinstance(fh, BytesIO))",
+            )
+        # make_thumbnails is only ever given the bytes themselves: `x.data` (a HashOutcome's) or a name
+        # `data`, never a path, a handle or a call that opens one
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                called = (
+                    fn.id
+                    if isinstance(fn, ast.Name)
+                    else fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else None
+                )
+                if called == "make_thumbnails" and module != "thumbs":
+                    first = node.args[0] if node.args else None
+                    if not (
+                        len(node.args) == 1
+                        and not node.keywords
+                        and (
+                            (isinstance(first, ast.Attribute) and first.attr == "data")
+                            or (isinstance(first, ast.Name) and first.id == "data")
+                        )
+                    ):
+                        bad(
+                            node, "make_thumbnails must be given `<outcome>.data` bytes"
+                        )
+        if module == "thumbs" and thumbs_open_nodes and not thumbs_guarded:
+            bad(
+                tree,
+                "make_thumbnails must refuse anything that is not bytes (isinstance(data, bytes))",
             )
     return found
 
@@ -631,6 +739,46 @@ BYPASSES_AS = [
         "classify_sem",
     ),
     ("from PIL import Image\nImage.new('L', (1, 1))", "classify_sem"),
+    # thumbs: Pillow only on make_thumbnails' bytes, and the one save only to its own BytesIO
+    ("img.save(p)", "thumbs"),
+    ("img.save(buf)", "classify_sem"),
+    ("def other(img, buf):\n    img.save(buf)", "thumbs"),
+    ("def _encode_jpeg(img, q):\n    img.save(path)", "thumbs"),
+    (
+        "def _encode_jpeg(img, q):\n    buf = opener(p)\n    img.save(buf, 'JPEG')",
+        "thumbs",
+    ),
+    (
+        "from io import BytesIO\ndef _encode_jpeg(img, q):\n    buf = BytesIO()\n    other.save(buf, 'JPEG')",
+        "thumbs",
+    ),
+    ("from PIL import Image\nImage.open(fh)", "thumbs"),
+    ("from PIL import Image\nImage.open(rel)", "thumbs"),
+    (
+        "from io import BytesIO\nfrom PIL import Image\ndef other(data):\n    return Image.open(BytesIO(data))",
+        "thumbs",
+    ),
+    (  # no isinstance(data, bytes) guard
+        "from io import BytesIO\nfrom PIL import Image\ndef make_thumbnails(data):\n"
+        "    return Image.open(BytesIO(data))",
+        "thumbs",
+    ),
+    (  # a path through the BytesIO
+        "from io import BytesIO\nfrom PIL import Image\ndef make_thumbnails(data):\n"
+        "    if not isinstance(data, bytes):\n        return None\n    return Image.open(BytesIO(path))",
+        "thumbs",
+    ),
+    ("from PIL import Image\nImage.new('L', (1, 1))", "thumbs"),
+    ("from PIL import ImageFile", "thumbs"),
+    ("from PIL import ImageOps", "thumbs"),
+    ("from PIL import ImageOps\nImageOps.autocontrast(img)", "thumbs"),
+    ("from PIL import ImageOps", "scan"),
+    ("from PIL import Image", "scan"),
+    ("x = thumbs.make_thumbnails(rel)", "scan"),
+    ("x = thumbs.make_thumbnails(open_rb(p))", "daemon"),
+    ("x = thumbs.make_thumbnails(fh.read())", "daemon"),
+    ("x = thumbs.make_thumbnails(out.data, 1)", "daemon"),
+    ("x = thumbs.make_thumbnails(data=out.data)", "daemon"),
 ]
 
 
@@ -689,6 +837,17 @@ CLEAN = [
         "classify_sem",
     ),
     ("x = classify_sem.classify_image(io.BytesIO(data))\nimport io", "scan"),
+    ("x = thumbs.make_thumbnails(hashed.data)", "scan"),
+    ("x = thumbs.make_thumbnails(out.data)", "daemon"),
+    (
+        "import warnings\nfrom io import BytesIO\nfrom PIL import Image, ImageOps\n"
+        "def _encode_jpeg(img, quality):\n    buf = BytesIO()\n"
+        "    img.save(buf, 'JPEG', quality=quality)\n    return buf.getvalue()\n"
+        "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+        "    img = Image.open(BytesIO(data), formats=['PNG'])\n    img.thumbnail((9, 9), Image.LANCZOS)\n"
+        "    return ImageOps.exif_transpose(img)",
+        "thumbs",
+    ),
 ]
 
 
