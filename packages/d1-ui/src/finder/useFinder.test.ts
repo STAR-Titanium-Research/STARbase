@@ -291,6 +291,34 @@ describe('useFinder hands a scanned sample to onOpen as a record too', () => {
 	});
 });
 
+describe('useFinder asking the same query again', () => {
+	it('keeps what the query showed until the new answers replace it, instead of emptying and filling up again', async () => {
+		const gets: Array<{ path: string; answer: (rows: any[]) => void }> = [];
+		const host = { api: { get: (path: string) => new Promise((resolve) => { gets.push({ path, answer: (rows) => resolve({ data: { data: rows } }) }); }) } } as unknown as ExplorerHost;
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible));
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		for (const g of gets) g.answer(g.path === '/items/physical_samples' ? [{ sample_id: 's1', sample_code: '12-ABC' }] : []);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC']);
+		// typed on and back: asked again for the same query
+		finder.query.value = '12-';
+		finder.query.value = '12';
+		gets.length = 0;
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC']);
+		// an answer for another group arrives first: the list does not collapse
+		gets.find((g) => g.path === '/items/campaigns')!.answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC', 'CAMP-12']);
+		// once every answer is in, the list is what they say (the sample is gone)
+		for (const g of gets) g.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(false);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-12']);
+	});
+});
+
 describe('useFinder streams its answers', () => {
 	const all = new Set(['physical_samples', 'manufacturing_operations', 'campaigns', 'directus_files']);
 	// A host whose every request waits for the test to answer it.
@@ -312,8 +340,8 @@ describe('useFinder streams its answers', () => {
 		const { finder, pending, take } = held();
 		finder.query.value = '12';
 		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
-		// samples (2), operations (2), campaigns, files: every request is out at once
-		expect(pending.map((p) => p.path).sort()).toEqual(['/files', '/items/campaigns', '/items/manufacturing_operations', '/items/manufacturing_operations', '/items/physical_samples', '/items/physical_samples']);
+		// samples (2), operations (2), campaigns: every request is out at once (files wait for a word of 3 characters)
+		expect(pending.map((p) => p.path).sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/manufacturing_operations', '/items/physical_samples', '/items/physical_samples']);
 		take('/items/campaigns').answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(finder.hits.value.map((h) => h.group)).toEqual(['Campaigns']);
@@ -330,16 +358,30 @@ describe('useFinder streams its answers', () => {
 		expect(finder.loading.value).toBe(false);
 	});
 
-	it('drops an answer to a query typed over, whichever pass and group it was', async () => {
+	it('sends all of pass 1 before any of pass 2, and asks for files only for a word of 3 characters', async () => {
+		const { finder, pending } = held();
+		finder.query.value = 'anneal';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		expect(pending.map((p) => p.path)).toEqual(['/items/physical_samples', '/items/manufacturing_operations', '/items/campaigns', '/files', '/items/physical_samples', '/items/manufacturing_operations']);
+		expect(pending.slice(0, 4).every((p) => !String(p.params.filter).includes('legacy_notes') && !String(p.params.filter).includes('outcome_notes'))).toBe(true);
+		expect(String(pending[4].params.filter)).toContain('legacy_notes');
+	});
+
+	it("drops an answer to a query typed over, even one that arrives after the new query's own", async () => {
 		const { finder, pending } = held();
 		finder.query.value = '12';
 		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
 		const old = [...pending];
 		finder.query.value = '123';
 		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		const fresh = pending.slice(old.length);
+		fresh.find((p) => p.path === '/items/campaigns')!.answer([{ campaign_id: 'c3', campaign_code: 'CAMP-123', name: 'New' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-123']);
 		old.find((p) => p.path === '/items/campaigns')!.answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
 		await vi.advanceTimersByTimeAsync(0);
-		expect(finder.hits.value.some((h) => h.group === 'Campaigns')).toBe(false);
+		// the new query's hit is still there, the old one never was
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-123']);
 		expect(finder.loading.value).toBe(true);
 		// the old query's answers do not end the new query's loading either
 		for (const p of old) p.answer([]);

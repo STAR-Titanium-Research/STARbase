@@ -25,6 +25,8 @@ Out of scope here (later sub-projects): `e:`/`@` prefixes and recents (B), actio
 ### Wider matching (narrow list, per decision)
 Matching also reads: samples `notes`, `legacy_notes`, `location`, `project_id.project_code`, `owner_person_id.full_name`; equipment `notes`, `location`; operations `outcome_notes`; files path (above). Nothing else.
 
+**Implemented differently (PR 1):** `project_id.project_code` was dropped from the samples fields: a many-to-one filter joins `projects` without the projects row rule, so searching a project code would reveal which readable samples belong to a project the user may not read. A follow-up could first `GET /items/projects` (which applies the rule) and then filter samples by `project_id` `_in` those ids. The files path is not matched: it is not a column (`directus_files` keeps it in `metadata.archive_path`, JSON that a filter cannot reach).
+
 ### Two passes
 - **Pass 1** (as today): code/name fields (+ short id). The first group to answer shows at once.
 - **Pass 2**: the notes/location/owner/project fields, a second `GET` per source that has any, issued in parallel with pass 1 but merged as it arrives. A pass-2 row already in pass 1 is dropped; a pass-2 hit is labelled "matched in <field>" (`FinderHit.matchedIn`) and ranks 4, below every pass-1 hit.
@@ -42,6 +44,14 @@ Enter opens the active row, which starts as the first row. While a pass-1 hit ex
 
 ### Speed gate
 Time to the first hit (first group answering) must be no worse than today; the slowest group may grow by at most 20 ms. Measured on live (median of 20, same queries, before and after, from the finder's own request timings) and recorded in the PR. A source that breaks the gate moves entirely to pass 2 or is dropped.
+
+## Deviations recorded while implementing PR 1
+- **Files open `/files/<id>`** (Directus's own file page), not the Inbox: the Inbox has no per-file selection parameter. "More in Files…" opens `/files` without the query.
+- **A file's detail is its MIME type, not its owner:** `directus_files.owner_person_id` has a foreign key but no `directus_relations` row, so `owner_person_id.full_name` is not a field `/files` can read (the request would be refused).
+- **"More in <Page>…" is suppressed** for a multi-word query and for a group whose lost hits were pass 2 only: the Explorer search is one `_icontains` on the page's code and name fields and would find nothing. It is kept (alone) for a group the 12-row cap emptied, when its lost hits were pass 1.
+- **Form record pickers inherit multi-word matching** through `sourceParams` (it is the picker's query for the collections the finder knows). Materials and files are `finderOnly`, so the pickers keep their own template for them.
+- **Files are asked only when a word has 3 characters or more**, and migration 201 adds trigram indexes on `lower(filename_download)` and `lower(title)` (the form Directus builds for `_icontains`).
+- **Directus-special words:** `true`, `false` and `null` are sent capitalised and a leading `$` is dropped (Directus would otherwise turn them into a boolean, null or a variable and break the whole request); a word is cut at 100 characters. This changes the single-word filter only for words that were already broken.
 
 ## PR 2: preview pane (on top of PR 1)
 

@@ -36,10 +36,14 @@ export interface FinderSource {
 	fields: string[];
 	// _icontains on each of these (pass 1).
 	match: string[];
-	// Pass 2: more fields a word may be found in, each with the name shown as "matched in <label>". A dotted field reads through a relation.
+	// Pass 2: more fields a word may be found in, each with the name shown as "matched in <label>". A dotted field reads through a relation, but only one
+	// whose records every reader may read: Directus joins the related table without its row rules, so a match in it could reveal a record the user may not
+	// read (that is why a sample's project code is not here).
 	deep?: Array<{ field: string; label: string }>;
 	// The request path when it is not /items/<collection> (files have an endpoint of their own).
 	path?: string;
+	// Only asked about a query whose longest word has this many characters (an index on the field works on trigrams, which a word of 1 or 2 characters has none of).
+	minWord?: number;
 	// The collection has a short_id column: a hex input is also tried as an exact short id.
 	shortId?: boolean;
 	// Only the finder uses this source: a form's record picker keeps reading that collection by the field's own template.
@@ -65,6 +69,8 @@ const DEEP_LIMIT = 10;
 const RECORD_CAP = 12;
 // A longer query is cut here: every word is one more clause in a GET url.
 const MAX_WORDS = 6;
+// ... and each word at this many characters, so a pasted block of text cannot overflow the request's header limit.
+const MAX_WORD_LENGTH = 100;
 // Pass 2 hits rank below every pass 1 hit.
 export const DEEP_RANK = 4;
 // Characters kept on each side of the word in a matched-in snippet.
@@ -102,7 +108,6 @@ export const FINDER_SOURCES: FinderSource[] = [
 			{ field: 'notes', label: 'notes' },
 			{ field: 'legacy_notes', label: 'legacy notes' },
 			{ field: 'location', label: 'location' },
-			{ field: 'project_id.project_code', label: 'project' },
 			{ field: 'owner_person_id.full_name', label: 'owner' },
 		],
 		shortId: true,
@@ -194,6 +199,8 @@ export const FINDER_SOURCES: FinderSource[] = [
 		collection: 'directus_files',
 		path: '/files',
 		finderOnly: true,
+		// migration 201: trigram indexes on lower(filename_download) and lower(title), which a word under 3 characters cannot use (it would scan every file).
+		minWord: 3,
 		fields: ['id', 'filename_download', 'title', 'type'],
 		match: ['filename_download', 'title'],
 		label: (r) => str(r.filename_download) || str(r.title) || 'File',
@@ -215,9 +222,23 @@ export function isSearchable(q: string): boolean {
 	return q.trim().length >= MIN_QUERY;
 }
 
+// Directus reads a few whole values as something else before they reach a filter (true, false and null become a boolean or null; $NOW, $CURRENT_USER and
+// the like are variables), which breaks the _icontains of the whole request. _icontains ignores case, so a capital letter makes the word an ordinary string,
+// and a leading $ is dropped. Only words that were already broken change.
+function safeWord(word: string): string {
+	const w = word.replace(/^\$+/, '').slice(0, MAX_WORD_LENGTH);
+	return /^(true|false|null)$/i.test(w) ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+}
+
 // The words of a query: split on whitespace. A row must match each of them, a word in any of the fields.
 export function queryWords(q: string): string[] {
-	return q.trim().split(/\s+/).filter(Boolean).slice(0, MAX_WORDS);
+	return q.trim().split(/\s+/).map(safeWord).filter(Boolean).slice(0, MAX_WORDS);
+}
+
+// Whether a source is worth asking about this query (see FinderSource.minWord).
+export function askable(src: FinderSource, q: string): boolean {
+	const min = src.minWord;
+	return !min || queryWords(q).some((w) => w.length >= min);
 }
 
 // One word in any of the fields. A hex word is also tried as an exact short id when the source has them (and the caller asks for it).
@@ -230,7 +251,7 @@ function wordClause(src: FinderSource, word: string, fields: string[], withShort
 // The one clause of a one-word query (exactly the filter it has always built), an _and of them for several words.
 function wordsFilter(src: FinderSource, q: string, fields: string[], withShortId: boolean): Record<string, unknown> {
 	const words = queryWords(q);
-	const clauses = (words.length ? words : [q.trim()]).map((w) => wordClause(src, w, fields, withShortId));
+	const clauses = (words.length ? words : [q.trim().slice(0, MAX_WORD_LENGTH)]).map((w) => wordClause(src, w, fields, withShortId));
 	return clauses.length === 1 ? clauses[0] : { _and: clauses };
 }
 
@@ -361,8 +382,9 @@ function dedupe(hits: FinderHit[]): FinderHit[] {
 
 // Groups in spec order, best rank first inside each (ties keep their arrival order). A remote group shows at most 5 hits (Inventory is six sources but
 // one group), all remote groups together at most 12: the best ranked stay, kept in group order (a tie goes to the earlier group). A group that lost hits
-// ends with a "More in <Page>…" row for the page that lost the most; those rows are not counted in the 12. The Explorer page searches one phrase in its code
-// and name fields, so the row is only offered for a one-word query and for pass 1 hits that were left out: it would find nothing for the others.
+// ends with a "More in <Page>…" row for the page that lost the most (a group left with no hit shown keeps just that row); those rows are not counted in the
+// 12. The Explorer page searches one phrase in its code and name fields, so the row is only offered for a one-word query and for pass 1 hits that were left
+// out: it would find nothing for the others.
 export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 	if (!isSearchable(q)) return [];
 	const all = dedupe(groups.flat());
@@ -383,7 +405,6 @@ export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 	}
 	const single = queryWords(q).length === 1;
 	for (const { group, shown, lost } of remote) {
-		if (!shown.length) continue;
 		out.push(...shown);
 		const counts = new Map<string, number>();
 		for (const h of single ? lost : []) if (h.record && h.rank < DEEP_RANK) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);

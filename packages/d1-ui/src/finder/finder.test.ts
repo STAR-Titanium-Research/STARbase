@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildNav, type Bookmark } from '../nav/navConfig';
 import {
-	FETCH_LIMIT, FINDER_SOURCES, MIN_QUERY, deepParams, isSearchable, localHits, mergeHits, queryWords, rankHit, sourceParams, toHits, visibleSources,
+	FETCH_LIMIT, FINDER_SOURCES, askable, MIN_QUERY, deepParams, isSearchable, localHits, mergeHits, queryWords, rankHit, sourceParams, toHits, visibleSources,
 	type FinderHit, type FinderSource,
 } from './finder';
 
@@ -217,6 +217,48 @@ describe('sourceParams with several words', () => {
 	});
 });
 
+describe('words that Directus would read as something else, and very long ones', () => {
+	const filterOf = (collection: string, q: string) => JSON.parse(sourceParams(source(collection), q).filter as string);
+	const valuesOf = (collection: string, q: string) => filterOf(collection, q)._or.map((c: any) => Object.values(Object.values(c)[0] as object)[0]);
+
+	it('sends true, false and null (any case) as ordinary words, and drops a leading $', () => {
+		for (const [typed, sent] of [['true', 'True'], ['FALSE', 'False'], ['null', 'Null'], ['NULL', 'Null'], ['$NOW', 'NOW'], ['$$CURRENT_USER', 'CURRENT_USER']]) {
+			expect(valuesOf('campaigns', typed), typed).toEqual([sent, sent]);
+		}
+		// only whole words: these were never a problem and are sent as typed
+		expect(valuesOf('campaigns', 'nullable')).toEqual(['nullable', 'nullable']);
+		expect(valuesOf('campaigns', 'a$b')).toEqual(['a$b', 'a$b']);
+	});
+
+	it('does so word by word, in pass 2 as well, and the words still match the rows', () => {
+		const and = filterOf('campaigns', 'true null')._and;
+		expect(and.map((c: any) => c._or[0].campaign_code._icontains)).toEqual(['True', 'Null']);
+		expect(queryWords('$ $x')).toEqual(['x']);
+		const rows = [{ sample_id: 's1', sample_code: 'S-1', notes: 'null result' }];
+		expect(toHits(source('physical_samples'), 'null', rows, 2)[0]).toMatchObject({ matchedIn: 'notes' });
+		expect(JSON.parse(deepParams(source('physical_samples'), 'null')!.filter as string)._or[0]).toEqual({ notes: { _icontains: 'Null' } });
+	});
+
+	it('cuts a word at 100 characters, so a pasted block cannot overflow the header limit', () => {
+		const long = 'x'.repeat(5000);
+		expect(queryWords(`ab ${long}`)).toEqual(['ab', 'x'.repeat(100)]);
+		expect(sourceParams(source('physical_samples'), long).filter as string).toHaveLength(JSON.stringify(filterOf('physical_samples', 'x'.repeat(100))).length);
+		expect(JSON.stringify(deepParams(source('physical_samples'), long)).length).toBeLessThan(2000);
+	});
+});
+
+describe('askable', () => {
+	it('asks for files only when a word has 3 characters (the trigram index needs one), and for everything else always', () => {
+		const files = source('directus_files');
+		expect(files.minWord).toBe(3);
+		expect(askable(files, 'ab')).toBe(false);
+		expect(askable(files, 'ab cd')).toBe(false);
+		expect(askable(files, 'ab scan')).toBe(true);
+		expect(askable(files, '  tif ')).toBe(true);
+		for (const src of FINDER_SOURCES.filter((s) => s !== files)) expect(askable(src, 'ab'), src.collection).toBe(true);
+	});
+});
+
 describe('deepParams (pass 2)', () => {
 	const deep = (collection: string, q: string) => deepParams(source(collection), q)!;
 
@@ -233,11 +275,10 @@ describe('deepParams (pass 2)', () => {
 				{ notes: { _icontains: 'anneal' } },
 				{ legacy_notes: { _icontains: 'anneal' } },
 				{ location: { _icontains: 'anneal' } },
-				{ project_id: { project_code: { _icontains: 'anneal' } } },
 				{ owner_person_id: { full_name: { _icontains: 'anneal' } } },
 			],
 		});
-		expect(p.fields).toEqual(['sample_id', 'sample_code', 'nickname', 'short_id', 'notes', 'legacy_notes', 'location', 'project_id.project_code', 'owner_person_id.full_name']);
+		expect(p.fields).toEqual(['sample_id', 'sample_code', 'nickname', 'short_id', 'notes', 'legacy_notes', 'location', 'owner_person_id.full_name']);
 		expect(p.limit).toBe(10);
 	});
 
@@ -251,7 +292,8 @@ describe('deepParams (pass 2)', () => {
 
 	it('covers exactly the narrow list of fields', () => {
 		const fieldsOf = (c: string) => source(c).deep?.map((d) => d.field);
-		expect(fieldsOf('physical_samples')).toEqual(['notes', 'legacy_notes', 'location', 'project_id.project_code', 'owner_person_id.full_name']);
+		// no project code: a to-one filter joins projects without its row rule, so it would reveal which samples belong to a project the user may not read
+		expect(fieldsOf('physical_samples')).toEqual(['notes', 'legacy_notes', 'location', 'owner_person_id.full_name']);
 		expect(fieldsOf('equipment')).toEqual(['notes', 'location']);
 		expect(fieldsOf('manufacturing_operations')).toEqual(['outcome_notes']);
 		expect(FINDER_SOURCES.filter((s) => s.deep).map((s) => s.collection)).toEqual(['physical_samples', 'manufacturing_operations', 'equipment']);
@@ -266,13 +308,9 @@ describe('toHits pass 2', () => {
 		expect(h).toMatchObject({ group: 'Samples', label: 'S-1', rank: 4, matchedIn: 'notes', to: '/home/samples/s1' });
 	});
 
-	it('reads through the project and owner relations', () => {
-		const rows = [
-			{ sample_id: 's1', sample_code: 'S-1', project_id: { project_code: 'PRJ-ANNEAL' } },
-			{ sample_id: 's2', sample_code: 'S-2', owner_person_id: { full_name: 'Ann Nealson' } },
-		];
-		expect(toHits(sample, 'prj-anneal', rows.slice(0, 1), 2).map((h) => h.matchedIn)).toEqual(['project']);
-		expect(toHits(sample, 'nealson', rows.slice(1), 2).map((h) => h.matchedIn)).toEqual(['owner']);
+	it('reads through the owner relation', () => {
+		const rows = [{ sample_id: 's2', sample_code: 'S-2', owner_person_id: { full_name: 'Ann Nealson' } }];
+		expect(toHits(sample, 'nealson', rows, 2).map((h) => h.matchedIn)).toEqual(['owner']);
 	});
 
 	it('drops a row pass 1 would have found anyway, and is never an exact short-id hit', () => {
@@ -302,10 +340,6 @@ describe('toHits pass 2', () => {
 		expect(own.matchedSnippet!.length).toBeLessThan(long.length);
 		const [short] = toHits(sample, 'shed', [{ sample_id: 's2', sample_code: 'S-2', location: 'Shed 4' }], 2);
 		expect(short.matchedSnippet).toBe('Shed 4');
-		const [project] = toHits(sample, 'prj-9', [{ sample_id: 's3', sample_code: 'S-3', project_id: { project_code: 'PRJ-9' } }], 2);
-		expect(project).toMatchObject({ matchedIn: 'project' });
-		expect(project.matchedSnippet).toBeUndefined();
-		expect(JSON.stringify(project)).not.toContain('PRJ-9');
 		const [owner] = toHits(sample, 'nealson', [{ sample_id: 's4', sample_code: 'S-4', owner_person_id: { full_name: 'Ann Nealson' } }], 2);
 		expect(owner.matchedSnippet).toBeUndefined();
 		expect(JSON.stringify(owner)).not.toContain('Nealson');
@@ -439,14 +473,24 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 		expect(merged.filter((h) => h.group === 'Operations')).toHaveLength(5);
 	});
 
-	it('does not count Pages and Saved views in the 12, and gives a group with nothing left no heading', () => {
+	it('does not count Pages and Saved views in the 12, and gives a group with nothing left no heading unless it has a "More in" row', () => {
 		const pages = Array.from({ length: 4 }, (_, i) => ({ group: 'Pages' as const, label: `pg${i}`, to: `/pg${i}`, rank: 3 }));
 		const files = many('Files', 'directus_files', 'f', 5, 4);
 		const merged = mergeHits('ab', [pages, samples(5), samples(5, 3, 5), files]);
 		expect(merged.filter((h) => h.group === 'Pages')).toHaveLength(4);
 		expect(merged.filter((h) => h.group === 'Samples' && !h.more)).toHaveLength(5);
 		expect(merged.some((h) => h.group === 'Files')).toBe(true);
+		// ... and no row either when all that was left out is pass 2
 		const crowded = mergeHits('ab', [samples(5), many('Operations', 'manufacturing_operations', 'o', 5), many('Tests', 'test_sessions', 't', 5), files]);
 		expect(crowded.some((h) => h.group === 'Files')).toBe(false);
+	});
+
+	it('keeps just the "More in" row for a group the 12-row cap emptied, when what it lost was pass 1 and the query one word', () => {
+		const ops = many('Operations', 'manufacturing_operations', 'o', 5);
+		const tests = many('Tests', 'test_sessions', 't', 5);
+		const files = many('Files', 'directus_files', 'f', 5);
+		const merged = mergeHits('ab', [samples(5, 2), ops, tests, files]);
+		expect(merged.filter((h) => h.group === 'Files')).toEqual([expect.objectContaining({ more: true, label: 'More in Files…' })]);
+		expect(mergeHits('ab cd', [samples(5, 2), ops, tests, files]).some((h) => h.group === 'Files')).toBe(false);
 	});
 });

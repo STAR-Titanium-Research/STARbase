@@ -3,7 +3,7 @@ import type { Ref } from 'vue';
 import type { ExplorerHost } from '../host';
 import type { VisibleNav } from '../nav/navConfig';
 import { useRequestGate } from '../composables/useRequestGate';
-import { deepParams, isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
+import { askable, deepParams, isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
 import type { FinderHit, FinderSource } from './finder';
 import { QR_HEADER } from '../labels/qrPayload';
 import { isScanComplete, isScanStarted, resolveLabel } from './scan';
@@ -58,16 +58,24 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 	async function run(q: string): Promise<void> {
 		const token = gate.begin();
 		const answers: FinderHit[][] = [];
-		const asked = visibleSources(visible.value).flatMap((src) => {
-			const deep = deepParams(src, q);
-			return [search(src, q, 1, sourceParams(src, q)), ...(deep ? [search(src, q, 2, deep)] : [])];
-		});
+		// The same query again (typed back to, or asked again when the collections arrive): what it showed stays until the answers replace it, so the
+		// list does not empty and fill up again.
+		const before = remote.value?.q === q ? remote.value.groups : [];
+		const sources = visibleSources(visible.value).filter((src) => askable(src, q));
+		// All of pass 1 goes out first: the first rows are made of it.
+		const asked = [
+			...sources.map((src) => search(src, q, 1, sourceParams(src, q))),
+			...sources.flatMap((src) => {
+				const deep = deepParams(src, q);
+				return deep ? [search(src, q, 2, deep)] : [];
+			}),
+		];
 		await Promise.all(
 			asked.map((answer) =>
 				answer.then((hits) => {
 					if (!gate.isCurrent(token) || !hits.length) return;
 					answers.push(hits);
-					remote.value = { q, groups: [...answers] };
+					remote.value = { q, groups: [...before, ...answers] };
 				}),
 			),
 		);
