@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
+  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, mount, parseFileFilters, parseScanItem, safeEqual, semAccess,
+  shapeSemSettings, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -696,7 +697,7 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
 
 const USER_ROUTES = [
   'GET /summary', 'GET /files', 'POST /link', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
-  'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all',
+  'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /sem-settings', 'PATCH /sem-settings/:file',
 ];
 
 test('every route but auto-link needs a signed-in user: 401, Directus-shaped, source d1-inbox', async () => {
@@ -730,6 +731,7 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
   const writes = [
     ['POST /link', { items: [link(c)] }], ['POST /accept-all', { filter: {} }], ['POST /dismiss', { candidate_ids: [c.candidate_id] }],
     ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
+    ['PATCH /sem-settings/:file', { field: 'kv', value: 10 }],
   ];
   for (const [key, body] of writes) {
     const res = await call(key, { user: U.viewer, role: LAB_VIEWER_ROLE_ID, body });
@@ -1705,13 +1707,16 @@ test('POST /undo: a caller who may no longer delete the scan gets 403, nothing i
   assert.equal(w.items.some((i) => i.op === 'delete' && i.accountability.admin === true), false);
 });
 
-test('POST /undo of a scan batch: another person\'s batch is 403 (an administrator may, with their own accountability)', async () => {
+test('POST /undo of a scan batch: another person\'s batch is 403 (an administrator in the owner team may, with their own accountability; one outside it may not)', async () => {
   const w = newWorld();
   const scan = add(w, scanCand({ owner_person_id: null, owner_team_id: TEAM }));
   const { call } = setup(w);
   const batch = (await call('POST /link', { user: U.alice, body: { items: [scanItem(scan)] } })).body.data.link_batch_id;
   assert.equal((await call('POST /undo', { user: U.bob, body: { link_batch_id: batch } })).statusCode, 403);
   assert.equal(w.scans.length, 1);
+  assert.equal((await call('POST /undo', { user: U.admin, admin: true, role: ID(80), body: { link_batch_id: batch } })).statusCode, 403, 'read-only on a team that is not theirs');
+  assert.equal(w.scans.length, 1);
+  w.teamMembers.push({ team_id: TEAM, person_id: P.admin });
   const admin = await call('POST /undo', { user: U.admin, admin: true, role: ID(80), body: { link_batch_id: batch } });
   assert.equal(admin.statusCode, 200, JSON.stringify(admin.body));
   assert.equal(w.scans.length, 0);
@@ -2263,7 +2268,11 @@ test('POST /undo: unknown or already undone batch is 404; another person\'s batc
   assert.equal(mine.state, 'linked');
   assert.equal(w.junctions.sample_data_files.length, 2);
   w.denyDelete = false;
-  assert.equal((await call('POST /undo', { user: U.admin, admin: true, body: { link_batch_id: teamBatch } })).statusCode, 200);
+  // an administrator who is not in the owner team is read-only on its files (stream D): 403, nothing undone; a member of the team that did not link it is 403 too
+  assert.equal((await call('POST /undo', { user: U.admin, admin: true, body: { link_batch_id: teamBatch } })).statusCode, 403);
+  assert.equal(t.state, 'linked');
+  w.teamMembers.push({ team_id: TEAM, person_id: P.admin });
+  assert.equal((await call('POST /undo', { user: U.admin, admin: true, body: { link_batch_id: teamBatch } })).statusCode, 200, 'an administrator in the team may undo what a teammate linked');
   assert.equal(t.state, 'new');
   assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: myBatch } })).statusCode, 200);
   assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: myBatch } })).statusCode, 404, 'already undone');
@@ -2448,6 +2457,429 @@ test('the SQL: the settings are written by the function only, and undo deletes o
   for (const table of ['sample_data_files', 'operation_data_files', 'session_data_files', 'surface_scans']) assert.match(del, new RegExp(`NOT EXISTS \\(SELECT 1 FROM ${table} `), table);
   assert.match(SQL.candidatesForUpdate, /c\.extracted/, 'the link transaction reads the candidate\'s extracted');
   assert.match(SQL.batchForUpdate, /c\.extracted/);
+});
+
+// ---- imaging settings: read and correct, locked files, administrators read-only (stream D, task D2) ---------------------------------
+
+const SEM_ROW = {
+  kv: '15.00', spot: '3.0', working_distance_mm: '8.50', magnification: 5000, hfw_um: '59.70', pixel_size_nm: '29.1400', scale_bar_um: '10.000',
+  detector: 'ETD', mode: 'SE', instrument: 'Quanta 650', acquired_at: new Date('2026-03-02T10:15:30.000Z'),
+  sources: { kv: 'metadata', magnification: 'derived', detector: 'metadata' }, flags: { check_this: true }, read_by: 'inbox', read_at: new Date('2026-10-14T10:00:00.000Z'),
+  corrected_by: null, corrected_at: null,
+};
+// A file with a pointer row (owner columns) and settings. Defaults: Alice's own.
+let fileSeq = 0;
+const semFile = (w, { owner = { owner_person_id: P.alice, owner_team_id: null }, settings = true } = {}) => {
+  fileSeq += 1;
+  const id = ID(7500 + fileSeq);
+  w.files.set(id, { id, ...owner });
+  if (settings) w.settings.set(id, { directus_files_id: id, ...copy(SEM_ROW) });
+  return id;
+};
+const OWNED_BY = { alice: { owner_person_id: P.alice, owner_team_id: null }, team: { owner_person_id: null, owner_team_id: TEAM }, other: { owner_person_id: P.carol, owner_team_id: null },
+  nobody: { owner_person_id: null, owner_team_id: null } };
+const getSem = (call, file, who) => call('GET /sem-settings', { ...who, query: { file } });
+const ALICE = { user: U.alice };
+const BOB = { user: U.bob };
+const CAROL = { user: U.carol };
+const ADMIN = { user: U.admin, admin: true, role: ID(80) };
+const VALUES = { kv: 15, spot: 3, working_distance_mm: 8.5, magnification: 5000, hfw_um: 59.7, pixel_size_nm: 29.14, scale_bar_um: 10, detector: 'ETD', mode: 'SE', instrument: 'Quanta 650', acquired_at: '2026-03-02T10:15:30.000Z' };
+
+test('canChange and semAccess: the owner person or an active member of the owner team; an administrator is neither unless they are', () => {
+  const scope = (over) => ({ personId: P.alice, teamIds: [TEAM], admin: false, ...over });
+  const own = cand();
+  const teams = cand({ owner_person_id: null, owner_team_id: TEAM });
+  assert.equal(canChange(scope(), own), true);
+  assert.equal(canChange(scope(), teams), true);
+  assert.equal(canChange(scope({ personId: P.bob, teamIds: [] }), own), false);
+  assert.equal(canChange(scope({ teamIds: [] }), teams), false);
+  assert.equal(canChange(scope({ personId: P.admin, teamIds: [], admin: true }), own), false, 'an administrator who is not the owner may not change it');
+  assert.equal(canChange(scope({ personId: P.admin, teamIds: [], admin: true }), teams), false);
+  assert.equal(canChange(scope({ personId: P.admin, teamIds: [TEAM], admin: true }), teams), true, 'a member of the owner team is a member, administrator or not');
+  assert.equal(canChange(scope({ personId: P.alice, admin: true }), own), true);
+  assert.equal(canChange(scope({ personId: null, teamIds: [], admin: false }), own), false);
+  assert.equal(canChange(scope({ personId: null, teamIds: [] }), cand({ owner_person_id: null, owner_team_id: null })), false, 'an unowned candidate is nobody\'s to change');
+  assert.equal(canSee(scope({ personId: P.admin, teamIds: [], admin: true }), own), true, 'canSee is unchanged: the list still shows an administrator everything');
+  const file = (o) => ({ owner_person_id: null, owner_team_id: null, ...o });
+  assert.equal(semAccess(scope(), file({ owner_person_id: P.alice })), 'owner');
+  assert.equal(semAccess(scope(), file({ owner_team_id: TEAM })), 'owner');
+  assert.equal(semAccess(scope(), file({ owner_person_id: P.bob })), 'other');
+  assert.equal(semAccess(scope(), file({ owner_team_id: OTHER_TEAM })), 'other');
+  assert.equal(semAccess(scope(), file({})), 'unowned');
+  assert.equal(semAccess(scope({ personId: null, teamIds: [] }), file({ owner_person_id: P.alice })), 'other');
+  assert.equal(semAccess(scope({ personId: null, teamIds: [] }), file({})), 'unowned');
+});
+
+test('GET /sem-settings: the owner gets the values, their sources and flags, and can edit; no administrator log row is written for an owner', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const { call } = setup(w);
+  const res = await getSem(call, file, ALICE);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: {
+    locked: false, settings: VALUES, sources: SEM_ROW.sources, flags: { check_this: true }, can_edit: true,
+  } });
+  assert.equal(w.settingsLog.length, 0, 'an owner reading their own settings is not logged');
+  assert.equal(w.log.some((l) => l.name === 'semAccessLogInsert'), false);
+  const read = w.log.find((l) => l.name === 'semSettingsGet');
+  assert.deepEqual(read.bindings, [file]);
+  assert.equal(w.items.length, 0, 'the owner is decided from the pointer row\'s owner columns: no Directus read');
+});
+
+test('GET /sem-settings: a value that is null is absent from settings (never null), numbers are numbers, the time is ISO 8601', async () => {
+  const w = newWorld();
+  const file = semFile(w, { settings: false });
+  w.settings.set(file, { directus_files_id: file, kv: '12.50', spot: null, working_distance_mm: null, magnification: null, hfw_um: null, pixel_size_nm: null, scale_bar_um: null,
+    detector: null, mode: null, instrument: null, acquired_at: null, sources: { kv: 'ocr' }, flags: {}, read_by: 'inbox', read_at: new Date(), corrected_by: null, corrected_at: null });
+  const { call } = setup(w);
+  const res = await getSem(call, file, ALICE);
+  assert.deepEqual(res.body.data.settings, { kv: 12.5 });
+  assert.deepEqual(res.body.data.sources, { kv: 'ocr' });
+  assert.deepEqual(res.body.data.flags, {});
+  assert.doesNotMatch(JSON.stringify(res.body), /null/);
+  assert.deepEqual(shapeSemSettings({ ...SEM_ROW, sources: JSON.stringify({ kv: 'manual' }), flags: '{}' }, { canEdit: false }).sources, { kv: 'manual' }, 'jsonb as text is parsed');
+});
+
+test('GET /sem-settings: a member of the owner team gets the team\'s values; a person outside the team, and a Former member, get locked: true and no values anywhere in the JSON', async () => {
+  const w = newWorld();
+  const file = semFile(w, { owner: OWNED_BY.team });
+  const { call } = setup(w);
+  const bob = await getSem(call, file, BOB);
+  assert.equal(bob.statusCode, 200);
+  assert.equal(bob.body.data.locked, false);
+  assert.deepEqual(bob.body.data.settings, VALUES);
+  assert.equal(bob.body.data.can_edit, true, 'a team member may correct a team file');
+  for (const who of [CAROL, { user: U.former }, { user: U.nobody }]) {
+    const res = await getSem(call, file, who);
+    assert.equal(res.statusCode, 200, 'locked is an answer, not an error');
+    assert.deepEqual(res.body, { data: { locked: true } });
+    assert.doesNotMatch(JSON.stringify(res.body), /5000|Quanta|ETD|metadata|settings|kv/, 'no value anywhere');
+  }
+  assert.equal(w.settingsLog.length, 0, 'a refusal is not an administrator read');
+  assert.equal(w.items.length, 0);
+});
+
+test('GET /sem-settings: another person\'s file is locked for a member even when they can read the record it is linked to', async () => {
+  const w = newWorld();
+  const file = semFile(w, { owner: OWNED_BY.other });
+  w.junctions.sample_data_files.push({ id: ID(4921), sample_id: S1, directus_files_id: file });
+  const { call } = setup(w);
+  const res = await getSem(call, file, ALICE);
+  assert.deepEqual(res.body, { data: { locked: true } });
+  assert.equal(w.items.length, 0, 'an owned file is decided by its owner alone: the record is not consulted');
+});
+
+test('GET /sem-settings: an administrator gets the same values read-only and exactly one access log row with reason admin_read; an administrator who is the owner is not logged', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const { call } = setup(w);
+  const res = await getSem(call, file, ADMIN);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.data, { locked: false, settings: VALUES, sources: SEM_ROW.sources, flags: { check_this: true }, can_edit: false });
+  assert.deepEqual(w.settingsLog, [{ directus_files_id: file, read_by_user: U.admin, reason: 'admin_read' }]);
+  const insert = w.log.find((l) => l.name === 'semAccessLogInsert');
+  assert.ok(insert.tx !== null, 'written in a transaction that starts with the actor');
+  assert.equal(w.log.find((l) => l.tx === insert.tx).name, 'setActor');
+  await getSem(call, file, ADMIN);
+  assert.equal(w.settingsLog.length, 2, 'every read is one row');
+  // an administrator who owns a file, and one who is a member of the owner team, read as owners
+  const mine = semFile(w, { owner: { owner_person_id: P.admin, owner_team_id: null } });
+  const own = await getSem(call, mine, ADMIN);
+  assert.equal(own.body.data.can_edit, true);
+  assert.equal(w.settingsLog.length, 2, 'no log row for an owner');
+  // an administrator's read of a team's file
+  const teamFile = semFile(w, { owner: OWNED_BY.team });
+  assert.equal((await getSem(call, teamFile, ADMIN)).statusCode, 200);
+  assert.equal(w.settingsLog.length, 3);
+  assert.equal(w.settingsLog[2].directus_files_id, teamFile);
+});
+
+test('GET /sem-settings: no settings row for a reader who is allowed is { locked: false, settings: null }; for one who is not, it is still locked (no hint whether a row exists)', async () => {
+  const w = newWorld();
+  const file = semFile(w, { settings: false });
+  const { call } = setup(w);
+  assert.deepEqual((await getSem(call, file, ALICE)).body, { data: { locked: false, settings: null } });
+  assert.deepEqual((await getSem(call, file, CAROL)).body, { data: { locked: true } });
+  assert.equal(w.settingsLog.length, 0, 'an administrator who reads nothing is not logged as having read something');
+  assert.deepEqual((await getSem(call, file, ADMIN)).body, { data: { locked: false, settings: null } });
+  assert.equal(w.settingsLog.length, 0);
+});
+
+test('GET /sem-settings: an unowned file is read by whoever can read a record it is linked to, decided by reading the junctions AS THE CALLER through ItemsService', async () => {
+  const w = newWorld();
+  const file = semFile(w, { owner: OWNED_BY.nobody });
+  w.junctions.sample_data_files.push({ id: ID(4922), sample_id: S1, directus_files_id: file });
+  w.junctions.session_data_files.push({ id: ID(4923), session_id: T1, directus_files_id: file });
+  const { call } = setup(w);
+  const bob = await getSem(call, file, BOB); // Bob can edit (so read) S1
+  assert.deepEqual(bob.body.data.settings, VALUES);
+  assert.equal(bob.body.data.can_edit, false, 'nobody owns an unowned file, so nobody may correct it here');
+  const reads = w.items.filter((i) => i.op === 'read');
+  assert.ok(reads.length >= 1);
+  assert.ok(reads.every((r) => r.accountability.user === U.bob && r.accountability.admin === false), 'every read ran with the caller\'s own accountability');
+  assert.ok(reads.every((r) => Object.values(LINK_TARGETS).some((t) => t.junction === r.collection)), 'the junction collections');
+  assert.deepEqual(reads[0].query.filter, { directus_files_id: { _eq: file } });
+  assert.equal(w.settingsLog.length, 0);
+  // Carol can read neither record
+  assert.deepEqual((await getSem(call, file, CAROL)).body, { data: { locked: true } });
+  // Carol can read S3 (view-only) and a file linked to it is hers to read
+  const viewed = semFile(w, { owner: OWNED_BY.nobody });
+  w.junctions.sample_data_files.push({ id: ID(4924), sample_id: S3, directus_files_id: viewed });
+  assert.equal((await getSem(call, viewed, CAROL)).body.data.locked, false);
+});
+
+test('GET /sem-settings: an unowned file linked nowhere, or whose junction read is refused, is locked for a member; an administrator reads it (and is logged)', async () => {
+  const w = newWorld();
+  const orphan = semFile(w, { owner: OWNED_BY.nobody });
+  const linked = semFile(w, { owner: OWNED_BY.nobody });
+  w.junctions.sample_data_files.push({ id: ID(4925), sample_id: S1, directus_files_id: linked });
+  const { call } = setup(w);
+  assert.deepEqual((await getSem(call, orphan, ALICE)).body, { data: { locked: true } });
+  w.denyJunctionRead = true;
+  assert.deepEqual((await getSem(call, linked, ALICE)).body, { data: { locked: true } }, 'a refused read is "not allowed", not an error');
+  w.denyJunctionRead = false;
+  assert.equal((await getSem(call, linked, ALICE)).body.data.locked, false);
+  const admin = await getSem(call, orphan, ADMIN);
+  assert.equal(admin.body.data.locked, false);
+  assert.equal(w.settingsLog.at(-1).reason, 'admin_read');
+});
+
+test('GET /sem-settings: a file that does not exist is locked, a bad or missing file id is 400, a Lab Viewer may read', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const { call } = setup(w);
+  assert.deepEqual((await getSem(call, ID(7999), ALICE)).body, { data: { locked: true } });
+  assert.deepEqual((await getSem(call, ID(7999), ADMIN)).body, { data: { locked: true } }, 'there is nothing to read or log');
+  assert.equal(w.settingsLog.length, 0);
+  for (const bad of [undefined, '', 'x', `${file}x`, ['a', 'b']]) assert.equal((await getSem(call, bad, ALICE)).statusCode, 400, JSON.stringify(bad));
+  const viewerFile = semFile(w, { owner: { owner_person_id: P.viewer, owner_team_id: null } });
+  const res = await getSem(call, viewerFile, { user: U.viewer, role: LAB_VIEWER_ROLE_ID });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.locked, false);
+  assert.equal(res.body.data.can_edit, true, 'the route would still refuse a Lab Viewer\'s PATCH (READ_ONLY_ROLE)');
+});
+
+test('GET /sem-settings: a failing log insert is a 500 and no value is sent (the read is logged or it does not happen)', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const { call, errors } = setup(w);
+  w.settingsLog.push = () => { throw new Error('log table down'); };
+  const res = await getSem(call, file, ADMIN);
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.data, undefined);
+  assert.equal(errors.length, 1);
+});
+
+const patchSem = (call, file, body, who) => call('PATCH /sem-settings/:file', { ...who, params: { file }, body });
+
+test('PATCH /sem-settings/<file>: the owner corrects a value; sources.kv is manual; the answer is the settings as the GET gives them; it runs in a transaction that starts with the actor', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const { call } = setup(w);
+  const res = await patchSem(call, file, { field: 'kv', value: 20 }, ALICE);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.locked, false);
+  assert.equal(res.body.data.settings.kv, 20);
+  assert.equal(res.body.data.sources.kv, 'manual');
+  assert.equal(res.body.data.sources.magnification, 'derived', 'the other fields keep their source');
+  assert.equal(res.body.data.can_edit, true);
+  assert.equal(w.settings.get(file).sources.kv, 'manual');
+  assert.equal(w.settings.get(file).corrected_by, U.alice);
+  const call1 = w.log.find((l) => l.name === 'semCorrect');
+  assert.deepEqual(call1.bindings, [file, 'kv', '20', U.alice], 'the function gets the file, the field, the value as JSON text and the user');
+  assert.match(SQL.semCorrect, /d1_private\.correct_sem_setting\(\?, \?, \?::jsonb, \?\)/);
+  assert.equal(w.log.find((l) => l.tx === call1.tx).name, 'setActor');
+  // text and time corrections take their JSON as it is
+  assert.equal((await patchSem(call, file, { field: 'detector', value: 'BSE' }, ALICE)).body.data.settings.detector, 'BSE');
+  assert.deepEqual(w.log.filter((l) => l.name === 'semCorrect').at(-1).bindings.slice(1, 3), ['detector', '"BSE"']);
+  assert.equal((await patchSem(call, file, { field: 'acquired_at', value: '2026-03-02T11:00:00+00:00' }, ALICE)).statusCode, 200);
+});
+
+test('PATCH /sem-settings/<file>: a member of the owner team may correct a team file', async () => {
+  const w = newWorld();
+  const file = semFile(w, { owner: OWNED_BY.team });
+  const { call } = setup(w);
+  assert.equal((await patchSem(call, file, { field: 'spot', value: 4 }, BOB)).statusCode, 200);
+  assert.equal(w.settings.get(file).sources.spot, 'manual');
+});
+
+test('PATCH /sem-settings/<file>: anyone else is 403 FORBIDDEN and nothing changes: another member, an administrator who is not the owner, a Former team member, an unowned file, a file that does not exist', async () => {
+  const w = newWorld();
+  const mine = semFile(w);
+  const team = semFile(w, { owner: OWNED_BY.team });
+  const unowned = semFile(w, { owner: OWNED_BY.nobody });
+  const { call } = setup(w);
+  const before = JSON.stringify([...w.settings]);
+  const body = { field: 'kv', value: 20 };
+  for (const [file, who, label] of [[mine, BOB, 'another member'], [mine, CAROL, 'a stranger'], [mine, ADMIN, 'an administrator who is not the owner'], [team, CAROL, 'outside the team'],
+    [team, { user: U.former }, 'a Former team member'], [team, ADMIN, 'an administrator, team file'], [unowned, ALICE, 'an unowned file, a member'], [unowned, ADMIN, 'an unowned file, an administrator'],
+    [ID(7998), ALICE, 'no such file']]) {
+    const res = await patchSem(call, file, body, who);
+    assert.equal(res.statusCode, 403, label);
+    assert.equal(codeOf(res), 'FORBIDDEN', label);
+    assert.equal(errorOf(res).extensions.source, 'd1-inbox');
+  }
+  assert.equal(JSON.stringify([...w.settings]), before);
+  assert.equal(w.log.some((l) => l.name === 'semCorrect'), false, 'the function was never called');
+});
+
+test('PATCH /sem-settings/<file>: an unknown field (read_by, sources, directus_files_id) or a value the function refuses is 400 INVALID_PAYLOAD and nothing changes; a missing row is 404', async () => {
+  const w = newWorld();
+  const file = semFile(w);
+  const bare = semFile(w, { settings: false });
+  const { call } = setup(w);
+  const before = JSON.stringify([...w.settings]);
+  for (const field of ['read_by', 'sources', 'flags', 'directus_files_id', 'corrected_by', 'nope']) {
+    const res = await patchSem(call, file, { field, value: 'x' }, ALICE);
+    assert.equal(res.statusCode, 400, field);
+    assert.equal(codeOf(res), 'INVALID_PAYLOAD', field);
+    assert.equal(errorOf(res).extensions.field, 'field', field);
+  }
+  for (const [field, value] of [['kv', 99], ['kv', 'ten'], ['kv', null], ['magnification', 2], ['spot', 0], ['detector', ''], ['acquired_at', 'not a time']]) {
+    const res = await patchSem(call, file, { field, value }, ALICE);
+    assert.equal(res.statusCode, 400, `${field}=${value}`);
+    assert.equal(errorOf(res).extensions.field, 'value', field);
+  }
+  assert.equal(JSON.stringify([...w.settings]), before, 'a refused correction changes nothing');
+  const gone = await patchSem(call, bare, { field: 'kv', value: 10 }, ALICE);
+  assert.equal(gone.statusCode, 404);
+  assert.equal(codeOf(gone), 'NOT_FOUND');
+});
+
+test('PATCH /sem-settings/<file>: the body is { field, value } and nothing else; a bad file id is 400; a Lab Viewer is READ_ONLY_ROLE', async () => {
+  const w = newWorld();
+  const file = semFile(w, { owner: { owner_person_id: P.viewer, owner_team_id: null } });
+  const { call } = setup(w);
+  for (const body of [undefined, null, [], {}, { value: 1 }, { field: 'kv' }, { field: 7, value: 1 }, { field: 'kv', value: 1, extra: true }, { field: 'kv', value: undefined }]) {
+    const res = await patchSem(call, semFile(w), body, ALICE);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+  }
+  assert.equal((await patchSem(call, 'not-a-uuid', { field: 'kv', value: 1 }, ALICE)).statusCode, 400);
+  const viewer = await patchSem(call, file, { field: 'kv', value: 10 }, { user: U.viewer, role: LAB_VIEWER_ROLE_ID });
+  assert.equal(viewer.statusCode, 403);
+  assert.equal(codeOf(viewer), 'READ_ONLY_ROLE');
+  assert.equal(w.log.some((l) => l.name === 'semCorrect'), false);
+});
+
+// Administrators are read-only on other people's files: the write rule is canChange, never canSee.
+const adminCall = (call, key, body) => call(key, { ...ADMIN, body });
+
+test('test_admin_cannot_link_others_files: POST /link by an administrator who is not the owner or a member of the owner team is 403 FORBIDDEN, nothing is written', async () => {
+  const w = newWorld();
+  const person = add(w, cand());
+  const team = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const scan = add(w, cand({ kind: 'surface_scan', matches: [], suggested_collection: null, suggested_record_id: null, match_strength: 'none' }));
+  const { call } = setup(w);
+  for (const [c, item] of [[person, link(person)], [team, link(team)], [scan, { candidate_id: scan.candidate_id, collection: 'surface_scans', insert_id: INS1, condition: 'worn' }]]) {
+    const res = await adminCall(call, 'POST /link', { items: [item] });
+    assert.equal(res.statusCode, 403, JSON.stringify(res.body));
+    assert.equal(codeOf(res), 'FORBIDDEN');
+    assert.equal(errorOf(res).extensions.candidate_id, c.candidate_id);
+    assert.match(errorOf(res).message, /administrator/i);
+    assert.equal(c.state, 'new');
+  }
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(w.scans.length, 0);
+  assert.equal(w.settings.size, 0);
+  assert.equal(savesOf(w).length, 0);
+  // one file of someone else in a batch refuses the whole batch
+  const own = add(w, cand({ owner_person_id: P.admin }));
+  const mixed = await adminCall(call, 'POST /link', { items: [link(own, 'physical_samples', S1), link(person)] });
+  assert.equal(mixed.statusCode, 403);
+  assert.equal(own.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  // their own file, and a file of a team they belong to, link as before
+  assert.equal((await adminCall(call, 'POST /link', { items: [link(own)] })).statusCode, 200);
+  w.teamMembers.push({ team_id: TEAM, person_id: P.admin });
+  assert.equal((await adminCall(call, 'POST /link', { items: [link(team)] })).statusCode, 200);
+});
+
+test('POST /accept-all by an administrator for someone else\'s files is 403 FORBIDDEN (a run and a preview), by candidate_ids and by a person filter; the administrator\'s own files still link', async () => {
+  const w = newWorld();
+  const theirs = add(w, candFor('physical_samples', S1));
+  const mine = add(w, candFor('physical_samples', S1, { owner_person_id: P.admin }));
+  w.acceptIds = [theirs.candidate_id];
+  const { call } = setup(w);
+  for (const body of [
+    { candidate_ids: [theirs.candidate_id] }, { candidate_ids: [theirs.candidate_id], dry_run: true },
+    { filter: { tab: 'new', owner: `person:${P.alice}` } }, { filter: { tab: 'new', owner: `person:${P.alice}` }, dry_run: true },
+  ]) {
+    const res = await adminCall(call, 'POST /accept-all', body);
+    assert.equal(res.statusCode, 403, JSON.stringify(body));
+    assert.equal(codeOf(res), 'FORBIDDEN');
+  }
+  assert.equal(theirs.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(savesOf(w).length, 0);
+  w.acceptIds = [mine.candidate_id];
+  const ok = await adminCall(call, 'POST /accept-all', { filter: { tab: 'new' } });
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.data.linked, 1);
+});
+
+test('POST /dismiss, /restore and /undo by an administrator for someone else\'s files are 403 FORBIDDEN and change nothing', async () => {
+  const w = newWorld();
+  const fresh = add(w, cand());
+  const dismissed = add(w, cand({ state: 'dismissed' }));
+  const linkedByAlice = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(linkedByAlice)] } })).body.data.link_batch_id;
+  const dismiss = await adminCall(call, 'POST /dismiss', { candidate_ids: [fresh.candidate_id] });
+  assert.equal(dismiss.statusCode, 403);
+  assert.equal(codeOf(dismiss), 'FORBIDDEN');
+  assert.equal(fresh.state, 'new');
+  const restore = await adminCall(call, 'POST /restore', { candidate_ids: [dismissed.candidate_id] });
+  assert.equal(restore.statusCode, 403);
+  assert.equal(dismissed.state, 'dismissed');
+  const undo = await adminCall(call, 'POST /undo', { link_batch_id: batch });
+  assert.equal(undo.statusCode, 403);
+  assert.equal(codeOf(undo), 'FORBIDDEN');
+  assert.equal(linkedByAlice.state, 'linked');
+  assert.equal(w.junctions.sample_data_files.length, 1);
+  assert.equal(w.settings.size, 1, 'the settings stay');
+  // their own files
+  const own = add(w, cand({ owner_person_id: P.admin }));
+  assert.equal((await adminCall(call, 'POST /dismiss', { candidate_ids: [own.candidate_id] })).statusCode, 200);
+  assert.equal((await adminCall(call, 'POST /restore', { candidate_ids: [own.candidate_id] })).statusCode, 200);
+  // the owner and the linker may still undo
+  assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } })).statusCode, 200);
+});
+
+test('administrators keep reading: the list shows another person\'s files (and the acceptable count leaves them out), the summary and the admin page work', async () => {
+  const w = newWorld();
+  const theirs = add(w, candFor('physical_samples', S1));
+  w.listRows = [{ ...theirs, name: 'x.tif', mime_type: 'image/tiff', owner_name: 'Alice A', decided_by_name: null }];
+  w.listTotal = 1;
+  w.acceptIds = [theirs.candidate_id];
+  const { call } = setup(w);
+  const list = await call('GET /files', { ...ADMIN, query: { owner: `person:${P.alice}`, acceptable: '1' } });
+  assert.equal(list.statusCode, 200, JSON.stringify(list.body));
+  assert.equal(list.body.data.length, 1);
+  assert.equal(list.body.meta.acceptable, 0, 'accept all would not link a file the administrator may not change');
+  assert.equal((await call('GET /summary', ADMIN)).statusCode, 200);
+  assert.equal((await call('GET /admin', ADMIN)).statusCode, 200);
+});
+
+test('the crawler\'s auto-link is unaffected: it acts for the owner, never for an administrator', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: P.admin, extracted: SEM_EXTRACTED }));
+  w.prefs.set(U.admin, true);
+  const res = await auto(w, [c.candidate_id]);
+  assert.equal(res.body.data.results[0].status, 'linked', JSON.stringify(res.body));
+  assert.equal(savesOf(w).length, 1);
+  const theirs = add(w, cand({ extracted: SEM_EXTRACTED }));
+  w.prefs.set(U.alice, true);
+  assert.equal((await auto(w, [theirs.candidate_id])).body.data.results[0].status, 'linked');
+});
+
+test('ERRORS.adminReadOnly and the new SQL: the words, and the statements stay inside d1_private, directus_files and the link tables', () => {
+  const err = ERRORS.adminReadOnly(ID(1001));
+  assert.equal(err.status, 403);
+  assert.equal(err.code, 'FORBIDDEN');
+  assert.equal(err.extra.candidate_id, ID(1001));
+  assert.match(SQL.semFile, /FROM directus_files WHERE id = \?/);
+  assert.match(SQL.semSettingsGet, /FROM d1_private\.sem_image_settings WHERE directus_files_id = \?/);
+  assert.match(SQL.semAccessLogInsert, /^INSERT INTO d1_private\.sem_settings_access_log \(directus_files_id, read_by_user, reason\) VALUES \(\?, \?, \?\)/);
 });
 
 // ---- rescan ----------------------------------------------------------------------------------------------------------------
@@ -2876,7 +3308,7 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
     'GET /admin', 'GET /files', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss',
-    'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
+    'GET /sem-settings', 'POST /link', 'PATCH /sem-settings/:file', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });
 
