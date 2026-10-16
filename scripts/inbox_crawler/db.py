@@ -715,7 +715,11 @@ class Store:
         """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
-        previous run's) are left alone, and an existing candidate for the file is left alone.
+        previous run's) are left alone (a pointer row without a stamp only gains the owner's, see
+        stamp_owner), and an existing candidate for the file is left alone.
+
+        A new pointer row is stamped with the owner of the scan (ADR-0022): the person_id or team_id of the
+        Owner, never derived from the path again.
         """
         fid = str(file_id(rel))
         rel_dir, _, name = rel.rpartition("/")
@@ -734,10 +738,11 @@ class Store:
                 "indexed_on": now.isoformat(),
                 "found_by": "inbox_crawler",
             }
-            self._run(
+            inserted = self._run(
                 "INSERT INTO directus_files (id, storage, filename_disk, filename_download, title, type, "
-                " folder, filesize, metadata, created_on, modified_on, uploaded_on) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                " folder, filesize, metadata, created_on, modified_on, uploaded_on, "
+                " owner_person_id, owner_team_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
                 (
                     fid,
                     self.storage,
@@ -751,8 +756,14 @@ class Store:
                     mtime,
                     mtime,
                     now,
+                    owner.person_id,
+                    owner.team_id,
                 ),
             )
+            if not inserted:
+                # The indexer's (or an older crawler's) pointer row: it takes the owner's stamp now, unless it
+                # is linked or already stamped (see stamp_owner).
+                self.stamp_owner(fid, owner)
             duplicate_of = None
             if hashed is not None:
                 self.upsert_fingerprint(fid, hashed, size, mtime)
@@ -799,6 +810,25 @@ class Store:
             )
             return RegisterResult(existing[0] if existing else None, False)
         return RegisterResult(row[0], True, duplicate_of)
+
+    def stamp_owners(self, files_ids: list[str], owner: Owner) -> int:
+        """Stamp the owner on these existing pointer rows (ADR-0022) and return how many changed. A row is
+        stamped only while BOTH owner columns are null and the file is not linked (`already_linked`: a linked
+        file stays unowned, like migration 196's back-fill), so a stamp is never overwritten, not by another
+        owner and not by the same one."""
+        todo = sorted(set(files_ids) - self.already_linked(files_ids))
+        if not todo:
+            return 0
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        return self._run(
+            "UPDATE directus_files SET " + col + " = %s WHERE id = ANY(%s::uuid[]) "
+            "AND owner_person_id IS NULL AND owner_team_id IS NULL",
+            (owner.id, todo),
+        )
+
+    def stamp_owner(self, files_id: str, owner: Owner) -> bool:
+        """`stamp_owners` for one file: True when this call set the stamp."""
+        return self.stamp_owners([files_id], owner) > 0
 
     def copies_of(self, original: Cand, owner: Owner) -> list:
         """The owner's undecided candidates recorded as copies of `original` (same content hash, found
