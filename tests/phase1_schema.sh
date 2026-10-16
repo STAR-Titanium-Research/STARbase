@@ -1665,8 +1665,9 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
 # The readers tables of migration 166 (sample_readers, operation_readers, test_readers, campaign_readers, project_readers,
 # campaign_sample_readers, operation_open_to_all) are derived caches written only by the recompute triggers: not audited either.
+# file_readers (migration 196) is the readers table of directus_files, derived and written only by its triggers: not audited either.
 # team_events (migration 181) is the history of a team, written only by the team triggers and the sharing code: it is a log, so not audited either.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','team_events','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','team_events','file_readers','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -3443,8 +3444,7 @@ SELECT 'reference_filtered:' || count(*) FROM directus_permissions
    AND NOT (collection = 'people' AND action = 'update')  -- migration 169: a member updates only their own People row
    AND collection IN ('materials','material_iso_classifications','alloying_elements','material_alloying_elements',
                       'equipment','tools','tool_boxes','cutting_inserts','insert_edges','insert_types',
-                      'raw_stock_lots','manufacturing_methods','people','facilities','fast_recipes',
-                      'directus_files');
+                      'raw_stock_lots','manufacturing_methods','people','facilities','fast_recipes');
 SELECT 'ref_in_rules:' || count(*) FROM _gen WHERE ruled AND collection IN ('materials','equipment','raw_stock_lots');
 SELECT 'audit_logs_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection = 'audit_logs';
 SELECT 'people_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy = '$LM' AND collection = 'people';
@@ -3464,6 +3464,17 @@ SELECT 'people_create_columns_left_out:' || coalesce(string_agg(c.column_name, '
  WHERE c.table_schema = 'public' AND c.table_name = 'people'
    AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
         WHERE policy = '$LM' AND collection = 'people' AND action = 'create'), ','));
+-- directus_files.create and .update list their fields too (migration 196, ADR-0022): a member may not set or change the provenance owner columns.
+SELECT 'files_create_columns_left_out:' || coalesce(string_agg(c.column_name, ',' ORDER BY c.column_name), '')
+  FROM information_schema.columns c
+ WHERE c.table_schema = 'public' AND c.table_name = 'directus_files'
+   AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
+        WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'create'), ','));
+SELECT 'files_update_columns_left_out:' || coalesce(string_agg(c.column_name, ',' ORDER BY c.column_name), '')
+  FROM information_schema.columns c
+ WHERE c.table_schema = 'public' AND c.table_name = 'directus_files'
+   AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
+        WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'update'), ','));
 -- read visibility is the readers tables: one membership test per record type, the amnesty leaf for operations, one bare hop for children
 SELECT 'read_membership:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND action = 'read' AND collection IN ('physical_samples','test_sessions','campaigns','projects','campaign_samples')
@@ -3513,7 +3524,7 @@ rl_check "access_tables_read:5" "Lab Member reads the five access tables for the
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
 rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only (the person owner, or a manager of the owning team)"
-rl_check "reference_filtered:0" "reference data, people (but its own-row update) and directus_files stay unfiltered"
+rl_check "reference_filtered:0" "reference data and people (but its own-row update) stay unfiltered (directus_files is filtered since migration 196, ADR-0022; checked in its own section)"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
 rl_check "people_update_own_row:1" "Lab Member updates only their own People row (migration 169: people.user_id = \$CURRENT_USER); create and read stay open"
@@ -3522,6 +3533,8 @@ rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,scan_while_former,uni_alias,user_id" "people.update leaves out exactly the key, the login, the legacy id, the timestamp and the inbox alias columns (migration 193: administrators only)"
 rl_check "people_create_columns_left_out:scan_while_former,uni_alias" "people.create leaves out exactly the inbox alias columns (migration 194: a member cannot squat a uni alias or switch on scan_while_former; administrators only)"
+rl_check "files_create_columns_left_out:owner_person_id,owner_team_id" "directus_files.create leaves out exactly the two provenance owner columns (migration 196: only an administrator stamps or changes an owner)"
+rl_check "files_update_columns_left_out:owner_person_id,owner_team_id" "directus_files.update leaves out exactly the two provenance owner columns (migration 196)"
 rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
 rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
@@ -6949,6 +6962,241 @@ ss_check "file_delete_keeps_others:3" "deleting a file with no scan changes no s
 ss_check "edge_delete_cascades:0" "deleting an edge deletes its scans"
 ss_check "file_delete_cascades:0" "deleting a file deletes its scans"
 ss_check "redown_table:gone" "down runs again after up"
+
+echo "== File provenance owner on directus_files (migration 196, ADR-0022) =="
+# ADR-0022 / spec docs/superpowers/specs/2026-10-16-sem-data-bar-reader-design.md section 3 and 4. Every check runs in a rolled-back
+# transaction (ids prefix a3000000-0000-4000-8000-). The CI database has the stub directus_files (id, filename_download, type) and
+# directus_users (id only), so fixtures set just those. CI has no Directus, so the read filter is checked as stored JSON and its
+# readers table by the SQL the filter stands for ("owners both null, or a reader row for the caller").
+FO_MIG=$(ls db/migrations/*_file_provenance_owner.sql 2>/dev/null | head -1)
+[[ -n "$FO_MIG" && -f "$FO_MIG" ]] && ok "found the file provenance owner migration (${FO_MIG:-none})" || bad "the file provenance owner migration is missing (db/migrations/*_file_provenance_owner.sql)"
+FO_P1='a3000000-0000-4000-8000-0000000000a1'
+FO_P2='a3000000-0000-4000-8000-0000000000a2'
+FO_P3='a3000000-0000-4000-8000-0000000000a3'
+FO_T1='a3000000-0000-4000-8000-0000000000b1'
+FO_T2='a3000000-0000-4000-8000-0000000000b2'
+FO_U1='a3000000-0000-4000-8000-0000000000d1'
+FO_U2='a3000000-0000-4000-8000-0000000000d2'
+FO_U3='a3000000-0000-4000-8000-0000000000d3'
+FO_F1='a3000000-0000-4000-8000-0000000000c1'
+FO_F2='a3000000-0000-4000-8000-0000000000c2'
+FO_F3='a3000000-0000-4000-8000-0000000000c3'
+FO_F4='a3000000-0000-4000-8000-0000000000c4'
+FO_F5='a3000000-0000-4000-8000-0000000000c5'
+FO_F6='a3000000-0000-4000-8000-0000000000c6'
+fo_fixture="
+INSERT INTO directus_users (id) VALUES ('$FO_U1'), ('$FO_U2'), ('$FO_U3');
+INSERT INTO people (person_id, full_name, user_id) VALUES ('$FO_P1', 'Owner Test One', '$FO_U1'), ('$FO_P2', 'Owner Test Two', '$FO_U2'), ('$FO_P3', 'Owner Test Three', NULL);
+INSERT INTO teams (team_id, name) VALUES ('$FO_T1', 'Owner Test Team'), ('$FO_T2', 'Owner Test Team Two');
+INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('$FO_T1', '$FO_P2', true), ('$FO_T1', '$FO_P3', false), ('$FO_T2', '$FO_P1', true);"
+fo_sql() { # fo_sql <statements>: run them after the fixture people, teams and users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$fo_fixture
+$1
+ROLLBACK;
+SQL
+}
+fo_users() { # fo_users <file id>: the users the readers table lists for a file, as a sorted list of u1/u2/u3 (empty: none)
+    printf "SELECT '%s:' || coalesce(string_agg(CASE user_id WHEN '%s' THEN 'u1' WHEN '%s' THEN 'u2' WHEN '%s' THEN 'u3' END, ',' ORDER BY user_id), '') FROM file_readers WHERE directus_files_id = '%s';\n" "$2" "$FO_U1" "$FO_U2" "$FO_U3" "$1"
+}
+fo_sees() { # fo_sees <label> <user id>: the fixture files the Directus read filter lets that user read (owners both null, or a reader row)
+    printf "SELECT '%s:' || coalesce(string_agg(right(f.id::text, 2), ',' ORDER BY f.id), '') FROM directus_files f WHERE f.id::text LIKE 'a3000000-%%' AND ((f.owner_person_id IS NULL AND f.owner_team_id IS NULL) OR EXISTS (SELECT 1 FROM file_readers r WHERE r.directus_files_id = f.id AND r.user_id = '%s'));\n" "$1" "$2"
+}
+# the columns
+run_eq "directus_files.owner_person_id and owner_team_id are nullable uuid columns" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name IN ('owner_person_id', 'owner_team_id')" \
+    "owner_person_id:uuid:YES,owner_team_id:uuid:YES"
+run_eq "the owner columns are foreign keys to people and teams, ON DELETE RESTRICT (deleting an owner must not silently open their files)" \
+    "SELECT string_agg(a.attname || '>' || c.confrelid::regclass::text || ':' || c.confdeltype::text, ',' ORDER BY a.attname) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] WHERE c.conrelid = 'public.directus_files'::regclass AND c.contype = 'f' AND a.attname IN ('owner_person_id', 'owner_team_id')" \
+    "owner_person_id>people:r,owner_team_id>teams:r"
+run_eq "each owner column has a partial index WHERE it IS NOT NULL" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'directus_files' AND indexname IN ('idx_directus_files_owner_person_id', 'idx_directus_files_owner_team_id') AND indexdef LIKE '%WHERE (owner_%_id IS NOT NULL)'" \
+    "idx_directus_files_owner_person_id,idx_directus_files_owner_team_id"
+run_eq "both owner columns carry a COMMENT" \
+    "SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.directus_files'::regclass AND a.attname IN ('owner_person_id', 'owner_team_id') AND col_description(a.attrelid, a.attnum) IS NOT NULL" "2"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id, owner_team_id) VALUES ('$FO_F1', '$FO_P1', '$FO_T1');")
+grep -q 'directus_files_one_owner_check' <<<"$fo_out" && ok "a file with both a person and a team owner is refused (CHECK num_nonnulls <= 1)" || bad "both owners were not refused (output: $fo_out)"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
+INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
+INSERT INTO directus_files (id) VALUES ('$FO_F3');
+SELECT 'fo_one:' || count(*) FROM directus_files WHERE id IN ('$FO_F1', '$FO_F2', '$FO_F3');")
+grep -q 'fo_one:3' <<<"$fo_out" && ok "a person owner, a team owner and no owner are all accepted" || bad "valid owners were refused (output: $fo_out)"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
+UPDATE directus_files SET owner_team_id = '$FO_T1' WHERE id = '$FO_F1';")
+grep -q 'directus_files_one_owner_check' <<<"$fo_out" && ok "setting a team owner on a person-owned file is refused (the owner is changed, not added)" || bad "a second owner was not refused (output: $fo_out)"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
+DELETE FROM people WHERE person_id = '$FO_P1';")
+grep -q 'violates foreign key constraint' <<<"$fo_out" && ok "deleting a person who owns a file is refused (RESTRICT: deactivate instead)" || bad "deleting an owning person was not refused (output: $fo_out)"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
+DELETE FROM teams WHERE team_id = '$FO_T1';")
+grep -q 'violates foreign key constraint' <<<"$fo_out" && ok "deleting a team that owns a file is refused" || bad "deleting an owning team was not refused (output: $fo_out)"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
+UPDATE directus_files SET owner_person_id = NULL WHERE id = '$FO_F1';
+DELETE FROM people WHERE person_id = '$FO_P1';
+SELECT 'fo_deleted:' || count(*) FROM people WHERE person_id = '$FO_P1';")
+grep -q 'fo_deleted:0' <<<"$fo_out" && ok "a person whose files are no longer owned by them can be deleted" || bad "deleting a person with no owned file failed (output: $fo_out)"
+
+# the back-fill statement (D10): stamp unlinked found files from the candidate's owner, never overwrite, never touch a linked file
+fo_backfill=$(awk '/^-- backfill:begin/{f=1;next}/^-- backfill:end/{f=0}f' "${FO_MIG:-/dev/null}")
+[[ -n "$fo_backfill" ]] && ok "the migration marks its back-fill statement (-- backfill:begin / -- backfill:end)" || bad "the migration has no marked back-fill statement"
+FO_CJ='a3000000-0000-4000-8000-0000000000e1'
+fo_out=$(fo_sql "INSERT INTO directus_files (id) VALUES ('$FO_F1'), ('$FO_F2'), ('$FO_F3'), ('$FO_F4'), ('$FO_F5');
+INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F6', '$FO_P3');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, rel_path, link_kind, linked_collection, linked_junction_id, link_batch_id) VALUES
+  ('$FO_F1', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/1.png', NULL, NULL, NULL, NULL),
+  ('$FO_F2', NULL, '$FO_T1', 'image', 'new', 'dismissed', 'Shared/t/2.png', NULL, NULL, NULL, NULL),
+  ('$FO_F3', '$FO_P2', NULL, 'image', 'new', 'gone', 'Users/b/3.png', NULL, NULL, NULL, NULL),
+  ('$FO_F4', '$FO_P1', NULL, 'image', 'new', 'linked', 'Users/a/4.png', 'manual', 'physical_samples', '$FO_CJ', '$FO_CJ'),
+  ('$FO_F6', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/6.png', NULL, NULL, NULL, NULL);
+$fo_backfill
+SELECT 'fo_bf:' || right(f.id::text, 2) || ':' || coalesce(right(f.owner_person_id::text, 2), '-') || ':' || coalesce(right(f.owner_team_id::text, 2), '-')
+  FROM directus_files f WHERE f.id::text LIKE 'a3000000-%' ORDER BY f.id;
+$fo_backfill
+SELECT 'fo_bf_again:' || count(*) FROM directus_files WHERE id::text LIKE 'a3000000-%' AND (owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL);")
+grep -qx 'fo_bf:c1:a1:-' <<<"$fo_out" && ok "back-fill: a new candidate's file is stamped with the candidate's person owner" || bad "back-fill: state new not stamped (output: $fo_out)"
+grep -qx 'fo_bf:c2:-:b1' <<<"$fo_out" && ok "back-fill: a dismissed candidate's file is stamped with the candidate's team owner" || bad "back-fill: state dismissed not stamped (output: $fo_out)"
+grep -qx 'fo_bf:c3:a2:-' <<<"$fo_out" && ok "back-fill: a gone candidate's file is stamped" || bad "back-fill: state gone not stamped (output: $fo_out)"
+grep -qx 'fo_bf:c4:-:-' <<<"$fo_out" && ok "back-fill: a linked candidate's file stays unowned (D10: nobody loses access they have)" || bad "back-fill: a linked file was stamped (output: $fo_out)"
+grep -qx 'fo_bf:c5:-:-' <<<"$fo_out" && ok "back-fill: a file with no candidate stays unowned" || bad "back-fill: a file without a candidate was stamped (output: $fo_out)"
+grep -qx 'fo_bf:c6:a3:-' <<<"$fo_out" && ok "back-fill: an existing stamp is never overwritten" || bad "back-fill: an existing owner was overwritten (output: $fo_out)"
+grep -qx 'fo_bf_again:4' <<<"$fo_out" && ok "back-fill: running it twice changes nothing more" || bad "back-fill is not idempotent (output: $fo_out)"
+
+# up, down, up inside one transaction: the stamp from the back-fill, the objects gone after down, the permission rows restored exactly
+if [[ -n "$FO_MIG" && -f "$FO_MIG" ]]; then
+fo_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FO_MIG")
+fo_down=$(awk '/-- migrate:down/{f=1;next}f' "$FO_MIG")
+fo_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+CREATE TEMP TABLE _fo_before AS SELECT policy, action, permissions::text AS p, validation::text AS v, fields FROM directus_permissions WHERE collection IN ('directus_files', 'file_readers');
+$fo_down
+SELECT 'fo_down_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name LIKE 'owner%';
+SELECT 'fo_down_objects:' || (to_regclass('public.file_readers') IS NULL) || ',' || (to_regclass('d1_private.directus_files_rules_backup') IS NULL) || ',' || (to_regprocedure('d1_private.file_readers_refresh(uuid,uuid,uuid)') IS NULL);
+SELECT 'fo_down_meta:' || (SELECT count(*) FROM directus_collections WHERE collection = 'file_readers') || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection = 'file_readers') || ',' || (SELECT count(*) FROM directus_fields WHERE collection = 'directus_files' AND field = 'readers');
+SELECT 'fo_down_perms_restored:' || count(*) FROM _fo_before b WHERE EXISTS (SELECT 1 FROM directus_permissions p WHERE p.policy = b.policy AND p.collection = 'directus_files' AND p.action = b.action AND p.permissions::text IS NOT DISTINCT FROM b.p AND p.validation::text IS NOT DISTINCT FROM b.v AND p.fields IS NOT DISTINCT FROM b.fields) AND b.policy IS NOT NULL;
+SELECT 'fo_down_perms_extra:' || count(*) FROM directus_permissions p WHERE p.collection IN ('directus_files', 'file_readers') AND NOT EXISTS (SELECT 1 FROM _fo_before b WHERE b.policy = p.policy AND b.action = p.action);
+$fo_fixture
+INSERT INTO directus_files (id) VALUES ('$FO_F1'), ('$FO_F2');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, rel_path) VALUES
+  ('$FO_F1', '$FO_P1', NULL, 'image', 'new', 'new', 'Users/a/1.png'),
+  ('$FO_F2', NULL, '$FO_T1', 'image', 'new', 'new', 'Shared/t/2.png');
+$fo_up
+SELECT 'fo_up_stamped:' || (SELECT right(owner_person_id::text, 2) FROM directus_files WHERE id = '$FO_F1') || ',' || (SELECT right(owner_team_id::text, 2) FROM directus_files WHERE id = '$FO_F2');
+$(fo_users "$FO_F1" fo_up_readers_f1)
+$(fo_users "$FO_F2" fo_up_readers_f2)
+SELECT 'fo_up_drift:' || d1_private.file_readers_drift_count();
+SELECT 'fo_up_perms:' || count(*) FROM directus_permissions WHERE collection = 'directus_files' AND policy IN ('20000002-0000-0000-0000-000000000002', '20000002-0000-0000-0000-000000000003') AND permissions::jsonb <> '{}'::jsonb;
+$fo_down
+SELECT 'fo_redown_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name LIKE 'owner%';
+ROLLBACK;
+SQL
+)
+fo_check() { grep -qx "$1" <<<"$fo_out" && ok "$2" || bad "$2 (psql output: $fo_out)"; }
+fo_check "fo_down_columns:0" "down: the owner columns are gone"
+fo_check "fo_down_objects:true,true,true" "down: the readers table, the rules backup and the refresh function are gone"
+fo_check "fo_down_meta:0,0,0" "down: the readers collection, relations and the hidden alias field are gone"
+fo_check "fo_down_perms_extra:0" "down: no permission row remains that was not there before the migration"
+fo_nrows=$(grep -o '^fo_down_perms_restored:[0-9]*' <<<"$fo_out" | cut -d: -f2)
+[[ "${fo_nrows:-0}" -ge 4 ]] && ok "down: the directus_files permission rows hold exactly their old filters, validation and fields (${fo_nrows} rows)" || bad "down did not restore the old permission rows (psql output: $fo_out)"
+fo_check "fo_up_stamped:a1,b1" "up: a found file is stamped from its candidate's person or team owner"
+fo_check "fo_up_readers_f1:u1" "up: a person-owned file's readers are that person's login"
+fo_check "fo_up_readers_f2:u2" "up: a team-owned file's readers are the logins of the team's members (the member without a login adds none)"
+fo_check "fo_up_drift:0" "up: the readers table has no drift from the owner columns"
+fo_check "fo_up_perms:2" "up: the Lab Member read row and the Lab Viewer read row carry the owner filter"
+fo_check "fo_redown_columns:0" "down runs again after up"
+fi
+
+# the readers table (ADR-0014 pattern; Directus filters through a top-level to-many alias, never through a team's members)
+run_eq "file_readers has a COMMENT on the table and every column" \
+    "SELECT (obj_description('public.file_readers'::regclass, 'pg_class') IS NOT NULL) || ',' || count(*) FILTER (WHERE col_description(a.attrelid, a.attnum) IS NULL) FROM pg_attribute a WHERE a.attrelid = 'public.file_readers'::regclass AND a.attnum > 0 AND NOT a.attisdropped" "true,0"
+run_eq "file_readers is unique per file and user, and cascades from files and users" \
+    "SELECT string_agg(conname || ':' || contype || CASE WHEN contype = 'f' THEN confdeltype::text ELSE '' END, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'public.file_readers'::regclass" \
+    "file_readers_directus_files_id_fkey:fc,file_readers_directus_files_id_user_id_key:u,file_readers_pkey:p,file_readers_user_id_fkey:fc"
+run_eq "file_readers has an index on user_id (the filter's lookup)" \
+    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'file_readers' AND indexdef LIKE '%(user_id)%'" "1"
+run_eq "the readers table is hidden in Directus, with the relation to files (alias readers) and to users (no alias)" \
+    "SELECT (SELECT hidden::text FROM directus_collections WHERE collection = 'file_readers') || '/' || (SELECT string_agg(many_field || '>' || one_collection || coalesce('.' || one_field, ''), ',' ORDER BY many_field) FROM directus_relations WHERE many_collection = 'file_readers') || '/' || (SELECT special::text || ':' || hidden::text FROM directus_fields WHERE collection = 'directus_files' AND field = 'readers')" \
+    "true/directus_files_id>directus_files.readers,user_id>directus_users/{o2m}:true"
+run_eq "the text-to-SQL role is not granted the readers table (migration 168 rule)" \
+    "SELECT has_table_privilege('d1_llm_readonly', 'public.file_readers', 'SELECT')" "f"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
+INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
+INSERT INTO directus_files (id) VALUES ('$FO_F3');
+INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F4', '$FO_P3');
+$(fo_users "$FO_F1" r_f1)
+$(fo_users "$FO_F2" r_f2)
+$(fo_users "$FO_F3" r_f3)
+$(fo_users "$FO_F4" r_f4)
+$(fo_sees see_u1 "$FO_U1")
+$(fo_sees see_u2 "$FO_U2")
+$(fo_sees see_u3 "$FO_U3")
+SELECT 'drift:' || d1_private.file_readers_drift_count();")
+fo_check() { grep -qx "$1" <<<"$fo_out" && ok "$2" || bad "$2 (psql output: $fo_out)"; }
+fo_check "r_f1:u1" "a person-owned file: its owner reads it"
+fo_check "r_f2:u2" "a team-owned file: the team's members with a login read it"
+fo_check "r_f3:" "an unowned file has no readers row (the filter's first leaf opens it)"
+fo_check "r_f4:" "a file owned by a person with no login has no reader (only an administrator reads it)"
+fo_check "see_u1:c1,c3" "the owner of c1 sees c1 and the unowned c3, not the team's c2 nor c4"
+fo_check "see_u2:c2,c3" "a team member sees the team's c2 and the unowned c3, not another person's c1"
+fo_check "see_u3:c3" "a login that owns nothing and is in no team sees only the unowned file"
+fo_check "drift:0" "the readers table matches the owner columns after the inserts"
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
+INSERT INTO team_members (team_id, person_id) VALUES ('$FO_T1', '$FO_P1');
+$(fo_users "$FO_F2" joined)
+UPDATE people SET user_id = '$FO_U3' WHERE person_id = '$FO_P3';
+$(fo_users "$FO_F2" login_added)
+DELETE FROM team_members WHERE team_id = '$FO_T1' AND person_id = '$FO_P2';
+$(fo_users "$FO_F2" left)
+UPDATE people SET user_id = NULL WHERE person_id = '$FO_P1';
+$(fo_users "$FO_F2" login_removed)
+SELECT 'drift:' || d1_private.file_readers_drift_count();")
+fo_check "joined:u1,u2" "a person who joins the owning team reads the team's files at once"
+fo_check "login_added:u1,u2,u3" "a member who is given a login reads the team's files"
+fo_check "left:u1,u3" "a person who leaves the owning team stops reading its files at once"
+fo_check "login_removed:u3" "a person whose login is removed stops reading"
+fo_check "drift:0" "the readers table has no drift after membership and login changes"
+fo_out=$(fo_sql "INSERT INTO directus_files (id) VALUES ('$FO_F1');
+UPDATE directus_files SET owner_person_id = '$FO_P1' WHERE id = '$FO_F1';
+$(fo_users "$FO_F1" stamped)
+UPDATE directus_files SET owner_person_id = NULL, owner_team_id = '$FO_T1' WHERE id = '$FO_F1';
+$(fo_users "$FO_F1" handed_to_team)
+UPDATE directus_files SET owner_team_id = NULL WHERE id = '$FO_F1';
+$(fo_users "$FO_F1" cleared)
+UPDATE directus_files SET owner_person_id = '$FO_P1' WHERE id = '$FO_F1';
+DELETE FROM directus_files WHERE id = '$FO_F1';
+SELECT 'cascade:' || count(*) FROM file_readers WHERE directus_files_id = '$FO_F1';
+INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F2', '$FO_P1');
+DELETE FROM directus_users WHERE id = '$FO_U1';
+SELECT 'user_deleted:' || count(*) FROM file_readers WHERE directus_files_id = '$FO_F2';
+SELECT 'drift:' || d1_private.file_readers_drift_count();")
+fo_check "stamped:u1" "stamping an unowned file gives its owner a readers row"
+fo_check "handed_to_team:u2" "changing the owner from a person to a team replaces the readers (the old owner stops reading)"
+fo_check "cleared:" "clearing the owner removes every readers row (the file is open again)"
+fo_check "cascade:0" "deleting a file deletes its readers rows"
+fo_check "user_deleted:0" "deleting a login deletes its readers rows"
+fo_check "drift:0" "the readers table has no drift after owner changes"
+run_eq "d1_private.file_readers_drift_count exists and the live database has no drift" \
+    "SELECT d1_private.file_readers_drift_count()" "0"
+# the stored Directus rules
+FO_READ='{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}'
+fo_out=$($PSQL 2>&1 <<SQL
+SELECT 'lm_read:' || (permissions::jsonb = '$FO_READ'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action = 'read';
+SELECT 'vw_read:' || (permissions::jsonb = '$FO_READ'::jsonb) FROM directus_permissions WHERE policy = '$VW' AND collection = 'directus_files' AND action = 'read';
+SELECT 'lm_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files';
+SELECT 'vw_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy = '$VW' AND collection = 'directus_files';
+SELECT 'readers_read:' || count(*) FROM directus_permissions WHERE policy IN ('$LM', '$VW') AND collection = 'file_readers' AND action = 'read'
+   AND permissions::jsonb = '{"user_id":{"_eq":"\$CURRENT_USER"}}'::jsonb AND fields = '*';
+SELECT 'readers_write:' || count(*) FROM directus_permissions WHERE policy IN ('$LM', '$VW') AND collection = 'file_readers' AND action <> 'read';
+SELECT 'update_delete_no_some:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection = 'directus_files' AND action IN ('update', 'delete') AND permissions::text LIKE '%_some%';
+SQL
+)
+fo_check "lm_read:true" "Lab Member reads a file when it has no owner or the caller is one of its readers"
+fo_check "vw_read:true" "Lab Viewer reads files under the same filter"
+fo_check "lm_actions:create,delete,read,update" "Lab Member still creates, reads, updates and deletes files"
+fo_check "vw_actions:read" "Lab Viewer only reads files"
+fo_check "readers_read:2" "Lab Member and Lab Viewer read the readers table for their own rows only (the legal _some applies its read rule)"
+fo_check "readers_write:0" "nobody but the triggers writes the readers table"
+fo_check "update_delete_no_some:0" "the files update and delete rows carry no _some"
 
 echo "== Cleanup test rows =="
 $PSQL -c "
