@@ -17,11 +17,13 @@
 // axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs` (and
 // `previewDelayMs` for the preview alone), `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
 // were open at once.
+// Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
 import type { FoundFile, LinkItem, ScanLinkItem } from './inboxApi';
 import { fakePictureBlob } from './fakePictures';
+import { createFakeIgnored, type FakeIgnoredOptions } from './fakeIgnored';
 
 let counter = 0;
 
@@ -74,7 +76,7 @@ export function exactMatch(over: Partial<FoundFile> = {}, token = '3fa9c1d2', la
 	});
 }
 
-export interface FakeInboxOptions {
+export interface FakeInboxOptions extends FakeIgnoredOptions {
 	files?: FoundFile[];
 	autoLink?: boolean;
 	summary?: Record<string, unknown>;
@@ -83,8 +85,6 @@ export interface FakeInboxOptions {
 	now?: () => number;
 	/** May the caller edit this record? Default: yes. A link to a record that fails is 403, and accept-all skips it (NOT_EDITABLE). */
 	editable?: (collection: string, recordId: string) => boolean;
-	/** The person has no folder: rescan answers 409 NO_FOLDER. */
-	noFolder?: boolean;
 	/** Accept-all takes `candidate_ids` and links exactly those (default true). */
 	acceptIds?: boolean;
 	/** A dry run lists the files it would link in `ids` (default true). */
@@ -352,7 +352,19 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		}
 	}
 
+	/** A rescan the way POST /rescan allows it: not within 10 minutes of the last one. The removal of an ignored folder asks for one this way. */
+	const queueRescan = () => {
+		const t = now();
+		if (lastRescan !== null && t - lastRescan < 10 * 60_000) return false;
+		lastRescan = t;
+		return true;
+	};
+	const ignored = createFakeIgnored({ opts, files, now, queueRescan, person: () => ({ kind: 'person', id: 'p1', name: 'Ann Lee' }) });
+	const IGNORED_ROUTE = /^\/d1-inbox\/ignored-folders\/([^/]+)$/;
+
 	const handlers: Record<string, (c: Call) => unknown> = {
+		'get /d1-inbox/ignored-folders': ignored.list,
+		'post /d1-inbox/ignored-folders': ignored.add,
 		'get /d1-inbox/summary': () => ok(summary()),
 		'get /d1-inbox/files': (c) => {
 			const p = c.params ?? {};
@@ -460,7 +472,8 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		calls.push(call);
 		// A picture is the image itself (not { data }), so it is not cloned through JSON.
 		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path).then((data) => ({ data }));
-		const h = handlers[`${method} ${path}`];
+		const rule = method === 'delete' ? IGNORED_ROUTE.exec(path) : null;
+		const h = rule ? () => ignored.remove(decodeURIComponent(rule[1])) : handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));
 		try {
 			// The answer is cloned, like an HTTP response: a page never holds the server's own rows.
@@ -478,5 +491,5 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		delete: (path, config) => run('delete', path, undefined, config),
 	};
 
-	return { api, files, calls, junctions, scans, pictureStats, setAutoLink: (v: boolean) => (autoLink = v) };
+	return { api, files, calls, junctions, scans, rules: ignored.rules, pictureStats, setAutoLink: (v: boolean) => (autoLink = v) };
 }

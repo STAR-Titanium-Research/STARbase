@@ -7,7 +7,7 @@ import { foundFile, sampleFiles, stubInbox, type InboxStub } from '../starbase/s
 
 // The Inbox (found files: spec 2026-10-15-found-files-inbox-design.md) in STARbase, in a real browser: the sidebar entry and its badge, Home's
 // panel, the /inbox page (rows with the reason, Link and Undo, Accept all with its confirm, the surface-scan row and its Add a surface scan
-// dialog (desktop and phone width), Other files, Rescan and its 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
+// dialog (desktop and phone width), Other files, Ignore this folder and the Ignored folders section, Rescan and its 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
 // (tests/ui/starbase/stubD1.ts for the shell, stubInbox.ts for d1-inbox, the same fake the vitest page tests use), so this needs only STARbase
 // served by `vite preview` (tests/ui/README.md), no Directus and no backend.
 // Run: cd tests/ui && npx playwright test specs/22-inbox.spec.ts   (INBOX_SHOTS=<dir> also saves screenshots there)
@@ -311,6 +311,114 @@ test('Add a surface scan works at phone width: the dialog fits the screen and Co
 	await confirm.click();
 	await expect(dialog).toBeHidden();
 	expect(inbox.scans).toHaveLength(1);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+const ignoreBadge = (page: Page) => page.locator('aside').getByRole('link', { name: /^Inbox/ }).locator('[data-test="nav-badge"] [aria-hidden]');
+const confirmLines = [
+	'The crawler will leave this folder and everything in it alone.',
+	'Any found files below it that are still in your Inbox (2 found files shown here) move to Dismissed. You can restore them.',
+	'Files already linked stay linked. Nothing on the share is changed.',
+];
+
+test('Ignore this folder: the confirm says what happens, the files below leave New and the badge follows, Dismissed holds them, and Remove rule takes the rule off', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox');
+	await expect(ignoreBadge(page)).toHaveText('5');
+	const first = row(page, '3fa9c1d2_A1.tif');
+	await first.locator('[data-test="ignore-folder"]').click();
+	const dialog = page.getByRole('dialog');
+	await expect(dialog.locator('[data-test="ignore-title"]')).toHaveText('Stop scanning sem?');
+	await expect(dialog.locator('[data-test="ignore-line"]')).toHaveText(confirmLines);
+	await shot(page, 'ignore-confirm');
+	// Cancel changes nothing
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toHaveCount(0);
+	expect(inbox.rules).toEqual([]);
+
+	await first.locator('[data-test="ignore-folder"]').click();
+	await dialog.getByRole('button', { name: 'Stop scanning' }).click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring sem. 2 found files moved to Dismissed.');
+	await expect(page.locator('[data-test="remove-rule"]')).toHaveText('Remove rule');
+	await expect.poll(() => names(page)).toEqual(['plain.tif', 'edge1.al3d']);
+	await expect(ignoreBadge(page)).toHaveText('3');
+	expect(inbox.rules.map((r) => r.folder)).toEqual(['sem']);
+	await expect(page.locator('[data-test="ignored-toggle"]')).toContainText('(1)');
+	await shot(page, 'ignore-notice');
+
+	// the files are in Dismissed, where Restore is
+	await page.locator('[data-test="tab-dismissed"]').click();
+	await expect.poll(() => names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif']);
+	await expect(row(page, '3fa9c1d2_A1.tif').getByRole('button', { name: 'Restore' })).toBeVisible();
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+
+	await page.locator('[data-test="remove-rule"]').click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Stopped ignoring sem. A rescan is queued');
+	expect(inbox.rules).toEqual([]);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Ignored folders: lists the rules, adds one by typing (checked first, the server\'s words for the rest) and removes one', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { ignoredRules: [{ folder: 'Archive/2024' }] });
+	const toggle = page.locator('[data-test="ignored-toggle"]');
+	await expect(toggle).toContainText('Show ignored folders (1)');
+	await toggle.click();
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['Archive/2024']);
+	// the folders of the rows on screen are the choices
+	await expect(page.locator('#ignored-choices option')).toHaveCount(3);
+	const input = page.locator('[data-test="ignored-input"]');
+	await input.fill('misc//x');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('The folder has an empty part (two slashes in a row).');
+	expect(inbox.calls.filter((c) => c.method === 'post' && c.path === '/d1-inbox/ignored-folders')).toHaveLength(0);
+	await input.fill('Users/ab1cd/misc');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('Give the folder relative to your own folder, without Users/ab1cd/.');
+	await input.fill('archive/2024');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('That folder is already ignored.');
+	await input.fill('misc');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring misc. 1 found file moved to Dismissed.');
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['Archive/2024', 'misc']);
+	await expect(input).toHaveValue('');
+	await expect.poll(() => names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif', 'edge1.al3d']);
+	await shot(page, 'ignored-section');
+	await page.locator('[data-test="ignored-rule"]').filter({ hasText: 'Archive/2024' }).getByRole('button', { name: 'Remove' }).click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Stopped ignoring Archive/2024.');
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['misc']);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a Lab Viewer sees the rules, cannot remove them, and has no Ignore this folder', async ({ browser }) => {
+	const { page, errors } = await start(browser, '/inbox', 1280, { viewer: true, ignoredRules: [{ folder: 'Archive/2024' }] });
+	await expect.poll(() => names(page)).toContain('3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-remove"]')).toBeDisabled();
+	await expect(page.locator('[data-test="ignored-readonly"]')).toHaveText('You can see these rules but not change them.');
+	await expect(page.locator('[data-test="ignored-input"]')).toHaveCount(0);
+	await shot(page, 'ignored-viewer');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Ignore this folder fits a phone screen: the confirm shows all its text and Stop scanning can be reached', async ({ browser }) => {
+	const { page, errors } = await start(browser, '/inbox', 390);
+	await row(page, '3fa9c1d2_A1.tif').locator('[data-test="ignore-folder"]').click();
+	const dialog = page.getByRole('dialog');
+	await expect(dialog.locator('[data-test="ignore-line"]')).toHaveText(confirmLines);
+	const confirm = dialog.getByRole('button', { name: 'Stop scanning' });
+	await expect(confirm).toBeInViewport();
+	// the dialog opens with a short animation: wait for it to settle before measuring
+	const card = dialog.locator('.confirm');
+	await expect.poll(async () => { const b = (await card.boundingBox())!; return b.x >= 0 && b.x + b.width <= 390; }).toBe(true);
+	await shot(page, 'ignore-confirm-phone');
+	await confirm.click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring sem.');
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 	expect(errors).toEqual([]);
 	await page.context().close();
 });
