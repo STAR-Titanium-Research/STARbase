@@ -1514,7 +1514,7 @@ export function mount(router, context, deps = {}) {
     });
     // A rescan, only where the limit of POST /rescan allows it; the rule is gone either way, so nothing here may fail the request.
     let queued = false;
-    if (scope.personId) {
+    if (scope.personId && (Boolean(scope.person?.uni_alias) || scope.teams.some((t) => !isBlank(t.share_folder)))) {
       try {
         await queueRescan(acc, scope);
         queued = true;
