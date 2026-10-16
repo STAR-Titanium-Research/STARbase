@@ -18,7 +18,7 @@
     "@d1/ui": "*",
     "axios": "^1.20.0",
     "grid-layout-plus": "^1.1.1",
-    "material-symbols": "^0.47.6",
+    "material-symbols": "^0.48.0",
     "potree-core": "^2.0.4",
     "three": "^0.186.1",
     "vue": "^3.5.13",
