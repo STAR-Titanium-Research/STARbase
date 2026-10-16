@@ -15,8 +15,8 @@ watchEffect(() => {
 	<div class="sb-frame">
 		<header class="sb-frame-head">
 			<slot name="title-outer:prepend" />
-			<div v-if="$slots.headline" class="sb-headline"><slot name="headline" /></div>
 			<h1 class="sb-title">{{ title }}</h1>
+			<div v-if="$slots.headline" class="sb-headline"><slot name="headline" /></div>
 			<div class="sb-actions"><slot name="actions" /></div>
 		</header>
 		<div class="sb-frame-body"><slot /></div>
@@ -24,19 +24,18 @@ watchEffect(() => {
 </template>
 
 <style scoped>
-/* One row: [back button] Home › Title ............ actions. The breadcrumb is the title's prefix, not a line of its own. */
+/* One row: [back button] Title  | Home ............ actions. The breadcrumb sits to the right of the title, not on a line of its own. */
 .sb-frame { --d1-header-offset: 52px; min-height: 100%; }
 .sb-frame-head {
 	position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: 44px; padding: 0 var(--content-padding, 32px);
 	display: flex; align-items: center; gap: 8px; min-width: 0;
 	background: var(--theme--background); border-bottom: 1px solid var(--theme--border-color-subdued);
 }
-.sb-headline { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; font-size: var(--fs-md, 13px); color: var(--theme--foreground-subdued); }
-.sb-headline::after { content: '\203A'; }
+.sb-headline { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--theme--border-color-subdued); font-size: var(--fs-sm, 12px); color: var(--theme--foreground-subdued); }
 .sb-headline :deep(a), .sb-headline :deep(.crumb) { color: inherit; font-weight: 500; text-decoration: none; cursor: pointer; }
 .sb-headline :deep(a:hover), .sb-headline :deep(.crumb:hover) { color: var(--theme--foreground); text-decoration: underline; }
-.sb-title { margin: 0; flex: 1 1 auto; min-width: 0; font-size: var(--fs-lg, 15px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-actions { display: flex; align-items: center; gap: 8px; }
+.sb-title { margin: 0; flex: 0 1 auto; min-width: 0; font-size: var(--fs-xl, 18px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 @media (max-width: 767px) {
 	.sb-frame-head { position: static; height: auto; min-height: 44px; padding-top: 6px; padding-bottom: 6px; flex-wrap: wrap; }
 	.sb-title { white-space: normal; }
