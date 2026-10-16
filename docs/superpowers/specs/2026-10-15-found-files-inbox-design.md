@@ -382,6 +382,10 @@ pictures into the database**, and `d1-inbox` serves those. The share is still on
   full view. The preview is a reduced copy, never the original: the dialog says so. Both are derived data, replaceable
   from the share, and live in `d1_private.file_thumbnails` (not exposed in Directus). Rows go with their candidate
   (`ON DELETE CASCADE`) and are removed when the file is marked gone. Switch off with `INBOX_THUMBNAILS=0`.
+- **Failures and staleness.** An image that cannot be decoded gets a marker row in the same table (both pictures NULL, a short
+  `failed_reason`), keyed on the file's size and modification time like a picture, so it is not read again until the file
+  changes. The backfill works only for owners the scan would scan now, below their current folder and outside ignored folders.
+  A picture is made once, when the file is first seen: a file re-saved at the same path keeps its old picture until it moves.
 - **Serving.** `GET /d1-inbox/files/:candidate_id/thumb` and `/preview` answer `image/jpeg` with the same visibility as
   the list (a person's own Inbox and their teams'), `Cache-Control: private`, an ETag, and 404 when the caller cannot
   see the file or it has none. `FoundFile` gains one additive field, `has_thumbnail: boolean`.

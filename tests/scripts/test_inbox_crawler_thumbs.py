@@ -323,9 +323,20 @@ def thumb_rows(world):
         for r in world.q(
             "SELECT c.rel_path, t.thumb, t.preview, t.thumb_width, t.thumb_height, t.preview_width, "
             " t.preview_height, t.source_size, t.source_mtime, c.size_bytes, c.source_mtime "
-            "FROM file_thumbnails t JOIN file_candidates c USING (candidate_id) ORDER BY c.rel_path"
+            "FROM file_thumbnails t JOIN file_candidates c USING (candidate_id) "
+            "WHERE t.thumb IS NOT NULL ORDER BY c.rel_path"
         )
     }
+
+
+def markers(world):
+    """{rel_path: failed_reason} of the rows that say "no picture can be made of this file"."""
+    return dict(
+        world.q(
+            "SELECT c.rel_path, t.failed_reason FROM file_thumbnails t "
+            "JOIN file_candidates c USING (candidate_id) WHERE t.thumb IS NULL ORDER BY c.rel_path"
+        )
+    )
 
 
 def states(world):
@@ -392,7 +403,9 @@ def test_registering_costs_no_second_read_of_the_share(folder):
     assert all(adopted is False for _r, adopted in share.opens)
 
 
-def test_documents_surface_scans_and_undecodable_images_get_none(folder):
+def test_documents_and_surface_scans_get_no_row_and_an_undecodable_image_a_marker(
+    folder,
+):
     world = folder
     run_scan(world)
     none = {
@@ -402,7 +415,10 @@ def test_documents_surface_scans_and_undecodable_images_get_none(folder):
             "WHERE t.candidate_id IS NULL"
         )
     }
-    assert none == {"Users/abc12de/notes.pdf", "Users/abc12de/scan1.al3d", BROKEN}
+    assert none == {"Users/abc12de/notes.pdf", "Users/abc12de/scan1.al3d"}
+    assert markers(world) == {
+        BROKEN: "not decoded"
+    }  # tried, and not tried again until it changes
     # an undecodable image is still a found file
     assert (
         world.one("SELECT kind FROM file_candidates WHERE rel_path = %s", (BROKEN,))[0]
@@ -423,7 +439,8 @@ def test_a_sem_image_gets_thumbnails_too(folder):
     kinds_with = {
         r[0]
         for r in world.q(
-            "SELECT c.kind FROM file_thumbnails t JOIN file_candidates c USING (candidate_id)"
+            "SELECT c.kind FROM file_thumbnails t JOIN file_candidates c USING (candidate_id) "
+            "WHERE t.thumb IS NOT NULL"
         )
     }
     assert kinds_with == {"sem_image"}
@@ -572,9 +589,9 @@ def test_the_backfill_is_offered_images_without_a_row_that_a_person_can_still_se
 def test_a_row_made_from_another_size_or_time_is_offered_again(folder):
     world = folder
     _, _, store = run_scan(world)
-    assert offered(store) == [
-        "broken.png"
-    ]  # no row: it could not be decoded (the daemon tries it once)
+    assert (
+        offered(store) == []
+    )  # broken.png has a marker for its current size and time: done
     ids = "(SELECT candidate_id FROM file_candidates WHERE rel_path = %s)"
     world.q(
         f"UPDATE file_thumbnails SET source_size = source_size + 1 WHERE candidate_id IN {ids}",
@@ -585,8 +602,15 @@ def test_a_row_made_from_another_size_or_time_is_offered_again(folder):
         f"WHERE candidate_id IN {ids}",
         (B,),
     )
+    world.q(
+        "UPDATE file_thumbnails SET source_size = source_size + 1 WHERE failed_reason IS NOT NULL"
+    )
     world.commit()
-    assert sorted(offered(store)) == ["a.png", "b.png", "broken.png"]
+    assert sorted(offered(store)) == [
+        "a.png",
+        "b.png",
+        "broken.png",
+    ]  # a changed file is tried again
 
 
 def test_skip_max_bytes_and_a_failed_discovery_hash_keep_a_file_off_the_list(folder):
@@ -765,8 +789,9 @@ def test_a_missing_table_switches_the_backfill_off_for_ten_minutes_without_faili
     clock[0] += timedelta(minutes=6)
     world.q(
         "CREATE TABLE file_thumbnails (candidate_id uuid PRIMARY KEY REFERENCES file_candidates "
-        "ON DELETE CASCADE, thumb bytea NOT NULL, preview bytea NOT NULL, thumb_width int, "
-        "thumb_height int, preview_width int, preview_height int, source_size bigint NOT NULL, "
+        "ON DELETE CASCADE, thumb bytea, preview bytea, thumb_width int, "
+        "thumb_height int, preview_width int, preview_height int, failed_reason text, "
+        "source_size bigint NOT NULL, "
         "source_mtime timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now())"
     )
     world.commit()

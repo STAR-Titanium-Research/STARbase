@@ -6,8 +6,8 @@ share, no clock, and it never raises. Anything it cannot decode, or will not (a 
 than `MAX_PIXELS`, a truncated file), is `None`: that file simply has no picture.
 
 The decode limits are classification's (`classify_sem.FORMATS`, `MAX_PIXELS`, `DRAFT_ABOVE_PIXELS`). The picture
-is normalised for a browser: 16-bit, 32-bit and float grey is stretched to 8 bits, palette, CMYK, RGBA and
-the rarer modes become RGB, an 8-bit grey picture stays grey, the first frame of a multi-page TIFF is the one
+is normalised for a browser: 16-bit, 32-bit and float grey is stretched to 8 bits, palette, CMYK and
+the rarer modes become RGB, transparency is composited on white, an 8-bit grey picture stays grey, the first frame of a multi-page TIFF is the one
 shown, and the EXIF orientation is applied. Both pictures are JPEG, scaled with LANCZOS and never enlarged.
 
 Both are derived, replaceable data in `d1_private.file_thumbnails`. The preview is a reduced copy: the UI says
@@ -68,6 +68,11 @@ def _scaled(img):
     if mode.startswith("I;16"):
         img = img.convert("I")  # Pillow cannot scale the 16-bit modes itself
         mode = "I"
+    elif mode in ("P", "PA") and "transparency" in img.info:
+        img = img.convert(
+            "RGBA"
+        )  # a transparent palette colour is composited on white below
+        mode = "RGBA"
     elif mode not in _RESIZABLE:
         img = img.convert("L" if mode == "1" else "RGB")
         mode = img.mode
@@ -77,8 +82,16 @@ def _scaled(img):
         lo, hi = img.getextrema()
         k = 255.0 / (hi - lo) if hi > lo else 1.0
         return img.point(lambda v: v * k - lo * k).convert("L")
-    if mode == "LA":
-        return img.convert("L")
+    if mode in ("RGBA", "LA"):
+        # JPEG has no alpha: composite on white (a plain convert would show the colour under a transparent
+        # pixel, usually black)
+        # (instance methods only: the read-only test allows no Image.new)
+        alpha = img.getchannel("A")
+        flat = alpha.point(lambda _v: 255)  # an all-white picture of the same size
+        if mode == "RGBA":
+            flat = flat.convert("RGB")
+        flat.paste(img.convert("RGB" if mode == "RGBA" else "L"), mask=alpha)
+        return flat
     if mode in ("L", "RGB"):
         return img
     return img.convert("RGB")

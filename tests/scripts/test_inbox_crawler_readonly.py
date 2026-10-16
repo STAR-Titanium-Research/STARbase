@@ -73,6 +73,12 @@ FORBIDDEN_NAMES = frozenset(
         "touch",
         "system",
         "save",
+        "save_all",  # Pillow's multi-frame save
+        "_save",
+        "show",  # Pillow's Image.show writes a temporary file and starts a viewer
+        "_dump",  # Pillow's Image._dump writes a temporary file
+        "dump",
+        "tofile",
         "mkfifo",
         "mknod",
         "startfile",
@@ -232,6 +238,100 @@ def _descendants(node) -> set[int]:
     return {id(n) for n in ast.walk(node)}
 
 
+def _bindings(func, name: str) -> list:
+    """Every place inside `func` that binds or rebinds `name`: assignments of any kind, loop and with targets,
+    walrus, del, except-as, match captures, parameters (its own included), nested defs, global and nonlocal."""
+    hits = []
+    for n in ast.walk(func):
+        if isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load):
+            hits.append(n)
+        elif isinstance(n, ast.arg) and n.arg == name:
+            hits.append(n)
+        elif isinstance(n, ast.ExceptHandler) and n.name == name:
+            hits.append(n)
+        elif (
+            isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            and n is not func
+            and n.name == name
+        ):
+            hits.append(n)
+        elif isinstance(n, ast.Global | ast.Nonlocal) and name in n.names:
+            hits.append(n)
+        elif isinstance(n, ast.MatchAs | ast.MatchStar) and n.name == name:
+            hits.append(n)
+        elif isinstance(n, ast.MatchMapping) and n.rest == name:
+            hits.append(n)
+    return hits
+
+
+def _buf_is_one_bytesio(func) -> tuple[int, int] | None:
+    """(line, column) of `buf = BytesIO()` when that is the ONLY place `_encode_jpeg` binds `buf` (so the
+    `save` target cannot be a path or a handle swapped in later), else None."""
+    hits = _bindings(func, "buf")
+    if len(hits) != 1:
+        return None
+    for n in ast.walk(func):
+        if (
+            isinstance(n, ast.Assign)
+            and len(n.targets) == 1
+            and n.targets[0] is hits[0]
+            and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name)
+            and n.value.func.id == "BytesIO"
+            and not n.value.args
+            and not n.value.keywords
+        ):
+            return (n.lineno, n.col_offset)
+    return None
+
+
+def _bytes_guarded(func) -> bool:
+    """Whether `make_thumbnails` starts with `if not isinstance(data, bytes): return None` (or a raise), no
+    other use of `data` comes before that guard ends, and `data` is never rebound (only its own parameter
+    binds it)."""
+    own = _bindings(func, "data")
+    if len(own) != 1 or not isinstance(own[0], ast.arg) or own[0] not in func.args.args:
+        return False
+    for guard in func.body:
+        if (
+            isinstance(guard, ast.If)
+            and isinstance(guard.test, ast.UnaryOp)
+            and isinstance(guard.test.op, ast.Not)
+            and isinstance(guard.test.operand, ast.Call)
+            and isinstance(guard.test.operand.func, ast.Name)
+            and guard.test.operand.func.id == "isinstance"
+            and len(guard.test.operand.args) == 2
+            and not guard.test.operand.keywords
+            and isinstance(guard.test.operand.args[0], ast.Name)
+            and guard.test.operand.args[0].id == "data"
+            and isinstance(guard.test.operand.args[1], ast.Name)
+            and guard.test.operand.args[1].id == "bytes"
+            and not guard.orelse
+            and len(guard.body) == 1
+            and isinstance(guard.body[0], ast.Return | ast.Raise)
+            and not any(
+                isinstance(n, ast.Name) and n.id == "data"
+                for n in ast.walk(guard.body[0])
+            )
+        ):
+            break
+        # only a docstring may come before the guard
+        if not (
+            isinstance(guard, ast.Expr)
+            and isinstance(guard.value, ast.Constant)
+            and isinstance(guard.value.value, str)
+        ):
+            return False
+    else:
+        return False
+    inside = _descendants(guard.test)
+    return all(
+        (n.lineno, n.col_offset) > (guard.end_lineno, guard.end_col_offset)
+        for n in ast.walk(func)
+        if isinstance(n, ast.Name) and n.id == "data" and id(n) not in inside
+    )
+
+
 def violations(source: str, module: str) -> list[str]:
     """Every rule the module breaks, as 'module:line: what'."""
     tree = ast.parse(source)
@@ -298,40 +398,20 @@ def violations(source: str, module: str) -> list[str]:
                     f"from {mod} import ... is not on {module}'s import allow-list",
                 )
 
-    # ---- thumbs: Pillow only inside make_thumbnails (on a BytesIO of `data`, which must be bytes) and
-    # _encode_jpeg (the one `save`, to a BytesIO it made itself)
+    # ---- thumbs: Pillow only inside make_thumbnails (on a BytesIO of `data`, which must be bytes: a guard
+    # before any other use of `data`, and `data` never rebound) and _encode_jpeg (the one `save`, to a BytesIO
+    # that `buf` was assigned once and never rebound)
     thumbs_open_nodes: set[int] = set()
-    thumbs_guarded = False
+    thumbs_guards: list[bool] = []
     save_nodes: set[int] = set()  # the `.save` attribute nodes that are allowed
     for node in ast.walk(tree):
         if module != "thumbs" or not isinstance(node, ast.FunctionDef):
             continue
         if node.name == "make_thumbnails":
             thumbs_open_nodes |= _descendants(node)
-            for n in ast.walk(node):
-                if (
-                    isinstance(n, ast.Call)
-                    and isinstance(n.func, ast.Name)
-                    and n.func.id == "isinstance"
-                    and len(n.args) == 2
-                    and isinstance(n.args[0], ast.Name)
-                    and n.args[0].id == "data"
-                    and isinstance(n.args[1], ast.Name)
-                    and n.args[1].id == "bytes"
-                ):
-                    thumbs_guarded = True
+            thumbs_guards.append(_bytes_guarded(node))
         elif node.name == "_encode_jpeg":
-            made_buf = any(
-                isinstance(n, ast.Assign)
-                and len(n.targets) == 1
-                and isinstance(n.targets[0], ast.Name)
-                and n.targets[0].id == "buf"
-                and isinstance(n.value, ast.Call)
-                and isinstance(n.value.func, ast.Name)
-                and n.value.func.id == "BytesIO"
-                and not n.value.args
-                for n in ast.walk(node)
-            )
+            made_buf = _buf_is_one_bytesio(node)
             for n in ast.walk(node):
                 if (
                     made_buf
@@ -343,8 +423,11 @@ def violations(source: str, module: str) -> list[str]:
                     and n.args
                     and isinstance(n.args[0], ast.Name)
                     and n.args[0].id == "buf"
+                    and (n.args[0].lineno, n.args[0].col_offset) > made_buf
+                    and not {k.arg for k in n.keywords} & {"fp", "file", "filename"}
                 ):
                     save_nodes.add(id(n.func))
+    thumbs_guarded = bool(thumbs_guards) and all(thumbs_guards)
 
     # ---- reflection, dynamic code, dunders, file-writing log handlers
     for node in ast.walk(tree):
@@ -790,6 +873,153 @@ def test_checker_catches(snippet):
 @pytest.mark.parametrize("snippet,module", BYPASSES_AS)
 def test_checker_catches_in_the_module_it_matters(snippet, module):
     assert violations(snippet, module), (module, snippet)
+
+
+# thumbs.py, tightened after review: the `save` exemption needs `buf` to be one BytesIO() that nothing rebinds,
+# the bytes guard must come before any other use of `data`, and `data` is never rebound.
+_THUMBS_HEAD = "from io import BytesIO\nfrom PIL import Image, ImageOps\n"
+_ENCODE_TAIL = "    return buf.getvalue()\n"
+THUMBS_BYPASSES = [
+    # --- _encode_jpeg: `buf` must be assigned BytesIO() once and never again
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    buf = fh\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    buf = BytesIO()\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    buf, n = fh, 1\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    for buf in handles:\n        img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    with handle as buf:\n        img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    (buf := fh)\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    buf += b'x'\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    try:\n        pass\n    except OSError as buf:\n"
+    "        pass\n    img.save(buf, 'JPEG')\n" + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    global buf\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q, buf):\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,  # a parameter, not an assignment
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    img.save(buf, 'JPEG')\n    buf = BytesIO()\n"
+    + _ENCODE_TAIL,  # saved before it exists
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO(b'x')\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    img.save(buf, 'JPEG', fp=path)\n"
+    + _ENCODE_TAIL,
+    _THUMBS_HEAD
+    + "def _encode_jpeg(img, q):\n    buf = BytesIO()\n    img.save(buf, 'JPEG')\n"
+    + _ENCODE_TAIL
+    + "def _encode_jpeg(img, q):\n    img.save(path)\n",  # a second definition without the rule
+    # --- make_thumbnails: the guard first, and `data` never rebound
+    _THUMBS_HEAD + "def make_thumbnails(data):\n    img = Image.open(BytesIO(data))\n"
+    "    if not isinstance(data, bytes):\n        return None\n    return img\n",  # used before the guard
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    n = len(data)\n    if not isinstance(data, bytes):\n"
+    "        return None\n    return n\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    data = fh\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        data = bytes(data)\n"
+    "    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return Image.open(BytesIO(data))\n"
+    "    return None\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        pass\n"
+    "    return Image.open(BytesIO(data))\n",  # a guard that does not leave
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if ok:\n        if not isinstance(data, bytes):\n            return None\n"
+    "    return Image.open(BytesIO(data))\n",  # a guard that only sometimes runs
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, (bytes, str)):\n        return None\n"
+    "    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if isinstance(data, bytes):\n        return None\n"
+    "    return Image.open(BytesIO(data))\n",  # the guard the wrong way round
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes) or True:\n        return None\n"
+    "    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    for data in items:\n        pass\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    (data := fh)\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    with handle as data:\n        pass\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    data += b'x'\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    try:\n        pass\n    except OSError as data:\n        pass\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    f = lambda data: data\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    def data():\n        pass\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    del data\n    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    global data\n    if not isinstance(data, bytes):\n        return None\n"
+    "    return Image.open(BytesIO(data))\n",
+    _THUMBS_HEAD
+    + "def make_thumbnails(*data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    return Image.open(BytesIO(data))\n",  # not a plain parameter
+    _THUMBS_HEAD
+    + "def make_thumbnails(data):\n    if not isinstance(data, bytes):\n        return None\n"
+    "    return Image.open(BytesIO(data))\n"
+    "def make_thumbnails(data):\n    return Image.open(BytesIO(data))\n",  # a second, unguarded definition
+    # --- Pillow's other writers
+    "def f(img):\n    img.show()",
+    "def f(img):\n    img._dump(path)",
+    "def f(img):\n    img.dump(fh)",
+    "def f(img):\n    img.tofile(path)",
+    "def f(img):\n    img.save_all(path)",
+    "def f(img):\n    img._save(path)",
+    "show = img.show",
+]
+
+
+@pytest.mark.parametrize("snippet", THUMBS_BYPASSES)
+def test_thumbs_save_and_bytes_guard_rules_have_no_bypass(snippet):
+    assert violations(snippet, "thumbs"), snippet
+
+
+def test_thumbs_py_itself_meets_the_tightened_rules():
+    src = (PKG / "thumbs.py").read_text(encoding="utf-8")
+    assert violations(src, "thumbs") == []
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    assert _buf_is_one_bytesio(funcs["_encode_jpeg"])
+    assert _bytes_guarded(funcs["make_thumbnails"])
+
+
+def test_a_docstring_may_come_before_the_bytes_guard():
+    src = (
+        _THUMBS_HEAD
+        + 'def make_thumbnails(data):\n    """Docs."""\n    if not isinstance(data, bytes):\n'
+        "        return None\n    return Image.open(BytesIO(data), formats=['PNG'])\n"
+    )
+    assert violations(src, "thumbs") == []
 
 
 def test_imports_outside_the_table_are_refused_even_if_harmless():

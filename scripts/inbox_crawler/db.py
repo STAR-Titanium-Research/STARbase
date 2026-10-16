@@ -774,9 +774,12 @@ class Store:
         origin: str,
         hashed: HashOutcome | None,
         thumbs=None,
+        thumbs_failed: str | None = None,
     ) -> RegisterResult:
         """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint, and the
         thumbnails (a `thumbs.Thumbs`, when the caller made them from the bytes it holds) in the same transaction.
+        When it tried and could not (`thumbs_failed`, a short reason), a marker row says so instead, so the
+        backfill does not read the file again until it changes.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
         previous run's) are left alone, and an existing candidate for the file is left alone.
@@ -852,6 +855,10 @@ class Store:
                 # same transaction; a failure (the table is not there yet) loses only the pictures, which
                 # the backfill makes later
                 self.store_thumbnails(row[0], thumbs, size, mtime, quiet=True)
+            elif row is not None and thumbs_failed is not None:
+                self.store_thumbnail_failure(
+                    row[0], thumbs_failed, size, mtime, quiet=True
+                )
             with self.conn.cursor() as cur:
                 cur.execute("RELEASE SAVEPOINT register_file")
         except Exception:
@@ -998,7 +1005,8 @@ class Store:
             "ON CONFLICT (candidate_id) DO UPDATE SET thumb = EXCLUDED.thumb, preview = EXCLUDED.preview, "
             " thumb_width = EXCLUDED.thumb_width, thumb_height = EXCLUDED.thumb_height, "
             " preview_width = EXCLUDED.preview_width, preview_height = EXCLUDED.preview_height, "
-            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, failed_reason = NULL, "
+            " created_at = now()",
             (
                 candidate_id,
                 thumbs.thumb,
@@ -1014,6 +1022,47 @@ class Store:
         )
         return n > 0
 
+    def store_thumbnail_failure(
+        self,
+        candidate_id: str,
+        reason: str,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """A marker that the file, as it was at `size` and `mtime`, has no picture (it was read and could not
+        be decoded, or is too big): both pictures NULL and a short `reason`. It replaces any earlier row and
+        is DONE for `candidates_missing_thumbnails` until the file's size or modification time changes, when
+        it is tried again. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, failed_reason, source_size, source_mtime) "
+            "VALUES (%s, NULL, NULL, NULL, NULL, NULL, NULL, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = NULL, preview = NULL, thumb_width = NULL, "
+            " thumb_height = NULL, preview_width = NULL, preview_height = NULL, "
+            " failed_reason = EXCLUDED.failed_reason, source_size = EXCLUDED.source_size, "
+            " source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            (candidate_id, reason[:200], size, mtime),
+            quiet,
+        )
+        return n > 0
+
+    def scanned_owners(self) -> list[tuple[str, str, str]]:
+        """(kind, owner id, root folder lower-cased) of everyone a scan would walk right now, decided by the
+        scan's own rule (`owners.person_claims` and `team_claims`: scannable is active or scan-while-former,
+        and INBOX_ONLY_FOLDERS) over the current people and teams. The root is `Users/<alias>` or
+        `Shared/<folder>` as claimed; the share is case-insensitive, so it is compared lower-cased."""
+        out: list[tuple[str, str, str]] = []
+        for kind, base, claims in (
+            ("person", owners.PERSON_BASE, owners.person_claims(self.load_people())),
+            ("team", owners.TEAM_BASE, owners.team_claims(self.load_teams())),
+        ):
+            for owner_id, folder, _label, scannable in claims:
+                if scannable and owners.safe_folder_name(folder):
+                    out.append((kind, owner_id, f"{base}/{folder}".lower()))
+        return out
+
     def candidates_missing_thumbnails(
         self, limit: int, *, max_bytes: int | None = None, skip=()
     ) -> list[ThumbTarget]:
@@ -1021,7 +1070,14 @@ class Store:
         no thumbnails, or whose thumbnails were made from a file of another size or modification time than the
         candidate's. Undecided ones first, newest first. `max_bytes` leaves out a file too big to decode and
         `skip` the ids already tried (a file that cannot be decoded would otherwise be offered every tick). A file
-        whose discovery hash failed is left to the hash retry (an hour later), not read again from here."""
+        whose discovery hash failed is left to the hash retry (an hour later), not read again from here.
+
+        Only files the scan would read right now: of an owner it scans (`scanned_owners`: an active or
+        scan-while-former person with an alias, a team with a share folder, and in INBOX_ONLY_FOLDERS when
+        that is set), below that owner's CURRENT folder (a candidate left under an old alias or share folder is
+        not read) and not below one of the owner's ignored folders. A file with a picture marker (see
+        `store_thumbnail_failure`) for its current size and modification time is done, not missing."""
+        roots = self.scanned_owners()
         rows = self._all(
             "SELECT c.candidate_id::text, c.rel_path, c.size_bytes, c.source_mtime "
             "FROM file_candidates c LEFT JOIN file_thumbnails t ON t.candidate_id = c.candidate_id "
@@ -1032,8 +1088,21 @@ class Store:
             "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
             "  AND NOT EXISTS (SELECT 1 FROM file_fingerprints f "
             "                  WHERE f.directus_files_id = c.directus_files_id AND f.status = 'error') "
-            "ORDER BY (c.state = 'new') DESC, c.first_seen_at DESC, c.candidate_id LIMIT %s",
-            (max_bytes, max_bytes, list(skip), limit),
+            "  AND EXISTS (SELECT 1 FROM unnest(%s::text[], %s::text[], %s::text[]) AS o(kind, id, root) "
+            "              WHERE ((o.kind = 'person' AND c.owner_person_id::text = o.id) "
+            "                  OR (o.kind = 'team' AND c.owner_team_id::text = o.id)) "
+            "                AND left(lower(c.rel_path), length(o.root) + 1) = o.root || '/') "
+            + self._not_ignored("c")
+            + " ORDER BY (c.state = 'new') DESC, c.first_seen_at DESC, c.candidate_id LIMIT %s",
+            (
+                max_bytes,
+                max_bytes,
+                list(skip),
+                [r[0] for r in roots],
+                [r[1] for r in roots],
+                [r[2] for r in roots],
+                limit,
+            ),
         )
         return [ThumbTarget(r[0], r[1], r[2], r[3]) for r in rows]
 
