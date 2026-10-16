@@ -1,6 +1,6 @@
 // Keyboard navigation and the words on the stage. Pure, so it is tested without a browser.
 
-import { focusParent, type ToolingEdge, type ToolingFocus, type ToolingModel } from '@d1/ui';
+import { edgeSummary, focusParent, type ToolingEdge, type ToolingFocus, type ToolingModel } from '@d1/ui';
 import type { PickTarget } from './scene/pick';
 
 // "3", or the insert's code when it has no slot number.
@@ -22,8 +22,8 @@ export function hoverLabel(model: ToolingModel, target: PickTarget): string {
 	const name = `Insert ${insertName(model, insert.id)}`;
 	if (insert.depleted) return `${name} · depleted`;
 	if (insert.edges.length === 0) return `${name} · no edges`;
-	const fresh = insert.edges.filter((e) => !e.used).length;
-	return `${name} · ${fresh}/${insert.edges.length} fresh`;
+	const { fresh, total } = edgeSummary(insert);
+	return `${name} · ${fresh}/${total} fresh`;
 }
 
 // What a screen reader hears when the focus moves: "Insert 3, 2 of 4 edges fresh", "Edge 3B, used, top face".
@@ -38,7 +38,8 @@ export function focusAnnouncement(model: ToolingModel, focus: ToolingFocus): str
 	if (focus.kind === 'insert') {
 		if (insert.depleted) return `Insert ${name}, depleted`;
 		if (insert.edges.length === 0) return `Insert ${name}, no edges`;
-		return `Insert ${name}, ${insert.edges.filter((e) => !e.used).length} of ${insert.edges.length} edges fresh`;
+		const { fresh, total } = edgeSummary(insert);
+		return `Insert ${name}, ${fresh} of ${total} edges fresh`;
 	}
 	const e = insert.edges.find((x) => x.id === focus.edgeId);
 	if (!e) return '';

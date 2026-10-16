@@ -408,6 +408,8 @@ export function interpolateFraming(a: Framing, b: Framing, t: number): Framing {
 	return framingAt(target, distance, lerp(a.polar, b.polar), a.azimuth + shortestArc(a.azimuth, b.azimuth) * t);
 }
 
+const RETARGET_MIN_MS = 160; // a retargeted move never finishes in less than this
+
 // A move in progress. `eased(now)` is the 0..1 progress that framings and other animated values share.
 export class FramingTween {
 	private from: Framing | null = null;
@@ -425,6 +427,18 @@ export class FramingTween {
 	}
 
 	get active(): boolean { return this.to !== null; }
+
+	// The destination moved while the camera is under way (the stage was resized): carry on from where the camera is now
+	// to the new destination in the time left, easing out so the speed does not restart from zero.
+	retarget(to: Framing, now: number): void {
+		if (!this.from || !this.to) return;
+		const current = interpolateFraming(this.from, this.to, this.eased(now));
+		this.duration = Math.max(RETARGET_MIN_MS, this.duration - (now - this.t0));
+		this.from = current;
+		this.to = to;
+		this.t0 = now;
+		this.ease = easeOutCubic;
+	}
 
 	eased(now: number): number { return easeStep(now - this.t0, this.duration, this.ease); }
 

@@ -240,8 +240,15 @@ export class ToolingScene {
 		this.camera.aspect = w / h;
 		this.camera.updateProjectionMatrix();
 		// Until the user has moved the camera, keep the framing fitted to the new shape of the stage.
-		if (changed && this.model && !this.userMoved) this.goTo(this.focus, true);
-		else this.requestRender();
+		if (changed && this.model && !this.userMoved) {
+			if (this.tween.active) {
+				// Selecting re-lays-out the page, so the stage often resizes mid-flight: refit the destination and keep flying
+				// (snapping to it would cancel the animation every time).
+				this.finalFraming = this.framingFor(this.focus);
+				this.tween.retarget(this.finalFraming, performance.now());
+				this.requestRender();
+			} else this.goTo(this.focus, true);
+		} else this.requestRender();
 	}
 
 	refreshTheme(): void {
