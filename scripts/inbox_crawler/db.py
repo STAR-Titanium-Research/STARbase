@@ -130,6 +130,9 @@ class Store:
         self._heartbeat_conn = None
         self._heartbeat_failing = False
         self._folders_done: set[str] = set()
+        self._surface_scans: bool | None = (
+            None  # see _has_surface_scans; filled on first use
+        )
         self._warned: set[str] = (
             set()
         )  # candidates already complained about (once per process)
@@ -568,9 +571,27 @@ class Store:
         return done
 
     def _has_surface_scans(self) -> bool:
-        """Does the database have the surface-scan table (migration 192)? An older one does not."""
-        row = self._one("SELECT to_regclass('surface_scans') IS NOT NULL")
-        return bool(row and row[0])
+        """Does the database have the surface-scan table (migration 192)? An older one does not. Asked once per
+        Store: migration 196 guarantees the table from then on, so the answer is never invalidated."""
+        if self._surface_scans is None:
+            row = self._one("SELECT to_regclass('surface_scans') IS NOT NULL")
+            self._surface_scans = bool(row and row[0])
+        return self._surface_scans
+
+    def _linked_in_junction(self, column: str) -> str:
+        """An SQL condition: the file id in `column` is linked in one of the three junctions or, when the
+        table exists, is a surface scan (the four tables migration 196 counts, the set of `already_linked`)."""
+        tables = ["sample_data_files", "operation_data_files", "session_data_files"]
+        if self._has_surface_scans():
+            tables.append("surface_scans")
+        return (
+            "("
+            + " OR ".join(
+                f"EXISTS (SELECT 1 FROM {t} j WHERE j.directus_files_id = {column})"
+                for t in tables
+            )
+            + ")"
+        )
 
     def already_linked(self, files_ids: list[str]) -> set[str]:
         """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
@@ -598,20 +619,11 @@ class Store:
         of the three junctions or added as a surface scan: the extension would refuse to link them again
         (already on the record) and the Inbox would show them for ever. Linked and dismissed rows are never
         touched."""
-        scans = (
-            "  OR EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = c.directus_files_id)"
-            if self._has_surface_scans()
-            else ""
-        )
         return self._run(
             "DELETE FROM file_candidates c WHERE "
             + _owner_eq(owner, "c.")
-            + " AND c.state IN ('new', 'gone') "
-            "AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = c.directus_files_id) "
-            "  OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = c.directus_files_id) "
-            "  OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = c.directus_files_id)"
-            + scans
-            + ")",
+            + " AND c.state IN ('new', 'gone') AND "
+            + self._linked_in_junction("c.directus_files_id"),
             (owner.id,),
         )
 
@@ -1060,21 +1072,12 @@ class Store:
         Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
         so one run visits each row once; the caller checks the path is the file's own before it reads
         anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
-        scans = (
-            " OR EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = f.id)"
-            if self._has_surface_scans()
-            else ""
-        )
         exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
         rows = self._all(
             "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
             "WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL "
             "  AND f.metadata::jsonb->>'archive_path' ~* %s "
-            "  AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = f.id) "
-            "    OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = f.id) "
-            "    OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = f.id)"
-            + scans
-            + ") "
+            "  AND " + self._linked_in_junction("f.id") + " "
             "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
             "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "
             "ORDER BY f.id LIMIT %s",
