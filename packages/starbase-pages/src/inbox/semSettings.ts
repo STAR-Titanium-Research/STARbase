@@ -142,9 +142,10 @@ function valueText(key: string, values: Record<string, unknown>): string | null 
 
 /**
  * The rows to show, in a fixed order: a value with its unit and source; a field with a flag and no value as "couldn't read <field>"; nothing for a
- * field with neither. A value gets the "check this" mark when `flags.check_this` is true and no source vouched for it (OCR, or nothing says).
+ * field with neither (with `all`, which is the owner's view, a row "not set" to fill in). A value gets the "check this" mark when `flags.check_this`
+ * is true and no source vouched for it (OCR, or nothing says).
  */
-export function settingRows(view: SettingsView): SettingRow[] {
+export function settingRows(view: SettingsView, opts: { all?: boolean } = {}): SettingRow[] {
 	const out: SettingRow[] = [];
 	const checkAll = view.flags.check_this === true;
 	for (const f of FIELDS) {
@@ -158,6 +159,8 @@ export function settingRows(view: SettingsView): SettingRow[] {
 		const why = view.flags[f.key];
 		if (typeof why === 'string' && why !== '') {
 			out.push({ key: f.key, label: f.label, text: null, source: null, check: false, failed: `couldn't read ${f.noun}`, reason: REASON_TEXT[why] ?? why });
+		} else if (opts.all) {
+			out.push({ key: f.key, label: f.label, text: null, source: null, check: false, failed: null, reason: null });
 		}
 	}
 	return out;
@@ -186,6 +189,20 @@ export function ukLocalToIso(local: string): string | null {
 		if (ukFields(asUtc - offset * 60_000) === wanted) return `${wanted}${offset === 60 ? '+01:00' : '+00:00'}`;
 	}
 	return null;
+}
+
+/** The text an edit box starts with: the value as it is typed back, the time as UK local time (what a datetime-local box takes), '' for none. */
+export function editDraft(key: string, values: Record<string, unknown>): string {
+	const f = FIELD_BY_KEY.get(key);
+	const v = values[key];
+	if (!f) return '';
+	if (f.type === 'time') {
+		const iso = text(v);
+		const ms = iso ? new Date(iso).getTime() : Number.NaN;
+		return Number.isNaN(ms) ? '' : ukFields(ms).slice(0, 16);
+	}
+	if (f.type === 'text') return text(v) ?? '';
+	return finite(v) ? String(v) : '';
 }
 
 const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;

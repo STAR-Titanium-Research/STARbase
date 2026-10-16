@@ -2251,6 +2251,23 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   one image to a second record in Data Studio as well and undo the Inbox link: `d1_private.sem_image_settings` must still hold the file's row. Delete
   the Data Studio link, link the file in the Inbox again and undo that: the row must be gone.
   Since: `d1-inbox` imaging settings routes (stream D of the SEM reader plan).
+- [ ] **SEM9 — Imaging settings in the Inbox row, from real crawler output (STARbase).** After **SEM1**, open the Inbox as the owner of a folder
+  holding a real FEI TIFF, a real PNG export and a JEOL image. Expect for each FEI row a list of labelled values in this order: kV, working distance,
+  magnification, spot, detector, mode, scale bar, taken (then field width, pixel size, instrument), each with a source label (`metadata`, `derived`,
+  `OCR`); the scale bar as "500 µm", "3 mm" or "200 nm" to match the bar printed on the image; the time as UK time with `GMT` or `BST` that equals
+  the instrument's clock (check one image taken in summer and one in winter); no OCR confidence anywhere. A PNG export read by OCR with nothing to
+  cross-check shows "check this" on the values the bar alone gave; a field the reader refused shows "couldn't read <field>" with the reason. A row
+  stored before the new crawler (no `sources`) and the JEOL row keep the one-line summary. Since: STARbase imaging settings (stream F of the SEM reader plan).
+- [ ] **SEM10 — Imaging settings and locked files on a record page, on the real Directus (STARbase, three accounts).** With **SEM8** passed and an SEM
+  image linked from account A's folder to a sample B can read: open the sample's page as A. Expect the Files section to list the image with its
+  settings and an Edit control on every field (also those with no value, "not set"); change kV to 20: the field then reads `manual`, and a value
+  out of range (kV 99, magnification 5000.5) shows the server's message beside the field and keeps the box open; a time typed as UK local time is
+  saved with the right offset (check a summer and a winter time). As B the same page shows a lock and "A file from another person's folder" and
+  nothing else (no name, no values, no download or copy-path button, no owner; the page source and network tab hold no filename), and B's Directus
+  read of `/items/physical_samples/<id>?fields=data_files.directus_files_id.id` returns the bare id for that file, not an object (the page relies on
+  that to know the file is locked without asking). As an administrator the page shows the values and no Edit control, and the access log gains a row.
+  For a file with no owner (linked before migration 196) a reader of the sample sees the values with no Edit control. The same Files section on an
+  operation page and a test page behaves the same. Since: STARbase imaging settings and locked files (stream F of the SEM reader plan).
 
 ## Done
 

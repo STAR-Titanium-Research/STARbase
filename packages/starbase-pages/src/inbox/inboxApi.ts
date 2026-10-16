@@ -21,6 +21,9 @@
 //   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
 //                                       queued or running; 409 NO_FOLDER when the person has no folder
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
+//   GET  /d1-inbox/sem-settings?file=<directus_files uuid>  -> { data: SemSettingsAnswer }: { locked: true } for a file the caller may not see (and nothing
+//                                       else), { locked: false, settings: null } with none saved, else { locked: false, settings, sources, flags, can_edit }
+//   PATCH /d1-inbox/sem-settings/<uuid> { field, value } -> the same answer with sources.<field> = 'manual'; 400 (extensions.field: field | value), 403
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
 //
@@ -483,3 +486,35 @@ export const loadAdmin = (api: HostApi): Promise<InboxAdmin> =>
 	);
 
 export const scanAll = (api: HostApi): Promise<void> => call(() => api.post(`${BASE}/admin/scan-all`, {}), () => undefined);
+
+// ---- imaging settings of a file (d1-inbox /sem-settings; spec 2026-10-16-sem-data-bar-reader-design.md sections 4 to 6) ----
+
+/** What an allowed reader gets for a file with settings. `can_edit` is true only for the file's owner (or a member of the owner team). */
+export interface SemSettingsRead {
+	/** Only the fields that have a value, numbers as numbers, `acquired_at` ISO 8601. */
+	settings: Record<string, unknown>;
+	/** Field name -> metadata | derived | ocr | manual. */
+	sources: Record<string, unknown>;
+	/** Field name -> a reason string, plus `check_this: true` when nothing could vouch for the values. */
+	flags: Record<string, unknown>;
+	can_edit: boolean;
+}
+/** `{ locked: true }` is all a locked file ever carries: no name, no value, no owner. */
+export type SemSettingsAnswer = { locked: true } | { locked: false; settings: null } | ({ locked: false } & SemSettingsRead);
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The answer as the page uses it: a locked file keeps nothing but `locked`; `can_edit` is true only when the server said exactly true. */
+export function parseSemAnswer(b: unknown): SemSettingsAnswer {
+	const r = isObj(b) ? b : {};
+	if (r.locked === true) return { locked: true };
+	if (!isObj(r.settings)) return { locked: false, settings: null };
+	return { locked: false, settings: r.settings, sources: isObj(r.sources) ? r.sources : {}, flags: isObj(r.flags) ? r.flags : {}, can_edit: r.can_edit === true };
+}
+
+export const getSemSettings = (api: HostApi, fileId: string): Promise<SemSettingsAnswer> =>
+	call(() => api.get(`${BASE}/sem-settings`, { params: { file: fileId } }), parseSemAnswer);
+
+/** The owner corrects one setting (`value` is a number, text or an ISO time with its offset); the answer is the settings again with the field `manual`. */
+export const correctSemSetting = (api: HostApi, fileId: string, field: string, value: number | string): Promise<SemSettingsAnswer> =>
+	call(() => api.patch(`${BASE}/sem-settings/${encodeURIComponent(fileId)}`, { field, value }), parseSemAnswer);

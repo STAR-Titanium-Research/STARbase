@@ -7,8 +7,11 @@ export const DEFAULT_UNC_PREFIX = '\\\\uosfstore.shef.ac.uk\\shared\\star_group1
 export interface LinkedFile {
 	id: string;
 	name: string;
-	/** 'archive': lives on the group share; 'upload': stored in Directus. */
-	kind: 'archive' | 'upload';
+	/**
+	 * 'archive': lives on the group share; 'upload': stored in Directus; 'locked': the link exists but the reader may not see the file (the
+	 * junction holds only its id): the page shows "a file from another person's folder" and nothing else, so `name` is empty.
+	 */
+	kind: 'archive' | 'upload' | 'locked';
 	unc: string | null;
 	folder: string | null;
 	fileUri: string | null;
@@ -42,12 +45,18 @@ function metadataOf(file: any): Record<string, any> {
 }
 
 // `links` are the junction rows of `data_files` read with
-// `data_files.directus_files_id.{id,title,filename_download,metadata}`.
+// `data_files.directus_files_id.{id,title,filename_download,metadata}`. A file Directus will not show the reader (ADR-0022: files belong to their
+// provenance owner) comes back as the bare id: it is listed as `kind: 'locked'`.
 export function linkedFiles(links: any[] | null | undefined, prefix = DEFAULT_UNC_PREFIX): LinkedFile[] {
 	const out: LinkedFile[] = [];
 	for (const l of links ?? []) {
 		const f = l?.directus_files_id;
-		if (!f || typeof f !== 'object') continue; // unreadable file: the junction holds only the id
+		// unreadable file: the junction holds only the id. It is kept as a locked file (a link exists, nothing more is known or shown).
+		if (typeof f === 'string' && f !== '') {
+			out.push({ id: f, name: '', kind: 'locked', unc: null, folder: null, fileUri: null });
+			continue;
+		}
+		if (!f || typeof f !== 'object') continue;
 		const archivePath: string = metadataOf(f).archive_path || '';
 		const name = f.filename_download || f.title || archivePath.split('/').pop() || '(file)';
 		if (!archivePath) {

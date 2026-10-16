@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, ref, type App } from 'vue';
+import { createApp, defineComponent, h, nextTick, ref, type App } from 'vue';
 import { setExplorerHostFactory, type HostApi, type LinkedFile } from '@d1/ui';
 import SampleFiles from './SampleFiles.vue';
 
@@ -59,10 +59,14 @@ function mount(files: LinkedFile[], api: HostApi) {
 
 const items = () => [...document.querySelectorAll<HTMLElement>('[data-test="linked-file"]')];
 const field = (key: string) => document.querySelector<HTMLElement>(`[data-field="${key}"]`);
-const click = (el: Element | null | undefined) => (el as HTMLElement).click();
+const click = async (el: Element | null | undefined) => {
+	(el as HTMLElement).click();
+	await nextTick();
+};
 async function type(input: HTMLInputElement, text: string) {
 	input.value = text;
 	input.dispatchEvent(new Event('input', { bubbles: true }));
+	await nextTick();
 }
 const settled = () => vi.waitFor(() => expect(document.querySelector('[data-test="sem-loading"]')).toBeNull());
 
@@ -124,11 +128,11 @@ describe("the owner's view", () => {
 		const { api, calls } = fixtureApi('sem_settings_owner', 'sem_settings_correct_ok');
 		mount([upload('sample-12.tif')], api);
 		await vi.waitFor(() => expect(field('kv')).not.toBeNull());
-		click(field('kv')!.querySelector('[data-test="edit-setting"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-setting"]'));
 		const input = field('kv')!.querySelector<HTMLInputElement>('[data-test="edit-input"]')!;
 		expect(input.value).toBe('15');
 		await type(input, '20');
-		click(field('kv')!.querySelector('[data-test="edit-save"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-save"]'));
 		await vi.waitFor(() => expect(field('kv')!.querySelector('[data-test="setting-source"]')!.textContent).toBe('manual'));
 		expect(calls.at(-1)).toEqual({ method: 'PATCH', path: `/d1-inbox/sem-settings/${FILE}`, params: undefined, body: { field: 'kv', value: 20 } });
 		expect(field('kv')!.textContent).toContain('20 kV');
@@ -139,9 +143,9 @@ describe("the owner's view", () => {
 		const { api } = fixtureApi('sem_settings_owner', 'sem_settings_correct_400_value');
 		mount([upload('sample-12.tif')], api);
 		await vi.waitFor(() => expect(field('kv')).not.toBeNull());
-		click(field('kv')!.querySelector('[data-test="edit-setting"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-setting"]'));
 		await type(field('kv')!.querySelector<HTMLInputElement>('[data-test="edit-input"]')!, '99');
-		click(field('kv')!.querySelector('[data-test="edit-save"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-save"]'));
 		await vi.waitFor(() => expect(field('kv')!.querySelector('[data-test="setting-error"]')).not.toBeNull());
 		expect(field('kv')!.querySelector('[data-test="setting-error"]')!.textContent).toBe('That value is not valid for this setting.');
 		expect(field('kv')!.querySelector('[data-test="edit-input"]')).not.toBeNull();
@@ -152,9 +156,9 @@ describe("the owner's view", () => {
 		const { api } = fixtureApi('sem_settings_owner', 'sem_settings_correct_403');
 		mount([upload('sample-12.tif')], api);
 		await vi.waitFor(() => expect(field('kv')).not.toBeNull());
-		click(field('kv')!.querySelector('[data-test="edit-setting"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-setting"]'));
 		await type(field('kv')!.querySelector<HTMLInputElement>('[data-test="edit-input"]')!, '20');
-		click(field('kv')!.querySelector('[data-test="edit-save"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-save"]'));
 		await vi.waitFor(() => expect(field('kv')!.querySelector('[data-test="setting-error"]')).not.toBeNull());
 		expect(field('kv')!.querySelector('[data-test="setting-error"]')!.textContent).toBe("Only the file's owner can correct this.");
 		expect(document.querySelectorAll('[data-test="edit-setting"]')).toHaveLength(0);
@@ -164,8 +168,8 @@ describe("the owner's view", () => {
 		const { api, calls } = fixtureApi('sem_settings_owner', 'sem_settings_correct_ok');
 		mount([upload('sample-12.tif')], api);
 		await vi.waitFor(() => expect(field('kv')).not.toBeNull());
-		click(field('kv')!.querySelector('[data-test="edit-setting"]'));
-		click(field('kv')!.querySelector('[data-test="edit-cancel"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-setting"]'));
+		await click(field('kv')!.querySelector('[data-test="edit-cancel"]'));
 		expect(field('kv')!.querySelector('[data-test="edit-input"]')).toBeNull();
 		expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
 	});
