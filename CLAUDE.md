@@ -67,7 +67,7 @@ So give every new rig item a bold id at the start (`**R12 — …**` or `**#240 
 
 ### Issue tracker
 
-Issues live in GitHub Issues on `dpremoli/D1-Database`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues on `STAR-Titanium-Research/STARbase`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

@@ -463,7 +463,7 @@ def test_history_lists_every_run_of_an_issue_and_old_single_file_results(client,
 @pytest.mark.parametrize(
     ("url", "kept"),
     [
-        ("https://github.com/dpremoli/D1-Database/issues/231", True),
+        ("https://github.com/STAR-Titanium-Research/STARbase/issues/231", True),
         ("javascript:alert(1)", False),
         ("data:text/html,<script>1</script>", False),
         ("http://github.com/o/r/issues/1", False),
