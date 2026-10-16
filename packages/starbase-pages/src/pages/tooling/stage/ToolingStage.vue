@@ -27,6 +27,7 @@ const height = ref(0);
 const webgl = ref(false);
 const failed = ref(false); // the 3D scene could not start, or its context was lost
 const prefer2d = ref(false);
+const canvasKey = ref(0); // a new key is a new canvas: a lost WebGL context cannot be revived on the same one
 const loading = ref(false);
 const hover = ref<{ text: string; x: number; y: number } | null>(null);
 
@@ -46,6 +47,7 @@ let scene: ToolingScene | null = null;
 let token = 0;
 let unmounted = false;
 let observer: ResizeObserver | null = null;
+let recoveries: number[] = []; // when the context was lost lately
 
 async function start(): Promise<void> {
 	const mine = ++token;
@@ -57,7 +59,8 @@ async function start(): Promise<void> {
 	let mod: typeof import('./scene/toolingScene');
 	try {
 		mod = await import('./scene/toolingScene');
-	} catch {
+	} catch (e) {
+		console.warn('[tooling stage] the 3D scene could not be loaded', e);
 		if (mine === token) { failed.value = true; loading.value = false; }
 		return;
 	}
@@ -65,16 +68,32 @@ async function start(): Promise<void> {
 	let s: ToolingScene;
 	try {
 		s = new mod.ToolingScene(canvas, overlay);
-	} catch {
-		failed.value = true;
-		loading.value = false;
+	} catch (e) {
+		console.warn('[tooling stage] the 3D scene could not start', e);
+		const now = Date.now();
+		recoveries = recoveries.filter((t) => now - t < 30000);
+		if (unmounted || recoveries.length >= 3) { failed.value = true; loading.value = false; return; }
+		recoveries.push(now);
+		canvasKey.value++; // a canvas that failed to get a context is no use again: try a fresh one shortly
+		setTimeout(() => { if (!unmounted && use3d.value && mine === token) void start(); }, 500);
 		return;
 	}
 	s.onPick((t: PickTarget) => { grab(); select(targetToFocus(t)); });
 	s.onHover((t, x, y) => {
 		hover.value = t ? { text: hoverLabel(props.model, t), x, y } : null;
 	});
-	s.onContextLost(() => { failed.value = true; });
+	s.onContextLost(() => {
+		// The browser took the GPU context away (memory pressure, a GPU reset, many tabs). Start again on a fresh canvas
+		// rather than dropping to the 2D grid for good; after three losses in 30 s give up.
+		console.warn('[tooling stage] the WebGL context was lost');
+		const now = Date.now();
+		recoveries = recoveries.filter((t) => now - t < 30000);
+		if (unmounted || recoveries.length >= 3) { failed.value = true; return; }
+		recoveries.push(now);
+		stop();
+		canvasKey.value++;
+		void start();
+	});
 	s.setModel(props.model);
 	s.setFocus(props.focus);
 	s.setNextFresh(props.nextFresh);
@@ -96,8 +115,17 @@ watch(() => props.model, (m) => scene?.setModel(m));
 watch(() => focusKey(props.focus), () => scene?.setFocus(props.focus));
 watch(() => nextKey(props.nextFresh), () => scene?.setNextFresh(props.nextFresh));
 
-onMounted(() => {
+// A failed probe is tried again a few times: the browser may only be short of contexts for a moment.
+const PROBE_RETRIES_MS = [400, 1500, 4000];
+let probeTimer: ReturnType<typeof setTimeout> | null = null;
+function probe(attempt: number): void {
 	webgl.value = hasWebGL();
+	if (webgl.value || unmounted || attempt >= PROBE_RETRIES_MS.length) return;
+	probeTimer = setTimeout(() => probe(attempt + 1), PROBE_RETRIES_MS[attempt]);
+}
+
+onMounted(() => {
+	probe(0);
 	width.value = viewEl.value?.clientWidth ?? 0;
 	height.value = viewEl.value?.clientHeight ?? 0;
 	if (typeof ResizeObserver === 'function' && viewEl.value) {
@@ -112,6 +140,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	unmounted = true;
+	if (probeTimer !== null) clearTimeout(probeTimer);
 	observer?.disconnect();
 	stop();
 });
@@ -195,7 +224,7 @@ function grab(): void {
 
 		<div ref="viewEl" class="tstage__view" :class="{ flat: !use3d }">
 			<template v-if="use3d">
-				<canvas ref="canvasEl" class="tstage__canvas" aria-hidden="true" @pointerdown="grab"></canvas>
+				<canvas :key="canvasKey" ref="canvasEl" class="tstage__canvas" aria-hidden="true" @pointerdown="grab"></canvas>
 				<div ref="overlayEl" class="tstage__labels" @pointerdown="grab"></div>
 				<div v-if="loading" class="tstage__skeleton" aria-hidden="true"><span v-for="n in 8" :key="n"></span></div>
 				<div v-if="hover" class="d1-tstage-tip" :style="{ left: `${hover.x}px`, top: `${hover.y}px` }">{{ hover.text }}</div>

@@ -39,3 +39,39 @@ def test_a_path_or_dots_is_refused(bad):
     with pytest.raises(ValueError):
         owners.set_person_base(bad)
     assert owners.PERSON_BASE == "Users"
+
+
+@pytest.fixture
+def only_folders():
+    yield owners.set_only_folders
+    owners.set_only_folders(None)
+
+
+PEOPLE = [
+    {"person_id": "p1", "uni_alias": "mtp21dp", "active": True},
+    {"person_id": "p2", "uni_alias": "abc12de", "active": True},
+]
+
+
+def test_no_allow_list_scans_everyone(only_folders):
+    only_folders("")
+    assert [c[3] for c in owners.person_claims(PEOPLE)] == [True, True]
+
+
+def test_the_allow_list_skips_everyone_else_ignoring_case(only_folders):
+    only_folders(" MTP21DP , ")
+    assert [(c[1], c[3]) for c in owners.person_claims(PEOPLE)] == [
+        ("mtp21dp", True),
+        ("abc12de", False),
+    ]
+    assert owners.team_claims([{"team_id": "t1", "share_folder": "Grp"}])[0][3] is False
+
+
+def test_a_skipped_folder_is_neither_scanned_nor_unmatched(only_folders):
+    only_folders("mtp21dp")
+    m = owners.match_folders(
+        "User", ["mtp21dp", "abc12de", "zz9"], owners.person_claims(PEOPLE), "person"
+    )
+    assert [o.root for o in m.owners] == ["User/mtp21dp"]
+    assert m.skipped == ["User/abc12de"]
+    assert m.unmatched == ["User/zz9"]

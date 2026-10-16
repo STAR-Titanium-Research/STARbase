@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolingModel, type EdgeRow, type InsertRow } from '@d1/ui';
 import { faces, outline2d } from './outline2d';
-import { freshCaption, gridSlots } from './slots2d';
+import { freshCaption } from './slots2d';
 
 const box = { tool_box_id: 'b', tool_box_code: 'B' };
 const ins = (n: number | null, extra: Partial<InsertRow> = {}): InsertRow => ({
@@ -57,23 +57,16 @@ describe('outline2d', () => {
 	});
 });
 
-describe('gridSlots', () => {
-	it('lists the grid cells in reading order with their inserts', () => {
-		const m = buildToolingModel(box, null, [ins(1), ins(2), ins(4)], []);
-		const g = gridSlots(m);
-		expect(g.columns).toBe(m.grid.columns);
-		expect(g.slots.map((s) => s.label)).toEqual(['1', '2', '3', '4']);
-		expect(g.slots.map((s) => s.insert?.id ?? null)).toEqual(['i1', 'i2', null, 'i4']);
-	});
+describe('freshCaption of an insert that does not match its type', () => {
+	const cnmg = { iso_designation: 'CNMG 12 04 08-MF' };
+	const caption = (rows: EdgeRow[]) => freshCaption(buildToolingModel(box, cnmg, [ins(1)], rows).inserts[0]);
 
-	it('adds a ? cell for an insert with no slot number', () => {
-		const m = buildToolingModel(box, null, [ins(1), ins(null)], []);
-		const g = gridSlots(m);
-		expect(g.slots.at(-1)).toMatchObject({ label: '?', insert: { id: 'ix' } });
-	});
-
-	it('is empty for an empty box', () => {
-		expect(gridSlots(buildToolingModel(box, null, [], [])).slots).toEqual([]);
+	it('reads 4/4 for a complete insert and for one with a duplicate row, 3/4 for one missing an edge', () => {
+		const four = ['A', 'B', 'C', 'D'].map((l) => edge('i1', l));
+		expect(caption(four)).toBe('4/4 fresh');
+		expect(caption([...four, edge('i1', 'D', false)].map((e, k) => ({ ...e, edge_id: `r${k}`, edge_code: `c${k}` })))).toBe('4/4 fresh');
+		expect(caption(four.slice(0, 3))).toBe('3/4 fresh');
+		expect(caption([])).toBe('no edges');
 	});
 });
 
@@ -82,7 +75,7 @@ describe('freshCaption', () => {
 		const m = buildToolingModel(box, { iso_designation: 'CNMG120408' }, [ins(1), ins(2, { is_depleted: true }), ins(3)],
 			[edge('i1', 'A', true), edge('i1', 'B'), edge('i2', 'A')]);
 		const [a, b, c] = m.inserts;
-		expect(freshCaption(a)).toBe('1/2 fresh');
+		expect(freshCaption(a)).toBe('1/4 fresh'); // two recorded edges of the type's four: the missing two are not fresh
 		expect(freshCaption(b)).toBe('depleted');
 		expect(freshCaption(c)).toBe('no edges');
 	});
