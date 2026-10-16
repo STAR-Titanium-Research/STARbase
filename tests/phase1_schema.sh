@@ -3827,6 +3827,7 @@ DROP TABLE IF EXISTS d1_private.inbox_prefs;
 DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
 DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
 DROP TABLE IF EXISTS d1_private.inbox_dirs;
+DROP TABLE IF EXISTS d1_private.file_thumbnails;
 DROP TABLE IF EXISTS d1_private.file_candidates;
 DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard() CASCADE;
 DROP FUNCTION IF EXISTS d1_private.inbox_person_alias_changed() CASCADE;
@@ -6590,6 +6591,8 @@ INSERT INTO directus_files (id) VALUES ('$FI_F1');
 INSERT INTO directus_users (id) VALUES ('$FI_U1');
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
 INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES ('$FI_U1', true);
+-- migration 198's table references file_candidates; its own down runs first in a real rollback
+DROP TABLE IF EXISTS d1_private.file_thumbnails;
 $fi_down
 SELECT 'fi_dn_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables);
 SELECT 'fi_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
@@ -6610,6 +6613,81 @@ SQL
     grep -q 'fi_dn_triggers:0,0' <<<"$fi_out" && grep -q 'fi_up_triggers:3,3' <<<"$fi_out" && ok "down drops the three trigger functions and triggers; up brings them back" || bad "triggers did not round-trip (output: $fi_out)"
     grep -q 'fi_dn_people:1' <<<"$fi_out" && grep -q 'fi_dn_files:1' <<<"$fi_out" && ok "down keeps the people and files rows (only the new columns and tables go)" || bad "down removed people or files rows (output: $fi_out)"
     grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
+
+echo "== Inbox thumbnails: d1_private.file_thumbnails =="
+# Spec section 14 of the found files inbox design; plan docs/superpowers/plans/2026-10-16-inbox-thumbnails.md. Same fixture helper as above (fi_sql).
+FT_MIG=$(ls db/migrations/*_file_thumbnails.sql 2>/dev/null | head -1)
+[[ -n "$FT_MIG" && -f "$FT_MIG" ]] && ok "found the file thumbnails migration (${FT_MIG:-none})" || bad "the file thumbnails migration is missing (db/migrations/*_file_thumbnails.sql)"
+FT_CAND="INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif');"
+FT_ROW="INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime) SELECT candidate_id, '\\xffd8ffe0'::bytea, '\\xffd8ffe0aabbcc'::bytea, 1234, '2026-10-10T09:00:00Z' FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';"
+run_eq "file_thumbnails is a d1_private table, in no Directus-facing place (public, v_schema_dictionary, directus_collections, directus_fields)" \
+    "SELECT (SELECT count(*) FROM pg_tables WHERE schemaname = 'd1_private' AND tablename = 'file_thumbnails') || ',' || (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'file_thumbnails') || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name = 'file_thumbnails') || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'file_thumbnails') || ',' || (SELECT count(*) FROM directus_fields WHERE collection = 'file_thumbnails')" "1,0,0,0,0"
+run_eq "d1_llm_readonly cannot read the thumbnails" \
+    "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.file_thumbnails', 'SELECT')" "f"
+run_eq "file_thumbnails columns and types match the contract" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_thumbnails'" \
+    "candidate_id:uuid:NO,thumb:bytea:NO,preview:bytea:NO,thumb_width:integer:YES,thumb_height:integer:YES,preview_width:integer:YES,preview_height:integer:YES,source_size:bigint:NO,source_mtime:timestamp with time zone:NO,created_at:timestamp with time zone:NO"
+run_eq "the key and the foreign key have the repo's names, and the foreign key cascades from file_candidates" \
+    "SELECT string_agg(conname || ':' || contype::text || ':' || coalesce(confrelid::regclass::text, '-') || ':' || coalesce(confdeltype::text, '-'), ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f')" \
+    "file_thumbnails_candidate_id_fkey:f:d1_private.file_candidates:c,file_thumbnails_pkey:p:-:a"
+fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+SELECT 'ft_row:' || octet_length(thumb) || ':' || octet_length(preview) || ':' || source_size || ':' || (created_at IS NOT NULL) || ':' || (thumb_width IS NULL) FROM d1_private.file_thumbnails;")
+grep -q 'ft_row:4:7:1234:true:true' <<<"$fi_out" && ok "a picture pair stores the bytes as written, with created_at defaulted and the sizes optional" || bad "a thumbnail row did not store as written (output: $fi_out)"
+fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+$FT_ROW")
+grep -q 'file_thumbnails_pkey' <<<"$fi_out" && ok "a candidate has at most one picture pair" || bad "a second picture pair for one candidate was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime) VALUES (gen_random_uuid(), '\\x00', '\\x00', 1, now());")
+grep -q 'file_thumbnails_candidate_id_fkey' <<<"$fi_out" && ok "pictures for an unknown candidate are rejected (foreign key)" || bad "a picture for a candidate that does not exist was not rejected (output: $fi_out)"
+for ft_col in thumb preview source_size source_mtime; do
+    fi_out=$(fi_sql "$FT_CAND
+INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime) SELECT candidate_id, '\\x00', '\\x00', 1, now() FROM d1_private.file_candidates;
+UPDATE d1_private.file_thumbnails SET $ft_col = NULL;")
+    grep -q "null value in column \"$ft_col\"" <<<"$fi_out" && ok "file_thumbnails.$ft_col cannot be NULL" || bad "file_thumbnails.$ft_col accepted NULL (output: $fi_out)"
+done
+for ft_col in thumb_width thumb_height preview_width preview_height; do
+    fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+UPDATE d1_private.file_thumbnails SET $ft_col = 0;")
+    grep -q "file_thumbnails_${ft_col}_check" <<<"$fi_out" && ok "file_thumbnails.$ft_col must be positive when set" || bad "file_thumbnails.$ft_col accepted 0 (output: $fi_out)"
+done
+fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+UPDATE d1_private.file_thumbnails SET source_size = -1;")
+grep -q 'file_thumbnails_source_size_check' <<<"$fi_out" && ok "file_thumbnails.source_size cannot be negative" || bad "a negative source_size was accepted (output: $fi_out)"
+fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+DELETE FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';
+SELECT 'ft_cascade_candidate:' || count(*) FROM d1_private.file_thumbnails;")
+grep -q 'ft_cascade_candidate:0' <<<"$fi_out" && ok "deleting a candidate deletes its pictures" || bad "pictures outlived their candidate (output: $fi_out)"
+fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+DELETE FROM directus_files WHERE id = '$FI_F1';
+SELECT 'ft_cascade_file:' || (SELECT count(*) FROM d1_private.file_candidates) || ':' || (SELECT count(*) FROM d1_private.file_thumbnails);")
+grep -q 'ft_cascade_file:0:0' <<<"$fi_out" && ok "deleting the file row removes its candidate and the pictures with it" || bad "pictures outlived their file (output: $fi_out)"
+run_eq "the table, every column and the key and foreign key have a comment (without: none)" \
+    "SELECT coalesce(string_agg(x, ', ' ORDER BY x), '') FROM (
+        SELECT c.relname AS x FROM pg_class c WHERE c.oid = 'd1_private.file_thumbnails'::regclass AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT a.attname FROM pg_attribute a WHERE a.attrelid = 'd1_private.file_thumbnails'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT conname FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f') AND coalesce(obj_description(oid, 'pg_constraint'), '') = '') q" ""
+# Down and up again, inside one rolled-back transaction: down drops the table (the candidate stays), up brings it back empty.
+if [[ -n "$FT_MIG" && -f "$FT_MIG" ]]; then
+    ft_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FT_MIG")
+    ft_down=$(awk '/-- migrate:down/{f=1;next}f' "$FT_MIG")
+    fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+$ft_down
+SELECT 'ft_dn_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname = 'file_thumbnails';
+SELECT 'ft_dn_candidates:' || count(*) FROM d1_private.file_candidates;
+$ft_up
+SELECT 'ft_up_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'file_thumbnails';
+SELECT 'ft_up_rows:' || count(*) FROM d1_private.file_thumbnails;")
+    grep -q 'ft_dn_table:0' <<<"$fi_out" && grep -q 'ft_dn_candidates:1' <<<"$fi_out" && ok "down drops the thumbnails table and keeps the candidates" || bad "down left the table or removed candidates (output: $fi_out)"
+    grep -q 'ft_up_table:1' <<<"$fi_out" && grep -q 'ft_up_rows:0' <<<"$fi_out" && ok "up again restores the table, empty (the pictures are made again from the share)" || bad "up after down failed (output: $fi_out)"
 fi
 
 echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="
