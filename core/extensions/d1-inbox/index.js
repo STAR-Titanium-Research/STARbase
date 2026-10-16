@@ -379,9 +379,7 @@ export function isViewerAccountability(acc) {
 }
 
 export function canSee(scope, candidate) {
-  if (scope.admin === true) return true;
-  if (scope.personId && candidate.owner_person_id === scope.personId) return true;
-  return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
+  return scope.admin === true || canChange(scope, candidate);
 }
 
 // The WRITE rule (stream D, ADR-0022 decision 3): who may link, dismiss, restore or undo a candidate, and correct a file's settings. Only the owner
@@ -1356,15 +1354,16 @@ export function mount(router, context, deps = {}) {
   // Does the caller read a record this file is linked to? The three junctions are read AS THE CALLER through ItemsService, so Directus's own read rule
   // of each junction (it follows the record's read rule) decides; a refused read is "no". One row is enough.
   async function linkedRecordReadable(acc, schema, fileId) {
-    for (const target of Object.values(LINK_TARGETS)) {
+    const reads = Object.values(LINK_TARGETS).map(async (target) => {
       try {
         const rows = await itemsFor(schema, acc, target.junction).readByQuery({ fields: ['id'], filter: { directus_files_id: { _eq: fileId } }, limit: 1 });
-        if (rows.length) return true;
+        return rows.length > 0;
       } catch (err) {
         if (!isDenied(err)) throw err;
+        return false;
       }
-    }
-    return false;
+    });
+    return (await Promise.all(reads)).some(Boolean);
   }
 
   // GET /sem-settings?file=<directus_files id>. Who may read a file's settings is decided from the pointer row's OWNER columns (ADR-0022):
