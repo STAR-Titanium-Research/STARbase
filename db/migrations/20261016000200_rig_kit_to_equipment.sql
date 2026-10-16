@@ -29,9 +29,8 @@ UPDATE directus_fields
 
 -- 2. Copy the unreferenced hex-coded rows into equipment, then remove them from physical_samples.
 CREATE TEMP TABLE _rig_kit ON COMMIT DROP AS
-SELECT p.sample_id, p.sample_code,
-       COALESCE(NULLIF(btrim(p.nickname), ''), p.sample_code) AS name,
-       p.notes, p.location, p.project_id
+SELECT p.sample_id, p.sample_code, p.notes, p.location, p.project_id,
+       COALESCE(NULLIF(btrim(p.nickname), ''), p.sample_code) AS item_name
   FROM physical_samples p
  WHERE p.sample_code ~ '^[0-9a-f]{8}$'
    AND NOT EXISTS (SELECT 1 FROM manufacturing_operations x WHERE x.sample_id = p.sample_id OR x.output_sample_id = p.sample_id)
@@ -49,11 +48,11 @@ SELECT p.sample_id, p.sample_code,
 INSERT INTO equipment (equipment_code, equipment_name, equipment_type, location, notes, project_id, is_active)
 SELECT CASE WHEN EXISTS (SELECT 1 FROM equipment e WHERE e.equipment_code = s.slug)
             THEN s.slug || '-' || r.sample_code ELSE s.slug END,
-       r.name, 'Rig_Kit', r.location,
+       r.item_name, 'Rig_Kit', r.location,
        btrim(COALESCE(r.notes, '') || E'\n\nWas sample ' || r.sample_code || '.'),
        r.project_id, true
   FROM _rig_kit r
-  CROSS JOIN LATERAL (SELECT trim(both '-' from regexp_replace(r.name, '[^A-Za-z0-9]+', '-', 'g')) AS slug) s;
+  CROSS JOIN LATERAL (SELECT btrim(regexp_replace(r.item_name, '[^A-Za-z0-9]+', '-', 'g'), '-') AS slug) s;
 
 DELETE FROM physical_samples WHERE sample_id IN (SELECT sample_id FROM _rig_kit);
 
