@@ -37,6 +37,11 @@ def bar_of(im):
     means = a.mean(axis=1)
     # the bar's top divider: the first full-white row in the bottom 25% followed by dark rows
     for y in range(int(h * 0.75), h - 10):
-        if means[y] > 250 and means[y + 2] < 60:
+        # a bright full-width row followed by dark rows (relative, so contrast-edited exports still match)
+        if (
+            means[y] > 150
+            and means[y] > 2.5 * max(means[y + 2], 1)
+            and means[y + 2] < 60
+        ):
             return im.crop((0, y, im.width, h)).convert("L")
     return None

@@ -42,3 +42,22 @@ disagree with the bar's magnification. The metadata shows that the file names ar
 python -m venv .venv && .venv/Scripts/pip install rapidocr-onnxruntime
 .venv/Scripts/python ocr_trial.py paths.txt 'Z:\star_group1' out.json   # paths.txt: share-relative .tif paths
 ```
+
+## Exports (PNG/JPEG), second round
+
+The second round covered every FEI-sized (1024×943 / 2048×1887) PNG, JPEG and BMP in SEM-named folders: **37/37 read
+cleanly**, including 32 contrast-edited `*_contrasted.PNG`. Six exports have a TIFF twin with the same name, and all six
+match it, with one exception: a JPEG whose bar really says 10 kV while its TIFF namesake says 20 kV, so it is a
+different capture with the same name, not a misread.
+
+Two thresholds had to become relative to survive contrast edits, which dim the white lines to about 200, and the
+dividers further still:
+- the bar's top edge is a row with a mean above 150 and at least 2.5× the rows below it (it was "= 255");
+- a divider column is one where more than 90% of the bar body is brighter than 0.4 × the bar's maximum (it was "> 200").
+  Text never spans the full height, so this stays safe.
+
+Geometry: the bar is always the bottom 59–60 rows of a 943-row frame (119 of 1887), and the header/value split is at a
+fixed height. **Columns are not fixed**: 120 bars showed 16 layouts, because a cell's width follows its text. Find the
+columns from the dividers rather than from fixed pixel positions.
+
+The TIFF set is unchanged after these changes, still 246/246.

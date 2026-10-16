@@ -14,7 +14,9 @@ def cells(bar):
     dark = [y for y in band if left[y] <= lo + 2]
     mid = (dark[0] + dark[-1]) // 2
     body = a[2 : h - 1]
-    cols = [x for x in range(w) if (body[:, x] > 200).mean() > 0.9]  # vertical dividers
+    cols = [
+        x for x in range(w) if (body[:, x] > 0.4 * body.max()).mean() > 0.9
+    ]  # vertical dividers
     edges = []
     for x in cols:
         if not edges or x - edges[-1][-1] > 1:
