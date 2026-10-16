@@ -42,8 +42,8 @@ describe('the tables', () => {
 			for (const c of CHOICES[k]) expect(c.text.trim(), `${k}.${c.value}`).not.toBe('');
 		}
 	});
-	it('equipment types: all 29 stored values, and the Force App value stays', () => {
-		expect(CHOICES.equipmentType).toHaveLength(29);
+	it('equipment types: all 30 stored values, and the Force App value stays', () => {
+		expect(CHOICES.equipmentType).toHaveLength(30);
 		expect(CHOICES.equipmentType.map((c) => c.value)).toContain('Machining');
 		expect(CHOICES.equipmentType.map((c) => c.value)).not.toContain('AM');
 	});

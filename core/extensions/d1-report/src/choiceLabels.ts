@@ -67,6 +67,7 @@ export const EQUIPMENT_TYPE_CHOICES: Choice[] = [
 	{ value: 'Mounting_Press', text: 'Mounting press' },
 	{ value: 'Optical_Microscope', text: 'Optical microscope' },
 	{ value: 'Powder_Mixer', text: 'Powder mixer' },
+	{ value: 'Rig_Kit', text: 'Rig kit / accessory' },
 	{ value: 'Sample_Prep', text: 'Sample prep' },
 	{ value: 'SEM', text: 'SEM' },
 	{ value: 'SEM_FIB', text: 'SEM / FIB' },

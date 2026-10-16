@@ -60,8 +60,10 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 	await figureBtn.click();
 
 	// Operation info tiles.
-	await expect(page.locator('.card.info .stat').first()).toBeVisible({ timeout: 20_000 });
-	expect(await page.locator('.card.info .stat').count()).toBeGreaterThanOrEqual(6);
+	// (Cut parameters is an .edit-grid of inputs: spiral feed/Ø, inner Ø, pulses/rev, sample rate, cut time.)
+	const cutFields = page.locator('.card.info-op .edit-grid', { hasText: 'Spiral feed' }).locator('input');
+	await expect(cutFields.first()).toBeVisible({ timeout: 20_000 });
+	expect(await cutFields.count()).toBeGreaterThanOrEqual(6);
 
 	// Three stacked signal charts (Force mode by default) each render an SVG.
 	const charts = page.locator('.charts-col .chart svg');
