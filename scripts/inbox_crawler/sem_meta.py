@@ -35,6 +35,35 @@ UM_PER: dict[str, float] = {
     "mm": 1000.0,
 }
 
+# Shared by the text parser (`classify_sem`) and the bar reader (`sem_bar`), which cannot import each other (the
+# bar reader needs numpy).
+DIVIDER_ROW_FRAC = (
+    0.9  # a divider column is bright in more than this share of the body rows ...
+)
+DIVIDER_BRIGHT_FRAC = (
+    0.4  # ... where bright means above this share of the bar's maximum
+)
+SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
+
+
+def um_of(number, unit: str) -> float:
+    """A printed length (`number` in `unit`, a key of `UM_PER` in any case) as micrometres, rounded to 6 places."""
+    return round(float(number) * UM_PER[unit.lower()], 6)
+
+
+def tiff_tag_text(img, key: int) -> str | None:
+    """TIFF tag `key` of `img` as text (bytes are decoded as latin-1), or None when the image is not a TIFF, the
+    tag is absent or it is not text."""
+    try:
+        tags = img.tag_v2  # TIFF only
+    except AttributeError:
+        return None
+    val = tags.get(key)
+    if isinstance(val, bytes):
+        val = val.decode("latin-1", "ignore")
+    return val if isinstance(val, str) else None
+
+
 _CREATED_FORMAT = "%d.%m.%Y %H:%M:%S"  # [PrivateFei] TimeOfCreation
 _USER_DATE_FORMAT = "%m/%d/%Y"  # [User] Date
 _USER_TIME = re.compile(r"\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])?[Mm]?\s*$")
@@ -86,14 +115,8 @@ def _user_naive(date: str, time: str) -> datetime | None:
 def _read_ini(img) -> dict[str, configparser.SectionProxy] | None:
     """The tag's sections (lower-cased names; option names are lower-cased by the parser), or None when the
     tag is absent, not text, too long or not INI."""
-    try:
-        tags = img.tag_v2  # TIFF only
-    except AttributeError:
-        return None
-    val = tags.get(FEI_TAG)
-    if isinstance(val, bytes):
-        val = val.decode("latin-1", "ignore")
-    if not isinstance(val, str) or len(val) > MAX_META_CHARS:
+    val = tiff_tag_text(img, FEI_TAG)
+    if val is None or len(val) > MAX_META_CHARS:
         return None
     cp = configparser.ConfigParser(strict=False, interpolation=None)
     try:

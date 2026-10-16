@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import numpy
 from PIL import Image, ImageOps
 
-from .sem_meta import RANGES, UM_PER
+from .sem_meta import DIVIDER_BRIGHT_FRAC, DIVIDER_ROW_FRAC, RANGES, SEP, um_of
 
 log = logging.getLogger("inbox_crawler.sem_bar")
 
@@ -45,10 +45,6 @@ SCALE_TOLERANCE = 0.05  # the scale-bar label against the bar's pixel length
 
 MIN_CELL_PX = 12  # a narrower strip between dividers is not a cell
 INSET_PX = 2  # crops stay this far inside a cell, off the divider and the top row
-DIVIDER_ROW_FRAC = (
-    0.9  # a divider column is bright in more than this share of the body rows ...
-)
-DIVIDER_BRIGHT_FRAC = 0.4  # ... where bright is above this share of the bar's maximum
 SPLIT_BAND = (
     0.3,
     0.7,
@@ -219,9 +215,8 @@ def read_bar(bar, recognise: Recogniser) -> dict[str, tuple[str, float]]:
 # ---- parsing and checks ---------------------------------------------------------------------
 
 _DECIMAL = re.compile(r"\d+(?:[.,]\d+)?")
-_SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
-_INT_CHAIN = re.compile(rf"\d+(?:{_SEP}\d+)*")
-_SEP_SPLIT = re.compile(_SEP)
+_INT_CHAIN = re.compile(rf"\d+(?:{SEP}\d+)*")
+_SEP_SPLIT = re.compile(SEP)
 _SCALE_TEXT = re.compile(r"(\d+(?:[.,]\d+)?)\s*(nm|µm|μm|um|mm)(?![A-Za-z])", re.I)
 _TEXT_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .+/-]{0,23}")
 
@@ -256,7 +251,7 @@ def _scale_label_um(text: str) -> float | None:
     m = _SCALE_TEXT.search(text)
     if m is None:
         return None
-    return round(float(re.sub(",", ".", m.group(1))) * UM_PER[m.group(2).lower()], 6)
+    return um_of(re.sub(",", ".", m.group(1)), m.group(2))
 
 
 def _canvas_of(magnification: int, hfw_um: float) -> float | None:
