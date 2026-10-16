@@ -43,6 +43,8 @@ export interface Notice {
 	tone: 'ok' | 'warn' | 'bad';
 	text: string;
 	undo?: NoticeUndo;
+	/** A rule was just added (Ignore this folder): the notice offers to remove it again (useIgnoredFolders). Nothing is restored. */
+	removeRule?: string;
 }
 
 /** A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. */
@@ -397,6 +399,7 @@ export function createInbox(deps: InboxDeps) {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
 		preview, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
 		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
+		say,
 		dismissNotice: () => say(null),
 		cancel: () => {
 			mainGate.cancel();
