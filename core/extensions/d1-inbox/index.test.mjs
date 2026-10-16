@@ -274,11 +274,16 @@ function statement(w, sql, b, txId) {
       const t = w.thumbs.get(b[0]);
       if (!c || !t) return [];
       const bytes = t[name.split('.')[1]];
-      return [{ owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, state: c.state, etag: createHash('md5').update(bytes).digest('hex') }];
+      // a failure marker row (thumb and preview NULL): md5(NULL) is NULL
+      const row = { owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, state: c.state, etag: bytes ? createHash('md5').update(bytes).digest('hex') : null };
+      // a test hook: what happens between the cheap step and the bytes (a picture replaced or removed by the crawler)
+      if (w.afterThumbMeta) { const hook = w.afterThumbMeta; w.afterThumbMeta = null; queueMicrotask(() => hook(w)); }
+      return [row];
     }
     case 'thumbBytes.thumb': case 'thumbBytes.preview': {
       const t = w.thumbs.get(b[0]);
-      return t ? [{ bytes: t[name.split('.')[1]] }] : [];
+      const bytes = t ? t[name.split('.')[1]] : null;
+      return t ? [{ etag: bytes ? createHash('md5').update(bytes).digest('hex') : null, bytes }] : [];
     }
     case 'summary': case 'summaryWithScans': return copy(w.summaryRows);
     case 'scansOfFiles': return [...new Set(csv(b[0]))].filter((id) => w.scans.some((r) => r.directus_files_id === id)).map((id) => ({ directus_files_id: id }));
@@ -2698,8 +2703,8 @@ test('GET /files: has_thumbnail is a boolean per row, true only when the list qu
   const res = await call('GET /files', { user: U.alice, query: { tab: 'new' } });
   assert.deepEqual(res.body.data.map((r) => r.has_thumbnail), [true, false]);
   const page = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({}));
-  assert.match(page.sql, /EXISTS \(SELECT 1 FROM d1_private\.file_thumbnails th WHERE th\.candidate_id = c\.candidate_id\) AS has_thumbnail/);
-  assert.doesNotMatch(page.sql, /\b(th|t)\.(thumb|preview)\b/, 'the list never selects the bytes');
+  assert.match(page.sql, /EXISTS \(SELECT 1 FROM d1_private\.file_thumbnails th WHERE th\.candidate_id = c\.candidate_id AND th\.thumb IS NOT NULL\) AS has_thumbnail/, 'a failure marker (thumb NULL) is not a thumbnail');
+  assert.doesNotMatch(page.sql.replace('th.thumb IS NOT NULL', ''), /\b(th|t)\.(thumb|preview)\b/, 'the list never selects the bytes');
   const info = { readable: new Set(), labels: new Map(), editable: new Set() };
   assert.equal(fileOut(listRow(a, { has_thumbnail: 'yes' }), info).has_thumbnail, false, 'only a real true counts');
   assert.equal(fileOut(listRow(a), info).has_thumbnail, false, 'a row without the column is false, not undefined');
@@ -2713,7 +2718,9 @@ test('GET /files/:id/thumb and /preview: the owner gets the JPEG itself with the
     const res = await picture(call, kind, a.candidate_id, U.alice);
     assert.equal(res.statusCode, 200, kind);
     assert.equal(res.headers['content-type'], 'image/jpeg', kind);
-    assert.equal(res.headers['cache-control'], 'private, max-age=3600', kind);
+    assert.equal(res.headers['cache-control'], 'private, no-cache', kind);
+    assert.equal(res.headers.vary, 'Cookie, Authorization', kind);
+    assert.doesNotMatch(res.headers['cache-control'], /max-age/, 'a cached picture would skip canSee');
     assert.equal(res.headers.etag, `"${md5(bytes)}"`, kind);
     assert.equal(res.headers['content-length'], String(bytes.length), kind);
     assert.equal(res.headers['x-content-type-options'], 'nosniff', kind);
@@ -2747,15 +2754,17 @@ test('GET /files/:id/thumb: not visible, no picture, no such file, a gone file a
   const hidden = withPicture(w, add(w, cand({ owner_person_id: P.bob })));
   const none = add(w, cand());
   const gone = withPicture(w, add(w, cand({ state: 'gone' })));
+  const marker = add(w, cand());
+  w.thumbs.set(marker.candidate_id, { thumb: null, preview: null, failed_reason: 'could not be decoded' });
   const { call } = setup(w);
   const answers = [];
-  for (const id of [hidden.candidate_id, none.candidate_id, ID(9999), gone.candidate_id, 'not-a-uuid', undefined]) {
+  for (const id of [hidden.candidate_id, none.candidate_id, ID(9999), gone.candidate_id, marker.candidate_id, 'not-a-uuid', undefined]) {
     const res = await picture(call, 'preview', id, U.alice);
     assert.equal(res.statusCode, 404, String(id));
     assert.equal(codeOf(res), 'NOT_FOUND', String(id));
     assert.equal(errorOf(res).extensions.source, 'd1-inbox');
     assert.equal(res.raw, undefined);
-    assert.equal(res.headers.etag, undefined, 'no ETag for a picture the caller cannot have');
+    for (const h of ['etag', 'cache-control', 'vary']) assert.equal(res.headers[h], undefined, `no ${h} on a 404`);
     answers.push(res.body);
   }
   assert.deepEqual(answers, answers.map(() => answers[0]), 'one answer for every reason');
@@ -2764,6 +2773,50 @@ test('GET /files/:id/thumb: not visible, no picture, no such file, a gone file a
   // an upper-case id is the same id
   const upper = await picture(call, 'thumb', withPicture(w, add(w, cand())).candidate_id.toUpperCase(), U.alice);
   assert.equal(upper.statusCode, 200);
+});
+
+test('GET /files/:id/thumb and /preview: a failure marker row (no pictures) is a 404 for the owner too, with no bytes read and no caching headers, even with a matching If-None-Match', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  w.thumbs.set(a.candidate_id, { thumb: null, preview: null, failed_reason: 'could not be decoded' });
+  const { call } = setup(w);
+  for (const kind of ['thumb', 'preview']) {
+    for (const headers of [{}, { 'if-none-match': '*' }, { 'if-none-match': `"${md5(Buffer.alloc(0))}"` }]) {
+      const res = await picture(call, kind, a.candidate_id, U.alice, { headers });
+      assert.equal(res.statusCode, 404, kind);
+      assert.equal(codeOf(res), 'NOT_FOUND');
+      assert.equal(res.raw, undefined);
+      for (const h of ['etag', 'cache-control', 'vary']) assert.equal(res.headers[h], undefined, `${kind}: no ${h}`);
+    }
+  }
+  assert.equal(w.log.filter((l) => /^thumbBytes/.test(l.name ?? '')).length, 0, 'bytes were never read for a marker');
+});
+
+test('GET /files/:id/thumb: the picture vanishing (or becoming a marker) between the cheap step and the bytes is a plain 404 with no caching headers', async () => {
+  for (const after of [(w, id) => w.thumbs.delete(id), (w, id) => w.thumbs.set(id, { thumb: null, preview: null, failed_reason: 'x' })]) {
+    const w = newWorld();
+    const a = withPicture(w, add(w, cand()));
+    w.afterThumbMeta = (world) => after(world, a.candidate_id);
+    const { call } = setup(w);
+    const res = await picture(call, 'thumb', a.candidate_id, U.alice);
+    assert.equal(res.statusCode, 404);
+    assert.equal(codeOf(res), 'NOT_FOUND');
+    assert.equal(res.raw, undefined);
+    for (const h of ['etag', 'cache-control', 'vary', 'content-type', 'content-length']) assert.equal(res.headers[h], undefined, `no ${h}`);
+  }
+});
+
+test('GET /files/:id/thumb: a picture replaced between the cheap step and the bytes goes out under the ETag of the bytes sent, not the old one', async () => {
+  const w = newWorld();
+  const a = withPicture(w, add(w, cand()));
+  const fresh = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x09, 0x09, 0x09]);
+  w.afterThumbMeta = (world) => world.thumbs.set(a.candidate_id, { thumb: fresh, preview: JPEG_PREVIEW });
+  const { call } = setup(w);
+  const res = await picture(call, 'thumb', a.candidate_id, U.alice);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.raw, fresh);
+  assert.equal(res.headers.etag, `"${md5(fresh)}"`, 'the tag of the bytes sent');
+  assert.notEqual(res.headers.etag, `"${md5(JPEG_THUMB)}"`);
 });
 
 test('GET /files/:id/thumb: 401 without a user; a Lab Viewer may read pictures of their own inbox (a read is not a write)', async () => {
@@ -2788,7 +2841,8 @@ test('GET /files/:id/thumb: If-None-Match with the current ETag is a 304 with no
   assert.equal(hit.raw, undefined, 'no body');
   assert.equal(hit.ended, true);
   assert.equal(hit.headers.etag, etag, 'a 304 repeats the ETag');
-  assert.equal(hit.headers['cache-control'], 'private, max-age=3600');
+  assert.equal(hit.headers['cache-control'], 'private, no-cache');
+  assert.equal(hit.headers.vary, 'Cookie, Authorization');
   assert.equal(hit.headers['content-type'], undefined);
   assert.equal(w.log.filter((l) => l.name === 'thumbBytes.thumb').length, 0, 'a 304 never moves the bytes');
   for (const header of [`"${md5(JPEG_PREVIEW)}"`, '"stale"', '', undefined]) {
@@ -2822,7 +2876,8 @@ test('the picture SQL reads the bytes of one column chosen from a closed list, f
     assert.match(SQL.thumbMeta[kind], new RegExp(`md5\\(t\\.${kind}\\) AS etag`));
     assert.doesNotMatch(SQL.thumbMeta[kind].replace(/md5\(t\.\w+\)/, ''), /\bt\.(thumb|preview)\b/, 'only the md5 of the picture, never the picture');
     assert.match(SQL.thumbMeta[kind], /WHERE c\.candidate_id = \?$/);
-    assert.match(SQL.thumbBytes[kind], new RegExp(`^SELECT t\\.${kind} AS bytes FROM d1_private\\.file_thumbnails t WHERE t\\.candidate_id = \\?$`));
+    // the bytes and their md5 in one query: the ETag sent always belongs to the bytes sent
+    assert.match(SQL.thumbBytes[kind], new RegExp(`^SELECT md5\\(t\\.${kind}\\) AS etag, t\\.${kind} AS bytes FROM d1_private\\.file_thumbnails t WHERE t\\.candidate_id = \\?$`));
   }
 });
 

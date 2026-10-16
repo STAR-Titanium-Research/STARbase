@@ -495,15 +495,18 @@ two small pictures behind the Inbox row and its full view, for candidates of kin
 replaceable from the share (a reduced copy, never the original), so no audit or OCC triggers. Like the five tables above it is in
 `d1_private`: not exposed by Directus, not in `v_schema_dictionary`, not granted to the LLM role. The crawler writes it (at registration,
 from bytes it already holds, and in a throttled backfill); the `d1-inbox` endpoint serves it (`GET /d1-inbox/files/:candidate_id/thumb`
-and `/preview`, `image/jpeg`, with the same visibility as the list) and reports `has_thumbnail` on each found file, never the bytes.
+and `/preview`, `image/jpeg`, with the same visibility as the list) and reports `has_thumbnail` (true only when `thumb` is set) on each found file, never the bytes. A file the crawler could not decode gets a
+**marker row** (`thumb` and `preview` NULL, `failed_reason` set) so it is not read from the share again until its size or modification time changes;
+the picture routes answer a marker with the same 404 as no row.
 
 | Column | Type | Description |
 |---|---|---|
 | `candidate_id` | UUID PK, FK `file_candidates` | One row per candidate; `ON DELETE CASCADE` (the crawler also deletes the row when it marks the file gone) |
-| `thumb` | BYTEA NOT NULL | JPEG, about 320 px on the long side (10 to 25 KB) |
-| `preview` | BYTEA NOT NULL | JPEG, about 1600 px on the long side (150 to 400 KB) |
+| `thumb` | BYTEA, NULL in a marker row | JPEG, about 320 px on the long side (10 to 25 KB) |
+| `preview` | BYTEA, NULL in a marker row | JPEG, about 1600 px on the long side (150 to 400 KB) |
+| `failed_reason` | TEXT | Why no pictures could be made; NULL when they exist. CHECK `file_thumbnails_pictures_or_failure_check`: either `thumb` and `preview` are both set and this is NULL, or all of `thumb`, `preview` are NULL and this is set |
 | `thumb_width`, `thumb_height`, `preview_width`, `preview_height` | INTEGER | Pixel sizes; NULL when not recorded, greater than 0 when set |
-| `source_size`, `source_mtime` | BIGINT NOT NULL (>= 0), TIMESTAMPTZ NOT NULL | The file's size and modification time when the pictures were made; the backfill redoes a candidate whose values differ |
+| `source_size`, `source_mtime` | BIGINT NOT NULL (>= 0), TIMESTAMPTZ NOT NULL | The file's size and modification time when the pictures (or the failure marker) were made; the backfill redoes a candidate whose values differ |
 | `created_at` | TIMESTAMPTZ NOT NULL | Default `now()` |
 **`d1_private.inbox_ignored_dirs`** (migration `…199`, [spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 15): the
 folders the crawler leaves alone ("ignore this folder when scanning"). Also in `d1_private`: not exposed by Directus, not in

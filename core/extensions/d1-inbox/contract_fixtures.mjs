@@ -305,8 +305,8 @@ export function buildFixtures() {
     description: 'what GET /d1-inbox/files/:candidate_id/thumb and /preview answer for a file the caller may see and that has a picture: the JPEG bytes (not JSON) with these headers; the client sends the signed-in session and fetches a blob',
     route: ['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview'],
     status: 200,
-    headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', ETag: '"<md5 of the stored bytes, quoted>"', 'Content-Length': '<bytes>', 'X-Content-Type-Options': 'nosniff' },
-    conditional: { request_header: 'If-None-Match', status: 304, body: null, repeats: ['ETag', 'Cache-Control'] },
+    headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache', Vary: 'Cookie, Authorization', ETag: '"<md5 of the stored bytes, quoted>"', 'Content-Length': '<bytes>', 'X-Content-Type-Options': 'nosniff' },
+    conditional: { request_header: 'If-None-Match', status: 304, body: null, repeats: ['ETag', 'Cache-Control', 'Vary'], only_after: 'the caller may see the file (a 304 is never sent to someone who may not)' },
     has_picture_when: 'the found file has has_thumbnail true',
   });
   put('picture_404', failure('no picture for that id: the file is not the caller\'s to see, does not exist, is gone, has no picture, or the id is not a uuid (one answer for all, a JSON error)',
