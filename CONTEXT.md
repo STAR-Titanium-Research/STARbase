@@ -345,6 +345,33 @@ To tie a file on the share to a sample, operation or test, so it shows on that r
 be undone; linking never changes, moves or deletes the file.
 _Avoid_: attach (that is the process map's word), upload, import
 
+**SEM image**:
+An image recognised as coming from a scanning electron microscope, whether it is still a **found file** or
+already **linked**.
+_Avoid_: micrograph (the lab says SEM image)
+
+**Data bar**:
+The strip along the bottom edge of an **SEM image** that prints the microscope's settings and the scale bar.
+_Avoid_: footer, banner, info bar
+
+**Imaging settings**:
+What was read from an **SEM image**: accelerating voltage, working distance, magnification, spot size,
+detector, mode, scale bar, the date it was taken and the instrument. They describe one image, never a whole
+**test**.
+_Avoid_: SEM parameters (parameters are a **test**'s), metadata
+
+**Provenance owner**:
+The person whose **personal folder** a file came from, or the team whose **team folder** it came from. Only the
+**provenance owner** can see that file and its **imaging settings**, and only they can **link** it. It is fixed
+when the file is first registered and follows the person, not the **uni alias**'s spelling. Administrators can
+see such files read-only.
+_Avoid_: uploader, creator, folder owner
+
+**Locked file**:
+A file **linked** to a record someone can read, but whose **provenance owner** is somebody else. They see that
+the link exists and nothing about the file: no name, no **imaging settings**, no contents.
+_Avoid_: private file, hidden file
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
