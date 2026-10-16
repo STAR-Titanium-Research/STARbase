@@ -6803,6 +6803,17 @@ CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
 CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
+-- stream D (ADR-0022): the imaging settings the link saves through d1_private.save_sem_settings and the undo removes. File ...0101 is saved; ...0103 has a
+-- sample junction row, ...0107 a surface scan row and ...0105 no link: after the undo's delete only ...0105's settings are gone.
+CREATE TEMP TABLE ib_sv AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000101', '{"kv": 15, "magnification": 5000, "ocr_confidence": {"kv": 0.9}}', 'inbox');
+SELECT 'ib_sem_saved:' || saved FROM ib_sv;
+SELECT 'ib_sem_row:' || kv || ':' || magnification || ':' || read_by FROM d1_private.sem_image_settings WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000101';
+CREATE TEMP TABLE ib_sv2 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000103', '{"kv": 10}', 'inbox');
+CREATE TEMP TABLE ib_sv3 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000105', '{"kv": 10}', 'inbox');
+CREATE TEMP TABLE ib_sv4 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000107', '{"kv": 10}', 'inbox');
+-- (ib_run's row count is 0 for a DELETE through EXECUTE, so the rows left are checked)
+SELECT pg_temp.ib_run(format('EXECUTE deleteunlinkedsemsettings(%L)', 'a1b00000-0000-4000-8000-000000000103,a1b00000-0000-4000-8000-000000000105,a1b00000-0000-4000-8000-000000000107')) AS ib_sd \gset
+SELECT 'ib_sem_kept:' || coalesce(string_agg(right(directus_files_id::text, 3), ',' ORDER BY directus_files_id), '') FROM d1_private.sem_image_settings;
 ROLLBACK;
 SQL
 )
@@ -6837,6 +6848,9 @@ SQL
     ib_check "ib_scan_list_linked_kept:a1b00000-0000-4000-8000-000000000006" "the linked tab keeps a scan file after the exclusion variant (it is only for undecided tabs)"
     ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"
     ib_check "ib_scan_list:a1b00000-0000-4000-8000-000000000006" "the Recently linked list names the scan id as the linked record without joining a table that may not exist yet"
+    ib_check "ib_sem_saved:true" "stream D: save_sem_settings (called as the link calls it) saves a row and answers true"
+    ib_check "ib_sem_row:15.00:5000:inbox" "stream D: the saved row holds the mapped keys and read_by inbox; ocr_confidence is ignored by the function"
+    ib_check "ib_sem_kept:101,103,107" "stream D: undo's delete removes the settings of a file with no link left (105) and keeps those of a file still linked (103 sample junction row, 107 surface scan row)"
     ib_check "ib_prefs:1" "the auto-link preference upserts"
     ib_check "ib_first_rescan:1" "a rescan request is queued"
     ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"

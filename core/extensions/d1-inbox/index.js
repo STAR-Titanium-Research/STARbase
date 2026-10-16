@@ -42,6 +42,9 @@
 //                                   feature's own dialog: asked up front, before any record is read; the table's unique constraints are the backstop),
 //                                   409 SURFACE_SCANS_UNAVAILABLE (no such table yet). Where the table exists, the summary and the new, older and open
 //                                   lists leave out undecided surface scan files that already have a scan (older databases use the plain queries).
+//                                   IMAGING SETTINGS (ADR-0022, spec 2026-10-16 section 5): every newly linked candidate of kind 'sem_image' (here, in accept-all and in
+//                                   auto-link) has its `extracted` passed to d1_private.save_sem_settings(file, extracted, 'inbox') in the same transaction. That
+//                                   function is the only place `extracted` becomes columns; this endpoint never maps it.
 //   POST /d1-inbox/accept-all       { filter?, dry_run?, candidate_ids?, cursor? }   links the exact short-ID suggestions the caller can edit
 //                                   (images, and documents or other files, never surface scans) -> { data: { link_batch_id, linked: <count>,
 //                                   items, skipped: [{ candidate_id, reason }] (the first 200), skipped_total, has_more, next_cursor } }.
@@ -53,7 +56,9 @@
 //   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
 //                                   A restore (and an undo) also makes the crawler list the file's folder again (D12): see SQL.relistDirs.
 //   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created (and the surface_scans rows it added,
-//                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }
+//                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }. A file's imaging settings go with
+//                                   its LAST link: they are deleted only when no row is left in sample_data_files, operation_data_files, session_data_files or
+//                                   surface_scans for that file (a file linked to two records keeps them while one link stands).
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
 //                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
@@ -96,6 +101,8 @@ import { readFileSync } from 'node:fs';
 import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE, isWriteRequest } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-inbox';
+// read_by of the settings a link saves: the inbox (the crawler's own reads say sem-<version> in the candidate's classified_by).
+const SEM_READ_BY = 'inbox';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CURRENT_USER = '$CURRENT_USER';
 const MAX_BATCH = 200;
@@ -190,7 +197,7 @@ const isUuid = (v) => typeof v === 'string' && UUID.test(v);
 
 const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_id, c.owner_team_id, c.kind, c.state, c.origin, c.match_strength, c.matches,'
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
-  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at';
+  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at, c.extracted';
 const IDS = "string_to_array(?, ',')::uuid[]";
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
@@ -310,6 +317,15 @@ export const SQL = {
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
   junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
   junctionById: perTarget((t) => `SELECT id, ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE id = ?`),
+  // Imaging settings (stream D, ADR-0022). d1_private.save_sem_settings is the ONLY place `extracted` becomes columns (it maps the keys it knows,
+  // merges, keeps a person's manual fields): this endpoint passes the candidate's extracted on and never maps it. Bindings: the file id, extracted as
+  // JSON text, read_by.
+  saveSemSettings: 'SELECT d1_private.save_sem_settings(?, ?::jsonb, ?) AS saved',
+  // Undo: a file's settings go only when NO row is left in any of the four tables that link a file (a file linked twice keeps them while one link
+  // stands). Binding: the file ids as one csv.
+  deleteUnlinkedSemSettings: `DELETE FROM d1_private.sem_image_settings s WHERE s.directus_files_id = ANY(${IDS})${
+    [...Object.values(LINK_TARGETS).map((t) => t.junction), SURFACE_SCANS]
+      .map((table) => ` AND NOT EXISTS (SELECT 1 FROM ${table} j WHERE j.directus_files_id = s.directus_files_id)`).join('')}`,
 };
 
 // ---- pure helpers (exported for the tests) -----------------------------------------------------------------------------------
@@ -991,6 +1007,8 @@ export function mount(router, context, deps = {}) {
       const adopt = !IMAGE_KINDS.includes(cand.kind);
       const done = rowsOf(await trx.raw(SQL.markLinked, [acc.user, linkKind, collection, junctionId, batchId, adopt, cand.candidate_id]));
       if (!done.length) throw ERRORS.dealtWith(cand.candidate_id);
+      // the image's imaging settings are saved per file, in this transaction, by the one function that maps them (an SEM image only)
+      if (cand.kind === 'sem_image') await trx.raw(SQL.saveSemSettings, [cand.directus_files_id, JSON.stringify(asJson(cand.extracted) ?? {}), SEM_READ_BY]);
       linked.push(linkedItemOut({ cand, collection, recordId, scan }, junctionId, adopt));
     }
     return linked;
@@ -1232,6 +1250,8 @@ export function mount(router, context, deps = {}) {
           throw err;
         }
       }
+      // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
+      await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
       // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
       if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
