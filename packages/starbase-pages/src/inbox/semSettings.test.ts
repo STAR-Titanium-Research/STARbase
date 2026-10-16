@@ -2,7 +2,7 @@
 // section 6). Pure formatting, so every rule here is checked without a page.
 import { describe, expect, it } from 'vitest';
 import { extractedText } from './inboxModel';
-import { editDraft, editableFields, extractedView, parseEdit, scaleBarText, settingRows, ukLocalToIso, ukTime } from './semSettings';
+import { FIELDS, editDraft, extractedView, parseEdit, scaleBarText, settingRows, ukLocalToIso, ukTime } from './semSettings';
 
 const FULL = {
 	kv: 15, spot: 3, working_distance_mm: 8.5, magnification: 5000, hfw_um: 59.7, pixel_size_nm: 29.14, scale_bar_um: 10, detector: 'ETD', mode: 'SE',
@@ -138,7 +138,7 @@ describe('the one-line summary reads scale_bar_um too', () => {
 
 describe('editing a value', () => {
 	it('offers all eleven settings', () => {
-		expect(editableFields().map((f) => f.key)).toEqual([
+		expect(FIELDS.map((f) => f.key)).toEqual([
 			'kv', 'working_distance_mm', 'magnification', 'spot', 'detector', 'mode', 'scale_bar_um', 'acquired_at', 'hfw_um', 'pixel_size_nm', 'instrument',
 		]);
 	});
@@ -174,7 +174,7 @@ describe('editing a value', () => {
 describe('rows for the owner, who may fill in any setting', () => {
 	it('with all: true every setting has a row, the ones with no value as "not set"', () => {
 		const r = settingRows({ values: { kv: 15 }, sources: { kv: 'ocr' }, flags: { magnification: 'hfw_mismatch' } }, { all: true });
-		expect(r.map((x) => x.key)).toEqual(editableFields().map((f) => f.key));
+		expect(r.map((x) => x.key)).toEqual(FIELDS.map((f) => f.key));
 		const k = byKey(r);
 		expect(k.kv.text).toBe('15 kV');
 		expect(k.magnification.failed).toBe("couldn't read magnification");

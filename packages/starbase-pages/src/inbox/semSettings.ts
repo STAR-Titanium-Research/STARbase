@@ -6,6 +6,11 @@
 // `check_this` when something was read and no cross-check could vouch for it). `ocr_confidence` is recorded by the crawler and never shown: it is
 // not a threshold.
 
+import { asRecord } from '@d1/ui';
+
+/** The instrument PC's clock: times are read and shown as UK time. */
+const INSTRUMENT_TZ = 'Europe/London';
+
 export type SemFieldType = 'number' | 'integer' | 'text' | 'time';
 
 export interface SemField {
@@ -20,7 +25,7 @@ export interface SemField {
 }
 
 /** Every setting in the order they are shown: the first eight are the ones a person reads first, the rest follow. */
-const FIELDS: readonly SemField[] = [
+export const FIELDS: readonly SemField[] = [
 	{ key: 'kv', label: 'kV', noun: 'kV', unit: 'kV', type: 'number' },
 	{ key: 'working_distance_mm', label: 'working distance', noun: 'working distance', unit: 'mm', type: 'number' },
 	{ key: 'magnification', label: 'magnification', noun: 'magnification', unit: '×', type: 'integer' },
@@ -35,8 +40,6 @@ const FIELDS: readonly SemField[] = [
 ];
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
-/** The settings a person can correct (all of them), in display order. */
-export const editableFields = (): readonly SemField[] => FIELDS;
 export const fieldOf = (key: string): SemField | undefined => FIELD_BY_KEY.get(key);
 
 const SOURCE_LABEL: Record<string, string> = { metadata: 'metadata', derived: 'derived', ocr: 'OCR', manual: 'manual' };
@@ -75,12 +78,10 @@ export interface SettingsView {
 	flags: Record<string, unknown>;
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-
 /** A candidate's `extracted` as a view: the object is the values, with its own `sources` and `flags` (a row from before them has neither). */
 export function extractedView(extracted: Record<string, unknown> | null | undefined): SettingsView {
-	const e = isObject(extracted) ? extracted : {};
-	return { values: e, sources: isObject(e.sources) ? e.sources : {}, flags: isObject(e.flags) ? e.flags : {} };
+	const e = asRecord(extracted) ?? {};
+	return { values: e, sources: asRecord(e.sources) ?? {}, flags: asRecord(e.flags) ?? {} };
 }
 
 // ---- formatting ----
@@ -99,13 +100,20 @@ export function scaleBarText(um: number): string {
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
-const UK_TIME = new Intl.DateTimeFormat(GB, { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
+const UK_TIME = new Intl.DateTimeFormat(GB, { timeZone: INSTRUMENT_TZ, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
 /** An ISO 8601 instant as UK time with its zone, "2 Mar 2026, 10:15 GMT" (BST in summer). What cannot be read as a date is returned as it was. */
 export function ukTime(iso: string): string {
 	const t = new Date(iso);
 	if (Number.isNaN(t.getTime())) return iso;
 	const p = Object.fromEntries(UK_TIME.formatToParts(t).map((x) => [x.type, x.value]));
 	return `${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+
+/** A magnification as "×5,000": a number is formatted, a text gets the "×" when it has none; null when there is nothing to show. */
+export function magnificationText(v: unknown): string | null {
+	if (finite(v)) return `×${v.toLocaleString(GB)}`;
+	const m = text(v);
+	return m ? (m.startsWith('×') || m.toLowerCase().startsWith('x') ? m : `×${m}`) : null;
 }
 
 /** One value as text, or null when there is nothing to show (absent, null, empty, NaN). */
@@ -118,11 +126,8 @@ function valueText(key: string, values: Record<string, unknown>): string | null 
 		}
 		case 'working_distance_mm':
 			return finite(v) ? `${plain(v)} mm` : null;
-		case 'magnification': {
-			if (finite(v)) return `×${v.toLocaleString(GB)}`;
-			const m = text(v);
-			return m ? (m.startsWith('×') || m.toLowerCase().startsWith('x') ? m : `×${m}`) : null;
-		}
+		case 'magnification':
+			return magnificationText(v);
 		case 'spot':
 			return finite(v) ? plain(v) : null;
 		case 'scale_bar_um':
@@ -168,7 +173,7 @@ export function settingRows(view: SettingsView, opts: { all?: boolean } = {}): S
 
 // ---- correcting a value ----
 
-const PARTS = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+const PARTS = new Intl.DateTimeFormat('en-GB', { timeZone: INSTRUMENT_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 const ukFields = (ms: number): string => {
 	const p = Object.fromEntries(PARTS.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
 	return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;

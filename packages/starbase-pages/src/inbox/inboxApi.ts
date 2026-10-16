@@ -29,7 +29,7 @@
 //
 // The client does not ask for meta.acceptable (the list's count of what Accept all would link): the dry run, asked when the confirm opens, is the
 // one count it trusts. A dry run that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
-import { errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
+import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 
 const BASE = '/d1-inbox';
 
@@ -502,14 +502,13 @@ export interface SemSettingsRead {
 /** `{ locked: true }` is all a locked file ever carries: no name, no value, no owner. */
 export type SemSettingsAnswer = { locked: true } | { locked: false; settings: null } | ({ locked: false } & SemSettingsRead);
 
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-
 /** The answer as the page uses it: a locked file keeps nothing but `locked`; `can_edit` is true only when the server said exactly true. */
 export function parseSemAnswer(b: unknown): SemSettingsAnswer {
-	const r = isObj(b) ? b : {};
+	const r = asRecord(b) ?? {};
 	if (r.locked === true) return { locked: true };
-	if (!isObj(r.settings)) return { locked: false, settings: null };
-	return { locked: false, settings: r.settings, sources: isObj(r.sources) ? r.sources : {}, flags: isObj(r.flags) ? r.flags : {}, can_edit: r.can_edit === true };
+	const settings = asRecord(r.settings);
+	if (!settings) return { locked: false, settings: null };
+	return { locked: false, settings, sources: asRecord(r.sources) ?? {}, flags: asRecord(r.flags) ?? {}, can_edit: r.can_edit === true };
 }
 
 export const getSemSettings = (api: HostApi, fileId: string): Promise<SemSettingsAnswer> =>
