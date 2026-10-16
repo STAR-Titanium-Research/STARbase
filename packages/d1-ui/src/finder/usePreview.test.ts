@@ -43,8 +43,9 @@ describe('usePreview', () => {
 		const { calls, preview } = setup(hit('1'));
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS - 1);
 		expect(calls).toEqual([]);
-		expect(preview.state.value).toBe('idle');
-		expect(preview.card.value).toBeNull();
+		// the instant part is there meanwhile
+		expect(preview.state.value).toBe('loading');
+		expect(preview.card.value).toMatchObject({ title: 'S-1', kind: 'Sample', facts: [] });
 		await vi.advanceTimersByTimeAsync(1);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].path).toBe('/items/physical_samples/1');
@@ -52,10 +53,10 @@ describe('usePreview', () => {
 		expect(calls[0].params.fields).not.toContain('*');
 	});
 
-	it('shows the instant part (from the hit) while loading, then the finished card', async () => {
+	it('shows the instant part (from the hit) at once, then the finished card', async () => {
 		const { calls, preview } = setup(hit('1', { detail: 'disc', matchedIn: 'notes', matchedSnippet: '…crack…' }));
-		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		expect(preview.state.value).toBe('loading');
+		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		expect(preview.card.value).toMatchObject({ title: 'S-1', kind: 'Sample', detail: 'disc', facts: [], matched: { field: 'notes', snippet: '…crack…' } });
 		answer(calls[0], { form: 'disc', location: 'Shelf 2' });
 		await vi.advanceTimersByTimeAsync(0);
@@ -108,7 +109,9 @@ describe('usePreview', () => {
 		active.value = hit('2');
 		await nextTick();
 		expect(calls[0].signal?.aborted).toBe(true);
-		expect(preview.state.value).toBe('idle');
+		// row 2's instant part shows at once
+		expect(preview.state.value).toBe('loading');
+		expect(preview.card.value).toMatchObject({ title: 'S-2', facts: [] });
 		// the answer for row 1 arrives late
 		answer(calls[0], { location: 'Late' });
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
@@ -130,7 +133,7 @@ describe('usePreview', () => {
 		// ... and is not cached as a result for row 1
 		active.value = hit('1');
 		await nextTick();
-		expect(preview.state.value).toBe('idle');
+		expect(preview.state.value).toBe('loading');
 	});
 
 	it('a failed read is "unavailable" with the instant card, and is not cached', async () => {

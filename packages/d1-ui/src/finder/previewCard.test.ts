@@ -29,7 +29,9 @@ describe('previewKey and previewRequest', () => {
 	it('asks for the relations the facts need and no more than the record pages read', () => {
 		const sample = previewRequest('physical_samples', '1')!.fields;
 		expect(sample).toEqual(expect.arrayContaining(['material_id.alloy_code', 'owner_person_id.full_name', 'owner_team_id.name', 'project_id.project_code']));
-		expect(previewRequest('equipment', '1')!.fields).toEqual(expect.arrayContaining(['facility_id.name', 'manufacturer_id.name']));
+		// equipment.manufacturer_id has no directus_relations row on live (only facility_id does): reading it through would refuse the whole request
+		expect(previewRequest('equipment', '1')!.fields).toEqual(expect.arrayContaining(['facility_id.name', 'manufacturer']));
+		expect(previewRequest('equipment', '1')!.fields.join()).not.toContain('manufacturer_id');
 		// the file owner has no Directus relation, so it is never asked for
 		expect(previewRequest('directus_files', '1')!.fields.join()).not.toMatch(/owner|thumb/);
 	});
@@ -84,11 +86,11 @@ describe('buildCard', () => {
 
 	it('equipment: type, manufacturer, facility, location, active', () => {
 		const c = buildCard(hit('equipment', '1', { group: 'Inventory' }), {
-			equipment_type: 'Universal_Tester', manufacturer: 'Old text', manufacturer_id: { name: 'Zwick' }, facility_id: { name: 'Diamond' }, location: 'Bay 3', is_active: false,
+			equipment_type: 'Universal_Tester', manufacturer: 'Zwick', facility_id: { name: 'Diamond' }, location: 'Bay 3', is_active: false,
 		})!;
 		expect(facts(c)).toEqual({ Type: 'Universal tester', Manufacturer: 'Zwick', Facility: 'Diamond', Location: 'Bay 3', Active: 'No' });
-		// the free-text manufacturer is the fallback
-		expect(facts(buildCard(hit('equipment', '1'), { manufacturer: 'Old text', manufacturer_id: null, facility_id: 'f' })).Manufacturer).toBe('Old text');
+		// a facility that came back as a bare id is left out, never printed
+		expect(facts(buildCard(hit('equipment', '1'), { manufacturer: 'Zwick', facility_id: 'f' }))).toEqual({ Manufacturer: 'Zwick' });
 	});
 
 	it('operations: method, sample, machine, operator, date', () => {
@@ -131,7 +133,8 @@ describe('buildCard', () => {
 		expect(facts(material)).toEqual({ Name: 'Ti-6Al-4V', Density: '4.43 g/cm³' });
 		expect(facts(buildCard(hit('campaigns', '1'), { status: 'in_progress', campaign_type: 'machining_trial' }))).toEqual({ Status: 'In progress', Type: 'Machining trial' });
 		expect(facts(buildCard(hit('projects', '1'), { principal_investigator_name: 'Dr X', is_active: true }))).toEqual({ 'Principal investigator': 'Dr X', Active: 'Yes' });
-		expect(facts(buildCard(hit('people', '1'), { email: 'a@b.c', is_operator: true, is_researcher: true }))).toEqual({ Email: 'a@b.c', Role: 'Operator, Researcher' });
+		expect(facts(buildCard(hit('people', '1'), { email: 'a@b.c', is_operator: true, is_researcher: true, active: true }))).toEqual({ Role: 'Operator, Researcher', Active: 'Yes' });
+		expect(previewRequest('people', '1')!.fields).not.toContain('email');
 		expect(facts(buildCard(hit('tools', '1'), { tool_name: 'Drill', tool_type: 'drill', is_active: true }))).toMatchObject({ Name: 'Drill' });
 		expect(facts(buildCard(hit('tool_boxes', '1'), { description: 'Box', location: null }))).toEqual({ Description: 'Box' });
 		expect(facts(buildCard(hit('cutting_inserts', '1'), { location: 'Drawer', is_depleted: false }))).toEqual({ Location: 'Drawer', Depleted: 'No' });

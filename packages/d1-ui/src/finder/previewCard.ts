@@ -1,16 +1,15 @@
 import { choiceLabel } from '../choiceLabels';
 import { asRecord, formatDate, formatNumber } from '../format';
 import type { NavIconName } from '../nav/navIcons';
-import { operationKind, operationRailFacts, projectFact } from '../record/operationFacts';
-import { ownerName, visibleFacts } from '../record/facts';
+import { operationKind, operationRailFacts, sampleFact } from '../record/operationFacts';
 import type { Fact } from '../record/facts';
-import { sampleKind, sampleMassText } from '../record/sampleFacts';
+import { sampleKind, sampleRailFacts } from '../record/sampleFacts';
 import { humanise } from '../status';
 import { FINDER_SOURCES } from './finder';
 import type { FinderHit } from './finder';
 
 // The finder's preview card, kept free of Vue and of the host so it can be tested on its own. The pane (FinderPreview.vue) draws a PreviewCard; usePreview
-// asks for the fields a collection's card needs (previewFields), reads the record with them and turns it into the card (buildCard). The part of the card that
+// asks for the fields a collection's card needs (previewRequest), reads the record with them and turns it into the card (buildCard). The part of the card that
 // needs no request (label, kind, detail and the "matched in" line) comes from the hit itself (instantCard) and is shown while the record loads.
 //
 // The fields are a small, checked subset of what the record pages already read (useSampleData, useOperationData, useTestData and the index columns): one field
@@ -55,20 +54,15 @@ export function bytesText(bytes: unknown): string {
 	const n = typeof bytes === 'string' && bytes.trim() ? Number(bytes) : bytes;
 	if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
 	if (n < 1024) return `${n} B`;
+	const units = ['KB', 'MB', 'GB'];
 	let v = n / 1024;
-	for (const unit of ['KB', 'MB', 'GB']) {
-		if (v < 1024 || unit === 'GB') return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
-		v /= 1024;
-	}
-	return '';
+	let i = 0;
+	for (; v >= 1024 && i < units.length - 1; i++) v /= 1024;
+	return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-const byLabel = (facts: Fact[]): Map<string, Fact> => new Map(facts.map((f) => [f.label, f]));
 // The facts with these labels, in this order (a missing one is skipped).
-function pick(facts: Fact[], labels: string[]): Fact[] {
-	const all = byLabel(facts);
-	return labels.flatMap((l) => (all.has(l) ? [all.get(l)!] : []));
-}
+const pick = (facts: Fact[], labels: string[]): Fact[] => labels.flatMap((l) => facts.filter((f) => f.label === l));
 
 const CARDS: Record<string, CardDef> = {
 	physical_samples: {
@@ -81,25 +75,15 @@ const CARDS: Record<string, CardDef> = {
 			'owner_person_id.full_name', 'owner_team_id.name',
 		],
 		build(row) {
-			const project = asRecord(row.project_id);
-			// A project that came back as a bare id was not readable.
-			const rail = byLabel([
-				{ label: 'Material', value: asRecord(row.material_id)?.common_name || asRecord(row.material_id)?.alloy_code },
-				{ label: 'Owner', value: ownerName(row) },
-				{ label: 'Location', value: row.location },
-				projectFact(project, !!row.project_id && !project),
-				{ label: 'Mass', value: sampleMassText(row) },
-			]);
+			// The rail's facts (a project that came back as a bare id reads as hidden there); the dimensions, co-owners and campaigns are not read.
+			const rail = sampleRailFacts(row, '', [], {});
 			return {
 				kind: sampleKind(row),
 				facts: [
-					rail.get('Material')!,
+					...pick(rail, ['Material']),
 					{ label: 'Geometry', value: choiceLabel('geometry', row.form) },
 					{ label: 'Status', value: row.current_status ? humanise(String(row.current_status)) : '' },
-					rail.get('Owner')!,
-					rail.get('Location')!,
-					rail.get('Project')!,
-					rail.get('Mass')!,
+					...pick(rail, ['Owner', 'Location', 'Project', 'Mass']),
 				],
 			};
 		},
@@ -107,11 +91,11 @@ const CARDS: Record<string, CardDef> = {
 	equipment: {
 		icon: 'drill',
 		kind: 'Equipment',
-		fields: ['equipment_id', 'equipment_type', 'location', 'is_active', 'manufacturer', 'manufacturer_id.name', 'facility_id.name'],
+		fields: ['equipment_id', 'equipment_type', 'location', 'is_active', 'manufacturer', 'facility_id.name'],
 		build: (row) => ({
 			facts: [
 				{ label: 'Type', value: choiceLabel('equipmentType', row.equipment_type) },
-				{ label: 'Manufacturer', value: asRecord(row.manufacturer_id)?.name || row.manufacturer },
+				{ label: 'Manufacturer', value: row.manufacturer },
 				{ label: 'Facility', value: asRecord(row.facility_id)?.name },
 				{ label: 'Location', value: row.location },
 				{ label: 'Active', value: yesNo(row.is_active) },
@@ -142,7 +126,7 @@ const CARDS: Record<string, CardDef> = {
 					{ label: 'Type', value: row.test_type ? humanise(String(row.test_type)) : '' },
 					{ label: 'Status', value: row.status ? humanise(String(row.status)) : '' },
 					// A sample that came back as a bare id was not readable.
-					sample ? { label: 'Sample', value: sample.sample_code || 'Sample', mono: true } : { label: 'Sample', value: null, hidden: !!row.sample_id },
+					sampleFact(sample, !sample && !!row.sample_id),
 					{ label: 'Date', value: when(row.session_date) },
 				],
 			};
@@ -202,11 +186,11 @@ const CARDS: Record<string, CardDef> = {
 	people: {
 		icon: 'users',
 		kind: 'Person',
-		fields: ['person_id', 'email', 'is_operator', 'is_researcher'],
+		fields: ['person_id', 'is_operator', 'is_researcher', 'active'],
 		build: (row) => ({
 			facts: [
-				{ label: 'Email', value: row.email },
 				{ label: 'Role', value: [row.is_operator ? 'Operator' : '', row.is_researcher ? 'Researcher' : ''].filter(Boolean).join(', ') },
+				{ label: 'Active', value: yesNo(row.active) },
 			],
 		}),
 	},
@@ -264,11 +248,6 @@ export function previewRequest(collection: string, id: string): { path: string; 
 	return { path: `${base}/${encodeURIComponent(id)}`, fields: def.fields };
 }
 
-function matchedOf(hit: FinderHit): PreviewCard['matched'] {
-	if (!hit.matchedIn) return undefined;
-	return hit.matchedSnippet ? { field: hit.matchedIn, snippet: hit.matchedSnippet } : { field: hit.matchedIn };
-}
-
 // The card as far as the hit alone can say it: nothing is invented, and no relation is read. null for a hit that has no card.
 export function instantCard(hit: FinderHit): PreviewCard | null {
 	if (!previewKey(hit)) return null;
@@ -276,8 +255,7 @@ export function instantCard(hit: FinderHit): PreviewCard | null {
 	const card: PreviewCard = { icon: def.icon, title: hit.label, kind: def.kind, facts: [] };
 	// The inventory hits say their kind as their detail already.
 	if (hit.detail && hit.detail !== def.kind) card.detail = hit.detail;
-	const matched = matchedOf(hit);
-	if (matched) card.matched = matched;
+	if (hit.matchedIn) card.matched = hit.matchedSnippet ? { field: hit.matchedIn, snippet: hit.matchedSnippet } : { field: hit.matchedIn };
 	return card;
 }
 
@@ -288,9 +266,9 @@ export function buildCard(hit: FinderHit, row: unknown): PreviewCard | null {
 	if (!card || !rec) return card;
 	const built = CARDS[hit.record!.collection].build(rec);
 	if (built.kind) card.kind = built.kind;
-	card.facts = visibleFacts(built.facts).flatMap((f) => {
+	card.facts = built.facts.flatMap((f) => {
 		const value = f.hidden ? HIDDEN_TEXT : text(f.value);
-		return value ? [f.mono ? { label: f.label, value, mono: true } : { label: f.label, value }] : [];
+		return value ? [{ label: f.label, value, mono: f.mono }] : [];
 	});
 	return card;
 }

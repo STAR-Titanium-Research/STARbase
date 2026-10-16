@@ -15,7 +15,7 @@
 //
 // Preview pane: once the first record hit exists the dialog widens and a card of the active record shows on the right (FinderPreview, usePreview). It is
 // only there for the main Explorer finder (a host that passes pickRecord keeps its layout), at 720px of viewport and wider, and never over a scan. It
-// never holds the list back: the card is asked for after the active row has settled, and a failed card leaves the row openable.
+// never holds the list back: the card shows its first part at once, the record is read once the active row has settled, and a failed read leaves the row openable.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
 import { useExplorerHost } from '../host';
