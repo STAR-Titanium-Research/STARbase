@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { bestIndex, isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, sameHitIndex, shouldOpenFinder, toSections } from './finderNav';
+import { bestIndex, isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, paneAllowed, sameHitIndex, shouldOpenFinder, toSections, widenLatch } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -174,5 +174,30 @@ describe('sameHitIndex', () => {
 		expect(sameHitIndex(h('Samples', 'gone'), [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
 		expect(sameHitIndex(undefined, [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
 		expect(sameHitIndex(h('Samples', 'a'), [])).toBe(-1);
+	});
+});
+
+describe('the preview pane', () => {
+	const rec: FinderHit = { group: 'Samples', label: 'A', to: '/a', rank: 3, record: { collection: 'physical_samples', id: '1' } };
+	const page: FinderHit = { group: 'Pages', label: 'Samples', to: '/home/samples', rank: 3 };
+	const more: FinderHit = { group: 'Samples', label: 'More in Samples…', to: '/x', rank: Infinity, more: true };
+
+	it('is not allowed for a host that picks the record, below the width, or over a scan', () => {
+		expect(paneAllowed({ pickRecord: false, roomy: true, scanning: false })).toBe(true);
+		expect(paneAllowed({ pickRecord: true, roomy: true, scanning: false })).toBe(false);
+		expect(paneAllowed({ pickRecord: false, roomy: false, scanning: false })).toBe(false);
+		expect(paneAllowed({ pickRecord: false, roomy: true, scanning: true })).toBe(false);
+	});
+
+	it('widens on the first record hit, not for pages, saved views or a "More in" row', () => {
+		expect(widenLatch(false, true, false, [])).toBe(false);
+		expect(widenLatch(false, true, false, [page, more])).toBe(false);
+		expect(widenLatch(false, true, false, [page, rec])).toBe(true);
+	});
+
+	it('stays wide while the record hits are gone between two answers, and resets when the box cannot be searched or holds a scan', () => {
+		expect(widenLatch(true, true, false, [])).toBe(true);
+		expect(widenLatch(true, false, false, [])).toBe(false);
+		expect(widenLatch(true, true, true, [rec])).toBe(false);
 	});
 });
