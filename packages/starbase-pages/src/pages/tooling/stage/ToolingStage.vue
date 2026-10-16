@@ -70,8 +70,12 @@ async function start(): Promise<void> {
 		s = new mod.ToolingScene(canvas, overlay);
 	} catch (e) {
 		console.warn('[tooling stage] the 3D scene could not start', e);
-		failed.value = true;
-		loading.value = false;
+		const now = Date.now();
+		recoveries = recoveries.filter((t) => now - t < 30000);
+		if (unmounted || recoveries.length >= 3) { failed.value = true; loading.value = false; return; }
+		recoveries.push(now);
+		canvasKey.value++; // a canvas that failed to get a context is no use again: try a fresh one shortly
+		setTimeout(() => { if (!unmounted && use3d.value && mine === token) void start(); }, 500);
 		return;
 	}
 	s.onPick((t: PickTarget) => { grab(); select(targetToFocus(t)); });
@@ -111,8 +115,17 @@ watch(() => props.model, (m) => scene?.setModel(m));
 watch(() => focusKey(props.focus), () => scene?.setFocus(props.focus));
 watch(() => nextKey(props.nextFresh), () => scene?.setNextFresh(props.nextFresh));
 
-onMounted(() => {
+// A failed probe is tried again a few times: the browser may only be short of contexts for a moment.
+const PROBE_RETRIES_MS = [400, 1500, 4000];
+let probeTimer: ReturnType<typeof setTimeout> | null = null;
+function probe(attempt: number): void {
 	webgl.value = hasWebGL();
+	if (webgl.value || unmounted || attempt >= PROBE_RETRIES_MS.length) return;
+	probeTimer = setTimeout(() => probe(attempt + 1), PROBE_RETRIES_MS[attempt]);
+}
+
+onMounted(() => {
+	probe(0);
 	width.value = viewEl.value?.clientWidth ?? 0;
 	height.value = viewEl.value?.clientHeight ?? 0;
 	if (typeof ResizeObserver === 'function' && viewEl.value) {
@@ -127,6 +140,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	unmounted = true;
+	if (probeTimer !== null) clearTimeout(probeTimer);
 	observer?.disconnect();
 	stop();
 });
