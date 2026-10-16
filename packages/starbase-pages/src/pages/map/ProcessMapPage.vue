@@ -27,6 +27,7 @@ import { useMapInput } from './useMapInput';
 import { MIN_ZOOM, miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
+import { useMaterialComposition } from './useMaterialComposition';
 import { personName, useMapExport } from './useMapExport';
 import type { Reach } from './model/reach';
 import { useProcessMap } from './useProcessMap';
@@ -132,6 +133,18 @@ const cardPreview = computed(() => {
 	return of ? dataPreviews.previews.value[of.id] : undefined;
 });
 
+// A material's composition is read when its hover card opens or it is selected (one request per material, then
+// held), not for every material card up front.
+const materials = useMaterialComposition(host.api);
+watch(
+	() => [map.card.value?.info, map.selectedInfo.value] as const,
+	(infos) => {
+		for (const i of infos) if (i?.kind === 'material') materials.load(i.ref.id);
+	},
+	{ immediate: true },
+);
+const compositionOf = (i: { kind: string; ref: { id: string } } | null | undefined) => (i?.kind === 'material' ? materials.compositions.value[i.ref.id] : undefined);
+
 /** The canvas element a rail row's record is drawn as: its card, or the card whose Inside tray holds it. */
 function elementFor(id: string): HTMLElement | undefined {
 	const owner = map.nodes.value.find((n) => n.id === id || (n.type === 'container' && n.slots.some((s) => [s.ref, ...(s.values ?? [])].some((r) => r && refKey(r) === id))));
@@ -149,6 +162,7 @@ const railProps = computed(() => ({
 	info: map.selectedInfo.value,
 	focus: map.focus.value,
 	preview: selectedPreview.value,
+	composition: compositionOf(map.selectedInfo.value),
 	onMap: map.selectedOnMap.value,
 	connections: map.connections.value,
 	highlight: map.socketHighlight.value,
@@ -319,7 +333,7 @@ onBeforeUnmount(() => {
 								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 							</VueFlow>
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
-							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
+							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
 							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
