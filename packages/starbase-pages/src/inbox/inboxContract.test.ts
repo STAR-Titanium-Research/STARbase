@@ -7,11 +7,11 @@
 // client's own idea of the server, which is how the two sides drifted once).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
-	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 	type FilesQuery, type FoundFile,
 } from './inboxApi';
 import {
@@ -948,6 +948,33 @@ describe('adding a surface scan', () => {
 		expect(batch).toMatchObject({ id: ID(903), count: 1, kind: 'manual', scans: 1 });
 		expect(batchTitle(batch)).toBe('Added as a surface scan, 1 file');
 		expect(groupLinked(page1.rows).every((g) => g.batch !== null)).toBe(true);
+	});
+});
+
+// ---- GET /files/:id/thumb | /preview -------------------------------------------------------------------------------------------------------
+
+describe('GET /d1-inbox/files/:id/thumb and /preview', () => {
+	it('picture_headers: an image/jpeg answer becomes an object URL, asked for as a blob on the route the fixture names', async () => {
+		const f = side('picture_headers');
+		const calls: { path: string; config: any }[] = [];
+		const api = { get: async (path: string, config: any) => (calls.push({ path, config }), { data: new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: f.headers['Content-Type'] }) }) } as unknown as HostApi;
+		const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+		try {
+			expect(f.status).toBe(200);
+			expect(await loadPicture(api, ID(1001), 'thumb')).toBe('blob:test');
+			expect(await loadPicture(api, ID(1001), 'preview')).toBe('blob:test');
+		} finally {
+			create.mockRestore();
+		}
+		expect(calls.map((c) => c.path)).toEqual([`/d1-inbox/files/${ID(1001)}/thumb`, `/d1-inbox/files/${ID(1001)}/preview`]);
+		expect(f.route).toEqual(['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview']);
+		expect(calls.every((c) => c.config.responseType === 'blob')).toBe(true);
+	});
+
+	it('picture_404: one refusal for every cause, and the client fails quietly with the status', async () => {
+		const f = side('picture_404');
+		const api = { get: async () => { throw Object.assign(new Error('Request failed with status code 404'), { response: { status: f.status, data: new Blob([JSON.stringify(f.body)]) } }); } } as unknown as HostApi;
+		await expect(loadPicture(api, ID(1001), 'thumb')).rejects.toMatchObject({ name: 'InboxApiError', status: 404 });
 	});
 });
 
