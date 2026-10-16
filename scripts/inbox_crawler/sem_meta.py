@@ -112,18 +112,27 @@ def _user_naive(date: str, time: str) -> datetime | None:
         return None
 
 
-def _read_ini(img) -> dict[str, configparser.SectionProxy] | None:
-    """The tag's sections (lower-cased names; option names are lower-cased by the parser), or None when the
-    tag is absent, not text, too long or not INI."""
+def _read_ini(img) -> tuple[dict[str, configparser.SectionProxy], bool] | None:
+    """The tag's sections (lower-cased names; option names are lower-cased by the parser) and whether some line
+    could not be parsed, or None when the tag is absent, not text, too long or not INI at all (no section header).
+
+    A line the parser cannot read (one without `=`) raises ParsingError only AFTER it has read the rest of the
+    text, so the sections it did parse are kept (spec section 8: a metadata block that parses badly gives the
+    fields it could parse); the caller notes it as `flags.metadata_error`."""
     val = tiff_tag_text(img, FEI_TAG)
     if val is None or len(val) > MAX_META_CHARS:
         return None
     cp = configparser.ConfigParser(strict=False, interpolation=None)
+    bad_lines = False
     try:
         cp.read_string(val.rstrip("\x00"))
+    except configparser.MissingSectionHeaderError:
+        return None
+    except configparser.ParsingError:
+        bad_lines = True
     except configparser.Error:
         return None
-    return {name.lower(): cp[name] for name in cp.sections()}
+    return {name.lower(): cp[name] for name in cp.sections()}, bad_lines
 
 
 class _Reader:
@@ -171,17 +180,23 @@ def fei_metadata(img) -> dict | None:
     None when tag 34682 is absent, not text, longer than 20,000 characters, not INI, or lacks `[System]
     Type=SEM` and a `[PrivateFei]` section. Otherwise a dict of the keys the file states (numeric, unit in the
     key, absent when unknown), plus `bar_height_px` when `DatabarHeight` exists, `sources` (every key
-    `metadata`, `magnification` `derived`) and `flags` (why a present value was left out). `acquired_at` is an
+    `metadata`, `magnification` `derived`) and `flags` (why a present value was left out; `metadata_error` when some line of the tag could not be
+    parsed and the rest was kept). `acquired_at` is an
     aware `datetime`; the caller turns it into ISO text.
     """
-    sections = _read_ini(img)
-    if sections is None or "privatefei" not in sections:
+    parsed = _read_ini(img)
+    if parsed is None:
+        return None
+    sections, bad_lines = parsed
+    if "privatefei" not in sections:
         return None
     sys_sec = sections.get("system")
     if sys_sec is None or sys_sec.get("type", "").strip().upper() != "SEM":
         return None
 
     flags: dict[str, str] = {}
+    if bad_lines:
+        flags["metadata_error"] = "unparseable_lines"
     rd = _Reader(sections, flags)
     out: dict = {}
 

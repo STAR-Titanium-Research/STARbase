@@ -200,6 +200,28 @@ def test_bad_date_omits_acquired_at():
     assert m["kv"] == 2.0 and m["instrument"] == "Inspect F (9923499)"
 
 
+def test_a_line_without_equals_keeps_what_parsed_and_flags_the_metadata():
+    """M1 (spec section 8): one bad line in a real tag (configparser raises ParsingError after it has read the
+    rest) costs that line, not the whole tag: the fields before and after it are kept and `metadata_error` says so."""
+    text = FEI_TEXT.replace(
+        "[Beam]\nHV=2000", "[Beam]\nthis line has no equals sign\nHV=2000"
+    )
+    text = text.replace(
+        "[Detectors]\nName=ETD", "[Detectors]\nanother stray line\nName=ETD"
+    )
+    m = meta(text)
+    assert m is not None
+    assert m["kv"] == 2.0 and m["spot"] == 3.5  # the section with the bad line is kept
+    assert m["detector"] == "ETD" and m["mode"] == "SE"
+    assert m["magnification"] == 40 and m["acquired_at"].year == 2025
+    assert m["flags"]["metadata_error"] == "unparseable_lines"
+    assert m["sources"]["kv"] == "metadata"
+
+
+def test_a_clean_tag_has_no_metadata_error_flag():
+    assert "metadata_error" not in meta(FEI_TEXT)["flags"]
+
+
 def test_garbage_tag_is_not_a_claim():
     assert meta("this is not ini text, at all. " * 900) is None  # 25,000+ characters
     assert meta("not ini text") is None
