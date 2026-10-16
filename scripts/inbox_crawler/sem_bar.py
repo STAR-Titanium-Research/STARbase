@@ -85,13 +85,16 @@ class BarCell:
 @dataclass
 class BarValues:
     """What the bar states, in the keys of `extracted`: `values` (numeric, unit in the key, absent when unknown),
-    `sources` (every kept key `ocr`), `flags` (why a value is absent or unconfirmed) and `confidence` (the
+    `sources` (every kept key `ocr`, derived from `values`), `flags` (why a value is absent or unconfirmed) and `confidence` (the
     recogniser's score for each kept key; recorded, never a threshold)."""
 
     values: dict = field(default_factory=dict)
-    sources: dict = field(default_factory=dict)
     flags: dict = field(default_factory=dict)
     confidence: dict = field(default_factory=dict)
+
+    @property
+    def sources(self) -> dict:
+        return {key: "ocr" for key in self.values}
 
 
 # ---- cells ----------------------------------------------------------------------------------
@@ -286,8 +289,11 @@ def parse_bar(
 
     def keep(key: str, value, conf: float) -> None:
         out.values[key] = value
-        out.sources[key] = "ocr"
         out.confidence[key] = conf
+
+    def drop(key: str, flag: str) -> None:
+        del out.values[key], out.confidence[key]
+        out.flags[key] = flag
 
     def numeric(cell: str, key: str, parse: Callable[[str], float | None]) -> None:
         if cell not in read:
@@ -325,16 +331,13 @@ def parse_bar(
                 out.flags[key] = "unparseable"
 
     confirmed = False
-    mag_by_hfw = False
     canvas = None
     if "magnification" in out.values and hfw_um is not None and hfw_um > 0:
         canvas = _canvas_of(out.values["magnification"], hfw_um)
         if canvas is None:
-            for table in (out.values, out.sources, out.confidence):
-                del table["magnification"]
-            out.flags["magnification"] = "hfw_mismatch"
+            drop("magnification", "hfw_mismatch")
         else:
-            confirmed = mag_by_hfw = True
+            confirmed = True
     if "scale_bar_um" in out.values and "magnification" in out.values:
         if scale_px and image_width > 0:
             # the screen width the field width identified, else the first constant (nothing says which applies)
@@ -347,15 +350,13 @@ def parse_bar(
             if abs(out.values["scale_bar_um"] - implied) <= SCALE_TOLERANCE * implied:
                 confirmed = True
             else:
-                dropped = (
+                # the field width (canvas) had vouched for the magnification: only the label goes
+                for key in (
                     ["scale_bar_um"]
-                    if mag_by_hfw
+                    if canvas is not None
                     else ["scale_bar_um", "magnification"]
-                )
-                for key in dropped:
-                    for table in (out.values, out.sources, out.confidence):
-                        del table[key]
-                    out.flags[key] = "length_mismatch"
+                ):
+                    drop(key, "length_mismatch")
     if out.values and not confirmed:
         out.flags["check_this"] = True
     return out

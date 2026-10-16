@@ -199,11 +199,11 @@ def fei_metadata(img) -> dict | None:
 
     hfw = rd.number("ebeam", "hfw", "hfw_um")
     canvas = rd.number("image", "screenmagcanvasrealwidth", "magnification")
-    if hfw is not None and hfw <= 0:
-        flags["hfw_um"] = "out_of_range"
     if (
         hfw is None or hfw <= 0
     ):  # no field width: no magnification (and no division by zero)
+        if hfw is not None:
+            flags["hfw_um"] = "out_of_range"
         flags["magnification"] = "no_hfw"
     else:
         out["hfw_um"] = round(hfw * 1e6, 4)
