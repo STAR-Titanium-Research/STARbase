@@ -163,6 +163,30 @@ def test_nothing_is_extracted_that_was_not_read():
     }  # only what the text says
 
 
+TEM_XML = (
+    '<TemReporter2 xmlns="http://schemas.datacontract.org/2004/07/JEOL.EO.EM.Libraries.TemReporter">'
+    "<FormatVersion>2.0</FormatVersion></TemReporter2>"
+)
+
+
+def test_a_jeol_tem_frame_is_tagged_possible_tem_and_not_claimed_as_sem():
+    # found on d1-server: the TEM history XML names JEOL, which used to make a 1024 x 1024 grey frame a 0.65 sem_image
+    img = Image.new("I;16", (1024, 1024), 1000)
+    c = csem.classify_image(encode(img, "TIFF", description=TEM_XML))
+    assert c.kind == "image" and c.confidence is None
+    assert c.extracted == {"possible_tem": True, "instrument": "JEOL"}
+    assert "possible TEM" in c.reason
+    # even with a data bar and JEOL SEM metadata in the picture, the TEM marker wins (it is unambiguous)
+    c = csem.classify_image(
+        encode(make_sem(), "TIFF", description=JEOL_TEXT + " " + TEM_XML)
+    )
+    assert c.kind == "image" and c.extracted["possible_tem"] is True
+
+
+def test_jeol_sem_metadata_without_the_tem_marker_is_still_an_sem():
+    assert classify_jeol(make_sem()).kind == "sem_image"
+
+
 def test_a_bar_without_a_scale_line_is_a_weaker_sem_guess():
     c = classify_jeol(make_sem(line=False))
     assert c.kind == "sem_image" and c.confidence == pytest.approx(0.7)

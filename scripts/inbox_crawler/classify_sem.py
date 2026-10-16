@@ -301,6 +301,19 @@ def negative_signal(img) -> str | None:
     return None
 
 
+# A JEOL transmission electron microscope writes its history as an XML block (`<TemReporter2 ...JEOL.EO.EM.Libraries.TemReporter...>`)
+# into the TIFF description. It names JEOL, so the JEOL profile used to take such a frame for an SEM image (found on d1-server in
+# `.../TEM/Sam/...x40k_150mm_BFBottom_....tif`: 1024 x 1024, 16-bit grey, no data bar).
+_TEM_MARKER = re.compile(r"TemReporter|JEOL\.EO\.EM", re.I)
+
+
+def tem_signal(img) -> str | None:
+    """Why this is probably a TEM frame (the reason text), or None."""
+    if _TEM_MARKER.search(_metadata_text(img)):
+        return "possible TEM image (JEOL TEM metadata), not an SEM"
+    return None
+
+
 class JeolProfile:
     """JEOL SEM: embedded metadata naming JEOL, and a data bar (black strip along the bottom, white text, a
     scale-bar line). A bar alone is not evidence, so without JEOL metadata the confidence stays below the
@@ -576,6 +589,19 @@ def classify_image(
             continue
         if r is not None and (best is None or r.confidence > best.confidence):
             best = r
+    try:
+        tem = tem_signal(img)
+    except Exception:  # a broken tag must not lose the classification
+        tem = None
+    if tem is not None:
+        # tagged, not claimed: a plain image whose `extracted` says it is probably a TEM frame (no kind of its own yet)
+        return Classification(
+            "image",
+            None,
+            {"possible_tem": True, "instrument": "JEOL"},
+            tem,
+            CLASSIFIER_VERSION,
+        )
     negative = None
     try:
         negative = negative_signal(img)
