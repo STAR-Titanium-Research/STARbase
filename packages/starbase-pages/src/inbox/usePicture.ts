@@ -48,28 +48,62 @@ export function usePicture(api: HostApi, id: () => string | null, size: PictureS
 	return { state, url, retry: start };
 }
 
+
 /**
- * Whether the element has come into view (or is about to: `margin` ahead of the viewport), and stays true from then on. Without
- * IntersectionObserver (an old browser, a test environment) it is true at once, so the picture loads rather than never.
+ * The nearest ancestor that scrolls (overflow auto, scroll or overlay), or null when the page itself does. Inside Data Studio the page scrolls in
+ * #main-content, not in the window, so an observer rooted at the viewport would never see the look-ahead margin do anything.
+ */
+export function scrollParentOf(el: Element): Element | null {
+	try {
+		for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+			const { overflowY, overflowX } = getComputedStyle(p);
+			if (/(auto|scroll|overlay)/.test(`${overflowY} ${overflowX}`)) return p;
+		}
+	} catch {
+		// no computed styles (a test environment): the viewport it is
+	}
+	return null;
+}
+
+/**
+ * Whether the element has come into view (or is about to: `margin` ahead of its scrolling container, else of the viewport), and stays true from
+ * then on. Without IntersectionObserver (an old browser, a test environment) it is true at once, so the picture loads rather than never.
  */
 export function useInView(el: Ref<HTMLElement | null>, margin = '200px'): Ref<boolean> {
 	const seen = ref(false);
 	let io: IntersectionObserver | null = null;
+	let root: Element | null = null;
+	const make = (r: Element | null) =>
+		new IntersectionObserver(
+			(entries) => {
+				if (!entries.some((e) => e.isIntersecting)) return;
+				seen.value = true;
+				io?.disconnect();
+			},
+			{ rootMargin: margin, ...(r ? { root: r } : {}) },
+		);
+	/** An observer rooted at the element's scrolling container (the viewport when there is none, or when the browser refuses the root). */
+	function observerFor(target: HTMLElement): boolean {
+		const wanted = scrollParentOf(target);
+		if (io && wanted === root) return true;
+		io?.disconnect();
+		io = null;
+		try {
+			try {
+				io = make(wanted);
+				root = wanted;
+			} catch {
+				io = make(null);
+				root = null;
+			}
+			return true;
+		} catch {
+			seen.value = true;
+			return false;
+		}
+	}
 	onMounted(() => {
 		if (typeof IntersectionObserver !== 'function') {
-			seen.value = true;
-			return;
-		}
-		try {
-			io = new IntersectionObserver(
-				(entries) => {
-					if (!entries.some((e) => e.isIntersecting)) return;
-					seen.value = true;
-					io?.disconnect();
-				},
-				{ rootMargin: margin },
-			);
-		} catch {
 			seen.value = true;
 			return;
 		}
@@ -77,7 +111,7 @@ export function useInView(el: Ref<HTMLElement | null>, margin = '200px'): Ref<bo
 			el,
 			(now, before) => {
 				if (before) io?.unobserve(before);
-				if (now && !seen.value) io?.observe(now);
+				if (now && !seen.value && observerFor(now)) io?.observe(now);
 			},
 			{ immediate: true, flush: 'post' },
 		);
