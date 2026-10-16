@@ -79,6 +79,11 @@
 //                                   409 ALREADY_IGNORED, 400 INVALID_PAYLOAD otherwise (extensions.field is 'folder'). In the SAME transaction the owner's
 //                                   open ('new') found files in that folder and below are dismissed exactly as POST /dismiss does it (restorable; linked
 //                                   and gone files are untouched); dismissed says how many. The crawler reads the rules and never lists the subtree.
+//                                   `dismissed` counts every open ('new') row of the owner under the rule that moved to Dismissed: it can include rows the
+//                                   list does not show (a copy hidden while its original is decided by the same owner, a surface scan file that already
+//                                   has a scan), so it can be larger than the number of files the Inbox listed under the folder. It is not changed to
+//                                   match the list: those rows were open and are now dismissed, restorable like any other. folder is trimmed of leading
+//                                   and trailing whitespace before it is checked and stored.
 //   DELETE /d1-inbox/ignored-folders/:id  -> { data: { ignored_id, folder, still_ignored, rescan_queued } }   removes the rule and RESETS the folder's cache rows (inbox_dirs: dir_mtime
 //                                   and last_listed_at NULL, for the folder and everything below it; never deleted, or a crawler that finds the parent
 //                                   unchanged would never rediscover the folder: it keeps a 'seen, not listed' row for every ignored folder), so the next
@@ -789,11 +794,13 @@ export function folderOfCandidate(relPath, root) {
 
 // The folder of a new rule, checked: relative to the owner's root, no leading or trailing slash, no empty, '.' or '..' part (the same rules as the
 // table's CHECKs, so a refusal here is a 400 with a message, never a constraint error), and never the root itself or a path that starts with it.
-// `root` is 'Users/<alias>' or 'Shared/<share folder>'. Returns the folder as sent.
-export function parseIgnoredFolder(value, root) {
+// `root` is 'Users/<alias>' or 'Shared/<share folder>'. Leading and trailing whitespace is trimmed BEFORE anything is checked (the client trims too; a pasted
+// path often carries a newline or a space), and the trimmed folder is what is validated, compared, stored and answered. Returns that folder.
+export function parseIgnoredFolder(raw, root) {
   const fail = (message) => new HttpError(400, 'INVALID_PAYLOAD', message, { field: 'folder' });
-  if (typeof value !== 'string') throw fail('Choose the folder to ignore.');
-  if (value.trim() === '') throw fail('Choose a folder below your own folder: the whole folder cannot be ignored.');
+  if (typeof raw !== 'string') throw fail('Choose the folder to ignore.');
+  const value = raw.trim();
+  if (value === '') throw fail('Choose a folder below your own folder: the whole folder cannot be ignored.');
   if (value.length > MAX_IGNORED_FOLDER) throw fail(`The folder is too long (at most ${MAX_IGNORED_FOLDER} characters).`);
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) throw fail('The folder contains characters that are not allowed.');
@@ -853,7 +860,8 @@ export const shapeIgnoredFolders = (rows, canChange) => ({
   })),
   meta: { can_change: canChange },
 });
-// POST /ignored-folders
+// POST /ignored-folders. `dismissed` is the number of rows the dismissal changed: every open row of the owner under the rule, so it can include hidden copies and
+// rows the list does not show; it is not a count of what the list displayed.
 export const shapeIgnoredAdded = (rule, teamId, dismissed) => ({ ignored_id: rule.ignored_id, folder: rule.rel_folder, team_id: teamId ?? null, dismissed });
 // DELETE /ignored-folders/:id
 // stillIgnored: the folder is still covered by another rule of the same owner (a rule above it), so nothing about it changed: no cache reset, no rescan.

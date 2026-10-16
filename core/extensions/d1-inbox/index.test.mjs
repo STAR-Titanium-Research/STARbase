@@ -3075,6 +3075,47 @@ test('POST /ignored-folders: which open rows a rule covers is decided in JS by i
   assert.doesNotMatch(SQL.openUnderFolder, /FOR UPDATE/, 'nothing is locked: the dismissal changes a row only while it is still new');
 });
 
+test('parseIgnoredFolder and POST /ignored-folders: leading and trailing whitespace is trimmed before validating; the trimmed folder is stored, compared and answered', async () => {
+  assert.equal(parseIgnoredFolder('  World-Ti Paper/Drafts \n', 'Users/ali1'), 'World-Ti Paper/Drafts');
+  assert.equal(parseIgnoredFolder('\ta b/c\u00a0', 'Users/ali1'), 'a b/c', 'tabs and a no-break space too');
+  assert.equal(parseIgnoredFolder(` ${'x'.repeat(500)} `, 'Users/ali1').length, 500, 'the length limit is on the trimmed folder');
+  for (const [value, message] of [[' / ', /start or end with a slash/], [' /a', /start or end with a slash/], ['a/ ', /whole folder|empty part|slash/], [' Users/ali1/x ', /relative to your own folder/], [' a//b ', /empty part/], [' a/../b ', /\. or \.\./]]) {
+    assert.throws(() => parseIgnoredFolder(value, 'Users/ali1'), (e) => e.status === 400 && e.extra.field === 'folder' && message.test(e.message), JSON.stringify(value));
+  }
+  assert.throws(() => parseIgnoredFolder('a\nb', 'Users/ali1'), /characters that are not allowed/, 'a line break INSIDE the path is still refused');
+  const w = newWorld();
+  const c = add(w, under('Users/ali1/World-Ti Paper/a.tif'));
+  const { call } = setup(w);
+  const res = await call('POST /ignored-folders', { user: U.alice, body: { folder: '  World-Ti Paper \n' } });
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.equal(res.body.data.folder, 'World-Ti Paper', 'answered trimmed');
+  assert.equal(res.body.data.dismissed, 1);
+  assert.deepEqual(w.ignored.map((r) => r.rel_folder), ['World-Ti Paper'], 'stored trimmed');
+  assert.equal(c.state, 'dismissed');
+  // the duplicate check sees the trimmed text, so a padded copy of an existing rule is the same rule
+  const again = await call('POST /ignored-folders', { user: U.alice, body: { folder: ' world-ti paper ' } });
+  assert.equal(again.statusCode, 409);
+  assert.equal(codeOf(again), 'ALREADY_IGNORED');
+  assert.equal(errorOf(again).extensions.folder, 'world-ti paper');
+  assert.equal(w.ignored.length, 1);
+  // only whitespace is the whole folder: 400, nothing written
+  const blank = await call('POST /ignored-folders', { user: U.alice, body: { folder: ' \n\t ' } });
+  assert.equal(blank.statusCode, 400);
+  assert.equal(errorOf(blank).extensions.field, 'folder');
+  assert.equal(w.ignored.length, 1);
+});
+
+test('POST /ignored-folders: dismissed counts every open row of the owner under the rule, hidden copies and rows the list does not show included', async () => {
+  const w = newWorld();
+  const original = add(w, under('Users/ali1/dup/orig.tif'));
+  const copy = add(w, under('Users/ali1/dup/copy.tif', { duplicate_of: original.candidate_id }));
+  const { call } = setup(w);
+  const res = await call('POST /ignored-folders', { user: U.alice, body: { folder: 'dup' } });
+  assert.equal(res.body.data.dismissed, 2, 'the original and its copy: the copy is hidden from the list once its original is dismissed, and still counted here');
+  assert.deepEqual([original.state, copy.state], ['dismissed', 'dismissed']);
+  assert.match(readFileSync(new URL('./index.js', import.meta.url), 'utf8'), /`dismissed` counts every open \('new'\) row of the owner under the rule/, 'the contract comment says so');
+});
+
 test('POST /ignored-folders: a file the rule dismissed can be restored by hand, with the ordinary Restore', async () => {
   const w = newWorld();
   const c = add(w, under('Users/ali1/old/a.tif'));
