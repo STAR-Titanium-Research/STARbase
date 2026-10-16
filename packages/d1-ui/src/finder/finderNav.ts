@@ -107,3 +107,16 @@ export function openHit(
 	if (pickRecord && hit.record && pickRecord(hit.record) !== false) return;
 	navigate(hit.to);
 }
+
+// Whether the preview pane may exist at all: never for a host that takes the record itself (the Process map passes `pickRecord` and keeps its own layout),
+// never below the width that has room for it, never over a scanned label.
+export function paneAllowed(opts: { pickRecord: boolean; roomy: boolean; scanning: boolean }): boolean {
+	return !opts.pickRecord && opts.roomy && !opts.scanning;
+}
+
+// The dialog is narrow until the first record hit exists, then wide. Record hits come and go while the user types (a keystroke empties the remote groups until
+// the next answer), so "wide" is latched: once on it stays on, and goes off only when the box cannot be searched (empty, one character) or holds a scan.
+export function widenLatch(wasWide: boolean, searchable: boolean, scanning: boolean, hits: FinderHit[]): boolean {
+	if (!searchable || scanning) return false;
+	return wasWide || hits.some((h) => !!h.record && !h.more);
+}

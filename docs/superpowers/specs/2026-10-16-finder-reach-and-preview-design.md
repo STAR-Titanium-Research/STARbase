@@ -69,6 +69,15 @@ Time to the first hit (first group answering) must be no worse than today; the s
   - Footer: "Open ↵".
 - **Keyboard and a11y:** unchanged (arrows move the active row, Enter opens, Tab cycles). The pane is `aria-live="polite"`, labelled by the active option. The scan flow is untouched.
 
+## Deviations recorded while implementing PR 2
+- **The file card has no thumbnail, owner or linked-record action.** The d1-inbox picture route is keyed by a `candidate_id`, which a `/files` hit does not carry; `directus_files.owner_person_id` has no Directus relation (see PR 1); `directus_files` has no reverse field to the record that links it, and a second action would add a Tab stop. The card shows MIME type, size, upload date and the share path (`metadata.archive_path`) instead.
+- **The card is read through `/files/<id>` for files**, `/items/<collection>/<id>` for everything else (the path comes from the finder's own source).
+- **A sample's mass is the measured one only:** the card does not read the dimensions and density an estimate needs.
+- **Nothing shows while the active row is settling** (the first 120 ms after it changes), not even the instant part; a record already read shows at once, with no wait.
+- **The wide layout is latched:** record hits vanish between keystrokes (the remote groups are for the query they answered), so the dialog goes wide at the first record hit and returns to 560 px only when the box is emptied (or holds a scan).
+- **`HostRequestConfig` gets an optional `signal`** so the read in flight can be aborted (both hosts' clients are axios).
+- **The component test is of the props-only `FinderPreview.vue`** rendered on the server (d1-ui has no DOM environment); whether the pane exists (`paneAllowed`, `widenLatch`) and what it fetches (`usePreview`) are tested as pure logic. `Finder.vue` itself is typechecked, not mounted.
+
 ## Testing
 Unit tests for every new/changed pure function (source params incl. multi-word `_and`/`_or`, ranking incl. rank 4, merge with the 12-row cap and "more in" rows, pass-2 de-dup, streaming merge with stale answers dropped, best-match rule, preview card models and cache/abort). The two d1-ui count tests that enumerate sources and groups are updated. Component test for the pane (shown after the first hit, hidden in `pickRecord` mode, "unavailable" on a failed fetch).
 
