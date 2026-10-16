@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMapTween, type TweenFrame } from './useMapTween';
 
 type P = { x: number; y: number };
@@ -199,5 +199,58 @@ describe('useMapTween', () => {
     await Promise.resolve();
     expect(done).toBe(true);
     expect(s.opacity.n).toBe(1);
+  });
+
+  it('a frame whose timestamp is before the start (rAF stamps can precede performance.now) is the first frame: no negative position or opacity', () => {
+    const s = setup();
+    s.nodes.n = { x: 0, y: 0 };
+    void s.tween.start({ target: { n: { x: 100, y: 0 } }, fresh: new Set(['n']), origin: { x: 10, y: 0 } });
+    s.step(-50);
+    expect(s.nodes.n).toEqual({ x: 10, y: 0 });
+    expect(s.opacity.n).toBe(0);
+  });
+
+  describe('a requestAnimationFrame that never fires (a hidden tab)', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('finishes the tween by itself a little after its duration: cards at their places, in full, waiters released', async () => {
+      vi.useFakeTimers();
+      const s = setup();
+      s.nodes.n = { x: 0, y: 0 };
+      let done = false;
+      void s.tween.start({ target: { n: { x: 100, y: 0 } }, fresh: new Set(['n']), origin: { x: 0, y: 0 } }).then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(340); // (the frames are never run in this test)
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(done).toBe(true);
+      expect(s.nodes.n).toEqual({ x: 100, y: 0 });
+      expect(s.opacity.n).toBe(1);
+      expect(s.tween.active()).toBe(false);
+    });
+
+    it('does not fire after the tween ended normally', async () => {
+      vi.useFakeTimers();
+      const s = setup();
+      s.nodes.a = { x: 0, y: 0 };
+      void s.tween.start({ target: { a: { x: 100, y: 0 } } });
+      s.step(300);
+      const drawn = s.frames.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(s.frames).toHaveLength(drawn);
+    });
+  });
+
+  it('dispose() ends the tween without drawing anything more, and releases whoever waits', async () => {
+    const s = setup();
+    s.nodes.n = { x: 0, y: 0 };
+    let done = false;
+    void s.tween.start({ target: { n: { x: 100, y: 0 } }, fresh: new Set(['n']), origin: { x: 0, y: 0 } }).then(() => (done = true));
+    const drawn = s.frames.length;
+    s.tween.dispose();
+    s.step(100);
+    await Promise.resolve();
+    expect(done).toBe(true);
+    expect(s.frames).toHaveLength(drawn);
+    expect(s.tween.active()).toBe(false);
   });
 });

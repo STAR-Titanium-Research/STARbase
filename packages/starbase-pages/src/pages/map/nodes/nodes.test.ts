@@ -299,6 +299,47 @@ describe('JunctionNode', () => {
 		expect(styleOf(await render(JunctionNode, { id: j.id, data: one }), 'j:s:cut_from:out:0')).toBe('left:100%;top:50%;');
 	});
 
+	// Pointing down, a junction's outputs are not rows: they spread along the bottom edge and the card widens to fit them.
+	describe('pointing down', () => {
+		const many = (n: number): JunctionData => ({
+			...j,
+			outs: Array.from({ length: n }, (_, i) => ({ socket: `j:s:cut_from:out:${i}`, childId: `c${i}`, fraction: i % 2 ? 0.5 : null })),
+		});
+		const down = (d: JunctionData) => render(JunctionNode, { id: d.id, data: d }, { direction: ref<'RIGHT' | 'DOWN'>('DOWN') });
+		const cardStyle = (html: string) => /<div[^>]*class="node junction[^"]*"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? '';
+		const lefts = (html: string, n: number) =>
+			Array.from({ length: n }, (_, i) => Number(new RegExp(`data-id="j:s:cut_from:out:${i}"[^>]*style="[^"]*left:([0-9.]+)%`).exec(html)?.[1]));
+
+		it('2 outputs: the card keeps its width of 150 px, the sockets are on the bottom edge, and there are no stacked rows', async () => {
+			const html = await down(many(2));
+			expect(cardStyle(html)).toContain('width:150px');
+			expect(html).not.toContain('class="frac"'); // the per-row fraction block is a RIGHT thing
+			expect(html).toContain('class="down outs"');
+			const l = lefts(html, 2);
+			expect(l[0]).toBeCloseTo(100 / 3, 3);
+			expect(l[1]).toBeCloseTo(200 / 3, 3);
+			// a small label above the sockets that have a fraction (n <= 6)
+			expect(html.match(/class="dfrac"/g)).toHaveLength(1);
+		});
+
+		it('16 outputs: the card widens to 18 px a socket plus 24, the sockets are spread evenly, no labels, the fraction is in the socket title', async () => {
+			const html = await down(many(16));
+			expect(cardStyle(html)).toContain('width:312px');
+			const l = lefts(html, 16);
+			l.forEach((x, i) => expect(x).toBeCloseTo(((i + 1) / 17) * 100, 3));
+			expect(html).not.toContain('class="dfrac"');
+			expect(html).not.toContain('class="frac"');
+			expect(html).toContain('title="0.5"');
+		});
+
+		it('RIGHT is unchanged: rows, a fixed width, a fraction block per row', async () => {
+			const html = await render(JunctionNode, { id: j.id, data: many(16) });
+			expect(cardStyle(html)).not.toContain('width');
+			expect(html).not.toContain('class="down outs"');
+			expect(html.match(/class="frac"/g)).toHaveLength(16);
+		});
+	});
+
 	it('names the other lineage types', async () => {
 		const t = async (lineageType: JunctionData['lineageType']) => text(await render(JunctionNode, { id: j.id, data: { ...j, lineageType } }));
 		expect(await t('sintered_from')).toContain('Sintered from');

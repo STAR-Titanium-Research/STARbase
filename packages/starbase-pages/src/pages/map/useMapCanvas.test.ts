@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick, reactive, type ShallowRef } from 'vue';
+import { effectScope, nextTick, reactive, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
@@ -812,6 +812,68 @@ describe('useMapCanvas: the cards glide to their places (useMapTween)', () => {
     expect(canvas.laidOut.value).toBe(true);
     expect(frames).toHaveLength(0);
     expect(nodesOf().map((n) => n.position.y).sort((a, b) => a - b)).toEqual([0, 100, 200, 300, 400, 500]);
+  });
+
+  /** Where a layout of the ELK stand-in `column` puts every card after a ＋ on `pressed`, which keeps the place it had. */
+  const afterPlus = (elk: Record<string, { x: number; y: number }>, pressed: string, was: { x: number; y: number }) =>
+    Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + was.x - elk[pressed].x, y: p.y + was.y - elk[pressed].y }]));
+
+  it('a second ＋ while the cards are still moving: the card pressed ends where the first layout was sending it (the map does not drift)', async () => {
+    const { map } = await open();
+    let last: Record<string, { x: number; y: number }> = {};
+    store.elk = (graph, shown) => (last = column(graph, shown));
+    vi.mocked(loadFamily).mockImplementation(async (_api, id) => familyOfX(Number(String(id).slice(1))));
+    const u0 = { ...at('op:u0') };
+    await map.expand('op:u0');
+    await settle();
+    const target1 = afterPlus(last, 'op:u0', u0);
+    run(100); // mid-way: op:u1 is somewhere between where it was and target1
+    expect(at('op:u1')).not.toEqual(target1['op:u1']);
+    await map.expand('op:u1');
+    await settle();
+    run(100);
+    run(400);
+    expect(at('op:u1')).toEqual(target1['op:u1']);
+    expect(at('op:u0').x).toBe(target1['op:u0'].x);
+  });
+
+  it('a layout that changes nothing but arrives mid-way (a reflow) does not freeze the cards that were moving', async () => {
+    const { map, canvas } = await open();
+    let last: Record<string, { x: number; y: number }> = {};
+    store.elk = (graph, shown) => (last = column(graph, shown));
+    const u0 = { ...at('op:u0') };
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    const target = afterPlus(last, 'op:u0', u0);
+    run(100);
+    await canvas.reflow();
+    await settle();
+    run(100);
+    run(400);
+    for (const n of nodesOf()) expect(n.position, n.id).toEqual(target[n.id]);
+  });
+
+  it('when the canvas goes away the move stops: nothing more is drawn, and nothing waits for it', async () => {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const scope = effectScope();
+    const canvas = scope.run(() => useMapCanvas(map))!;
+    await settle();
+    store.elk = column;
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    run(100);
+    expect(await canvas.whenSettled(20)).toBe(false);
+    scope.stop();
+    const drawn = store.moves.length;
+    run(100);
+    run(400);
+    expect(store.moves).toHaveLength(drawn);
+    expect(await canvas.whenSettled(20)).toBe(true);
   });
 
   it('grabbing a card mid-way takes it out of the move: it stays where it is, the others carry on', async () => {

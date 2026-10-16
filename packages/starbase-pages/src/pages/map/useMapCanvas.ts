@@ -5,7 +5,7 @@
 // Layout runs only on measured sizes: Vue Flow reports 0x0 until a node is mounted and measured, so a
 // layout waits for `onNodesInitialized` (and elkInput treats a non-positive size as unmeasured).
 
-import { computed, markRaw, nextTick, ref, watch } from 'vue';
+import { computed, getCurrentScope, markRaw, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject, type Styles } from '@vue-flow/core';
 import { nodeOfSocket } from './model/sockets';
 import { fanNodeIds } from './model/fans';
@@ -254,14 +254,17 @@ export function useMapCanvas(map: ProcessMap) {
       const was = placed.get(n.id);
       if (was && dragged.has(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
     }
+    // Where a card is: where the last layout sent it (a card still moving is not there yet, and a layout that arrives mid-way must not
+    // take that for its place: rapid ＋ and − would drift the map); a dragged card is where it is dropped.
+    const placeOf = (id: string): { x: number; y: number } | undefined => (dragged.has(id) ? undefined : placed.get(id)) ?? vf.findNode(id)?.position;
     let shift = { x: 0, y: 0 };
-    const anchor = anchors.find((id) => elk[id] && (vf.findNode(id) || placed.has(id)));
+    const anchor = anchors.find((id) => elk[id] && placeOf(id));
     if (anchor) {
-      const now = vf.findNode(anchor)?.position ?? placed.get(anchor)!;
+      const now = placeOf(anchor)!;
       shift = { x: now.x - elk[anchor].x, y: now.y - elk[anchor].y };
     } else {
       const kept = vf.getNodes.value.filter((n) => placed.has(n.id) && !dragged.has(n.id) && elk[n.id]);
-      shift = { x: median(kept.map((n) => n.position.x - elk[n.id].x)), y: median(kept.map((n) => n.position.y - elk[n.id].y)) };
+      shift = { x: median(kept.map((n) => placed.get(n.id)!.x - elk[n.id].x)), y: median(kept.map((n) => placed.get(n.id)!.y - elk[n.id].y)) };
     }
     const moved = Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + shift.x, y: p.y + shift.y }]));
     const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
@@ -306,7 +309,7 @@ export function useMapCanvas(map: ProcessMap) {
         const here: Record<string, Box> = {};
         for (const n of vf.getNodes.value) {
           const was = placed.get(n.id);
-          if (was && (dragged.has(n.id) || !merges.some((m) => m.replace?.includes(n.id)))) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+          if (was && (dragged.has(n.id) || !merges.some((m) => m.replace?.includes(n.id)))) here[n.id] = dragged.has(n.id) ? { x: n.position.x, y: n.position.y, width: was.width, height: was.height } : { ...was };
         }
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
@@ -325,6 +328,13 @@ export function useMapCanvas(map: ProcessMap) {
         }
       }
       // New cards (not placed before) start at the card that was expanded and fade in; the first layout of a family is not shown (the canvas is hidden), so it is just placed.
+      // A card still on its way to the place the last layout gave it keeps going there (the new tween replaces the old one: it must still name it).
+      if (merges) {
+        for (const n of vf.getNodes.value) {
+          const pending = placed.get(n.id);
+          if (!positions[n.id] && !dragged.has(n.id) && pending && (pending.x !== n.position.x || pending.y !== n.position.y)) positions = { ...positions, [n.id]: { x: pending.x, y: pending.y } };
+        }
+      }
       const firstLayout = !placed.size;
       const fresh = new Set(firstLayout ? [] : Object.keys(positions).filter((id) => !placed.has(id)));
       const from = anchors.map((id) => vf.findNode(id)?.position ?? placed.get(id)).find((p) => !!p);
@@ -355,6 +365,7 @@ export function useMapCanvas(map: ProcessMap) {
 
   // Grabbing a card takes it out of the move (it follows the pointer, not the layout); letting go pins it (spec D18) and the sockets
   // of the cards it is wired to may now be better the other way round.
+  if (getCurrentScope()) onScopeDispose(() => tween.dispose()); // (a move that outlives the canvas would draw into a store that is gone)
   vf.onNodeDragStart((e) => tween.cancel(e.nodes.map((n) => n.id)));
   vf.onNodeDragStop((e) => {
     for (const n of e.nodes) dragged.add(n.id);

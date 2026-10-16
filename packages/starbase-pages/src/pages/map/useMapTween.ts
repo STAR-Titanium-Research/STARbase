@@ -47,6 +47,8 @@ export interface TweenSpec {
 
 /** About a third of a second: long enough to follow, short enough not to wait for. */
 export const TWEEN_MS = 300;
+/** How long after its duration a tween whose frames never came is finished anyway. */
+const FALLBACK_SLACK_MS = 50;
 const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
 
 interface Mover {
@@ -62,6 +64,8 @@ export function createMapTween(deps: TweenDeps) {
   let movers = new Map<string, Mover>();
   let started = 0;
   let handle: unknown = null;
+  /** The fallback that ends the tween when the browser never calls back (a hidden tab pauses requestAnimationFrame). */
+  let fallback: ReturnType<typeof setTimeout> | null = null;
   /** How visible each fading card is now: a layout that replaces the tween carries it on. */
   const visible = new Map<string, number>();
   /** Resolves the call of `start` that is running (one at a time) and whoever waits in `whenIdle`. */
@@ -74,6 +78,8 @@ export function createMapTween(deps: TweenDeps) {
   function finish(): void {
     if (handle !== null) deps.cancelRaf?.(handle);
     handle = null;
+    if (fallback !== null) clearTimeout(fallback);
+    fallback = null;
     movers = new Map();
     const r = release;
     release = null;
@@ -104,7 +110,7 @@ export function createMapTween(deps: TweenDeps) {
   function tick(time: number): void {
     handle = null;
     if (!movers.size) return;
-    const t = Math.min(1, (time - started) / duration);
+    const t = Math.max(0, Math.min(1, (time - started) / duration)); // (a frame stamp can precede the start's clock reading)
     draw(t);
     if (t >= 1) finish();
     else handle = deps.raf!(tick);
@@ -130,6 +136,8 @@ export function createMapTween(deps: TweenDeps) {
     release = null;
     if (handle !== null) deps.cancelRaf?.(handle);
     handle = null;
+    if (fallback !== null) clearTimeout(fallback);
+    fallback = null;
     movers = new Map();
     previous?.();
     settleFading(gone);
@@ -162,6 +170,12 @@ export function createMapTween(deps: TweenDeps) {
       started = now();
       draw(0); // the first frame is now: new cards are at their start and invisible before the browser paints
       handle = deps.raf!(tick);
+      fallback = setTimeout(() => {
+        fallback = null;
+        if (!movers.size) return;
+        draw(1);
+        finish();
+      }, duration + FALLBACK_SLACK_MS);
     });
   }
 
@@ -181,12 +195,19 @@ export function createMapTween(deps: TweenDeps) {
     finish();
   }
 
+  /** The canvas is gone: nothing more is drawn (not even the cards' full opacity), and whoever waits is released. */
+  function dispose(): void {
+    movers = new Map();
+    visible.clear();
+    finish();
+  }
+
   const active = (): boolean => movers.size > 0;
   /** How visible a card is while it fades in (undefined: not fading, fully visible). */
   const opacityOf = (id: string): number | undefined => visible.get(id);
   const whenIdle = (): Promise<void> => (movers.size ? new Promise<void>((resolve) => void idle.push(resolve)) : Promise.resolve());
 
-  return { start, cancel, stop, active, whenIdle, opacityOf };
+  return { start, cancel, stop, dispose, active, whenIdle, opacityOf };
 }
 
 export type MapTween = ReturnType<typeof createMapTween>;
