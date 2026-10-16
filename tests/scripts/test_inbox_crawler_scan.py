@@ -867,7 +867,7 @@ def test_a_synthetic_sem_image_is_tagged_and_a_plain_one_is_not(world):
         d.text((x, 880 + (i % 2) * 40), "15.0kV x5,000 5um", fill=255)
     d.line((950, 915, 1100, 915), fill=255, width=3)
     b = io.BytesIO()
-    img.save(b, "TIFF")
+    img.save(b, "TIFF", description="JEOL JSM-7800F")  # a bar alone is no SEM evidence
     world.write("Users/abc12de/jeol.tif", b.getvalue())
     world.write("Users/abc12de/plain.png", png())
     settle(world)
@@ -875,6 +875,36 @@ def test_a_synthetic_sem_image_is_tagged_and_a_plain_one_is_not(world):
     got = cands(world)
     assert got["Users/abc12de/jeol.tif"][2] == "sem_image"
     assert got["Users/abc12de/plain.png"][2] == "image"
+
+
+def test_the_scanner_carries_the_bar_reader_to_the_classifier(world):
+    pytest.importorskip("numpy")
+    from PIL import Image
+    from test_inbox_crawler_sem_bar import (
+        HEADERS6,
+        VALUES6,
+        Scripted,
+        interleave,
+        make_bar,
+    )
+
+    world.person("abc12de")
+    img = Image.new("L", (1024, 943))
+    img.paste(Image.effect_noise((1024, 884), 30).convert("L"), (0, 0))
+    img.paste(make_bar(HEADERS6, VALUES6), (0, 884))
+    b = io.BytesIO()
+    img.save(b, "PNG")
+    world.write("Users/abc12de/export.png", b.getvalue())
+    settle(world)
+    reader = Scripted(interleave(HEADERS6, VALUES6))
+    run(world, ocr=True, bar_reader=reader)
+    assert cands(world)["Users/abc12de/export.png"][2] == "sem_image"
+    extracted = world.one(
+        "SELECT extracted FROM file_candidates WHERE rel_path = %s",
+        ("Users/abc12de/export.png",),
+    )[0]
+    assert extracted["kv"] == 20.0 and extracted["sources"]["kv"] == "ocr"
+    assert len(reader.calls) == 1
 
 
 def test_an_image_too_big_to_keep_is_hashed_but_not_classified(one_person, monkeypatch):

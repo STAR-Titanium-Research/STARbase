@@ -41,6 +41,6 @@ open.
 | [Rig test requests](specs/2026-10-11-rig-test-requests-design.md) | force-app / relay | **Design only** (phase 1 plan open) |
 | [Rig test requests: UI handoff](specs/2026-10-11-rig-test-requests-ui-handoff.md) | force-app UI | Describes the phase-1 UI as built |
 | [Process map edit mode](specs/2026-10-14-process-map-edit-mode-design.md) | STARbase / d1-build | **In progress** on `claude/keen-brahmagupta-nmo9oy` (plan [2026-10-14-process-map-edit-mode](plans/2026-10-14-process-map-edit-mode.md)); ADR-0018, ADR-0019 |
-| [SEM data-bar reader and provenance-owned files](specs/2026-10-16-sem-data-bar-reader-design.md) | inbox crawler / d1-inbox / access | **Design only** (ADR-0022) |
+| [SEM data-bar reader and provenance-owned files](specs/2026-10-16-sem-data-bar-reader-design.md) | inbox crawler / d1-inbox / access | **Design only** (ADR-0022; plan [2026-10-16-sem-reader](plans/2026-10-16-sem-reader.md) open) |
 
 Add a row when a new spec lands, and update its Status line (and this table) when it ships.

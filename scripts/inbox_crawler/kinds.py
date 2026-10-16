@@ -30,13 +30,15 @@ class Classification:
 
     confidence is NULL when no classifier looked at the file. `extracted` holds only values that were
     actually read from the file (metadata or, when switched on, the data bar's text), never guesses.
-    `reason` is for the log, not the database.
+    `reason` is for the log, not the database. `classified_by` is the classifier version that set the kind
+    (`classify_sem.CLASSIFIER_VERSION`); it is empty when only the file name decided.
     """
 
     kind: str
     confidence: float | None = None
     extracted: dict = field(default_factory=dict)
     reason: str = ""
+    classified_by: str = ""
 
 
 def kind_by_name(name: str) -> Classification:
