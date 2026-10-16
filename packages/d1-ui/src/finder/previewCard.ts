@@ -197,10 +197,8 @@ const CARDS: Record<string, CardDef> = {
 	tools: {
 		icon: 'wrench',
 		kind: 'Tool',
-		fields: ['tool_id', 'tool_name', 'tool_type', 'is_active'],
-		build: (row) => ({
-			facts: [{ label: 'Name', value: row.tool_name }, { label: 'Type', value: row.tool_type }, { label: 'Active', value: yesNo(row.is_active) }],
-		}),
+		fields: ['tool_id', 'tool_name', 'tool_type'],
+		build: (row) => ({ facts: [{ label: 'Name', value: row.tool_name }, { label: 'Type', value: row.tool_type }] }),
 	},
 	tool_boxes: {
 		icon: 'briefcase',
@@ -223,13 +221,9 @@ const CARDS: Record<string, CardDef> = {
 	raw_stock_lots: {
 		icon: 'cylinder',
 		kind: 'Raw stock lot',
-		fields: ['lot_id', 'stock_type', 'supplier_name', 'remaining_mass_grams'],
+		fields: ['lot_id', 'supplier_name', 'remaining_mass_grams'],
 		build: (row) => ({
-			facts: [
-				{ label: 'Type', value: row.stock_type },
-				{ label: 'Supplier', value: row.supplier_name },
-				{ label: 'Remaining', value: formatNumber(row.remaining_mass_grams, 'g') },
-			],
+			facts: [{ label: 'Supplier', value: row.supplier_name }, { label: 'Remaining', value: formatNumber(row.remaining_mass_grams, 'g') }],
 		}),
 	},
 };

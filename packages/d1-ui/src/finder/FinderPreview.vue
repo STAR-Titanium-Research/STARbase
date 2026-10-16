@@ -4,14 +4,14 @@ import type { PreviewCard } from './previewCard';
 import type { PreviewState } from './usePreview';
 
 // The finder's preview pane: the card of the active record (see previewCard.ts, usePreview.ts). It only draws what it is given, so it can be rendered and
-// tested on its own; Finder.vue decides whether it exists. It is a polite live region, named by the active option, so a screen reader hears the card as the
-// arrow keys move. It has no buttons or links: the dialog's Tab stops stay as they were, and "Open ↵" is the Enter key's own hint.
+// tested on its own; Finder.vue decides whether it exists. The pane is named by the active option (which the box announces as the arrow keys move), and only
+// the facts, which arrive after the row, are a polite live region. It has no buttons or links: the dialog's Tab stops stay as they were, and "Open ↵" is the Enter key's own hint.
 defineProps<{ state: PreviewState; card: PreviewCard | null; labelledby?: string }>();
 </script>
 
 <template>
 	<!-- mousedown.prevent: a click in the pane must not take focus off the box. -->
-	<aside class="d1-finder-preview" aria-live="polite" aria-atomic="true" :aria-labelledby="labelledby" @mousedown.prevent>
+	<aside class="d1-finder-preview" :aria-labelledby="labelledby" @mousedown.prevent>
 		<template v-if="card">
 			<header class="top">
 				<NavIcon :name="card.icon" :size="20" class="ico" />
@@ -22,12 +22,17 @@ defineProps<{ state: PreviewState; card: PreviewCard | null; labelledby?: string
 			</header>
 			<p v-if="card.detail" class="detail">{{ card.detail }}</p>
 			<p v-if="card.matched" class="matched">Matched in {{ card.matched.field }}<template v-if="card.matched.snippet">: {{ card.matched.snippet }}</template></p>
-			<dl v-if="card.facts.length" class="facts">
+		</template>
+		<!-- Always present, so the facts that arrive later are announced. -->
+		<div aria-live="polite">
+			<dl v-if="card?.facts.length" class="facts">
 				<div v-for="f in card.facts" :key="f.label" class="fact">
 					<dt>{{ f.label }}</dt>
 					<dd :class="{ mono: f.mono }">{{ f.value }}</dd>
 				</div>
 			</dl>
+		</div>
+		<template v-if="card">
 			<p v-if="state === 'loading'" class="note">Loading…</p>
 			<p v-else-if="state === 'unavailable'" class="note">Preview unavailable</p>
 			<footer class="foot">Open ↵</footer>

@@ -16,17 +16,20 @@ const card: PreviewCard = {
 };
 
 describe('FinderPreview', () => {
-	it('draws nothing but the live region when there is no card', async () => {
+	it('draws nothing but the (empty) live region when there is no card', async () => {
 		const html = await render({ state: 'idle', card: null });
 		expect(html).toContain('aria-live="polite"');
+		expect(html).not.toContain('aria-atomic');
 		expect(html).not.toContain('Open');
 		expect(html).not.toContain('Preview unavailable');
 	});
 
-	it('is a polite live region named by the active option', async () => {
+	it('is named by the active option, and only the facts are live (not the loading and unavailable notes)', async () => {
 		const html = await render({ state: 'ready', card, labelledby: 'f-opt-3' });
-		expect(html).toContain('aria-live="polite"');
 		expect(html).toContain('aria-labelledby="f-opt-3"');
+		expect(html).toMatch(/aria-live="polite"[^>]*><dl.*<\/dl><\/div>/s);
+		const unavailable = await render({ state: 'unavailable', card: { ...card, facts: [] } });
+		expect(unavailable.indexOf('Preview unavailable')).toBeGreaterThan(unavailable.indexOf('</div>', unavailable.indexOf('aria-live')));
 	});
 
 	it('shows the instant part with "Loading…" while the record is read', async () => {

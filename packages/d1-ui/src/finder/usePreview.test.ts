@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, createRenderer, defineComponent, nextTick, ref, watch } from 'vue';
 import type { FinderHit } from './finder';
 import { sameHitIndex } from './finderNav';
 import { PREVIEW_SETTLE_MS, usePreview } from './usePreview';
@@ -192,14 +192,27 @@ describe('usePreview', () => {
 		expect(second.preview.card.value).toBeNull();
 	});
 
-	// Finder.vue's wiring: the active hit is hits[active], and active is re-pointed by a watcher on hits (pre flush) after a streamed answer has landed.
+	// Finder.vue's wiring, in a component (a no-op renderer, no DOM): usePreview is set up first, then the watcher that re-points the active row after a
+	// streamed answer has landed. A key watcher that ran synchronously would see hits[oldIndex] (another record) in between and abort the read.
 	it('an answer that inserts rows above the active row does not abort or repeat the read', async () => {
 		const calls: Call[] = [];
 		const api = { get: (path: string, cfg?: any) => new Promise<any>((resolve, reject) => { calls.push({ path, params: cfg?.params, signal: cfg?.signal, resolve, reject }); }) };
 		const hits = ref<FinderHit[]>([hit('1'), hit('2')]);
 		const active = ref(1);
-		watch(hits, (h, old) => { active.value = sameHitIndex(old?.[active.value], h); });
-		const preview = usePreview(computed(() => hits.value[active.value]), api, ref(true));
+		let preview!: ReturnType<typeof usePreview>;
+		const Host = defineComponent({
+			setup() {
+				preview = usePreview(computed(() => hits.value[active.value]), api, ref(true));
+				watch(hits, (h, old) => { active.value = sameHitIndex(old?.[active.value], h); });
+				return () => null;
+			},
+		});
+		const node = () => ({});
+		createRenderer<object, object>({
+			patchProp: () => {}, insert: () => {}, remove: () => {}, createElement: node, createText: node, createComment: node, setText: () => {},
+			setElementText: () => {}, parentNode: () => null, nextSibling: () => null,
+		}).createApp(Host).mount({});
+
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].path).toBe('/items/physical_samples/2');

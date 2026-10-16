@@ -127,7 +127,7 @@ describe('buildCard', () => {
 		expect(facts(buildCard(hit('directus_files', 'f'), { type: null, filesize: null, metadata: null }))).toEqual({});
 	});
 
-	it('the minimal cards give two or three facts and a kind', () => {
+	it('the minimal cards give a kind and two facts', () => {
 		const material = buildCard(hit('materials', '1', { group: 'Reference' }), { common_name: 'Ti-6Al-4V', density_g_per_cm3: '4.43' })!;
 		expect(material.kind).toBe('Material');
 		expect(facts(material)).toEqual({ Name: 'Ti-6Al-4V', Density: '4.43 g/cm³' });
@@ -135,11 +135,11 @@ describe('buildCard', () => {
 		expect(facts(buildCard(hit('projects', '1'), { principal_investigator_name: 'Dr X', is_active: true }))).toEqual({ 'Principal investigator': 'Dr X', Active: 'Yes' });
 		expect(facts(buildCard(hit('people', '1'), { email: 'a@b.c', is_operator: true, is_researcher: true, active: true }))).toEqual({ Role: 'Operator, Researcher', Active: 'Yes' });
 		expect(previewRequest('people', '1')!.fields).not.toContain('email');
-		expect(facts(buildCard(hit('tools', '1'), { tool_name: 'Drill', tool_type: 'drill', is_active: true }))).toMatchObject({ Name: 'Drill' });
+		expect(facts(buildCard(hit('tools', '1'), { tool_name: 'Drill', tool_type: 'drill', is_active: true }))).toEqual({ Name: 'Drill', Type: 'drill' });
 		expect(facts(buildCard(hit('tool_boxes', '1'), { description: 'Box', location: null }))).toEqual({ Description: 'Box' });
 		expect(facts(buildCard(hit('cutting_inserts', '1'), { location: 'Drawer', is_depleted: false }))).toEqual({ Location: 'Drawer', Depleted: 'No' });
 		expect(facts(buildCard(hit('insert_edges', '1'), { edge_identifier: 'A', is_used: true }))).toEqual({ Edge: 'A', Used: 'Yes' });
-		expect(facts(buildCard(hit('raw_stock_lots', '1'), { stock_type: 'bar', supplier_name: 'Acme', remaining_mass_grams: 1200 }))).toEqual({ Type: 'bar', Supplier: 'Acme', Remaining: '1,200 g' });
+		expect(facts(buildCard(hit('raw_stock_lots', '1'), { stock_type: 'bar', supplier_name: 'Acme', remaining_mass_grams: 1200 }))).toEqual({ Supplier: 'Acme', Remaining: '1,200 g' });
 	});
 
 	it('keeps the matched line and the detail of the hit on the finished card', () => {
