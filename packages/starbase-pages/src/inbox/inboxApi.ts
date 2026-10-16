@@ -402,15 +402,19 @@ export function filesParams(q: FilesQuery): Record<string, string | number> {
 
 export type PictureSize = 'thumb' | 'preview';
 
+/** How long a picture request may take before it fails like any other (a stalled one must not hold one of the store's four slots for the session). */
+export const PICTURE_TIMEOUT_MS = 30_000;
+
 /**
  * One picture of a found file as an object URL (the caller revokes it with URL.revokeObjectURL, see inboxPictures.ts). The request carries the
  * signed-in session like every other call, so no unauthenticated URL exists; an <img src> to the endpoint would not work in both hosts. Throws an
- * InboxApiError (status 404 when the caller cannot see the file or it has no picture) or, for an answer that is not a picture, one without a status.
+ * InboxApiError (status 404 when the caller cannot see the file or it has no picture) or, for a timeout (PICTURE_TIMEOUT_MS) or an answer that is not a
+ * picture, one without a status.
  */
 export async function loadPicture(api: HostApi, candidateId: string, size: PictureSize): Promise<string> {
 	let data: unknown;
 	try {
-		data = (await api.get(`${BASE}/files/${encodeURIComponent(candidateId)}/${size}`, { responseType: 'blob' })).data;
+		data = (await api.get(`${BASE}/files/${encodeURIComponent(candidateId)}/${size}`, { responseType: 'blob', timeout: PICTURE_TIMEOUT_MS })).data;
 	} catch (e: any) {
 		// The error body of a blob request is a blob too, so the endpoint's own words are not read: a picture that fails to load fails quietly.
 		throw new InboxApiError('The picture could not be loaded.', { status: e?.response?.status });

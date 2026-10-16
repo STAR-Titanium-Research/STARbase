@@ -208,7 +208,7 @@ describe('GET /d1-inbox/files', () => {
 		expect(await loadFiles(only(fx('files_empty')).api, {})).toEqual({ rows: [], total: 0, acceptable: null });
 	});
 
-	it('meta.acceptable is read when the server sends it (only with acceptable=1, which the client never asks for)', async () => {
+	it('meta.acceptable is read when the server sends it (only with acceptable=1, which the list plan never sends)', async () => {
 		const page = await loadFiles(only(fx('files_new_acceptable')).api, {});
 		expect(page).toMatchObject({ total: 2, acceptable: 1 });
 		expect(fx('files_new').body.meta.acceptable).toBeNull();

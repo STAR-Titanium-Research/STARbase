@@ -2,7 +2,8 @@
 // what the model, API and page tests (and the Playwright spec's stand-in server) run against.
 //
 // The shapes are d1-inbox's own, as built (core/extensions/d1-inbox/index.js, stream B): every answer is `{ data: ... }`; a list also has
-// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1: the page asks once per filter, with limit 1); `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
+// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1: the page asks once per filter, with limit 1);
+// `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
 // cannot edit (403 FORBIDDEN) and a file someone else linked (409 ALREADY_LINKED); `accept-all` answers `{ link_batch_id, linked, items, skipped,
 // has_more }`, its dry run `{ link_batch_id: null, linked: 0, count, acceptable, ids, items: [], skipped, has_more, dry_run: true }`, takes
 // `candidate_ids` (links exactly those), and skips surface scans (SURFACE_SCAN), copies (COPY), records the caller cannot edit (NOT_EDITABLE) and
@@ -16,7 +17,8 @@
 // Pictures (spec section 14): a file with `has_thumbnail: true` serves GET /d1-inbox/files/<id>/thumb and /preview as an image Blob (fakePictures.ts), as an
 // axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs` (and
 // `previewDelayMs` for the preview alone), `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
-// were open at once.
+// were open at once. `pictureHangs` makes a request that never answers: like axios it fails with ECONNABORTED when the request carries a `timeout`, and
+// stays open forever when it does not.
 // Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
@@ -107,6 +109,8 @@ export interface FakeInboxOptions extends FakeIgnoredOptions {
 	thumbFails?: boolean | number;
 	/** Preview requests are refused with 500 (true), or the first n of them are. */
 	previewFails?: boolean | number;
+	/** Picture requests never answer (a stalled share): they fail with a timeout error after the request's own `timeout`, or hang when it has none. */
+	pictureHangs?: boolean;
 }
 
 /** One surface_scans row the fake made. */
@@ -331,7 +335,7 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 	const pictureStats = { requests: 0, thumbs: 0, previews: 0, open: 0, maxOpen: 0, paths: [] as string[] };
 	const refused: Record<string, number> = { thumb: 0, preview: 0 };
 	/** The picture routes: a Blob after the delay, or the error the endpoint would answer. */
-	async function picture(path: string): Promise<Blob> {
+	async function picture(path: string, timeout?: number): Promise<Blob> {
 		const [, id, size] = PICTURE_ROUTE.exec(path) as RegExpExecArray & [string, string, 'thumb' | 'preview'];
 		pictureStats.requests += 1;
 		pictureStats[size === 'thumb' ? 'thumbs' : 'previews'] += 1;
@@ -339,6 +343,11 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		pictureStats.open += 1;
 		pictureStats.maxOpen = Math.max(pictureStats.maxOpen, pictureStats.open);
 		try {
+			if (opts.pictureHangs) {
+				await new Promise<never>((_, reject) => {
+					if (timeout) setTimeout(() => reject(Object.assign(new Error(`timeout of ${timeout}ms exceeded`), { code: 'ECONNABORTED' })), timeout);
+				});
+			}
 			const delay = size === 'preview' ? opts.previewDelayMs ?? opts.pictureDelayMs : opts.pictureDelayMs;
 			if (delay) await new Promise((r) => setTimeout(r, delay));
 			const f = files.find((x) => x.candidate_id === id);
@@ -467,11 +476,11 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		},
 	};
 
-	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown> }) {
+	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown>; timeout?: number }) {
 		const call: Call = { method, path, body, params: config?.params };
 		calls.push(call);
 		// A picture is the image itself (not { data }), so it is not cloned through JSON.
-		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path).then((data) => ({ data }));
+		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path, config?.timeout).then((data) => ({ data }));
 		const rule = method === 'delete' ? IGNORED_ROUTE.exec(path) : null;
 		const h = rule ? () => ignored.remove(decodeURIComponent(rule[1])) : handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));

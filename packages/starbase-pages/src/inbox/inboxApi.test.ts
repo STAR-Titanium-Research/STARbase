@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
 import {
-	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, PICTURE_TIMEOUT_MS, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 } from './inboxApi';
 import { createFakeInbox, exactMatch, foundFile } from './fakeInboxServer';
 
@@ -50,8 +50,8 @@ describe('loadPicture', () => {
 		expect(preview).toMatch(/^blob:/);
 		expect(thumb).not.toBe(preview);
 		expect(get.mock.calls.map((c) => [c[0], c[1]])).toEqual([
-			[`/d1-inbox/files/${id}/thumb`, { responseType: 'blob' }],
-			[`/d1-inbox/files/${id}/preview`, { responseType: 'blob' }],
+			[`/d1-inbox/files/${id}/thumb`, { responseType: 'blob', timeout: PICTURE_TIMEOUT_MS }],
+			[`/d1-inbox/files/${id}/preview`, { responseType: 'blob', timeout: PICTURE_TIMEOUT_MS }],
 		]);
 		expect(create).toHaveBeenCalledTimes(2);
 		expect((create.mock.calls[0][0] as Blob).type).toBe('image/png');
@@ -72,6 +72,25 @@ describe('loadPicture', () => {
 		await expect(loadPicture(fake.api, fake.files[0].candidate_id, 'thumb')).rejects.toMatchObject({ status: 500 });
 		expect(create).not.toHaveBeenCalled();
 		create.mockRestore();
+	});
+
+	it('a request that stalls fails after 30 s like any other (no status), so it cannot hold a queue slot for good', async () => {
+		vi.useFakeTimers();
+		try {
+			const fake = withPictures({ pictureHangs: true });
+			const create = vi.spyOn(URL, 'createObjectURL');
+			let outcome: unknown = 'pending';
+			loadPicture(fake.api, fake.files[0].candidate_id, 'preview').then((u) => (outcome = u), (e) => (outcome = e));
+			await vi.advanceTimersByTimeAsync(PICTURE_TIMEOUT_MS - 1);
+			expect(outcome).toBe('pending');
+			await vi.advanceTimersByTimeAsync(1);
+			expect(outcome).toBeInstanceOf(InboxApiError);
+			expect(outcome).toMatchObject({ message: 'The picture could not be loaded.', status: undefined });
+			expect(create).not.toHaveBeenCalled();
+			create.mockRestore();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('an answer that is not a picture (JSON, an empty body, text) is refused', async () => {
@@ -99,7 +118,7 @@ describe('against the fake server (d1-inbox\'s shapes)', () => {
 		expect(s).toMatchObject({ newCount: 3, olderMatches: 0, person: { has_alias: true } });
 	});
 
-	it('loadFiles pages by tab and kind with the total; it never asks for meta.acceptable', async () => {
+	it('loadFiles pages by tab and kind with the total; meta.acceptable only comes with acceptable=1', async () => {
 		const fake = sample();
 		const pictures = await loadFiles(fake.api, { tab: 'new', kind: 'sem_image,surface_scan,image' });
 		expect(pictures.rows).toHaveLength(2);
