@@ -337,11 +337,14 @@ export const SQL = {
     'INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, owner_team_id, rel_folder, created_by) VALUES (?::uuid, ?::uuid, ?, ?)'
     + ' RETURNING ignored_id, rel_folder, created_at',
   ignoredDelete: 'DELETE FROM d1_private.inbox_ignored_dirs WHERE ignored_id = ? RETURNING ignored_id',
-  // The owner's open candidates in the folder and below, locked in id order like /dismiss does. Bindings: person id, team id, the path prefix 'root/folder/'.
+  // The owner's open candidates, by owner only (the (owner, state) indexes serve it): which of them lie under the new rule is decided in JS by isIgnored, the one
+  // matcher the crawler's Python twin is tested against. A SQL prefix test lowercases in Postgres while the final check lowercases in JS, and the two differ for
+  // some characters (a final sigma, a dotted capital I), so a prefilter could drop a row the matcher would cover. Only id and path are read, and nothing is
+  // locked here: the dismissal that follows (SQL.dismiss, as POST /dismiss) changes a row only while it is still 'new', so a file linked or dismissed in
+  // between stays as it is. Bindings: person id, team id.
   openUnderFolder:
     "SELECT c.candidate_id, c.rel_path FROM d1_private.file_candidates c WHERE c.state = 'new'"
-    + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid'
-    + ' AND starts_with(lower(c.rel_path), lower(?)) ORDER BY c.candidate_id FOR UPDATE',
+    + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid ORDER BY c.candidate_id',
   // A removed rule: reset the cache rows of the folder (its own row and everything below) to "seen, not listed" (last_listed_at and dir_mtime NULL, as
   // relistDirs does; never baselined_at, and the rows are NOT deleted: the crawler reaches a folder through its cached parent, so a deleted row would hide
   // the folder for as long as the parent's modification time stays the same; a NULL mtime never equals the share's). Bindings: person id, team id, the
@@ -1577,9 +1580,9 @@ export function mount(router, context, deps = {}) {
         throw err;
       }
       // The owner's open files in the folder and below, dismissed with the SAME statement and state rule as POST /dismiss (only 'new' changes: linked and
-      // gone files are untouched). The prefix match is on whole path parts; isIgnored re-checks every row, so a file the crawler would still scan (the same
-      // rule, in Python) is never dismissed on the strength of a database case-folding difference.
-      const open = rowsOf(await trx.raw(SQL.openUnderFolder, [owner.personId, owner.teamId, `${owner.root}/${folder}/`]))
+      // gone files are untouched). The database only selects the owner's open rows; isIgnored decides which of them the rule covers, so a file the crawler would
+      // still scan (the same rule, in Python) is never dismissed, and one it would skip is never missed, on the strength of a database case-folding difference.
+      const open = rowsOf(await trx.raw(SQL.openUnderFolder, [owner.personId, owner.teamId]))
         .filter((r) => isIgnored(folderOfCandidate(r.rel_path, owner.root), [folder]));
       const done = open.length ? rowsOf(await trx.raw(SQL.dismiss, [acc.user, open.map((r) => r.candidate_id).join(',')])) : [];
       return shapeIgnoredAdded(rule, owner.teamId, done.length);

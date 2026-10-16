@@ -7007,14 +7007,17 @@ CREATE TEMP TABLE ib_ig_list AS EXECUTE ignoredlist('$IB_P', '');
 SELECT 'ib_ign_list:' || count(*) || ':' || bool_and(owner_name = 'Inbox Person' AND owner_team_id IS NULL) FROM ib_ig_list;
 CREATE TEMP TABLE ib_ig_byid AS EXECUTE ignoredbyid(:'ib_ign_id');
 SELECT 'ib_ign_by_id:' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P') FROM ib_ig_byid;
--- the candidates under the folder: open ones, of this owner, on whole path parts and ignoring case (not 'Ign Dir 2', not a gone file, not another owner's, not 'x/Ign Dir')
-SELECT 'ib_ign_open:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+-- the owner's open candidates (review Minor1: by owner only, never gone or another owner's; which of them lie under the rule is decided in JS by isIgnored, so no
+-- lowercasing prefix in SQL can disagree with it). The ids to dismiss are then the ones on whole path parts, ignoring case (a, e and sub/b: not 'Ign Dir 2', not x/Ign Dir).
+SELECT 'ib_ign_open_owner:' || (pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL)', '$IB_P')) = (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$IB_P' AND state = 'new'));
+SELECT 'ib_ign_open_owner_only:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL)', 'a1b00000-0000-4000-8000-0000000000e1'));
 SELECT string_agg(candidate_id::text, ',') AS ib_ign_ids FROM d1_private.file_candidates
  WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/')) \gset
+SELECT 'ib_ign_open_under:' || array_length(string_to_array(:'ib_ign_ids', ','), 1);
 -- the same dismissal statement as POST /dismiss
 SELECT 'ib_ign_dismissed:' || pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_ign_ids'));
 SELECT 'ib_ign_states:' || string_agg(regexp_replace(rel_path, '^Users/ibx1/', '') || '=' || state, ',' ORDER BY rel_path COLLATE "C") FROM d1_private.file_candidates WHERE directus_files_id::text LIKE 'a1b00000-0000-4000-8000-0000000002%';
-SELECT 'ib_ign_open_after:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+SELECT 'ib_ign_open_after:' || count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/'));
 -- Review M1: files the crawler registered AFTER the rule was added (it loads the rules once per scan) stay open under the folder. The list, its count, the summary,
 -- accept-all's selection and its candidate reads leave an undecided row under a rule of ITS OWNER out; a linked row under a rule is still listed in the Linked tab.
 -- Rows (ids ...0208 to ...0213): 208 late (P, under Ign Dir, exact match), 209 late in a sub folder, other letter case, 210 linked under the rule, 211 a sibling folder that
@@ -7114,7 +7117,9 @@ SQL
     ib_check "ib_ign_duplicate:refused" "the unique index refuses the same folder in another case for one owner (the endpoint answers 409 ALREADY_IGNORED)"
     ib_check "ib_ign_list:1:true" "the rule list names the owner (person full name)"
     ib_check "ib_ign_by_id:1:true" "a rule is found by its id with its owner and folder"
-    ib_check "ib_ign_open:3" "the open files under a rule: the folder and below (a, e and sub/b) on whole path parts and ignoring case; not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
+    ib_check "ib_ign_open_owner:true" "the open files of an owner are selected by owner and state only (never gone ones; the rule is applied in JS, not by a SQL prefix)"
+    ib_check "ib_ign_open_owner_only:0" "...and an owner with no open files has none"
+    ib_check "ib_ign_open_under:3" "the open files under the rule (a, e and sub/b), on whole path parts and ignoring case: not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
     ib_check "ib_ign_dismissed:3" "the rule's dismissal is the very statement of POST /dismiss"
     ib_check "ib_ign_states:Ign Dir 2/c.tif=new,Ign Dir/a.tif=dismissed,Ign Dir/e.tif=dismissed,Ign Dir/gone.tif=gone,Ign Dir/q.tif=new,ign dir/sub/b.tif=dismissed,x/Ign Dir/d.tif=new" "only the open files under the rule changed state"
     ib_check "ib_ign_open_after:0" "nothing open is left under the rule"

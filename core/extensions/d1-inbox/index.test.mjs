@@ -250,8 +250,8 @@ function statement(w, sql, b, txId) {
       w.ignored = w.ignored.filter((r) => r.ignored_id !== b[0]);
       return hit.map((r) => ({ ignored_id: r.ignored_id }));
     }
-    case 'openUnderFolder':
-      return [...w.candidates.values()].filter((c) => c.state === 'new' && sameOwner(c, b) && c.rel_path.toLowerCase().startsWith(b[2].toLowerCase()))
+    case 'openUnderFolder': // the owner's open rows only: which of them lie under the rule is decided in JS
+      return [...w.candidates.values()].filter((c) => c.state === 'new' && sameOwner(c, b))
         .sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map((c) => ({ candidate_id: c.candidate_id, rel_path: c.rel_path }));
     case 'ignoredResetDirs':
       for (const d of w.dirs) {
@@ -3053,8 +3053,25 @@ test('POST /ignored-folders: a rule for the caller\'s folder; the open files bel
   assert.equal(new Set(tx.map((l) => l.tx)).size, 1);
   assert.deepEqual(tx.map((l) => l.name), ['setActor', 'lock', 'ignoredCount', 'ignoredFind', 'ignoredInsert', 'openUnderFolder', 'dismiss']);
   assert.equal(actorsOf(w).at(0).bindings[0], U.alice);
-  assert.equal(w.log.find((l) => l.name === 'openUnderFolder').bindings[2], 'Users/ali1/World-Ti Paper/', 'a prefix of whole path parts, with the owner root');
+  assert.deepEqual(w.log.find((l) => l.name === 'openUnderFolder').bindings, [P.alice, null], 'the owner only: the rule is applied in JS, not by a lowercasing prefix in SQL');
   assert.equal(w.log.find((l) => l.name === 'dismiss').sql, SQL.dismiss, 'the very statement of POST /dismiss');
+});
+
+test('POST /ignored-folders: which open rows a rule covers is decided in JS by isIgnored, never by a lowercasing prefix in SQL (a character Postgres and JS lowercase differently is still covered)', async () => {
+  const w = newWorld();
+  // JS lowercases a dotted capital I to "i" plus a combining dot, as the rule and as the path; a Postgres prefix compare on lower() could miss the pair
+  const dotted = add(w, under('Users/ali1/i\u0307stanbul/a.tif'), under('Users/ali1/\u03a3\u0391\u03a3/b.tif'));
+  const other = add(w, under('Users/ali1/istanbul2/a.tif'));
+  const { call } = setup(w);
+  assert.equal((await call('POST /ignored-folders', { user: U.alice, body: { folder: '\u0130stanbul' } })).body.data.dismissed, 1);
+  assert.equal(dotted[0].state, 'dismissed');
+  assert.equal(dotted[1].state, 'new');
+  assert.equal(other.state, 'new');
+  assert.equal((await call('POST /ignored-folders', { user: U.alice, body: { folder: '\u03a3\u0391\u03a3' } })).body.data.dismissed, 1, 'a final sigma in the rule and in the path');
+  assert.equal(dotted[1].state, 'dismissed');
+  // the statement reads no path: it does not look at a prefix, so SQL and JS cannot disagree about a row
+  assert.doesNotMatch(SQL.openUnderFolder, /starts_with|lower\(|LIKE|\bleft\(/);
+  assert.doesNotMatch(SQL.openUnderFolder, /FOR UPDATE/, 'nothing is locked: the dismissal changes a row only while it is still new');
 });
 
 test('POST /ignored-folders: a file the rule dismissed can be restored by hand, with the ordinary Restore', async () => {
@@ -3098,7 +3115,7 @@ test('POST /ignored-folders: a team rule by a member dismisses the team\'s open 
   assert.deepEqual(w.ignored.map((r) => [r.owner_person_id, r.owner_team_id, r.created_by]), [[null, TEAM, U.bob]]);
   assert.deepEqual(t1.map((c) => [c.state, c.decided_by]), [['dismissed', U.bob], ['dismissed', U.bob]]);
   assert.equal(mine.state, 'new', 'Alice\'s own folder of the same name is not the team\'s');
-  assert.equal(w.log.find((l) => l.name === 'openUnderFolder').bindings[2], 'Shared/SEM/runs/');
+  assert.deepEqual(w.log.find((l) => l.name === 'openUnderFolder').bindings, [null, TEAM], 'the team\'s open rows; the rule is applied in JS');
   // Alice, a member too, may then not add the same rule again
   assert.equal(codeOf(await call('POST /ignored-folders', { user: U.alice, body: { folder: 'RUNS', team_id: TEAM } })), 'ALREADY_IGNORED');
   w.teams[0].share_folder = null;
