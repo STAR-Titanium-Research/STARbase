@@ -53,6 +53,7 @@ Record access (A1a)
   sample_readers, operation_readers, test_readers, campaign_readers, project_readers, campaign_sample_readers
                                derived: which login may read each record (kept by triggers; never edited)
   operation_open_to_all        derived: the ownerless operations every member may read
+  file_readers                 derived: which login may read each OWNED file (ADR-0022; kept by triggers; never edited)
 
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
@@ -146,6 +147,12 @@ Private schema (not exposed)
                              folders the inbox crawler must not scan (migration 199, spec section 15
                              of the Inbox design): one rule per person or team and folder. Reached
                              only through the d1-inbox endpoint and the crawler; see "Found files".
+  d1_private.sem_image_settings, sem_settings_access_log
+                             imaging settings per SEM image (kV, spot, working distance, magnification,
+                             field width, ...) saved when a person links the image, with where each
+                             value came from, and the log of administrator reads (migration 197,
+                             ADR-0022). Written only by d1_private.save_sem_settings and
+                             correct_sem_setting; reached only through the d1-inbox endpoint.
 ```
 
 ---
@@ -525,6 +532,85 @@ Unique on `(coalesce(owner_person_id, owner_team_id), lower(rel_folder))` (`inbo
 each owner column and on `created_by`. At most 200 rules per owner, enforced by the endpoint. Adding a rule dismisses the owner's `new`
 candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one resets the folder's `inbox_dirs` rows (`dir_mtime` and `last_listed_at` NULL for the
 folder and everything below it; kept, not deleted) so the next scan lists it again.
+### Files belong to their provenance owner: `directus_files.owner_person_id` / `owner_team_id` and `file_readers`
+
+Migration `…196` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 3 and 4). A file the inbox crawler found is visible, and linkable, only to the user whose folder it came from. `directus_files` is a Directus
+system table; the migration adds two columns to it and a readers table beside it.
+
+| Column | Type | Description |
+|---|---|---|
+| `directus_files.owner_person_id` | UUID FK `people (person_id)`, nullable, `ON DELETE RESTRICT` | The person whose personal folder (`Users/<uni alias>`) the file came from. The owner is the person, not the alias text. A person who owns files cannot be deleted: deactivate them |
+| `directus_files.owner_team_id` | UUID FK `teams (team_id)`, nullable, `ON DELETE RESTRICT` | The team whose folder (`Shared/<share folder>`) the file came from; every team member can read it |
+
+`CHECK directus_files_one_owner_check`: at most one of the two is set. Both null means the file is open, as before (linked files and the legacy archive
+stay open until the file-access stream, D10). Partial indexes `idx_directus_files_owner_person_id` and `idx_directus_files_owner_team_id`
+(`WHERE ... IS NOT NULL`). The crawler stamps a pointer row when it registers it and never overwrites a stamp. The migration back-fills the files the live crawler had
+already registered from `d1_private.file_candidates.owner_*` for every file that is **not linked anywhere**: its candidate's state is not `linked` *and* it has no
+row in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans` (a file linked in Data Studio's picker or the Alicona dialog keeps a
+dismissed, new or gone candidate, so the candidate alone cannot say). Lab Members cannot write either column:
+the Lab Member `create` and `update` field lists of `directus_files` name every other column (the 26 of the `db/schema.sql` snapshot, pinned by a test) (as `people.uni_alias`; there is no Postgres trigger, because Directus
+uses one database role for every user). Administrators are not filtered and can change an owner.
+
+**`file_readers`** (public, hidden Directus collection, derived like the other readers tables, not audited): `reader_id` BIGINT identity PK,
+`directus_files_id` UUID FK (`ON DELETE CASCADE`), `user_id` UUID FK to `directus_users` (`ON DELETE CASCADE`), `UNIQUE (directus_files_id, user_id)`, index on
+`user_id`. One row per owned file and login that may read it: the owning person's login, or the login of every member of the owning team. A file with no owner
+has no rows. It exists because the Directus read rule cannot say "the caller is a member of the owning team" (a to-many hop inside `_some`, which Directus 11.17
+refuses); the rule is instead one legal membership test on the hidden top-level alias `directus_files.readers`: **the file has no owner, or the caller has a
+`file_readers` row**. The Lab Member and Lab Viewer read rows of `directus_files` carry that filter, and so does `/assets/<id>`. The Lab Member **update and delete** rows of `directus_files` carry the same test in its bare-hop form (`readers.user_id = $CURRENT_USER`, no
+`_some`), so a member cannot rewrite or delete a file they cannot read (deleting a file cascades its candidate, settings and readers). Triggers keep the table right
+(`directus_files` owner change, `team_members` join, leave or move, `people.user_id` set or removed);
+`d1_private.file_readers_drift_count()` counts the differences from `d1_private.file_readers_expected()` (0 is correct) and `d1_private.file_readers_refresh()`
+repairs them. Not granted to the LLM role.
+
+### SEM image settings: `d1_private.sem_image_settings`, `sem_settings_access_log`, `file_candidates.classified_by`
+
+Migration `…197` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 2 and 3). The inbox crawler reads an SEM image's imaging settings (TIFF metadata, or OCR of the data bar) into
+`d1_private.file_candidates.extracted`; when a person links the image they are saved per image. Both tables are in `d1_private`: not exposed by
+Directus, not in `v_schema_dictionary`, not granted to the LLM role; reached only through the `d1-inbox` endpoint, which shows a row to the file's owner
+(an administrator read-only and logged) and a locked answer to everyone else. No audit or OCC trigger (derived bookkeeping).
+
+**`d1_private.sem_image_settings`**: one row per file, `directus_files_id` UUID PK, FK to `directus_files` (`ON DELETE CASCADE`). A column is NULL when the value
+is unknown, failed a cross-check or fell outside its range; it is never zero.
+
+| Column | Type | Description |
+|---|---|---|
+| `kv` | NUMERIC(6,2) | Accelerating voltage in kV, 0.1 to 30 (CHECK). A value is tested against its range as given, then rounded, so 0.095 is dropped, not saved as 0.10 |
+| `spot` | NUMERIC(4,1) | Spot size, 1 to 10 (CHECK) |
+| `working_distance_mm` | NUMERIC(6,2) | Working distance in mm, 0.1 to 50 (CHECK) |
+| `magnification` | INTEGER | Magnification as printed, 5 to 1,000,000 (CHECK); derived from the screen-width constant and the field width when read from metadata |
+| `hfw_um` | NUMERIC(10,2) | Horizontal field width in micrometres, greater than 0 |
+| `pixel_size_nm` | NUMERIC(12,4) | One pixel in nanometres, greater than 0 |
+| `scale_bar_um` | NUMERIC(12,3) | The length the printed scale bar stands for, in micrometres, greater than 0 |
+| `detector`, `mode`, `instrument` | TEXT | As the instrument records them, up to 200 characters (CHECK) |
+| `acquired_at` | TIMESTAMPTZ | When the image was taken; the instrument clock is UK time (`Europe/London`), stored as the instant; NULL for a local time that does not exist (the skipped spring hour) |
+| `sources` | JSONB NOT NULL, default `{}` | Per saved field: `metadata`, `derived`, `ocr` or `manual` (a person's correction, never overwritten by a re-read) |
+| `flags` | JSONB NOT NULL, default `{}` | Notes on the read: `check_this` (could not be cross-checked), a field name with a reason (`acquired_at = invalid_local_time`), a metadata/bar mismatch |
+| `read_by` | TEXT NOT NULL | The profile and version that read it (for example `sem-2`) |
+| `read_at` | TIMESTAMPTZ NOT NULL | When it was last read or saved from a read |
+| `corrected_by`, `corrected_at` | UUID, TIMESTAMPTZ | The Directus user and time of the last correction (no foreign key: the history outlives the user) |
+
+**`d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean`** is the only place `extracted` becomes columns (`SECURITY INVOKER`). It maps the
+keys above, drops a value of the wrong JSON type or outside its range (after rounding to the column's scale, so a bad value costs that field, never the link),
+keeps only the `sources` of saved fields and never a source of `manual`, and upserts. It **merges** into the row (ruling R12): only the keys present and usable in
+`extracted` are updated; a key it does not carry keeps its stored value, `sources` entry and flags, and a key that is present but unusable (out of range, null,
+the wrong type) is dropped without erasing the stored value, so a re-read with fewer fields (a back-fill without OCR) cannot erase what an earlier read found. An
+updated key takes the source the read gave it (none if it gave none) and loses the flag named after it. It **skips every field whose existing source is `manual`**
+and takes no flag named after such a field. It returns whether a row exists afterwards: `false` for an `extracted` with nothing usable on a file with no row
+(nothing is written), `true` otherwise (an existing row is left exactly as it is when nothing usable was given). The migration's down is lossy: the
+owners' manual corrections and the administrator access log are dropped with the tables. **`d1_private.correct_sem_setting(file, field, value, user) RETURNS void`** is the owner's correction: it sets one of the eleven settings from
+a JSON value (same type and range rules), marks `sources.<field> = 'manual'`, removes the flag named after the field, and records `corrected_by` and `corrected_at`;
+it refuses other columns (`read_by`, `sources`, ...), bad values, a missing user and a file with no row. The endpoint decides who may call it.
+Helpers `sem_clean_number`, `sem_clean_text` and `sem_try_timestamptz` turn a malformed value into NULL instead of an error.
+
+**`d1_private.sem_settings_access_log`**: one row per administrator read of settings that are not theirs. `id` BIGSERIAL PK, `directus_files_id` UUID NOT NULL,
+`read_by_user` UUID NOT NULL, `read_at` TIMESTAMPTZ NOT NULL (default now), `reason` TEXT NOT NULL (not blank). No foreign keys (the log outlives the file and the
+user); index on `(directus_files_id, read_at)`.
+
+**`d1_private.file_candidates.classified_by`** TEXT, nullable: the classifier profile and version that set `kind`, `kind_confidence` and `extracted` (for example
+`sem-2`); a re-classification pass skips rows already at the current version.
+
 ### `surface_scans`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona

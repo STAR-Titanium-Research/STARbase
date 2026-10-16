@@ -158,8 +158,9 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "dataclasses",
             "typing",
             "io",
+            "logging",
+            "os",
             "PIL",
-            "pytesseract",
         }
     ),
     "daemon": frozenset({"logging", "threading", "dataclasses", "datetime"}),
@@ -171,6 +172,22 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "recognise": frozenset({"re", "collections.abc", "dataclasses"}),
     "scan": frozenset({"io", "logging", "time", "dataclasses"}),
     "thumbs": frozenset({"warnings", "dataclasses", "io", "PIL"}),
+    # the bar reader: a pure function of an in-memory image (Pillow, numpy); onnxruntime and rapidocr only to
+    # build the default recogniser (the models ship in the wheel), and only the attributes ATTR_ALLOWED lists
+    "sem_bar": frozenset(
+        {
+            "logging",
+            "re",
+            "collections.abc",
+            "dataclasses",
+            "numpy",
+            "onnxruntime",
+            "rapidocr_onnxruntime",
+            "PIL",
+        }
+    ),
+    # pure functions of an in-memory image: standard library text and time maths only
+    "sem_meta": frozenset({"configparser", "math", "re", "datetime", "zoneinfo"}),
 }
 PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 # (module, imported name) -> the attributes of it that module may use; anything else is refused. `io` is
@@ -178,19 +195,28 @@ PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 ATTR_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
     ("__main__", "os"): frozenset({"environ"}),
     ("__main__", "sys"): frozenset({"exit"}),
+    ("classify_sem", "os"): frozenset({"environ"}),  # INBOX_OCR_DEVICE
     ("identity", "sys"): frozenset({"path"}),
     ("identity", "os"): frozenset({"path"}),
+    # numpy on in-memory arrays only: no load, fromfile, memmap, genfromtxt, save ...
+    ("sem_bar", "numpy"): frozenset(
+        {"asarray", "ndarray", "nonzero", "diff", "pad", "int8", "full", "uint8"}
+    ),
+    ("sem_bar", "onnxruntime"): frozenset(
+        {"get_available_providers", "InferenceSession"}
+    ),
     ("autolink", "urllib.request"): frozenset(
         {"Request", "build_opener", "ProxyHandler", "HTTPRedirectHandler", "urlopen"}
     ),
 }
 IMAGE_ATTRS = frozenset(
-    {"open", "BOX", "DecompressionBombWarning", "MAX_IMAGE_PIXELS", "LANCZOS"}
+    {"open", "BOX", "DecompressionBombWarning", "MAX_IMAGE_PIXELS", "Image", "LANCZOS"}
 )
-# which `from PIL import ...` lines a module may have (one name per line)
-PIL_IMPORTS: dict[str, list[list[str]]] = {
-    "classify_sem": [["Image"]],
-    "thumbs": [["Image", "ImageOps"]],
+# the Pillow names a module may import: classify_sem decodes (Image); thumbs makes pictures (Image, ImageOps); the bar reader uses ImageOps on crops
+PIL_IMPORTS = {
+    "classify_sem": {"Image"},
+    "thumbs": {"Image", "ImageOps"},
+    "sem_bar": {"Image", "ImageOps"},
 }
 IMAGEOPS_ATTRS = frozenset({"exif_transpose"})
 # What the package may use of the indexer: the id rule and the move re-pointing, nothing that walks or
@@ -353,6 +379,11 @@ def violations(source: str, module: str) -> list[str]:
                     )
                 if a.name.split(".")[0] in NEVER_IMPORT:
                     bad(node, f"import {a.name}")
+                elif a.name == "rapidocr_onnxruntime":
+                    bad(
+                        node,
+                        "import rapidocr_onnxruntime (from ... import RapidOCR only)",
+                    )
                 elif not is_fs and a.name not in allowed:
                     bad(node, f"import {a.name} is not on {module}'s import allow-list")
         elif isinstance(node, ast.ImportFrom):
@@ -383,11 +414,19 @@ def violations(source: str, module: str) -> list[str]:
                 if names != ["BytesIO"]:
                     bad(node, "from io import anything but BytesIO")
             elif mod == "PIL":
-                if names not in PIL_IMPORTS.get(module, []):
+                if not set(names) <= PIL_IMPORTS.get(module, set()):
                     bad(
                         node,
-                        "from PIL import anything but Image (classify_sem) or Image, ImageOps (thumbs)",
+                        f"from PIL import {', '.join(names)} (allowed: {sorted(PIL_IMPORTS.get(module, set()))})",
                     )
+            elif mod in ("numpy", "onnxruntime"):
+                bad(
+                    node,
+                    f"from {mod} import ... (use the module, so every use is checked)",
+                )
+            elif mod == "rapidocr_onnxruntime":
+                if names != ["RapidOCR"] or "rapidocr_onnxruntime" not in allowed:
+                    bad(node, "from rapidocr_onnxruntime import anything but RapidOCR")
             elif mod in ("os", "sys"):
                 ok = ATTR_ALLOWED.get((module, mod))
                 if mod not in allowed or ok is None or not set(names) <= ok:
@@ -585,11 +624,25 @@ def violations(source: str, module: str) -> list[str]:
                     node,
                     f"{head}.{node.attr} is not on {module}'s attribute allow-list",
                 )
+            elif (
+                head in ("numpy", "onnxruntime")
+                and n == 2
+                and node.attr not in ATTR_ALLOWED.get((module, head), frozenset())
+            ):
+                bad(
+                    node,
+                    f"{head}.{node.attr} is not on {module}'s attribute allow-list",
+                )
             elif head == "io" and n == 2 and node.attr != "BytesIO":
                 bad(node, f"io.{node.attr} (only BytesIO)")
             elif head == "Image" and n == 2 and node.attr not in IMAGE_ATTRS:
                 bad(node, f"Image.{node.attr}")
-            elif head == "ImageOps" and n == 2 and node.attr not in IMAGEOPS_ATTRS:
+            elif (
+                head == "ImageOps"
+                and module == "thumbs"
+                and n == 2
+                and node.attr not in IMAGEOPS_ATTRS
+            ):
                 bad(node, f"ImageOps.{node.attr}")
             elif parts[:2] == ["urllib", "request"] and n == 3:
                 if node.attr not in ATTR_ALLOWED.get(
@@ -853,7 +906,6 @@ BYPASSES_AS = [
     ),
     ("from PIL import Image\nImage.new('L', (1, 1))", "thumbs"),
     ("from PIL import ImageFile", "thumbs"),
-    ("from PIL import ImageOps", "thumbs"),
     ("from PIL import ImageOps\nImageOps.autocontrast(img)", "thumbs"),
     ("from PIL import ImageOps", "scan"),
     ("from PIL import Image", "scan"),
@@ -862,6 +914,25 @@ BYPASSES_AS = [
     ("x = thumbs.make_thumbnails(fh.read())", "daemon"),
     ("x = thumbs.make_thumbnails(out.data, 1)", "daemon"),
     ("x = thumbs.make_thumbnails(data=out.data)", "daemon"),
+    # the bar reader: Pillow on crops it is given, numpy on arrays, nothing that reads a file
+    ("from PIL import ImageOps", "classify_sem"),
+    ("from PIL import ImageFile", "sem_bar"),
+    ("from PIL import Image\nImage.open(fh)", "sem_bar"),
+    ("from PIL import Image\nImage.new('L', (1, 1))", "sem_bar"),
+    ("import numpy\nnumpy.load(p)", "sem_bar"),
+    ("import numpy\nnumpy.fromfile(p)", "sem_bar"),
+    ("import numpy\nnumpy.memmap(p)", "sem_bar"),
+    ("import numpy\nnumpy.save(p, a)", "sem_bar"),
+    ("import numpy\nnumpy.genfromtxt(p)", "sem_bar"),
+    ("from numpy import load", "sem_bar"),
+    ("import numpy as np", "sem_bar"),
+    ("import numpy", "classify_sem"),
+    ("import onnxruntime\nonnxruntime.InferenceSession(p)", "scan"),
+    ("import onnxruntime\nonnxruntime.set_default_logger_severity(0)", "sem_bar"),
+    ("from onnxruntime import InferenceSession", "sem_bar"),
+    ("from rapidocr_onnxruntime import RapidOCR", "classify_sem"),
+    ("from rapidocr_onnxruntime import utils", "sem_bar"),
+    ("import rapidocr_onnxruntime", "sem_bar"),
 ]
 
 
@@ -1077,6 +1148,11 @@ CLEAN = [
         "    img = Image.open(BytesIO(data), formats=['PNG'])\n    img.thumbnail((9, 9), Image.LANCZOS)\n"
         "    return ImageOps.exif_transpose(img)",
         "thumbs",
+    ),
+    (
+        "import numpy\nfrom PIL import Image, ImageOps\nfrom rapidocr_onnxruntime import RapidOCR\n"
+        "a = numpy.asarray(ImageOps.invert(c).resize((2, 2), Image.LANCZOS))",
+        "sem_bar",
     ),
 ]
 

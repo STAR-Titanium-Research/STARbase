@@ -30,8 +30,10 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
    exists and nothing else. Administrators see owned files read-only, and each such read is logged.
 4. **Derived data follows the file.** The imaging settings read from an SEM image sit in `d1_private`, are read
    only through the `d1-inbox` endpoint, and obey the same rule. Only the owner can correct them.
-5. **Not retroactive.** Only files registered after this change are owned. Already-linked files and the legacy
-   archive stay open until the file-access stream (A1b) or an administrator's opt-in.
+5. **Linked and legacy files are not retroactive.** Already-linked files and the legacy archive stay open until the
+   file-access stream (A1b) or an administrator's opt-in, so nobody loses access they have today. Found files that
+   are not linked yet are owned: the migration stamps the ones the (already live) crawler registered, from the
+   owner it recorded in `d1_private.file_candidates`, and the crawler stamps new ones.
 6. **Surface scans** are brought under the rule by a separate stream that supersedes the lab-wide decision in
    ADR-0021. Until it lands, ADR-0021 stands.
 
@@ -51,7 +53,7 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
 
 ## Consequences
 
-- A new column pair on a Directus system table, an immutable-owner trigger, and a filter in the Lab Member and Lab
+- A new column pair on a Directus system table, Directus field lists that keep the owner columns out of members' writes, and a filter in the Lab Member and Lab
   Viewer policies that every `/assets` read pays for (indexed; measured in the plan).
 - A person with owned files cannot be deleted (`ON DELETE RESTRICT`); they are deactivated instead.
 - A linked record can show a link its reader cannot open. The link's existence is visible; the file's name,
