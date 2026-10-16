@@ -4,7 +4,7 @@ import type { ExplorerHost } from '../host';
 import type { VisibleNav } from '../nav/navConfig';
 import { useRequestGate } from '../composables/useRequestGate';
 import { deepParams, isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
-import type { FinderHit } from './finder';
+import type { FinderHit, FinderSource } from './finder';
 import { QR_HEADER } from '../labels/qrPayload';
 import { isScanComplete, isScanStarted, resolveLabel } from './scan';
 import type { ScanOutcome } from './scan';
@@ -43,9 +43,8 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 
 	// One source, one pass. A failure (a 403 when the user may not read a collection the label expands into, a pass 2 field
 	// the user may not read, the network) drops this answer only; the others still show.
-	async function search(src: ReturnType<typeof visibleSources>[number], q: string, pass: 1 | 2): Promise<FinderHit[]> {
+	async function search(src: FinderSource, q: string, pass: 1 | 2, params: Record<string, unknown>): Promise<FinderHit[]> {
 		try {
-			const params = pass === 1 ? sourceParams(src, q) : deepParams(src, q) ?? undefined;
 			const res = await host.api.get(src.path ?? `/items/${src.collection}`, { params });
 			const rows = res.data?.data;
 			return Array.isArray(rows) ? toHits(src, q, rows, pass) : [];
@@ -59,7 +58,10 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 	async function run(q: string): Promise<void> {
 		const token = gate.begin();
 		const answers: FinderHit[][] = [];
-		const asked = visibleSources(visible.value).flatMap((src) => [search(src, q, 1), ...(deepParams(src, q) ? [search(src, q, 2)] : [])]);
+		const asked = visibleSources(visible.value).flatMap((src) => {
+			const deep = deepParams(src, q);
+			return [search(src, q, 1, sourceParams(src, q)), ...(deep ? [search(src, q, 2, deep)] : [])];
+		});
 		await Promise.all(
 			asked.map((answer) =>
 				answer.then((hits) => {

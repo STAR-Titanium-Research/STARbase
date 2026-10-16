@@ -147,9 +147,9 @@ describe('openHit', () => {
 	});
 });
 
-describe('bestIndex', () => {
-	const h = (group: FinderHit['group'], label: string, rank: number, more?: true): FinderHit => ({ group, label, to: `/x/${label}`, rank, ...(more ? { more } : {}) });
+const h = (group: FinderHit['group'], label: string, rank = 3, more?: true): FinderHit => ({ group, label, to: `/x/${label}`, rank, ...(more ? { more } : {}) });
 
+describe('bestIndex', () => {
 	it('is the first row when it is a pass 1 hit, and -1 for no rows', () => {
 		expect(bestIndex([h('Pages', 'a', 2), h('Samples', 'b', 4)])).toBe(0);
 		expect(bestIndex([])).toBe(-1);
@@ -166,15 +166,13 @@ describe('bestIndex', () => {
 });
 
 describe('sameHitIndex', () => {
-	const h = (label: string, rank = 3, group: FinderHit['group'] = 'Samples'): FinderHit => ({ group, label, to: `/x/${label}`, rank });
-
 	it('finds the hit the user had made active in the new list', () => {
-		expect(sameHitIndex(h('b'), [h('a'), h('x', 1), h('b')])).toBe(2);
+		expect(sameHitIndex(h('Samples', 'b'), [h('Samples', 'a'), h('Samples', 'x', 1), h('Samples', 'b')])).toBe(2);
 	});
 
 	it('falls back to the best match when it is gone or there was none', () => {
-		expect(sameHitIndex(h('gone'), [h('deep', 4), h('code', 2)])).toBe(1);
-		expect(sameHitIndex(undefined, [h('deep', 4), h('code', 2)])).toBe(1);
-		expect(sameHitIndex(h('a'), [])).toBe(-1);
+		expect(sameHitIndex(h('Samples', 'gone'), [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
+		expect(sameHitIndex(undefined, [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
+		expect(sameHitIndex(h('Samples', 'a'), [])).toBe(-1);
 	});
 });

@@ -366,7 +366,8 @@ describe('the new sources', () => {
 describe('mergeHits ranking, caps and "More in" rows', () => {
 	const rec = (group: FinderHit['group'], collection: string, id: string, rank: number, extra: Partial<FinderHit> = {}): FinderHit =>
 		({ group, label: id, to: `/${collection}/${id}`, rank, record: { collection, id }, ...extra });
-	const samples = (n: number, rank = 3, from = 0) => Array.from({ length: n }, (_, i) => rec('Samples', 'physical_samples', `s${from + i}`, rank));
+	const many = (group: FinderHit['group'], collection: string, prefix: string, n: number, rank = 3, from = 0) => Array.from({ length: n }, (_, i) => rec(group, collection, `${prefix}${from + i}`, rank));
+	const samples = (n: number, rank = 3, from = 0) => many('Samples', 'physical_samples', 's', n, rank, from);
 
 	it('puts a pass 2 hit (rank 4) below every pass 1 hit of its group', () => {
 		const merged = mergeHits('ab', [[rec('Samples', 'physical_samples', 'deep', 4)], [rec('Samples', 'physical_samples', 'exact', 1), rec('Samples', 'physical_samples', 'contains', 3)]]);
@@ -402,23 +403,23 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 	});
 
 	it('names the page that lost the most in a group of several, and has a target for people, files and projects', () => {
-		const tools = Array.from({ length: 5 }, (_, i) => rec('Inventory', 'tools', `t${i}`, 3));
-		const lots = Array.from({ length: 3 }, (_, i) => rec('Inventory', 'raw_stock_lots', `l${i}`, 3));
+		const tools = many('Inventory', 'tools', 't', 5);
+		const lots = many('Inventory', 'raw_stock_lots', 'l', 3);
 		const inv = mergeHits('ab', [tools, lots]);
 		expect(inv.filter((h) => h.group === 'Inventory' && !h.more).map((h) => h.record?.collection)).toEqual(Array(5).fill('tools'));
 		// 5 tools fill the group (all rank 3, arrival order), so the 3 lots are what was left out
 		expect(inv.at(-1)).toMatchObject({ more: true, label: 'More in Raw stock lots…', to: '/home/stock-lots?q=ab' });
-		const people = Array.from({ length: 6 }, (_, i) => rec('People', 'people', `p${i}`, 3));
+		const people = many('People', 'people', 'p', 6);
 		expect(mergeHits('jo', [people]).at(-1)).toMatchObject({ label: 'More in People…', to: '/home/people?q=jo' });
-		const files = Array.from({ length: 6 }, (_, i) => rec('Files', 'directus_files', `f${i}`, 3));
+		const files = many('Files', 'directus_files', 'f', 6);
 		expect(mergeHits('jo', [files]).at(-1)).toMatchObject({ label: 'More in Files…', to: '/files' });
-		const projects = Array.from({ length: 6 }, (_, i) => rec('Projects', 'projects', `j${i}`, 3));
+		const projects = many('Projects', 'projects', 'j', 6);
 		expect(mergeHits('jo', [projects]).at(-1)).toMatchObject({ label: 'More in Projects…', to: '/home/projects' });
 	});
 
 	it('caps the whole record list at 12, keeping the best ranked across groups in group order', () => {
-		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3));
-		const people = Array.from({ length: 5 }, (_, i) => rec('People', 'people', `p${i}`, 1));
+		const ops = many('Operations', 'manufacturing_operations', 'o', 5);
+		const people = many('People', 'people', 'p', 5, 1);
 		const merged = mergeHits('ab', [samples(5, 2), ops, people]);
 		const records = merged.filter((h) => !h.more);
 		expect(records).toHaveLength(12);
@@ -431,8 +432,8 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 	});
 
 	it('breaks a rank tie across groups in favour of the earlier group', () => {
-		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3));
-		const tests = Array.from({ length: 5 }, (_, i) => rec('Tests', 'test_sessions', `t${i}`, 3));
+		const ops = many('Operations', 'manufacturing_operations', 'o', 5);
+		const tests = many('Tests', 'test_sessions', 't', 5);
 		const merged = mergeHits('ab', [samples(5), ops, tests]).filter((h) => !h.more);
 		expect(merged.filter((h) => h.group === 'Tests')).toHaveLength(2);
 		expect(merged.filter((h) => h.group === 'Operations')).toHaveLength(5);
@@ -440,12 +441,12 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 
 	it('does not count Pages and Saved views in the 12, and gives a group with nothing left no heading', () => {
 		const pages = Array.from({ length: 4 }, (_, i) => ({ group: 'Pages' as const, label: `pg${i}`, to: `/pg${i}`, rank: 3 }));
-		const files = Array.from({ length: 5 }, (_, i) => rec('Files', 'directus_files', `f${i}`, 4));
+		const files = many('Files', 'directus_files', 'f', 5, 4);
 		const merged = mergeHits('ab', [pages, samples(5), samples(5, 3, 5), files]);
 		expect(merged.filter((h) => h.group === 'Pages')).toHaveLength(4);
 		expect(merged.filter((h) => h.group === 'Samples' && !h.more)).toHaveLength(5);
 		expect(merged.some((h) => h.group === 'Files')).toBe(true);
-		const crowded = mergeHits('ab', [samples(5), Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3)), Array.from({ length: 5 }, (_, i) => rec('Tests', 'test_sessions', `t${i}`, 3)), files]);
+		const crowded = mergeHits('ab', [samples(5), many('Operations', 'manufacturing_operations', 'o', 5), many('Tests', 'test_sessions', 't', 5), files]);
 		expect(crowded.some((h) => h.group === 'Files')).toBe(false);
 	});
 });

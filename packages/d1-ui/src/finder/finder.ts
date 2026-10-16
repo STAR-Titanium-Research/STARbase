@@ -62,7 +62,7 @@ export const FETCH_LIMIT = REMOTE_LIMIT + 1;
 // Pass 2 asks for more: rows pass 1 already shows are dropped from it, and must not use up its places.
 const DEEP_LIMIT = 10;
 // All remote groups together (Pages and Saved views excluded): the best ranked stay.
-export const RECORD_CAP = 12;
+const RECORD_CAP = 12;
 // A longer query is cut here: every word is one more clause in a GET url.
 const MAX_WORDS = 6;
 // Pass 2 hits rank below every pass 1 hit.
@@ -298,7 +298,7 @@ export function toHits(src: FinderSource, q: string, rows: any[], pass: 1 | 2 = 
 	return rows.flatMap((row) => {
 		if (pass === 2 && foundByPass1(src, row, words)) return [];
 		const label = src.label(row);
-		const exactShortId = pass === 1 && !!src.shortId && SHORT_ID_RE.test(needle) && str(row.short_id).toLowerCase() === needle;
+		const exactShortId = !!src.shortId && SHORT_ID_RE.test(needle) && str(row.short_id).toLowerCase() === needle;
 		const hit: FinderHit = { group: src.group, label, to: src.to(row), rank: pass === 2 ? DEEP_RANK : rankHit(q, label, exactShortId), record: src.record(row) };
 		const detail = src.detail?.(row);
 		if (detail) hit.detail = detail;
@@ -366,42 +366,32 @@ function dedupe(hits: FinderHit[]): FinderHit[] {
 export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 	if (!isSearchable(q)) return [];
 	const all = dedupe(groups.flat());
-	type Slot = { hit: FinderHit; group: number; order: number };
 	const out: FinderHit[] = [];
-	const remote: Slot[] = [];
-	const lost = new Map<FinderGroup, FinderHit[]>();
-	const lose = (hit: FinderHit) => lost.set(hit.group, [...(lost.get(hit.group) ?? []), hit]);
-	GROUP_ORDER.forEach((group, g) => {
+	const remote: Array<{ group: FinderGroup; shown: FinderHit[]; lost: FinderHit[] }> = [];
+	for (const group of GROUP_ORDER) {
 		const inGroup = all.filter((h) => h.group === group).sort((a, b) => a.rank - b.rank);
-		if (LOCAL_GROUPS.has(group)) {
-			out.push(...inGroup);
-			return;
-		}
-		inGroup.slice(0, REMOTE_LIMIT).forEach((hit, order) => remote.push({ hit, group: g, order }));
-		inGroup.slice(REMOTE_LIMIT).forEach(lose);
-	});
-	let kept = remote;
-	if (remote.length > RECORD_CAP) {
-		const best = new Set([...remote].sort((a, b) => a.hit.rank - b.hit.rank || a.group - b.group || a.order - b.order).slice(0, RECORD_CAP));
-		remote.filter((slot) => !best.has(slot)).forEach((slot) => lose(slot.hit));
-		kept = remote.filter((slot) => best.has(slot));
+		if (LOCAL_GROUPS.has(group)) out.push(...inGroup);
+		else remote.push({ group, shown: inGroup.slice(0, REMOTE_LIMIT), lost: inGroup.slice(REMOTE_LIMIT) });
 	}
-	// `kept` is in group order and rank order inside a group, so a group's hits are contiguous.
-	let at = 0;
-	while (at < kept.length) {
-		const group = kept[at].hit.group;
-		let end = at;
-		while (end < kept.length && kept[end].hit.group === group) end++;
-		out.push(...kept.slice(at, end).map((s) => s.hit));
+	if (remote.reduce((n, r) => n + r.shown.length, 0) > RECORD_CAP) {
+		// The sort is stable over group order then rank order, so a tie goes to the earlier group.
+		const best = new Set(remote.flatMap((r) => r.shown).sort((a, b) => a.rank - b.rank).slice(0, RECORD_CAP));
+		for (const r of remote) {
+			r.lost.push(...r.shown.filter((h) => !best.has(h)));
+			r.shown = r.shown.filter((h) => best.has(h));
+		}
+	}
+	const single = queryWords(q).length === 1;
+	for (const { group, shown, lost } of remote) {
+		if (!shown.length) continue;
+		out.push(...shown);
 		const counts = new Map<string, number>();
-		const single = queryWords(q).length === 1;
-		for (const h of single ? lost.get(group) ?? [] : []) if (h.record && h.rank < DEEP_RANK) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);
+		for (const h of single ? lost : []) if (h.record && h.rank < DEEP_RANK) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);
 		const [collection] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
 		if (collection) {
 			const target = moreTarget(collection, q);
 			out.push({ group, label: `More in ${target.title}…`, to: target.to, rank: Number.POSITIVE_INFINITY, more: true });
 		}
-		at = end;
 	}
 	return out;
 }
