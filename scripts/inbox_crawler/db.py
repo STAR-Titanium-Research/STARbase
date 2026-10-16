@@ -1,7 +1,7 @@
 """Everything the crawler reads from and writes to Postgres, in one place.
 
 Tables: `d1_private.file_candidates`, `inbox_dirs`, `inbox_scan_requests`, `inbox_crawler_state`,
-`inbox_prefs` (migration 193), `file_thumbnails` (migration 198, derived pictures), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
+`inbox_prefs` (migration 193), `file_thumbnails` (migration 198, derived pictures), `inbox_ignored_dirs` (migration 199, read only: the owners' ignore rules), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
 `teams`, `short_ids` and the record tables it reads for recognition. The crawler never writes a junction
 row or a link (invariant 5): that is the d1-inbox extension's job.
 
@@ -477,14 +477,62 @@ class Store:
         )
         return n > 0
 
-    def forget_dirs_under(self, owner: Owner, prefixes: list[str]) -> None:
-        """Drop cache rows of directories that no longer exist (and everything below them)."""
+    def forget_dirs_under(
+        self, owner: Owner, prefixes: list[str], keep: list[str] = ()
+    ) -> None:
+        """Drop cache rows of directories that no longer exist (and everything below them), except the
+        rows of the folders in `keep` (ignored folders, which are not scanned: their cache rows stay as
+        they are) and everything below those."""
         for p in prefixes:
             self._run(
                 "DELETE FROM inbox_dirs WHERE (rel_path = %s OR left(rel_path, %s) = %s) AND "
-                + _owner_eq(owner),
-                (p, len(p) + 1, p + "/", owner.id),
+                + _owner_eq(owner)
+                + " AND NOT (rel_path = ANY(%s) OR "
+                "EXISTS (SELECT 1 FROM unnest(%s::text[]) AS k WHERE left(rel_path, length(k) + 1) = k || '/'))",
+                (p, len(p) + 1, p + "/", owner.id, list(keep), list(keep)),
             )
+
+    # ---- ignored folders (spec section 15) -------------------------------------------
+
+    def _has_ignored_dirs(self) -> bool:
+        """Does the database have the rules table (migration of the ignored-folders feature)? An older one
+        does not, and then nothing is ignored."""
+        row = self._one("SELECT to_regclass('inbox_ignored_dirs') IS NOT NULL")
+        return bool(row and row[0])
+
+    def load_ignored(self) -> dict[tuple[str, str], owners.IgnoreRules]:
+        """Every owner's ignore rules, read once at the start of a scan: {(kind, owner id): rules}. A rule
+        added or removed while the scan runs is not seen until the next scan."""
+        if not self._has_ignored_dirs():
+            return {}
+        rows = self._all(
+            "SELECT owner_person_id::text, owner_team_id::text, rel_folder FROM inbox_ignored_dirs"
+        )
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for person_id, team_id, folder in rows:
+            key = ("person", person_id) if person_id else ("team", team_id)
+            grouped.setdefault(key, []).append(folder)
+        return {k: owners.ignore_rules(v) for k, v in grouped.items()}
+
+    def _not_ignored(self, alias: str) -> str:
+        """An ` AND NOT EXISTS (...)` clause that leaves out a candidate (table alias `alias`) lying under
+        one of its owner's ignored folders: no file below an ignored folder is read for any reason, and
+        an undecided one can exist there (a rule written by hand, or one that raced a registration). The
+        owner's root is two path parts (`Users/<alias>`, `Shared/<folder>`), the rule is relative to it,
+        and the comparison is on whole parts and ignores case, as owners.is_ignored does. Empty when the
+        table does not exist."""
+        if not self._has_ignored_dirs():
+            return ""
+        a = alias
+        prefix = (
+            f"lower(split_part({a}.rel_path, '/', 1) || '/' || split_part({a}.rel_path, '/', 2)"
+            " || '/' || ig.rel_folder)"
+        )
+        return (
+            " AND NOT EXISTS (SELECT 1 FROM inbox_ignored_dirs ig "
+            f"WHERE (ig.owner_person_id = {a}.owner_person_id OR ig.owner_team_id = {a}.owner_team_id) "
+            f"AND left(lower({a}.rel_path), length({prefix}) + 1) = {prefix} || '/')"
+        )
 
     def mark_baselined(self, owner: Owner) -> None:
         self._run(
@@ -1079,13 +1127,15 @@ class Store:
         )
 
     def errored_hashes(self, limit: int = 20) -> list[tuple[str, str, str]]:
-        """Images and scans whose discovery hash failed at least an hour ago and are still undecided."""
+        """Images and scans whose discovery hash failed at least an hour ago and are still undecided. One
+        under an ignored folder is not retried: nothing below an ignored folder is read."""
         rows = self._all(
             "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path "
             "FROM file_candidates c JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
             "WHERE c.state = 'new' AND c.kind IN ('image', 'sem_image', 'surface_scan') "
             "  AND f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s) "
-            "ORDER BY f.hashed_at LIMIT %s",
+            + self._not_ignored("c")
+            + " ORDER BY f.hashed_at LIMIT %s",
             (HASH_RETRY_HOURS, limit),
         )
         return [tuple(r) for r in rows]
@@ -1106,7 +1156,8 @@ class Store:
             "  AND auto_undone_at IS NULL "
             "  AND kind IN ('sem_image', 'image') "
             "  AND owner_person_id = ANY(%s::uuid[]) "
-            "ORDER BY first_seen_at, candidate_id LIMIT %s",
+            + self._not_ignored("file_candidates")
+            + " ORDER BY first_seen_at, candidate_id LIMIT %s",
             (sorted(person_ids), limit),
         )
         return [

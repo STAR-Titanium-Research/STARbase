@@ -8,6 +8,11 @@ marks everything it finds `origin='backlog'` and then sets `baselined_at`. A fil
 changed directory becomes `gone` (undecided candidates only), unless a new file with the same content
 turned up, which re-points the row. A share that drops mid-scan aborts the scan and marks nothing gone.
 
+Ignored folders (spec section 15): the owner's rules are read once at the start of a scan. A folder that is
+ignored, and everything below it, is NOT SCANNED: it is neither listed nor statted, no file in it is opened,
+and, unlike an empty folder, it never makes a candidate `gone` (any state), nor loses its cache rows. A rule
+added or removed while the scan runs takes effect from the next scan.
+
 Everything that touches the share goes through the `share` object (a `fs_readonly.Share` or a test fake).
 The database is committed after each directory, so a killed scan loses nothing and resumes where it was.
 """
@@ -148,6 +153,7 @@ class ScanStats:
     gone: int = 0
     repointed: int = 0
     owners_scanned: int = 0
+    ignored_dirs: int = 0  # known folders passed over because a rule ignores them (not listed, not statted)
     aborted: bool = False
     interrupted: bool = False
     last_error: str | None = None
@@ -205,6 +211,9 @@ class Scanner:
         self._wall = wall
         self._last_activity = 0.0
         self._failures = 0  # consecutive failed reads
+        # {(owner kind, owner id): owners.IgnoreRules}, read once per scan (None: not loaded yet)
+        self._ignored: dict[tuple[str, str], owners.IgnoreRules] | None = None
+        self._dir_ignored = lambda _path: False  # set per owner by scan_owner
 
     # ---- the share is there ----------------------------------------------------------
 
@@ -261,6 +270,7 @@ class Scanner:
         stats = ScanStats()
         if self.lookup is None:
             self.lookup = self.store.load_lookup()
+        self._ignored = None  # the rules are read again for every scan
         try:
             self._scan(stats, person_id)
         except ShareUnavailable as exc:
@@ -268,6 +278,10 @@ class Scanner:
             stats.aborted = True
             stats.error(f"scan aborted, nothing marked gone: {exc}")
             log.warning("scan aborted: %s", exc)
+        finally:
+            self._ignored = None
+        if stats.ignored_dirs:
+            log.info("%d ignored folders were not scanned", stats.ignored_dirs)
         return stats
 
     def _scan(self, stats: ScanStats, person_id: str | None) -> None:
@@ -287,6 +301,8 @@ class Scanner:
         if person_id is None:
             bases = sorted(set(bases) | {b for b in claims if self._exists(b)})
         self.verify_share(bases)
+        # Once per scan: a rule added or removed from here on waits for the next scan.
+        self._ignored = self.store.load_ignored()
         found: list[owners.Owner] = []
         unmatched: list[str] = []
         for base in (owners.PERSON_BASE, owners.TEAM_BASE):
@@ -348,6 +364,16 @@ class Scanner:
             )
         dirs = store.load_dirs(owner)
         cands = store.load_candidates(owner)
+        if self._ignored is None:  # scan_owner called on its own
+            self._ignored = store.load_ignored()
+        rules = self._ignored.get((owner.kind, owner.id), owners.IgnoreRules())
+
+        def dir_ignored(path: str) -> bool:
+            """Is this share path a folder the owner ignores (or one below it)? The root never is."""
+            below = owners.below_root(owner.root, path)
+            return bool(below) and owners.is_ignored(below, rules)
+
+        self._dir_ignored = dir_ignored
         origin = "new" if store.owner_baselined(owner) else "backlog"
         children: dict[str, set[str]] = {}
         for d in dirs:
@@ -382,6 +408,12 @@ class Scanner:
                 self._commit(owner)
                 return
             d, depth = stack.pop()
+            if dir_ignored(d):
+                # Not scanned: no stat, no listing, nothing below it is read, and nothing in it is judged
+                # (see the sweep below). The one place that keeps an ignored folder out of the walk, for
+                # folders from the cache and folders seen in a listing alike.
+                stats.ignored_dirs += 1
+                continue
             if depth > MAX_DEPTH:
                 stats.error(f"{d}: deeper than {MAX_DEPTH} levels, not scanned")
                 continue
@@ -450,10 +482,26 @@ class Scanner:
                 for c in cands.values():
                     if c.state == "new" and c.rel_path.startswith(v + "/"):
                         lost[c.candidate_id] = c
+            # An ignored subtree is not scanned, which is not the same as empty: whatever sits under one
+            # keeps its state, even when a folder above it vanished.
+            lost = {
+                k: c
+                for k, c in lost.items()
+                if not dir_ignored(c.rel_path.rpartition("/")[0])
+            }
             lost_list = sorted(lost.values(), key=lambda c: c.rel_path)
             self._reconcile_moves(lost_list, fresh, stats, owner)
             stats.gone += store.mark_gone([c.candidate_id for c in lost_list])
-            store.forget_dirs_under(owner, vanished_dirs)
+            store.forget_dirs_under(
+                owner,
+                vanished_dirs,
+                keep=[
+                    d
+                    for d in dirs
+                    if dir_ignored(d)
+                    and any(d == v or d.startswith(v + "/") for v in vanished_dirs)
+                ],
+            )
             for d, mtime in deferred.items():  # same transaction as mark_gone
                 if not any(d == v or d.startswith(v + "/") for v in vanished_dirs):
                     store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
@@ -510,8 +558,10 @@ class Scanner:
         lost_before = len(gone) + len(vanished_dirs)
         wanted = {f"{d}/{n}" for n in subdirs}
         for known in sorted(children.get(d, ())):
-            if known not in wanted:
-                vanished_dirs.append(known)
+            if known not in wanted and not self._dir_ignored(known):
+                vanished_dirs.append(
+                    known
+                )  # (an ignored one is not judged: not scanned)
         present = {f"{d}/{e.name}" for e in files}
         for c in by_dir.get(d, ()):
             if c.state == "new" and c.rel_path not in present:

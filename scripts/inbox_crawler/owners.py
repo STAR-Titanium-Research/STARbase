@@ -179,3 +179,46 @@ def team_claims(teams: Iterable[dict]) -> list[tuple[str, str, str, bool]]:
         for t in teams
         if t.get("share_folder")
     ]
+
+
+# ---- ignored folders (spec section 15) -----------------------------------------------------------
+
+
+class IgnoreRules(frozenset):
+    """An owner's ignore rules, lower-cased once, so a lookup costs one set test per path part."""
+
+    __slots__ = ()
+
+
+def ignore_rules(folders: Iterable[str]) -> IgnoreRules:
+    """Compile the `rel_folder` values of one owner's rules. An empty value is no rule: the owner's root
+    cannot be ignored."""
+    return IgnoreRules(f.lower() for f in folders if isinstance(f, str) and f)
+
+
+def is_ignored(rel_folder: str, rules: Iterable[str]) -> bool:
+    """Is this folder, given relative to its owner's root ('World-Ti Paper/Drafts'), ignored by `rules`?
+
+    True when it equals a rule or lies beneath one, compared on whole path parts and case-insensitively
+    (the share is case-insensitive): the rule 'World-Ti Paper' covers 'world-ti paper/Drafts' but not
+    'World-Ti Paper 2'. The owner's root ('') is never ignored. No wildcards. A path with an empty part
+    (a leading, trailing or doubled slash) is not a clean relative path and matches only if its leading
+    clean parts do. Pure: it never touches the share. The JS twin in d1-inbox shares its table of cases
+    (`IGNORE_CASES` in tests/scripts/test_inbox_crawler_ignored.py)."""
+    if not rel_folder:
+        return False
+    compiled = rules if isinstance(rules, IgnoreRules) else ignore_rules(rules)
+    if not compiled:
+        return False
+    parts = rel_folder.lower().split("/")
+    return any("/".join(parts[:i]) in compiled for i in range(1, len(parts) + 1))
+
+
+def below_root(owner_root: str, path: str) -> str | None:
+    """`path` (share-relative) relative to the owner's root: '' for the root itself, None when `path` is
+    not the root or beneath it. Whole parts: 'Users/ab1' is not the root of 'Users/ab12/x'."""
+    if path == owner_root:
+        return ""
+    if path.startswith(owner_root + "/"):
+        return path[len(owner_root) + 1 :]
+    return None

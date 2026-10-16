@@ -94,6 +94,26 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   not only the folders in the cache, so a whole folder that was deleted is noticed even when its cache rows
   went earlier. That matters for a file that was dismissed (or linked) when its folder was deleted and is then
   restored (or its link undone): it comes back as `new`, and the next scan marks it `gone`.
+- **Ignored folders.** A person (for their own folder) or a team member (for the team folder) can tell the
+  crawler to leave a folder alone: a rule in `d1_private.inbox_ignored_dirs`, a path *relative to the owner's
+  folder* (`World-Ti Paper/Drafts`, not `Users/abc12de/...`), matched on whole path parts without regard to case
+  (`World-Ti Paper` covers `world-ti paper/Drafts` but not `World-Ti Paper 2`; no wildcards; the folder itself is
+  covered, and everything below it). The crawler reads every owner's rules once at the start of a scan, so a rule
+  added or removed meanwhile counts from the next scan. An ignored folder is **not scanned**, which is not the
+  same as empty:
+  - it is not listed, not statted and nothing in it is opened (a lower load on the share is the point). It
+    still shows in its parent's listing, so it keeps a cache row (`inbox_dirs`, seen but not listed);
+  - nothing under it is ever marked `gone`, in any state, even when the folder or a folder above it has been
+    deleted on the share, and the cache rows below it stay as they are. Candidates there keep whatever state
+    they had until the rule is removed, when the next scan looks again;
+  - a file below it is not retried when its first hash failed, and is not offered to auto-link;
+  - **a file that is already linked stays tracked.** The queue that hashes a linked document once (and retries a
+    failed one) is not stopped by a rule: a linked file belongs to a record, and the rule only keeps the crawler
+    from finding new files there.
+  The scan log says `N ignored folders were not scanned`. The rules are changed in STARbase's Inbox (adding one
+  dismisses the owner's undecided files below it); to look at them in SQL:
+  `SELECT owner_person_id, owner_team_id, rel_folder FROM d1_private.inbox_ignored_dirs`. A database without the
+  table (the migration not applied yet) ignores nothing.
 - **Already linked is not found.** A file already linked to a sample, operation or test (for example in Data
   Studio), or already a surface scan (`surface_scans.directus_files_id`, added in the Alicona feature's own
   dialog, which offers every star `.al3d`, the crawler's included), gets no candidate, and an undecided
@@ -198,6 +218,9 @@ are replaceable copies, never the original, and the table is outside Directus's 
   alias, a Former person (unless "scan while Former"), or a folder that does not match is not scanned.
   `docker compose logs inbox-crawler` shows `scan aborted` when the share did not answer, and `skipping
   Users/<alias>` when one folder could not be read.
+- *A folder's files never show up:* check that no rule ignores it (or a folder above it):
+  `SELECT rel_folder FROM d1_private.inbox_ignored_dirs WHERE owner_person_id = '<person id>'` (or
+  `owner_team_id`). Remove the rule in the Inbox and the next scan lists the folder again.
 - *A scan request stays queued:* the daemon claims one request per 30-second tick, but only between scans: a
   request waits while a scheduled scan runs, which can take hours on a first scan of a big share (watch
   `current_activity` in the admin tab). It is also not claimed while the daemon is paused. A request found
@@ -209,8 +232,8 @@ are replaceable copies, never the original, and the table is outside Directus's 
   differs from Directus's.
 - Tests: `python -m pytest tests/scripts/test_inbox_crawler_*.py` (the DB-backed ones need `DATABASE_URL`, see
   `tests/scripts/test_inbox_crawler_world.py`). What only the real share can show is in
-  [the physical test backlog](./physical-test-backlog.md) (IF1 to IF14, IF15 onward, and the IF20 to IF23 and
-  IF30 to IF33 groups that other streams own).
+  [the physical test backlog](./physical-test-backlog.md) (IF1 to IF14, IF15 onward, the IF20 to IF23 and
+  IF30 to IF33 groups that other streams own, and IF70 to IF72 for ignored folders).
 
 ## Rolling back
 
