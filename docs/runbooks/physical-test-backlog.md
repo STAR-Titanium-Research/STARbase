@@ -2202,6 +2202,41 @@ commit a research image while doing these; look at them on d1-server only.
   confirm the image has timezone data (`zoneinfo.ZoneInfo("Europe/London")` is built when the crawler imports
   `sem_meta`, with or without OCR). Since: sem-reader plan, stream B.
 
+### SEM data-bar reader and provenance-owned files (2026-10-16, ADR-0022; migrations 196 and 197)
+
+Needs the real Directus and database on d1-server (restart Directus after the migrations, it caches permissions and relations), the real share
+and two non-administrator accounts that are each other's colleagues (a Lab Member each; one also in a team with a third person). Spec:
+[SEM data-bar reader](../superpowers/specs/2026-10-16-sem-data-bar-reader-design.md) sections 3 and 4. Only the database half is in this PR; the
+crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams and add their own items.
+
+- [ ] **SEM3 — Two accounts and a locked file (the owner filter on the real Directus).** First, the filter itself: after
+  `make migrate` and a Directus restart, sign in as a Lab Member and open any page that lists files or shows an image (a sample photo, the
+  Force App's file picker). Expect no *400* and no *"_some can only be used with top level relational alias field"* in the Directus log: Directus
+  must accept the new hidden alias `directus_files.readers` over the readers table `file_readers` (it could not be tried before the
+  migration was written; if it refuses, the filter must change, do not widen it). Then, with account A's personal folder holding a found
+  image the crawler has registered: as A, `GET /files/<id>` and `/assets/<id>` answer 200; as B (another Lab Member) the same id answers
+  403/404, and so does a Lab Viewer; as an administrator it answers 200 (administrators are not filtered). For a team folder, a member of
+  the team reads it and a non-member does not; add the non-member to the team and expect access at once, remove them and expect it gone.
+  A file already linked to a record before migration 196 (no owner) stays readable by every member. As A, upload a new image through Data Studio
+  and the Force App: expect no 403 (the Lab Member create field list names every `directus_files` column), and expect that a Lab Member
+  cannot set the owner (`PATCH /files/<id>` with `owner_person_id` answers 403). Then link A's file to a sample that B can read and open
+  that sample as B: expect a link B cannot open. Then, as B, try to change or remove A's file: `PATCH /files/<id>` with a new `title` and `DELETE /files/<id>` must be refused (403), and A's file
+  must be unchanged and still there; as A the same calls succeed on a throwaway owned file, and any member can still `PATCH` and `DELETE` an
+  unowned file they can read. Finally an administrator reads A's file's settings and the log gains a row (that half needs
+  the `d1-inbox` stream). Since: provenance owner (database, migration 196).
+- [ ] **SEM5 — Migrations 196 and 197 and the back-fill on the real database (database half).** On a copy of the production database, apply
+  both (`dbmate up`) and check: `SELECT count(*) FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL` equals
+  the number of `d1_private.file_candidates` rows whose state is not `linked` **and** whose file has no row in `sample_data_files`,
+  `operation_data_files`, `session_data_files` or `surface_scans` (not linked anywhere; about 82,000 when this was written, a few fewer
+  than the candidates that are not `linked`), no file with such a row was stamped (a dismissed candidate whose file was linked in Data Studio is
+  the case to look for), and `SELECT d1_private.file_readers_drift_count()` is 0. Time the apply (the back-fill and the readers refresh scan every file
+  once). Read an SEM image's `extracted` from `file_candidates` and run `SELECT d1_private.save_sem_settings(<file id>, extracted,
+  'sem-2')` for a few real rows: expect the columns to equal the printed bar and a second call to change nothing; then
+  `correct_sem_setting` one value and run the save again: expect the corrected value to stay. `dbmate down` twice and `up` twice must
+  also work on the real data. Down is lossy: it drops the stamps, the settings, the owners' manual corrections and the administrator
+  access log, so dump `d1_private.sem_image_settings` and `d1_private.sem_settings_access_log` first if the copy holds any. Since: provenance owner and SEM settings (database,
+  migrations 196 and 197). The crawler half of SEM5 (`--sem-backfill`) is the crawler stream's.
+
 ## Done
 
 (Move ticked items here with their date and result.)
