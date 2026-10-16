@@ -1,0 +1,19 @@
+{
+  "description": "a rule that does not exist, or is not the caller's or their team's (the same answer)",
+  "request": {
+    "method": "DELETE",
+    "path": "/d1-inbox/ignored-folders/00000000-0000-4000-8000-000000009401"
+  },
+  "status": 404,
+  "body": {
+    "errors": [
+      {
+        "message": "That ignored folder does not exist.",
+        "extensions": {
+          "code": "NOT_FOUND",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

@@ -3826,6 +3826,7 @@ DROP TABLE IF EXISTS d1_private.process_drafts;
 DROP TABLE IF EXISTS d1_private.inbox_prefs;
 DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
 DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
+DROP TABLE IF EXISTS d1_private.inbox_ignored_dirs;
 DROP TABLE IF EXISTS d1_private.inbox_dirs;
 DROP TABLE IF EXISTS d1_private.file_thumbnails;
 DROP TABLE IF EXISTS d1_private.file_candidates;
@@ -6690,6 +6691,107 @@ SELECT 'ft_up_rows:' || count(*) FROM d1_private.file_thumbnails;")
     grep -q 'ft_up_table:1' <<<"$fi_out" && grep -q 'ft_up_rows:0' <<<"$fi_out" && ok "up again restores the table, empty (the pictures are made again from the share)" || bad "up after down failed (output: $fi_out)"
 fi
 
+echo "== Ignored folders: d1_private.inbox_ignored_dirs =="
+# Spec section 15 of the found files inbox design; migration 199. Each check is its own rolled-back transaction (ids as in the section above).
+IG_MIG=$(ls db/migrations/*_inbox_ignored_dirs.sql 2>/dev/null | head -1)
+[[ -n "$IG_MIG" && -f "$IG_MIG" ]] && ok "found the ignored folders migration (${IG_MIG:-none})" || bad "the ignored folders migration is missing (db/migrations/*_inbox_ignored_dirs.sql)"
+ig_sql() { # ig_sql <statements>: run them after fixture people, a team and users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One'), ('$FI_P2', 'Inbox Test Two');
+INSERT INTO teams (team_id, name) VALUES ('$FI_T1', 'Inbox Test Team');
+INSERT INTO directus_users (id) VALUES ('$FI_U1'), ('$FI_U2');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "inbox_ignored_dirs is in d1_private and nowhere in public" \
+    "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'inbox_ignored_dirs')" "1,0"
+run_eq "it is not exposed in Directus (v_schema_dictionary, directus_collections, directus_fields)" \
+    "SELECT (SELECT count(*) FROM v_schema_dictionary WHERE object_name = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM directus_fields WHERE collection = 'inbox_ignored_dirs')" "0,0,0"
+run_eq "d1_llm_readonly cannot read it" "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.inbox_ignored_dirs', 'SELECT')" "f"
+run_eq "the columns are the contract's (ignored_id uuid PK default, two nullable owners, rel_folder NOT NULL, created_at NOT NULL default now(), created_by nullable)" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || (column_default IS NOT NULL), ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'inbox_ignored_dirs'" \
+    "created_at:timestamp with time zone:NO:true,created_by:uuid:YES:false,ignored_id:uuid:NO:true,owner_person_id:uuid:YES:false,owner_team_id:uuid:YES:false,rel_folder:text:NO:false"
+run_eq "the constraints are named {table}_{description}_{type}" \
+    "SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_ignored_dirs'::regclass" \
+    "inbox_ignored_dirs_created_by_fkey,inbox_ignored_dirs_one_owner_check,inbox_ignored_dirs_owner_person_id_fkey,inbox_ignored_dirs_owner_team_id_fkey,inbox_ignored_dirs_pkey,inbox_ignored_dirs_rel_folder_form_check,inbox_ignored_dirs_rel_folder_parts_check"
+run_eq "the foreign keys delete as inbox_dirs' do: owners CASCADE, created_by SET NULL" \
+    "SELECT string_agg(conname || '=' || confdeltype::text, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_ignored_dirs'::regclass AND contype = 'f'" \
+    "inbox_ignored_dirs_created_by_fkey=n,inbox_ignored_dirs_owner_person_id_fkey=c,inbox_ignored_dirs_owner_team_id_fkey=c"
+run_eq "inbox_ignored_dirs_owner_folder_key is unique on (coalesce(owner_person_id, owner_team_id), lower(rel_folder))" \
+    "SELECT (indexdef LIKE 'CREATE UNIQUE INDEX inbox_ignored_dirs_owner_folder_key ON d1_private.inbox_ignored_dirs USING btree (COALESCE(owner_person_id, owner_team_id), lower(rel_folder))') FROM pg_indexes WHERE schemaname = 'd1_private' AND indexname = 'inbox_ignored_dirs_owner_folder_key'" "t"
+run_eq "the owner and user foreign keys are indexed, partial on NOT NULL" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_ignored_dirs' AND ((indexname = 'idx_inbox_ignored_dirs_owner_person' AND indexdef LIKE '%(owner_person_id) WHERE (owner_person_id IS NOT NULL)') OR (indexname = 'idx_inbox_ignored_dirs_owner_team' AND indexdef LIKE '%(owner_team_id) WHERE (owner_team_id IS NOT NULL)') OR (indexname = 'idx_inbox_ignored_dirs_created_by' AND indexdef LIKE '%(created_by) WHERE (created_by IS NOT NULL)'))" \
+    "idx_inbox_ignored_dirs_created_by,idx_inbox_ignored_dirs_owner_person,idx_inbox_ignored_dirs_owner_team"
+run_eq "the table has no audit or OCC trigger (derived bookkeeping, like the other d1_private inbox tables)" \
+    "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'd1_private.inbox_ignored_dirs'::regclass AND NOT tgisinternal" "0"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder, created_by) VALUES ('$FI_P1', 'World-Ti Paper/Drafts', '$FI_U1');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Old runs');
+SELECT 'ig_rows:' || count(*) || ':' || count(ignored_id) || ':' || count(created_at) || ':' || count(created_by) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_rows:2:2:2:1' <<<"$fi_out" && ok "a person rule and a team rule insert, with a generated id and time; created_by is optional" || bad "rule inserts failed (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, owner_team_id, rel_folder) VALUES ('$FI_P1', '$FI_T1', 'x');")
+grep -q 'inbox_ignored_dirs_one_owner_check' <<<"$fi_out" && ok "a rule with both owners is rejected" || bad "a rule with two owners was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (rel_folder) VALUES ('x');")
+grep -q 'inbox_ignored_dirs_one_owner_check' <<<"$fi_out" && ok "a rule with no owner is rejected" || bad "a rule with no owner was not rejected (output: $fi_out)"
+for ig_bad in '' '/a' 'a/' '/' 'a//b' '.' '..' './a' 'a/.' 'a/./b' '../a' 'a/..' 'a/../b'; do
+    fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', '$ig_bad');")
+    grep -q 'inbox_ignored_dirs_rel_folder_\(form\|parts\)_check' <<<"$fi_out" && ok "the folder '$ig_bad' is rejected (leading or trailing slash, empty, . or .. part)" || bad "the folder '$ig_bad' was not rejected (output: $fi_out)"
+done
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'World-Ti Paper'), ('$FI_P1', 'World-Ti Paper 2'), ('$FI_P1', 'a.b/..c/d.'), ('$FI_P1', 'a/b/c');
+SELECT 'ig_ok:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_ok:4' <<<"$fi_out" && ok "ordinary folders are accepted, also with dots inside a name and a sibling that shares a prefix" || bad "valid folders were rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'World-Ti Paper');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'WORLD-ti paper');")
+grep -q 'inbox_ignored_dirs_owner_folder_key' <<<"$fi_out" && ok "the same folder twice for one owner is rejected, ignoring case" || bad "a duplicate rule was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Old runs');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'OLD RUNS');")
+grep -q 'inbox_ignored_dirs_owner_folder_key' <<<"$fi_out" && ok "the same folder twice for one team is rejected, ignoring case" || bad "a duplicate team rule was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'Shared'), ('$FI_P2', 'Shared');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Shared');
+SELECT 'ig_owners:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_owners:3' <<<"$fi_out" && ok "two people and a team may each ignore a folder of the same name" || bad "the same folder for different owners was rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder, created_by) VALUES ('$FI_P1', 'a', '$FI_U1'), ('$FI_P2', 'a', '$FI_U2');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'b');
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'ig_user:' || count(*) || ':' || count(created_by) FROM d1_private.inbox_ignored_dirs;
+DELETE FROM people WHERE person_id = '$FI_P1';
+SELECT 'ig_person:' || count(*) FROM d1_private.inbox_ignored_dirs;
+DELETE FROM teams WHERE team_id = '$FI_T1';
+SELECT 'ig_team:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_user:3:1' <<<"$fi_out" && grep -q 'ig_person:2' <<<"$fi_out" && grep -q 'ig_team:1' <<<"$fi_out" && ok "deleting a user keeps their rules (created_by becomes NULL); deleting a person or a team deletes their rules, and only theirs" || bad "foreign key actions are wrong (output: $fi_out)"
+run_eq "every column, index and the table of inbox_ignored_dirs has a comment (without: none)" \
+    "SELECT coalesce(string_agg(x, ', ' ORDER BY x), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT i.indexname FROM pg_indexes i JOIN pg_class ic ON ic.relname = i.indexname AND ic.relnamespace = to_regnamespace(i.schemaname)
+         WHERE i.schemaname = 'd1_private' AND i.tablename = 'inbox_ignored_dirs' AND coalesce(obj_description(ic.oid, 'pg_class'), '') = '') q" ""
+# Down and up again, inside one rolled-back transaction.
+if [[ -n "$IG_MIG" && -f "$IG_MIG" ]]; then
+    ig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$IG_MIG")
+    ig_down=$(awk '/-- migrate:down/{f=1;next}f' "$IG_MIG")
+    fi_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'a/b');
+$ig_down
+SELECT 'ig_dn_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs';
+SELECT 'ig_dn_people:' || count(*) FROM people WHERE person_id = '$FI_P1';
+$ig_up
+SELECT 'ig_up_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'inbox_ignored_dirs';
+SELECT 'ig_up_rows:' || count(*) FROM d1_private.inbox_ignored_dirs;
+ROLLBACK;
+SQL
+)
+    grep -q 'ig_dn_table:0' <<<"$fi_out" && grep -q 'ig_dn_people:1' <<<"$fi_out" && ok "down drops the table and keeps the people" || bad "down left the table behind or removed people (output: $fi_out)"
+    grep -q 'ig_up_table:1' <<<"$fi_out" && grep -q 'ig_up_rows:0' <<<"$fi_out" && ok "up again brings back an empty table (the rules are not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
+
 echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="
 # core/extensions/d1-inbox/sql_check.mjs prints a PREPARE for every statement the endpoint sends (SQL.* and the list, count and accept queries
 # buildListQuery builds, ? turned into $n). They are prepared here in a rolled-back transaction, so a column or table the real schema lacks fails the
@@ -6849,6 +6951,55 @@ CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
 CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
+-- Ignored folders (spec section 15): the rule statements, run on rows of their own after everything above (ids a1b00000-...-0000000002NN).
+INSERT INTO directus_files (id) SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(g::text, 2, '0'))::uuid FROM generate_series(1, 7) g;
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES
+  ('a1b00000-0000-4000-8000-000000000201', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/a.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000202', '$IB_P', 'image', 'new', 'Users/ibx1/ign dir/sub/b.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000203', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir 2/c.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000204', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/gone.tif', 'gone'),
+  ('a1b00000-0000-4000-8000-000000000205', '$IB_Q', 'image', 'new', 'Users/ibx1/Ign Dir/q.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000206', '$IB_P', 'image', 'new', 'Users/ibx1/x/Ign Dir/d.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000207', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/e.tif', 'new');
+SELECT pg_temp.ib_run(format('EXECUTE ignoredinsert(%L, NULL, %L, %L)', '$IB_P', 'Ign Dir', '$IB_U')) AS ib_ign_n \gset
+SELECT 'ib_ign_insert:' || :ib_ign_n || ':' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P' AND owner_team_id IS NULL AND created_by = '$IB_U') FROM d1_private.inbox_ignored_dirs;
+SELECT ignored_id AS ib_ign_id FROM d1_private.inbox_ignored_dirs \gset
+CREATE TEMP TABLE ib_ig_cnt AS EXECUTE ignoredcount('$IB_P', NULL);
+SELECT 'ib_ign_count:' || n FROM ib_ig_cnt;
+CREATE TEMP TABLE ib_ig_cnt_other AS EXECUTE ignoredcount(NULL, 'a2000000-0000-4000-8000-0000000000b1');
+SELECT 'ib_ign_count_other_owner:' || n FROM ib_ig_cnt_other;
+CREATE TEMP TABLE ib_ig_find AS EXECUTE ignoredfind('$IB_P', NULL, 'IGN DIR');
+SELECT 'ib_ign_find_any_case:' || count(*) FROM ib_ig_find;
+CREATE TEMP TABLE ib_ig_find2 AS EXECUTE ignoredfind('$IB_Q', NULL, 'IGN DIR');
+SELECT 'ib_ign_find_other_owner:' || count(*) FROM ib_ig_find2;
+CREATE TEMP TABLE ib_ig_flags (v text);
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE ignoredinsert(%L, NULL, %L, NULL)', '$IB_P', 'ign DIR'));
+  INSERT INTO ib_ig_flags VALUES ('inserted');
+EXCEPTION WHEN unique_violation THEN INSERT INTO ib_ig_flags VALUES ('refused');
+END \$\$;
+SELECT 'ib_ign_duplicate:' || v FROM ib_ig_flags;
+CREATE TEMP TABLE ib_ig_list AS EXECUTE ignoredlist('$IB_P', '');
+SELECT 'ib_ign_list:' || count(*) || ':' || bool_and(owner_name = 'Inbox Person' AND owner_team_id IS NULL) FROM ib_ig_list;
+CREATE TEMP TABLE ib_ig_byid AS EXECUTE ignoredbyid(:'ib_ign_id');
+SELECT 'ib_ign_by_id:' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P') FROM ib_ig_byid;
+-- the candidates under the folder: open ones, of this owner, on whole path parts and ignoring case (not 'Ign Dir 2', not a gone file, not another owner's, not 'x/Ign Dir')
+SELECT 'ib_ign_open:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+SELECT string_agg(candidate_id::text, ',') AS ib_ign_ids FROM d1_private.file_candidates
+ WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/')) \gset
+-- the same dismissal statement as POST /dismiss
+SELECT 'ib_ign_dismissed:' || pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_ign_ids'));
+SELECT 'ib_ign_states:' || string_agg(regexp_replace(rel_path, '^Users/ibx1/', '') || '=' || state, ',' ORDER BY rel_path COLLATE "C") FROM d1_private.file_candidates WHERE directus_files_id::text LIKE 'a1b00000-0000-4000-8000-0000000002%';
+SELECT 'ib_ign_open_after:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+-- removing the rule: the folder's cache rows are RESET (kept, mtime and listed time NULL; any case, below it, this owner only)
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at) VALUES
+  ('Users/ibx1/Ign Dir', '$IB_P', now(), now()), ('Users/ibx1/ign dir/sub', '$IB_P', now(), now()), ('Users/ibx1/Ign Dir 2', '$IB_P', now(), now());
+SELECT pg_temp.ib_run(format('EXECUTE ignoredresetdirs(%L, NULL, %L, %L)', '$IB_P', 'Users/ibx1/Ign Dir', 'Users/ibx1/Ign Dir/')) AS ib_ign_r1 \gset
+SELECT 'ib_ign_dirs:' || string_agg(rel_path || '=' || (dir_mtime IS NULL) || (last_listed_at IS NULL), ',' ORDER BY rel_path COLLATE "C") FROM d1_private.inbox_dirs WHERE rel_path LIKE 'Users/ibx1/%ign dir%' OR rel_path LIKE 'Users/ibx1/Ign Dir%';
+SELECT pg_temp.ib_run(format('EXECUTE ignoredresetdirs(%L, NULL, %L, %L)', 'a1b00000-0000-4000-8000-000000000007', 'Users/ibx1/Ign Dir 2', 'Users/ibx1/Ign Dir 2/')) AS ib_ign_r2 \gset
+SELECT 'ib_ign_reset_wrong_owner_kept:' || (dir_mtime IS NOT NULL AND last_listed_at IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1/Ign Dir 2';
+SELECT 'ib_ign_deleted:' || pg_temp.ib_run(format('EXECUTE ignoreddelete(%L)', :'ib_ign_id'));
+SELECT 'ib_ign_rules_left:' || count(*) FROM d1_private.inbox_ignored_dirs;
 ROLLBACK;
 SQL
 )
@@ -6886,6 +7037,22 @@ SQL
     ib_check "ib_prefs:1" "the auto-link preference upserts"
     ib_check "ib_first_rescan:1" "a rescan request is queued"
     ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"
+    ib_check "ib_ign_insert:1:1:true" "an ignored folder rule inserts for a person (the other owner column NULL, created_by set)"
+    ib_check "ib_ign_count:1" "the rule count for the 200-rule cap is per owner"
+    ib_check "ib_ign_count_other_owner:0" "...and another owner (a team) has none"
+    ib_check "ib_ign_find_any_case:1" "the duplicate check finds the rule whatever the letter case"
+    ib_check "ib_ign_find_other_owner:0" "...and for the same folder another owner has no rule"
+    ib_check "ib_ign_duplicate:refused" "the unique index refuses the same folder in another case for one owner (the endpoint answers 409 ALREADY_IGNORED)"
+    ib_check "ib_ign_list:1:true" "the rule list names the owner (person full name)"
+    ib_check "ib_ign_by_id:1:true" "a rule is found by its id with its owner and folder"
+    ib_check "ib_ign_open:3" "the open files under a rule: the folder and below (a, e and sub/b) on whole path parts and ignoring case; not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
+    ib_check "ib_ign_dismissed:3" "the rule's dismissal is the very statement of POST /dismiss"
+    ib_check "ib_ign_states:Ign Dir 2/c.tif=new,Ign Dir/a.tif=dismissed,Ign Dir/e.tif=dismissed,Ign Dir/gone.tif=gone,Ign Dir/q.tif=new,ign dir/sub/b.tif=dismissed,x/Ign Dir/d.tif=new" "only the open files under the rule changed state"
+    ib_check "ib_ign_open_after:0" "nothing open is left under the rule"
+    ib_check "ib_ign_dirs:Users/ibx1/Ign Dir=truetrue,Users/ibx1/Ign Dir 2=falsefalse,Users/ibx1/ign dir/sub=truetrue" "the rows are kept with dir_mtime and last_listed_at NULL; a sibling that shares a prefix is untouched"
+    ib_check "ib_ign_reset_wrong_owner_kept:true" "another owner's reset of the same path changes nothing: the row keeps its times"
+    ib_check "ib_ign_deleted:1" "a rule is deleted by id"
+    ib_check "ib_ign_rules_left:0" "...and none is left"
 else
     echo "  skip: node is not installed here, so the d1-inbox SQL is not run (CI has node)"
 fi

@@ -1,0 +1,24 @@
+{
+  "description": "the same folder twice for one owner, whatever the letter case",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "world-ti paper/drafts"
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "That folder is already ignored.",
+        "extensions": {
+          "field": "folder",
+          "folder": "world-ti paper/drafts",
+          "code": "ALREADY_IGNORED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

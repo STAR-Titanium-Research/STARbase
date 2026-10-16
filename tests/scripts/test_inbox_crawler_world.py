@@ -26,6 +26,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 DSN = os.environ.get("DATABASE_URL")
 FINGERPRINTS = ROOT / "db/migrations/20261010000159_file_fingerprints.sql"
 INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
+IGNORED = (
+    ROOT / "db/migrations/20261016000199_inbox_ignored_dirs.sql"
+)  # stream IA of the ignored folders plan
 THUMBNAILS = (
     ROOT / "db/migrations/20261016000198_file_thumbnails.sql"
 )  # stream A of the thumbnails plan
@@ -67,31 +70,6 @@ CREATE TABLE operation_data_files (id serial PRIMARY KEY, operation_id uuid,
     directus_files_id uuid REFERENCES directus_files (id) ON DELETE CASCADE);
 CREATE TABLE session_data_files (id serial PRIMARY KEY, session_id uuid,
     directus_files_id uuid REFERENCES directus_files (id) ON DELETE CASCADE);
-"""
-
-
-# d1_private.inbox_ignored_dirs as the ignored-folders plan's contract defines it (stream IA owns the real
-# migration). Stand-in until that migration is on the base: then replace this with migration_up(<its file>,
-# schema) like the two real migrations above. The CHECKs and the unique index are the contract's, so the
-# tests cannot insert what the endpoint would refuse.
-IGNORED_DIRS = """
-CREATE TABLE d1_private.inbox_ignored_dirs (
-    ignored_id      uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_person_id uuid        REFERENCES people (person_id) ON DELETE CASCADE,
-    owner_team_id   uuid        REFERENCES teams (team_id) ON DELETE CASCADE,
-    rel_folder      text        NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    created_by      uuid,
-    CONSTRAINT inbox_ignored_dirs_one_owner_check CHECK (num_nonnulls(owner_person_id, owner_team_id) = 1),
-    CONSTRAINT inbox_ignored_dirs_rel_folder_check CHECK (
-        rel_folder <> '' AND rel_folder !~ '^/|/$'
-        AND NOT ('.' = ANY (string_to_array(rel_folder, '/')))
-        AND NOT ('..' = ANY (string_to_array(rel_folder, '/')))
-        AND NOT ('' = ANY (string_to_array(rel_folder, '/')))
-    )
-);
-CREATE UNIQUE INDEX inbox_ignored_dirs_owner_folder_key
-    ON d1_private.inbox_ignored_dirs (coalesce(owner_person_id, owner_team_id), lower(rel_folder));
 """
 
 
@@ -207,7 +185,7 @@ def world(tmp_path):
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
         cur.execute(migration_up(THUMBNAILS, schema))
-        cur.execute(IGNORED_DIRS.replace("d1_private.", f"{schema}."))
+        cur.execute(migration_up(IGNORED, schema))
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:

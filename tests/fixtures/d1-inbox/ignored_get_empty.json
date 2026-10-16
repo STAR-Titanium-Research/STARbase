@@ -1,0 +1,11 @@
+{
+  "description": "nothing ignored yet",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/ignored-folders"
+  },
+  "status": 200,
+  "body": {
+    "data": []
+  }
+}

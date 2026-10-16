@@ -11,7 +11,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { FIXTURE_DIR, buildFixtures, fixtureText } from './contract_fixtures.mjs';
-import { FILTER_KEYS, FILTER_VALUES, LINK_COLLECTIONS, SCAN_CONDITIONS, buildListQuery, parseFileFilters, parseScanItem, shapeAcceptAll } from './index.js';
+import { FILTER_KEYS, FILTER_VALUES, LINK_COLLECTIONS, SCAN_CONDITIONS, buildListQuery, parseFileFilters, parseIgnoredFolder, parseScanItem, shapeAcceptAll } from './index.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const built = buildFixtures();
@@ -38,6 +38,9 @@ test('the fixtures are the cases the client has to handle', () => {
     'link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'files_linked_surface_scan', 'undo_ok_surface_scan',
     'undo_403_surface_scan', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
     'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys', 'picture_headers', 'picture_404',
+    'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
+    'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
+    'ignored_delete_ok_rate_limited', 'ignored_delete_404',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -63,7 +66,23 @@ test('every request in a fixture is one the server accepts', () => {
       continue;
     }
     const body = req.body ?? {};
-    if (req.path === '/d1-inbox/link') {
+    if (req.path.startsWith('/d1-inbox/ignored-folders')) {
+      if (req.method === 'POST') {
+        assert.deepEqual(Object.keys(body).filter((k) => !['folder', 'team_id'].includes(k)), [], `${label} sends a key the server ignores`);
+        if (body.team_id !== undefined) assert.match(body.team_id, UUID, label);
+        if (fx.status === 400) {
+          // the 400 fixtures are the folders the server's own parser refuses, with the message and field they show
+          assert.throws(() => parseIgnoredFolder(body.folder, 'Users/ali1'), (e) => e.status === 400 && e.message === fx.body.errors[0].message && e.extra.field === 'folder', label);
+        } else {
+          assert.equal(typeof body.folder, 'string', label);
+          if (fx.status === 201) assert.doesNotThrow(() => parseIgnoredFolder(body.folder, 'Users/ali1'), label);
+        }
+      } else if (req.method === 'DELETE') {
+        assert.match(req.path.slice('/d1-inbox/ignored-folders/'.length), UUID, label);
+      } else {
+        assert.equal(req.path, '/d1-inbox/ignored-folders', label);
+      }
+    } else if (req.path === '/d1-inbox/link') {
       assert.ok(body.items.length >= 1 && body.items.length <= 200, label);
       for (const i of body.items) {
         assert.match(i.candidate_id, UUID, label);
@@ -214,6 +233,38 @@ test('a surface scan item always carries a condition the person chose: the fixtu
   assert.equal(linked.linked_collection, 'surface_scans');
   assert.equal([linked.linked_insert_id, linked.linked_edge_id].filter((v) => v !== null).length, 1);
   assert.match(linked.linked_label, /worn/);
+});
+
+test('ignored folders: a rule is { ignored_id, folder, owner: { kind, id, name }, created_at, can_remove }; adding answers the rule and what was dismissed; removing says whether a rescan was queued', () => {
+  const list = built.get('ignored_get.json').body.data;
+  assert.ok(list.some((r) => r.owner.kind === 'team') && list.some((r) => r.owner.kind === 'person'), 'a team rule and a personal rule');
+  for (const r of list) {
+    assert.deepEqual(Object.keys(r), ['ignored_id', 'folder', 'owner', 'created_at', 'can_remove']);
+    assert.match(r.ignored_id, UUID);
+    assert.deepEqual(Object.keys(r.owner), ['kind', 'id', 'name']);
+    assert.equal(r.can_remove, true);
+    assert.equal(new Date(r.created_at).toISOString(), r.created_at);
+    assert.doesNotMatch(r.folder, /^\/|\/$|\/\/|^Users\/|^Shared\//, 'relative to the owner root');
+  }
+  assert.ok(built.get('ignored_get_viewer.json').body.data.every((r) => r.can_remove === false), 'a Lab Viewer removes nothing');
+  assert.deepEqual(built.get('ignored_get_empty.json').body.data, []);
+  const person = built.get('ignored_post_ok.json');
+  assert.equal(person.status, 201);
+  assert.deepEqual(Object.keys(person.body.data), ['ignored_id', 'folder', 'team_id', 'dismissed']);
+  assert.equal(person.body.data.team_id, null);
+  assert.equal(person.body.data.folder, person.request.body.folder);
+  assert.equal(Number.isInteger(person.body.data.dismissed), true);
+  const team = built.get('ignored_post_ok_team.json');
+  assert.equal(team.body.data.team_id, team.request.body.team_id);
+  const removed = built.get('ignored_delete_ok.json').body.data;
+  assert.deepEqual(Object.keys(removed), ['ignored_id', 'folder', 'rescan_queued']);
+  assert.equal(removed.rescan_queued, true);
+  assert.equal(built.get('ignored_delete_ok_rate_limited.json').status, 200, 'the rescan limit never fails the delete');
+  assert.equal(built.get('ignored_delete_ok_rate_limited.json').body.data.rescan_queued, false);
+  assert.equal(built.get('ignored_post_409_already_ignored.json').body.errors[0].extensions.code, 'ALREADY_IGNORED');
+  assert.equal(built.get('ignored_post_409_too_many_rules.json').body.errors[0].extensions.limit, 200);
+  assert.equal(built.get('ignored_post_400_folder.json').body.errors[0].extensions.field, 'folder');
+  assert.equal(built.get('ignored_delete_404.json').status, 404);
 });
 
 test('a copy of a file in an Inbox the caller has no part in carries { kind: other } and no name; a copy in their own or their team folder carries the name', () => {

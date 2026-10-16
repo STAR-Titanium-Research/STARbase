@@ -1,0 +1,23 @@
+{
+  "description": "200 rules per owner at most",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "one more"
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "You can ignore at most 200 folders. Remove one first.",
+        "extensions": {
+          "limit": 200,
+          "code": "TOO_MANY_RULES",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

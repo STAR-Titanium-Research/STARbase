@@ -142,6 +142,10 @@ Private schema (not exposed)
                              the Inbox's thumbnails and full view (migration 198, spec section 14): two
                              small derived JPEGs per image candidate, written by the inbox crawler and served
                              by the d1-inbox endpoint to whoever may see the candidate; see "Found files".
+  d1_private.inbox_ignored_dirs
+                             folders the inbox crawler must not scan (migration 199, spec section 15
+                             of the Inbox design): one rule per person or team and folder. Reached
+                             only through the d1-inbox endpoint and the crawler; see "Found files".
 ```
 
 ---
@@ -501,6 +505,23 @@ and `/preview`, `image/jpeg`, with the same visibility as the list) and reports 
 | `thumb_width`, `thumb_height`, `preview_width`, `preview_height` | INTEGER | Pixel sizes; NULL when not recorded, greater than 0 when set |
 | `source_size`, `source_mtime` | BIGINT NOT NULL (>= 0), TIMESTAMPTZ NOT NULL | The file's size and modification time when the pictures were made; the backfill redoes a candidate whose values differ |
 | `created_at` | TIMESTAMPTZ NOT NULL | Default `now()` |
+**`d1_private.inbox_ignored_dirs`** (migration `…199`, [spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 15): the
+folders the crawler leaves alone ("ignore this folder when scanning"). Also in `d1_private`: not exposed by Directus, not in
+`v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers. Written only by `d1-inbox`
+(`GET`/`POST /ignored-folders`, `DELETE /ignored-folders/:id`), read by the crawler once per scan.
+
+| Column | Type | Description |
+|---|---|---|
+| `ignored_id` | UUID PK | Surrogate key, `gen_random_uuid()` |
+| `owner_person_id`, `owner_team_id` | UUID FK | Whose folder the rule sits under: a person (their personal folder) or a team (its team folder); exactly one is set (`inbox_ignored_dirs_one_owner_check`); both cascade, as in `inbox_dirs` |
+| `rel_folder` | TEXT NOT NULL | The folder **relative to the owner's root** (`World-Ti Paper/Drafts`, not `Users/abc12de/...`). Matched on whole path parts, ignoring case, and covers the folder and everything beneath it (`World-Ti Paper` does not cover `World-Ti Paper 2`). No leading or trailing `/`, no empty, `.` or `..` part (two CHECKs); the root itself cannot be ignored; no wildcards |
+| `created_at` | TIMESTAMPTZ NOT NULL | Default `now()` |
+| `created_by` | UUID FK | The Directus user who added the rule; `ON DELETE SET NULL` |
+
+Unique on `(coalesce(owner_person_id, owner_team_id), lower(rel_folder))` (`inbox_ignored_dirs_owner_folder_key`); partial indexes on
+each owner column and on `created_by`. At most 200 rules per owner, enforced by the endpoint. Adding a rule dismisses the owner's `new`
+candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one resets the folder's `inbox_dirs` rows (`dir_mtime` and `last_listed_at` NULL for the
+folder and everything below it; kept, not deleted) so the next scan lists it again.
 ### `surface_scans`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona

@@ -1,0 +1,15 @@
+{
+  "description": "a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued",
+  "request": {
+    "method": "DELETE",
+    "path": "/d1-inbox/ignored-folders/00000000-0000-4000-8000-000000009401"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "ignored_id": "00000000-0000-4000-8000-000000009401",
+      "folder": "World-Ti Paper/Drafts",
+      "rescan_queued": true
+    }
+  }
+}

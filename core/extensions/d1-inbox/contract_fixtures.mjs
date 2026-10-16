@@ -13,8 +13,8 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
-  shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo, unfit,
+  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseIgnoredFolder, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError,
+  shapeFiles, shapeIgnoredAdded, shapeIgnoredFolders, shapeIgnoredRemoved, shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo, unfit,
 } from './index.js';
 
 export const FIXTURE_DIR = fileURLToPath(new URL('../../../tests/fixtures/d1-inbox/', import.meta.url));
@@ -311,6 +311,36 @@ export function buildFixtures() {
   });
   put('picture_404', failure('no picture for that id: the file is not the caller\'s to see, does not exist, is gone, has no picture, or the id is not a uuid (one answer for all, a JSON error)',
     pictureReq('thumb'), ERRORS.noPicture()));
+  // GET, POST and DELETE /ignored-folders (spec section 15)
+  const IGNORED_PATH = '/d1-inbox/ignored-folders';
+  const RULE_PERSON = ID(9401);
+  const RULE_TEAM = ID(9402);
+  const ruleRows = [
+    { ignored_id: RULE_TEAM, owner_person_id: null, owner_team_id: TEAM, rel_folder: 'Old runs', created_at: at('2026-10-16T09:30:00.000Z'), owner_name: 'SEM team' },
+    { ignored_id: RULE_PERSON, owner_person_id: P_ALICE, owner_team_id: null, rel_folder: 'World-Ti Paper/Drafts', created_at: at('2026-10-16T08:00:00.000Z'), owner_name: 'Alice A' },
+  ];
+  const folderRefusal = (value) => { try { parseIgnoredFolder(value, 'Users/ali1'); } catch (e) { return e; } return new Error('expected a 400'); };
+  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true)", request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, true) }));
+  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false)', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, false) }));
+  put('ignored_get_empty', ok('nothing ignored yet', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders([], true) }));
+  put('ignored_post_ok', ok("a folder of the caller's own folder ignored: the rule, and how many open files below it were dismissed",
+    request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper/Drafts' } }), { data: shapeIgnoredAdded({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, null, 12) }, 201));
+  put('ignored_post_ok_team', ok('a folder of a team folder ignored by a member of the team (team_id is in the answer)',
+    request('POST', IGNORED_PATH, { body: { folder: 'Old runs', team_id: TEAM } }), { data: shapeIgnoredAdded({ ignored_id: RULE_TEAM, rel_folder: 'Old runs' }, TEAM, 0) }, 201));
+  put('ignored_post_400_folder', failure("a folder with an empty part: relative to the owner's root, no empty, . or .. part, no leading or trailing slash (extensions.field is folder)",
+    request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper//Drafts' } }), folderRefusal('World-Ti Paper//Drafts')));
+  put('ignored_post_400_root', failure('a path that starts with the owner\'s root (Users/<alias>) is not relative to it', request('POST', IGNORED_PATH, { body: { folder: 'Users/ali1/World-Ti Paper' } }),
+    folderRefusal('Users/ali1/World-Ti Paper')));
+  put('ignored_post_403_team', failure('a team the caller is not an active member of', request('POST', IGNORED_PATH, { body: { folder: 'Old runs', team_id: TEAM_NO_FOLDER } }), ERRORS.notYourTeam()));
+  put('ignored_post_409_no_folder', failure('a person with no folder to scan has nothing to ignore in it', request('POST', IGNORED_PATH, { body: { folder: 'x' } }), ERRORS.noFolder()));
+  put('ignored_post_409_already_ignored', failure('the same folder twice for one owner, whatever the letter case', request('POST', IGNORED_PATH, { body: { folder: 'world-ti paper/drafts' } }),
+    ERRORS.alreadyIgnored('world-ti paper/drafts')));
+  put('ignored_post_409_too_many_rules', failure('200 rules per owner at most', request('POST', IGNORED_PATH, { body: { folder: 'one more' } }), ERRORS.tooManyRules()));
+  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
+    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, true) }));
+  put('ignored_delete_ok_rate_limited', ok('a rule removed while the rescan limit says wait: the delete still works, rescan_queued is false', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
+    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, false) }));
+  put('ignored_delete_404', failure("a rule that does not exist, or is not the caller's or their team's (the same answer)", request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), ERRORS.notIgnored()));
 
   // GET and PUT /prefs
   put('prefs_get_off', ok('auto-link off (the default)', request('GET', '/d1-inbox/prefs'), { data: shapePrefs(undefined) }));

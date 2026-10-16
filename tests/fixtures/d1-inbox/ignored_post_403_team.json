@@ -1,0 +1,24 @@
+{
+  "description": "a team the caller is not an active member of",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "Old runs",
+      "team_id": "00000000-0000-4000-8000-000000000022"
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "You are not a member of that team.",
+        "extensions": {
+          "field": "team_id",
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

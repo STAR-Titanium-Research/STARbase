@@ -1,0 +1,22 @@
+{
+  "description": "a person with no folder to scan has nothing to ignore in it",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "x"
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "There is no folder to scan yet. Ask an administrator to set your uni alias.",
+        "extensions": {
+          "code": "NO_FOLDER",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}
