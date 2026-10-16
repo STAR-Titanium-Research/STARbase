@@ -403,6 +403,9 @@ class FeiProfile:
         bar_reader: Callable | None = None,
     ) -> ProfileResult | None:
         meta = fei_metadata(img)
+        reading = ocr and bar_reader is not None
+        if meta is None and not reading:
+            return None  # no metadata and no bar reading: nothing can claim the image
         gray = _gray(img)
         y = find_fei_bar(gray)
         if meta is not None:
@@ -413,7 +416,7 @@ class FeiProfile:
                 )  # DatabarHeight places a bar whose top row is not bright
         structured = y is not None and bar_structure(gray, y) is not None
         read = None
-        if ocr and bar_reader is not None and structured:
+        if reading and structured:
             read = self._read_bar(
                 gray, y, bar_reader, None if meta is None else meta.get("hfw_um")
             )
@@ -449,12 +452,13 @@ class FeiProfile:
 
             w, h = gray.size
             bar = gray.crop((0, y, w, h))
-            read = sem_bar.read_bar(bar, bar_reader)
+            cells = sem_bar.cut_cells(bar)
+            read = sem_bar.read_bar(bar, bar_reader, cells)
             labels = sum(1 for key in read if key != "scale")
             parsed = sem_bar.parse_bar(
                 read,
                 image_width=w,
-                scale_px=sem_bar.scale_bar_length_px(bar),
+                scale_px=sem_bar.scale_bar_length_px(bar, cells) if read else None,
                 hfw_um=hfw_um,
             )
             return labels, parsed

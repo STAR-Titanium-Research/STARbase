@@ -145,11 +145,13 @@ def cut_cells(bar) -> list[BarCell]:
     return cells if len(cells) >= MIN_CELLS else []
 
 
-def scale_bar_length_px(bar) -> int | None:
+def scale_bar_length_px(bar, cells: list[BarCell] | None = None) -> int | None:
     """The scale bar's length in pixels, or None: the longest run of bright pixels of at least 20 px in any single
     row of the rightmost cell. The top row is not looked at, and a run that spans the whole cell is a divider row,
-    not a scale bar. "Bright" is relative (200 of 255 of the bar's maximum) so a contrast-edited bar still reads."""
-    cells = cut_cells(bar)
+    not a scale bar. "Bright" is relative (200 of 255 of the bar's maximum) so a contrast-edited bar still reads.
+    `cells` are the bar's `cut_cells` when the caller already has them."""
+    if cells is None:
+        cells = cut_cells(bar)
     if not cells:
         return None
     a = numpy.asarray(_gray(bar))
@@ -182,13 +184,17 @@ def _prepare(crop) -> numpy.ndarray:
     )
 
 
-def read_bar(bar, recognise: Recogniser) -> dict[str, tuple[str, float]]:
+def read_bar(
+    bar, recognise: Recogniser, cells: list[BarCell] | None = None
+) -> dict[str, tuple[str, float]]:
     """The text of each field the bar shows, `{key: (text, confidence)}` with key one of `hv det wd mag mode spot
     scale`. One `recognise` call reads every crop (a header and a value per cell, in cell order). A header is
     matched by its start (`hv`, `det`, `wd`, `mag`, `mode`, `spot`; others are ignored); when no header matches but
     it reads like a length (`40 µm`), the cell is the scale bar and that label is the `scale` text. `{}` when the
-    bar has no cells or the recogniser did not answer for every crop."""
-    cells = cut_cells(bar)
+    bar has no cells or the recogniser did not answer for every crop. `cells` are the bar's `cut_cells` when the
+    caller already has them."""
+    if cells is None:
+        cells = cut_cells(bar)
     if not cells:
         return {}
     crops = []
@@ -365,9 +371,9 @@ def parse_bar(
 # ---- the default recogniser -----------------------------------------------------------------
 
 _CPU, _CUDA = "CPUExecutionProvider", "CUDAExecutionProvider"
-_READERS: dict[
-    str, Recogniser
-] = {}  # one recogniser per device and process (the models load once)
+# One recogniser per device and process (the models load once). A device whose rapidocr import failed holds that
+# ImportError instead, so every later bar fails at once and the import is not retried for each image.
+_READERS: dict[str, Recogniser | ImportError] = {}
 
 
 def _on_cuda(recogniser) -> str:
@@ -410,9 +416,15 @@ def default_bar_reader(device: str = "cpu") -> Recogniser:
         log.warning("INBOX_OCR_DEVICE=%r is not auto, cpu or cuda: using cpu", device)
         device = "cpu"
     cached = _READERS.get(device)
+    if isinstance(cached, ImportError):
+        raise type(cached)(*cached.args)
     if cached is not None:
         return cached
-    from rapidocr_onnxruntime import RapidOCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        _READERS[device] = exc
+        raise
 
     recogniser = RapidOCR(use_text_det=False, use_angle_cls=False).text_recognizer
     provider = _CPU
