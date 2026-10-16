@@ -13,10 +13,14 @@
 // junction_id: <scan id>, insert_id, edge_id, adopted: false }`; a repeat by the same person is `already_linked`; 400 INVALID_PAYLOAD (with extensions.field),
 // 404 NOT_FOUND, 403 FORBIDDEN, 409 ALREADY_ADDED / NOT_A_SURFACE_SCAN / SURFACE_SCAN / SURFACE_SCANS_UNAVAILABLE. The options `scanItems`, `scanAllowed`,
 // `scanTableMissing` and `scanUndoAllowed` steer those; undo deletes the scan rows of the batch (403 when `scanUndoAllowed` is false).
+// The imaging settings routes (GET /d1-inbox/sem-settings?file=, PATCH /d1-inbox/sem-settings/<uuid> { field, value }) answer from the `sem` option: file id ->
+// the `data` of a contract fixture ({ locked: true } | { locked: false, settings: null } | { locked: false, settings, sources, flags, can_edit }); a file it does not
+// know is locked (as the server answers for an id that does not exist). A correction is 403 unless the file's entry has can_edit, 400 INVALID_PAYLOAD
+// (extensions.field: 'field' | 'value') for a field that is not a setting or a value out of its range, else it sets the field, marks it manual and drops its flag.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
-import type { FoundFile, LinkItem, ScanLinkItem } from './inboxApi';
+import type { FoundFile, LinkItem, ScanLinkItem, SemSettingsAnswer } from './inboxApi';
 
 let counter = 0;
 
@@ -91,6 +95,8 @@ export interface FakeInboxOptions {
 	scanTableMissing?: boolean;
 	/** May the caller delete a scan they added (undo)? Default yes; false is 403 FORBIDDEN and nothing is undone. */
 	scanUndoAllowed?: boolean;
+	/** Imaging settings by directus_files id (see the header). */
+	sem?: Record<string, SemSettingsAnswer>;
 	/** The caller is not the person who linked a batch (and not an administrator): undo is 403 FORBIDDEN with no candidate_id, as the server's own check answers. */
 	undoByLinkerOnly?: boolean;
 }
@@ -121,6 +127,18 @@ const err = (status: number, code: string, message: string, extra: Record<string
 	});
 
 const ACCEPT_LIMIT = 500;
+/** The ranges the database holds each setting to (migration 197): [min, max, whole number]. Text settings are 1 to 200 characters; acquired_at is a time with an offset. */
+const SEM_RANGES: Record<string, [number, number, boolean]> = {
+	kv: [0.1, 30, false], spot: [1, 10, false], working_distance_mm: [0.1, 50, false], magnification: [5, 1_000_000, true],
+	hfw_um: [Number.MIN_VALUE, 1e7, false], pixel_size_nm: [Number.MIN_VALUE, 1e7, false], scale_bar_um: [Number.MIN_VALUE, 1e9, false],
+};
+const SEM_TEXT = ['detector', 'mode', 'instrument'];
+const semValueOk = (field: string, v: unknown): boolean => {
+	const range = SEM_RANGES[field];
+	if (range) return typeof v === 'number' && Number.isFinite(v) && v >= range[0] && v <= range[1] && (!range[2] || Number.isInteger(v));
+	if (SEM_TEXT.includes(field)) return typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= 200;
+	return typeof v === 'string' && /[Zz]|[+-]\d{2}:\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
+};
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONDITIONS = ['new', 'worn', 'cleaned', 'other'];
 const blank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
@@ -313,6 +331,24 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 
 	const ok = (data: unknown, extra: Record<string, unknown> = {}) => ({ data, ...extra });
 
+	const sem: Record<string, SemSettingsAnswer> = JSON.parse(JSON.stringify(opts.sem ?? {}));
+	/** What the endpoint answers for a file: its entry, else locked (an id that does not exist is told apart from a locked one by nobody). */
+	const semAnswer = (file: string): SemSettingsAnswer => sem[file.toLowerCase()] ?? sem[file] ?? { locked: true };
+	function semCorrect(file: string, body: unknown) {
+		const entry = sem[file.toLowerCase()] ?? sem[file];
+		if (!entry || entry.locked || entry.settings === null || entry.can_edit !== true) throw err(403, 'FORBIDDEN', 'Only the owner of a file can correct its imaging settings.');
+		const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+		const keys = Object.keys(b).sort().join(',');
+		if (keys !== 'field,value') throw bad('field', 'Send exactly { field, value }.');
+		const field = String(b.field);
+		if (!(field in SEM_RANGES) && !SEM_TEXT.includes(field) && field !== 'acquired_at') throw bad('field', 'That is not a setting that can be corrected.');
+		if (!semValueOk(field, b.value)) throw bad('value', 'That value is not valid for this setting.');
+		entry.settings[field] = SEM_TEXT.includes(field) ? String(b.value).trim() : b.value;
+		entry.sources[field] = 'manual';
+		delete entry.flags[field];
+		return entry;
+	}
+
 	const handlers: Record<string, (c: Call) => unknown> = {
 		'get /d1-inbox/summary': () => ok(summary()),
 		'get /d1-inbox/files': (c) => {
@@ -395,6 +431,11 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 			autoLink = (c.body as any).auto_link === true;
 			return ok({ auto_link: autoLink });
 		},
+		'get /d1-inbox/sem-settings': (c) => {
+			const file = String((c.params as any)?.file ?? '');
+			if (!UUID.test(file)) throw bad('file', 'file must be the id of a file.');
+			return ok(semAnswer(file));
+		},
 		'get /d1-inbox/admin': () =>
 			ok({
 				status: {
@@ -419,7 +460,8 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown> }) {
 		const call: Call = { method, path, body, params: config?.params };
 		calls.push(call);
-		const h = handlers[`${method} ${path}`];
+		const semPatch = method === 'patch' ? /^\/d1-inbox\/sem-settings\/([^/]+)$/.exec(path) : null;
+		const h = semPatch ? (c: Call) => ok(semCorrect(decodeURIComponent(semPatch[1]), c.body)) : handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));
 		try {
 			// The answer is cloned, like an HTTP response: a page never holds the server's own rows.

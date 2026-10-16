@@ -33,14 +33,28 @@ describe('linkedFiles', () => {
 		expect(row.name).toBe('z.csv');
 	});
 
-	it('skips a junction row whose file is unreadable, and survives bad metadata', () => {
+	it('keeps a junction row whose file the reader may not see as a locked file: Directus answers directus_files_id null, with the row\'s own id', () => {
 		const rows = linkedFiles([
-			{ directus_files_id: 'just-an-id' },
-			null,
-			{ directus_files_id: { id: 'f5', filename_download: 'x', metadata: '{broken' } },
+			{ id: 'j1', directus_files_id: null },
+			{ id: 'j2', directus_files_id: { id: 'f5', filename_download: 'x', metadata: '{broken' } },
 		]);
-		expect(rows).toHaveLength(1);
-		expect(rows[0].kind).toBe('upload');
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toEqual({ id: 'j1', name: '', kind: 'locked', source: 'data_files', unc: null, folder: null, fileUri: null });
+		expect(rows[1]).toMatchObject({ id: 'f5', kind: 'upload', source: 'data_files' });
+	});
+
+	it('gives a locked row with no id of its own a key that cannot clash, and still skips a row that is not a link at all', () => {
+		const rows = linkedFiles([{ directus_files_id: null }, null, undefined, {}, { directus_files_id: null }]);
+		expect(rows.map((r) => r.kind)).toEqual(['locked', 'locked']);
+		expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+	});
+
+	it('still reads a bare id string as a locked file (a fallback: the id is all that is known)', () => {
+		expect(linkedFiles([{ directus_files_id: 'just-an-id' }])[0]).toMatchObject({ id: 'just-an-id', name: '', kind: 'locked', source: 'data_files' });
+	});
+
+	it('marks every linked Directus file as coming from data_files', () => {
+		expect(linkedFiles([{ directus_files_id: { id: 'f1', filename_download: 'a.tif' } }])[0].source).toBe('data_files');
 	});
 
 	it('handles no links at all', () => {
@@ -60,6 +74,9 @@ describe('shareFiles', () => {
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toMatchObject({ id: 'a', name: 'One', kind: 'archive', folder: '\\\\host\\share\\runs', fileUri: null });
 		expect(rows[1]).toMatchObject({ name: 'two.csv', folder: 'X:/runs' });
+	});
+	it('marks a share file as coming from the share: its id is the share link\'s own, not a Directus file', () => {
+		expect(shareFiles([{ file_id: 'a', file_path: '\\\\host\\share\\one.tif' }])[0].source).toBe('share');
 	});
 	it('has no folder for a bare file name', () => {
 		expect(shareFiles([{ file_id: 'd', file_path: 'one.mat' }])[0].folder).toBeNull();

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { BrowserContext } from '@playwright/test';
 import { D1_BASE, STAR_BASE } from './target';
 import { STUB_SAMPLE } from './stubD1';
@@ -17,6 +19,13 @@ const cors = {
 
 export type InboxStub = ReturnType<typeof createFakeInbox>;
 
+// The imaging settings routes (GET /d1-inbox/sem-settings, PATCH /d1-inbox/sem-settings/<id>) are the fake's own; the stand-in knows two files from the
+// d1-inbox contract fixtures: one the signed-in person owns (values, sources, a "check this", can_edit) and one that is locked.
+const contract = (name: string) => JSON.parse(readFileSync(join(__dirname, '..', '..', 'fixtures', 'd1-inbox', `${name}.json`), 'utf8'));
+export const STUB_SEM_OWNER_FILE: string = contract('sem_settings_owner').request.query.file;
+export const STUB_SEM_LOCKED_FILE = '00000000-0000-4000-8000-000000003002';
+const stubSem = () => ({ [STUB_SEM_OWNER_FILE]: contract('sem_settings_owner').body.data, [STUB_SEM_LOCKED_FILE]: contract('sem_settings_locked').body.data });
+
 /** A small inbox: two exact short-ID images, an unflagged image, an exact surface scan (Accept all leaves it), a document and one older file that names a record. */
 export const sampleFiles = () => [
 	exactMatch({ rel_path: 'Users/ab1cd/sem/3fa9c1d2_A1.tif' }, '3fa9c1d2', 'S-0042'),
@@ -28,7 +37,7 @@ export const sampleFiles = () => [
 ];
 
 export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions = {}): Promise<InboxStub> {
-	const fake = createFakeInbox({ files: sampleFiles(), ...opts });
+	const fake = createFakeInbox({ files: sampleFiles(), sem: stubSem(), ...opts });
 	await context.route(`${D1_BASE}/d1-inbox/**`, async (route) => {
 		const req = route.request();
 		const url = new URL(req.url());
