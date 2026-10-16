@@ -2422,7 +2422,8 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   folder `Users/<alias>` holding a few images A's crawler scan registered: change A's `uni_alias` to something else and give the old alias to B
   (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
   *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
-  afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
+  afterwards listed. The scan **deletes A's undecided and dismissed candidates** under that folder (`drop_foreign_state`: the candidate table is unique on the file, so B's scan could not register
+  the same files otherwise; A's linked ones stay), so none of A's candidate ids survive it: to try `POST /d1-inbox/link` with one, take its id before the scan and expect 404 (not found) after. A's own linked
   files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else", including the `inbox_dirs` reset, without which the rescan skips the unchanged folder) for one folder: expect
   `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
 - [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
@@ -2466,19 +2467,20 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
 - [ ] **SEM18 — Deactivating, and deleting, a person who owns files (`ON DELETE RESTRICT`).** In Data Studio, set a person who owns found files (an alias, a
   login, owned rows in `directus_files`) inactive: expect it to save, the person's folder to stop being scanned (unless "scan while Former"), their owned
   files to stay owned by them and readable by their login, and the admin tab to list nothing new as unowned. Then try to delete that person (People page, and
-  `DELETE /items/people/<id>`): expect a refusal (a foreign-key violation, `directus_files_owner_person_id_fkey`), and the person and their files unchanged. Check
-  that the message Directus shows is understandable, and write down what an administrator must do to remove such a person (re-stamp their files first, see
-  the runbook "An alias handed to someone else"). Since: SEM reader final fix wave (ADR-0022 consequences).
+  `DELETE /items/people/<id>`): expect a refusal, and the person and their files unchanged. Since migration 201 the message names the person and the count ("X cannot
+  be deleted: they own N found file(s) on the share. Set them inactive instead, or re-stamp their files first ..."; Directus still answers HTTP 500 with a `delete from "people" ... -` prefix; before 201 it showed
+  only the raw `directus_files_owner_person_id_fkey` error). The same for a team that owns files. An administrator removes such a person by re-stamping their files first (the runbook "An alias handed to
+  someone else"). Since: SEM reader final fix wave (ADR-0022 consequences); message: migration 201.
 - [ ] **SEM19 — Team membership: `d1-inbox` counts active members, `file_readers` counts every member with a login (M3, ADR-0022 consequences).** With a team
   that has a share folder and a team-owned file, and a team member who is a Former (inactive) person with a login still active in Directus: as that
-  person, `GET /files/<id>` of the team's file answers 200 (the readers table holds them) while the Inbox shows them no team files, badge 0 and no team in the
-  summary (d1-inbox counts only `people.active` members). As an active member both work. Decide which rule is right (a Former member keeping read access by id is
-  probably not), and record the answer: the fix is a later migration (change `file_readers_expected` to join `people.active`, then
-  `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
+  person, `GET /files/<id>` of the team's file must answer 403 and the Inbox shows them no team files, badge 0 and no team in the summary (d1-inbox counts only
+  `people.active` members). As an active member both work; setting the person active again gives `GET /files/<id>` 200 at once and inactive 403 again, with
+  `file_readers_drift_count()` 0 (migration 201 made a team owner count active members only, and `people.active` refreshes the readers; before it the Former member got 200). A **person** owner who is inactive
+  still reads their own files. Since: SEM reader final fix wave (M3); migration 201.
 
 - [ ] **SEM20 — The indexer's own move keeps the owner (re-review finding).** On a copy of the database with 196 applied, take an owned image registered by the crawler, move it on the share out of `Users/<alias>` into a project folder, and run `make index-archive` (full run). Expect one `directus_files` row for the file at the new path with the same `owner_person_id` as before (not NULL), no row for the old path, and `file_readers_drift_count()` 0; a member who is not the owner cannot read it. Since: SEM reader final fix wave (`index_archive.carry_owner_stamp`, ADR-0022 D13).
-- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (A's old
-  candidates kept in the database for the test, their files stamped to A, the alias now B's) and the crawler having stored thumbnails for some of them:
+- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (the alias now B's; **the scan deletes A's unlinked candidates**, so after B's scan stamp one of B's registered candidates and its file to A by hand
+  to stand in for "A's old candidates kept") and the crawler having stored thumbnails for some of them:
   as B, `GET /d1-inbox/files/<one of A's candidate ids>/thumb` and `/preview` answer 404 NOT_FOUND with no ETag or caching headers, while B's own images
   still show their thumbnails. Then, as B, *Ignore this folder* on a folder that holds both B's own open files and A's old ones: expect the notice's
   count to include B's files only, B's files in Dismissed, and A's old candidates untouched (still `state = 'new'`, `decided_by` NULL). As A (or an
