@@ -65,6 +65,23 @@
 //   POST /d1-inbox/auto-link        MACHINE ONLY (the crawler): header X-Inbox-Crawler-Secret = env D1_INBOX_CRAWLER_SECRET
 //                                   { candidate_ids: [...] } (or candidate_id) -> { data: { results: [{ candidate_id, status: 'linked' | 'skipped'
 //                                   | 'error', reason?, link_batch_id? }] } }. Images only (sem_image, image): never a surface scan.
+//   GET  /d1-inbox/sem-settings?file=<directus_files uuid>
+//                                   the imaging settings of an SEM image (ADR-0022, spec 2026-10-16 sections 4 and 5), decided from the file's pointer row (the
+//                                   provenance owner columns of directus_files) BEFORE anything is read:
+//                                     the owner (the person, or an active member of the owner team) -> { data: { locked: false, settings: { kv, spot,
+//                                       working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument, acquired_at:
+//                                       only those that have a value }, sources: { <field>: metadata | derived | ocr | manual }, flags: {...}, can_edit } };
+//                                     an administrator who is not the owner -> the same, read-only (can_edit false), and ONE row in
+//                                       d1_private.sem_settings_access_log with reason 'admin_read' whenever values are returned (none for an owner);
+//                                     an UNOWNED file (linked and legacy files stay open, D10) -> whoever can read a record it is linked to, decided by
+//                                       reading the three junctions AS THE CALLER through ItemsService (Directus's own read rule), can_edit false;
+//                                     anyone else, and a file that is not there -> HTTP 200 { data: { locked: true } } and nothing else (no value, no source,
+//                                       not even whether settings exist);
+//                                     an allowed reader of a file with no settings saved -> { data: { locked: false, settings: null } }.
+//   PATCH /d1-inbox/sem-settings/<directus_files uuid>   { field, value }: the OWNER corrects one setting through d1_private.correct_sem_setting, which marks
+//                                   it manual (a re-read never overwrites it). 403 FORBIDDEN for everyone else, an administrator who is not the owner and an
+//                                   unowned file too; 400 INVALID_PAYLOAD (extensions.field 'field' or 'value') for an unknown field (read_by, sources, ...) or a
+//                                   value the function refuses; 404 when no settings are saved. Answers like the GET.
 //   GET  /d1-inbox/admin            administrators only -> { data: { status: {...}, errors: [{at, message}], unmatched_folders: [...],
 //                                   people_without_alias: [{person_id, full_name, active, has_login}], queued_requests, queue, candidates } }
 //   POST /d1-inbox/admin/scan-all   administrators only -> 202 { data: { queued: true, ... } }; 409 ALREADY_QUEUED while one waits
@@ -73,6 +90,9 @@
 // 404 unknown (or not yours to see), 409 refused state, 400 bad input, 429 rate limit.
 //
 // Visibility of a candidate: its owner person's login, any ACTIVE member (people.active) of its owner team, administrators (all).
+// Who may CHANGE a candidate (link, accept-all, dismiss, restore, undo): its owner person or an active member of its owner team and NOBODY else. An
+// administrator who is neither is refused 403 FORBIDDEN on those routes: administrators read other people's files, they do not change them (ADR-0022
+// decision 3). They keep the list, the summary and the admin routes. The crawler's machine auto-link acts for the owner and is not affected.
 //
 // How a request runs (the d1-build / d1-record-access pattern):
 //   * Every write transaction starts with set_config('d1.actor_identity', <user id>, true), so the audit trigger names the person.
@@ -103,6 +123,11 @@ import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE, isWriteRequest } from '../d
 const SOURCE = 'd1-inbox';
 // read_by of the settings a link saves: the inbox (the crawler's own reads say sem-<version> in the candidate's classified_by).
 const SEM_READ_BY = 'inbox';
+// the reason an administrator's read of someone else's settings is logged with
+const ADMIN_READ_REASON = 'admin_read';
+// the settings the answer carries, by type (the columns of d1_private.sem_image_settings; `sources` and `flags` travel beside them)
+const SEM_NUMBERS = ['kv', 'spot', 'working_distance_mm', 'magnification', 'hfw_um', 'pixel_size_nm', 'scale_bar_um'];
+const SEM_TEXTS = ['detector', 'mode', 'instrument'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CURRENT_USER = '$CURRENT_USER';
 const MAX_BATCH = 200;
@@ -321,6 +346,14 @@ export const SQL = {
   // merges, keeps a person's manual fields): this endpoint passes the candidate's extracted on and never maps it. Bindings: the file id, extracted as
   // JSON text, read_by.
   saveSemSettings: 'SELECT d1_private.save_sem_settings(?, ?::jsonb, ?) AS saved',
+  // GET and PATCH /sem-settings: the file's pointer row (the provenance owner columns decide who may read and correct), its settings row, the
+  // administrator access log (binding: file, administrator, reason) and the owner's correction (bindings: file, field, value as JSON text, user;
+  // d1_private.correct_sem_setting refuses an unknown field and an out-of-range value, and marks the field manual).
+  semFile: 'SELECT id, owner_person_id, owner_team_id FROM directus_files WHERE id = ?',
+  semSettingsGet: 'SELECT directus_files_id, kv, spot, working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument,'
+    + ' acquired_at, sources, flags, read_by, read_at, corrected_by, corrected_at FROM d1_private.sem_image_settings WHERE directus_files_id = ?',
+  semAccessLogInsert: 'INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES (?, ?, ?)',
+  semCorrect: 'SELECT d1_private.correct_sem_setting(?, ?, ?::jsonb, ?)',
   // Undo: a file's settings go only when NO row is left in any of the four tables that link a file (a file linked twice keeps them while one link
   // stands). Binding: the file ids as one csv.
   deleteUnlinkedSemSettings: `DELETE FROM d1_private.sem_image_settings s WHERE s.directus_files_id = ANY(${IDS})${
@@ -351,6 +384,21 @@ export function canSee(scope, candidate) {
   return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
 }
 
+// The WRITE rule (stream D, ADR-0022 decision 3): who may link, dismiss, restore or undo a candidate, and correct a file's settings. Only the owner
+// person or an active member of the owner team: an administrator is NOT one unless they are (administrators read other people's files, they never
+// change them). canSee is the READ rule of the list and of the picture routes and stays as it is; this is a separate predicate on purpose.
+export function canChange(scope, candidate) {
+  if (scope.personId && candidate.owner_person_id === scope.personId) return true;
+  return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
+}
+
+// How a caller stands to a file (its pointer row's owner columns): 'owner' (the owner person, or a member of the owner team: canChange), 'unowned' (no
+// owner stamp: legacy and linked files stay open, D10) or 'other' (someone else's file).
+export function semAccess(scope, file) {
+  if (canChange(scope, file)) return 'owner';
+  return isBlank(file.owner_person_id) && isBlank(file.owner_team_id) ? 'unowned' : 'other';
+}
+
 // The refusals the client acts on (each is a Directus-shaped error, see shapeError). The routes throw these, and the contract fixtures write them.
 const rateLimited = (wait) => new HttpError(429, 'RATE_LIMITED', 'Your folder was scanned or queued a moment ago. Try again in a few minutes.', { retry_after_seconds: wait });
 export const ERRORS = {
@@ -368,6 +416,12 @@ export const ERRORS = {
     new HttpError(404, 'NOT_FOUND', `That ${what} does not exist or you cannot see it.`, { candidate_id: candidateId, collection: SURFACE_SCANS, record_id: id }),
   scanUndoDenied: (candidateId) =>
     new HttpError(403, 'FORBIDDEN', 'You can no longer delete that surface scan, so adding it cannot be undone.', { candidate_id: candidateId }),
+  adminReadOnly: (candidateId) =>
+    new HttpError(403, 'FORBIDDEN', 'An administrator can read other people\'s files but not change them.', { candidate_id: candidateId }),
+  notSettingsOwner: () => new HttpError(403, 'FORBIDDEN', 'Only the owner of a file can correct its imaging settings.'),
+  settingUnknown: () => new HttpError(400, 'INVALID_PAYLOAD', 'That is not a setting that can be corrected.', { field: 'field' }),
+  settingInvalid: () => new HttpError(400, 'INVALID_PAYLOAD', 'That value is not valid for this setting.', { field: 'value' }),
+  noSettings: () => new HttpError(404, 'NOT_FOUND', 'That file has no imaging settings.'),
   notInInbox: (candidateId) => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: candidateId }),
   noFolder: () => new HttpError(409, 'NO_FOLDER', 'There is no folder to scan yet. Ask an administrator to set your uni alias.'),
   alreadyQueued: (requestId) => new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: requestId }),
@@ -684,6 +738,19 @@ export const shapeStateChange = ({ done, unchanged, change }) => ({
 export const shapeUndo = (batch, done) => ({ link_batch_id: batch.toLowerCase(), undone: done.length });
 // POST /rescan and /admin/scan-all (202)
 export const shapeQueued = (row) => ({ queued: true, request_id: row.request_id, status: row.status, requested_at: toIso(row.requested_at) });
+// GET /sem-settings. A row of d1_private.sem_image_settings as the answer: the settings that have a value (numbers as numbers, the time as ISO 8601; a
+// column that is NULL is absent, never null), where each came from (`sources`), the notes on the read (`flags`) and whether the caller may correct them.
+export function shapeSemSettings(row, { canEdit }) {
+  const settings = {};
+  for (const key of SEM_NUMBERS) if (!isBlank(row[key])) settings[key] = Number(row[key]);
+  for (const key of SEM_TEXTS) if (!isBlank(row[key])) settings[key] = row[key];
+  if (!isBlank(row.acquired_at)) settings.acquired_at = toIso(row.acquired_at);
+  return { locked: false, settings, sources: asJson(row.sources) ?? {}, flags: asJson(row.flags) ?? {}, can_edit: canEdit === true };
+}
+// A file the caller may not read: it says so and NOTHING else (no value, no source, no flag, not even whether settings exist).
+export const shapeSemLocked = () => ({ locked: true });
+// A reader who is allowed, and a file with no settings saved.
+export const shapeSemNone = () => ({ locked: false, settings: null });
 // GET and PUT /prefs
 export const shapePrefs = (row) => ({ auto_link: row?.auto_link === true });
 // The error body of every refusal (Directus's shape); an unknown error is a 500 that says nothing of its cause.
@@ -1042,6 +1109,8 @@ export function mount(router, context, deps = {}) {
       for (const w of wanted) {
         const cand = rows.get(w.id);
         if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(w.id);
+        // an administrator reads other people's files but never links them (ADR-0022): only the owner or a member of the owner team
+        if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(w.id);
         if (cand.state === 'new') {
           // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test;
           // and only a surface scan is added that way
@@ -1111,6 +1180,9 @@ export function mount(router, context, deps = {}) {
     const fit = [];
     for (const cand of cands) {
       if (!canSee(scope, cand)) continue;
+      // an administrator's view of someone else's files (a person filter, or candidate_ids): never linked here. The accept-all route refuses the call
+      // for it (refuseReadOnly); the list's "acceptable" count simply does not count it.
+      if (!canChange(scope, cand)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_OWNER' }); continue; }
       const why = unfit(cand, { auto: false });
       if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
       else fit.push(cand);
@@ -1161,6 +1233,11 @@ export function mount(router, context, deps = {}) {
     }
     return { entries, skipped, has_more: !exhausted, next_cursor: exhausted || !last ? null : encodeCursor(last) };
   }
+  // Accept all by an administrator for files that are not theirs is refused as a whole (the same 403 as Link), a preview included.
+  const refuseReadOnly = (skipped) => {
+    const hit = skipped.find((s) => s.reason === 'NOT_OWNER');
+    if (hit) throw ERRORS.adminReadOnly(hit.candidate_id);
+  };
   router.post('/accept-all', route(async ({ req, res, acc }) => {
     const body = req.body === undefined || req.body === null ? {} : bodyOf(req);
     if (!body) throw badInput('The request is not valid.');
@@ -1173,11 +1250,13 @@ export function mount(router, context, deps = {}) {
     requireOwnerVisible(scope, f);
     if (body.dry_run === true) {
       const found = await planAccept(database, { acc, schema, scope, f, lock: false, ids, cursor });
+      refuseReadOnly(found.skipped);
       res.json({ data: shapeAcceptDryRun(found) });
       return;
     }
     const out = await inTransaction(acc.user, async (trx) => {
       const found = await planAccept(trx, { acc, schema, scope, f, lock: true, ids, cursor });
+      refuseReadOnly(found.skipped);
       if (!found.entries.length) return { ...found, batchId: null, items: [] };
       const batchId = newId();
       return { ...found, batchId, items: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
@@ -1200,6 +1279,7 @@ export function mount(router, context, deps = {}) {
       for (const id of ids) {
         const cand = byId.get(id);
         if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(id);
+        if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(id);
         if (cand.state === from) change.push(id);
         else if (cand.state === to) unchanged.push(id);
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
@@ -1222,6 +1302,8 @@ export function mount(router, context, deps = {}) {
     const out = await inTransaction(acc.user, async (trx) => {
       const rows = rowsOf(await trx.raw(SQL.batchForUpdate, [batch.toLowerCase()])).filter((r) => r.state === 'linked' && canSee(scope, r));
       if (!rows.length) throw new HttpError(404, 'NOT_FOUND', 'That batch does not exist or was already undone.');
+      const readOnly = rows.find((r) => !canChange(scope, r));
+      if (readOnly) throw ERRORS.adminReadOnly(readOnly.candidate_id);
       if (!scope.admin && rows.some((r) => r.decided_by !== acc.user)) throw new HttpError(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
       for (const row of rows) {
         // A surface scan this batch added: only that row, and only while it still holds the file it was made for, deleted as the caller (the member
@@ -1267,6 +1349,74 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const rows = scope.personId ? rowsOf(await database.raw((await scanTableAvailable()) ? SQL.summaryWithScans : SQL.summary, [scope.personId, scope.teamIds.join(',')])) : [];
     res.json({ data: shapeSummary(rows, scope, scope.teams, scope.person) });
+  }));
+
+  // -- imaging settings -------------------------------------------------------------------------------------------------------
+
+  // Does the caller read a record this file is linked to? The three junctions are read AS THE CALLER through ItemsService, so Directus's own read rule
+  // of each junction (it follows the record's read rule) decides; a refused read is "no". One row is enough.
+  async function linkedRecordReadable(acc, schema, fileId) {
+    for (const target of Object.values(LINK_TARGETS)) {
+      try {
+        const rows = await itemsFor(schema, acc, target.junction).readByQuery({ fields: ['id'], filter: { directus_files_id: { _eq: fileId } }, limit: 1 });
+        if (rows.length) return true;
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+      }
+    }
+    return false;
+  }
+
+  // GET /sem-settings?file=<directus_files id>. Who may read a file's settings is decided from the pointer row's OWNER columns (ADR-0022):
+  //   owner (the person, or a member of the owner team)  -> the settings, and may correct them
+  //   an administrator who is not the owner              -> the same, read-only, and ONE access log row (reason admin_read) when values are returned
+  //   an unowned file                                    -> whoever can read a record it is linked to (read as the caller)
+  //   anyone else, and a file that is not there          -> { locked: true } and nothing else, with HTTP 200
+  // The decision comes BEFORE the settings are read, so a locked answer says nothing about whether settings exist.
+  router.get('/sem-settings', route(async ({ req, res, acc }) => {
+    const fileId = req.query?.file;
+    if (!isUuid(fileId)) throw badInput('file must be a file id.');
+    const id = fileId.toLowerCase();
+    const scope = await scopeOf(acc);
+    const [file] = rowsOf(await database.raw(SQL.semFile, [id]));
+    const locked = () => res.json({ data: shapeSemLocked() });
+    if (!file) return locked();
+    const standing = semAccess(scope, file);
+    if (standing === 'other' && !scope.admin) return locked();
+    if (standing === 'unowned' && !scope.admin && !(await linkedRecordReadable(acc, await schemaOf(req), id))) return locked();
+    const [row] = rowsOf(await database.raw(SQL.semSettingsGet, [id]));
+    if (!row) return res.json({ data: shapeSemNone() });
+    // an administrator reading settings that are not theirs: logged BEFORE anything is sent (a failed log is a 500 and no values)
+    if (scope.admin && standing !== 'owner') await inTransaction(acc.user, (trx) => trx.raw(SQL.semAccessLogInsert, [id, acc.user, ADMIN_READ_REASON]));
+    return res.json({ data: shapeSemSettings(row, { canEdit: standing === 'owner' }) });
+  }));
+
+  // PATCH /sem-settings/<file>  { field, value }: the OWNER (the person or a member of the owner team) corrects one setting through
+  // d1_private.correct_sem_setting, which refuses an unknown field and a value out of range (400) and marks the field manual. Everyone else is 403, an
+  // administrator who is not the owner too, and so is a file nobody owns. Answers the settings as the GET does.
+  router.patch('/sem-settings/:file', route(async ({ req, res, acc }) => {
+    const fileId = req.params?.file;
+    if (!isUuid(fileId)) throw badInput('file must be a file id.');
+    const body = bodyOf(req);
+    if (!body || Object.keys(body).sort().join() !== 'field,value' || typeof body.field !== 'string' || body.field.trim() === '' || body.value === undefined) {
+      throw badInput('The request must be { "field": <a setting>, "value": <its new value> }.');
+    }
+    const id = fileId.toLowerCase();
+    const scope = await scopeOf(acc);
+    const [file] = rowsOf(await database.raw(SQL.semFile, [id]));
+    if (!file || semAccess(scope, file) !== 'owner') throw ERRORS.notSettingsOwner();
+    const row = await inTransaction(acc.user, async (trx) => {
+      try {
+        await trx.raw(SQL.semCorrect, [id, body.field, JSON.stringify(body.value), acc.user]);
+      } catch (err) {
+        // 22023 invalid_parameter_value: an unknown field, or a value the function refuses; P0002 no_data_found: no settings saved for this file
+        if (err?.code === '22023') throw /not a correctable field/.test(String(err.message)) ? ERRORS.settingUnknown() : ERRORS.settingInvalid();
+        if (err?.code === 'P0002') throw ERRORS.noSettings();
+        throw err;
+      }
+      return rowsOf(await trx.raw(SQL.semSettingsGet, [id]))[0];
+    });
+    res.json({ data: shapeSemSettings(row, { canEdit: true }) });
   }));
 
   router.get('/files', route(async ({ req, res, acc }) => {

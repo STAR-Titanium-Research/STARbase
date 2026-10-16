@@ -947,6 +947,40 @@ describe('adding a surface scan', () => {
 	});
 });
 
+// ---- imaging settings and read-only administrators (stream D's fixtures; stream F builds the client on them) -------------------------------------
+
+describe('the imaging settings answers (the client for them is stream F; here the fixtures are read as they are)', () => {
+	it('a locked file carries nothing but locked; an owner and an administrator see the same values and only the owner can edit', () => {
+		expect(fx('sem_settings_locked').body).toEqual({ data: { locked: true } });
+		expect(fx('sem_settings_none').body).toEqual({ data: { locked: false, settings: null } });
+		const owner = fx('sem_settings_owner');
+		const admin = fx('sem_settings_admin');
+		expect(owner.request).toMatchObject({ method: 'GET', path: '/d1-inbox/sem-settings' });
+		expect(owner.request.query?.file).toMatch(/^[0-9a-f-]{36}$/);
+		expect(owner.body.data).toMatchObject({ locked: false, can_edit: true });
+		expect(admin.body.data).toEqual({ ...owner.body.data, can_edit: false });
+		expect(Object.values(owner.body.data.settings).every((v) => v !== null && v !== undefined)).toBe(true);
+	});
+
+	it('a correction is { field, value } to the file\'s path and answers the settings with the field marked manual; the refusals name what was wrong', () => {
+		const ok = fx('sem_settings_correct_ok');
+		expect(ok.request).toMatchObject({ method: 'PATCH', body: { field: 'kv', value: 20 } });
+		expect(ok.request.path).toMatch(/^\/d1-inbox\/sem-settings\/[0-9a-f-]{36}$/);
+		expect(ok.body.data).toMatchObject({ locked: false, can_edit: true, settings: { kv: 20 }, sources: { kv: 'manual' } });
+		expect(fx('sem_settings_correct_403').status).toBe(403);
+		expect(fx('sem_settings_correct_400_field').body.errors[0].extensions).toMatchObject({ code: 'INVALID_PAYLOAD', field: 'field' });
+		expect(fx('sem_settings_correct_400_value').body.errors[0].extensions).toMatchObject({ code: 'INVALID_PAYLOAD', field: 'value' });
+	});
+
+	it('an administrator linking a file that is not theirs is a plain 403 FORBIDDEN with the server\'s words, which the Link error path shows as it shows any refusal', async () => {
+		const f = fx('link_403_admin_read_only');
+		const { api } = only(f);
+		const err = await linkFiles(api, f.request.body.items).catch((e) => e);
+		expect(err).toBeInstanceOf(InboxApiError);
+		expect(err).toMatchObject({ status: 403, code: 'FORBIDDEN', message: f.body.errors[0].message });
+	});
+});
+
 // ---- every fixture was used ---------------------------------------------------------------------------------------------------------------
 
 describe('coverage', () => {

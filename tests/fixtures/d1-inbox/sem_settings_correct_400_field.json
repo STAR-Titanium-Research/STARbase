@@ -1,0 +1,24 @@
+{
+  "description": "a field that is not a setting (read_by, sources, ...)",
+  "request": {
+    "method": "PATCH",
+    "path": "/d1-inbox/sem-settings/00000000-0000-4000-8000-000000003001",
+    "body": {
+      "field": "read_by",
+      "value": "x"
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "That is not a setting that can be corrected.",
+        "extensions": {
+          "field": "field",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

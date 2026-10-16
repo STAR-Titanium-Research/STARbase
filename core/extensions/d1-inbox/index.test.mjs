@@ -3307,8 +3307,8 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   const router = fakeRouter();
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
-    'GET /admin', 'GET /files', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss',
-    'GET /sem-settings', 'POST /link', 'PATCH /sem-settings/:file', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
+    'GET /admin', 'GET /files', 'GET /prefs', 'GET /sem-settings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all',
+    'POST /auto-link', 'POST /dismiss', 'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });
 
