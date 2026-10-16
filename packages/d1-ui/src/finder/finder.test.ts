@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildNav, type Bookmark } from '../nav/navConfig';
 import {
-	FINDER_SOURCES, MIN_QUERY, isSearchable, localHits, mergeHits, rankHit, sourceParams, toHits, visibleSources,
+	FETCH_LIMIT, FINDER_SOURCES, MIN_QUERY, deepParams, isSearchable, localHits, mergeHits, queryWords, rankHit, sourceParams, toHits, visibleSources,
 	type FinderHit, type FinderSource,
 } from './finder';
 
@@ -36,9 +36,9 @@ describe('localHits', () => {
 });
 
 describe('sourceParams', () => {
-	it('ORs _icontains over the match fields, 5 results, the source fields', () => {
+	it('ORs _icontains over the match fields, one more than the 5 shown, the source fields', () => {
 		const p = sourceParams(source('physical_samples'), 'ab12');
-		expect(p.limit).toBe(5);
+		expect(p.limit).toBe(FETCH_LIMIT);
 		expect(p.fields).toEqual(source('physical_samples').fields);
 		expect(JSON.parse(p.filter as string)).toEqual({
 			_or: [{ sample_code: { _icontains: 'ab12' } }, { nickname: { _icontains: 'ab12' } }],
@@ -184,5 +184,245 @@ describe('hits carry their record', () => {
 			expect(hit.record, collection).toEqual({ collection, id: Object.values(row)[0] });
 		}
 		for (const src of FINDER_SOURCES) expect(typeof src.record, src.collection).toBe('function');
+	});
+});
+
+describe('sourceParams with several words', () => {
+	const filterOf = (collection: string, q: string) => JSON.parse(sourceParams(source(collection), q).filter as string);
+
+	it('builds exactly the old filter for one word, whitespace around it or not', () => {
+		const old = { _or: [{ sample_code: { _icontains: 'ab12' } }, { nickname: { _icontains: 'ab12' } }] };
+		expect(filterOf('physical_samples', 'ab12')).toEqual(old);
+		expect(filterOf('physical_samples', '  ab12  ')).toEqual(old);
+	});
+
+	it('ANDs one OR per word, each word on every match field', () => {
+		expect(filterOf('campaigns', 'twelve  alpha')).toEqual({
+			_and: [
+				{ _or: [{ campaign_code: { _icontains: 'twelve' } }, { name: { _icontains: 'twelve' } }] },
+				{ _or: [{ campaign_code: { _icontains: 'alpha' } }, { name: { _icontains: 'alpha' } }] },
+			],
+		});
+	});
+
+	it('tries only a hex word as a short id', () => {
+		const and = filterOf('physical_samples', 'a1b2c3d4 steel')._and;
+		expect(and[0]._or).toContainEqual({ short_id: { _eq: 'a1b2c3d4' } });
+		expect(JSON.stringify(and[1])).not.toContain('short_id');
+	});
+
+	it('cuts a very long query at six words', () => {
+		expect(filterOf('people', 'a1 b2 c3 d4 e5 f6 g7 h8')._and).toHaveLength(6);
+		expect(queryWords('  one   two\tthree ')).toEqual(['one', 'two', 'three']);
+	});
+});
+
+describe('deepParams (pass 2)', () => {
+	const deep = (collection: string, q: string) => deepParams(source(collection), q)!;
+
+	it('is null for a source with nothing more to look in', () => {
+		expect(deepParams(source('test_sessions'), 'ab')).toBeNull();
+		expect(deepParams(source('directus_files'), 'ab')).toBeNull();
+		expect(deepParams(source('materials'), 'ab')).toBeNull();
+	});
+
+	it('looks for one word in the deep fields only, and asks for them as well as the hit fields', () => {
+		const p = deep('physical_samples', 'anneal');
+		expect(JSON.parse(p.filter as string)).toEqual({
+			_or: [
+				{ notes: { _icontains: 'anneal' } },
+				{ legacy_notes: { _icontains: 'anneal' } },
+				{ location: { _icontains: 'anneal' } },
+				{ project_id: { project_code: { _icontains: 'anneal' } } },
+				{ owner_person_id: { full_name: { _icontains: 'anneal' } } },
+			],
+		});
+		expect(p.fields).toEqual(['sample_id', 'sample_code', 'nickname', 'short_id', 'notes', 'legacy_notes', 'location', 'project_id.project_code', 'owner_person_id.full_name']);
+		expect(p.limit).toBe(10);
+	});
+
+	it('lets several words be spread over the code, name and deep fields', () => {
+		const and = JSON.parse(deep('equipment', 'furnace shed').filter as string)._and;
+		expect(and).toHaveLength(2);
+		for (const clause of and) {
+			expect(clause._or.map((c: any) => Object.keys(c)[0])).toEqual(['equipment_code', 'equipment_name', 'notes', 'location']);
+		}
+	});
+
+	it('covers exactly the narrow list of fields', () => {
+		const fieldsOf = (c: string) => source(c).deep?.map((d) => d.field);
+		expect(fieldsOf('physical_samples')).toEqual(['notes', 'legacy_notes', 'location', 'project_id.project_code', 'owner_person_id.full_name']);
+		expect(fieldsOf('equipment')).toEqual(['notes', 'location']);
+		expect(fieldsOf('manufacturing_operations')).toEqual(['outcome_notes']);
+		expect(FINDER_SOURCES.filter((s) => s.deep).map((s) => s.collection)).toEqual(['physical_samples', 'manufacturing_operations', 'equipment']);
+	});
+});
+
+describe('toHits pass 2', () => {
+	const sample = source('physical_samples');
+
+	it('ranks 4 and says which field the word was found in', () => {
+		const [h] = toHits(sample, 'anneal', [{ sample_id: 's1', sample_code: 'S-1', nickname: '', notes: 'Annealed 2h', location: 'Shed' }], 2);
+		expect(h).toMatchObject({ group: 'Samples', label: 'S-1', rank: 4, matchedIn: 'notes', to: '/home/samples/s1' });
+	});
+
+	it('reads through the project and owner relations', () => {
+		const rows = [
+			{ sample_id: 's1', sample_code: 'S-1', project_id: { project_code: 'PRJ-ANNEAL' } },
+			{ sample_id: 's2', sample_code: 'S-2', owner_person_id: { full_name: 'Ann Nealson' } },
+		];
+		expect(toHits(sample, 'prj-anneal', rows.slice(0, 1), 2).map((h) => h.matchedIn)).toEqual(['project']);
+		expect(toHits(sample, 'nealson', rows.slice(1), 2).map((h) => h.matchedIn)).toEqual(['owner']);
+	});
+
+	it('drops a row pass 1 would have found anyway, and is never an exact short-id hit', () => {
+		const rows = [
+			{ sample_id: 's1', sample_code: 'ANNEAL-1', notes: 'anneal' },
+			{ sample_id: 's2', sample_code: 'S-2', nickname: 'Anneal disc', notes: '' },
+			{ sample_id: 's3', sample_code: 'S-3', notes: 'anneal' },
+		];
+		expect(toHits(sample, 'anneal', rows, 2).map((h) => h.label)).toEqual(['S-3']);
+		const [h] = toHits(sample, 'a1b2c3d4', [{ sample_id: 's4', sample_code: 'S-4', short_id: 'ffffffff', location: 'rack a1b2c3d4' }], 2);
+		expect(h.rank).toBe(4);
+		// the same row, when its short id is the word, is a pass 1 hit
+		expect(toHits(sample, 'a1b2c3d4', [{ sample_id: 's5', sample_code: 'S-5', short_id: 'a1b2c3d4', location: 'rack a1b2c3d4' }], 2)).toEqual([]);
+	});
+
+	it('with several words, matches each in a pass 1 or a pass 2 field', () => {
+		const rows = [{ sample_id: 's1', sample_code: 'S-0042', notes: 'annealed' }, { sample_id: 's2', sample_code: 'S-0043', notes: 'annealed' }];
+		// "s-0042" is in the code, "anneal" only in the notes: pass 1 (code and name only) would not find it
+		expect(toHits(sample, 's-0042 anneal', rows, 2).map((h) => h.label)).toEqual(['S-0042', 'S-0043']);
+		expect(toHits(sample, 's-0042 anneal', rows, 2)[0].matchedIn).toBe('notes');
+	});
+
+	it('leaves matchedIn off when no deep field holds a word', () => {
+		const [h] = toHits(sample, 'zzz', [{ sample_id: 's1', sample_code: 'S-1' }], 2);
+		expect(h.matchedIn).toBeUndefined();
+		expect(h.rank).toBe(4);
+	});
+
+	it('is pass 1 unless told otherwise', () => {
+		const [h] = toHits(sample, 's-1', [{ sample_id: 's1', sample_code: 'S-1' }]);
+		expect(h.rank).toBe(1);
+		expect(h.matchedIn).toBeUndefined();
+	});
+});
+
+describe('the new sources', () => {
+	it('materials: alloy code as the label, common name as the detail, the Materials drawer', () => {
+		const [hit] = toHits(source('materials'), 'ti', [{ material_id: 'm1', alloy_code: 'Ti-6Al-4V', common_name: 'Grade 5 titanium' }]);
+		expect(hit).toMatchObject({
+			group: 'Reference', label: 'Ti-6Al-4V', detail: 'Grade 5 titanium', to: '/home/materials?open=m1', rank: 2,
+			record: { collection: 'materials', id: 'm1' },
+		});
+		expect(JSON.parse(sourceParams(source('materials'), 'ti').filter as string)._or).toEqual([
+			{ alloy_code: { _icontains: 'ti' } }, { common_name: { _icontains: 'ti' } },
+		]);
+	});
+
+	it('materials fall back to the common name, and keep out of the form pickers', () => {
+		expect(toHits(source('materials'), 'x', [{ material_id: 'm2', alloy_code: null, common_name: 'Mystery' }])[0]).toMatchObject({ label: 'Mystery' });
+		expect(source('materials').finderOnly).toBe(true);
+		expect(source('directus_files').finderOnly).toBe(true);
+	});
+
+	it('files: asked of /files by filename and title, the filename as the label, the owner or kind as the detail', () => {
+		const files = source('directus_files');
+		expect(files.path).toBe('/files');
+		expect(JSON.parse(sourceParams(files, 'scan').filter as string)._or).toEqual([
+			{ filename_download: { _icontains: 'scan' } }, { title: { _icontains: 'scan' } },
+		]);
+		const [owned, plain, untitled] = toHits(files, 'scan', [
+			{ id: 'f1', filename_download: 'scan 01.tif', title: 'Scan', type: 'image/tiff', owner_person_id: { full_name: 'Jo Smith' } },
+			{ id: 'f 2', filename_download: 'scan.csv', type: 'text/csv', owner_person_id: null },
+			{ id: 'f3', filename_download: '', title: 'Only a title' },
+		]);
+		expect(owned).toMatchObject({ group: 'Files', label: 'scan 01.tif', detail: 'Jo Smith', to: '/files/f1', record: { collection: 'directus_files', id: 'f1' } });
+		expect(plain).toMatchObject({ label: 'scan.csv', detail: 'text/csv', to: '/files/f%202' });
+		expect(untitled.label).toBe('Only a title');
+	});
+
+	it('both are searched only where the collection is readable', () => {
+		expect(visibleSources(new Set(['materials', 'directus_files'])).map((s) => s.collection)).toEqual(['materials', 'directus_files']);
+	});
+});
+
+describe('mergeHits ranking, caps and "More in" rows', () => {
+	const rec = (group: FinderHit['group'], collection: string, id: string, rank: number, extra: Partial<FinderHit> = {}): FinderHit =>
+		({ group, label: id, to: `/${collection}/${id}`, rank, record: { collection, id }, ...extra });
+	const samples = (n: number, rank = 3, from = 0) => Array.from({ length: n }, (_, i) => rec('Samples', 'physical_samples', `s${from + i}`, rank));
+
+	it('puts a pass 2 hit (rank 4) below every pass 1 hit of its group', () => {
+		const merged = mergeHits('ab', [[rec('Samples', 'physical_samples', 'deep', 4)], [rec('Samples', 'physical_samples', 'exact', 1), rec('Samples', 'physical_samples', 'contains', 3)]]);
+		expect(merged.map((h) => h.label)).toEqual(['exact', 'contains', 'deep']);
+	});
+
+	it('counts a record found by both passes once, at its best rank', () => {
+		const merged = mergeHits('ab', [[rec('Samples', 'physical_samples', 's1', 4, { matchedIn: 'notes' })], [rec('Samples', 'physical_samples', 's1', 2)]]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]).toMatchObject({ rank: 2 });
+		expect(merged[0].matchedIn).toBeUndefined();
+		// whichever answer arrived first
+		expect(mergeHits('ab', [[rec('Samples', 'physical_samples', 's1', 2)], [rec('Samples', 'physical_samples', 's1', 4)]])[0].rank).toBe(2);
+	});
+
+	it('ends a group that has more than 5 hits with a "More in <Page>…" row opening the Explorer search', () => {
+		const merged = mergeHits('ab c', [samples(6)]);
+		expect(merged).toHaveLength(6);
+		expect(merged.slice(0, 5).every((h) => !h.more)).toBe(true);
+		expect(merged[5]).toMatchObject({ group: 'Samples', label: 'More in Samples…', more: true, to: '/home/samples?q=ab%20c' });
+		expect(merged[5].record).toBeUndefined();
+	});
+
+	it('has no such row when nothing was left out', () => {
+		expect(mergeHits('ab', [samples(5)]).some((h) => h.more)).toBe(false);
+	});
+
+	it('names the page that lost the most in a group of several, and has a target for people, files and projects', () => {
+		const tools = Array.from({ length: 5 }, (_, i) => rec('Inventory', 'tools', `t${i}`, 3));
+		const lots = Array.from({ length: 3 }, (_, i) => rec('Inventory', 'raw_stock_lots', `l${i}`, 3));
+		const inv = mergeHits('ab', [tools, lots]);
+		expect(inv.filter((h) => h.group === 'Inventory' && !h.more).map((h) => h.record?.collection)).toEqual(Array(5).fill('tools'));
+		// 5 tools fill the group (all rank 3, arrival order), so the 3 lots are what was left out
+		expect(inv.at(-1)).toMatchObject({ more: true, label: 'More in Raw stock lots…', to: '/home/stock-lots?q=ab' });
+		const people = Array.from({ length: 6 }, (_, i) => rec('People', 'people', `p${i}`, 3));
+		expect(mergeHits('jo s', [people]).at(-1)).toMatchObject({ label: 'More in People…', to: '/home/people?q=jo%20s' });
+		const files = Array.from({ length: 6 }, (_, i) => rec('Files', 'directus_files', `f${i}`, 3));
+		expect(mergeHits('jo', [files]).at(-1)).toMatchObject({ label: 'More in Files…', to: '/files' });
+		const projects = Array.from({ length: 6 }, (_, i) => rec('Projects', 'projects', `j${i}`, 3));
+		expect(mergeHits('jo', [projects]).at(-1)).toMatchObject({ label: 'More in Projects…', to: '/home/projects' });
+	});
+
+	it('caps the whole record list at 12, keeping the best ranked across groups in group order', () => {
+		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 4));
+		const people = Array.from({ length: 5 }, (_, i) => rec('People', 'people', `p${i}`, 1));
+		const merged = mergeHits('ab', [samples(5), ops, people]);
+		const records = merged.filter((h) => !h.more);
+		expect(records).toHaveLength(12);
+		// the three rank 4 operations that missed the cut are the last ones in; all samples and people stay
+		expect(records.filter((h) => h.group === 'Samples')).toHaveLength(5);
+		expect(records.filter((h) => h.group === 'People')).toHaveLength(5);
+		expect(records.filter((h) => h.group === 'Operations')).toHaveLength(2);
+		expect(merged.map((h) => h.group)).toEqual([...Array(5).fill('Samples'), 'Operations', 'Operations', 'Operations', ...Array(5).fill('People')]);
+		expect(merged[7]).toMatchObject({ more: true, label: 'More in Operations…', to: '/home/operations?q=ab' });
+	});
+
+	it('breaks a rank tie across groups in favour of the earlier group', () => {
+		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3));
+		const tests = Array.from({ length: 5 }, (_, i) => rec('Tests', 'test_sessions', `t${i}`, 3));
+		const merged = mergeHits('ab', [samples(5), ops, tests]).filter((h) => !h.more);
+		expect(merged.filter((h) => h.group === 'Tests')).toHaveLength(2);
+		expect(merged.filter((h) => h.group === 'Operations')).toHaveLength(5);
+	});
+
+	it('does not count Pages and Saved views in the 12, and gives a group with nothing left no heading', () => {
+		const pages = Array.from({ length: 4 }, (_, i) => ({ group: 'Pages' as const, label: `pg${i}`, to: `/pg${i}`, rank: 3 }));
+		const files = Array.from({ length: 5 }, (_, i) => rec('Files', 'directus_files', `f${i}`, 4));
+		const merged = mergeHits('ab', [pages, samples(5), samples(5, 3, 5), files]);
+		expect(merged.filter((h) => h.group === 'Pages')).toHaveLength(4);
+		expect(merged.filter((h) => h.group === 'Samples' && !h.more)).toHaveLength(5);
+		expect(merged.some((h) => h.group === 'Files')).toBe(true);
+		const crowded = mergeHits('ab', [samples(5), Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3)), Array.from({ length: 5 }, (_, i) => rec('Tests', 'test_sessions', `t${i}`, 3)), files]);
+		expect(crowded.some((h) => h.group === 'Files')).toBe(false);
 	});
 });

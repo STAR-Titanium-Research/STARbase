@@ -66,7 +66,7 @@ export function itemsPath(collection: string): string {
 }
 
 export function pickerSource(related: RelatedRef): PickerSource {
-	const finder = FINDER_SOURCES.find((s) => s.collection === related.collection) ?? null;
+	const finder = FINDER_SOURCES.find((s) => s.collection === related.collection && !s.finderOnly) ?? null;
 	const key = related.key || 'id';
 	const template = related.template ?? null;
 	const named = templateFields(template);

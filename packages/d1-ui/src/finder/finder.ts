@@ -1,4 +1,4 @@
-import { SHORT_ID_RE } from '../index/indexQuery';
+import { SHORT_ID_RE, nested } from '../index/indexQuery';
 import { indexDefByCollection } from '../index/indexConfig';
 import { linkForBookmark, type VisibleNav } from '../nav/navConfig';
 import { operationLabel } from '../operationLabel';
@@ -6,10 +6,11 @@ import { indexRoute, recordRoute } from '../recordRoute';
 
 // The Ctrl K finder's logic, kept free of Vue and of the host so it can be tested on its own.
 // The overlay (a later task) does the fetching: it asks visibleSources() what to query, sends
-// sourceParams() to GET /items/<collection>, turns the rows into hits with toHits() and passes
-// the lot to mergeHits() together with the local hits.
+// sourceParams() (pass 1: codes and names) and deepParams() (pass 2: notes, location, owner...) to
+// the source's path, turns the rows into hits with toHits() and passes the lot to mergeHits()
+// together with the local hits.
 
-export type FinderGroup = 'Pages' | 'Saved views' | 'Samples' | 'Operations' | 'Tests' | 'Campaigns' | 'Projects' | 'People' | 'Inventory';
+export type FinderGroup = 'Pages' | 'Saved views' | 'Samples' | 'Operations' | 'Tests' | 'Campaigns' | 'Projects' | 'People' | 'Inventory' | 'Reference' | 'Files';
 
 export interface FinderHit {
 	group: FinderGroup;
@@ -19,6 +20,10 @@ export interface FinderHit {
 	rank: number;
 	// The record behind a hit from a remote source (not Pages, not Saved views): lets a host pick it instead of opening it.
 	record?: { collection: string; id: string };
+	// A pass 2 hit (the words are in a field the label does not show): that field's name, e.g. "notes" or "owner".
+	matchedIn?: string;
+	// The "More in <Page>…" row that ends a group with hits left out. Not a record: it opens that page searched for the query.
+	more?: true;
 }
 
 export interface FinderSource {
@@ -26,10 +31,16 @@ export interface FinderSource {
 	collection: string;
 	// What to ask Directus for: enough for label/detail/to (and short_id when shortId is set).
 	fields: string[];
-	// _icontains on each of these.
+	// _icontains on each of these (pass 1).
 	match: string[];
+	// Pass 2: more fields a word may be found in, each with the name shown as "matched in <label>". A dotted field reads through a relation.
+	deep?: Array<{ field: string; label: string }>;
+	// The request path when it is not /items/<collection> (files have an endpoint of their own).
+	path?: string;
 	// The collection has a short_id column: a hex input is also tried as an exact short id.
 	shortId?: boolean;
+	// Only the finder uses this source: a form's record picker keeps reading that collection by the field's own template.
+	finderOnly?: boolean;
 	label(row: any): string;
 	detail?(row: any): string;
 	to(row: any): string;
@@ -41,8 +52,18 @@ export interface FinderSource {
 export const MIN_QUERY = 2;
 
 // Spec section 6: Pages and Saved views first, then the table's order.
-const GROUP_ORDER: FinderGroup[] = ['Pages', 'Saved views', 'Samples', 'Operations', 'Tests', 'Campaigns', 'Projects', 'People', 'Inventory'];
+const GROUP_ORDER: FinderGroup[] = ['Pages', 'Saved views', 'Samples', 'Operations', 'Tests', 'Campaigns', 'Projects', 'People', 'Inventory', 'Reference', 'Files'];
+// Hits shown per remote group. One more is asked of the server, so a full group can tell it has more ("More in <Page>…").
 const REMOTE_LIMIT = 5;
+export const FETCH_LIMIT = REMOTE_LIMIT + 1;
+// Pass 2 asks for more: rows pass 1 already shows are dropped from it, and must not use up its places.
+const DEEP_LIMIT = 10;
+// All remote groups together (Pages and Saved views excluded): the best ranked stay.
+export const RECORD_CAP = 12;
+// A longer query is cut here: every word is one more clause in a GET url.
+const MAX_WORDS = 6;
+// Pass 2 hits rank below every pass 1 hit.
+export const DEEP_RANK = 4;
 const LOCAL_GROUPS = new Set<FinderGroup>(['Pages', 'Saved views']);
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
@@ -72,6 +93,13 @@ export const FINDER_SOURCES: FinderSource[] = [
 		collection: 'physical_samples',
 		fields: ['sample_id', 'sample_code', 'nickname', 'short_id'],
 		match: ['sample_code', 'nickname'],
+		deep: [
+			{ field: 'notes', label: 'notes' },
+			{ field: 'legacy_notes', label: 'legacy notes' },
+			{ field: 'location', label: 'location' },
+			{ field: 'project_id.project_code', label: 'project' },
+			{ field: 'owner_person_id.full_name', label: 'owner' },
+		],
 		shortId: true,
 		label: (r) => str(r.sample_code) || 'Sample',
 		detail: (r) => str(r.nickname),
@@ -84,6 +112,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		// operationLabel falls back to the sample code and step when there is no pass code.
 		fields: ['operation_id', 'pass_code', 'operation_sequence', 'sample_id.sample_code', 'short_id'],
 		match: ['pass_code'],
+		deep: [{ field: 'outcome_notes', label: 'outcome notes' }],
 		shortId: true,
 		label: (r) => operationLabel(r),
 		to: (r) => recordRoute('manufacturing_operations', r.operation_id),
@@ -137,7 +166,36 @@ export const FINDER_SOURCES: FinderSource[] = [
 	inventory('insert_edges', 'edge_code', 'Insert edge'),
 	inventory('raw_stock_lots', 'lot_code', 'Raw stock lot'),
 	// Equipment is found by its name as well as its code (codes are slugs of the name, so people type the name).
-	{ ...inventory('equipment', 'equipment_code', 'Equipment', ['equipment_name']), match: ['equipment_code', 'equipment_name'], label: (r) => str(r.equipment_name) || str(r.equipment_code) },
+	{
+		...inventory('equipment', 'equipment_code', 'Equipment', ['equipment_name']),
+		match: ['equipment_code', 'equipment_name'],
+		deep: [{ field: 'notes', label: 'notes' }, { field: 'location', label: 'location' }],
+		label: (r) => str(r.equipment_name) || str(r.equipment_code),
+	},
+	// Materials open the Materials page's drawer (rowTarget in indexConfig), found by alloy code or common name.
+	{
+		...inventory('materials', 'alloy_code', 'Material', ['common_name']),
+		group: 'Reference',
+		finderOnly: true,
+		match: ['alloy_code', 'common_name'],
+		label: (r) => str(r.alloy_code) || str(r.common_name) || 'Material',
+		detail: (r) => (str(r.alloy_code) ? str(r.common_name) : ''),
+	},
+	// Files and SEM images, through /files: whatever Directus lets this user read (since migration 196 an owned file is owner-only), with no rule of the
+	// finder's own. The share path is not matched: it is not a column (directus_files keeps it in the metadata JSON as archive_path, which a filter cannot reach).
+	{
+		group: 'Files',
+		collection: 'directus_files',
+		path: '/files',
+		finderOnly: true,
+		fields: ['id', 'filename_download', 'title', 'type', 'owner_person_id.full_name'],
+		match: ['filename_download', 'title'],
+		label: (r) => str(r.filename_download) || str(r.title) || 'File',
+		detail: (r) => str(r.owner_person_id?.full_name) || str(r.type),
+		// Directus's own file page (the Inbox has no page per file).
+		to: (r) => `/files/${encodeURIComponent(String(r.id))}`,
+		record: (r) => ({ collection: 'directus_files', id: String(r.id) }),
+	},
 ];
 
 // Only the sources whose collection the user can read; null (the /collections call failed) leaves
@@ -151,16 +209,45 @@ export function isSearchable(q: string): boolean {
 	return q.trim().length >= MIN_QUERY;
 }
 
-// Params for GET /items/<collection>, in the shapes indexQuery uses (fields as an array, filter
-// as a JSON string).
-export function sourceParams(src: FinderSource, q: string): Record<string, unknown> {
-	const text = q.trim();
-	const or: unknown[] = src.match.map((field) => ({ [field]: { _icontains: text } }));
-	if (src.shortId && SHORT_ID_RE.test(text)) or.push({ short_id: { _eq: text.toLowerCase() } });
-	return { fields: src.fields, filter: JSON.stringify({ _or: or }), limit: REMOTE_LIMIT };
+// The words of a query: split on whitespace. A row must match each of them, a word in any of the fields.
+export function queryWords(q: string): string[] {
+	return q.trim().split(/\s+/).filter(Boolean).slice(0, MAX_WORDS);
 }
 
-// 0 exact short id, 1 exact code, 2 prefix, 3 contains (or matched on a field the label does not show).
+// One word in any of the fields. A hex word is also tried as an exact short id when the source has them (and the caller asks for it).
+function wordClause(src: FinderSource, word: string, fields: string[], withShortId: boolean): Record<string, unknown> {
+	const or: unknown[] = fields.map((field) => nested(field, { _icontains: word }));
+	if (withShortId && src.shortId && SHORT_ID_RE.test(word)) or.push({ short_id: { _eq: word.toLowerCase() } });
+	return { _or: or };
+}
+
+// The one clause of a one-word query (exactly the filter it has always built), an _and of them for several words.
+function wordsFilter(src: FinderSource, q: string, fields: string[], withShortId: boolean): Record<string, unknown> {
+	const words = queryWords(q);
+	const clauses = (words.length ? words : [q.trim()]).map((w) => wordClause(src, w, fields, withShortId));
+	return clauses.length === 1 ? clauses[0] : { _and: clauses };
+}
+
+// Pass 1: params for GET <path>, in the shapes indexQuery uses (fields as an array, filter as a JSON string).
+export function sourceParams(src: FinderSource, q: string): Record<string, unknown> {
+	return { fields: src.fields, filter: JSON.stringify(wordsFilter(src, q, src.match, true)), limit: FETCH_LIMIT };
+}
+
+// Pass 2: the notes/location/owner fields, or null for a source that has none. One word is looked for in those fields only (pass 1 has the rest);
+// several may be spread over both kinds of field, so then the code and name fields are searched too.
+export function deepParams(src: FinderSource, q: string): Record<string, unknown> | null {
+	if (!src.deep?.length) return null;
+	const multi = queryWords(q).length > 1;
+	const deepFields = src.deep.map((d) => d.field);
+	const fields = multi ? [...src.match, ...deepFields] : deepFields;
+	return {
+		fields: [...new Set([...src.fields, ...deepFields])],
+		filter: JSON.stringify(wordsFilter(src, q, fields, multi)),
+		limit: DEEP_LIMIT,
+	};
+}
+
+// 0 exact short id, 1 exact code, 2 prefix, 3 contains (or matched on a field the label does not show; pass 2 hits are ranked 4 by toHits).
 export function rankHit(q: string, label: string, exactShortId: boolean): number {
 	if (exactShortId) return 0;
 	const needle = q.trim().toLowerCase();
@@ -170,16 +257,39 @@ export function rankHit(q: string, label: string, exactShortId: boolean): number
 	return 3;
 }
 
-// Rows from one source as hits. An exact short-id match is read off the row's own short_id.
-export function toHits(src: FinderSource, q: string, rows: any[]): FinderHit[] {
+function valueAt(row: any, path: string): string {
+	let v: any = row;
+	for (const key of path.split('.')) v = v?.[key];
+	return typeof v === 'string' ? v.toLowerCase() : '';
+}
+
+// Would pass 1 have found this row: every word in a code/name field (or the word is the row's exact short id)?
+function foundByPass1(src: FinderSource, row: any, words: string[]): boolean {
+	return words.every((w) => src.match.some((f) => valueAt(row, f).includes(w)) || (!!src.shortId && SHORT_ID_RE.test(w) && str(row.short_id).toLowerCase() === w));
+}
+
+// The first pass 2 field that holds one of the words: what the row is "matched in".
+function matchedIn(src: FinderSource, row: any, words: string[]): string | undefined {
+	return src.deep?.find((d) => words.some((w) => valueAt(row, d.field).includes(w)))?.label;
+}
+
+// Rows from one source as hits. An exact short-id match is read off the row's own short_id. Rows that answer deepParams (pass 2) rank 4 and say what
+// they matched in; one that pass 1 would have found anyway is left to pass 1.
+export function toHits(src: FinderSource, q: string, rows: any[], pass: 1 | 2 = 1): FinderHit[] {
 	const needle = q.trim().toLowerCase();
-	return rows.map((row) => {
+	const words = queryWords(q).map((w) => w.toLowerCase());
+	return rows.flatMap((row) => {
+		if (pass === 2 && foundByPass1(src, row, words)) return [];
 		const label = src.label(row);
-		const exactShortId = !!src.shortId && SHORT_ID_RE.test(needle) && str(row.short_id).toLowerCase() === needle;
-		const hit: FinderHit = { group: src.group, label, to: src.to(row), rank: rankHit(q, label, exactShortId), record: src.record(row) };
+		const exactShortId = pass === 1 && !!src.shortId && SHORT_ID_RE.test(needle) && str(row.short_id).toLowerCase() === needle;
+		const hit: FinderHit = { group: src.group, label, to: src.to(row), rank: pass === 2 ? DEEP_RANK : rankHit(q, label, exactShortId), record: src.record(row) };
 		const detail = src.detail?.(row);
 		if (detail) hit.detail = detail;
-		return hit;
+		if (pass === 2) {
+			const where = matchedIn(src, row, words);
+			if (where) hit.matchedIn = where;
+		}
+		return [hit];
 	});
 }
 
@@ -203,15 +313,73 @@ export function localHits(q: string, nav: VisibleNav): FinderHit[] {
 	return hits;
 }
 
-// Groups in spec order, best rank first inside each (ties keep their arrival order), and no more
-// than 5 from any remote group (Inventory is five sources but one group).
+// The page a "More in" row opens: the Explorer page searched for the query (?q=, the index page's own search). The People page reads ?q= too, Projects
+// has no search to give, and files have Directus's own list.
+function moreTarget(collection: string, q: string): { title: string; to: string } {
+	const text = q.trim();
+	if (collection === 'people') return { title: 'People', to: `/home/people?q=${encodeURIComponent(text)}` };
+	if (collection === 'directus_files') return { title: 'Files', to: '/files' };
+	const title = indexDefByCollection(collection)?.title ?? (collection === 'projects' ? 'Projects' : collection);
+	return { title, to: indexRoute(collection, { query: { q: text } }) };
+}
+
+// The same record found twice (pass 1 and pass 2, or two answers racing) counts once, at its best rank.
+function dedupe(hits: FinderHit[]): FinderHit[] {
+	const key = (h: FinderHit) => (h.record ? `${h.record.collection}:${h.record.id}` : null);
+	const best = new Map<string, FinderHit>();
+	for (const h of hits) {
+		const k = key(h);
+		if (k === null) continue;
+		const seen = best.get(k);
+		if (!seen || h.rank < seen.rank) best.set(k, h);
+	}
+	return hits.filter((h) => {
+		const k = key(h);
+		return k === null || best.get(k) === h;
+	});
+}
+
+// Groups in spec order, best rank first inside each (ties keep their arrival order). A remote group shows at most 5 hits (Inventory is six sources but
+// one group), all remote groups together at most 12: the best ranked stay, kept in group order (a tie goes to the earlier group). A group that lost hits
+// ends with a "More in <Page>…" row for the page that lost the most; those rows are not counted in the 12.
 export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 	if (!isSearchable(q)) return [];
-	const all = groups.flat();
+	const all = dedupe(groups.flat());
+	type Slot = { hit: FinderHit; group: number; order: number };
 	const out: FinderHit[] = [];
-	for (const group of GROUP_ORDER) {
+	const remote: Slot[] = [];
+	const lost = new Map<FinderGroup, FinderHit[]>();
+	const lose = (hit: FinderHit) => lost.set(hit.group, [...(lost.get(hit.group) ?? []), hit]);
+	GROUP_ORDER.forEach((group, g) => {
 		const inGroup = all.filter((h) => h.group === group).sort((a, b) => a.rank - b.rank);
-		out.push(...(LOCAL_GROUPS.has(group) ? inGroup : inGroup.slice(0, REMOTE_LIMIT)));
+		if (LOCAL_GROUPS.has(group)) {
+			out.push(...inGroup);
+			return;
+		}
+		inGroup.slice(0, REMOTE_LIMIT).forEach((hit, order) => remote.push({ hit, group: g, order }));
+		inGroup.slice(REMOTE_LIMIT).forEach(lose);
+	});
+	let kept = remote;
+	if (remote.length > RECORD_CAP) {
+		const best = new Set([...remote].sort((a, b) => a.hit.rank - b.hit.rank || a.group - b.group || a.order - b.order).slice(0, RECORD_CAP));
+		remote.filter((slot) => !best.has(slot)).forEach((slot) => lose(slot.hit));
+		kept = remote.filter((slot) => best.has(slot));
+	}
+	// `kept` is in group order and rank order inside a group, so a group's hits are contiguous.
+	let at = 0;
+	while (at < kept.length) {
+		const group = kept[at].hit.group;
+		let end = at;
+		while (end < kept.length && kept[end].hit.group === group) end++;
+		out.push(...kept.slice(at, end).map((s) => s.hit));
+		const counts = new Map<string, number>();
+		for (const h of lost.get(group) ?? []) if (h.record) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);
+		const [collection] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+		if (collection) {
+			const target = moreTarget(collection, q);
+			out.push({ group, label: `More in ${target.title}…`, to: target.to, rank: Number.POSITIVE_INFINITY, more: true });
+		}
+		at = end;
 	}
 	return out;
 }
