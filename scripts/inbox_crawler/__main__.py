@@ -1,4 +1,4 @@
-"""python -m inbox_crawler --daemon | --once
+"""python -m inbox_crawler --daemon | --once | --reclassify
 
 Environment:
     DATABASE_URL               required, the Postgres DSN (never printed).
@@ -15,6 +15,16 @@ Environment:
     INBOX_LOG_LEVEL            DEBUG logs every file the crawler opens (default INFO).
     INBOX_PERSON_DIR           the top-level folder of the personal folders (default Users; the lab share's is User).
     INBOX_ONLY_FOLDERS         trial runs: scan only these comma-separated folder names (default: everyone).
+
+Modes (exactly one; each takes the single-crawler database lock and exits 1 when another crawler holds it):
+    --daemon      run forever, polling inbox_crawler_state.
+    --once        one scan of everyone, then exit.
+    --reclassify  one pass over the undecided image candidates (state new or dismissed) that the current
+                  classifier version has not looked at: each is re-read through the read-only share
+                  (throttled by the state row's read_mb_per_s, with INBOX_OCR as above), promoted to
+                  sem_image or demoted to image, and stamped with the version. Never touches a linked row;
+                  resumable and idempotent (a second run reads nothing); an unreadable file is logged and
+                  marked, not retried. Logs the promoted, demoted and unchanged counts. Exit 0.
 """
 
 from __future__ import annotations
@@ -26,7 +36,7 @@ import signal
 import sys
 import threading
 
-from . import autolink, daemon, db, fs_readonly, hashing, owners
+from . import autolink, daemon, db, fs_readonly, hashing, maintenance, owners
 
 log = logging.getLogger("inbox_crawler")
 
@@ -55,6 +65,11 @@ def _parse(argv):
     )
     mode.add_argument(
         "--once", action="store_true", help="one scan of everyone, then exit"
+    )
+    mode.add_argument(
+        "--reclassify",
+        action="store_true",
+        help="re-read undecided image candidates with the current classifier version, then exit",
     )
     ap.add_argument(
         "--root",
@@ -116,16 +131,18 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
     if not root_ok:
         log.error("ARCHIVE_ROOT does not exist or is not a directory: %s", args.root)
         return 2
-    try:
-        linker = autolink.AutoLinker(
-            os.environ.get("D1_INBOX_URL", "http://directus:8055"),
-            os.environ.get("D1_INBOX_CRAWLER_SECRET", ""),
-        )
-    except ValueError as exc:
-        log.error("%s", exc)
-        return 2
-    if not linker.enabled:
-        log.info("D1_INBOX_CRAWLER_SECRET is not set: auto-link is off")
+    linker = None
+    if not args.reclassify:  # a pass over existing rows never auto-links
+        try:
+            linker = autolink.AutoLinker(
+                os.environ.get("D1_INBOX_URL", "http://directus:8055"),
+                os.environ.get("D1_INBOX_CRAWLER_SECRET", ""),
+            )
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 2
+        if not linker.enabled:
+            log.info("D1_INBOX_CRAWLER_SECRET is not set: auto-link is off")
 
     store = db.Store(
         holder["conn"],
@@ -138,12 +155,14 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         log.error(
             "another inbox crawler holds the database lock (a daemon, or a --once run): "
             "%s",
-            "refusing to run alongside it"
-            if args.once
-            else "not starting a second daemon",
+            "not starting a second daemon"
+            if args.daemon
+            else "refusing to run alongside it",
         )
         return 1
     stop = threading.Event()
+    if args.reclassify:
+        return _run_pass(args, store, share, stop)
     d = daemon.Daemon(
         store,
         share,
@@ -186,6 +205,32 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         return new
 
     d.run_forever(reconnect)
+    return 0
+
+
+def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
+    """--reclassify: one pass under the lock the caller took. SIGTERM or SIGINT stops it between files (what
+    is done is committed; run it again to finish)."""
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    throttle = hashing.Throttle(None)
+    state = store.load_state()
+    store.commit()
+    if state is not None:
+        throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
+    log.info("reading %s READ-ONLY", args.root)
+    try:
+        maintenance.reclassify(
+            store,
+            share,
+            throttle=throttle,
+            ocr=os.environ.get("INBOX_OCR") == "1",
+            stop=stop.is_set,
+        )
+    except Exception as exc:  # noqa: BLE001 (the class only: the text can echo the DSN)
+        store.rollback()
+        log.error("the pass failed: %s", type(exc).__name__)
+        return 1
     return 0
 
 

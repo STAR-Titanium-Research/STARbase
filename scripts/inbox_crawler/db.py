@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from . import identity, owners, recognise
+from . import classify_sem, identity, owners, recognise
 from .fs_readonly import extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
@@ -773,8 +773,8 @@ class Store:
                 cur.execute(
                     "INSERT INTO file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, "
                     " kind_confidence, extracted, origin, match_strength, matches, suggested_collection, "
-                    " suggested_record_id, duplicate_of, rel_path, size_bytes, source_mtime) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    " suggested_record_id, duplicate_of, rel_path, size_bytes, source_mtime, classified_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (directus_files_id) DO NOTHING RETURNING candidate_id::text",
                     (
                         fid,
@@ -792,6 +792,7 @@ class Store:
                         rel,
                         size,
                         mtime,
+                        classification.classified_by or None,
                     ),
                 )
                 row = cur.fetchone()
@@ -996,6 +997,52 @@ class Store:
             (HASH_RETRY_HOURS, limit),
         )
         return [tuple(r) for r in rows]
+
+    # ---- re-classification (--reclassify) ---------------------------------------------------
+
+    def reclassify_batch(self, limit: int) -> list[tuple[str, str, str, str]]:
+        """Undecided image candidates (state new or dismissed, kind image or sem_image) that the current
+        classifier version has not looked at: (candidate id, files id, rel path, current kind). A linked row
+        is never offered. Each row processed leaves this list (set_classification or mark_classified writes
+        the current version), so the pass is resumable and a second run finds nothing."""
+        rows = self._all(
+            "SELECT candidate_id::text, directus_files_id::text, rel_path, kind FROM file_candidates "
+            "WHERE state IN ('new', 'dismissed') AND kind IN ('image', 'sem_image') "
+            "  AND classified_by IS DISTINCT FROM %s "
+            "ORDER BY candidate_id LIMIT %s",
+            (classify_sem.CLASSIFIER_VERSION, limit),
+        )
+        return [tuple(r) for r in rows]
+
+    def set_classification(self, candidate_id: str, classification) -> bool:
+        """Write what a re-read found: kind, kind_confidence, extracted and classified_by, nothing else, and
+        only while the row is still undecided (a link made meanwhile wins). True when a row was written."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET kind = %s, kind_confidence = %s, extracted = %s, "
+                " classified_by = %s WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (
+                    classification.kind,
+                    classification.confidence,
+                    json.dumps(classification.extracted),
+                    classification.classified_by or None,
+                    candidate_id,
+                ),
+            )
+            > 0
+        )
+
+    def mark_classified(self, candidate_id: str) -> bool:
+        """Record that the current classifier version has dealt with this candidate without changing what it
+        says (an unreadable file, or one too large to read into memory): it is not offered again."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET classified_by = %s "
+                "WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (classify_sem.CLASSIFIER_VERSION, candidate_id),
+            )
+            > 0
+        )
 
     # ---- auto-link ---------------------------------------------------------------------
 

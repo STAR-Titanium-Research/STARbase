@@ -1,0 +1,423 @@
+# ruff: noqa: F811
+"""`python -m inbox_crawler --reclassify` (SEM reader plan task E2).
+
+Postgres-backed (see test_inbox_crawler_world.py). Every image is synthetic: the FEI TIFF carries the
+metadata text of test_inbox_crawler_sem_meta, the false claim is a bar-only image. The pass reads each file
+once through the share's read-only `open_rb`, classifies it in memory and writes kind, kind_confidence,
+extracted and classified_by of undecided candidates only.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+pytest.importorskip("psycopg2")
+import psycopg2  # noqa: E402
+from inbox_crawler import __main__ as cli  # noqa: E402
+from inbox_crawler import (  # noqa: E402
+    classify_sem,
+    db,
+    fs_readonly,
+    hashing,
+    kinds,
+    maintenance,
+    recognise,
+)
+from inbox_crawler.owners import Owner  # noqa: E402
+from test_inbox_crawler_classify_fei import make_fei_tiff  # noqa: E402
+from test_inbox_crawler_daemon import add_candidate  # noqa: E402
+from test_inbox_crawler_scan import SpyShare, png, run, settle  # noqa: E402
+from test_inbox_crawler_world import world  # noqa: E402, F401
+
+VERSION = classify_sem.CLASSIFIER_VERSION
+FEI = make_fei_tiff().getvalue()  # sem_image, kv 2.0
+BAR_ONLY = make_fei_tiff(
+    meta=False
+).getvalue()  # a dark strip with dividers and no SEM evidence: image
+
+
+class FlagSpy(SpyShare):
+    """SpyShare that also remembers whether each open asked for `adopted`."""
+
+    def __init__(self, inner):
+        super().__init__(inner)
+        self.adopted: list[bool] = []
+
+    def open_rb(self, rel, adopted=False):
+        self.adopted.append(adopted)
+        return super().open_rb(rel, adopted=adopted)
+
+
+@pytest.fixture
+def pid(world):
+    p, _ = world.person("abc12de")
+    world.commit()
+    return p
+
+
+def put(world, pid, name, content, *, kind="image", state="new"):
+    """A candidate row (never classified: classified_by NULL) and its bytes on the share."""
+    rel = f"Users/abc12de/{name}"
+    world.write(rel, content)
+    cid, fid = add_candidate(world, pid, rel, kind=kind, state=state)
+    return cid, rel
+
+
+def row(world, cid):
+    return world.one(
+        "SELECT kind, kind_confidence, extracted, classified_by, state FROM file_candidates "
+        "WHERE candidate_id = %s",
+        (cid,),
+    )
+
+
+def reclassify(world, *, spy=None, **kw):
+    spy = spy or FlagSpy(fs_readonly.Share(world.root))
+    kw.setdefault("throttle", None)
+    stats = maintenance.reclassify(db.Store(world.conn), spy, **kw)
+    world.commit()
+    return stats, spy
+
+
+# ---- what changes -----------------------------------------------------------------------------
+
+
+def test_reclassify_demotes_a_false_sem_image(world, pid):
+    cid, _ = put(world, pid, "strip.tif", BAR_ONLY, kind="sem_image")
+    world.q(
+        "UPDATE file_candidates SET kind_confidence = 0.7 WHERE candidate_id = %s",
+        (cid,),
+    )
+    world.commit()
+    stats, _ = reclassify(world)
+    kind, conf, extracted, by, state = row(world, cid)
+    assert (kind, conf, extracted, by, state) == ("image", None, {}, VERSION, "new")
+    assert (stats.promoted, stats.demoted, stats.unchanged) == (0, 1, 0)
+
+
+def test_reclassify_promotes_a_fei_tiff(world, pid):
+    cid, _ = put(world, pid, "fei.tif", FEI, kind="image")
+    stats, _ = reclassify(world)
+    kind, conf, extracted, by, _ = row(world, cid)
+    assert kind == "sem_image" and conf >= classify_sem.SEM_MIN_CONFIDENCE
+    assert extracted["kv"] == 2.0 and by == VERSION
+    assert (stats.promoted, stats.demoted, stats.unchanged) == (1, 0, 0)
+
+
+def test_a_dismissed_candidate_is_re_read_too_but_a_gone_one_is_not(world, pid):
+    d, _ = put(world, pid, "d.tif", FEI, state="dismissed")
+    g, _ = put(world, pid, "g.tif", FEI, state="gone")
+    stats, spy = reclassify(world)
+    assert row(world, d)[0] == "sem_image" and row(world, d)[4] == "dismissed"
+    assert row(world, g)[0] == "image" and row(world, g)[3] is None
+    assert spy.opens == ["Users/abc12de/d.tif"]
+    assert stats.promoted == 1
+
+
+def test_an_image_that_stays_what_it_was_is_unchanged_and_marked(world, pid):
+    plain, _ = put(world, pid, "p.png", png())
+    sem, _ = put(world, pid, "s.tif", FEI, kind="sem_image")
+    stats, _ = reclassify(world)
+    assert row(world, plain)[0] == "image" and row(world, plain)[3] == VERSION
+    assert row(world, sem)[0] == "sem_image" and row(world, sem)[3] == VERSION
+    assert (stats.promoted, stats.demoted, stats.unchanged) == (0, 0, 2)
+
+
+def test_a_file_that_is_not_an_image_is_kept_as_a_plain_image(world, pid):
+    cid, _ = put(world, pid, "broken.png", b"this is not a png")
+    stats, _ = reclassify(world)
+    assert row(world, cid)[0] == "image" and row(world, cid)[3] == VERSION
+    assert stats.unchanged == 1 and stats.unreadable == 0
+
+
+# ---- what it never touches --------------------------------------------------------------------
+
+
+def test_reclassify_skips_linked_rows(world, pid):
+    cid, _ = put(world, pid, "linked.tif", BAR_ONLY, kind="sem_image", state="linked")
+    stats, spy = reclassify(world)
+    kind, _, _, by, state = row(world, cid)
+    assert (kind, by, state) == ("sem_image", None, "linked")
+    assert spy.opens == [] and (stats.promoted, stats.demoted, stats.unchanged) == (
+        0,
+        0,
+        0,
+    )
+
+
+def test_documents_and_surface_scans_are_never_read(world, pid):
+    put(world, pid, "notes.pdf", b"%PDF-1.4", kind="document")
+    put(world, pid, "scan.al3d", b"AL3D" * 10, kind="surface_scan")
+    stats, spy = reclassify(world)
+    assert spy.opens == [] and stats.examined == 0
+
+
+def test_a_row_set_to_linked_during_the_pass_is_not_written(world, pid, monkeypatch):
+    cid, _ = put(world, pid, "race.tif", FEI, kind="image")
+    store = db.Store(world.conn)
+    real = store.set_classification
+
+    def link_then_write(candidate_id, classification):
+        world.q(
+            "UPDATE file_candidates SET state = 'linked', link_kind = 'manual', "
+            "linked_collection = 'physical_samples', linked_junction_id = gen_random_uuid(), "
+            "link_batch_id = gen_random_uuid() WHERE candidate_id = %s",
+            (candidate_id,),
+        )
+        return real(candidate_id, classification)
+
+    monkeypatch.setattr(store, "set_classification", link_then_write)
+    maintenance.reclassify(store, FlagSpy(fs_readonly.Share(world.root)), throttle=None)
+    world.commit()
+    assert row(world, cid)[0] == "image" and row(world, cid)[4] == "linked"
+
+
+def test_set_classification_writes_only_the_four_columns(world, pid):
+    cid, _ = put(world, pid, "a.tif", FEI)
+    before = world.one(
+        "SELECT state, origin, rel_path, owner_person_id, match_strength, adopted_at "
+        "FROM file_candidates WHERE candidate_id = %s",
+        (cid,),
+    )
+    store = db.Store(world.conn)
+    c = kinds.Classification("sem_image", 0.9, {"kv": 5.0}, "x", "sem-9")
+    assert store.set_classification(cid, c) is True
+    kind, conf, extracted, by = row(world, cid)[:4]
+    assert (kind, float(conf), extracted, by) == (
+        "sem_image",
+        0.9,
+        {"kv": 5.0},
+        "sem-9",
+    )
+    assert (
+        world.one(
+            "SELECT state, origin, rel_path, owner_person_id, match_strength, adopted_at "
+            "FROM file_candidates WHERE candidate_id = %s",
+            (cid,),
+        )
+        == before
+    )
+
+
+# ---- idempotent, resumable, no tight retry ---------------------------------------------------
+
+
+def test_reclassify_is_idempotent(world, pid):
+    put(world, pid, "a.tif", FEI)
+    put(world, pid, "b.tif", BAR_ONLY, kind="sem_image")
+    reclassify(world)
+    snapshot = world.q(
+        "SELECT candidate_id, kind, extracted, classified_by FROM file_candidates ORDER BY 1"
+    )
+    stats, spy = reclassify(world)
+    assert spy.opens == [] and stats.examined == 0
+    assert (
+        world.q(
+            "SELECT candidate_id, kind, extracted, classified_by FROM file_candidates ORDER BY 1"
+        )
+        == snapshot
+    )
+
+
+def test_a_run_stopped_half_way_is_finished_by_the_next(world, pid):
+    ids = [put(world, pid, f"f{n}.tif", FEI)[0] for n in range(4)]
+    reads = []
+
+    def stop():
+        return len(reads) >= 2
+
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    real = spy.open_rb
+
+    def counting(rel, adopted=False):
+        reads.append(rel)
+        return real(rel, adopted=adopted)
+
+    spy.open_rb = counting
+    first, _ = reclassify(world, spy=spy, stop=stop)
+    assert first.examined == 2
+    assert sum(row(world, c)[3] == VERSION for c in ids) == 2
+    second, spy2 = reclassify(world)
+    assert second.examined == 2 and len(spy2.opens) == 2
+    assert all(
+        row(world, c)[3] == VERSION and row(world, c)[0] == "sem_image" for c in ids
+    )
+    assert set(reads).isdisjoint(spy2.opens)  # nothing read twice
+
+
+def test_unreadable_file_is_not_retried_in_a_loop(world, pid, caplog):
+    cid, rel = put(world, pid, "locked.tif", FEI, kind="sem_image")
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    spy.fail[("open", rel)] = PermissionError(13, "no permission")
+    with caplog.at_level(logging.INFO):
+        stats, _ = reclassify(world, spy=spy)
+    kind, _, _, by, _ = row(world, cid)
+    assert (kind, by) == ("sem_image", VERSION)  # kind untouched, marked as classified
+    assert stats.unreadable == 1 and spy.opens == [rel]  # one attempt, not a loop
+    assert rel in caplog.text and "PermissionError" in caplog.text
+    stats2, spy2 = reclassify(world)
+    assert spy2.opens == [] and stats2.examined == 0
+
+
+def test_a_file_missing_from_the_share_is_marked_not_retried(world, pid):
+    cid, rel = put(world, pid, "vanished.tif", FEI)
+    Path(world.root, rel).unlink()
+    stats, _ = reclassify(world)
+    assert stats.unreadable == 1 and row(world, cid)[3] == VERSION
+    assert reclassify(world)[1].opens == []
+
+
+def test_reclassify_only_opens_allowlisted_images(world, pid):
+    a, _ = put(world, pid, "a.tif", FEI)
+    b, _ = put(world, pid, "b.JPG", png())
+    c, odd = put(
+        world, pid, "mislabelled.pdf", b"%PDF-1.4", kind="image"
+    )  # an image row, a document name
+    put(world, pid, "notes.pdf", b"%PDF-1.4", kind="document")
+    put(world, pid, "x.tif", FEI, state="linked")
+    stats, spy = reclassify(world)
+    assert spy.adopted and not any(
+        spy.adopted
+    )  # never adopted: nothing a person linked is read
+    assert sorted(spy.opens) == sorted(
+        ["Users/abc12de/a.tif", "Users/abc12de/b.JPG", odd]
+    )
+    # the allow-list refused the mislabelled one before anything was read: marked, not retried
+    assert stats.unreadable == 1 and row(world, c)[3] == VERSION
+    ok = [r for r in spy.opens if r != odd]
+    assert all(fs_readonly.extension(r) in fs_readonly.IMAGE_EXTENSIONS for r in ok)
+
+
+# ---- throttle and OCR -------------------------------------------------------------------------
+
+
+def test_reads_go_through_the_read_rate_throttle(world, pid):
+    put(world, pid, "a.tif", FEI)
+    slept = []
+    t = hashing.Throttle(1_000.0, clock=lambda: 0.0, sleep=slept.append)
+    reclassify(world, throttle=t)
+    assert slept and sum(slept) > 0  # the bytes were charged to the cap
+
+
+def test_the_ocr_switch_is_passed_to_the_classifier(world, pid, monkeypatch):
+    put(world, pid, "a.tif", FEI)
+    seen = []
+    real = classify_sem.classify_image
+
+    def spy(fh, **kw):
+        seen.append(kw.get("ocr"))
+        return real(fh, **kw)
+
+    monkeypatch.setattr(classify_sem, "classify_image", spy)
+    reclassify(world, ocr=True, bar_reader=lambda *_a, **_k: None)
+    assert seen == [True]
+
+
+# ---- the registration records the version, so a fresh scan is not re-read -----------------------
+
+
+def test_a_scan_records_the_classifier_version_of_images_only(world):
+    world.person("abc12de")
+    world.write("Users/abc12de/a.tif", FEI)
+    world.write("Users/abc12de/notes.pdf", b"%PDF-1.4")
+    settle(world)
+    world.commit()
+    run(world)
+    got = dict(world.q("SELECT rel_path, classified_by FROM file_candidates"))
+    assert got["Users/abc12de/a.tif"] == VERSION
+    assert got["Users/abc12de/notes.pdf"] is None
+    stats, spy = reclassify(world)
+    assert spy.opens == [] and stats.examined == 0
+
+
+def test_register_file_stores_null_for_a_name_only_classification(world):
+    pid, _ = world.person("abc12de")
+    store = db.Store(world.conn)
+    store.register_file(
+        owner=Owner("person", pid, "Users/abc12de", "abc12de", claim="abc12de"),
+        rel="Users/abc12de/x.png",
+        size=1,
+        mtime=db.to_datetime(1_700_000_000_000_000_000),
+        classification=kinds.Classification("image"),
+        recognition=recognise.NO_MATCH,
+        origin="new",
+        hashed=None,
+    )
+    assert world.one("SELECT classified_by FROM file_candidates") == (None,)
+
+
+# ---- the command ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def env(world, monkeypatch):
+    for k in ("D1_INBOX_URL", "D1_INBOX_CRAWLER_SECRET", "INBOX_OCR", "ARCHIVE_ROOT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DATABASE_URL", world.dsn)
+    monkeypatch.setenv("INBOX_PRIVATE_SCHEMA", world.schema)
+    return world
+
+
+def test_reclassify_is_a_third_exclusive_mode(env):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--reclassify", "--once", "--root", env.root])
+    assert e.value.code == 2
+    with pytest.raises(SystemExit):
+        cli.main(["--reclassify", "--daemon", "--root", env.root])
+
+
+def test_the_command_logs_promoted_demoted_and_unchanged(env, pid, caplog):
+    put(env, pid, "fei.tif", FEI, kind="image")
+    put(env, pid, "strip.tif", BAR_ONLY, kind="sem_image")
+    put(env, pid, "plain.png", png())
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--root", env.root]) == 0
+    assert "1 promoted, 1 demoted, 1 unchanged" in caplog.text
+    assert env.one(
+        "SELECT count(*) FROM file_candidates WHERE classified_by = %s", (VERSION,)
+    ) == (3,)
+    # a second command run has nothing to do
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--root", env.root]) == 0
+    assert "0 promoted, 0 demoted, 0 unchanged" in caplog.text
+
+
+def test_reclassify_refuses_when_another_crawler_holds_the_lock(env, pid, caplog):
+    cid, _ = put(env, pid, "fei.tif", FEI, kind="image")
+    other = psycopg2.connect(env.dsn)
+    try:
+        holder = db.Store(other)
+        assert holder.try_crawler_lock()
+        with caplog.at_level(logging.INFO):
+            assert cli.main(["--reclassify", "--root", env.root]) == 1
+        assert "another inbox crawler holds the database lock" in caplog.text
+        assert (
+            row(env, cid)[0] == "image" and row(env, cid)[3] is None
+        )  # nothing was read or written
+    finally:
+        other.close()
+    assert cli.main(["--reclassify", "--root", env.root]) == 0  # the lock is free again
+    assert row(env, cid)[0] == "sem_image"
+
+
+def test_the_command_reads_ocr_from_the_environment(env, pid, monkeypatch):
+    put(env, pid, "fei.tif", FEI)
+    seen = []
+    real = maintenance.reclassify
+
+    def spy(store, share, **kw):
+        seen.append(kw.get("ocr"))
+        return real(store, share, **kw)
+
+    monkeypatch.setattr(maintenance, "reclassify", spy)
+    monkeypatch.setenv("INBOX_OCR", "0")
+    assert cli.main(["--reclassify", "--root", env.root]) == 0
+    assert seen == [False]
