@@ -345,6 +345,21 @@ To tie a file on the share to a sample, operation or test, so it shows on that r
 be undone; linking never changes, moves or deletes the file.
 _Avoid_: attach (that is the process map's word), upload, import
 
+**SEM image**:
+An image recognised as coming from a scanning electron microscope, whether it is still a **found file** or
+already **linked**.
+_Avoid_: micrograph (the lab says SEM image)
+
+**Data bar**:
+The strip along the bottom edge of an **SEM image** that prints the microscope's settings and the scale bar.
+_Avoid_: footer, banner, info bar
+
+**Imaging settings**:
+What was read from an **SEM image**: accelerating voltage, working distance, magnification, spot size,
+detector, mode, scale bar, the date it was taken and the instrument. They describe one image, never a whole
+**test**.
+_Avoid_: SEM parameters (parameters are a **test**'s), metadata
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
