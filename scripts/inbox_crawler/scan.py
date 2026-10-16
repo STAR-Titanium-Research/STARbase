@@ -520,6 +520,16 @@ class Scanner:
         # A file already linked to a record is not a found file: do not register it at all.
         unknown = [f"{d}/{e.name}" for e in files if f"{d}/{e.name}" not in cands]
         linked = store.already_linked([str(file_id(r)) for r in unknown])
+        # A candidate already known whose pointer row has no stamp (made by the indexer, or by a crawler from
+        # before the owner columns) takes the owner's now; stamp_owners leaves a stamped or linked row alone.
+        store.stamp_owners(
+            [
+                c.directus_files_id
+                for r in (f"{d}/{e.name}" for e in files)
+                if (c := cands.get(r)) is not None and c.state != "linked"
+            ],
+            owner,
+        )
         for e in files:
             rel = f"{d}/{e.name}"
             known = cands.get(rel)

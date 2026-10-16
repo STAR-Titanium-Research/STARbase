@@ -2165,8 +2165,12 @@ commit a research image while doing these; look at them on d1-server only.
   the controls stay `image` ("data-bar-like strip, no SEM evidence" or the optical-microscope reason). Check with
   `SELECT rel_path, kind, kind_confidence, extracted FROM d1_private.file_candidates WHERE ...`. Re-run with
   `INBOX_OCR=1` once **SEM7** passes: every field the bar prints must agree with the metadata, and any
-  `flags.<field> = 'bar_mismatch'` is a finding to look at (the bar or the metadata is wrong), not noise. Since:
-  sem-reader plan, stream B.
+  `flags.<field> = 'bar_mismatch'` is a finding to look at (the bar or the metadata is wrong), not noise. Stream E
+  adds: every registered row's `directus_files.owner_person_id` (a personal folder) or `owner_team_id` (a team folder)
+  must be the person or team whose folder holds the file (`SELECT f.owner_person_id, f.owner_team_id, p.uni_alias FROM
+  directus_files f LEFT JOIN people p ON p.person_id = f.owner_person_id WHERE f.id IN (SELECT directus_files_id FROM
+  d1_private.file_candidates WHERE ...)`), a file already linked in Data Studio before the scan stays unowned, and a second
+  scan changes no stamp. Since: sem-reader plan, stream B (the stamp check: stream E).
 - [ ] **SEM2 — Real PNG, BMP and JPEG exports against their TIFFs' metadata.** Needs `INBOX_OCR=1` and **SEM7**
   done. Run the crawler over SEM-named folders that hold exports, including contrast-edited `*_contrasted.PNG`
   files (white dividers about 207 instead of 255) and at least one JPEG. For every export that has a same-name
@@ -2235,7 +2239,40 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   `correct_sem_setting` one value and run the save again: expect the corrected value to stay. `dbmate down` twice and `up` twice must
   also work on the real data. Down is lossy: it drops the stamps, the settings, the owners' manual corrections and the administrator
   access log, so dump `d1_private.sem_image_settings` and `d1_private.sem_settings_access_log` first if the copy holds any. Since: provenance owner and SEM settings (database,
-  migrations 196 and 197). The crawler half of SEM5 (`--sem-backfill`) is the crawler stream's.
+  migrations 196 and 197). **Crawler half (`--sem-backfill`, sem-reader plan stream E):** with the daemon stopped
+  (`docker compose --profile archive stop inbox-crawler`, the pass refuses to run beside it), run the pass on the real database
+  (command in the runbook, `docs/runbooks/inbox-crawler.md`, "One-shot passes"; first on a copy if the settings table could not be
+  dumped). Expect the log line `sem-backfill: N saved, N not an SEM image, N SEM images with no usable value, N unreadable, ...`;
+  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed,
+  linked in a junction or `surface_scans` and **unowned** (`SELECT ... FROM d1_private.sem_image_settings s JOIN directus_files f ON
+  f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL OR f.owner_team_id IS NOT NULL` returns nothing for rows with
+  `read_by = 'backfill'`); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
+  metadata (`sources` = `metadata`/`derived`). Kill the run half way (`docker stop` or Ctrl-C) and run it again: expect it to finish
+  the rest without re-reading the finished ones. Correct one value as its owner, run the pass again: the corrected value stays
+  (that row is not listed at all, it has settings). A PNG or JPEG export with no metadata gets no row until `INBOX_OCR=1` works
+  (**SEM7**): expect it counted under "no usable value" and filled by a second run with OCR on. Record the time per file
+  and the count of unreadable files. Since: SEM reader plan, stream E.
+- [ ] **SEM6 — `--reclassify` on the real database.** With the detector fix deployed and the daemon stopped, run
+  `python -m inbox_crawler --reclassify` (runbook, "One-shot passes"). First note `SELECT kind, count(*) FROM
+  d1_private.file_candidates GROUP BY kind` and `SELECT count(*) FROM d1_private.file_candidates WHERE state IN ('new','dismissed')
+  AND kind IN ('image','sem_image') AND classified_by IS DISTINCT FROM 'sem-2'` (the queue). Expect the log line
+  `reclassify: N promoted, N demoted, N unchanged (...)`, with N promoted + N demoted + N unchanged + N unreadable + N too large
+  + N skipped equal to that queue (less rows linked meanwhile), and the queue count equal to N skipped afterwards (a skipped file is
+  missing or failed transiently: it is not marked, the next run offers it again). Then check the real files: the maintainer's six FEI
+  TIFFs and their PNG exports are `kind = 'sem_image'` (the PNG exports only once `INBOX_OCR=1` works, **SEM7**; before that
+  expect the TIFFs and "unchanged" for the PNGs, and once SEM7 is done and `INBOX_OCR=1` is set, run `--reclassify --force` once:
+  a plain second run finds an empty queue and will NOT promote them, `--force` re-reads every eligible row), thermal-camera JPEGs, "Microscope x20" optical TIFFs and EDS maps with a legend bar are
+  back to (or stay) `image`, and the previous false `sem_image` rows (about 1,586 were tagged by the first detector) now
+  show as demoted. A `linked` candidate's kind must be exactly what it was (`SELECT ... WHERE state = 'linked'` compared with a copy taken
+  before). Run it a second time: expect `0 promoted, 0 demoted, 0 unchanged` (a skipped row may be read again) and no other file opened
+  (watch `INBOX_LOG_LEVEL=DEBUG` for `reading ...` lines). Kill a first run half way and run it again: it must finish the rest.
+  Look at any `not re-classifying ...` warning: a permission error or an allow-list refusal is marked and not retried by the next
+  run; a file that vanished or a transient error is skipped and offered again. Unmount or block the share part-way through a run
+  (on a copy of the database): expect `reclassify aborted` in the log, exit code 1, and no row marked after that point
+  (`classified_by` of the rest still not `sem-2`); run again with the share back and expect it to finish. Run
+  `--reclassify --force` once and expect every eligible row to be read (the counts are the whole of `new` and `dismissed` image
+  candidates) and a linked row untouched. Record the time and the
+  promoted, demoted and unchanged counts. Since: SEM reader plan, stream E.
 - [ ] **SEM8 — The `d1-inbox` imaging settings routes on the real Directus (two accounts and an administrator).** With **SEM3** passed, and an SEM
   image (a FEI TIFF) in account A's personal folder that the crawler has registered and stamped: as A, link it to a sample A can edit, then call
   `GET /d1-inbox/sem-settings?file=<directus_files id>` (browser address bar while signed in, or the Data Studio network tab). Expect

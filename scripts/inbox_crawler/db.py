@@ -18,8 +18,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from . import identity, owners, recognise
-from .fs_readonly import extension
+from . import classify_sem, identity, owners, recognise
+from .fs_readonly import IMAGE_EXTENSIONS, extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
 from .owners import Owner, clean_rel_path
@@ -715,7 +715,11 @@ class Store:
         """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
-        previous run's) are left alone, and an existing candidate for the file is left alone.
+        previous run's) are left alone (a pointer row without a stamp only gains the owner's, see
+        stamp_owner), and an existing candidate for the file is left alone.
+
+        A new pointer row is stamped with the owner of the scan (ADR-0022): the person_id or team_id of the
+        Owner, never derived from the path again.
         """
         fid = str(file_id(rel))
         rel_dir, _, name = rel.rpartition("/")
@@ -734,10 +738,11 @@ class Store:
                 "indexed_on": now.isoformat(),
                 "found_by": "inbox_crawler",
             }
-            self._run(
+            inserted = self._run(
                 "INSERT INTO directus_files (id, storage, filename_disk, filename_download, title, type, "
-                " folder, filesize, metadata, created_on, modified_on, uploaded_on) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                " folder, filesize, metadata, created_on, modified_on, uploaded_on, "
+                " owner_person_id, owner_team_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
                 (
                     fid,
                     self.storage,
@@ -751,8 +756,14 @@ class Store:
                     mtime,
                     mtime,
                     now,
+                    owner.person_id,
+                    owner.team_id,
                 ),
             )
+            if not inserted:
+                # The indexer's (or an older crawler's) pointer row: it takes the owner's stamp now, unless it
+                # is linked or already stamped (see stamp_owner).
+                self.stamp_owner(fid, owner)
             duplicate_of = None
             if hashed is not None:
                 self.upsert_fingerprint(fid, hashed, size, mtime)
@@ -762,8 +773,8 @@ class Store:
                 cur.execute(
                     "INSERT INTO file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, "
                     " kind_confidence, extracted, origin, match_strength, matches, suggested_collection, "
-                    " suggested_record_id, duplicate_of, rel_path, size_bytes, source_mtime) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    " suggested_record_id, duplicate_of, rel_path, size_bytes, source_mtime, classified_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (directus_files_id) DO NOTHING RETURNING candidate_id::text",
                     (
                         fid,
@@ -781,6 +792,7 @@ class Store:
                         rel,
                         size,
                         mtime,
+                        classification.classified_by or None,
                     ),
                 )
                 row = cur.fetchone()
@@ -799,6 +811,25 @@ class Store:
             )
             return RegisterResult(existing[0] if existing else None, False)
         return RegisterResult(row[0], True, duplicate_of)
+
+    def stamp_owners(self, files_ids: list[str], owner: Owner) -> int:
+        """Stamp the owner on these existing pointer rows (ADR-0022) and return how many changed. A row is
+        stamped only while BOTH owner columns are null and the file is not linked (`already_linked`: a linked
+        file stays unowned, like migration 196's back-fill), so a stamp is never overwritten, not by another
+        owner and not by the same one."""
+        todo = sorted(set(files_ids) - self.already_linked(files_ids))
+        if not todo:
+            return 0
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        return self._run(
+            "UPDATE directus_files SET " + col + " = %s WHERE id = ANY(%s::uuid[]) "
+            "AND owner_person_id IS NULL AND owner_team_id IS NULL",
+            (owner.id, todo),
+        )
+
+    def stamp_owner(self, files_id: str, owner: Owner) -> bool:
+        """`stamp_owners` for one file: True when this call set the stamp."""
+        return self.stamp_owners([files_id], owner) > 0
 
     def copies_of(self, original: Cand, owner: Owner) -> list:
         """The owner's undecided candidates recorded as copies of `original` (same content hash, found
@@ -966,6 +997,101 @@ class Store:
             (HASH_RETRY_HOURS, limit),
         )
         return [tuple(r) for r in rows]
+
+    # ---- re-classification (--reclassify) ---------------------------------------------------
+
+    def reclassify_batch(
+        self, limit: int, after: str | None = None, *, force: bool = False
+    ) -> list[tuple[str, str, str, str]]:
+        """Undecided image candidates (state new or dismissed, kind image or sem_image) that the current
+        classifier version has not looked at: (candidate id, files id, rel path, current kind), in candidate-id
+        order, those after `after`, so a pass visits each row once even when it skips some. With `force` the
+        version is ignored and every such candidate is offered. A linked row is never offered. A row that is
+        read leaves the list (set_classification or mark_classified writes the current version), so a killed
+        run is finished by the next; a skipped row (missing, transient error) stays for the next run."""
+        rows = self._all(
+            "SELECT candidate_id::text, directus_files_id::text, rel_path, kind FROM file_candidates "
+            "WHERE state IN ('new', 'dismissed') AND kind IN ('image', 'sem_image') "
+            "  AND (%s OR classified_by IS DISTINCT FROM %s) "
+            "  AND (%s::uuid IS NULL OR candidate_id > %s::uuid) "
+            "ORDER BY candidate_id LIMIT %s",
+            (force, classify_sem.CLASSIFIER_VERSION, after, after, limit),
+        )
+        return [tuple(r) for r in rows]
+
+    def set_classification(self, candidate_id: str, classification) -> bool:
+        """Write what a re-read found: kind, kind_confidence, extracted and classified_by, nothing else, and
+        only while the row is still undecided (a link made meanwhile wins). True when a row was written."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET kind = %s, kind_confidence = %s, extracted = %s, "
+                " classified_by = %s WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (
+                    classification.kind,
+                    classification.confidence,
+                    json.dumps(classification.extracted),
+                    classification.classified_by or None,
+                    candidate_id,
+                ),
+            )
+            > 0
+        )
+
+    def mark_classified(self, candidate_id: str) -> bool:
+        """Record that the current classifier version has dealt with this candidate without changing what it
+        says (an unreadable file, or one too large to read into memory): it is not offered again."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET classified_by = %s "
+                "WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (classify_sem.CLASSIFIER_VERSION, candidate_id),
+            )
+            > 0
+        )
+
+    # ---- the imaging-settings back-fill (--sem-backfill) -------------------------------------
+
+    def backfill_batch(
+        self, limit: int, after: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Pointer rows the SEM back-fill may read: image-typed (an extension of fs_readonly.IMAGE_EXTENSIONS),
+        linked in one of the four tables migration 196 counts (the three junctions and surface_scans, the same
+        set as `already_linked`), unowned (both owner columns null) and without a `sem_image_settings` row.
+        Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
+        so one run visits each row once; the caller checks the path is the file's own before it reads
+        anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
+        scans = (
+            " OR EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = f.id)"
+            if self._has_surface_scans()
+            else ""
+        )
+        exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
+        rows = self._all(
+            "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
+            "WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL "
+            "  AND f.metadata::jsonb->>'archive_path' ~* %s "
+            "  AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = f.id) "
+            "    OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = f.id) "
+            "    OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = f.id)"
+            + scans
+            + ") "
+            "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
+            "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "
+            "ORDER BY f.id LIMIT %s",
+            (r"\.(" + exts + ")$", after, after, limit),
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def save_sem_settings(self, files_id: str, extracted: dict, read_by: str) -> bool:
+        """The ONLY place `extracted` becomes settings is the SQL function `save_sem_settings` (migration
+        197); this calls it. It MERGES (a key `extracted` does not carry keeps its stored value, a person's
+        correction is never overwritten) and returns whether a row exists afterwards. The function is named
+        bare: the connection's search_path puts the private schema (d1_private) first."""
+        row = self._one(
+            "SELECT save_sem_settings(%s, %s::jsonb, %s)",
+            (files_id, json.dumps(extracted), read_by),
+        )
+        return bool(row and row[0])
 
     # ---- auto-link ---------------------------------------------------------------------
 
