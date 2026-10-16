@@ -414,9 +414,22 @@ user's request as the only input; each is cheap to change:
   (`dir_mtime` and `last_listed_at` set to NULL for the folder and everything below it; the rows are kept, because the crawler
   reaches a folder through its cached parent and keeps a "seen, not listed" row for every ignored folder) so the next
   scan lists it again (queued as a rescan when the rate limit allows); files dismissed by the rule stay in Dismissed until
-  restored by hand.
-- **Endpoint.** `GET /d1-inbox/ignored-folders`, `POST /d1-inbox/ignored-folders { folder, team_id? }` (answers
-  the rule and how many files were dismissed), `DELETE /d1-inbox/ignored-folders/:id`. Errors in the d1-record-access shape.
+  restored by hand. A rule that is removed while another rule of the same owner still covers its folder (removing `A/B`
+  while `A` is ignored) changes nothing for the crawler: the answer says `still_ignored: true`, the cache is not reset and no rescan is queued.
+- **Late files (review of the first cut).** The crawler loads the owner's rules once per scan, so it can register a file under a
+  folder that was ignored a moment ago, after the dismissal ran. The list, its count, the badge (summary) and accept-all (the preview,
+  the real run and its candidate re-reads) leave out an undecided (`new`) row that lies under one of *its owner's* rules, by one shared SQL
+  clause: the rule relative to the owner's root (the first two parts of the file's own path), whole path parts, case-insensitive, `left()`/`lower()` and
+  never `LIKE`, as two `NOT EXISTS` (person owner, team owner) so the partial indexes on the rules table serve it. Linked files under a rule stay
+  in the Linked tab, dismissed ones in Dismissed; `POST /ignored-folders` still dismisses what is open when the rule is added. Which of the owner's
+  open rows a new rule covers is decided in JS by the same matcher the tests share with the crawler (the database selects the owner's open rows only, so
+  a Postgres/JS difference in lowercasing cannot make them disagree).
+- **Endpoint.** `GET /d1-inbox/ignored-folders` (answers `{ data: [rule], meta: { can_change } }`: `can_change` is false for a Lab Viewer
+  and true for everyone else, whatever the number of rules, so the UI can hide the add controls even when the list is empty),
+  `POST /d1-inbox/ignored-folders { folder, team_id? }` (the folder is trimmed of leading and trailing whitespace first; answers the rule and how many
+  files were dismissed: every open row of the owner under it, which can include hidden copies and rows the list does not show),
+  `DELETE /d1-inbox/ignored-folders/:id` (answers `{ ignored_id, folder, still_ignored, rescan_queued }`; takes the owner's rule lock like POST).
+  Errors in the d1-record-access shape.
 - **UI.** A row's folder offers "Ignore this folder" (confirm says what happens: the files below move to Dismissed, nothing on the share
   is touched); the Inbox gets an "Ignored folders" section listing the rules with Remove, and an add-by-picking field fed by the folders already known.
 - **Not in v1.** Wildcards or patterns, ignoring by file type, admin-wide rules.
