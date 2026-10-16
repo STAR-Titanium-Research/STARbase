@@ -144,11 +144,32 @@ async function addScan(form: ScanAddForm) {
 }
 
 // ---- Ignore this folder: the confirm, then the rows below the folder are gone from the list ----
+// Focus goes back to the row's button when the confirm is cancelled (Cancel, Esc, click outside); after a confirmed ignore the row is gone, so it goes to the
+// status line, which says what happened.
+let ignoreOpener: HTMLElement | null = null;
+function openIgnore(f: FoundFile, opener: HTMLElement) {
+	ignoreOpener = opener;
+	ig.openIgnore(f);
+}
+async function afterIgnoreDialog(): Promise<void> {
+	await nextTick();
+	const back = ignoreOpener;
+	ignoreOpener = null;
+	const target = back?.isConnected && !back.hasAttribute('disabled') ? back : region.value;
+	target?.focus();
+}
+function cancelIgnore() {
+	// Esc makes the dialog say both "esc" and "closed": the second one finds nothing open and does nothing
+	if (!ig.dialog.value.open) return;
+	ig.closeIgnore();
+	// a confirm that is busy (the request is running) does not close: nothing to give back yet
+	if (!ig.dialog.value.open) void afterIgnoreDialog();
+}
 async function confirmIgnore() {
 	const r = await ig.confirmIgnore();
-	if (r.ok) (region.value as HTMLElement | null)?.focus();
+	if (r.ok) await afterIgnoreDialog();
 }
-const canIgnore = computed(() => ig.available.value && !ig.readOnly.value);
+const canIgnore = computed(() => ig.available.value && !ig.loading.value && !ig.readOnly.value);
 
 // ---- Accept all: its confirm opens on a dry run ----
 const acceptable = computed(() => (tab.value === 'new' || tab.value === 'older'));
@@ -232,7 +253,7 @@ async function accept() {
 					:busy="inbox.isBusy(f.candidate_id)"
 					:show-owner="showOwner"
 					:can-ignore="canIgnore"
-					@ignore="ig.openIgnore(f)"
+					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
 					@scan="openScan(f)"
@@ -266,7 +287,7 @@ async function accept() {
 							:busy="inbox.isBusy(f.candidate_id)"
 							:show-owner="showOwner"
 							:can-ignore="canIgnore"
-							@ignore="ig.openIgnore(f)"
+							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
 							@scan="openScan(f)"
@@ -284,7 +305,7 @@ async function accept() {
 
 		<AddScanDialog v-model="scanOpen" :file="scanFile" :busy="scanBusy" :error="scanError" :error-field="scanField" @submit="addScan" />
 
-		<IgnoreFolderDialog :dialog="ig.dialog.value" @confirm="confirmIgnore" @cancel="ig.closeIgnore()" />
+		<IgnoreFolderDialog :dialog="ig.dialog.value" @confirm="confirmIgnore" @cancel="cancelIgnore" />
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>

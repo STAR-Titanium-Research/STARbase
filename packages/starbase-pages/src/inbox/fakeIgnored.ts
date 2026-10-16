@@ -1,11 +1,13 @@
 // The ignored-folder routes of the fake d1-inbox (fakeInboxServer.ts), as the endpoint answers them (core/extensions/d1-inbox/index.js, spec section 15):
-//   GET    /d1-inbox/ignored-folders      { data: [{ ignored_id, folder, owner: { kind, id, name }, created_at, can_remove }] }  the caller's rules and their teams'
+//   GET    /d1-inbox/ignored-folders      { data: [{ ignored_id, folder, owner: { kind, id, name }, created_at, can_remove }], meta: { can_change } }  the caller's rules and
+//                                         their teams'; can_change is false for a Lab Viewer and true otherwise, whatever the number of rules
 //   POST   /d1-inbox/ignored-folders      { folder, team_id? } -> { data: { ignored_id, folder, team_id, dismissed } } (the real endpoint's status is 201);
 //                                         the owner's open files below the folder are dismissed in the same step; 400 INVALID_PAYLOAD (field 'folder' / 'team_id'),
 //                                         403 FORBIDDEN (a team the caller is not in), 409 NO_FOLDER / ALREADY_IGNORED (any letter case) / TOO_MANY_RULES
-//   DELETE /d1-inbox/ignored-folders/:id  { data: { ignored_id, folder, rescan_queued } }; 404 NOT_FOUND for a rule that is not the caller's or their team's
-// A Lab Viewer (option `viewer`) reads the rules with can_remove false and every write is 403 READ_ONLY_ROLE. Rules are matched on whole path parts,
-// ignoring case. Options: `ignoredRules` (the rules to start with), `alias`, `ignoreTeams`, `ignoreLimit`, `viewer`, `noFolder`.
+//   DELETE /d1-inbox/ignored-folders/:id  { data: { ignored_id, folder, rescan_queued, still_ignored } }: still_ignored is true when another rule of the same owner still
+//                                         covers the folder (then no rescan is queued); 404 NOT_FOUND for a rule that is not the caller's or their team's
+// A Lab Viewer (option `viewer`) reads the rules with can_remove false and can_change false, and every write is 403 READ_ONLY_ROLE. Rules are matched on whole
+// path parts, ignoring case. Options: `ignoredRules` (the rules to start with), `alias`, `ignoreTeams`, `ignoreLimit`, `viewer`, `noFolder`, `noMeta`.
 import type { FileOwner, FoundFile } from './inboxApi';
 
 export interface FakeTeam {
@@ -32,6 +34,8 @@ export interface FakeIgnoredOptions {
 	viewer?: boolean;
 	/** The person has no folder: POST is 409 NO_FOLDER. */
 	noFolder?: boolean;
+	/** An older server: the list has no meta (the page then judges a Lab Viewer by can_remove on the rules). */
+	noMeta?: boolean;
 }
 
 interface Rule {
@@ -99,6 +103,7 @@ export function createFakeIgnored(ctx: {
 		/** The routes, as handlers over a call's body; `remove` takes the id of the path. */
 		list: () => ({
 			data: rules.filter(mine).sort((a, b) => a.folder.toLowerCase().localeCompare(b.folder.toLowerCase()) || a.ignored_id.localeCompare(b.ignored_id)).map(ruleOut),
+			...(opts.noMeta ? {} : { meta: { can_change: !opts.viewer } }),
 		}),
 		add: (c: { body?: unknown }) => {
 			guardWrite();
@@ -139,7 +144,10 @@ export function createFakeIgnored(ctx: {
 			const at = rules.findIndex((r) => r.ignored_id === id.toLowerCase() && mine(r));
 			if (at < 0) throw err(404, 'NOT_FOUND', 'That ignored folder does not exist.');
 			const [rule] = rules.splice(at, 1);
-			return { data: { ignored_id: rule.ignored_id, folder: rule.folder, rescan_queued: ctx.queueRescan() } };
+			// another rule of the same owner at or above the folder still covers it: nothing to scan again
+			const f = rule.folder.toLowerCase();
+			const stillIgnored = rules.some((r) => same(r.owner, rule.owner) && (f === r.folder.toLowerCase() || f.startsWith(`${r.folder.toLowerCase()}/`)));
+			return { data: { ignored_id: rule.ignored_id, folder: rule.folder, rescan_queued: stillIgnored ? false : ctx.queueRescan(), still_ignored: stillIgnored } };
 		},
 	};
 }

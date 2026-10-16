@@ -3,8 +3,8 @@ import { computed } from 'vue';
 import { ignoreConfirm } from './ignoredFolders';
 import type { IgnoreDialog } from './useIgnoredFolders';
 
-// The confirm of "Ignore this folder": it says what happens, in full (the crawler leaves the folder alone, the open files below it move to Dismissed and
-// can be restored, linked files stay linked, nothing on the share changes). The count on screen is an estimate and says so; the real one comes back
+// The confirm of "Ignore this folder": it says what happens, in full (the crawler stops looking for new files there, the files still in the Inbox move to
+// Dismissed and can be restored, linked files stay linked and tracked, nothing on the share changes). The count on screen is an estimate and says so; the real one comes back
 // in the answer and goes into the notice. A refusal is shown here, in the server's words, and the dialog stays open.
 const props = defineProps<{ dialog: IgnoreDialog }>();
 const emit = defineEmits<{ (e: 'confirm'): void; (e: 'cancel'): void }>();

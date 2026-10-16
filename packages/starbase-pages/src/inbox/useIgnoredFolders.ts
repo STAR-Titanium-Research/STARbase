@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue';
 import type { HostApi } from '@d1/ui';
-import { InboxApiError, addIgnored, listIgnored, removeIgnored, type FoundFile, type IgnoredRule } from './inboxApi';
-import { folderProblem, ignoreTarget, ignoredText, shownBelow, unignoredText, type IgnoreTarget } from './ignoredFolders';
+import { InboxApiError, addIgnored, loadIgnored, removeIgnored, type FoundFile, type IgnoredRule } from './inboxApi';
+import { coveringRule, folderProblem, ignoreTarget, ignoredText, shownBelow, unignoredText, type IgnoreTarget } from './ignoredFolders';
 import type { Notice, Outcome } from './useInbox';
 
 // Ignored folders on the Inbox page (spec section 15), over the typed client with no lifecycle hooks: the rules, "Ignore this folder" on a row (a confirm
@@ -34,6 +34,8 @@ const words = (e: unknown, fallback: string) => (e instanceof Error && e.message
 export function createIgnoredFolders(deps: IgnoredDeps) {
 	const { api } = deps;
 	const rules = ref<IgnoredRule[]>([]);
+	/** The server's word on whether this person may change rules (meta.can_change); null until it has said, and from an older server that does not. */
+	const canChange = ref<boolean | null>(null);
 	const loading = ref(true);
 	/** Why the list could not be read or a rule could not be removed (the endpoint's own words). */
 	const error = ref('');
@@ -44,12 +46,17 @@ export function createIgnoredFolders(deps: IgnoredDeps) {
 	const adding = ref(false);
 	const dialog = ref<IgnoreDialog>(closed());
 
-	/** A Lab Viewer reads the rules and may not change them (the server says so with can_remove false on every rule). */
-	const readOnly = computed(() => rules.value.length > 0 && rules.value.every((r) => !r.can_remove));
+	/**
+	 * A Lab Viewer reads the rules and may not change them. The server says so with meta.can_change (also when there are no rules); an older server sends no
+	 * meta, and then it is judged by the rules: can_remove false on every one of them.
+	 */
+	const readOnly = computed(() => (canChange.value !== null ? !canChange.value : rules.value.length > 0 && rules.value.every((r) => !r.can_remove)));
 
 	async function load(): Promise<void> {
 		try {
-			rules.value = await listIgnored(api);
+			const r = await loadIgnored(api);
+			rules.value = r.rules;
+			canChange.value = r.canChange;
 			error.value = '';
 			available.value = true;
 		} catch (e) {
@@ -89,8 +96,11 @@ export function createIgnoredFolders(deps: IgnoredDeps) {
 		if (removing.value !== null) return { ok: false, message: 'A rule is already being removed.' };
 		removing.value = id;
 		try {
+			// which rule still covers the folder is read from the rules we hold, before the list is read again
+			const gone = rules.value.find((x) => x.ignored_id === id);
 			const r = await removeIgnored(api, id);
-			deps.say({ tone: 'ok', text: unignoredText(r.folder, r.rescan_queued) });
+			const by = r.still_ignored && gone ? coveringRule(rules.value, gone)?.folder ?? null : null;
+			deps.say({ tone: 'ok', text: unignoredText(r.folder || gone?.folder || '', r.rescan_queued, r.still_ignored, by) });
 			error.value = '';
 			await Promise.all([load(), deps.onChanged()]);
 			return { ok: true };
@@ -126,5 +136,5 @@ export function createIgnoredFolders(deps: IgnoredDeps) {
 		return r;
 	}
 
-	return { rules, loading, error, available, open, removing, adding, dialog, readOnly, load, add, remove, removeById, openIgnore, closeIgnore, confirmIgnore };
+	return { rules, canChange, loading, error, available, open, removing, adding, dialog, readOnly, load, add, remove, removeById, openIgnore, closeIgnore, confirmIgnore };
 }

@@ -31,7 +31,8 @@ const emit = defineEmits<{
 	(e: 'change'): void;
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
-	(e: 'ignore'): void;
+	/** The button that was pressed, so the page can give focus back to it when the confirm is cancelled. */
+	(e: 'ignore', opener: HTMLElement): void;
 }>();
 
 const name = computed(() => nameOf(props.file.rel_path));
@@ -120,7 +121,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			</div>
 			<div class="sub">
 				<span class="folder" :title="folder">{{ folder || 'Share root' }}</span>
-				<button v-if="ignorable" type="button" class="lf-link quiet" :disabled="busy" data-test="ignore-folder" :aria-label="`Ignore the folder ${folder}`" @click="emit('ignore')">Ignore this folder</button>
+				<button v-if="ignorable" type="button" class="lf-link quiet" :disabled="busy" data-test="ignore-folder" :aria-label="`Ignore the folder ${folder}`" @click="emit('ignore', $event.currentTarget as HTMLElement)">Ignore this folder</button>
 				<span v-if="meta" class="meta">{{ meta }}</span>
 				<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
 			</div>
