@@ -338,9 +338,9 @@ test('Add a surface scan works at phone width: the dialog fits the screen and Co
 
 const ignoreBadge = (page: Page) => page.locator('aside').getByRole('link', { name: /^Inbox/ }).locator('[data-test="nav-badge"] [aria-hidden]');
 const confirmLines = [
-	'The crawler will leave this folder and everything in it alone.',
-	'Any found files below it that are still in your Inbox (2 found files shown here) move to Dismissed. You can restore them.',
-	'Files already linked stay linked. Nothing on the share is changed.',
+	'The crawler stops looking for new files in sem and below.',
+	'Files there that are still in your Inbox (2 found files shown here) move to Dismissed. You can restore them.',
+	'Files already linked stay linked and tracked. Nothing on the share is changed.',
 ];
 
 test('Ignore this folder: the confirm says what happens, the files below leave New and the badge follows, Dismissed holds them, and Remove rule takes the rule off', async ({ browser }) => {
@@ -356,11 +356,21 @@ test('Ignore this folder: the confirm says what happens, the files below leave N
 	await dialog.getByRole('button', { name: 'Cancel' }).click();
 	await expect(dialog).toHaveCount(0);
 	expect(inbox.rules).toEqual([]);
+	// and focus is back on the button that opened it (Cancel, then Esc)
+	await expect(first.locator('[data-test="ignore-folder"]')).toBeFocused();
+	await first.locator('[data-test="ignore-folder"]').click();
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(dialog).toHaveCount(0);
+	await expect(first.locator('[data-test="ignore-folder"]')).toBeFocused();
+	expect(inbox.rules).toEqual([]);
 
 	await first.locator('[data-test="ignore-folder"]').click();
 	await dialog.getByRole('button', { name: 'Stop scanning' }).click();
 	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring sem. 2 found files moved to Dismissed.');
 	await expect(page.locator('[data-test="remove-rule"]')).toHaveText('Remove rule');
+	// the row is gone: focus is on the status line that says so
+	await expect(page.locator('[data-test="status"]')).toBeFocused();
 	await expect.poll(() => names(page)).toEqual(['plain.tif', 'edge1.al3d']);
 	await expect(ignoreBadge(page)).toHaveText('3');
 	expect(inbox.rules.map((r) => r.folder)).toEqual(['sem']);
@@ -409,6 +419,36 @@ test('Ignored folders: lists the rules, adds one by typing (checked first, the s
 	await page.locator('[data-test="ignored-rule"]').filter({ hasText: 'Archive/2024' }).getByRole('button', { name: 'Remove' }).click();
 	await expect(page.locator('[data-test="notice"]')).toContainText('Stopped ignoring Archive/2024.');
 	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['misc']);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Remove of a rule that another rule still covers says so and does not promise a rescan', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { ignoredRules: [{ folder: 'sem' }, { folder: 'sem/runs' }] });
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['sem', 'sem/runs']);
+	await page.locator('[data-test="ignored-rule"]').filter({ hasText: 'sem/runs' }).getByRole('button', { name: 'Remove' }).click();
+	const notice = page.locator('[data-test="notice"]');
+	await expect(notice).toContainText('Rule removed. sem/runs is still ignored by another rule (sem).');
+	await expect(notice).not.toContainText(/rescan|next scan|listed again/i);
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['sem']);
+	expect(inbox.rules.map((r) => r.folder)).toEqual(['sem']);
+	await shot(page, 'ignored-still-covered');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a Lab Viewer with no rules at all has no Ignore this folder and no add field either', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { viewer: true });
+	await expect.poll(() => names(page)).toContain('3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-empty"]')).toHaveText('No folders are ignored.');
+	await expect(page.locator('[data-test="ignored-readonly"]')).toHaveText('You can see these rules but not change them.');
+	await expect(page.locator('[data-test="ignored-input"]')).toHaveCount(0);
+	await expect(page.locator('[data-test="ignored-add"]')).toHaveCount(0);
+	expect(inbox.calls.some((c) => c.method === 'post')).toBe(false);
+	await shot(page, 'ignored-viewer-no-rules');
 	expect(errors).toEqual([]);
 	await page.context().close();
 });
