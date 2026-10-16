@@ -18,7 +18,7 @@ import { useExplorerHost } from '../host';
 import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
-import { isTypingKey, moveIndex, openHit, toSections } from './finderNav';
+import { bestIndex, isTypingKey, moveIndex, openHit, sameHitIndex, toSections } from './finderNav';
 import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
@@ -50,8 +50,17 @@ const input = ref<HTMLTextAreaElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const dialog = ref<HTMLElement | null>(null);
 
-// The best match is the one Enter opens; a new result list starts from it.
-watch(hits, (h) => { active.value = h.length ? 0 : -1; });
+// The best match is the one Enter opens; a new result list starts from it. Answers stream in, so the list changes while it is shown: once the
+// user has moved the active row it stays on the same hit (by its target) instead of jumping back to the best match.
+let moved = false;
+watch(query, () => { moved = false; });
+watch(hits, (h, old) => { active.value = moved ? sameHitIndex(old?.[active.value], h) : bestIndex(h); });
+
+function setActive(i: number) {
+	if (i === active.value) return;
+	active.value = i;
+	moved = true;
+}
 
 watch(activeId, async (id) => {
 	if (!id) return;
@@ -134,7 +143,7 @@ function onKeydown(e: KeyboardEvent) {
 		emit('close');
 	} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 		e.preventDefault();
-		active.value = moveIndex(active.value, e.key === 'ArrowDown' ? 1 : -1, hits.value.length);
+		setActive(moveIndex(active.value, e.key === 'ArrowDown' ? 1 : -1, hits.value.length));
 	} else if (e.key === 'Enter') {
 		// Enter that confirms an IME composition is not "open this"; Enter on a button (Scan, Open sample) is that button's.
 		if (e.isComposing || e.target !== input.value) return;
@@ -211,14 +220,15 @@ function onKeydown(e: KeyboardEvent) {
 							:key="item.id"
 							role="option"
 							class="opt"
-							:class="{ on: item.index === active }"
+							:class="{ on: item.index === active, more: item.hit.more }"
 							:aria-selected="item.index === active"
 							@mousedown.prevent
-							@mousemove="active = item.index"
+							@mousemove="setActive(item.index)"
 							@click="pick(item.hit)"
 						>
 							<span class="label">{{ item.hit.label }}</span>
 							<span v-if="item.hit.detail" class="detail">{{ item.hit.detail }}</span>
+							<span v-if="item.hit.matchedIn" class="matched">matched in {{ item.hit.matchedIn }}</span>
 						</div>
 					</div>
 				</div>
@@ -276,6 +286,8 @@ function onKeydown(e: KeyboardEvent) {
 .opt.on { background: var(--d1-tile); outline: 1px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
 .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+.opt.more .label { font-weight: 400; color: var(--d1-dim); }
+.matched { margin-left: auto; flex: 0 0 auto; padding-left: 10px; font-size: var(--fs-xs, 11px); font-style: italic; color: var(--d1-dim); white-space: nowrap; }
 .hint { margin: 0; padding: 8px 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .hint:empty { display: none; }
 </style>

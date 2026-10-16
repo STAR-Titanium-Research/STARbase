@@ -3,15 +3,17 @@ import type { Ref } from 'vue';
 import type { ExplorerHost } from '../host';
 import type { VisibleNav } from '../nav/navConfig';
 import { useRequestGate } from '../composables/useRequestGate';
-import { isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
-import type { FinderHit } from './finder';
+import { askable, deepParams, isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
+import type { FinderHit, FinderSource } from './finder';
 import { QR_HEADER } from '../labels/qrPayload';
 import { isScanComplete, isScanStarted, resolveLabel } from './scan';
 import type { ScanOutcome } from './scan';
 
 // The finder's state: the query, and the hits for it. Pages and saved views are matched in the
 // browser on every keystroke; the records are asked of the server once typing pauses (200 ms),
-// one GET /items/<collection> per collection the user can read, all at once.
+// one GET per collection the user can read (pass 1: codes and names) and, for the collections that
+// have notes, a location or an owner to look in, a second (pass 2), all at once. Each answer is
+// shown as it arrives, so the first group to answer is not held back by the slowest.
 
 export const FINDER_DEBOUNCE_MS = 200;
 // A USB scanner types a whole label in a few milliseconds, one key at a time. Once the text has been
@@ -39,23 +41,46 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 	const scanning = computed(() => isScanStarted(query.value));
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	// One source. A failure (a 403 when the user may not read a collection the label expands into,
-	// the network) drops this group only; the others still show.
-	async function search(src: ReturnType<typeof visibleSources>[number], q: string): Promise<FinderHit[]> {
+	// One source, one pass. A failure (a 403 when the user may not read a collection the label expands into, a pass 2 field
+	// the user may not read, the network) drops this answer only; the others still show.
+	async function search(src: FinderSource, q: string, pass: 1 | 2, params: Record<string, unknown>): Promise<FinderHit[]> {
 		try {
-			const res = await host.api.get(`/items/${src.collection}`, { params: sourceParams(src, q) });
+			const res = await host.api.get(src.path ?? `/items/${src.collection}`, { params });
 			const rows = res.data?.data;
-			return Array.isArray(rows) ? toHits(src, q, rows) : [];
+			return Array.isArray(rows) ? toHits(src, q, rows, pass) : [];
 		} catch {
 			return [];
 		}
 	}
 
+	// Every answer is merged into `remote` as it arrives; one for a query that was typed over (or a closed finder) is dropped.
+	// `loading` stays true until every request has settled.
 	async function run(q: string): Promise<void> {
 		const token = gate.begin();
-		const groups = await Promise.all(visibleSources(visible.value).map((src) => search(src, q)));
+		const answers: FinderHit[][] = [];
+		// The same query again (typed back to, or asked again when the collections arrive): what it showed stays until the answers replace it, so the
+		// list does not empty and fill up again.
+		const before = remote.value?.q === q ? remote.value.groups : [];
+		const sources = visibleSources(visible.value).filter((src) => askable(src, q));
+		// All of pass 1 goes out first: the first rows are made of it.
+		const asked = [
+			...sources.map((src) => search(src, q, 1, sourceParams(src, q))),
+			...sources.flatMap((src) => {
+				const deep = deepParams(src, q);
+				return deep ? [search(src, q, 2, deep)] : [];
+			}),
+		];
+		await Promise.all(
+			asked.map((answer) =>
+				answer.then((hits) => {
+					if (!gate.isCurrent(token) || !hits.length) return;
+					answers.push(hits);
+					remote.value = { q, groups: [...before, ...answers] };
+				}),
+			),
+		);
 		if (!gate.isCurrent(token)) return; // typed on, or closed
-		remote.value = { q, groups };
+		remote.value = { q, groups: answers };
 		loading.value = false;
 	}
 
