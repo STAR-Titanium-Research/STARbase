@@ -81,28 +81,37 @@ DROP TRIGGER IF EXISTS people_owns_files_guard ON people;
 DROP FUNCTION IF EXISTS d1_private.trg_teams_owns_files();
 DROP FUNCTION IF EXISTS d1_private.trg_people_owns_files();
 
-DROP TRIGGER IF EXISTS people_file_owner_sync ON people;
-CREATE TRIGGER people_file_owner_sync AFTER UPDATE OF user_id ON people
-    FOR EACH ROW WHEN (OLD.user_id IS DISTINCT FROM NEW.user_id)
-    EXECUTE FUNCTION d1_private.trg_file_readers_on_person();
-COMMENT ON TRIGGER people_file_owner_sync ON people IS 'A login added to, changed on or removed from a person refreshes the readers of their files and of their teams'' files (migration 196).';
+-- 196's own down drops the readers functions and the people trigger, and the test replay (tests/phase1_schema.sh) can run this down after that, so what
+-- puts 196's versions back is skipped when the readers machinery is already gone (otherwise it would leave functions that keep d1_private from being dropped).
+DO $do$
+BEGIN
+    IF to_regprocedure('d1_private.file_readers_refresh(uuid,uuid,uuid)') IS NOT NULL
+       AND to_regprocedure('d1_private.trg_file_readers_on_person()') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS people_file_owner_sync ON people;
+        CREATE TRIGGER people_file_owner_sync AFTER UPDATE OF user_id ON people
+            FOR EACH ROW WHEN (OLD.user_id IS DISTINCT FROM NEW.user_id)
+            EXECUTE FUNCTION d1_private.trg_file_readers_on_person();
+        COMMENT ON TRIGGER people_file_owner_sync ON people IS 'A login added to, changed on or removed from a person refreshes the readers of their files and of their teams'' files (migration 196).';
 
-CREATE OR REPLACE FUNCTION d1_private.file_readers_expected(p_file UUID DEFAULT NULL, p_team UUID DEFAULT NULL, p_person UUID DEFAULT NULL)
-RETURNS TABLE (directus_files_id UUID, user_id UUID)
-LANGUAGE sql STABLE AS $fn$
-    SELECT f.id, p.user_id
-      FROM directus_files f
-      JOIN people p ON p.person_id = f.owner_person_id
-     WHERE p.user_id IS NOT NULL
-       AND ((p_file IS NULL AND p_team IS NULL AND p_person IS NULL) OR f.id = p_file OR f.owner_team_id = p_team OR f.owner_person_id = p_person)
-    UNION
-    SELECT f.id, p.user_id
-      FROM directus_files f
-      JOIN team_members tm ON tm.team_id = f.owner_team_id
-      JOIN people p ON p.person_id = tm.person_id
-     WHERE p.user_id IS NOT NULL
-       AND ((p_file IS NULL AND p_team IS NULL AND p_person IS NULL) OR f.id = p_file OR f.owner_team_id = p_team OR f.owner_person_id = p_person)
-$fn$;
-COMMENT ON FUNCTION d1_private.file_readers_expected(UUID, UUID, UUID) IS 'The model of file_readers (migration 196): the (file, login) pairs the owner columns imply, for one file, the files of one team, the files of one person, or all owned files when every argument is NULL. A person owner counts when they have a login; a team owner counts every member with a login.';
+        CREATE OR REPLACE FUNCTION d1_private.file_readers_expected(p_file UUID DEFAULT NULL, p_team UUID DEFAULT NULL, p_person UUID DEFAULT NULL)
+        RETURNS TABLE (directus_files_id UUID, user_id UUID)
+        LANGUAGE sql STABLE AS $fn$
+            SELECT f.id, p.user_id
+              FROM directus_files f
+              JOIN people p ON p.person_id = f.owner_person_id
+             WHERE p.user_id IS NOT NULL
+               AND ((p_file IS NULL AND p_team IS NULL AND p_person IS NULL) OR f.id = p_file OR f.owner_team_id = p_team OR f.owner_person_id = p_person)
+            UNION
+            SELECT f.id, p.user_id
+              FROM directus_files f
+              JOIN team_members tm ON tm.team_id = f.owner_team_id
+              JOIN people p ON p.person_id = tm.person_id
+             WHERE p.user_id IS NOT NULL
+               AND ((p_file IS NULL AND p_team IS NULL AND p_person IS NULL) OR f.id = p_file OR f.owner_team_id = p_team OR f.owner_person_id = p_person)
+        $fn$;
+        COMMENT ON FUNCTION d1_private.file_readers_expected(UUID, UUID, UUID) IS 'The model of file_readers (migration 196): the (file, login) pairs the owner columns imply, for one file, the files of one team, the files of one person, or all owned files when every argument is NULL. A person owner counts when they have a login; a team owner counts every member with a login.';
 
-SELECT d1_private.file_readers_refresh();
+        PERFORM d1_private.file_readers_refresh();
+    END IF;
+END
+$do$;
