@@ -245,6 +245,19 @@ const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
   .map(([collection, t]) => `NOT (c.suggested_collection = '${collection}' AND EXISTS (SELECT 1 FROM ${t.junction} j WHERE j.${t.fk} = c.suggested_record_id AND j.directus_files_id = c.directus_files_id))`)
   .join(' AND ');
 
+// Ignored folders (spec section 15, M1 of the review): the crawler loads the owner's rules once per scan, so it can register a file under a folder that was
+// ignored a moment ago, after POST /ignored-folders dismissed what was there. Such an undecided ('new') row must never show, never count in the badge and never
+// be accepted in bulk: this one clause, shared by the list, the count, the summary and accept-all, leaves it out. It is the crawler's own db._not_ignored: the rule
+// is relative to the owner's root, which is the first two parts of the file's own path ('Users/<alias>', 'Shared/<share folder>'); a rule covers the folder and
+// everything below it on WHOLE path parts (the prefix 'root/rule/' is compared with left(), never LIKE, so no wildcard in a folder name is special) and ignoring
+// case. The owner-person and owner-team tests are two separate NOT EXISTS (each an equality on its own column) so the planner can use the partial indexes
+// idx_inbox_ignored_dirs_owner_person and _owner_team; a file owned by a team has a NULL person id and the person subquery then finds nothing, and the reverse.
+// Only the undecided tabs and the summary use it: a LINKED row under a rule is still listed in the Linked tab, a dismissed one in Dismissed.
+const IGNORED_PREFIX = "lower(split_part(c.rel_path, '/', 1) || '/' || split_part(c.rel_path, '/', 2) || '/' || ig.rel_folder)";
+const UNDER_RULE = `left(lower(c.rel_path), length(${IGNORED_PREFIX}) + 1) = ${IGNORED_PREFIX} || '/'`;
+const NOT_UNDER_IGNORED = 'NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_person_id = c.owner_person_id'
+  + ` AND ${UNDER_RULE}) AND NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_team_id = c.owner_team_id AND ${UNDER_RULE})`;
+
 // A surface scan file that was already added (through the Alicona feature's own dialog, or here) is not a new thing to add: not counted, not listed as
 // undecided. Only meaningful where the surface_scans table exists (the endpoint asks first), so it is a separate fragment, never part of NOT_ON_RECORD.
 const SCAN_ADDED = "NOT (c.kind = 'surface_scan' AND EXISTS (SELECT 1 FROM surface_scans s WHERE s.directus_files_id = c.directus_files_id))";
@@ -252,7 +265,7 @@ const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.orig
   + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
   + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${NOT_UNDER_IGNORED}${scans ? ` AND ${SCAN_ADDED}` : ''}`
   + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
 
 export const SQL = {
@@ -270,6 +283,10 @@ export const SQL = {
   candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
   candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
+  // The same two reads for accept-all, which must never link a row under an ignored folder (see NOT_UNDER_IGNORED): such an undecided row reads as not found. A row
+  // that is already decided is returned whatever its folder, so the answer for it stays NOT_NEW.
+  acceptCandidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id`,
+  acceptCandidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id FOR UPDATE`,
   batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
@@ -590,9 +607,9 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
     where.push(`(c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`);
     bindings.push(mine ? scope.personId : null, scope.teamIds.join(','));
   }
-  if (f.tab === 'new') where.push("c.state = 'new'", "c.origin = 'new'", COPY_HIDDEN);
-  else if (f.tab === 'older') where.push("c.state = 'new'", "c.origin = 'backlog'", COPY_HIDDEN);
-  else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN);
+  if (f.tab === 'new') where.push("c.state = 'new'", "c.origin = 'new'", COPY_HIDDEN, NOT_UNDER_IGNORED);
+  else if (f.tab === 'older') where.push("c.state = 'new'", "c.origin = 'backlog'", COPY_HIDDEN, NOT_UNDER_IGNORED);
+  else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN, NOT_UNDER_IGNORED);
   else where.push(`c.state = '${f.tab}'`); // linked or dismissed (validated by parseFileFilters)
   // a surface scan file that already has a scan is not undecided any more (only where the table exists: `scans`)
   if (scans && !accept && ['new', 'older', 'open'].includes(f.tab)) where.push(SCAN_ADDED);
@@ -606,6 +623,7 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
     // What accept-all can ever link: exact short ID naming one record, not a surface scan, not a copy, not already on its record
     where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL', "c.kind <> 'surface_scan'", 'c.duplicate_of IS NULL',
       'jsonb_array_length(c.matches) = 1', NOT_ON_RECORD);
+    if (!where.includes(NOT_UNDER_IGNORED)) where.push(NOT_UNDER_IGNORED); // (the undecided tabs have it already)
     if (after) { where.push('(c.first_seen_at, c.candidate_id) > (?::timestamptz, ?::uuid)'); bindings.push(after.at, after.id); }
     const size = Math.max(1, Math.floor(Number(pageSize)) || ACCEPT_PAGE);
     return { sql: `SELECT c.candidate_id, c.first_seen_at${SLIM_FROM} WHERE ${where.join(' AND ')} ORDER BY c.first_seen_at, c.candidate_id LIMIT ${size}`, bindings };
@@ -1273,7 +1291,7 @@ export function mount(router, context, deps = {}) {
   // whether rows may remain (the last page was full), and `next_cursor` carries on. `lock` takes the row locks of a real run.
   async function planAccept(db, { acc, schema, scope, f, lock, ids = null, cursor = null }) {
     if (ids) {
-      const rows = new Map(rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [ids.join(',')])).map((r) => [r.candidate_id, r]));
+      const rows = new Map(rowsOf(await db.raw(lock ? SQL.acceptCandidatesForUpdate : SQL.acceptCandidatesById, [ids.join(',')])).map((r) => [r.candidate_id, r]));
       const missing = ids.filter((id) => !rows.get(id) || !canSee(scope, rows.get(id))).map((id) => ({ candidate_id: id, reason: 'NOT_FOUND' }));
       const planned = await classify(db, { acc, schema, scope, cands: ids.map((id) => rows.get(id)).filter(Boolean) });
       return { entries: planned.entries, skipped: [...planned.skipped, ...missing], has_more: false, next_cursor: null };
@@ -1287,7 +1305,7 @@ export function mount(router, context, deps = {}) {
       const query = buildListQuery(scope, f, { accept: true, after, pageSize: acceptPage });
       const found = rowsOf(await db.raw(query.sql, query.bindings));
       if (found.length) {
-        const cands = rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [found.map((r) => r.candidate_id).join(',')]));
+        const cands = rowsOf(await db.raw(lock ? SQL.acceptCandidatesForUpdate : SQL.acceptCandidatesById, [found.map((r) => r.candidate_id).join(',')]));
         const planned = await classify(db, { acc, schema, scope, cands });
         entries.push(...planned.entries);
         skipped.push(...planned.skipped);

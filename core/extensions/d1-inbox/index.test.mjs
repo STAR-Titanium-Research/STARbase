@@ -136,6 +136,14 @@ const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 // does a row (a rule, a cache row, a candidate) belong to the owner given as the first two bindings (person id, team id; one of them null)?
 const sameOwner = (row, b) => (row.owner_person_id ?? null) === (b[0] ?? null) && (row.owner_team_id ?? null) === (b[1] ?? null);
 const copy = (v) => structuredClone(v);
+// the SQL clause NOT_UNDER_IGNORED, as the fake database evaluates it: is the candidate under one of ITS OWNER's rules? The rule is relative to the owner's root,
+// which is the first two parts of the file's own path; whole path parts, ignoring case.
+const underIgnoredRule = (w, c) => {
+  const root = c.rel_path.split('/').slice(0, 2).join('/');
+  const ownRule = (r) => (c.owner_person_id !== null && r.owner_person_id === c.owner_person_id) || (c.owner_team_id !== null && r.owner_team_id === c.owner_team_id);
+  return w.ignored.some((r) => ownRule(r)
+    && c.rel_path.toLowerCase().startsWith(`${root}/${r.rel_folder}/`.toLowerCase()));
+};
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
 const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), ignored: copy(w.ignored) });
@@ -169,6 +177,9 @@ function statement(w, sql, b, txId) {
       return copy(w.teams.filter((t) => ids.includes(t.team_id)));
     }
     case 'candidatesById': case 'candidatesForUpdate': return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter(Boolean).map(copy);
+    // the same reads without an undecided row that lies under one of its owner's ignored folders (SQL NOT_UNDER_IGNORED)
+    case 'acceptCandidatesById': case 'acceptCandidatesForUpdate':
+      return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter((c) => c && (c.state !== 'new' || !underIgnoredRule(w, c))).map(copy);
     case 'batchForUpdate': return [...w.candidates.values()].filter((c) => c.link_batch_id === b[0]).sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map(copy);
     case 'markLinked': {
       const [decidedBy, linkKind, collection, junctionId, batchId, adopt, id] = b;
@@ -2041,7 +2052,7 @@ test('POST /accept-all dry_run: { count, ids, skipped, has_more } and nothing wr
   const again = await call('POST /accept-all', { user: U.alice, body: { candidate_ids: [bobs.candidate_id, ID(4044), c.candidate_id] } });
   assert.deepEqual(again.body.data.skipped.map((s) => s.reason).sort(), ['NOT_EDITABLE', 'NOT_FOUND', 'NOT_FOUND']);
   assert.equal(bobs.state, 'new');
-  assert.ok(w.log.some((l) => l.name === 'candidatesForUpdate'));
+  assert.ok(w.log.some((l) => l.name === 'acceptCandidatesForUpdate'), 'accept-all locks through its own read, which leaves out rows under an ignored folder');
   assert.equal((await call('POST /accept-all', { user: U.alice, body: { candidate_ids: ['x'] } })).statusCode, 400);
   assert.equal((await call('POST /accept-all', { user: U.alice, body: { candidate_ids: [] } })).statusCode, 400);
 });
@@ -3269,6 +3280,77 @@ test('DELETE /ignored-folders/:id: a rule whose owner folder was unset since is 
   assert.equal(w.log.some((l) => l.name === 'ignoredResetDirs'), false);
   assert.equal(res.body.data.rescan_queued, false, 'a person with no folder has nothing to rescan (POST /rescan says NO_FOLDER)');
   assert.equal(w.scanRequests.length, 0);
+});
+
+// ---- rows the crawler registered under a folder that is ignored now (review M1) ----------------------------------------------------
+
+// The one clause every undecided read shares (the list and its count, the summary, accept-all's selection and its candidate reads): an undecided row under a rule
+// of ITS OWNER is left out. The SQL itself runs on a real Postgres in tests/phase1_schema.sh (the d1-inbox block); here the text is pinned.
+const IGNORED_CLAUSE = /NOT EXISTS \(SELECT 1 FROM d1_private\.inbox_ignored_dirs ig WHERE ig\.owner_person_id = c\.owner_person_id AND left\(lower\(c\.rel_path\), length\(lower\(split_part\(c\.rel_path, '\/', 1\) \|\| '\/' \|\| split_part\(c\.rel_path, '\/', 2\) \|\| '\/' \|\| ig\.rel_folder\)\) \+ 1\) = lower\(split_part\(c\.rel_path, '\/', 1\) \|\| '\/' \|\| split_part\(c\.rel_path, '\/', 2\) \|\| '\/' \|\| ig\.rel_folder\) \|\| '\/'\) AND NOT EXISTS \(SELECT 1 FROM d1_private\.inbox_ignored_dirs ig WHERE ig\.owner_team_id = c\.owner_team_id AND left\(/;
+
+test('the SQL: the summary, the new / older / open lists and their counts, and accept-all leave out undecided rows under an ignored folder of their owner; Linked and Dismissed keep them', () => {
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  assert.match(SQL.summary, IGNORED_CLAUSE);
+  assert.match(SQL.summaryWithScans, IGNORED_CLAUSE);
+  for (const tab of ['new', 'older', 'open']) {
+    const f = parseFileFilters({ tab });
+    assert.match(buildListQuery(scope, f).sql, IGNORED_CLAUSE, `${tab} list`);
+    assert.match(buildListQuery(scope, f, { count: true }).sql, IGNORED_CLAUSE, `${tab} count`);
+    assert.match(buildListQuery(scope, f, { scans: true }).sql, IGNORED_CLAUSE, `${tab} list with scans`);
+  }
+  for (const tab of ['linked', 'dismissed']) {
+    assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab })).sql, /inbox_ignored_dirs/, `${tab}: a linked or dismissed file under a rule is still listed`);
+    assert.doesNotMatch(buildListQuery(scope, parseFileFilters({ tab }), { count: true }).sql, /inbox_ignored_dirs/, `${tab} count`);
+  }
+  // accept-all's pages, whatever tab the filter names, and each of its candidate reads
+  for (const tab of ['new', 'open', 'older', 'linked']) {
+    const sql = buildListQuery(scope, parseFileFilters({ tab }), { accept: true }).sql;
+    assert.match(sql, IGNORED_CLAUSE, `accept-all page (${tab})`);
+    assert.equal(sql.split('inbox_ignored_dirs').length - 1, 2, `${tab}: the clause is there once, not twice`);
+  }
+  for (const name of ['acceptCandidatesById', 'acceptCandidatesForUpdate']) {
+    assert.match(SQL[name], IGNORED_CLAUSE, name);
+    assert.match(SQL[name], /c\.state <> 'new' OR/, `${name}: a decided row is still returned, so its answer stays NOT_NEW`);
+  }
+  assert.match(SQL.acceptCandidatesForUpdate, /FOR UPDATE$/);
+  assert.doesNotMatch(SQL.acceptCandidatesById, /FOR UPDATE/);
+  // what /link, /dismiss, /restore and /undo read is not filtered: a person may still dismiss, restore or undo whatever they can reach
+  for (const name of ['candidatesById', 'candidatesForUpdate', 'batchForUpdate']) assert.doesNotMatch(SQL[name], /inbox_ignored_dirs/, name);
+});
+
+test('the SQL: the ignored-folder clause is two NOT EXISTS (person owner, team owner) so each uses its partial index, compares with left() and lower() and never LIKE, and takes the root from the path', () => {
+  for (const sql of [SQL.summary, buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({})).sql]) {
+    const clause = sql.slice(sql.indexOf('NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs'));
+    assert.equal(clause.split('NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs').length - 1, 2);
+    assert.match(clause, /ig\.owner_person_id = c\.owner_person_id/);
+    assert.match(clause, /ig\.owner_team_id = c\.owner_team_id/);
+    assert.doesNotMatch(clause, /OR ig\.owner|ig\.owner_person_id = c\.owner_person_id OR/, 'never one subquery with an OR across the two owner columns (no partial index would serve it)');
+    assert.doesNotMatch(clause, /\bLIKE\b|\bILIKE\b|~/, 'no pattern matching: a % or _ in a folder name is never special');
+    assert.match(clause, /split_part\(c\.rel_path, '\/', 1\)/);
+  }
+});
+
+test('POST /accept-all with candidate_ids: an undecided file under an ignored folder of its owner is not found (never linked); a rule of ANOTHER owner, or a decided file, changes nothing', async () => {
+  const w = newWorld();
+  const late = add(w, candFor('physical_samples', S1, { rel_path: 'Users/ali1/World-Ti Paper/late.tif' }));
+  const fine = add(w, candFor('physical_samples', S1, { rel_path: 'Users/ali1/World-Ti Paper 2/ok.tif' }));
+  const bobsRule = add(w, candFor('physical_samples', S1, { rel_path: 'Users/ali1/bobs/x.tif' }));
+  const linked = add(w, candFor('physical_samples', S1, { rel_path: 'Users/ali1/World-Ti Paper/linked.tif', state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_junction_id: ID(5001), link_batch_id: ID(901) }));
+  w.ignored.push({ ignored_id: ID(9300), owner_person_id: P.alice, owner_team_id: null, rel_folder: 'world-ti paper', created_at: NOW.toISOString(), created_by: U.alice });
+  w.ignored.push({ ignored_id: ID(9301), owner_person_id: P.bob, owner_team_id: null, rel_folder: 'bobs', created_at: NOW.toISOString(), created_by: U.bob });
+  const { call } = setup(w);
+  const ids = [late, fine, bobsRule, linked].map((c) => c.candidate_id);
+  const dry = await call('POST /accept-all', { user: U.alice, body: { dry_run: true, candidate_ids: ids } });
+  assert.equal(dry.statusCode, 200, JSON.stringify(dry.body));
+  assert.deepEqual(dry.body.data.ids.sort(), [fine, bobsRule].map((c) => c.candidate_id).sort(), 'only files outside Alice\'s own rules qualify (Bob\'s rule is Bob\'s)');
+  assert.deepEqual(dry.body.data.skipped.sort((x, y) => x.reason.localeCompare(y.reason)).map((x) => [x.candidate_id, x.reason]),
+    [[linked.candidate_id, 'NOT_NEW'], [late.candidate_id, 'NOT_FOUND']].sort((x, y) => x[1].localeCompare(y[1])));
+  const real = await call('POST /accept-all', { user: U.alice, body: { candidate_ids: ids } });
+  assert.equal(real.statusCode, 200, JSON.stringify(real.body));
+  assert.equal(late.state, 'new', 'the late file is not linked');
+  assert.equal(fine.state, 'linked');
+  assert.ok(w.log.some((l) => l.name === 'acceptCandidatesForUpdate'));
+  assert.equal(w.log.some((l) => l.name === 'candidatesForUpdate'), false, 'accept-all never reads through the unfiltered statement');
 });
 
 // ---- wiring ------------------------------------------------------------------------------------------------------------------
