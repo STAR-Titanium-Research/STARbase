@@ -360,6 +360,18 @@ detector, mode, scale bar, the date it was taken and the instrument. They descri
 **test**.
 _Avoid_: SEM parameters (parameters are a **test**'s), metadata
 
+**Provenance owner**:
+The person whose **personal folder** a file came from, or the team whose **team folder** it came from. Only the
+**provenance owner** can see that file and its **imaging settings**, and only they can **link** it. It is fixed
+when the file is first registered and follows the person, not the **uni alias**'s spelling. Administrators can
+see such files read-only.
+_Avoid_: uploader, creator, folder owner
+
+**Locked file**:
+A file **linked** to a record someone can read, but whose **provenance owner** is somebody else. They see that
+the link exists and nothing about the file: no name, no **imaging settings**, no contents.
+_Avoid_: private file, hidden file
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
