@@ -37,7 +37,7 @@ test('the fixtures are the cases the client has to handle', () => {
     'link_surface_scan_already_linked', 'link_surface_scan_400_condition', 'link_surface_scan_400_item', 'link_surface_scan_400_date', 'link_surface_scan_404_not_found',
     'link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'files_linked_surface_scan', 'undo_ok_surface_scan',
     'undo_403_surface_scan', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
-    'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys',
+    'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys', 'picture_headers', 'picture_404',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -238,4 +238,37 @@ test('every row the list shows names its owner as { kind, id, name }, and a copy
       assert.equal(row.duplicate_of === null, row.duplicate_of_owner === null, `${name}: duplicate_of and duplicate_of_owner go together`);
     }
   }
+});
+
+test('every row the list shows says has_thumbnail as a boolean, only image and sem_image rows have one, and the bytes are never in a row', () => {
+  let withPicture = 0;
+  for (const [name, fx] of built) {
+    if (fx.request?.path !== '/d1-inbox/files' || fx.status !== 200) continue;
+    for (const row of fx.body.data) {
+      assert.equal(typeof row.has_thumbnail, 'boolean', `${name}: ${row.candidate_id}`);
+      if (row.has_thumbnail) {
+        withPicture += 1;
+        assert.ok(['image', 'sem_image'].includes(row.kind), `${name}: only an image kind has a picture (${row.kind})`);
+      }
+      assert.deepEqual(Object.keys(row).filter((k) => /^(thumb|preview)/.test(k)), [], `${name}: no picture bytes in the list`);
+    }
+  }
+  assert.ok(withPicture >= 3, 'the fixtures show rows with a picture');
+  assert.ok(built.get('files_new.json').body.data.some((r) => r.has_thumbnail === false), 'and rows without one');
+});
+
+test('the picture routes: the 200 is bytes with image/jpeg and a private cache, a 304 repeats the ETag, and a refusal is one Directus-shaped 404', () => {
+  const ok = built.get('picture_headers.json');
+  assert.equal('request' in ok, false, 'not an envelope fixture: the body is a JPEG');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers['Content-Type'], 'image/jpeg');
+  assert.match(ok.headers['Cache-Control'], /^private\b/);
+  assert.ok('ETag' in ok.headers);
+  assert.equal(ok.conditional.status, 304);
+  assert.deepEqual(ok.route, ['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview']);
+  const missing = built.get('picture_404.json');
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.errors[0].extensions.code, 'NOT_FOUND');
+  assert.match(missing.request.path, /^\/d1-inbox\/files\/[0-9a-f-]{36}\/thumb$/);
+  assert.equal(JSON.stringify(missing.body).includes(missing.request.path.split('/')[3]), false, 'the refusal does not echo the id');
 });

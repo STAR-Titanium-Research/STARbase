@@ -1,11 +1,12 @@
 // Run with: node --test core/extensions/d1-inbox/index.test.mjs
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
+  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, etagMatches, fileOut, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -98,6 +99,8 @@ function newWorld() {
     labels: { [INS1]: 'INS-001', [EDGE1]: 'INS-001-E1' },
     denyScanCreate: false, denyRefRead: null,
     scanRequests: [],
+    // d1_private.file_thumbnails: candidate_id -> { thumb: Buffer, preview: Buffer }
+    thumbs: new Map(),
     // the crawler's folder cache (d1_private.inbox_dirs): { rel_path, owner_person_id, owner_team_id, dir_mtime, last_listed_at }
     dirs: [],
     crawlerState: {
@@ -226,6 +229,18 @@ function statement(w, sql, b, txId) {
       const row = { request_id: ID(7000 + w.scanRequests.length), scope: 'person', person_id: b[0], requested_by: b[1], requested_at: w.now.toISOString(), finished_at: null, status: 'queued' };
       w.scanRequests.push(row);
       return [copy(row)];
+    }
+    case 'thumbMeta.thumb': case 'thumbMeta.preview': {
+      // the join of file_candidates and file_thumbnails: no row when the candidate or its picture is missing; etag = md5 of the chosen picture
+      const c = w.candidates.get(b[0]);
+      const t = w.thumbs.get(b[0]);
+      if (!c || !t) return [];
+      const bytes = t[name.split('.')[1]];
+      return [{ owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, state: c.state, etag: createHash('md5').update(bytes).digest('hex') }];
+    }
+    case 'thumbBytes.thumb': case 'thumbBytes.preview': {
+      const t = w.thumbs.get(b[0]);
+      return t ? [{ bytes: t[name.split('.')[1]] }] : [];
     }
     case 'summary': case 'summaryWithScans': return copy(w.summaryRows);
     case 'scansOfFiles': return [...new Set(csv(b[0]))].filter((id) => w.scans.some((r) => r.directus_files_id === id)).map((id) => ({ directus_files_id: id }));
@@ -406,7 +421,7 @@ function fakeRes() {
   const res = { statusCode: 200, body: undefined, headers: {} };
   res.status = (code) => { res.statusCode = code; return res; };
   res.json = (body) => { res.body = body; return res; };
-  res.end = () => res;
+  res.end = (chunk) => { if (chunk !== undefined) res.raw = chunk; res.ended = true; return res; };
   res.setHeader = (k, v) => { res.headers[k.toLowerCase()] = v; return res; };
   res.set = res.setHeader;
   return res;
@@ -2625,6 +2640,152 @@ test('POST /admin/scan-all: administrators only; queues an all-scope request onc
   assert.equal(actorsOf(w).at(0).bindings[0], U.admin);
 });
 
+// ---- the pictures (spec section 14) ---------------------------------------------------------------------------------------------
+
+const JPEG_THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02]);
+const JPEG_PREVIEW = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x0a, 0x0b, 0x0c, 0x0d]);
+const md5 = (bytes) => createHash('md5').update(bytes).digest('hex');
+const withPicture = (w, c) => { w.thumbs.set(c.candidate_id, { thumb: JPEG_THUMB, preview: JPEG_PREVIEW }); return c; };
+const picture = (call, kind, id, user, extra = {}) => call(`GET /files/:candidate_id/${kind}`, { user, params: { candidate_id: id }, ...extra });
+
+test('GET /files: has_thumbnail is a boolean per row, true only when the list query says a picture pair exists, and the bytes are never in the list', async () => {
+  const w = newWorld();
+  const a = cand();
+  const b = cand();
+  w.listRows = [listRow(a, { has_thumbnail: true }), listRow(b)];
+  w.listTotal = 2;
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice, query: { tab: 'new' } });
+  assert.deepEqual(res.body.data.map((r) => r.has_thumbnail), [true, false]);
+  const page = buildListQuery({ personId: P.alice, teamIds: [], admin: false }, parseFileFilters({}));
+  assert.match(page.sql, /EXISTS \(SELECT 1 FROM d1_private\.file_thumbnails th WHERE th\.candidate_id = c\.candidate_id\) AS has_thumbnail/);
+  assert.doesNotMatch(page.sql, /\b(th|t)\.(thumb|preview)\b/, 'the list never selects the bytes');
+  const info = { readable: new Set(), labels: new Map(), editable: new Set() };
+  assert.equal(fileOut(listRow(a, { has_thumbnail: 'yes' }), info).has_thumbnail, false, 'only a real true counts');
+  assert.equal(fileOut(listRow(a), info).has_thumbnail, false, 'a row without the column is false, not undefined');
+});
+
+test('GET /files/:id/thumb and /preview: the owner gets the JPEG itself with the right headers and no JSON wrapping', async () => {
+  const w = newWorld();
+  const a = withPicture(w, add(w, cand()));
+  const { call } = setup(w);
+  for (const [kind, bytes] of [['thumb', JPEG_THUMB], ['preview', JPEG_PREVIEW]]) {
+    const res = await picture(call, kind, a.candidate_id, U.alice);
+    assert.equal(res.statusCode, 200, kind);
+    assert.equal(res.headers['content-type'], 'image/jpeg', kind);
+    assert.equal(res.headers['cache-control'], 'private, max-age=3600', kind);
+    assert.equal(res.headers.etag, `"${md5(bytes)}"`, kind);
+    assert.equal(res.headers['content-length'], String(bytes.length), kind);
+    assert.equal(res.headers['x-content-type-options'], 'nosniff', kind);
+    assert.deepEqual(res.raw, bytes, `${kind}: the stored bytes, as they are`);
+    assert.equal(res.body, undefined, `${kind}: res.json is never used for a picture`);
+  }
+  assert.notEqual(md5(JPEG_THUMB), md5(JPEG_PREVIEW), 'each picture has its own ETag');
+  assert.equal(w.log.filter((l) => l.name === 'thumbBytes.thumb').length, 1);
+  assert.equal(w.log.some((l) => l.name === 'setActor'), false, 'a read: no transaction, no actor');
+});
+
+test('GET /files/:id/thumb: visible to exactly who sees the file in the list (canSee): the owner, an active member of the owner team, an administrator; nobody else', async () => {
+  const w = newWorld();
+  const own = withPicture(w, add(w, cand()));
+  const team = withPicture(w, add(w, cand({ owner_person_id: null, owner_team_id: TEAM })));
+  const { call } = setup(w);
+  // [personal file, team file] visible? Alice and Bob are in the SEM team, Carol only in another team, Dave in none, Former is inactive
+  for (const [who, expected] of [[U.alice, [true, true]], [U.bob, [false, true]], [U.carol, [false, false]], [U.dave, [false, false]], [U.former, [false, false]]]) {
+    for (const [c, want] of [[own, expected[0]], [team, expected[1]]]) {
+      const res = await picture(call, 'thumb', c.candidate_id, who);
+      assert.equal(res.statusCode, want ? 200 : 404, `${who} on ${c.owner_person_id ? 'a personal' : 'a team'} file`);
+      if (want) assert.deepEqual(res.raw, JPEG_THUMB); else assert.equal(res.raw, undefined, 'no byte of a picture the caller cannot see');
+    }
+  }
+  assert.equal((await picture(call, 'thumb', own.candidate_id, U.admin, { admin: true })).statusCode, 200, 'an administrator sees all, as in canSee');
+  assert.equal((await picture(call, 'preview', team.candidate_id, U.admin, { admin: true })).statusCode, 200);
+});
+
+test('GET /files/:id/thumb: not visible, no picture, no such file, a gone file and a bad id are all the same 404 (nothing confirms an id), and no bytes are read for them', async () => {
+  const w = newWorld();
+  const hidden = withPicture(w, add(w, cand({ owner_person_id: P.bob })));
+  const none = add(w, cand());
+  const gone = withPicture(w, add(w, cand({ state: 'gone' })));
+  const { call } = setup(w);
+  const answers = [];
+  for (const id of [hidden.candidate_id, none.candidate_id, ID(9999), gone.candidate_id, 'not-a-uuid', undefined]) {
+    const res = await picture(call, 'preview', id, U.alice);
+    assert.equal(res.statusCode, 404, String(id));
+    assert.equal(codeOf(res), 'NOT_FOUND', String(id));
+    assert.equal(errorOf(res).extensions.source, 'd1-inbox');
+    assert.equal(res.raw, undefined);
+    assert.equal(res.headers.etag, undefined, 'no ETag for a picture the caller cannot have');
+    answers.push(res.body);
+  }
+  assert.deepEqual(answers, answers.map(() => answers[0]), 'one answer for every reason');
+  assert.deepEqual(answers[0], { errors: [{ message: ERRORS.noPicture().message, extensions: { code: 'NOT_FOUND', source: 'd1-inbox' } }] });
+  assert.equal(w.log.filter((l) => /^thumbBytes/.test(l.name ?? '')).length, 0, 'bytes were never read');
+  // an upper-case id is the same id
+  const upper = await picture(call, 'thumb', withPicture(w, add(w, cand())).candidate_id.toUpperCase(), U.alice);
+  assert.equal(upper.statusCode, 200);
+});
+
+test('GET /files/:id/thumb: 401 without a user; a Lab Viewer may read pictures of their own inbox (a read is not a write)', async () => {
+  const w = newWorld();
+  const a = withPicture(w, add(w, cand({ owner_person_id: P.viewer })));
+  const { call } = setup(w);
+  const anon = await picture(call, 'thumb', a.candidate_id, undefined);
+  assert.equal(anon.statusCode, 401);
+  assert.equal(codeOf(anon), 'UNAUTHORIZED');
+  const viewer = await picture(call, 'thumb', a.candidate_id, U.viewer, { role: LAB_VIEWER_ROLE_ID });
+  assert.equal(viewer.statusCode, 200);
+  assert.deepEqual(viewer.raw, JPEG_THUMB);
+});
+
+test('GET /files/:id/thumb: If-None-Match with the current ETag is a 304 with no body and no bytes read; another or old tag, or none, is a 200', async () => {
+  const w = newWorld();
+  const a = withPicture(w, add(w, cand()));
+  const { call } = setup(w);
+  const etag = `"${md5(JPEG_THUMB)}"`;
+  const hit = await picture(call, 'thumb', a.candidate_id, U.alice, { headers: { 'if-none-match': etag } });
+  assert.equal(hit.statusCode, 304);
+  assert.equal(hit.raw, undefined, 'no body');
+  assert.equal(hit.ended, true);
+  assert.equal(hit.headers.etag, etag, 'a 304 repeats the ETag');
+  assert.equal(hit.headers['cache-control'], 'private, max-age=3600');
+  assert.equal(hit.headers['content-type'], undefined);
+  assert.equal(w.log.filter((l) => l.name === 'thumbBytes.thumb').length, 0, 'a 304 never moves the bytes');
+  for (const header of [`"${md5(JPEG_PREVIEW)}"`, '"stale"', '', undefined]) {
+    const res = await picture(call, 'thumb', a.candidate_id, U.alice, { headers: header === undefined ? {} : { 'if-none-match': header } });
+    assert.equal(res.statusCode, 200, String(header));
+    assert.deepEqual(res.raw, JPEG_THUMB);
+  }
+  // the thumb's tag is not the preview's
+  assert.equal((await picture(call, 'preview', a.candidate_id, U.alice, { headers: { 'if-none-match': etag } })).statusCode, 200);
+  assert.equal((await picture(call, 'preview', a.candidate_id, U.alice, { headers: { 'if-none-match': `"${md5(JPEG_PREVIEW)}"` } })).statusCode, 304);
+  // a 304 is only for a caller who may see the file: someone else gets the 404 even with the right tag
+  assert.equal((await picture(call, 'thumb', a.candidate_id, U.carol, { headers: { 'if-none-match': etag } })).statusCode, 404);
+  // a changed picture changes the tag
+  w.thumbs.set(a.candidate_id, { thumb: Buffer.from([0xff, 0xd8, 0x00]), preview: JPEG_PREVIEW });
+  assert.equal((await picture(call, 'thumb', a.candidate_id, U.alice, { headers: { 'if-none-match': etag } })).statusCode, 200);
+});
+
+test('etagMatches: a quoted tag, a list of tags, a weak tag and * match; anything else does not', () => {
+  const tag = '"abc"';
+  assert.equal(etagMatches('"abc"', tag), true);
+  assert.equal(etagMatches('"x", "abc"', tag), true);
+  assert.equal(etagMatches('W/"abc"', tag), true);
+  assert.equal(etagMatches('*', tag), true);
+  for (const bad of ['"abd"', 'abc', '', '   ', undefined, null, ['"abc"']]) assert.equal(etagMatches(bad, tag), false, String(bad));
+});
+
+test('the picture SQL reads the bytes of one column chosen from a closed list, for one candidate id, and the visibility step reads no bytes', () => {
+  assert.deepEqual(Object.keys(SQL.thumbMeta), ['thumb', 'preview']);
+  assert.deepEqual(Object.keys(SQL.thumbBytes), ['thumb', 'preview']);
+  for (const kind of ['thumb', 'preview']) {
+    assert.match(SQL.thumbMeta[kind], new RegExp(`md5\\(t\\.${kind}\\) AS etag`));
+    assert.doesNotMatch(SQL.thumbMeta[kind].replace(/md5\(t\.\w+\)/, ''), /\bt\.(thumb|preview)\b/, 'only the md5 of the picture, never the picture');
+    assert.match(SQL.thumbMeta[kind], /WHERE c\.candidate_id = \?$/);
+    assert.match(SQL.thumbBytes[kind], new RegExp(`^SELECT t\\.${kind} AS bytes FROM d1_private\\.file_thumbnails t WHERE t\\.candidate_id = \\?$`));
+  }
+});
+
 // ---- wiring ------------------------------------------------------------------------------------------------------------------
 
 test('the default export is the endpoint: id d1-inbox, a handler that registers every route', () => {
@@ -2632,7 +2793,7 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   const router = fakeRouter();
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
-    'GET /admin', 'GET /files', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss',
+    'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss',
     'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });

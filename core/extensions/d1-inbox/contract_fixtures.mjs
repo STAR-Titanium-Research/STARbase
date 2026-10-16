@@ -51,7 +51,7 @@ const row = (over) => ({
   origin: 'new', state: 'new', match_strength: 'none', matches: [], suggested_collection: null, suggested_record_id: null, duplicate_of: null,
   duplicate_of_owner: null, duplicate_owner_person_id: null, duplicate_owner_team_id: null, rel_path: 'Users/ali1/file.tif', size_bytes: '2500000', source_mtime: at('2026-10-10T09:00:00.000Z'),
   first_seen_at: at('2026-10-11T09:00:00.000Z'), decided_at: null, link_kind: null, linked_collection: null, link_batch_id: null, linked_record_id: null,
-  decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, ...over,
+  decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, has_thumbnail: false, ...over,
 });
 const named = (id, token, via = 'short_id') => [{ collection: 'physical_samples', record_id: id, via, token }];
 const suggest = (id) => ({ suggested_collection: 'physical_samples', suggested_record_id: id });
@@ -59,12 +59,12 @@ const suggest = (id) => ({ suggested_collection: 'physical_samples', suggested_r
 const NEW_ORIGINAL = row({
   candidate_id: ID(1001), directus_files_id: ID(3001), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
   extracted: { kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' }, match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'),
-  ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A1.tif', size_bytes: '3145728',
+  ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A1.tif', size_bytes: '3145728', has_thumbnail: true,
 });
 const COPY = row({
   candidate_id: ID(1002), directus_files_id: ID(3002), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), duplicate_of: ID(1001), duplicate_of_owner: 'Alice A',
-  duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
+  duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team', has_thumbnail: true,
 });
 // A copy whose original sits in the Inbox of someone Alice has nothing to do with (not her folder, not her teams): the server sends { kind: 'other' }
 // and not the name 'Bob B' that the row carries.
@@ -99,12 +99,12 @@ const HIDDEN_RECORD = row({
 const BACKLOG_EXACT = row({
   candidate_id: ID(1007), directus_files_id: ID(3007), name: '3fa9c1d2_old.tif', kind: 'sem_image', kind_confidence: '0.90', origin: 'backlog',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/2024/3fa9c1d2_old.tif', source_mtime: at('2024-03-02T10:00:00.000Z'),
-  first_seen_at: at('2026-10-01T08:00:00.000Z'),
+  first_seen_at: at('2026-10-01T08:00:00.000Z'), has_thumbnail: true,
 });
 const LINKED_AUTO = row({
   candidate_id: ID(1008), directus_files_id: ID(3008), name: '3fa9c1d2_A2.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A2.tif', decided_at: at('2026-10-14T16:00:00.000Z'),
-  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, decided_by_name: 'Alice A', adopted_at: null,
+  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
 });
 const LINKED_MANUAL = row({
   candidate_id: ID(1009), directus_files_id: ID(3009), name: 'S-0042_notes.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null, state: 'linked',
@@ -298,6 +298,19 @@ export function buildFixtures() {
   put('rescan_409_no_folder', failure('a person with no folder', request('POST', '/d1-inbox/rescan', { body: {} }), ERRORS.noFolder()));
   put('scan_all_202', ok('a scan of every folder queued', request('POST', '/d1-inbox/admin/scan-all', { body: {} }), { data: shapeQueued({ ...queued, request_id: ID(7002) }) }, 202));
   put('scan_all_409_already_queued', failure('one already waits', request('POST', '/d1-inbox/admin/scan-all', { body: {} }), ERRORS.alreadyQueued(ID(7002))));
+
+  // GET /files/:candidate_id/thumb | /preview: the picture itself (image/jpeg, no { data } envelope), so a fixture of the 200 and 304 has headers and no body
+  const pictureReq = (kind, id = ID(1001)) => request('GET', `/d1-inbox/files/${id}/${kind}`);
+  put('picture_headers', {
+    description: 'what GET /d1-inbox/files/:candidate_id/thumb and /preview answer for a file the caller may see and that has a picture: the JPEG bytes (not JSON) with these headers; the client sends the signed-in session and fetches a blob',
+    route: ['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview'],
+    status: 200,
+    headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', ETag: '"<md5 of the stored bytes, quoted>"', 'Content-Length': '<bytes>', 'X-Content-Type-Options': 'nosniff' },
+    conditional: { request_header: 'If-None-Match', status: 304, body: null, repeats: ['ETag', 'Cache-Control'] },
+    has_picture_when: 'the found file has has_thumbnail true',
+  });
+  put('picture_404', failure('no picture for that id: the file is not the caller\'s to see, does not exist, is gone, has no picture, or the id is not a uuid (one answer for all, a JSON error)',
+    pictureReq('thumb'), ERRORS.noPicture()));
 
   // GET and PUT /prefs
   put('prefs_get_off', ok('auto-link off (the default)', request('GET', '/d1-inbox/prefs'), { data: shapePrefs(undefined) }));
