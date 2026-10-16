@@ -98,15 +98,25 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   crawler to leave a folder alone: a rule in `d1_private.inbox_ignored_dirs`, a path *relative to the owner's
   folder* (`World-Ti Paper/Drafts`, not `Users/abc12de/...`), matched on whole path parts without regard to case
   (`World-Ti Paper` covers `world-ti paper/Drafts` but not `World-Ti Paper 2`; no wildcards; the folder itself is
-  covered, and everything below it). The crawler reads every owner's rules once at the start of a scan, so a rule
-  added or removed meanwhile counts from the next scan. An ignored folder is **not scanned**, which is not the
-  same as empty:
-  - it is not listed, not statted and nothing in it is opened (a lower load on the share is the point). It
-    still shows in its parent's listing, so it keeps a cache row (`inbox_dirs`, seen but not listed);
+  covered, and everything below it). A rule only ever makes the crawler read less, so the crawler reads an owner's
+  rules when it starts the owner and again before it lists a folder, before each batch of 50 registrations and
+  (every few seconds) before it reads a file: a rule added while a big folder is being walked stops the walk of it
+  within a batch, and nothing under a rule found at that moment is registered, classified or given pictures
+  (files registered in the instant before the crawler saw the rule stay `new`; STARbase hides them, and the
+  crawler makes no more). A rule *removed* mid-scan is honoured from the next owner or folder it reads.
+  An ignored folder is **not scanned**, which is not the same as empty:
+  - the crawler stops looking for new files there: the folder is not listed, not statted and nothing in it is
+    opened (a lower load on the share is the point). It still shows in its parent's listing, so it keeps a cache
+    row (`inbox_dirs`, seen but not listed). Files already linked stay linked and tracked (a linked document is
+    still read to fingerprint it, see below);
   - nothing under it is ever marked `gone`, in any state, even when the folder or a folder above it has been
     deleted on the share, and the cache rows below it stay as they are. Candidates there keep whatever state
     they had until the rule is removed, when the next scan looks again;
-  - a file below it is not retried when its first hash failed, and is not offered to auto-link;
+  - a file below it is not retried when its first hash failed, is not offered to auto-link and gets no
+    thumbnail from the backfill (every query that reads the share applies the rules, in SQL and again exactly in
+    Python, because Postgres and Python lower-case a few letters differently);
+  - a file that was dismissed by the rule and then restored by hand stays `new`: the crawler neither lists the
+    folder nor marks it `gone`, and it never makes one `new` under a rule;
   - **a file that is already linked stays tracked.** The queue that hashes a linked document once (and retries a
     failed one) is not stopped by a rule: a linked file belongs to a record, and the rule only keeps the crawler
     from finding new files there.

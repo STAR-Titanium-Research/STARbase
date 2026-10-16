@@ -408,7 +408,9 @@ user's request as the only input; each is cheap to change:
   it. No wildcards. The root itself cannot be ignored; no leading or trailing slash, no `.` or `..` parts, at most 200 rules per owner.
 - **Crawler.** An ignored subtree is neither listed nor statted (lower load on the share, which is the point). It
   is *not scanned*, which is different from *empty*: the missing-file sweep must never mark candidates under it `gone`. A
-  rule that is added or removed mid-scan takes effect from the next scan.
+  rule is read when the crawler starts an owner and again before it lists a folder and before each batch of
+  registrations, so a rule added mid-scan stops the walk of its folder within a batch (it only ever makes the
+  crawler read less).
 - **Existing files.** Adding a rule dismisses the owner's open (`new`) candidates under it in the same transaction, as an
   ordinary, restorable dismissal; linked files are untouched. Removing a rule resets the folder's cache rows
   (`dir_mtime` and `last_listed_at` set to NULL for the folder and everything below it; the rows are kept, because the crawler
