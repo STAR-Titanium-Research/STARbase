@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { DataTable, LoadState, RecordLink, Section, edgeLabel, mismatchText, placementText, type SectionState, type ToolingInsert } from '@d1/ui';
+import { DataTable, LoadState, RecordLink, Section, edgeLabel, edgeNotes, mismatchText, placementText, type SectionState, type ToolingInsert } from '@d1/ui';
 import StateBadge from './StateBadge.vue';
 
 // What an insert page shows under the stage: its edges, with state and position, each a link to the
 // edge's own page. (Details and notes are ToolingDetails, placed by the page.)
 const props = defineProps<{ insert: ToolingInsert; counts: SectionState<Map<string, number>> }>();
 
+// "1 edge missing", "1 duplicate edge record ignored": what the insert's edge rows lack or repeat.
+const notes = computed(() => edgeNotes(props.insert));
 const rows = computed(() =>
 	props.insert.edges.map((edge) => ({
 		edge,
@@ -33,5 +35,6 @@ const rows = computed(() =>
 				</tr>
 			</tbody>
 		</DataTable>
+		<p v-for="n in notes" :key="n" class="d1-note warn">{{ n }}</p>
 	</Section>
 </template>
