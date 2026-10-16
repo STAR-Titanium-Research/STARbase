@@ -608,6 +608,8 @@ services:
       D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
       # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
       INBOX_OCR: ${INBOX_OCR:-}
+      # auto|cpu|cuda for the data-bar OCR: CPU unless asked; auto takes the GPU when onnxruntime offers one.
+      INBOX_OCR_DEVICE: ${INBOX_OCR_DEVICE:-cpu}
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
       # The folder holding the personal folders: the lab share spells it `User` (Z:\star_group1\User).
       INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
@@ -619,6 +621,8 @@ services:
       - archive_share:/mnt/archive:ro
     working_dir: /scripts
     # Exact versions (the ones CI resolved): a bump is a reviewed change, not whatever pip finds at a restart.
+    # INBOX_OCR=1 also needs rapidocr-onnxruntime and numpy, not installed here until a clean image has been shown to
+    # import them (physical-test backlog SEM7); `make inbox-crawler-once` has its own copy of this pip line.
     command: ["sh", "-c", "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && exec python -m inbox_crawler --daemon"]
     networks: [d1net]
 

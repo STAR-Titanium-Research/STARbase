@@ -1920,9 +1920,9 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **IF8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
   record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
   photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
-  from the text tags when present; the layout is a guess until seen). Decide whether to switch OCR on: it
-  needs `INBOX_OCR=1`, the `pytesseract` package and the tesseract program in the container, none of which
-  the service installs today.
+  from the text tags when present; the layout is a guess until seen). JEOL text OCR no longer has a default
+  (pytesseract was never installed or validated): only JEOL metadata claims a JEOL image, and the FEI data-bar
+  reader (`INBOX_OCR=1`, **SEM1** to **SEM7** below) does not read JEOL bars.
 - [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the `surface_scans`
   migration (192) applied. Expect tag `surface_scan`; the hand-off is an add, not a link:
   `POST /d1-inbox/link` with `{candidate_id, collection:'surface_scans', insert_id | edge_id, condition, ...}`
@@ -2145,6 +2145,62 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
   this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
   re-review fixes (server, S5).
+
+### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
+
+Needs the real share, real FEI/Thermo images and the crawler host. Spec:
+[SEM data-bar reader](../superpowers/specs/2026-10-16-sem-data-bar-reader-design.md) (section 2, tiers 1 and 2).
+Cloud sessions and CI have no real bars and no Docker daemon: the unit tests prove the geometry, the parsing, the
+ranges and the cross-checks on synthetic bars with a scripted recogniser, **not** that the real font reads. Never
+commit a research image while doing these; look at them on d1-server only.
+
+- [ ] **SEM1 — FEI TIFFs through the real crawler.** On d1-server, point a trial run at a folder with real FEI
+  TIFFs (`INBOX_ONLY_FOLDERS=<folder>`, `make inbox-crawler-once`): at least 20 images, among them one 2048-px
+  image (119-px bar), one acquired in British summer time and one in winter, one whose bar prints `40×`, and, as
+  controls, a thermal-camera JPEG, a `Microscope x20` optical TIFF and an EDS map with a legend bar. Expect each
+  FEI TIFF to be `kind = 'sem_image'` with `kind_confidence` 0.95 (0.9 where no bar is found), `extracted` holding
+  `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `detector`, `mode`, `acquired_at` (ISO 8601 with
+  offset, equal to the instrument's London clock: `+01:00` in summer, `+00:00` in winter), `sources` all
+  `metadata` except `magnification` = `derived`, and `flags` empty or naming only a field the file really lacks;
+  the controls stay `image` ("data-bar-like strip, no SEM evidence" or the optical-microscope reason). Check with
+  `SELECT rel_path, kind, kind_confidence, extracted FROM d1_private.file_candidates WHERE ...`. Re-run with
+  `INBOX_OCR=1` once **SEM7** passes: every field the bar prints must agree with the metadata, and any
+  `flags.<field> = 'bar_mismatch'` is a finding to look at (the bar or the metadata is wrong), not noise. Since:
+  sem-reader plan, stream B.
+- [ ] **SEM2 — Real PNG, BMP and JPEG exports against their TIFFs' metadata.** Needs `INBOX_OCR=1` and **SEM7**
+  done. Run the crawler over SEM-named folders that hold exports, including contrast-edited `*_contrasted.PNG`
+  files (white dividers about 207 instead of 255) and at least one JPEG. For every export that has a same-name
+  TIFF with metadata, compare `kv`, `working_distance_mm`, `spot`, `mode` and `magnification` with the TIFF's.
+  Expect `kind = 'sem_image'`, confidence 0.8, `sources` all `ocr`, and every value that is present equal to the
+  TIFF's (the trial read 37 of 37 exports cleanly; one JPEG whose bar says 10 kV has a TIFF namesake that says
+  20 kV, which is a different capture, not a misread). **A wrong value is a blocker; an absent one is fine** and
+  must carry a flag (`hfw_mismatch`, `length_mismatch`, `out_of_range`, `not_a_number`). Expect
+  `flags.check_this = true` on a bar-only export (nothing but the scale bar can vouch for it) and none when the
+  scale-bar length confirmed the magnification. Charts, 256x200 EDS thumbnails and phone photos in the same
+  folders must stay `image`. Record the time per file (the trial: about 0.16 s on a CPU) and the count of exports
+  with no value for some field. Since: sem-reader plan, stream B.
+- [ ] **SEM4 — (optional) `INBOX_OCR_DEVICE=auto` on the crawler host.** Only if the GPU is wanted: the CPU is
+  fast enough for this corpus. On the host with the RTX 5080 (Docker GPU passthrough set up, `onnxruntime-gpu`
+  installed in the crawler image in place of `onnxruntime`, a build that supports Blackwell), set
+  `INBOX_OCR=1` and `INBOX_OCR_DEVICE=auto` and recreate the service. Expect the log line `data-bar OCR: RapidOCR
+  recogniser on CUDAExecutionProvider (INBOX_OCR_DEVICE=auto)`; with no GPU or a provider that fails to load,
+  expect `data-bar OCR stays on the CPU (auto): ...` and the same values as on the CPU. The GPU switch rebuilds
+  RapidOCR's recogniser session by hand (RapidOCR 1.2.3 ignores its own `rec_use_cuda` option), so confirm the
+  `CUDAExecutionProvider` line is true and the values equal the CPU run's. `cuda` with no GPU must warn and fall
+  back, never stop the crawler. Since: sem-reader plan, stream B.
+- [ ] **SEM7 — The crawler image installs and imports rapidocr and `zoneinfo`.** The plan's packaging step could
+  not be run in the cloud session (no Docker daemon), so the pip lines of `docker-compose.yml` (service
+  `inbox-crawler`) and the `Makefile` (`inbox-crawler-once`) do **not** install rapidocr yet, and `INBOX_OCR=1` logs
+  one warning and reads no bars. On a machine with Docker: find a pip line that works in `python:3.12-slim`, which
+  installs `--no-deps rapidocr-onnxruntime==1.2.3`, then its dependencies (`onnxruntime`, `numpy`, `pyclipper`,
+  `Shapely`, `PyYAML`, `six`, `Pillow`) with `opencv-python-headless` in place of the non-headless
+  `opencv-python` (which needs libGL), every version exact from a passing install. Prove it in a clean image:
+  `docker run --rm python:3.12-slim sh -c "<the pip line> && python -c 'import zoneinfo, rapidocr_onnxruntime;
+  zoneinfo.ZoneInfo(\"Europe/London\"); rapidocr_onnxruntime.RapidOCR(); print(\"ok\")'"`. Expect `ok` (the models
+  ship in the wheel; nothing is downloaded at run time; the install is about 380 MB). Then put the same
+  pip line in the compose command and in both copies in the `Makefile`, run SEM1 and SEM2, and tick this. Also
+  confirm the image has timezone data (`zoneinfo.ZoneInfo("Europe/London")` is built when the crawler imports
+  `sem_meta`, with or without OCR). Since: sem-reader plan, stream B.
 
 ## Done
 
