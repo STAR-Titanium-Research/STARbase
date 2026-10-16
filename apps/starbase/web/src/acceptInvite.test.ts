@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acceptInvite, tokenEmail, tokenFrom } from './acceptInvite';
+import { acceptInvite, policyChecks, tokenEmail, tokenFrom } from './acceptInvite';
 import { createApi } from './api';
 import { fakeServer, type Reply } from './testing/fakeServer';
 
@@ -79,5 +79,29 @@ describe('tokenFrom', () => {
 		expect(tokenFrom({ token: '' })).toBeNull();
 		expect(tokenFrom({ token: null })).toBeNull();
 		expect(tokenFrom({})).toBeNull();
+	});
+});
+
+describe('policyChecks', () => {
+	// d1-server's live auth_password_policy (directus_settings), the oracle: the checklist must tick everything exactly when Directus accepts.
+	const LIVE_POLICY = /(?=^.{8,}$)(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*()_+}{';'?>.<,])(?!.*\s).*$/;
+	const allMet = (p: string) => policyChecks(p).every((c) => c.met);
+
+	it('ticks every line exactly when the live policy accepts the password', () => {
+		const passwords = [
+			'Abcdef1!', 'Abcdef1', 'Ab1!', 'abcdefg1!', 'ABCDEFG1!', 'Abcdefgh!', 'Abcdefg1', // length, case, digit, symbol each missing
+			'Abcdef1-', 'Abcdef1=', 'Abcdef1[', 'Abcdef1~', 'Abcdef1:', 'Abcdef1/', 'Abcdef1|', // symbols the policy does not count
+			'Abcdef1;', "Abcdef1'", 'Abcdef1?', 'Abcdef1.', 'Abcdef1,', 'Abcdef1<', 'Abcdef1>', 'Abcdef1{', 'Abcdef1}', 'Abcdef1_', 'Abcdef1+', // ones it does
+			'Abc def1!', 'Abcdef1! ', ' Abcdef1!', // whitespace is refused
+			'Ünïcödé1!a', 'Abcdéf1é', 'A1!aaaaa', 'A1!aaaa',
+		];
+		for (const p of passwords) expect(allMet(p), JSON.stringify(p)).toBe(LIVE_POLICY.test(p));
+	});
+
+	it('names the length and spaces rules as well as the character kinds', () => {
+		const labels = policyChecks('x').map((c) => c.label);
+		expect(labels).toEqual(expect.arrayContaining(['at least 8 characters', 'no spaces']));
+		expect(policyChecks('Abcdef1!').every((c) => c.met)).toBe(true);
+		expect(policyChecks('Abc def1!').find((c) => c.label === 'no spaces')?.met).toBe(false);
 	});
 });
