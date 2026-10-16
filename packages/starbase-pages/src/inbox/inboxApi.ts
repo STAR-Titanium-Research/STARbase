@@ -23,12 +23,14 @@
 //   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
 //                                       queued or running; 409 NO_FOLDER when the person has no folder
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
-//   GET  /d1-inbox/ignored-folders      -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }] }: the caller's own
-//                                       rules and their teams'; can_remove is false for a Lab Viewer. `folder` is relative to the owner's root.
+//   GET  /d1-inbox/ignored-folders      -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }], meta: { can_change } }:
+//                                       the caller's own rules and their teams'; `folder` is relative to the owner's root. meta.can_change is false for a Lab Viewer and
+//                                       true otherwise, whatever the number of rules (an older server sends no meta: the page then judges by can_remove on the rules).
 //   POST /d1-inbox/ignored-folders      { folder, team_id? } -> 201 { data: { ignored_id, folder, team_id, dismissed } }: `dismissed` is how many open files below the
 //                                       folder moved to Dismissed in the same transaction (restorable). 400 INVALID_PAYLOAD (extensions.field 'folder'), 403 FORBIDDEN
 //                                       (a team the caller is not in), 409 NO_FOLDER / ALREADY_IGNORED / TOO_MANY_RULES (200 per owner).
-//   DELETE /d1-inbox/ignored-folders/<id> -> { data: { ignored_id, folder, rescan_queued } }: the next scan lists the folder again; the rate limit never fails the
+//   DELETE /d1-inbox/ignored-folders/<id> -> { data: { ignored_id, folder, rescan_queued, still_ignored } }: still_ignored is true when another rule of the same owner
+//                                       still covers the folder (then no rescan was queued); otherwise the next scan lists the folder again. The rate limit never fails the
 //                                       delete (rescan_queued says whether a rescan was queued). 404 NOT_FOUND for a rule that is not the caller's or their team's.
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
@@ -38,7 +40,7 @@
 // that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
 import { errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
-	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredRemoved, IgnoredRule, InboxAdmin,
+	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
 	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, Skipped,
 } from './inboxApiTypes';
 
@@ -279,15 +281,20 @@ export const savePrefs = (api: HostApi, prefs: InboxPrefs): Promise<InboxPrefs> 
 		(b) => ({ auto_link: b.auto_link === true }),
 	);
 
-/** The rules the caller may see: their own folder's and their teams'. A row with no id is left out. */
-export const listIgnored = (api: HostApi): Promise<IgnoredRule[]> =>
+/** The rules the caller may see (their own folder's and their teams') and whether they may change them. A row with no id is left out. */
+export const loadIgnored = (api: HostApi): Promise<IgnoredList> =>
 	call(
 		() => api.get(`${BASE}/ignored-folders`),
-		(b) =>
-			(Array.isArray(b) ? b : Array.isArray(b.data) ? b.data : [])
+		(b) => ({
+			rules: (Array.isArray(b) ? b : Array.isArray(b.data) ? b.data : [])
 				.filter((r: any) => r && typeof r.ignored_id === 'string' && typeof r.folder === 'string')
 				.map((r: any): IgnoredRule => ({ ignored_id: r.ignored_id, folder: r.folder, owner: parseOwner(r.owner), created_at: str(r.created_at), can_remove: r.can_remove === true })),
+			canChange: typeof b.meta?.can_change === 'boolean' ? b.meta.can_change : null,
+		}),
 	);
+
+/** Just the rules (see loadIgnored). */
+export const listIgnored = async (api: HostApi): Promise<IgnoredRule[]> => (await loadIgnored(api)).rules;
 
 /** Ignore a folder (relative to the owner's root; `teamId` for a team folder). The server answers 201 and dismisses the owner's open files below it. */
 export const addIgnored = (api: HostApi, folder: string, teamId?: string | null): Promise<IgnoredAdded> =>
@@ -299,7 +306,7 @@ export const addIgnored = (api: HostApi, folder: string, teamId?: string | null)
 export const removeIgnored = (api: HostApi, ignoredId: string): Promise<IgnoredRemoved> =>
 	call(
 		() => api.delete(`${BASE}/ignored-folders/${encodeURIComponent(ignoredId)}`),
-		(b) => ({ ignored_id: String(b.ignored_id ?? ignoredId), folder: typeof b.folder === 'string' ? b.folder : '', rescan_queued: b.rescan_queued === true }),
+		(b) => ({ ignored_id: String(b.ignored_id ?? ignoredId), folder: typeof b.folder === 'string' ? b.folder : '', rescan_queued: b.rescan_queued === true, still_ignored: b.still_ignored === true }),
 	);
 
 const adminStatus = (s: Record<string, any> | null | undefined): CrawlerStatus => ({

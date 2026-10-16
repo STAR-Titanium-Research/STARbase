@@ -16,7 +16,15 @@ const Button = defineComponent({
 	setup: (p, { slots, emit }) => () => h('button', { type: 'button', disabled: p.disabled || p.loading, title: p.title, onClick: () => emit('click') }, slots.default?.()),
 });
 const Div = defineComponent({ setup: (_p, { slots }) => () => h('div', slots.default?.()) });
-const Dialog = defineComponent({ props: { modelValue: Boolean }, setup: (p, { slots }) => () => (p.modelValue ? h('div', { role: 'dialog' }, slots.default?.()) : null) });
+// Esc makes Directus's v-dialog say both "esc" and "closed"; so does this stand-in
+const Dialog = defineComponent({
+	props: { modelValue: Boolean },
+	emits: ['update:modelValue', 'esc'],
+	setup: (p, { slots, emit }) => () =>
+		p.modelValue
+			? h('div', { role: 'dialog', tabindex: -1, onKeydown: (e: KeyboardEvent) => e.key === 'Escape' && (emit('esc'), emit('update:modelValue', false)) }, slots.default?.())
+			: null,
+});
 function registerStubs(app: App) {
 	app.component('v-button', Button);
 	app.component('v-icon', defineComponent({ setup: () => () => h('span') }));
@@ -114,9 +122,9 @@ describe('Ignore this folder on a row', () => {
 		expect(q('[data-test="ignore-title"]')?.textContent).toBe('Stop scanning Paper/Drafts?');
 		const lines = [...document.querySelectorAll('[data-test="ignore-line"]')].map((l) => l.textContent);
 		expect(lines).toEqual([
-			'The crawler will leave this folder and everything in it alone.',
-			'Any found files below it that are still in your Inbox (1 found file shown here) move to Dismissed. You can restore them.',
-			'Files already linked stay linked. Nothing on the share is changed.',
+			'The crawler stops looking for new files in Paper/Drafts and below.',
+			'Files there that are still in your Inbox (1 found file shown here) move to Dismissed. You can restore them.',
+			'Files already linked stay linked and tracked. Nothing on the share is changed.',
 		]);
 		expect(q('[data-test="ignore-team"]')).toBeNull();
 		click(q('[data-test="ignore-cancel"]'));
@@ -124,6 +132,43 @@ describe('Ignore this folder on a row', () => {
 		expect(dialog()).toBeNull();
 		expect(posts()).toEqual([]);
 		expect(names()).toHaveLength(4);
+	});
+
+	it('Cancel gives focus back to the row\'s Ignore this folder button, and so does Esc', async () => {
+		await mount();
+		const button = rowOf('a.tif').querySelector<HTMLElement>('[data-test="ignore-folder"]')!;
+		button.focus();
+		click(button);
+		await nextTick();
+		// the dialog took focus away from the button (a real one moves it inside the card)
+		button.blur();
+		expect(document.activeElement).not.toBe(button);
+		click(q('[data-test="ignore-cancel"]'));
+		await flush();
+		expect(dialog()).toBeNull();
+		expect(document.activeElement).toBe(button);
+		// the other row's button, then Esc
+		const other = rowOf('b.tif').querySelector<HTMLElement>('[data-test="ignore-folder"]')!;
+		click(other);
+		await nextTick();
+		other.blur();
+		dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+		await flush();
+		expect(dialog()).toBeNull();
+		expect(document.activeElement).toBe(other);
+		expect(posts()).toEqual([]);
+	});
+
+	it('after Stop scanning the row is gone, so focus goes to the status line that says what happened', async () => {
+		await mount();
+		const button = rowOf('a.tif').querySelector<HTMLElement>('[data-test="ignore-folder"]')!;
+		click(button);
+		await nextTick();
+		click(q('[data-test="ignore-confirm"]'));
+		await vi.waitFor(() => expect(notice()?.textContent).toContain('Ignoring Paper/Drafts.'));
+		await vi.waitFor(() => expect(button.isConnected).toBe(false));
+		await flush();
+		expect(document.activeElement).toBe(q('[data-test="status"]'));
 	});
 
 	it('Stop scanning adds the rule, the files below it leave New, the badge count drops, and the notice says the server\'s count with Remove rule', async () => {
@@ -226,6 +271,16 @@ describe('the Ignored folders section', () => {
 		expect(fake.calls.some((c) => c.method === 'delete' && c.path.startsWith('/d1-inbox/ignored-folders/'))).toBe(true);
 	});
 
+	it('Remove of a rule that another rule still covers says so and names it, with no word of a rescan', async () => {
+		await mount(defaultFiles(), { ignoredRules: [{ folder: 'Paper' }, { folder: 'Paper/Drafts' }] });
+		await openSection();
+		const li = [...document.querySelectorAll('[data-test="ignored-rule"]')].find((x) => x.querySelector('[data-test="ignored-folder"]')?.textContent === 'Paper/Drafts')!;
+		click(li.querySelector('[data-test="ignored-remove"]'));
+		await vi.waitFor(() => expect(notice()?.textContent).toContain('Rule removed. Paper/Drafts is still ignored by another rule (Paper).'));
+		expect(notice()?.textContent).not.toMatch(/rescan|next scan|listed again/i);
+		await vi.waitFor(() => expect(document.querySelectorAll('[data-test="ignored-rule"]')).toHaveLength(1));
+	});
+
 	it('a failed Remove says why in the section', async () => {
 		await mount(defaultFiles(), { ignoredRules: [{ folder: 'Drafts' }] });
 		await openSection();
@@ -311,6 +366,27 @@ describe('a Lab Viewer and an older server', () => {
 		expect(q('[data-test="ignored-input"]')).toBeNull();
 		click(remove);
 		expect(fake.calls.some((c) => c.method === 'delete')).toBe(false);
+	});
+
+	it('a Lab Viewer with NO rules gets no Ignore this folder on any row and no add field, and is told why', async () => {
+		await mount(defaultFiles(), { viewer: true });
+		expect(rows().length).toBeGreaterThan(0);
+		expect(document.querySelector('[data-test="ignore-folder"]')).toBeNull();
+		await openSection();
+		expect(q('[data-test="ignored-empty"]')?.textContent).toBe('No folders are ignored.');
+		expect(q('[data-test="ignored-readonly"]')?.textContent).toBe('You can see these rules but not change them.');
+		expect(q('[data-test="ignored-input"]')).toBeNull();
+		expect(q('[data-test="ignored-add"]')).toBeNull();
+		expect(fake.calls.some((c) => c.method === 'post')).toBe(false);
+	});
+
+	it('an older server with no meta: a viewer with rules is still read-only, a person with no rules still may ignore', async () => {
+		await mount(defaultFiles(), { viewer: true, noMeta: true, ignoredRules: [{ folder: 'Drafts' }] });
+		expect(document.querySelector('[data-test="ignore-folder"]')).toBeNull();
+		app?.unmount();
+		document.body.innerHTML = '';
+		await mount(defaultFiles(), { noMeta: true });
+		expect(rowOf('a.tif').querySelector('[data-test="ignore-folder"]')).not.toBeNull();
 	});
 
 	it('a server with no ignored-folders route shows nothing about it', async () => {

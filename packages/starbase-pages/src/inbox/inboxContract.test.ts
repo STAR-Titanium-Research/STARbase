@@ -1010,6 +1010,8 @@ describe('ignored folders (GET / POST /d1-inbox/ignored-folders, DELETE /d1-inbo
 		expect(ig.rules.value.every((r) => r.can_remove === false)).toBe(true);
 		expect(ig.rules.value).toHaveLength(f.body.data.length);
 		expect(ig.readOnly.value).toBe(true);
+		// the server's own word (meta.can_change) when the fixture has it, else the page judged by the rules
+		expect(ig.canChange.value).toBe(f.body.meta?.can_change ?? null);
 		// and a person who can remove is not read-only
 		const own = page({ [`GET ${PATH}`]: fx('ignored_get') });
 		await own.ig.load();
@@ -1044,7 +1046,8 @@ describe('ignored folders (GET / POST /d1-inbox/ignored-folders, DELETE /d1-inbo
 			const f = fx(name);
 			const { api, calls } = only(f);
 			const id = f.request.path.split('/').pop()!;
-			expect(await removeIgnored(api, id)).toEqual({ ...f.body.data });
+			// still_ignored is read when the server sends it (toMatchObject: a server that does not yet is still_ignored false)
+			expect(await removeIgnored(api, id)).toMatchObject({ ...f.body.data });
 			expect(calls[0]).toMatchObject({ method: 'DELETE', path: f.request.path });
 			const p = page({ [`DELETE ${f.request.path}`]: f, [`GET ${PATH}`]: fx('ignored_get_empty') });
 			expect(await p.ig.removeById(id)).toEqual({ ok: true });

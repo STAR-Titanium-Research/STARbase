@@ -47,7 +47,7 @@ async function submit() {
 	if (r.ok) typed.value = '';
 	else problem.value = r.message;
 }
-const someLocked = computed(() => props.rules.some((r) => !r.can_remove));
+const someLocked = computed(() => props.readOnly || props.rules.some((r) => !r.can_remove));
 const showOwner = computed(() => props.teams.length > 0);
 </script>
 

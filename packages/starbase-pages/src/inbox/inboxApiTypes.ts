@@ -191,6 +191,11 @@ export interface IgnoredRule {
 	/** False for a Lab Viewer (they may read the rules, not remove them). */
 	can_remove: boolean;
 }
+/** The rules the caller may see, and whether they may change them (meta.can_change; null from an older server that does not say). */
+export interface IgnoredList {
+	rules: IgnoredRule[];
+	canChange: boolean | null;
+}
 /** What adding a rule answers: how many open files below the folder moved to Dismissed. */
 export interface IgnoredAdded {
 	ignored_id: string;
@@ -203,6 +208,8 @@ export interface IgnoredRemoved {
 	folder: string;
 	/** Whether a rescan was queued (the rescan limit may say wait; the removal worked either way). */
 	rescan_queued: boolean;
+	/** True when another rule of the same owner still covers the folder: the folder stays ignored and no rescan was queued. False from an older server. */
+	still_ignored: boolean;
 }
 
 export interface CrawlerStatus {

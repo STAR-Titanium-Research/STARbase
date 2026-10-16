@@ -155,9 +155,51 @@ describe('createIgnoredFolders', () => {
 		expect(await ig.add('y', null)).toEqual({ ok: false, message: 'The Lab Viewer role is read-only: it can look at everything and cannot change anything.' });
 	});
 
-	it('nobody is read-only without rules', async () => {
+	it('a person who may change rules is not read-only, with or without rules (meta.can_change is true)', async () => {
 		const { ig } = setup();
 		await ig.load();
+		expect(ig.canChange.value).toBe(true);
 		expect(ig.readOnly.value).toBe(false);
+	});
+
+	it('a Lab Viewer with NO rules is read-only too: meta.can_change is false', async () => {
+		const { ig } = setup({ viewer: true });
+		await ig.load();
+		expect(ig.rules.value).toEqual([]);
+		expect(ig.canChange.value).toBe(false);
+		expect(ig.readOnly.value).toBe(true);
+	});
+
+	it('an older server sends no meta: read-only is judged by can_remove on the rules, and false with none', async () => {
+		const viewer = setup({ noMeta: true, viewer: true, ignoredRules: [{ folder: 'x' }] });
+		await viewer.ig.load();
+		expect(viewer.ig.canChange.value).toBeNull();
+		expect(viewer.ig.readOnly.value).toBe(true);
+		const none = setup({ noMeta: true, viewer: true });
+		await none.ig.load();
+		expect(none.ig.readOnly.value).toBe(false);
+		const own = setup({ noMeta: true });
+		await own.ig.load();
+		expect(own.ig.readOnly.value).toBe(false);
+	});
+
+	it('removing a rule that another rule of the same owner covers says so, names that rule, and queues no rescan', async () => {
+		const { ig, fake, last } = setup({ ignoredRules: [{ folder: 'Paper' }, { folder: 'Paper/Drafts' }, { folder: 'Old runs', owner: TEAM }] });
+		await ig.load();
+		const drafts = ig.rules.value.find((r) => r.folder === 'Paper/Drafts')!;
+		expect(await ig.remove(drafts)).toEqual({ ok: true });
+		expect(last()).toMatchObject({ tone: 'ok', text: 'Rule removed. Paper/Drafts is still ignored by another rule (Paper).' });
+		expect(fake.rules.map((r) => r.folder)).toEqual(['Paper', 'Old runs']);
+		// the broader rule's removal covers nothing else: a rescan is queued, as before
+		const paper = ig.rules.value.find((r) => r.folder === 'Paper')!;
+		await ig.remove(paper);
+		expect(last()).toMatchObject({ text: 'Stopped ignoring Paper. A rescan is queued, so it is listed again soon. Files already dismissed stay in Dismissed.' });
+	});
+
+	it('a rule of another owner does not cover: the same folder in a team folder is listed again after its own rescan', async () => {
+		const { ig, last } = setup({ ignoredRules: [{ folder: 'Paper' }, { folder: 'Paper', owner: TEAM }] });
+		await ig.load();
+		await ig.remove(ig.rules.value.find((r) => r.owner.kind === 'team')!);
+		expect(last()?.text).toContain('A rescan is queued');
 	});
 });

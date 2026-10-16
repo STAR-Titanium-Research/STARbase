@@ -93,16 +93,19 @@ export function knownFolders(rows: readonly FoundFile[], owner: string, rules: r
 
 const files = (n: number) => `${n} found file${n === 1 ? '' : 's'}`;
 
-/** The confirm of "Ignore this folder": what happens, exactly. `shown` is how many open files below it are on screen (an estimate, so it says "any"). */
+/**
+ * The confirm of "Ignore this folder": what happens, exactly. `shown` is how many open files below it are on screen (an estimate, so it says "found files shown here").
+ * What stops is the crawler's look for NEW files; what moves is only the files still in the Inbox; linked files keep being tracked.
+ */
 export function ignoreConfirm(target: Pick<IgnoreTarget, 'folder'>, shown: number): { title: string; lines: string[] } {
 	return {
 		title: `Stop scanning ${target.folder}?`,
 		lines: [
-			'The crawler will leave this folder and everything in it alone.',
+			`The crawler stops looking for new files in ${target.folder} and below.`,
 			shown > 0
-				? `Any found files below it that are still in your Inbox (${files(shown)} shown here) move to Dismissed. You can restore them.`
-				: 'Any found files below it that are still in your Inbox move to Dismissed. You can restore them.',
-			'Files already linked stay linked. Nothing on the share is changed.',
+				? `Files there that are still in your Inbox (${files(shown)} shown here) move to Dismissed. You can restore them.`
+				: 'Files there that are still in your Inbox move to Dismissed. You can restore them.',
+			'Files already linked stay linked and tracked. Nothing on the share is changed.',
 		],
 	};
 }
@@ -111,9 +114,24 @@ export function ignoreConfirm(target: Pick<IgnoreTarget, 'folder'>, shown: numbe
 export const ignoredText = (folder: string, dismissed: number): string =>
 	`Ignoring ${folder}. ${dismissed === 0 ? 'No found files moved to Dismissed.' : `${files(dismissed)} moved to Dismissed.`}`;
 
-/** The notice after a rule was removed. The files the rule dismissed stay in Dismissed. */
-export const unignoredText = (folder: string, rescanQueued: boolean): string =>
-	`Stopped ignoring ${folder}. ${rescanQueued ? 'A rescan is queued, so it is listed again soon.' : 'It is listed again at the next scan.'} Files already dismissed stay in Dismissed.`;
+/** The other rule of the same owner that still covers this removed rule's folder (the broadest one), or null when none of the loaded rules does. */
+export function coveringRule(rules: readonly IgnoredRule[], removed: Pick<IgnoredRule, 'ignored_id' | 'folder' | 'owner'>): IgnoredRule | null {
+	const key = ownerKey(removed.owner);
+	return (
+		rules
+			.filter((r) => r.ignored_id !== removed.ignored_id && ownerKey(r.owner) === key && isBelow(removed.folder, r.folder))
+			.sort((a, b) => a.folder.length - b.folder.length)[0] ?? null
+	);
+}
+
+/**
+ * The notice after a rule was removed. The files the rule dismissed stay in Dismissed. When another rule still covers the folder (`stillIgnored`) it says so
+ * and names that rule when it is known (`by`), and says nothing of a rescan: none was queued.
+ */
+export const unignoredText = (folder: string, rescanQueued: boolean, stillIgnored = false, by: string | null = null): string =>
+	stillIgnored
+		? `Rule removed. ${folder} is still ignored by another rule${by ? ` (${by})` : ''}.`
+		: `Stopped ignoring ${folder}. ${rescanQueued ? 'A rescan is queued, so it is listed again soon.' : 'It is listed again at the next scan.'} Files already dismissed stay in Dismissed.`;
 
 export const VIEWER_TEXT = 'You can see these rules but not change them.';
-export const IGNORE_HINT = 'The crawler leaves these folders and everything in them alone. Nothing on the share is changed.';
+export const IGNORE_HINT = 'The crawler stops looking for new files in these folders and below. Nothing on the share is changed.';
