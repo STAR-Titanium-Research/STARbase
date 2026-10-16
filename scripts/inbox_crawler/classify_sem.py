@@ -24,7 +24,7 @@ from io import BytesIO
 from typing import Protocol
 
 from .kinds import Classification
-from .sem_meta import RANGES, fei_metadata
+from .sem_meta import RANGES, UM_PER, fei_metadata
 
 try:  # Pillow is a dependency of the service; the pure helpers below work without it
     from PIL import Image
@@ -82,14 +82,6 @@ _MAG = re.compile(
     re.I,
 )
 _SCALE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(nm|µm|μm|um|mm)(?![A-Za-z])", re.I)
-# micrometres per unit: the key is scale_bar_um, a number, never the printed label
-_UM_PER = {
-    "nm": 0.001,
-    "um": 1.0,
-    "\u00b5m": 1.0,  # micro sign
-    "\u03bcm": 1.0,  # Greek mu
-    "mm": 1000.0,
-}
 _WD = re.compile(r"\bWD\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm", re.I)
 
 
@@ -120,7 +112,7 @@ def parse_text(text: str, *, scale_bar: bool = False) -> dict:
             if wd_end and wd_end.start() <= s.start() < wd_end.end():
                 continue  # the working distance is not the scale bar
             out["scale_bar_um"] = round(
-                float(s.group(1)) * _UM_PER[s.group(2).lower()], 6
+                float(s.group(1)) * UM_PER[s.group(2).lower()], 6
             )
             break
     return out
