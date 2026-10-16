@@ -390,3 +390,27 @@ pictures into the database**, and `d1-inbox` serves those. The share is still on
   (spinner while it loads, the thumbnail shown meanwhile, Esc/click outside closes, keyboard reachable). Pictures
   are fetched with the signed-in session as blobs, so no unauthenticated URL exists.
 - **Not in v1.** Zoom/pan, thumbnails for linked records elsewhere in STARbase, `.al3d` renders, document previews.
+
+## 15. Ignored folders (follow-up, 2026-10-16)
+
+A person can tell the crawler to leave a folder alone ("ignore this folder when scanning"). Decisions, taken with the
+user's request as the only input; each is cheap to change:
+
+- **Scope.** A rule belongs to the owner of the folder it sits under: a person for their own folder, a team for its
+  team folder. A person manages their own rules; a team member manages the team's (the same people who may link a team file).
+  Table `d1_private.inbox_ignored_dirs(owner_person_id | owner_team_id, rel_folder, created_at, created_by)`; not exposed in Directus.
+- **Matching.** A rule is a folder path *relative to the owner's root* (`World-Ti Paper/Drafts`, not `Users/abc12de/...`),
+  matched on whole path parts, case-insensitively (the share is case-insensitive), covering the folder and everything under
+  it. No wildcards. The root itself cannot be ignored; no leading or trailing slash, no `.` or `..` parts, at most 200 rules per owner.
+- **Crawler.** An ignored subtree is neither listed nor statted (lower load on the share, which is the point). It
+  is *not scanned*, which is different from *empty*: the missing-file sweep must never mark candidates under it `gone`. A
+  rule that is added or removed mid-scan takes effect from the next scan.
+- **Existing files.** Adding a rule dismisses the owner's open (`new`) candidates under it in the same transaction, as an
+  ordinary, restorable dismissal; linked files are untouched. Removing a rule clears the folder's cache so the next
+  scan lists it again (queued as a rescan when the rate limit allows); files dismissed by the rule stay in Dismissed until
+  restored by hand.
+- **Endpoint.** `GET /d1-inbox/ignored-folders`, `POST /d1-inbox/ignored-folders { folder, team_id? }` (answers
+  the rule and how many files were dismissed), `DELETE /d1-inbox/ignored-folders/:id`. Errors in the d1-record-access shape.
+- **UI.** A row's folder offers "Ignore this folder" (confirm says what happens: the files below move to Dismissed, nothing on the share
+  is touched); the Inbox gets an "Ignored folders" section listing the rules with Remove, and an add-by-picking field fed by the folders already known.
+- **Not in v1.** Wildcards or patterns, ignoring by file type, admin-wide rules.
