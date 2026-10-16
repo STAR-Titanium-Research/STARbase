@@ -12,12 +12,13 @@ import {
 	patchLogin,
 	removeDirectGrant,
 	resendInvite,
+	sendPasswordReset,
 	type AccessList,
 	type AccessRecord,
 	type PersonAccess,
 } from './peopleApi';
 import type { PeopleLogin, PeopleRow } from './peopleQuery';
-import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, canSendReset, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const props = defineProps<{
 	personId: string;
@@ -109,6 +110,16 @@ function doAction() {
 			override.value = { status: done.status };
 		}
 		emit('changed');
+	});
+}
+
+const resetOffered = computed(() => !!person.value && canSendReset(person.value, viewer.value));
+function doReset() {
+	const p = person.value;
+	if (!p?.user_id) return;
+	void run(async () => {
+		const r = await sendPasswordReset(api, p.user_id!);
+		notice.value = r.email_sent ? `Password reset email sent to ${p.login?.email ?? p.email ?? 'them'}.` : 'The reset email could not be sent.';
 	});
 }
 
@@ -232,6 +243,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 					{{ line.state }}
 					<template v-if="line.action">
 						· <button type="button" class="link" :disabled="busy" @click="doAction">{{ line.action.label }}</button>
+					</template>
+					<template v-if="resetOffered">
+						· <button type="button" class="link" :disabled="busy" @click="doReset">Send reset email</button>
 					</template>
 				</span>
 			</div>

@@ -117,6 +117,9 @@ services:
       # Where an invitation e-mail points (d1-people-admin: <STARBASE_URL>/accept-invite). Directus refuses to invite to any other
       # address; blank when STARBASE_URL is unset (the invite endpoint then answers 503).
       USER_INVITE_URL_ALLOW_LIST: ${STARBASE_URL:+${STARBASE_URL}/accept-invite}
+      # Where a password-reset e-mail points: STARbase's /reset-password (the sign-in pages' "Forgot password?" and the People page's
+      # "Send reset email"), plus Data Studio's own reset page so its "Forgot password?" keeps working once a list is set.
+      PASSWORD_RESET_URL_ALLOW_LIST: ${STARBASE_URL:+${STARBASE_URL}/reset-password,}${DIRECTUS_PUBLIC_URL:-http://localhost:80}/admin/reset-password
       # Auto-load local extensions (the actor-identity audit hook).
       EXTENSIONS_AUTO_RELOAD: "true"
       # Thumbnails of the force figures (frm_fz PNGs, ~6,100 x 5,900 px, ~20 MB) for the Explorer's

@@ -67,6 +67,7 @@ body {
 	border-left: 4px solid var(--theme--danger);
 }
 .sb-hint { margin: 2px 0 0; font-size: 12px; line-height: 1.45; text-align: center; color: var(--theme--foreground-subdued); }
+.sb-forgot { align-self: center; font-size: 13px; }
 
 /* Phone (< 768 px, spec §3.3): the pages' side padding (PageShell reads --content-padding) shrinks so a
    record page fits 375 px with no sideways scroll. */

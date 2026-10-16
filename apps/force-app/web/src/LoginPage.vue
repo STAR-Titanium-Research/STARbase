@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { authStore } from './authStore';
 import { getConfig } from './config';
+import { forgotPasswordLink } from './recordLink';
 import { ThinkingOrb } from '@d1/force-plotting';
 
 const router = useRouter();
@@ -67,6 +68,8 @@ async function submit() {
 			<button class="btn primary submit" type="submit" :disabled="busy || !email || !password">
 				<span>{{ busy ? 'Signing in…' : 'Sign in' }}</span>
 			</button>
+
+			<a class="forgot" :href="forgotPasswordLink(getConfig().directusUrl, email)" target="_blank" rel="noopener">Forgot password?</a>
 
 			<p class="offline-hint" :class="{ active: !online }">
 				<span class="material-symbols-rounded">{{ online ? 'cloud_done' : 'cloud_off' }}</span>
@@ -215,6 +218,16 @@ async function submit() {
 	margin-top: 6px;
 	font-size: var(--fs-lg);
 	border-radius: 10px;
+}
+.forgot {
+	display: block;
+	margin-top: 12px;
+	text-align: center;
+	font-size: var(--fs-sm);
+	color: var(--text-dim);
+}
+.forgot:hover {
+	color: var(--accent);
 }
 .offline-hint {
 	display: flex; gap: 8px; align-items: flex-start; margin: 14px 0 0;

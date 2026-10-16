@@ -259,6 +259,10 @@ export const invite = (api: HostApi, body: InviteBody): Promise<InviteResult> =>
 export const resendInvite = (api: HostApi, userId: string): Promise<{ email_sent: boolean }> =>
 	call(() => api.post(`${BASE}/invite/resend`, { user_id: userId }), (b) => b as { email_sent: boolean });
 
+/** E-mail an active login a link to set a new password (the link lands on STARbase's /reset-password). */
+export const sendPasswordReset = (api: HostApi, userId: string): Promise<{ email_sent: boolean }> =>
+	call(() => api.post(`${BASE}/password-reset`, { user_id: userId }), (b) => b as { email_sent: boolean });
+
 /** Take a person's direct access to one record away (the Who-has-access endpoint). */
 export const removeDirectGrant = (api: HostApi, collection: string, recordId: string, personId: string): Promise<{ removed: boolean }> =>
 	call(
