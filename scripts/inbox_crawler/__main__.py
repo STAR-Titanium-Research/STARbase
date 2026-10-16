@@ -71,6 +71,24 @@ def _log_level(name: str | None) -> int:
     return _LEVELS.get((name or "").strip().upper(), logging.INFO)
 
 
+def _ocr_on() -> bool:
+    """INBOX_OCR=1 switches the data-bar reading on."""
+    return os.environ.get("INBOX_OCR") == "1"
+
+
+def _apply_read_rate(store: db.Store, throttle: hashing.Throttle) -> None:
+    """Cap `throttle` at the state row's read_mb_per_s, when the row exists."""
+    state = store.load_state()
+    if state is not None:
+        throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
+
+
+def _stop_on_signals(stop: threading.Event) -> None:
+    """SIGTERM and SIGINT set `stop`."""
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+
+
 def _parse(argv):
     ap = argparse.ArgumentParser(
         prog="inbox_crawler", description=__doc__.split("\n")[0]
@@ -198,19 +216,16 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         share,
         linker,
         config=daemon.Config(
-            ocr=os.environ.get("INBOX_OCR") == "1",
+            ocr=_ocr_on(),
             tick_s=float(os.environ.get("INBOX_TICK_S", "30")),
         ),
         stop=stop,
     )
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: stop.set())
+    _stop_on_signals(stop)
 
     log.info("reading %s READ-ONLY", args.root)
     if args.once:
-        state = store.load_state()
-        if state is not None:
-            d.throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
+        _apply_read_rate(store, d.throttle)
         stats = d.run_scan(None, full=True)
         d.hash_pending()
         return 1 if stats.aborted else 0
@@ -241,13 +256,10 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
 def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
     """--reclassify or --sem-backfill: one pass under the lock the caller took. SIGTERM or SIGINT stops it between files (what
     is done is committed; run it again to finish)."""
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: stop.set())
+    _stop_on_signals(stop)
     throttle = hashing.Throttle(None)
-    state = store.load_state()
+    _apply_read_rate(store, throttle)
     store.commit()
-    if state is not None:
-        throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
     log.info("reading %s READ-ONLY", args.root)
     try:
         extra = {"force": args.force} if args.reclassify else {}
@@ -257,7 +269,7 @@ def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
             store,
             share,
             throttle=throttle,
-            ocr=os.environ.get("INBOX_OCR") == "1",
+            ocr=_ocr_on(),
             stop=stop.is_set,
             **extra,
         )

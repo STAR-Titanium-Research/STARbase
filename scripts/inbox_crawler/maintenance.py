@@ -139,13 +139,56 @@ def read_image(share, rel: str, throttle, guard: ShareGuard, base: str | None = 
     return out.data, "ok", None
 
 
+def _walk(
+    stats,
+    store: db.Store,
+    share,
+    *,
+    fetch,
+    visit,
+    abort_message: str,
+    summary: str,
+    summary_args,
+    stop,
+):
+    """The skeleton both passes share: verify the share, then page through `fetch(after)` (rows whose first
+    column is the keyset id, one commit after each page) calling `visit(row, guard)` once per row, until the
+    rows run out or `stop()`. A `scan.ShareUnavailable` rolls back, sets `stats.aborted` and logs
+    `abort_message % exc`. Ends with one log line: `summary % summary_args(stats)`, then the ABORTED and
+    STOPPED notes. Returns `stats`."""
+    guard = ShareGuard(share, store)
+    after: str | None = None
+    try:
+        guard.verify()
+        while not stop():
+            rows = fetch(after)
+            store.commit()
+            if not rows:
+                break
+            for row in rows:
+                if stop():
+                    break
+                after = row[0]
+                visit(row, guard)
+    except scan.ShareUnavailable as exc:
+        store.rollback()
+        stats.aborted = True
+        log.error(abort_message, exc)
+    log.info(
+        summary + "%s%s",
+        *summary_args(stats),
+        " (ABORTED)" if stats.aborted else "",
+        " (STOPPED, run it again to finish)" if stop() else "",
+    )
+    return stats
+
+
 def reclassify(
     store: db.Store,
     share,
     *,
     throttle: hashing.Throttle | None = None,
     ocr: bool = False,
-    ocr_func=None,
     bar_reader=None,
     profiles=None,
     stop=lambda: False,
@@ -156,92 +199,79 @@ def reclassify(
     eligible one with `force`), and write kind, kind_confidence, extracted and classified_by. One commit per
     file; rows are visited in id order, once per run."""
     stats = PassStats()
-    guard = ShareGuard(share, store)
-    after: str | None = None
-    try:
-        guard.verify()
-        while not stop():
-            rows = store.reclassify_batch(batch, after, force=force)
-            store.commit()
-            if not rows:
-                break
-            for cid, _fid, rel, kind in rows:
-                if stop():
-                    break
-                after = cid
-                data, status, problem = read_image(
-                    share, rel, throttle, guard, rel.split("/")[0]
-                )
-                if status == "skipped":
-                    stats.skipped += 1
-                    log.warning(
-                        "not re-classifying %s: %s; left in the queue for the next run",
-                        rel,
-                        problem,
-                    )
-                    continue
-                if data is None:
-                    store.mark_classified(cid)
-                    store.commit()
-                    if status == "too_large":
-                        stats.too_large += 1
-                        log.info(
-                            "not re-classifying %s: %s; kept as %s, marked as classified by %s",
-                            rel,
-                            problem,
-                            kind,
-                            classify_sem.CLASSIFIER_VERSION,
-                        )
-                    else:
-                        stats.unreadable += 1
-                        log.warning(
-                            "not re-classifying %s: %s; kept as %s, marked as classified by %s "
-                            "so it is not retried",
-                            rel,
-                            problem,
-                            kind,
-                            classify_sem.CLASSIFIER_VERSION,
-                        )
-                    continue
-                cls = classify_sem.classify_image(
-                    io.BytesIO(data),
-                    ocr=ocr,
-                    ocr_func=ocr_func,
-                    bar_reader=bar_reader,
-                    profiles=profiles,
-                )
-                written = store.set_classification(cid, cls)
-                store.commit()
-                if not written:
-                    stats.decided += 1
-                elif kind == "image" and cls.kind == "sem_image":
-                    stats.promoted += 1
-                    log.info("promoted %s to sem_image (%s)", rel, cls.reason)
-                elif kind == "sem_image" and cls.kind == "image":
-                    stats.demoted += 1
-                    log.info("demoted %s to image (%s)", rel, cls.reason)
-                else:
-                    stats.unchanged += 1
-    except scan.ShareUnavailable as exc:
-        store.rollback()
-        stats.aborted = True
-        log.error(
-            "reclassify aborted, nothing read after this point was marked: %s", exc
+
+    def visit(row, guard: ShareGuard) -> None:
+        cid, rel, kind = row
+        data, status, problem = read_image(
+            share, rel, throttle, guard, rel.split("/")[0]
         )
-    log.info(
-        "reclassify: %d promoted, %d demoted, %d unchanged "
-        "(%d unreadable, %d too large, %d skipped, %d decided meanwhile)%s%s",
-        stats.promoted,
-        stats.demoted,
-        stats.unchanged,
-        stats.unreadable,
-        stats.too_large,
-        stats.skipped,
-        stats.decided,
-        " (ABORTED)" if stats.aborted else "",
-        " (STOPPED, run it again to finish)" if stop() else "",
+        if status == "skipped":
+            stats.skipped += 1
+            log.warning(
+                "not re-classifying %s: %s; left in the queue for the next run",
+                rel,
+                problem,
+            )
+            return
+        if data is None:
+            store.mark_classified(cid)
+            store.commit()
+            if status == "too_large":
+                stats.too_large += 1
+                log.info(
+                    "not re-classifying %s: %s; kept as %s, marked as classified by %s",
+                    rel,
+                    problem,
+                    kind,
+                    classify_sem.CLASSIFIER_VERSION,
+                )
+            else:
+                stats.unreadable += 1
+                log.warning(
+                    "not re-classifying %s: %s; kept as %s, marked as classified by %s "
+                    "so it is not retried",
+                    rel,
+                    problem,
+                    kind,
+                    classify_sem.CLASSIFIER_VERSION,
+                )
+            return
+        cls = classify_sem.classify_image(
+            io.BytesIO(data), ocr=ocr, bar_reader=bar_reader, profiles=profiles
+        )
+        written = store.set_classification(cid, cls)
+        store.commit()
+        if not written:
+            stats.decided += 1
+        elif kind == "image" and cls.kind == "sem_image":
+            stats.promoted += 1
+            log.info("promoted %s to sem_image (%s)", rel, cls.reason)
+        elif kind == "sem_image" and cls.kind == "image":
+            stats.demoted += 1
+            log.info("demoted %s to image (%s)", rel, cls.reason)
+        else:
+            stats.unchanged += 1
+
+    return _walk(
+        stats,
+        store,
+        share,
+        fetch=lambda after: store.reclassify_batch(batch, after, force=force),
+        visit=visit,
+        abort_message="reclassify aborted, nothing read after this point was marked: %s",
+        summary="reclassify: %d promoted, %d demoted, %d unchanged "
+        "(%d unreadable, %d too large, %d skipped, %d decided meanwhile)",
+        summary_args=lambda st: (
+            st.promoted,
+            st.demoted,
+            st.unchanged,
+            st.unreadable,
+            st.too_large,
+            st.skipped,
+            st.decided,
+        ),
+        stop=stop,
     )
-    return stats
 
 
 READ_BY = "backfill"  # sem_image_settings.read_by for rows this pass writes
@@ -269,7 +299,6 @@ def sem_backfill(
     *,
     throttle: hashing.Throttle | None = None,
     ocr: bool = False,
-    ocr_func=None,
     bar_reader=None,
     profiles=None,
     stop=lambda: False,
@@ -280,61 +309,46 @@ def sem_backfill(
     row's id is the indexer's uuid5 of it (any Lab Member can edit the metadata). Marks nothing (an unreadable
     row is simply listed again by the next run); the share guard is the reclassify pass's."""
     stats = BackfillStats()
-    guard = ShareGuard(share, store)
-    after: str | None = None
-    try:
-        guard.verify()
-        while not stop():
-            rows = store.backfill_batch(batch, after)
-            store.commit()
-            if not rows:
-                break
-            for fid, rel in rows:
-                if stop():
-                    break
-                after = fid
-                if not clean_rel_path(rel) or str(file_id(rel)) != fid:
-                    stats.bad_path += 1
-                    log.warning(
-                        "not reading file %s: its stored path is not its own", fid
-                    )
-                    continue
-                data, _status, problem = read_image(share, rel, throttle, guard)
-                if data is None:
-                    stats.unreadable += 1
-                    log.warning(
-                        "not reading %s for settings: %s; skipped", rel, problem
-                    )
-                    continue
-                cls = classify_sem.classify_image(
-                    io.BytesIO(data),
-                    ocr=ocr,
-                    ocr_func=ocr_func,
-                    bar_reader=bar_reader,
-                    profiles=profiles,
-                )
-                if cls.kind != "sem_image":
-                    stats.not_sem += 1
-                    continue
-                if store.save_sem_settings(fid, cls.extracted, READ_BY):
-                    stats.saved += 1
-                else:
-                    stats.no_values += 1
-                    log.info("%s is an SEM image but gave no usable value", rel)
-                store.commit()
-    except scan.ShareUnavailable as exc:
-        store.rollback()
-        stats.aborted = True
-        log.error("sem-backfill aborted: %s", exc)
-    log.info(
-        "sem-backfill: %d saved, %d not an SEM image, %d SEM images with no usable value, "
-        "%d unreadable, %d with a path that is not their own%s%s",
-        stats.saved,
-        stats.not_sem,
-        stats.no_values,
-        stats.unreadable,
-        stats.bad_path,
-        " (ABORTED)" if stats.aborted else "",
-        " (STOPPED, run it again to finish)" if stop() else "",
+
+    def visit(row, guard: ShareGuard) -> None:
+        fid, rel = row
+        if not clean_rel_path(rel) or str(file_id(rel)) != fid:
+            stats.bad_path += 1
+            log.warning("not reading file %s: its stored path is not its own", fid)
+            return
+        data, _status, problem = read_image(share, rel, throttle, guard)
+        if data is None:
+            stats.unreadable += 1
+            log.warning("not reading %s for settings: %s; skipped", rel, problem)
+            return
+        cls = classify_sem.classify_image(
+            io.BytesIO(data), ocr=ocr, bar_reader=bar_reader, profiles=profiles
+        )
+        if cls.kind != "sem_image":
+            stats.not_sem += 1
+            return
+        if store.save_sem_settings(fid, cls.extracted, READ_BY):
+            stats.saved += 1
+        else:
+            stats.no_values += 1
+            log.info("%s is an SEM image but gave no usable value", rel)
+        store.commit()
+
+    return _walk(
+        stats,
+        store,
+        share,
+        fetch=lambda after: store.backfill_batch(batch, after),
+        visit=visit,
+        abort_message="sem-backfill aborted: %s",
+        summary="sem-backfill: %d saved, %d not an SEM image, %d SEM images with no usable value, "
+        "%d unreadable, %d with a path that is not their own",
+        summary_args=lambda st: (
+            st.saved,
+            st.not_sem,
+            st.no_values,
+            st.unreadable,
+            st.bad_path,
+        ),
+        stop=stop,
     )
-    return stats
