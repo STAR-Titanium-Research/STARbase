@@ -24,7 +24,7 @@ from io import BytesIO
 from typing import Protocol
 
 from .kinds import Classification
-from .sem_meta import fei_metadata
+from .sem_meta import RANGES, fei_metadata
 
 try:  # Pillow is a dependency of the service; the pure helpers below work without it
     from PIL import Image
@@ -96,18 +96,24 @@ _WD = re.compile(r"\bWD\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm", re.I)
 def parse_text(text: str, *, scale_bar: bool = False) -> dict:
     """The values a block of text states: kV, magnification, working distance (and, for a data bar read
     by OCR, the scale-bar label as `scale_bar_um`, a number of micrometres). Only what is there; absent keys
-    stay absent."""
+    stay absent. A kV, magnification or working distance outside `sem_meta.RANGES` is left out, never guessed."""
     out: dict = {}
+
+    def keep(key: str, value: float) -> None:
+        lo, hi = RANGES[key]
+        if lo <= value <= hi:
+            out[key] = value
+
     m = _KV.search(text)
     if m:
-        out["kv"] = float(m.group(1))
+        keep("kv", float(m.group(1)))
     m = _MAG.search(text)
     if m:
         digits = m.group(1) or m.group(2) or m.group(3)
-        out["magnification"] = int(re.sub(_SEP, "", digits))
+        keep("magnification", int(re.sub(_SEP, "", digits)))
     m = _WD.search(text)
     if m:
-        out["working_distance_mm"] = float(m.group(1))
+        keep("working_distance_mm", float(m.group(1)))
     if scale_bar:
         wd_end = _WD.search(text)
         for s in _SCALE.finditer(text):

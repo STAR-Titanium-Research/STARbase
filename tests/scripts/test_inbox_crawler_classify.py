@@ -366,9 +366,53 @@ def test_magnification_accepts_spaces_and_either_x(text, mag):
     assert csem.parse_text(text)["magnification"] == mag
 
 
-@pytest.mark.parametrize("text", ["1234", "3.0", "9.2 mm", "40 µm", "20 kV", "5 xyz"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1234",
+        "3.0",
+        "9.2 mm",
+        "40 µm",
+        "20 kV",
+        "5 xyz",
+        "2 x 3 mm",  # a size, not a magnification
+        "Tilt 0 x",
+        "Scan 2 x Integration",
+        "Image 1 x Pixel 1024",
+        "4 x",  # below the minimum of 5
+        "x2,000,000",  # above the maximum of 1,000,000
+    ],
+)
 def test_magnification_is_not_read_from_other_numbers(text):
     assert "magnification" not in csem.parse_text(text)
+
+
+@pytest.mark.parametrize(
+    "text,mag", [("1 200 x", 1200), ("40×", 40), ("5 x", 5), ("x1,000,000", 1000000)]
+)
+def test_magnification_inside_its_range_is_still_read(text, mag):
+    assert csem.parse_text(text)["magnification"] == mag
+
+
+@pytest.mark.parametrize(
+    "text,key",
+    [
+        ("250 kV", "kv"),
+        ("0 kV", "kv"),
+        ("WD 0 mm", "working_distance_mm"),
+        ("WD 80 mm", "working_distance_mm"),
+    ],
+)
+def test_a_value_outside_its_range_is_omitted_not_null(text, key):
+    out = csem.parse_text(text)
+    assert key not in out and None not in out.values()
+
+
+@pytest.mark.parametrize(
+    "text,key,val", [("30 kV", "kv", 30.0), ("WD 0.1 mm", "working_distance_mm", 0.1)]
+)
+def test_range_limits_are_inclusive(text, key, val):
+    assert csem.parse_text(text)[key] == val
 
 
 @pytest.mark.parametrize(
