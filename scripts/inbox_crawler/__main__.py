@@ -6,6 +6,7 @@ Environment:
     D1_INBOX_URL               the Directus base URL for auto-link (default http://directus:8055).
     D1_INBOX_CRAWLER_SECRET    the shared secret for POST /d1-inbox/auto-link; empty switches auto-link off.
     INBOX_OCR                  1 to read data-bar text with pytesseract (default off, not validated yet).
+    INBOX_THUMBNAILS           0 switches thumbnails off: none at registration, no backfill (default on).
     INBOX_TICK_S               seconds between claims of scan requests (default 30).
     INBOX_PRIVATE_SCHEMA       the schema holding the inbox tables (default d1_private; tests use another).
     STORAGE_NAME, ROOT_FOLDER  as for scripts/index_archive.py (defaults star, star_group1).
@@ -147,6 +148,7 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         linker,
         config=daemon.Config(
             ocr=os.environ.get("INBOX_OCR") == "1",
+            thumbnails=os.environ.get("INBOX_THUMBNAILS", "1").strip() != "0",
             tick_s=float(os.environ.get("INBOX_TICK_S", "30")),
         ),
         stop=stop,
@@ -161,6 +163,7 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
             d.throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
         stats = d.run_scan(None, full=True)
         d.hash_pending()
+        d.thumbnail_pending()
         return 1 if stats.aborted else 0
 
     def reconnect(old):

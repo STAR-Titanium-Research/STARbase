@@ -7,7 +7,10 @@ scan interval and the read throttle. Each tick, in order:
 1. claim one queued scan request (FOR UPDATE SKIP LOCKED) and run it, else
 2. run the scheduled scan of everyone when `interval_minutes` have passed since the last one began;
 3. after a scan: refresh suggestions for undecided files, then ask the d1-inbox extension to auto-link;
-4. read once, hash and fingerprint files a person has linked (documents), and retry hashes that failed.
+4. read once, hash and fingerprint files a person has linked (documents), and retry hashes that failed;
+5. when step 4 had nothing to do, backfill thumbnails (spec section 14) for a bounded batch of images that
+   have none: a read through `fs_readonly` like any other (allow-listed images only, `adopted=False`, the
+   same throttle).
 
 Nothing here touches the share except through `Scanner`'s `share` object (fs_readonly), and nothing here
 writes a link.
@@ -20,9 +23,17 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from . import autolink, db, hashing, scan
+from . import autolink, db, hashing, scan, thumbs
 
 log = logging.getLogger("inbox_crawler.daemon")
+
+# Images whose thumbnails the backfill makes per tick (each is one throttled read), and how long it stays off
+# after the thumbnails table could not be read (migration 198 not applied yet).
+THUMB_BATCH = 10
+THUMB_RETRY_S = 600
+# Ids tried this process: an image Pillow cannot decode (or that changed on the share) would be offered every
+# tick otherwise. Cleared when it grows past this, so a long-lived daemon tries such files again.
+THUMB_TRIED_MAX = 20_000
 
 NO_FOLDER = (
     "no folder to scan: this person has no uni alias and no team folder, is a Former person, or no "
@@ -37,6 +48,9 @@ class Config:
     error_sleep_s: float = 15.0
     heartbeat_s: float = (
         30.0  # the heartbeat while one large file is hashed through the throttle
+    )
+    thumbnails: bool = (
+        True  # INBOX_THUMBNAILS=0: no thumbnails at registration, no backfill
     )
 
 
@@ -67,6 +81,8 @@ class Daemon:
         self._clock = (
             clock  # None: time.monotonic (hashing.Pulse's default); tests pass a fake
         )
+        self._thumbs_tried: set[str] = set()
+        self._thumbs_retry_at: datetime | None = None
 
     # ---- one tick ----------------------------------------------------------------------
 
@@ -92,7 +108,8 @@ class Daemon:
         elif self.scan_due(state):
             self.run_scan(None, full=True)
             did = "scheduled"
-        self.hash_pending()
+        if self.hash_pending() == 0:  # fingerprints first: the backfill uses the ticks that are left
+            self.thumbnail_pending()
         store.heartbeat("idle" if did == "idle" else f"idle (last: {did})")
         return did
 
@@ -110,6 +127,7 @@ class Daemon:
             self.store,
             throttle=self.throttle,
             ocr=self.config.ocr,
+            thumbnails=self.config.thumbnails,
             stop=self.stop_event.is_set,
             activity=self.store.heartbeat,
             **self._scanner_options,
@@ -212,6 +230,94 @@ class Daemon:
         )
         self.store.commit()
         return out
+
+    # ---- thumbnails backfill ---------------------------------------------------------
+
+    def thumbnail_pending(self, limit: int = THUMB_BATCH) -> int:
+        """Make the thumbnails of up to `limit` images that have none (registered before thumbnails existed, or
+        whose file changed since they were made). Each is read through the share's `open_rb` (not adopted, so
+        only allow-listed images) at the shared throttle, and only if it is still the file the candidate
+        describes (same size and modification time): a picture of a different file would not match its row.
+        A file that vanished, cannot be read or cannot be decoded is skipped for the rest of the process; the
+        scan, not this step, decides what is gone. Returns how many were made."""
+        if not self.config.thumbnails:
+            return 0
+        if self._thumbs_retry_at is not None and self._now() < self._thumbs_retry_at:
+            return 0
+        store = self.store
+        try:
+            targets = store.candidates_missing_thumbnails(
+                limit, max_bytes=scan.CLASSIFY_MAX_BYTES, skip=self._thumbs_tried
+            )
+        except Exception as exc:  # noqa: BLE001 (above all: the table is not there yet)
+            store.rollback()
+            self._thumbs_retry_at = self._now() + timedelta(seconds=THUMB_RETRY_S)
+            log.warning(
+                "thumbnail backfill is off for %d minutes (%s): is migration 198 applied?",
+                THUMB_RETRY_S // 60,
+                type(exc).__name__,
+            )
+            return 0
+        self._thumbs_retry_at = None
+        made = 0
+        for target in targets:
+            if self.stop_event.is_set():
+                break
+            if len(self._thumbs_tried) >= THUMB_TRIED_MAX:
+                self._thumbs_tried.clear()
+            self._thumbs_tried.add(target.candidate_id)
+            try:
+                if self._make_thumbnails(target):
+                    made += 1
+            except Exception as exc:  # noqa: BLE001 (one file must not stop the others, or the loop)
+                store.rollback()
+                log.warning(
+                    "thumbnails of %s failed: %s", target.rel_path, type(exc).__name__
+                )
+        if made:
+            log.info("thumbnails made for %d images", made)
+        return made
+
+    def _make_thumbnails(self, target: db.ThumbTarget) -> bool:
+        rel = target.rel_path
+        try:
+            st = self.share.stat(rel)
+        except (OSError, ValueError):
+            return False  # gone or unreadable: the scan decides, not this step
+        if not st.is_file or (st.size, db.to_datetime(st.mtime_ns)) != (
+            target.size,
+            target.mtime,
+        ):
+            return False  # not the file the candidate describes any more
+        pulse_args = {} if self._clock is None else {"clock": self._clock}
+        pulse = hashing.Pulse(
+            self.config.heartbeat_s,
+            lambda _total: self.store.heartbeat(f"thumbnails {rel}"),
+            **pulse_args,
+        )
+        out = hashing.hash_file(
+            self.share,
+            rel,
+            throttle=self.throttle,
+            keep_up_to=scan.CLASSIFY_MAX_BYTES,
+            progress=pulse,
+        )
+        if out.status == "done":
+            try:
+                out = scan.still_the_same(self.share, rel, st, out)
+            except OSError:
+                return False
+        if out.status != "done" or out.data is None:
+            return False
+        pictures = thumbs.make_thumbnails(out.data)
+        if pictures is None:
+            log.info("no thumbnails for %s: it could not be decoded", rel)
+            return False
+        self.store.store_thumbnails(
+            target.candidate_id, pictures, target.size, target.mtime
+        )
+        self.store.commit()
+        return True
 
     # ---- forever -----------------------------------------------------------------------
 

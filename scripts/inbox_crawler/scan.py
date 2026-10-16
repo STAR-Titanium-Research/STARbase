@@ -2,7 +2,8 @@
 
 For each owner (a person's `Users/<uni alias>`, a team's `Shared/<share folder>`) the walk stats every
 directory it knows from `inbox_dirs` (one cheap call) and lists only those whose modification time moved.
-New files are classified and recognised and registered as candidates; the first complete scan of an owner
+New files are classified and recognised and registered as candidates (an image's thumbnails are made from the
+bytes already in hand and stored in the same transaction, spec section 14); the first complete scan of an owner
 marks everything it finds `origin='backlog'` and then sets `baselined_at`. A file that vanished from a
 changed directory becomes `gone` (undecided candidates only), unless a new file with the same content
 turned up, which re-points the row. A share that drops mid-scan aborts the scan and marks nothing gone.
@@ -18,7 +19,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from . import classify_sem, db, hashing, kinds, owners, recognise
+from . import classify_sem, db, hashing, kinds, owners, recognise, thumbs
 from .fs_readonly import ReadRefused
 from .identity import file_id
 
@@ -188,6 +189,7 @@ class Scanner:
         activity=lambda text: None,
         clock=time.monotonic,
         wall=time.time,
+        thumbnails: bool = True,
     ):
         self.share = share
         self.store = store
@@ -196,6 +198,7 @@ class Scanner:
         self.ocr = ocr
         self.ocr_func = ocr_func
         self.profiles = profiles
+        self.thumbnails = thumbnails  # INBOX_THUMBNAILS=0 turns it off
         self.stop = stop
         self.activity = activity
         self._clock = clock
@@ -647,6 +650,16 @@ class Scanner:
                 )
                 if cls.reason.startswith("not decoded"):
                     log.info("%s is registered as a plain image: %s", rel, cls.reason)
+        pictures = None
+        if (
+            self.thumbnails
+            and cls.kind in ("image", "sem_image")
+            and hashed is not None
+            and hashed.status == "done"
+            and hashed.data is not None
+        ):
+            # the bytes are already in memory (hashed and classified): no second read of the share
+            pictures = thumbs.make_thumbnails(hashed.data)
         rec = recognise.recognise(rel, self.lookup, below=owner.root)
         result = self.store.register_file(
             owner=owner,
@@ -657,6 +670,7 @@ class Scanner:
             recognition=rec,
             origin=origin,
             hashed=hashed,
+            thumbs=pictures,
         )
         if not result.created or result.candidate_id is None:
             return None
