@@ -186,7 +186,7 @@ inbox-crawler: ## Start the inbox crawler daemon (read-only; finds new files in 
 
 inbox-crawler-once: ## One scan of everyone with the inbox crawler, then exit (see docs/runbooks/inbox-crawler.md)
 	docker compose --profile archive run --rm inbox-crawler \
-		sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --once"
+		sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && if [ -n \"\$$INBOX_OCR\" ]; then pip install -q --no-deps 'rapidocr-onnxruntime==1.2.3' && pip install -q 'onnxruntime==1.31.0' 'numpy==2.5.4' 'opencv-python-headless==5.0.0.93' 'pyclipper==1.4.0' 'Shapely==2.2.0' 'PyYAML==6.0.3' 'six==1.17.0'; fi && python -m inbox_crawler --once"
 
 reset-db: ## Drop all tables and re-apply migrations + seed (DESTRUCTIVE — dev only). Asks you to type the DB name; CONFIRM=<name> skips the prompt.
 	@echo "WARNING: this DROPS the database '$(DB_NAME)' and every table in it."
