@@ -2145,6 +2145,37 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
   this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
   re-review fixes (server, S5).
+- [ ] **IF53 — Thumbnails of real SEM images look right.** Needs migration 198 and the crawler on the new code
+  (`INBOX_THUMBNAILS` unset or `1`). Save a real JEOL 16-bit TIFF, a JEOL 8-bit TIFF, a JPEG and a PNG into a test folder
+  and let the scan find them. Then, as the database owner,
+  `SELECT c.rel_path, octet_length(t.thumb), octet_length(t.preview), t.thumb_width, t.thumb_height, t.preview_width, t.preview_height
+  FROM d1_private.file_thumbnails t JOIN d1_private.file_candidates c USING (candidate_id)`: expect a row each, the thumbnail
+  about 320 px on its long side and 10 to 25 KB, the preview about 1600 px (or the original size if smaller) and 150 to 400 KB.
+  In the Inbox (stream C) or by saving `thumb` and `preview` out of the row: the 16-bit TIFF is a recognisable grey picture
+  (stretched, not black), the data bar and its scale bar are readable in the preview, and a rotated JPEG (camera or phone photo)
+  is upright. A multi-page TIFF shows its first frame. A PDF and an `.al3d` get no row. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF54 — The thumbnail backfill on the real share is throttled and bounded.** On the deployment, with older found files
+  that have no picture (everything registered before migration 198), start the crawler and watch
+  `SELECT count(*) FROM d1_private.file_thumbnails` over a few minutes: it grows by at most 25 per 30 second tick (and a tick
+  hands back after 20 seconds), reads stay at or below `read_mb_per_s` (check the share's or the container's network rate while
+  `docker compose --profile archive logs -f inbox-crawler` shows `thumbnails made for N images`), the admin tab's heartbeat does
+  not go stale, and a scan request queued meanwhile is picked up within about a minute. Restart the service in the middle: it
+  resumes where it left off and re-reads nothing that has a row. `docker stats` on the largest real image (a 50 megapixel 16-bit
+  TIFF decodes to roughly 300 MB): the container stays within its memory. Note how long the whole backlog takes and put it in
+  `docs/runbooks/inbox-crawler.md`. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF55 — The backfill reads only images and never writes to the share.** With `INBOX_LOG_LEVEL=DEBUG` (recreate the
+  service), let the backfill run on the real share: every `reading ...` line it logs is a `.tif .tiff .jpg .jpeg .png .bmp` path, never
+  a document, `.mat`, camera raw or `.al3d`, and a person's linked documents are not re-read for pictures. Compare the
+  modification times of a few folders and files before and after (and the SMB server's audit log if there is one): nothing
+  was created, changed or deleted. Since: Inbox thumbnails (stream B, crawler); read-only invariant of ADR-0020.
+- [ ] **IF56 — A file that goes gone loses its picture, and `INBOX_THUMBNAILS=0` stops it all.** Delete one undecided image
+  with pictures from the real share and run *Rescan my folder*: it becomes gone and its `file_thumbnails` row is deleted; put
+  it back and the next idle ticks make the picture again. Set `INBOX_THUMBNAILS=0` in `.env`, recreate the service
+  (`docker compose --profile archive up -d --force-recreate inbox-crawler`), save a new image: it is registered with no row, and
+  the row count does not grow while older images are still missing pictures. Back to `1` and it resumes. Finally compare
+  `SELECT pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))), count(*) FROM d1_private.file_thumbnails` with the
+  runbook's estimate (about 0.3 MB per image) and correct the estimate if it is off by more than half. Since: Inbox thumbnails
+  (stream B, crawler).
 
 ## Done
 
