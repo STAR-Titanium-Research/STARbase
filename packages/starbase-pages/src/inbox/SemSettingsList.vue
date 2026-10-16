@@ -26,12 +26,13 @@ defineProps<{ rows: SettingRow[] }>();
 </template>
 
 <style scoped>
-.settings { margin: 2px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 1px 12px; font-size: var(--fs-sm, 12px); }
-.setting { display: contents; }
-dt { color: var(--d1-dim); }
-dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+/* A grid of small cells (label over value), as many to a line as fit: about a dozen values take two or three lines, not a dozen. */
+.settings { margin: 4px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 4px 18px; font-size: var(--fs-sm, 12px); }
+.setting { min-width: 0; }
+dt { color: var(--d1-dim); font-size: var(--fs-xs, 11px); line-height: 1.3; }
+dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; overflow-wrap: anywhere; }
 .value { color: var(--theme--foreground); }
-.source { padding: 0 6px; border-radius: 99px; font-size: var(--fs-xs, 11px); line-height: 1.6; color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent); }
+.source { padding: 0 5px; border-radius: 99px; font-size: 10px; line-height: 1.5; color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent); }
 .source.src-manual { color: var(--d1-ok); background: color-mix(in srgb, var(--d1-ok) 14%, transparent); }
 .check { padding: 0 6px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; color: var(--d1-warn); background: color-mix(in srgb, var(--d1-warn) 14%, transparent); }
 .failed { color: var(--d1-warn); }
