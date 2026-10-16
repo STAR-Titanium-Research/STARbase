@@ -264,6 +264,32 @@ describe('JunctionNode', () => {
 		expect(ids(html)).toEqual([j.in, 'j:s:cut_from:out:0', 'j:s:cut_from:out:1']);
 	});
 
+	it('draws each output socket on the output edge of the card, in its own full-width row, with or without a fraction', async () => {
+		// The html of each output row: everything from one "out" div up to the next.
+		const rows = (html: string) => html.split(/<div[^>]*class="out[ "]/).slice(1);
+		const styleOf = (html: string, socket: string) => new RegExp(`data-id="${socket}"[^>]*style="([^"]*)"`).exec(html)?.[1] ?? '';
+		const right = await render(JunctionNode, { id: j.id, data: j });
+		// Each out is a block row (div.out) holding exactly its own socket, not an inline span.
+		expect(rows(right)).toHaveLength(2);
+		j.outs.forEach((o, i) => expect(rows(right)[i], o.socket).toContain(`data-id="${o.socket}"`));
+		// RIGHT: the right edge of the row (the card's edge), level with that row.
+		expect(styleOf(right, j.outs[0].socket)).toBe('left:100%;top:50%;');
+		expect(styleOf(right, j.outs[1].socket)).toBe('left:100%;top:50%;');
+		// Null fraction renders no text but the row (and its socket) is still there.
+		expect(right).toContain('data-pos="right"');
+		// DOWN: on the bottom edge, spread across the card like a container's.
+		const down = await render(JunctionNode, { id: j.id, data: j }, { direction: ref<'RIGHT' | 'DOWN'>('DOWN') });
+		expect(styleOf(down, j.outs[0].socket)).toBe('top:100%;left:33.33333333333333%;');
+		expect(styleOf(down, j.outs[1].socket)).toBe('top:100%;left:66.66666666666666%;');
+		expect(down).toContain('data-pos="bottom"');
+		// The input socket is unchanged: on the input edge.
+		expect(styleOf(right, j.in)).toBe('left:0;top:50%;');
+		expect(styleOf(down, j.in)).toBe('top:0;left:50%;');
+		// A single output with no fraction at all still gets the edge.
+		const one = { ...j, outs: [{ socket: 'j:s:cut_from:out:0', childId: 'a', fraction: null }] };
+		expect(styleOf(await render(JunctionNode, { id: j.id, data: one }), 'j:s:cut_from:out:0')).toBe('left:100%;top:50%;');
+	});
+
 	it('names the other lineage types', async () => {
 		const t = async (lineageType: JunctionData['lineageType']) => text(await render(JunctionNode, { id: j.id, data: { ...j, lineageType } }));
 		expect(await t('sintered_from')).toContain('Sintered from');

@@ -121,9 +121,11 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
   // 3. Stacks: a sample turned, faced or polished pass after pass. Only passes next to each other in the sample's
   // chain (buildGraph's order: date, sequence, id) stack, so the chain through the stack stays a straight line: any
   // other step on the sample in between (a cut, a test, a batch, another method or machine) ends the stack.
+  // A source_run_uid does not matter here (machining passes imported with force data carry one): a FAST press run
+  // has one too, but it makes a new sample, so the in-place condition already keeps it out of a stack.
   if (opts.stack) {
     const stackable = (o: OpRow) =>
-      !claimed.has(o.id) && !o.batchId && !o.sourceRunUid && !opts.unstacked?.has(o.id) && (!o.outputSampleId || o.outputSampleId === o.sampleId);
+      !claimed.has(o.id) && !o.batchId && !opts.unstacked?.has(o.id) && (!o.outputSampleId || o.outputSampleId === o.sampleId);
     const chains = new Map<string, { key: StepKey; op: OpRow | null }[]>();
     const add = (sample: string, key: StepKey, op: OpRow | null) => {
       const list = chains.get(sample);
