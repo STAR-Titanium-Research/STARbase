@@ -8,6 +8,8 @@ export interface HostRequestConfig {
 	timeout?: number;
 	headers?: Record<string, string>;
 	responseType?: 'json' | 'text' | 'blob' | 'arraybuffer';
+	// Lets the caller cancel the request (both hosts' clients are axios, which honours it).
+	signal?: AbortSignal;
 }
 export interface HostResponse {
 	data: any;
