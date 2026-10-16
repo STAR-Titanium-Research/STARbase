@@ -488,9 +488,9 @@ def test_package_is_there():
 
 def test_every_module_of_the_package_is_known_to_the_import_table():
     names = {module_name(p) for p in package_modules()}
-    assert names - {"fs_readonly"} == set(ALLOWED_IMPORTS), (
-        "a new module needs a reviewed entry in ALLOWED_IMPORTS (and a removed one must leave it)"
-    )
+    assert (
+        names - {"fs_readonly"} == set(ALLOWED_IMPORTS)
+    ), "a new module needs a reviewed entry in ALLOWED_IMPORTS (and a removed one must leave it)"
 
 
 @pytest.mark.parametrize("path", package_modules(), ids=module_name)
