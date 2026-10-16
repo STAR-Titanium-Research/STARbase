@@ -13,10 +13,15 @@
 // junction_id: <scan id>, insert_id, edge_id, adopted: false }`; a repeat by the same person is `already_linked`; 400 INVALID_PAYLOAD (with extensions.field),
 // 404 NOT_FOUND, 403 FORBIDDEN, 409 ALREADY_ADDED / NOT_A_SURFACE_SCAN / SURFACE_SCAN / SURFACE_SCANS_UNAVAILABLE. The options `scanItems`, `scanAllowed`,
 // `scanTableMissing` and `scanUndoAllowed` steer those; undo deletes the scan rows of the batch (403 when `scanUndoAllowed` is false).
+// Pictures (spec section 14): a file with `has_thumbnail: true` serves GET /d1-inbox/files/<id>/thumb and /preview as an image Blob (fakePictures.ts), as an
+// axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs`,
+// `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
+// were open at once.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
 import type { FoundFile, LinkItem, ScanLinkItem } from './inboxApi';
+import { fakePictureBlob } from './fakePictures';
 
 let counter = 0;
 
@@ -48,6 +53,7 @@ export function foundFile(over: Partial<FoundFile> = {}): FoundFile {
 		link_kind: null,
 		link_batch_id: null,
 		owner: { kind: 'person', id: 'p1', name: 'Ann Lee' },
+		has_thumbnail: false,
 		...over,
 	};
 }
@@ -93,6 +99,12 @@ export interface FakeInboxOptions {
 	scanUndoAllowed?: boolean;
 	/** The caller is not the person who linked a batch (and not an administrator): undo is 403 FORBIDDEN with no candidate_id, as the server's own check answers. */
 	undoByLinkerOnly?: boolean;
+	/** How long a picture request takes, in ms (default 0). Lets a test or a screenshot see the loading state. */
+	pictureDelayMs?: number;
+	/** Thumbnail requests are refused with 500 (true), or the first n of them are. */
+	thumbFails?: boolean | number;
+	/** Preview requests are refused with 500 (true), or the first n of them are. */
+	previewFails?: boolean | number;
 }
 
 /** One surface_scans row the fake made. */
@@ -120,6 +132,7 @@ const err = (status: number, code: string, message: string, extra: Record<string
 		response: { status, data: { errors: [{ message, extensions: { ...extra, code, source: 'd1-inbox' } }] } },
 	});
 
+const PICTURE_ROUTE = /^\/d1-inbox\/files\/([^/]+)\/(thumb|preview)$/;
 const ACCEPT_LIMIT = 500;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONDITIONS = ['new', 'worn', 'cleaned', 'other'];
@@ -313,6 +326,29 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 
 	const ok = (data: unknown, extra: Record<string, unknown> = {}) => ({ data, ...extra });
 
+	const pictureStats = { requests: 0, thumbs: 0, previews: 0, open: 0, maxOpen: 0, paths: [] as string[] };
+	const refused: Record<string, number> = { thumb: 0, preview: 0 };
+	/** The picture routes: a Blob after the delay, or the error the endpoint would answer. */
+	async function picture(path: string): Promise<Blob> {
+		const [, id, size] = PICTURE_ROUTE.exec(path) as RegExpExecArray & [string, string, 'thumb' | 'preview'];
+		pictureStats.requests += 1;
+		pictureStats[size === 'thumb' ? 'thumbs' : 'previews'] += 1;
+		pictureStats.paths.push(path);
+		pictureStats.open += 1;
+		pictureStats.maxOpen = Math.max(pictureStats.maxOpen, pictureStats.open);
+		try {
+			if (opts.pictureDelayMs) await new Promise((r) => setTimeout(r, opts.pictureDelayMs));
+			const f = files.find((x) => x.candidate_id === id);
+			if (!f || !f.has_thumbnail) throw err(404, 'NOT_FOUND', 'That file has no picture.');
+			const fails = size === 'thumb' ? opts.thumbFails : opts.previewFails;
+			refused[size] += 1;
+			if (fails === true || (typeof fails === 'number' && refused[size] <= fails)) throw err(500, 'INTERNAL_SERVER_ERROR', 'The picture could not be read.');
+			return fakePictureBlob(size);
+		} finally {
+			pictureStats.open -= 1;
+		}
+	}
+
 	const handlers: Record<string, (c: Call) => unknown> = {
 		'get /d1-inbox/summary': () => ok(summary()),
 		'get /d1-inbox/files': (c) => {
@@ -419,6 +455,8 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown> }) {
 		const call: Call = { method, path, body, params: config?.params };
 		calls.push(call);
+		// A picture is the image itself (not { data }), so it is not cloned through JSON.
+		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path).then((data) => ({ data }));
 		const h = handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));
 		try {
@@ -437,5 +475,5 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		delete: (path, config) => run('delete', path, undefined, config),
 	};
 
-	return { api, files, calls, junctions, scans, setAutoLink: (v: boolean) => (autoLink = v) };
+	return { api, files, calls, junctions, scans, pictureStats, setAutoLink: (v: boolean) => (autoLink = v) };
 }

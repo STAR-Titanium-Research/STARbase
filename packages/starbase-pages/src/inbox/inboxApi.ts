@@ -9,6 +9,8 @@
 //
 //   GET  /d1-inbox/summary              -> { data: InboxSummary } (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
 //   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, limit, offset, acceptable | null } }
+//   GET  /d1-inbox/files/<id>/thumb | /preview  -> the picture itself (image/jpeg, not { data }), only for a file with has_thumbnail; 404 when the
+//                                       caller cannot see the file or it has none. Fetched as a blob with the signed-in session (loadPicture).
 //   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id } | ScanLinkItem] } -> { data: { link_batch_id, linked: <count>, items } };
 //                                       403 when the caller cannot edit the record, 409 when someone else got there first. A surface scan is ADDED, not
 //                                       linked: its item is a ScanLinkItem (insert_id | edge_id, condition, ...); a repeat by the same person answers
@@ -59,7 +61,7 @@ export interface FileOwner {
  */
 export interface FoundFile {
 	candidate_id: string;
-	/** The directus_files pointer row. Directus cannot serve its bytes (storage 'star'), so the page draws no thumbnail from it. */
+	/** The directus_files pointer row. Directus cannot serve its bytes (storage 'star'), so the page never draws a picture from it (see has_thumbnail). */
 	directus_files_id: string;
 	/** The file's name (directus_files.filename_download, else the last part of rel_path). */
 	name?: string;
@@ -102,6 +104,11 @@ export interface FoundFile {
 	/** Optional: the person (login name) who decided it. */
 	decided_by_name?: string | null;
 	owner: FileOwner;
+	/**
+	 * The crawler stored a small picture of this file (an image or SEM image), served by GET /d1-inbox/files/<id>/thumb and /preview. An older
+	 * server leaves the field out: that reads as false.
+	 */
+	has_thumbnail: boolean;
 }
 
 /**
@@ -336,6 +343,7 @@ export function parseFile(v: unknown): FoundFile | null {
 		decided_by_name: str(r.decided_by_name),
 		duplicate_of_owner: parseDuplicateOwner(r.duplicate_of_owner),
 		owner: parseOwner(r.owner),
+		has_thumbnail: r.has_thumbnail === true,
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;
 	if (str(r.name)) file.name = str(r.name) as string;
@@ -358,6 +366,27 @@ export function filesParams(q: FilesQuery): Record<string, string | number> {
 }
 
 // ---- the calls ----
+
+export type PictureSize = 'thumb' | 'preview';
+
+/**
+ * One picture of a found file as an object URL (the caller revokes it with URL.revokeObjectURL, see inboxPictures.ts). The request carries the
+ * signed-in session like every other call, so no unauthenticated URL exists; an <img src> to the endpoint would not work in both hosts. Throws an
+ * InboxApiError (status 404 when the caller cannot see the file or it has no picture) or, for an answer that is not a picture, one without a status.
+ */
+export async function loadPicture(api: HostApi, candidateId: string, size: PictureSize): Promise<string> {
+	let data: unknown;
+	try {
+		data = (await api.get(`${BASE}/files/${encodeURIComponent(candidateId)}/${size}`, { responseType: 'blob' })).data;
+	} catch (e: any) {
+		// The error body of a blob request is a blob too, so the endpoint's own words are not read: a picture that fails to load fails quietly.
+		throw new InboxApiError('The picture could not be loaded.', { status: e?.response?.status });
+	}
+	const blob = data instanceof Blob ? data : data instanceof ArrayBuffer ? new Blob([data], { type: 'image/jpeg' }) : null;
+	if (!blob || blob.size === 0 || (blob.type && !blob.type.startsWith('image/'))) throw new InboxApiError('The answer was not a picture.');
+	if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') throw new InboxApiError('This browser cannot show the picture.');
+	return URL.createObjectURL(blob);
+}
 
 /** The counts for the badge, the Home panel and the page header. Shared with the sidebar (@d1/ui), which polls it. */
 export const loadSummary = (api: HostApi): Promise<InboxSummary> =>

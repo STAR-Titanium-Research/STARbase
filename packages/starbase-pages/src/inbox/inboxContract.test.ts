@@ -87,6 +87,13 @@ const BATCH = ID(901);
 
 const FILE_FIXTURES = ['files_new', 'files_new_acceptable', 'files_older', 'files_linked', 'files_dismissed', 'files_team_folder', 'files_empty'];
 
+/**
+ * The keys a parsed row has: every key the fixture row sends, plus `has_thumbnail`, which the client always sets (an older server leaves it out
+ * and it reads as false). The golden fixtures written after the thumbnails feature carry it; their value is then compared like any other key.
+ */
+const expectedKeys = (r: Record<string, unknown>, parsed: Record<string, unknown>): string[] =>
+	[...new Set([...Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed), 'has_thumbnail'])].sort();
+
 describe('GET /d1-inbox/files', () => {
 	it.each(FILE_FIXTURES)('%s: every row parses, key for key, and the page is read', async (name) => {
 		const f = fx(name);
@@ -99,7 +106,7 @@ describe('GET /d1-inbox/files', () => {
 		raw.forEach((r, i) => {
 			const parsed: any = page.rows[i];
 			// the client reads every key the server sends (a renamed key shows up as one the client never looks at) ...
-			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort());
+			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(expectedKeys(r, parsed));
 			// ... and gets the same value out of it (the owner is reshaped, the rest is as sent)
 			for (const k of Object.keys(r)) expect(parsed[k], `${r.candidate_id}.${k}`).toEqual(r[k]);
 		});
@@ -932,7 +939,7 @@ describe('adding a surface scan', () => {
 		expect(ids(page1.rows)).toEqual(raw.map((r) => r.candidate_id));
 		raw.forEach((r, i) => {
 			const parsed: any = page1.rows[i];
-			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort());
+			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(expectedKeys(r, parsed));
 			for (const k of Object.keys(r)) expect(parsed[k], `${r.candidate_id}.${k}`).toEqual(r[k]);
 		});
 		const [row] = page1.rows;
