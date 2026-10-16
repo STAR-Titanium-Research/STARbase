@@ -1158,6 +1158,12 @@ migration 141 prints about ownerless records.
   frame: their dashed outlines look the same thickness on screen at every zoom. Since: chain hover and outline fix
   (PR pending).
 
+- [ ] **PM4-5 — Wires in the PNG and PDF export of a large map.** Open `/map` on a campaign with many samples (for example
+  Campaign 10), where the export used to show wires cut along a straight horizontal or vertical line (top and left of
+  the picture's map origin, or past its right and bottom). Export ▾ → PNG and PDF. Expect: every wire is drawn from its
+  start to its end, including the fan from the campaign card. Do it once with a card selected (the unrelated cards and
+  wires dimmed): the dimmed wires show faintly, not missing. Since: process map export clips wires (PR pending).
+
 #### Process map edit mode (plan `2026-10-14-process-map-edit-mode.md`)
 
 - [ ] **PME-B1 — STARbase's generated form on real field definitions.** In edit mode, select a draft operation, a
