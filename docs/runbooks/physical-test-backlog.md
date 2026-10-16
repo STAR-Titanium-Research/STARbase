@@ -2308,6 +2308,13 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   and copy-path buttons, never the lock. As an administrator the page shows the values and no Edit control, and the access log gains a row.
   For a file with no owner (linked before migration 196) a reader of the sample sees the values with no Edit control. The same Files section on an
   operation page and a test page behaves the same. Since: STARbase imaging settings and locked files (stream F of the SEM reader plan).
+- [ ] **SEM11 — An alias handed to someone else, or corrected (C1, ADR-0022 D13).** On a copy of the database with two People, A and B, and a
+  folder `Users/<alias>` holding a few images A's crawler scan registered: change A's `uni_alias` to something else and give the old alias to B
+  (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
+  *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
+  afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
+  files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else") for one folder: expect
+  `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
 
 ## Done
 

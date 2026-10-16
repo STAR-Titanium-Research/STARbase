@@ -773,6 +773,15 @@ class Store:
                 ),
             )
             if not inserted:
+                if self.owned_by_other([fid], owner):
+                    # A folder that changed hands (C1): the pointer row is stamped to the person or team the
+                    # file came from. The new holder gets no candidate for it, like a linked file gets none.
+                    with self.conn.cursor() as cur:
+                        cur.execute("RELEASE SAVEPOINT register_file")
+                    log.info(
+                        "not registering %s: its file is stamped to another owner", rel
+                    )
+                    return RegisterResult(None, False)
                 # The indexer's (or an older crawler's) pointer row: it takes the owner's stamp now, unless it
                 # is linked or already stamped (see stamp_owner).
                 self.stamp_owner(fid, owner)
@@ -838,6 +847,21 @@ class Store:
             "AND owner_person_id IS NULL AND owner_team_id IS NULL",
             (owner.id, todo),
         )
+
+    def owned_by_other(self, files_ids: list[str], owner: Owner) -> set[str]:
+        """Which of these pointer-row ids are stamped to a person or team other than `owner` (a folder that
+        changed hands: its files stay with whoever they came from, ADR-0022 D13). An unstamped row, or one
+        stamped to this owner, is not in the answer."""
+        if not files_ids:
+            return set()
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        rows = self._all(
+            "SELECT id::text FROM directus_files WHERE id = ANY(%s::uuid[]) "
+            "AND (owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL) "
+            "AND NOT COALESCE(" + col + " = %s, false)",
+            (files_ids, owner.id),
+        )
+        return {r[0] for r in rows}
 
     def stamp_owner(self, files_id: str, owner: Owner) -> bool:
         """`stamp_owners` for one file: True when this call set the stamp."""

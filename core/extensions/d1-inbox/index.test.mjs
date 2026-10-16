@@ -143,6 +143,12 @@ const restore = (w, s) => {
   w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog;
 };
 
+// the pointer row's owner columns say another owner than the candidate's (a folder that changed hands, C1): the loaders of d1-inbox leave such a candidate out
+const restamped = (w, c) => {
+  const f = w.files.get(c.directus_files_id);
+  return Boolean(f) && (f.owner_person_id !== null || f.owner_team_id !== null) && (f.owner_person_id !== c.owner_person_id || f.owner_team_id !== c.owner_team_id);
+};
+
 function statement(w, sql, b, txId) {
   w.log.push({ sql, name: NAMES.get(sql) ?? null, bindings: b, tx: txId });
   const name = NAMES.get(sql);
@@ -167,8 +173,8 @@ function statement(w, sql, b, txId) {
       const ids = w.teamMembers.filter((m) => m.person_id === b[0]).map((m) => m.team_id);
       return copy(w.teams.filter((t) => ids.includes(t.team_id)));
     }
-    case 'candidatesById': case 'candidatesForUpdate': return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter(Boolean).map(copy);
-    case 'batchForUpdate': return [...w.candidates.values()].filter((c) => c.link_batch_id === b[0]).sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map(copy);
+    case 'candidatesById': case 'candidatesForUpdate': return csv(b[0]).sort().map((id) => w.candidates.get(id)).filter((c) => c && !restamped(w, c)).map(copy);
+    case 'batchForUpdate': return [...w.candidates.values()].filter((c) => c.link_batch_id === b[0] && !restamped(w, c)).sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map(copy);
     case 'markLinked': {
       const [decidedBy, linkKind, collection, junctionId, batchId, adopt, id] = b;
       const c = w.candidates.get(id);
@@ -3333,4 +3339,58 @@ test('sql_check.mjs (run on a real Postgres by tests/phase1_schema.sh) prepares 
   const phase1 = readFileSync(new URL('../../../tests/phase1_schema.sh', import.meta.url), 'utf8');
   assert.match(phase1, /core\/extensions\/d1-inbox\/sql_check\.mjs/);
   for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
+});
+
+// ---- C1: a folder that changed hands; the new holder neither sees nor links the old owner's files -------------------------------------------
+
+const stampTo = (w, c, owner) => { w.files.set(c.directus_files_id, { id: c.directus_files_id, ...owner }); return c; };
+
+test('C1: a candidate whose file is stamped to someone else is refused by link, accept-all (by id), dismiss and restore, and left alone', async () => {
+  const w = newWorld();
+  // Alice's candidate row (the folder is hers now), but the file is stamped to Carol (the former holder of the alias)
+  const foreign = stampTo(w, add(w, cand()), OWNED_BY.other);
+  const own = stampTo(w, add(w, cand()), OWNED_BY.alice);
+  const { call } = setup(w);
+  const linked = await call('POST /link', { user: U.alice, body: { items: [link(foreign)] } });
+  assert.equal(linked.statusCode, 404);
+  assert.equal(codeOf(linked), 'NOT_FOUND');
+  assert.equal(foreign.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  const accept = await call('POST /accept-all', { user: U.alice, body: { candidate_ids: [foreign.candidate_id, own.candidate_id] } });
+  assert.equal(accept.statusCode, 200, JSON.stringify(accept.body));
+  assert.deepEqual(accept.body.data.skipped.map((s) => [s.candidate_id, s.reason]), [[foreign.candidate_id, 'NOT_FOUND']]);
+  assert.equal(foreign.state, 'new');
+  assert.equal(own.state, 'linked');
+  const dismissed = await call('POST /dismiss', { user: U.alice, body: { candidate_ids: [foreign.candidate_id] } });
+  assert.equal(dismissed.statusCode, 404);
+  assert.equal(foreign.state, 'new');
+  foreign.state = 'dismissed';
+  const restored = await call('POST /restore', { user: U.alice, body: { candidate_ids: [foreign.candidate_id] } });
+  assert.equal(restored.statusCode, 404);
+  assert.equal(foreign.state, 'dismissed');
+});
+
+test('C1: undo leaves a batch row whose file was re-stamped to someone else (404 when nothing else is left in the batch)', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a)] } })).body.data.link_batch_id;
+  stampTo(w, a, OWNED_BY.other);
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 404);
+  assert.equal(a.state, 'linked');
+  assert.equal(w.junctions.sample_data_files.length, 1);
+});
+
+test('C1: every query that loads or counts candidates holds the file-owner predicate (the SQL the fake cannot run)', () => {
+  const predicate = /NOT EXISTS \(SELECT 1 FROM directus_files pf WHERE pf\.id = c\.directus_files_id AND \(pf\.owner_person_id IS NOT NULL OR pf\.owner_team_id IS NOT NULL\) AND \(pf\.owner_person_id IS DISTINCT FROM c\.owner_person_id OR pf\.owner_team_id IS DISTINCT FROM c\.owner_team_id\)\)/;
+  for (const name of ['candidatesForUpdate', 'candidatesById', 'batchForUpdate', 'summary', 'summaryWithScans']) assert.match(SQL[name], predicate, name);
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  for (const tab of ['new', 'older', 'open', 'linked', 'dismissed']) {
+    const f = parseFileFilters({ tab });
+    assert.match(buildListQuery(scope, f).sql, predicate, `list ${tab}`);
+    assert.match(buildListQuery(scope, f, { count: true }).sql, predicate, `count ${tab}`);
+  }
+  assert.match(buildListQuery(scope, parseFileFilters({}, { defaultTab: 'open' }), { accept: true }).sql, predicate, 'accept-all');
+  assert.match(SQL.candidatesForUpdate, /FOR UPDATE/);
 });

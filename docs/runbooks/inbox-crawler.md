@@ -198,7 +198,11 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   are an active member of; a person with neither fails the request with *no folder to scan*.
 - **Alias changes.** The crawler's cached rows are tied to their owner. If a person's alias or a team's share
   folder changes during a scan, that owner's unfinished work is dropped; a folder handed to someone else is a
-  first scan for them.
+  first scan for them. **The new holder does not get the old holder's files:** the old holder's undecided
+  candidates are deleted, and a file whose pointer row is stamped to another person or team gets no candidate for
+  the new holder (the log says `not registering <path>: its file is stamped to another owner`, or `N file(s)
+  stamped to another owner left out of the inbox` for a folder); `d1-inbox` hides and refuses such a candidate as
+  well. See "An alias handed to someone else" below.
 - **The indexer.** `make index-archive` and the crawler share `directus_files` pointer rows. The indexer's
   missing sweep now only judges file types it walks, so crawler-only rows (`.al3d`, other types) are left
   alone (rows flagged missing by an older run stay flagged: clear `metadata.missing` by hand if it matters).
@@ -223,6 +227,34 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   found (a `d1_private.file_candidates` row of kind `document` or `other`) that is not linked and was never
   adopted. It keys on that candidate row, not on `directus_files.metadata.found_by`, which the indexer's next
   run overwrites and any Lab Member can edit. `--phase all` stays a superset of `--phase linked`.
+
+## An alias handed to someone else
+
+A `uni_alias` (or `share_folder`) moved from person A to person B, or typed wrongly and corrected, leaves the files
+under that folder stamped to A (`directus_files.owner_person_id`), because the owner is the person, never the
+folder name (ADR-0022 D13). B's Inbox does not list them and B cannot read them (migration 196's filter). That is
+the safe outcome when the folder really changed hands, but wrong when the alias was only mistyped on A, or the files
+in the folder are in fact B's. An administrator re-stamps them by SQL, as the database owner, after checking who the
+files belong to. **Describe, check, then run; this is not something the crawler does:**
+
+```sql
+-- how many files would move (the alias is the folder name, <base> is Users or INBOX_PERSON_DIR)
+SELECT count(*) FROM directus_files
+WHERE owner_person_id = '<wrong person id>' AND metadata->>'archive_path' LIKE '<base>/<alias>/%';
+-- then
+UPDATE directus_files SET owner_person_id = '<right person id>'
+WHERE owner_person_id = '<wrong person id>' AND metadata->>'archive_path' LIKE '<base>/<alias>/%';
+-- and the candidates follow the files, so the new holder's Inbox lists them; run it in the same transaction
+UPDATE d1_private.file_candidates c SET owner_person_id = '<right person id>'
+FROM directus_files f WHERE f.id = c.directus_files_id AND f.owner_person_id = '<right person id>'
+  AND c.owner_person_id = '<wrong person id>' AND c.state IN ('new', 'gone', 'dismissed');
+SELECT d1_private.file_readers_drift_count();   -- 0 afterwards: the readers table follows the owner column
+```
+
+Escape `_` and `%` in an alias with a backslash in the `LIKE` pattern. A team folder is the same with
+`owner_team_id` and `Shared/<folder>`. Candidates the old holder had already deleted are not recreated by the
+re-stamp: run `make inbox-crawler-once` (or *Rescan my folder*) afterwards, and the new holder's scan registers
+what is missing now that the files are theirs. Backlog **SEM11**.
 
 ## When something looks wrong
 

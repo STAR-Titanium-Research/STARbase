@@ -136,10 +136,9 @@ def test_a_folder_handed_to_a_new_person_is_scanned_as_a_first_scan_for_them(wor
             "SELECT rel_path, owner_person_id::text, origin FROM file_candidates"
         )
     }
-    assert got["Users/aaa11/a.png"] == (
-        b,
-        "backlog",
-    )  # A's stale candidate does not block or leak: now B's, backlog
+    assert (
+        "Users/aaa11/a.png" not in got
+    )  # A's stale candidate does not block or leak (C1): B gets no candidate for A's file
     assert got["Users/aaa11/b_new.png"] == (
         b,
         "backlog",

@@ -224,6 +224,12 @@ const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_i
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
   + ' c.link_batch_id, c.adopted_at, c.auto_undone_at, c.extracted';
 const IDS = "string_to_array(?, ',')::uuid[]";
+// A folder that changes hands (alias handed to someone else, ADR-0022 D13): the file's pointer row stays stamped to the owner it came from. A candidate
+// whose file is stamped to someone OTHER than the candidate's own owner is not the holder's to see or change: every query that loads or counts candidates
+// holds this one predicate (an unstamped file, a linked one, or one stamped to the candidate's own owner passes). Belt and braces with the crawler, which
+// no longer makes such a candidate.
+const FILE_OWNER_MATCHES = 'NOT EXISTS (SELECT 1 FROM directus_files pf WHERE pf.id = c.directus_files_id AND (pf.owner_person_id IS NOT NULL OR pf.owner_team_id IS NOT NULL)'
+  + ' AND (pf.owner_person_id IS DISTINCT FROM c.owner_person_id OR pf.owner_team_id IS DISTINCT FROM c.owner_team_id))';
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
 // lists once the original is LINKED, or DISMISSED BY THE SAME OWNER (the same person or team). Another owner dismissing their file must not hide yours: a
@@ -247,7 +253,7 @@ const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.orig
   + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
   + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${FILE_OWNER_MATCHES}${scans ? ` AND ${SCAN_ADDED}` : ''}`
   + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
 
 export const SQL = {
@@ -262,10 +268,10 @@ export const SQL = {
   // The same where the surface_scans table exists (the endpoint checks first): without the surface scan files that already have a scan.
   summaryWithScans: summarySql(true),
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
-  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
+  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
-  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
-  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
+  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id`,
+  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
     "UPDATE d1_private.file_candidates SET state = 'linked', decided_at = now(), decided_by = ?, link_kind = ?, linked_collection = ?,"
@@ -556,7 +562,7 @@ const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers; { scans: true }: the surface_scans table exists, so
 // undecided surface scan files that already have a scan are left out). Everything a client chose is a binding.
 export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false } = {}) {
-  const where = [];
+  const where = [FILE_OWNER_MATCHES];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
   if (f.owner?.kind === 'me') { where.push('c.owner_person_id = ?'); bindings.push(mine ? scope.personId : null); }

@@ -235,8 +235,72 @@ def test_alias_handed_to_someone_else_does_not_move_the_file(world):
     run(world)
     assert owner_of(world, rel) == (a, None)  # still A's file
     assert owner_of(world, "Users/aaa11/b_new.png") == (b, None)
+    # C1: B's inbox does not list A's file: the candidate of the old holder is dropped and not re-made
+    assert (
+        world.one("SELECT count(*) FROM file_candidates WHERE rel_path = %s", (rel,))[0]
+        == 0
+    )
     assert world.one(
-        "SELECT owner_person_id::text FROM file_candidates WHERE rel_path = %s", (rel,)
-    ) == (
-        b,
-    )  # B's inbox lists it (the candidate follows the folder), the file stays A's
+        "SELECT owner_person_id::text FROM file_candidates WHERE rel_path = %s",
+        ("Users/aaa11/b_new.png",),
+    ) == (b,)
+
+
+def test_handover_leaves_the_new_holders_inbox_without_the_old_ones_files(world):
+    """C1: a folder that changes hands: every scan of B leaves A's files out of B's inbox, however often
+    the folder is listed, and A's pointer rows and linked candidates are untouched."""
+    a, _ = world.person("aaa11")
+    old = "Users/aaa11/sem/old.png"
+    kept = "Users/aaa11/sem/kept.png"
+    world.write(old, png((1, 1, 1)))
+    world.write(kept, png((3, 3, 3)))
+    settle(world)
+    world.commit()
+    run(world)
+    # A linked `kept` in Data Studio's way: the candidate row is A's and stays
+    world.q(
+        "UPDATE file_candidates SET state = 'linked', link_kind = 'manual', "
+        "linked_collection = 'physical_samples', linked_junction_id = gen_random_uuid(), "
+        "link_batch_id = gen_random_uuid() WHERE directus_files_id = %s",
+        (str(file_id(kept)),),
+    )
+    world.q("UPDATE people SET uni_alias = 'gone1' WHERE person_id = %s", (a,))
+    b, _ = world.person("aaa11")
+    world.write("Users/aaa11/sem/b_new.png", png((2, 2, 2)))
+    settle(world)
+    world.commit()
+    for n in range(2):  # a second scan changes nothing either
+        os.utime(Path(world.root, "Users/aaa11/sem"), (OLD + 60 + n, OLD + 60 + n))
+        world.commit()
+        run(world)
+    rows = world.q(
+        "SELECT rel_path, owner_person_id::text, state FROM file_candidates "
+        "WHERE owner_person_id = %s ORDER BY rel_path",
+        (b,),
+    )
+    assert rows == [("Users/aaa11/sem/b_new.png", b, "new")]
+    assert owner_of(world, old) == (a, None)
+    assert owner_of(world, kept) == (a, None)
+    assert world.q(
+        "SELECT rel_path, state FROM file_candidates WHERE owner_person_id = %s", (a,)
+    ) == [(kept, "linked")]
+
+
+def test_register_file_refuses_a_candidate_for_a_file_stamped_to_someone_else(
+    world, caplog
+):
+    a, _ = world.person("aaa11")
+    b, _ = world.person("bbb22")
+    tid = world.team("Machining")
+    store = db.Store(world.conn)
+    register(store, person_owner(a, "aaa11"), "Users/aaa11/a.png")
+    world.q("DELETE FROM file_candidates")
+    for owner in (person_owner(b, "aaa11"), team_owner(tid, "aaa11")):
+        with caplog.at_level("INFO"):
+            res = register(store, owner, "Users/aaa11/a.png")
+        assert (res.candidate_id, res.created) == (None, False)
+    assert world.one("SELECT count(*) FROM file_candidates")[0] == 0
+    assert owner_of(world, "Users/aaa11/a.png") == (a, None)
+    assert "stamped to another owner" in caplog.text
+    # the same owner still gets its candidate (an unstamped or own row is fine)
+    assert register(store, person_owner(a, "aaa11"), "Users/aaa11/a.png").created

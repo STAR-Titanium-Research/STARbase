@@ -520,6 +520,16 @@ class Scanner:
         # A file already linked to a record is not a found file: do not register it at all.
         unknown = [f"{d}/{e.name}" for e in files if f"{d}/{e.name}" not in cands]
         linked = store.already_linked([str(file_id(r)) for r in unknown])
+        # A folder that changed hands: files stamped to the old holder get no candidate (and are not read
+        # again at every scan).
+        handed = store.owned_by_other([str(file_id(r)) for r in unknown], owner)
+        if handed:
+            log.info(
+                "%s: %d file(s) stamped to another owner left out of the inbox",
+                d,
+                len(handed),
+            )
+        linked |= handed
         # A candidate already known whose pointer row has no stamp (made by the indexer, or by a crawler from
         # before the owner columns) takes the owner's now; stamp_owners leaves a stamped or linked row alone.
         store.stamp_owners(
