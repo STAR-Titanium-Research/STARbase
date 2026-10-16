@@ -1462,8 +1462,8 @@ const editOperatorName = ref('');
 const editOpCuttingSpeed = ref<number | null>(null);   // machining_cutting_speed_m_per_min (Vc)
 const editOpFeedMmPerRev = ref<number | null>(null);   // machining_feed_mm_per_rev
 const editOpAxialDoc = ref<number | null>(null);       // machining_axial_depth_of_cut_mm
-// The operation record's own workpiece diameter. NOT the same field as the FRM "Diameter" control
-// above (that one is machining_force_analysis.outer_diameter, a geometry override for the spiral):
+// The operation record's own workpiece diameter. NOT the same field as the "Spiral Ø" field
+// under Cut parameters (that one is machining_force_analysis.outer_diameter, a geometry override for the spiral):
 // this is the operation's recorded stock diameter.
 const editOpWorkpieceDiam = ref<number | null>(null);  // machining_workpiece_diameter_mm
 const editOutcomeNotes = ref('');
@@ -2614,12 +2614,10 @@ function fmtDateTime(v: string | null | undefined) {
 							     .mat filenames are matched to an operation by, so hand-editing either from this
 							     panel would silently desync that link. Combined
 							     with any pending crop edit into one "Save changes" summary dialog below. -->
-							<!-- Surface speed / Feed / Depth of cut / Workpiece Ø appear again under "Cut
-							     parameters" below, which reads as a duplicate until you know these two
-							     groups are different RECORDS: this one is the operation as specified
-							     (manufacturing_operations), that one is what this capture actually used
-							     (machining_force_analysis, and the source of the spiral geometry). The
-							     headings now say which is which. -->
+							<!-- "Cut parameters" below uses this same field style but is a different RECORD: this
+							     block is the operation as specified (manufacturing_operations), that one is what
+							     this capture actually used (machining_force_analysis, and the source of the
+							     spiral geometry), hence "Spiral feed" / "Spiral Ø" there. -->
 							<div class="stat-sep">Operation record <span class="u">(as specified)</span>
 								<button v-if="metaDirty" class="linkbtn" @click="seedMetaFromDetail">Reset</button>
 							</div>
@@ -2638,8 +2636,8 @@ function fmtDateTime(v: string | null | undefined) {
 								<label>Depth of cut
 									<span class="unit-box"><input v-model.number="editOpAxialDoc" type="number" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /><span class="unit">mm</span></span>
 								</label>
-								<!-- The operation's recorded stock diameter — distinct from the FRM "Diameter"
-								     control above (machining_force_analysis.outer_diameter, a spiral-geometry
+								<!-- The operation's recorded stock diameter — distinct from the "Spiral Ø"
+								     field under Cut parameters (machining_force_analysis.outer_diameter, a spiral-geometry
 								     override). Editable so the Doctor's diameter backfill has somewhere to write. -->
 								<label>Workpiece Ø
 									<span class="unit-box"><input v-model.number="editOpWorkpieceDiam" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /><span class="unit">mm</span></span>
@@ -2660,7 +2658,7 @@ function fmtDateTime(v: string | null | undefined) {
 							     not the operation's specified feed/Ø. A field is highlighted when its value differs
 							     from what the op was loaded with. -->
 							<div class="stat-sep">Cut parameters <span class="u">(this capture — draws the fingerprint)</span>
-								<button v-if="!near(editFeed, srcCut.feed) || !near(editDiam, srcCut.diam) || !near(editInnerDiam, srcCut.inner) || !near(editPpr, srcCut.ppr)"
+								<button v-if="!near(editFeed, srcCut.feed) || !near(editDiam, srcCut.diam) || !near(editInnerDiam, srcCut.inner) || !near(editPpr, srcCut.ppr) || !near(editRate, srcCut.rate)"
 									class="linkbtn" @click="seedCutFromDetail">Reset</button>
 							</div>
 							<div class="edit-grid">
@@ -2676,11 +2674,11 @@ function fmtDateTime(v: string | null | undefined) {
 								<label>Pulses/rev
 									<span class="unit-box"><input v-model.number="editPpr" type="number" step="1" min="1" :class="{ modified: !near(editPpr, srcCut.ppr) }" /></span>
 								</label>
-								<label v-if="addsInfoOverOp(detail.surface_speed, srcMeta.cuttingSpeed)">Surface speed <span class="u">(capture)</span>
-									<span class="unit-box"><input :value="fmt(detail.surface_speed)" type="text" disabled /><span class="unit">m/min</span></span>
+								<label v-if="addsInfoOverOp(detail.surface_speed, srcMeta.cuttingSpeed)" class="wide"><span>Surface speed <span class="u">(capture)</span></span>
+									<span class="unit-box mismatch"><input :value="fmt(detail.surface_speed)" type="text" readonly /><span class="unit">m/min</span></span>
 								</label>
-								<label v-if="addsInfoOverOp(detail.depth_of_cut, srcMeta.axialDoc)">Depth of cut <span class="u">(capture)</span>
-									<span class="unit-box"><input :value="fmt(detail.depth_of_cut)" type="text" disabled /><span class="unit">mm</span></span>
+								<label v-if="addsInfoOverOp(detail.depth_of_cut, srcMeta.axialDoc)" class="wide"><span>Depth of cut <span class="u">(capture)</span></span>
+									<span class="unit-box mismatch"><input :value="fmt(detail.depth_of_cut)" type="text" readonly /><span class="unit">mm</span></span>
 								</label>
 								<label>Sample rate
 									<span class="unit-box"><input v-model.number="editRateKHz" type="number" step="0.1" min="0.1" :class="{ modified: !near(editRate, srcCut.rate) }" /><span class="unit">kHz</span></span>
@@ -3622,8 +3620,6 @@ function fmtDateTime(v: string | null | undefined) {
    groups that carry the same quantities from different records -- quieter than the heading, but
    it has to stay readable, so it is not dimmed any further than the heading already is. */
 .stat-sep .u { font-weight: 400; opacity: 0.85; }
-/* These tiles now only appear when the capture disagrees with the operation record (or is the
-   only source), so they are a discrepancy to look at, not background reference. */
 .edit-grid input[type="number"], .edit-grid input[type="text"], .edit-grid select, .edit-grid textarea, .render-row input {
 	font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; text-transform: none; letter-spacing: 0; padding: 5px 8px;
 	border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff);
@@ -3632,6 +3628,9 @@ function fmtDateTime(v: string | null | undefined) {
 /* The BOX carries the border, not the input, so the trailing unit reads as part of one control
    (same construction as RecordingOptions.vue's .unit-box on the Record page). */
 .edit-grid .unit-box { display: flex; align-items: center; border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff); }
+/* The capture's Surface speed / Depth of cut only appear when they disagree with the operation
+   record (or it has no value), so they are a discrepancy to look at, not background reference. */
+.edit-grid .unit-box.mismatch { border-color: var(--theme--primary, #1d4ed8); }
 .edit-grid .unit-box:focus-within { border-color: var(--theme--primary, #1d4ed8); }
 .edit-grid .unit-box input { flex: 1 1 auto; min-width: 0; border: none; background: transparent; border-radius: 0; }
 .edit-grid .unit-box input:focus { outline: none; }

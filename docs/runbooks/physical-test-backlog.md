@@ -1503,6 +1503,14 @@ tool; a test cut on scrap stock is fine.
   with a reason on an operation with no feed or depth, and on a milling op. Since #127 (new default and per-subtype
   memory: also #128).
 
+- [ ] **#345 Operation detail Cut parameters layout.** In the Plot page's Operation detail (narrow
+  column, a real operation with a capture): the Operation record and Cut parameters blocks use the
+  same field style; the capture's fields read "Spiral feed", "Spiral Ø", "Inner Ø", "Pulses/rev",
+  "Sample rate" and nothing overflows. Edit each: its box gets the blue ring and Cut parameters'
+  Reset appears (including for Sample rate alone) and clears it. On an operation whose capture
+  surface speed or depth of cut differs from the record, that field shows full-width with a blue
+  border. From the 345 PR.
+
 ### Re-checks for the 2026-10-08 fixes (#199, #200, #212 to #216)
 Shipped in 0.1.35 (#217), so any build from 0.1.35 on will do. The issues were closed on
 2026-10-11; reopen the one whose check fails.
