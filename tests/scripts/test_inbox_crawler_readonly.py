@@ -192,7 +192,7 @@ ATTR_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
     ("identity", "os"): frozenset({"path"}),
     # numpy on in-memory arrays only: no load, fromfile, memmap, genfromtxt, save ...
     ("sem_bar", "numpy"): frozenset(
-        {"asarray", "ndarray", "nonzero", "diff", "pad", "int8"}
+        {"asarray", "ndarray", "nonzero", "diff", "pad", "int8", "full", "uint8"}
     ),
     ("sem_bar", "onnxruntime"): frozenset(
         {"get_available_providers", "InferenceSession"}

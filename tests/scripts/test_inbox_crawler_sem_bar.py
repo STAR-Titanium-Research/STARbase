@@ -574,3 +574,108 @@ def test_scale_bar_length_px_none_when_there_are_no_cells():
 
 def test_canvas_constants():
     assert sem_bar.CANVAS_M == (0.2984, 0.2984 * 0.858)
+
+
+# ---- the GPU switch, with fakes (no GPU needed) ---------------------------------------------
+
+
+class FakeOrtSession:
+    def __init__(self, model, providers=None):
+        self._model_path = model
+        self.providers = list(providers or ["CPUExecutionProvider"])
+
+    def get_providers(self):
+        return self.providers
+
+
+def install_fake_gpu_stack(monkeypatch, *, cuda_read):
+    """Fake `rapidocr_onnxruntime` and `onnxruntime` modules. `cuda_read(crops)` is what the recogniser answers
+    while its session is the CUDA one; the CPU session always answers `[("x", 0.5)] * len(crops)`."""
+
+    class Holder:  # RapidOCR's OrtInferSession: the onnxruntime session is its `.session`
+        def __init__(self):
+            self.session = FakeOrtSession("rec.onnx")
+
+    class Recogniser:
+        def __init__(self):
+            self.session = Holder()
+
+        def __call__(self, crops):
+            if self.session.session.providers[0] == "CUDAExecutionProvider":
+                return cuda_read(crops), 0.01
+            return [("x", 0.5)] * len(crops), 0.01
+
+    class FakeRapidOCR:
+        def __init__(self, **kw):
+            self.text_recognizer = Recogniser()
+
+    fake_rapid = type(sys)("rapidocr_onnxruntime")
+    fake_rapid.RapidOCR = FakeRapidOCR
+    fake_ort = type(sys)("onnxruntime")
+    fake_ort.get_available_providers = lambda: [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    fake_ort.InferenceSession = FakeOrtSession
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", fake_rapid)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr(sem_bar, "_READERS", {})
+    return FakeRapidOCR
+
+
+def test_the_cuda_session_is_kept_when_its_test_read_works(monkeypatch, caplog):
+    install_fake_gpu_stack(
+        monkeypatch, cuda_read=lambda crops: [("gpu", 0.9)] * len(crops)
+    )
+    with caplog.at_level("INFO", logger="inbox_crawler.sem_bar"):
+        reader = sem_bar.default_bar_reader("auto")
+    assert reader([np.zeros((24, 96, 3), np.uint8)]) == [
+        ("gpu", 0.9)
+    ]  # still on the GPU session
+    assert "CUDAExecutionProvider (INBOX_OCR_DEVICE=auto)" in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+@pytest.mark.parametrize(
+    "bad_read",
+    [
+        pytest.param(lambda crops: 1 / 0, id="raises"),
+        pytest.param(lambda crops: [], id="no-answer"),
+        pytest.param(lambda crops: [("a", 0.5), ("b", 0.5)], id="too-many"),
+        pytest.param(lambda crops: ["just a string"], id="not-a-pair"),
+    ],
+)
+@pytest.mark.parametrize("device", ["auto", "cuda"])
+def test_a_cuda_session_that_fails_its_test_read_falls_back_to_the_cpu(
+    monkeypatch, caplog, bad_read, device
+):
+    install_fake_gpu_stack(monkeypatch, cuda_read=bad_read)
+    with caplog.at_level("INFO", logger="inbox_crawler.sem_bar"):
+        reader = sem_bar.default_bar_reader(device)
+    # every bar still reads, on the CPU session that was put back
+    assert reader([np.zeros((24, 96, 3), np.uint8)] * 3) == [("x", 0.5)] * 3
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "failed a test read" in warnings[0].getMessage()
+    assert "CPUExecutionProvider (INBOX_OCR_DEVICE=" in caplog.text
+
+
+def test_the_test_read_is_one_small_blank_rgb_crop(monkeypatch):
+    seen = []
+
+    def cuda_read(crops):
+        seen.append(crops)
+        return [("ok", 0.9)]
+
+    install_fake_gpu_stack(monkeypatch, cuda_read=cuda_read)
+    sem_bar.default_bar_reader("cuda")
+    (crops,) = seen
+    assert len(crops) == 1 and crops[0].dtype == np.uint8
+    assert crops[0].ndim == 3 and crops[0].shape[2] == 3 and crops[0].min() == 255
+
+
+def test_cpu_never_touches_onnxruntime(monkeypatch):
+    install_fake_gpu_stack(monkeypatch, cuda_read=lambda crops: 1 / 0)
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)  # an import would fail
+    assert sem_bar.default_bar_reader("cpu")([np.zeros((24, 96, 3), np.uint8)]) == [
+        ("x", 0.5)
+    ]

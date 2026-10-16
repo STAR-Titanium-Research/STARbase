@@ -376,15 +376,31 @@ _READERS: dict[
 
 def _on_cuda(recogniser) -> str:
     """Move RapidOCR's recogniser session to the GPU when onnxruntime offers it; the provider now in use.
-    RapidOCR 1.2.3 ignores `rec_use_cuda` (the key is not mapped onto its config), so the session is rebuilt."""
+    RapidOCR 1.2.3 ignores `rec_use_cuda` (the key is not mapped onto its config), so the session is rebuilt.
+    A session that builds can still fail when it runs (a driver or cuDNN mismatch), which would fail every bar,
+    so the new session must read a small blank crop first; if that raises or answers the wrong shape the CPU
+    session is put back and one warning says so."""
     import onnxruntime
 
     if _CUDA not in onnxruntime.get_available_providers():
         raise RuntimeError("this onnxruntime has no CUDAExecutionProvider")
     holder = recogniser.session
+    cpu_session = holder.session
     holder.session = onnxruntime.InferenceSession(
-        holder.session._model_path, providers=[_CUDA, _CPU]
+        cpu_session._model_path, providers=[_CUDA, _CPU]
     )
+    try:
+        results, _elapsed = recogniser([numpy.full((24, 96, 3), 255, numpy.uint8)])
+        if len(results) != 1 or len(results[0]) != 2:
+            raise RuntimeError(f"the test read answered {results!r}")
+    except Exception as exc:  # noqa: BLE001 - whatever the GPU session does wrong, the CPU one is still there
+        holder.session = cpu_session
+        log.warning(
+            "the CUDA session built but failed a test read (%s: %s): data-bar OCR stays on the CPU",
+            type(exc).__name__,
+            exc,
+        )
+        return _CPU
     return holder.session.get_providers()[0]
 
 
