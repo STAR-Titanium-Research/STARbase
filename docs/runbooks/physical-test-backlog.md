@@ -2033,9 +2033,10 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   expect Undo to show *You can no longer delete that surface scan, so adding it cannot be undone.* and change
   nothing; the dialog fits a phone-width window. Since: found files inbox, streams F1 and F2.
 - [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
-  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
-  thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
-  `/assets/` request; check the browser's network tab shows none); a flagged file reading *short ID `…` in the
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (an
+  image with a stored picture shows it instead, see **IF60**; the page never makes an `/assets/` request for a
+  found file, because archive files are pointer rows Directus cannot serve: check the browser's network tab
+  shows none); a flagged file reading *short ID `…` in the
   file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
   Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
   past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
@@ -2176,6 +2177,25 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   `SELECT pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))), count(*) FROM d1_private.file_thumbnails` with the
   runbook's estimate (about 0.3 MB per image) and correct the estimate if it is off by more than half. Since: Inbox thumbnails
   (stream B, crawler).
+
+- [ ] **IF60 — Inbox thumbnails and the full view on real data (STARbase `/inbox`, and the same page inside Data Studio).**
+  Needs the deployed `d1-inbox` with the thumbnails migration and a crawler that has made the pictures (new files, and the
+  backfill for older ones). Save a few real SEM images (TIFF, JPEG) into a test folder and let the scan find them. Expect:
+  each image row shows a small picture in place of the icon, a shimmer for a moment first; rows far down a long list
+  load their pictures only when you scroll to them (network tab: `/d1-inbox/files/<id>/thumb`, at most four in flight, none
+  for rows not yet reached; each answers `image/jpeg` as a blob with the session cookie and none is an `<img src>` to the
+  endpoint); a document, an `.al3d` and an image the crawler could not decode keep the icon. Click a picture (or Tab to it
+  and press Enter): the dialog opens with the blurred thumbnail and a spinner, then the preview (`/preview`), shows the
+  file name, folder and the kV, magnification and scale bar the row shows, and the line *Reduced-size preview. The
+  original stays on the share.* Esc, a click outside and **Close** each close it, and focus is back on the picture; Tab
+  stays inside the dialog. Open the same file in **both** hosts (STARbase and Data Studio's Home) and expect the same
+  result. Switch the browser to *reduce motion*: the shimmer and the spinner stand still. Stop the `d1-inbox` route (or
+  reload with the network blocked) after the list has loaded and expect the rows to show their icons without an error, and
+  the dialog to show *The preview could not be loaded.* with **Retry**. Since: Inbox thumbnails (stream C).
+- [ ] **IF61 — A person only sees pictures of files they can see.** With two people (or a person and a team) whose
+  folders hold images with pictures, copy the `thumb` URL of one person's file from the network tab and request it as the
+  other person (their session): expect 404, not the picture; and as a signed-out browser, expect no picture (the
+  endpoint needs the session). Since: Inbox thumbnails (stream C: the client side of the server's visibility rule).
 
 ## Done
 

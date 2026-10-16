@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
 import {
-	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 } from './inboxApi';
 import { createFakeInbox, exactMatch, foundFile } from './fakeInboxServer';
 
@@ -23,6 +23,65 @@ describe('parseFile', () => {
 	it('gives odd values a harmless default; a bare owner name is a person', () => {
 		const f = parseFile({ candidate_id: 'c1', kind: 'video', state: 'weird', match_strength: 'maybe', matches: 'x', extracted: [], owner: 'Ann' });
 		expect(f).toMatchObject({ kind: 'other', state: 'new', match_strength: 'none', matches: [], extracted: {}, owner: { kind: 'person', id: null, name: 'Ann' }, rel_path: '' });
+	});
+});
+
+describe('has_thumbnail', () => {
+	it('is read as a boolean: true only when the server says true, and a server that leaves it out means no picture', () => {
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: true })!.has_thumbnail).toBe(true);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: false })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1' })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: 'yes' })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: 1 })!.has_thumbnail).toBe(false);
+	});
+});
+
+describe('loadPicture', () => {
+	const withPictures = (over: Parameters<typeof createFakeInbox>[0] = {}) => createFakeInbox({ files: [foundFile({ has_thumbnail: true }), foundFile()], ...over });
+
+	it('fetches the thumb and the preview as blobs with the session (a GET with responseType blob) and answers an object URL', async () => {
+		const fake = withPictures();
+		const get = vi.spyOn(fake.api, 'get');
+		const create = vi.spyOn(URL, 'createObjectURL');
+		const id = fake.files[0].candidate_id;
+		const thumb = await loadPicture(fake.api, id, 'thumb');
+		const preview = await loadPicture(fake.api, id, 'preview');
+		expect(thumb).toMatch(/^blob:/);
+		expect(preview).toMatch(/^blob:/);
+		expect(thumb).not.toBe(preview);
+		expect(get.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+			[`/d1-inbox/files/${id}/thumb`, { responseType: 'blob' }],
+			[`/d1-inbox/files/${id}/preview`, { responseType: 'blob' }],
+		]);
+		expect(create).toHaveBeenCalledTimes(2);
+		expect((create.mock.calls[0][0] as Blob).type).toBe('image/png');
+		URL.revokeObjectURL(thumb);
+		URL.revokeObjectURL(preview);
+		create.mockRestore();
+	});
+
+	it('a file with no picture, or one the caller cannot see, is an InboxApiError 404 (the fake answers the same for both)', async () => {
+		const fake = withPictures();
+		await expect(loadPicture(fake.api, fake.files[1].candidate_id, 'thumb')).rejects.toMatchObject({ name: 'InboxApiError', status: 404 });
+		await expect(loadPicture(fake.api, '00000000-0000-4000-8000-00000000dead', 'preview')).rejects.toMatchObject({ status: 404 });
+	});
+
+	it('a server error carries its status and does not leak an object URL', async () => {
+		const fake = withPictures({ thumbFails: true });
+		const create = vi.spyOn(URL, 'createObjectURL');
+		await expect(loadPicture(fake.api, fake.files[0].candidate_id, 'thumb')).rejects.toMatchObject({ status: 500 });
+		expect(create).not.toHaveBeenCalled();
+		create.mockRestore();
+	});
+
+	it('an answer that is not a picture (JSON, an empty body, text) is refused', async () => {
+		const answer = (data: unknown) => ({ get: vi.fn(async () => ({ data })) }) as unknown as HostApi;
+		await expect(loadPicture(answer({ data: [] }), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		await expect(loadPicture(answer(new Blob([])), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		await expect(loadPicture(answer(new Blob(['<html>'], { type: 'text/html' })), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		const url = await loadPicture(answer(new Uint8Array([1, 2, 3]).buffer), 'c1', 'thumb');
+		expect(url).toMatch(/^blob:/);
+		URL.revokeObjectURL(url);
 	});
 });
 

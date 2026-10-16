@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { AppLink, formatDate, recordRoute } from '@d1/ui';
+import { computed, nextTick, ref } from 'vue';
+import { AppLink, formatDate, recordRoute, useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import {
-	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, kindLabel, nameOf, needsReadNotice, ownerText,
+	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, hasThumbnail, kindLabel, nameOf, needsReadNotice, ownerText,
 	primaryAction, sizeText, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
+import PreviewDialog from './PreviewDialog.vue';
+import { useInView, usePicture } from './usePicture';
 
-// One found file: the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
+// One found file: its picture (when the crawler stored one: a button that opens the full view) or the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
 // (and why), and the buttons. The row only reports what was asked; the page does it (useInbox).
 const props = defineProps<{
 	file: FoundFile;
@@ -37,7 +39,7 @@ const copy = computed(() => duplicateText(props.file));
 const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
 const reads = computed(() => needsReadNotice(props.file.kind));
 
-// No thumbnail: a found file is a pointer row Directus cannot serve, so every row shows the icon of its kind (see hasThumbnail).
+// The icon of its kind is what a row shows when it has no picture, while none is wanted yet, and when the picture fails to load.
 const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
 
 const linkedTo = computed(() => (props.file.linked_collection && props.file.linked_record_id ? recordRoute(props.file.linked_collection, props.file.linked_record_id) : null));
@@ -48,12 +50,43 @@ const scanTo = computed(() => {
 	const t = scanTarget(props.file);
 	return t ? recordRoute(t.collection, t.id) : null;
 });
+
+// ---- the picture (spec section 14): loaded as a blob with the signed-in session once the row is near the screen, a few at a time ----
+const host = useExplorerHost();
+const withPicture = computed(() => hasThumbnail(props.file));
+const thumbButton = ref<HTMLElement | null>(null);
+const seen = useInView(thumbButton);
+const { state: thumbState, url: thumbUrl } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'thumb', () => seen.value);
+// A picture that failed to load is not mentioned: the row shows its icon, as if it had none.
+const showButton = computed(() => withPicture.value && thumbState.value !== 'failed');
+const previewOpen = ref(false);
+async function closePreview() {
+	previewOpen.value = false;
+	await nextTick();
+	thumbButton.value?.focus();
+}
+
 const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.link_kind] : 'Linked'));
 </script>
 
 <template>
 	<li class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
-		<span class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>
+		<button
+			v-if="showButton"
+			ref="thumbButton"
+			type="button"
+			class="thumb pic"
+			:aria-label="`View ${name}`"
+			:aria-busy="thumbState === 'loading'"
+			:data-state="thumbState"
+			data-test="thumb"
+			@click="previewOpen = true"
+		>
+			<img v-if="thumbUrl" :src="thumbUrl" alt="" draggable="false" />
+			<span v-else class="shimmer" aria-hidden="true" />
+		</button>
+		<span v-else class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>
+		<PreviewDialog v-if="previewOpen" :file="file" :thumb-url="thumbUrl" @close="closePreview" />
 
 		<div class="main">
 			<div class="line">
@@ -100,6 +133,17 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
 .thumb { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--d1-surface, var(--theme--background)); border: 1px solid var(--d1-line); color: var(--d1-dim); }
+.thumb.pic { padding: 0; font: inherit; cursor: zoom-in; position: relative; }
+.thumb.pic:hover { border-color: var(--d1-accent, var(--theme--primary)); }
+.thumb.pic:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.shimmer {
+	display: block; width: 100%; height: 100%;
+	background: linear-gradient(90deg, var(--d1-line) 25%, color-mix(in srgb, var(--d1-line) 35%, var(--d1-tile)) 50%, var(--d1-line) 75%); background-size: 200% 100%;
+	animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .name { font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; }

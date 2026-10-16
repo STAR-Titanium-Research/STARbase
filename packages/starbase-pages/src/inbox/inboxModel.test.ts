@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FoundFile } from './inboxApi';
 import {
 	DEFAULT_FILTERS, DOCUMENT_NOTICE, PAGE_SIZE, STRENGTH_FILTER_ITEMS, STRENGTH_LABEL, TABS,
 	canChange, duplicateText, extractedText, filtersToQuery,
@@ -99,8 +100,11 @@ describe('how a file reads', () => {
 		expect(kindLabel('document')).toBe('Document');
 		expect(kindLabel('other')).toBe('File');
 	});
-	it('has no thumbnail for any kind in v1 (Directus cannot serve a pointer row): the kind icon only', () => {
-		expect([hasThumbnail('sem_image'), hasThumbnail('image'), hasThumbnail('surface_scan'), hasThumbnail('document'), hasThumbnail('other')]).toEqual([false, false, false, false, false]);
+	it('shows a picture only for a file the crawler stored one for: an older server (no field) and every other file keep the kind icon', () => {
+		expect(hasThumbnail(foundFile({ has_thumbnail: true }))).toBe(true);
+		expect(hasThumbnail(foundFile())).toBe(false);
+		expect(hasThumbnail(foundFile({ kind: 'document' }))).toBe(false);
+		expect(hasThumbnail({} as FoundFile)).toBe(false);
 	});
 	it('shows only what the crawler read from an SEM image', () => {
 		expect(extractedText({ kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' })).toBe('15 kV · ×5,000 · 2 µm · JEOL');
