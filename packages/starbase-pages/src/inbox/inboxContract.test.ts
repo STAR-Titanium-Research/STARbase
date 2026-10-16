@@ -1056,6 +1056,26 @@ describe('ignored folders (GET / POST /d1-inbox/ignored-folders, DELETE /d1-inbo
 		}
 	});
 
+	it('ignored_delete_ok_still_ignored: another rule still covers the folder, so no rescan and the notice says so', async () => {
+		const f = fx('ignored_delete_ok_still_ignored');
+		const id = f.request.path.split('/').pop()!;
+		expect(await removeIgnored(only(f).api, id)).toMatchObject({ still_ignored: true, rescan_queued: false });
+		const p = page({ [`DELETE ${f.request.path}`]: f, [`GET ${PATH}`]: fx('ignored_get_empty') });
+		expect(await p.ig.removeById(id)).toEqual({ ok: true });
+		expect(p.said.at(-1)).toMatchObject({ tone: 'ok', text: unignoredText(f.body.data.folder, false, true, null) });
+		expect(p.said.at(-1)?.text).not.toMatch(/rescan|next scan/i);
+	});
+
+	it('ignored_get_empty_viewer: a Lab Viewer with no rules is read-only too (the server says can_change false)', async () => {
+		const f = fx('ignored_get_empty_viewer');
+		const { ig } = page({ [`GET ${PATH}`]: f });
+		await ig.load();
+		expect(ig.rules.value).toEqual([]);
+		expect(f.body.meta.can_change).toBe(false);
+		expect(ig.canChange.value).toBe(false);
+		expect(ig.readOnly.value).toBe(true);
+	});
+
 	it('ignored_delete_404: the endpoint\'s words, shown next to the list, and the list is read again', async () => {
 		const f = fx('ignored_delete_404');
 		const id = f.request.path.split('/').pop()!;
