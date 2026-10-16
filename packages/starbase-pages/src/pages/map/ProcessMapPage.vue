@@ -61,6 +61,7 @@ const actions: MapActions = {
 	},
 	collapse: (id) => map.collapse(id),
 	unstack: (id) => map.unstack(id),
+	restack: (id) => map.restack(id),
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);

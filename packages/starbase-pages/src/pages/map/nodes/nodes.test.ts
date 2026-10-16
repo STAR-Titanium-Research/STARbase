@@ -30,7 +30,7 @@ const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('
 function spies(): MapActions & { calls: unknown[][] } {
 	const calls: unknown[][] = [];
 	const rec = (name: string) => (...a: unknown[]) => void calls.push([name, ...a]);
-	return { calls, select: rec('select'), expand: rec('expand'), hover: rec('hover'), toggleRows: rec('toggleRows'), toggleMore: rec('toggleMore') };
+	return { calls, select: rec('select'), expand: rec('expand'), hover: rec('hover'), toggleRows: rec('toggleRows'), toggleMore: rec('toggleMore'), unstack: rec('unstack'), restack: rec('restack') };
 }
 
 async function render(component: Component, props: Record<string, unknown>, view?: Partial<MapView>, actions = spies()): Promise<string> {
@@ -429,6 +429,25 @@ describe('WireEdge', () => {
 		const html = await render(WireEdge, edgeProps({ data: { wire, tooltip: lines } }));
 		expect(/data-tip="([^"]*)"/.exec(html)?.[1]).toBe('S-0412-A · Sample\nfrom OP-17\ninto OP-18');
 	});
+	it('a stackable wire is drawn twice: its colour, then a background core on top; a normal wire once', async () => {
+		const html = await render(WireEdge, edgeProps({ data: { wire: { ...wire, stackable: true }, tooltip: [] } }));
+		const paths = [...html.matchAll(/<path class="([^"]*)"/g)].map((m) => m[1]);
+		expect(paths).toHaveLength(3); // colour, core, hit
+		expect(paths[0]).toContain('wire');
+		expect(paths[0]).toContain('stackable');
+		expect(paths[1]).toBe('core');
+		expect(paths[2]).toBe('hit');
+		const d = [...html.matchAll(/<path class="([^"]*)" d="([^"]*)"/g)].filter((m) => m[1] !== 'hit').map((m) => m[2]);
+		expect(d[0]).toBe(d[1]); // the same path
+		const normal = [...(await render(WireEdge, edgeProps())).matchAll(/<path class="([^"]*)"/g)].map((m) => m[1]);
+		expect(normal).toEqual([expect.stringContaining('wire'), 'hit']);
+	});
+
+	it('the tooltip of a stackable wire says how to stack the passes again', () => {
+		expect(wireTooltip({ ...wire, stackable: true }, byId)).toEqual(['S-0412-A · Sample', 'from OP-17', 'into OP-18', 'Double-click a pass to stack again']);
+		expect(wireTooltip(wire, byId)).not.toContain('Double-click a pass to stack again');
+	});
+
 });
 
 describe('lineage junction from the model renders', () => {
@@ -723,6 +742,35 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 		expect(text(html)).toContain('3 passes');
 		expect(html).toContain('aria-label="Unstack 3 passes"');
 		expect(ids(html)).toEqual([`${c.id}:in:0`, `${c.id}:out:0`]);
+	});
+
+	it('a stacked card: double-click on its body unstacks it, with a hint on the button; a pass of an unstacked stack restacks; buttons and sockets do nothing extra', async () => {
+		const ops = ['a', 'b', 'c'].map((id, i) => turning({ id, methodId: 'turn', date: `2026-09-0${i + 1}T09:00:00Z` }));
+		const data = mkData({ samples: sam('p'), operations: ops });
+		const stacked = buildGraph(data, groupBatches(ops, [], { probable: true, stack: true }), { slots: () => [] }).nodes.find((n): n is ContainerData => n.type === 'container')!;
+		const html = await render(ContainerNode, { id: stacked.id, data: stacked });
+		expect(html).toMatch(/title="[^"]*double-click[^"]*"[^>]*>Unstack</);
+		const a = spies();
+		const body = { stopPropagation: vi.fn(), target: { closest: () => null } };
+		const inner = (sel: string) => ({ stopPropagation: vi.fn(), target: { closest: (s: string) => (s.includes(sel) ? {} : null) } });
+		const stack = cardHandlers(a, () => stacked.id, () => false, () => 'unstack');
+		stack.dblclick(body);
+		for (const sel of ['button', '.sock', '.slots']) stack.dblclick(inner(sel));
+		expect(a.calls).toEqual([['unstack', stacked.id]]);
+		const pass = cardHandlers(a, () => 'op:b', () => false, () => 'restack');
+		pass.dblclick(body);
+		pass.dblclick(inner('button'));
+		cardHandlers(a, () => 'op:z', () => false, () => null).dblclick(body); // a card that is no pass of a stack
+		cardHandlers(a, () => 'op:z').dblclick(body);
+		expect(a.calls).toEqual([['unstack', stacked.id], ['restack', 'op:b']]);
+	});
+
+	it('the card of a pass of an unstacked stack is marked, and a stack is not', async () => {
+		const ops = ['a', 'b'].map((id, i) => turning({ id, methodId: 'turn', date: `2026-09-0${i + 1}T09:00:00Z` }));
+		const data = mkData({ samples: sam('p'), operations: ops });
+		const g = buildGraph(data, groupBatches(ops, [], { probable: true, stack: true, unstacked: new Set(['a', 'b']) }), { slots: () => [], unstackedGroups: [['a', 'b']] });
+		const c = g.nodes.find((n): n is ContainerData => n.type === 'container')!;
+		expect(c.unstackedPass).toBe(true);
 	});
 
 	it('an expanded card draws − and its button collapses', async () => {

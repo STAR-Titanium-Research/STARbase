@@ -12,7 +12,7 @@ import SlotRow from './SlotRow.vue';
 
 // An operation or a test as a container (spec D4, D5, D8, D9, D14): a tinted title bar saying what kind of
 // step it is ("Machining | Turning"), the step's own name and date, a socket rail, the Inside tray, the key
-// settings. A stack of passes is drawn as a deck of cards, with "Unstack" on its rail. The rail is one line of
+// settings. A stack of passes is drawn as a deck of cards, with "Unstack" on its rail (a double-click on it does the same, and on a pass of an unstacked stack stacks them again). The rail is one line of
 // text ("1 sample → 4 pieces") with the input sockets stacked on its left edge and the output sockets on its
 // right: no per-row labels, since the wires and the sample cards already say which sample is which. Every
 // socket id is drawn once (a cut's shared input once; the folded rows' bundle sockets last, fat). Folding is
@@ -113,7 +113,7 @@ const minors = computed(() => props.data.slots.filter((s) => !s.major));
 const moreShown = computed(() => moreOpen.value.has(props.id));
 const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.value.length} more from the form`));
 
-const card = cardHandlers(actions, () => props.id, () => open.value);
+const card = cardHandlers(actions, () => props.id, () => open.value, () => (props.data.stacked ? 'unstack' : props.data.unstackedPass ? 'restack' : null));
 const unstack = stopping(() => actions.unstack?.(props.id));
 const unstackKey = activating(() => actions.unstack?.(props.id));
 const sockProps = useSocketProps();
@@ -132,6 +132,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, stacked: data.stacked, planned: data.planned, draft: data.draft, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': 'var(--k-sample)' }"
 		@click="card.select"
+		@dblclick="card.dblclick"
 		@mouseenter="card.enter"
 		@mouseleave="card.leave"
 	>
@@ -176,7 +177,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			/>
 			<span class="sum">{{ summary }}</span>
 			<button v-if="railToggle" class="rtoggle nodrag nopan" type="button" @click="refold" @keydown="refoldKey">{{ railToggle }}</button>
-			<button v-if="data.stacked" class="rtoggle nodrag nopan" type="button" :aria-label="`Unstack ${data.group.rowIds.length} passes`" @click="unstack" @keydown="unstackKey">Unstack</button>
+			<button v-if="data.stacked" class="rtoggle nodrag nopan" type="button" :aria-label="`Unstack ${data.group.rowIds.length} passes`" title="Unstack (or double-click the stack)" @click="unstack" @keydown="unstackKey">Unstack</button>
 			<Handle
 				v-for="s in rail.outs"
 				:id="s.id"

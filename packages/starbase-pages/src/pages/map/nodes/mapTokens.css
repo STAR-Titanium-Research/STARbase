@@ -27,3 +27,5 @@
 .d1-process-map .vue-flow__edge.dim { opacity: 0.2; }
 .d1-process-map .vue-flow__edge .wire { transition: stroke-width 0.15s; }
 .d1-process-map .vue-flow__edge.hi .wire { stroke: var(--k); stroke-width: 3.2px; }
+.d1-process-map .vue-flow__edge.hi .wire.stackable { stroke-width: 5px; }
+.d1-process-map .vue-flow__edge.hi .core { stroke-width: 1.7px; }

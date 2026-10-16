@@ -19,6 +19,18 @@ describe('inlineSvgPaint', () => {
     expect(copy[1].set['stroke-width']).toBe('14px');
   });
 
+  it('carries the striped wire of an unstacked stack: the colour path, then the background core on top of it, each with its own paint', () => {
+    const live = [{ id: 'wire' }, { id: 'core' }, { id: 'hit' }];
+    const copy = [shape(), shape(), shape()];
+    const paint: Record<string, Record<string, string>> = {
+      wire: { fill: 'none', stroke: 'rgb(170, 90, 190)', 'stroke-width': '4.2px' },
+      core: { fill: 'none', stroke: 'rgb(255, 255, 255)', 'stroke-width': '1.4px' },
+      hit: { fill: 'none', stroke: 'rgba(0, 0, 0, 0)', 'stroke-width': '14px' },
+    };
+    inlineSvgPaint({ querySelectorAll: () => live as never }, { querySelectorAll: () => copy }, ((el: { id: string }) => ({ getPropertyValue: (n: string) => paint[el.id][n] ?? '' })) as never);
+    expect(copy.map((c) => [c.set.stroke, c.set['stroke-width']])).toEqual([['rgb(170, 90, 190)', '4.2px'], ['rgb(255, 255, 255)', '1.4px'], ['rgba(0, 0, 0, 0)', '14px']]);
+  });
+
   it('asks for shapes inside an svg only, and stops at the shorter list', () => {
     const asked: string[] = [];
     const copy = [shape()];

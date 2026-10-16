@@ -7,6 +7,8 @@ import { useMapActions, wireHandlers } from './actions';
 // A wire (spec §6.3, D17): a bezier coloured by what flows (sample, or stock), the same thickness whether or not it carries
 // a folded bundle (the bundle socket is the fat one; the wire is not). A wide transparent path takes the hover (the page shows the tooltip from its data-tip,
 // lines made by wireTooltip) and Ctrl/⌘+click, which selects and centres the wire's origin. No label.
+// The wire between two passes of an unstacked stack (`stackable`) is striped lengthwise, purple | white | purple: the same path
+// stroked twice, its colour at full width and then the canvas colour at a third of it on top (the export reads both from the live style).
 // The page marks wires `.hi` / `.dim` on the edge's own wrapper while a card is hovered (mapTokens.css).
 const props = defineProps<{
 	id: string;
@@ -41,12 +43,15 @@ const colour = computed(() => (wire.value.flow === 'stock' ? 'var(--k-material)'
 
 <template>
 	<g class="d1-wire" :style="{ '--k': colour }">
-		<path class="wire" :class="`flow-${wire.flow}`" :d="path" />
+		<path class="wire" :class="[`flow-${wire.flow}`, { stackable: wire.stackable }]" :d="path" />
+		<path v-if="wire.stackable" class="core" :d="path" />
 		<path class="hit" :d="path" :data-tip="tip" @mouseenter="on.enter" @mouseleave="on.leave" @click="on.click" />
 	</g>
 </template>
 
 <style scoped>
 .wire { fill: none; stroke: color-mix(in srgb, var(--k) 70%, var(--theme--border-color)); stroke-width: 2.4px; }
+.wire.stackable { stroke-width: 4.2px; }
+.core { fill: none; stroke: var(--d1-surface, var(--theme--background)); stroke-width: 1.4px; pointer-events: none; }
 .hit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }
 </style>
