@@ -1922,7 +1922,7 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
   from the text tags when present; the layout is a guess until seen). JEOL text OCR no longer has a default
   (pytesseract was never installed or validated): only JEOL metadata claims a JEOL image, and the FEI data-bar
-  reader (`INBOX_OCR=1`, **SEM1** to **SEM7** below) does not read JEOL bars.
+  reader (`INBOX_OCR=1`, **SEM1**, **SEM2**, **SEM4** and **SEM7** below) does not read JEOL bars.
 - [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the `surface_scans`
   migration (192) applied. Expect tag `surface_scan`; the hand-off is an add, not a link:
   `POST /d1-inbox/link` with `{candidate_id, collection:'surface_scans', insert_id | edge_id, condition, ...}`
@@ -2198,7 +2198,7 @@ commit a research image while doing these; look at them on d1-server only.
   `docker run --rm python:3.12-slim sh -c "<the pip line> && python -c 'import zoneinfo, rapidocr_onnxruntime;
   zoneinfo.ZoneInfo(\"Europe/London\"); rapidocr_onnxruntime.RapidOCR(); print(\"ok\")'"`. Expect `ok` (the models
   ship in the wheel; nothing is downloaded at run time; the install is about 380 MB). Then put the same
-  pip line in the compose command and in both copies in the `Makefile`, run SEM1 and SEM2, and tick this. Also
+  pip line in the `inbox-crawler` command of `docker-compose.yml` and in the `Makefile`'s `inbox-crawler-once` target (the two places that install it), run SEM1 and SEM2, and tick this. Also
   confirm the image has timezone data (`zoneinfo.ZoneInfo("Europe/London")` is built when the crawler imports
   `sem_meta`, with or without OCR). Since: sem-reader plan, stream B.
 
