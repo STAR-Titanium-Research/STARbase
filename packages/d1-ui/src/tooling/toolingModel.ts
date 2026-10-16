@@ -30,8 +30,35 @@ export interface ToolingEdge {
 
 export interface ToolingInsert {
 	id: string; code: string; number: number | null; depleted: boolean;
-	state: InsertState; edges: ToolingEdge[]; // edges sorted by letter
+	state: InsertState; edges: ToolingEdge[]; // edges sorted by letter, one per letter
+	// How many edges the insert type has (edges per face x faces), or null when the type is not known. Legacy imports can
+	// leave an insert with fewer edge rows than that, or with two rows for one letter.
+	expectedEdges: number | null;
+	duplicateEdges: string[]; // ids of extra edge rows for a letter already on `edges`: never drawn, never counted
 	cell: SlotCell | null; // null when the number is missing or out of the grid
+}
+
+// What an insert's edge count reads: "3/4 fresh" is `fresh` of `total`. `total` is the type's edge count (or the recorded
+// edges, if there are more), so a missing edge still counts as one the insert should have, and is never fresh.
+export interface EdgeSummary { fresh: number; total: number; missing: number; duplicates: number }
+
+export function edgeSummary(insert: Pick<ToolingInsert, 'edges' | 'expectedEdges' | 'duplicateEdges'>): EdgeSummary {
+	const total = Math.max(insert.edges.length, insert.expectedEdges ?? 0);
+	return {
+		fresh: insert.edges.filter((e) => !e.used).length,
+		total,
+		missing: total - insert.edges.length,
+		duplicates: insert.duplicateEdges.length,
+	};
+}
+
+// The notes the insert panel shows under the edges: "1 edge missing", "1 duplicate edge record ignored".
+export function edgeNotes(insert: Pick<ToolingInsert, 'edges' | 'expectedEdges' | 'duplicateEdges'>): string[] {
+	const { missing, duplicates } = edgeSummary(insert);
+	const out: string[] = [];
+	if (missing > 0) out.push(`${missing} ${missing === 1 ? 'edge' : 'edges'} missing`);
+	if (duplicates > 0) out.push(`${duplicates} duplicate edge ${duplicates === 1 ? 'record' : 'records'} ignored`);
+	return out;
 }
 
 export interface ToolingModel {
@@ -49,11 +76,39 @@ export type ToolingFocus =
 // A slot number beyond this is treated as a typo, not a request for a huge tray.
 const MAX_SLOT_NUMBER = 200;
 
-export function insertState(insert: { is_depleted: boolean | null }, edges: { is_used: boolean | null }[]): InsertState {
+// `expected` is the type's edge count: an insert is used only when every one of its edges is, so a missing edge keeps a
+// part-used insert part used.
+export function insertState(insert: { is_depleted: boolean | null }, edges: { is_used: boolean | null }[], expected: number | null = null): InsertState {
 	if (insert.is_depleted) return 'depleted';
 	const used = edges.filter((e) => e.is_used).length;
 	if (used === 0) return 'fresh';
-	return used === edges.length ? 'used' : 'partly-used';
+	return used >= Math.max(edges.length, expected ?? 0) ? 'used' : 'partly-used';
+}
+
+// One row per letter: of several rows for the same letter (a legacy import), the one that has been used, else the first by
+// code. Rows whose letter cannot be read are all kept. The rest come back as `dropped`.
+export function dedupeEdges(rows: ToolingEdge[]): { kept: ToolingEdge[]; dropped: ToolingEdge[] } {
+	const byLetterKey = new Map<string, ToolingEdge[]>();
+	const kept: ToolingEdge[] = [];
+	for (const e of rows) {
+		if (e.letter === null) { kept.push(e); continue; }
+		const list = byLetterKey.get(e.letter);
+		if (list) list.push(e);
+		else byLetterKey.set(e.letter, [e]);
+	}
+	const dropped: ToolingEdge[] = [];
+	for (const list of byLetterKey.values()) {
+		const ranked = [...list].sort((a, b) => Number(b.used) - Number(a.used) || a.code.localeCompare(b.code));
+		kept.push(ranked[0]);
+		dropped.push(...ranked.slice(1));
+	}
+	return { kept, dropped };
+}
+
+// How many edges an insert of this geometry has: per face, times the faces. Null when the type is not recognised (the
+// fallback polygon is a guess).
+export function expectedEdgeCount(geometry: InsertGeometry): number | null {
+	return geometry.recognised ? geometry.edgesPerFace * (geometry.doubleSided ? 2 : 1) : null;
 }
 
 const byLetter = (a: ToolingEdge, b: ToolingEdge): number => {
@@ -104,6 +159,7 @@ export function buildToolingModel(box: BoxRow, type: InsertTypeRow | null, inser
 	}, 0);
 	const grid = slotGrid(Math.max(sorted.length, highest));
 
+	const expected = expectedEdgeCount(geometry);
 	const taken = new Set<number>();
 	const modelInserts = sorted.map((i): ToolingInsert => {
 		const n = numberOf(i);
@@ -112,10 +168,12 @@ export function buildToolingModel(box: BoxRow, type: InsertTypeRow | null, inser
 			taken.add(n);
 			cell = grid.cells[n - 1] ?? null;
 		}
-		const own = (edgesOf.get(i.insert_id) ?? []).sort(byLetter);
+		const { kept, dropped } = dedupeEdges(edgesOf.get(i.insert_id) ?? []);
+		const own = kept.sort(byLetter);
 		return {
 			id: i.insert_id, code: i.insert_code, number: n, depleted: i.is_depleted === true,
-			state: insertState({ is_depleted: i.is_depleted === true }, own.map((e) => ({ is_used: e.used }))), edges: own, cell,
+			state: insertState({ is_depleted: i.is_depleted === true }, own.map((e) => ({ is_used: e.used })), expected), edges: own,
+			expectedEdges: expected, duplicateEdges: dropped.map((e) => e.id).sort(), cell,
 		};
 	});
 

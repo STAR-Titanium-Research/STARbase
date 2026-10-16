@@ -230,7 +230,7 @@ export { normaliseEdgeLetter, placeEdge } from './tooling/edgePlacement';
 export type { EdgePlacement } from './tooling/edgePlacement';
 export { slotGrid } from './tooling/boxLayout';
 export type { SlotCell, SlotGrid } from './tooling/boxLayout';
-export { buildToolingModel, insertState, nextFreshEdge, edgeUsageMismatch, focusParent, focusRoute } from './tooling/toolingModel';
+export { buildToolingModel, edgeNotes, edgeSummary, insertState, nextFreshEdge, edgeUsageMismatch, focusParent, focusRoute } from './tooling/toolingModel';
 export type {
 	BoxRow, InsertRow, EdgeRow, InsertState, ToolingEdge, ToolingInsert, ToolingModel, ToolingFocus,
 } from './tooling/toolingModel';

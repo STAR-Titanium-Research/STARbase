@@ -14,9 +14,12 @@ export interface Outline2D {
 
 const f = (n: number): string => (Math.round(n * 100) / 100).toString();
 
-export function outline2d(geom: InsertGeometry, outline: InsertOutline): Outline2D {
+// `face`: the underside is drawn as it looks turned over like a page, mirrored left to right, so a corner keeps its place from
+// the top view to the underside view (a mirrored drawing has no reference mark: it is on the top face only).
+export function outline2d(geom: InsertGeometry, outline: InsertOutline, face: EdgePlacement['face'] = 'top'): Outline2D {
+	const sx = face === 'bottom' ? -1 : 1;
 	const pts = outline.points;
-	const path = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${f(x)} ${f(-y)}`).join(' ') + ' Z';
+	const path = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${f(sx * x)} ${f(-y)}`).join(' ') + ' Z';
 	const reach = Math.max(geom.icMm / 2, ...outline.corners.map((c) => Math.hypot(c.x, c.y) + geom.noseRadiusMm));
 	const pad = 5;
 	const half = reach + pad;
@@ -27,13 +30,13 @@ export function outline2d(geom: InsertGeometry, outline: InsertOutline): Outline
 		if (!c) return { x: 0, y: 0 };
 		const a = (c.bisectorDeg * Math.PI) / 180;
 		const d = (geom.shape === 'R' ? 0 : geom.noseRadiusMm) + 2.3;
-		return { x: c.x + Math.cos(a) * d, y: -(c.y + Math.sin(a) * d) };
+		return { x: sx * (c.x + Math.cos(a) * d), y: -(c.y + Math.sin(a) * d) };
 	};
 
 	const c0 = outline.corners[0];
 	let mark = '';
 	const placed = c0 ? markDistance(geom, outline) : null; // the same size and place as the 3D mark (markPlacement.ts)
-	if (c0 && placed) {
+	if (c0 && placed && face === 'top') {
 		const { size, centre } = placed;
 		const p = ([x, y]: [number, number]) => `${f(x)} ${f(-y)}`;
 		const [tip, left, right] = markVertices(c0.bisectorDeg, size, centre);

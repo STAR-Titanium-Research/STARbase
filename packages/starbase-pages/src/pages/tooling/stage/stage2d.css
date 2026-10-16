@@ -1,0 +1,28 @@
+/* The 2D stage's tones, the same ones the 3D view draws with (scene/themePalette.ts), so the plan reads as the same tray in
+   both themes: a tray a step off the page, a neutral groove around each pocket (green only ever marks a fresh edge), a graphite
+   insert, and the selection blue (--d1-select) for what is selected. Defined on the 2D root; its parts use them. */
+.d1-s2d {
+	--s2d-tile: var(--d1-tile, var(--theme--background-subdued));
+	--s2d-tray: light-dark(
+		color-mix(in srgb, var(--theme--foreground) 12%, var(--s2d-tile)),
+		color-mix(in srgb, var(--theme--foreground) 5%, var(--s2d-tile))
+	);
+	--s2d-pocket: color-mix(in srgb, var(--s2d-tray) 90%, var(--theme--foreground));
+	--s2d-groove: color-mix(in srgb, var(--theme--foreground) 22%, var(--s2d-tray));
+	--s2d-ink: color-mix(in srgb, var(--theme--foreground) 88%, var(--s2d-tray));
+	--s2d-body: light-dark(
+		color-mix(in srgb, var(--theme--foreground) 86%, var(--theme--background)),
+		color-mix(in srgb, var(--theme--foreground) 40%, var(--theme--background))
+	);
+	--s2d-body-line: color-mix(in srgb, var(--theme--foreground) 35%, var(--s2d-body));
+	--s2d-fresh: var(--d1-ok, var(--theme--success));
+	--s2d-used: var(--d1-dim, var(--theme--foreground-subdued));
+	--s2d-select: var(--d1-select, royalblue);
+	--s2d-accent: var(--d1-accent, var(--theme--primary));
+	--s2d-dim: var(--d1-dim, var(--theme--foreground-subdued));
+	--s2d-line: var(--d1-line, var(--theme--border-color-subdued));
+	--s2d-surface: var(--d1-surface, var(--theme--background));
+	box-sizing: border-box;
+	color: var(--theme--foreground);
+	font-family: var(--theme--fonts--sans--font-family, 'Inter', system-ui, sans-serif);
+}
