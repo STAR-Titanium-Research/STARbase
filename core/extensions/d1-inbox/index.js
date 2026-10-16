@@ -263,7 +263,11 @@ const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
 // idx_inbox_ignored_dirs_owner_person and _owner_team; a file owned by a team has a NULL person id and the person subquery then finds nothing, and the reverse.
 // Only the undecided tabs and the summary use it: a LINKED row under a rule is still listed in the Linked tab, a dismissed one in Dismissed.
 const IGNORED_PREFIX = "lower(split_part(c.rel_path, '/', 1) || '/' || split_part(c.rel_path, '/', 2) || '/' || ig.rel_folder)";
-const UNDER_RULE = `left(lower(c.rel_path), length(${IGNORED_PREFIX}) + 1) = ${IGNORED_PREFIX} || '/'`;
+// The first condition is an equality on the first folder below the root (part 3 of the file's path, part 1 of the rule), which every covered file satisfies: it is
+// only there so Postgres can HASH-join files and rules (owner and first part) instead of testing every file against every rule of its owner, which measured at
+// seconds for 30 000 open files and 150 rules. The left() test after it is the real, whole-parts comparison.
+const UNDER_RULE = "lower(split_part(c.rel_path, '/', 3)) = lower(split_part(ig.rel_folder, '/', 1))"
+  + ` AND left(lower(c.rel_path), length(${IGNORED_PREFIX}) + 1) = ${IGNORED_PREFIX} || '/'`;
 const NOT_UNDER_IGNORED = 'NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_person_id = c.owner_person_id'
   + ` AND ${UNDER_RULE}) AND NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_team_id = c.owner_team_id AND ${UNDER_RULE})`;
 
