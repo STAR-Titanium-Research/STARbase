@@ -1504,8 +1504,9 @@ tool; a test cut on scrap stock is fine.
   memory: also #128).
 
 - [ ] **#345 Operation detail Cut parameters layout.** In the Plot page's Operation detail (narrow
-  column, a real operation with a capture): the Operation record and Cut parameters blocks use the
-  same field style; the capture's fields read "Spiral feed", "Spiral Ø", "Inner Ø", "Pulses/rev",
+  column, a real operation with a capture): Cut parameters sits at the top, above Operation record,
+  and both use the same field style; every number field shows two decimals when idle (60.00, 0.05;
+  Pulses/rev stays whole) and the full stored value, e.g. 0.055, while you edit it; the capture's fields read "Spiral feed", "Spiral Ø", "Inner Ø", "Pulses/rev",
   "Sample rate" and nothing overflows. Edit each: its box gets the blue ring and Cut parameters'
   Reset appears (including for Sample rate alone) and clears it. On an operation whose capture
   surface speed or depth of cut differs from the record, that field shows full-width with a blue

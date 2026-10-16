@@ -36,6 +36,8 @@ import { useForceHost } from './host';
 import { saveChartImage, type ChartSnapshot } from './chartExport';
 import { downloadText, safeFilePart, toCsv, useCopyFeedback, type CsvColumn } from './csvExport';
 import { debounce } from './debounce';
+import FixedNumberInput from './FixedNumberInput.vue';
+import { fmtFixed } from './fixedNumber';
 import { cropWindowSec, diffEnvelopes, diffWindow } from './compare';
 import { createPendingCrop } from './pendingCrop';
 import {
@@ -2607,51 +2609,6 @@ function fmtDateTime(v: string | null | undefined) {
 								<template v-for="m in compactMeta" :key="m[0]"><span>{{ m[0] }}</span><span>{{ m[1] }}</span></template>
 							</div>
 
-							<!-- Editable operation metadata: Subtype/New edge/Coolant/Operator/cutting params/
-							     notes. Machine/Method stay read-only above (see opMeta). Sequence and Operation
-							     code are shown here for context but are NOT editable: Operation code is built by
-							     the database from the fields around it, and Sequence is the key archive
-							     .mat filenames are matched to an operation by, so hand-editing either from this
-							     panel would silently desync that link. Combined
-							     with any pending crop edit into one "Save changes" summary dialog below. -->
-							<!-- "Cut parameters" below uses this same field style but is a different RECORD: this
-							     block is the operation as specified (manufacturing_operations), that one is what
-							     this capture actually used (machining_force_analysis, and the source of the
-							     spiral geometry), hence "Spiral feed" / "Spiral Ø" there. -->
-							<div class="stat-sep">Operation record <span class="u">(as specified)</span>
-								<button v-if="metaDirty" class="linkbtn" @click="seedMetaFromDetail">Reset</button>
-							</div>
-							<div class="edit-grid">
-								<label>Subtype<input v-model="editOpSubtype" type="text" :class="{ modified: editOpSubtype !== srcMeta.subtype }" /></label>
-								<label>Sequence<input :value="fmtOrDash(srcMeta.sequence)" type="text" disabled title="Derived — matches the archive .mat filename this operation was linked from. Not editable here." /></label>
-								<!-- Unit inside the field, right of the number, matching the Record page's
-								     .unit-box: folded into the label it wrapped these two-word labels onto a
-								     second line in this narrow column, which cost a row of height per field. -->
-								<label>Surface speed
-									<span class="unit-box"><input v-model.number="editOpCuttingSpeed" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpCuttingSpeed), srcMeta.cuttingSpeed) }" /><span class="unit">m/min</span></span>
-								</label>
-								<label>Feed
-									<span class="unit-box"><input v-model.number="editOpFeedMmPerRev" type="number" step="0.001" min="0" :class="{ modified: numDiffers(numOrNull(editOpFeedMmPerRev), srcMeta.feedMmPerRev) }" /><span class="unit">mm/rev</span></span>
-								</label>
-								<label>Depth of cut
-									<span class="unit-box"><input v-model.number="editOpAxialDoc" type="number" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /><span class="unit">mm</span></span>
-								</label>
-								<!-- The operation's recorded stock diameter — distinct from the "Spiral Ø"
-								     field under Cut parameters (machining_force_analysis.outer_diameter, a spiral-geometry
-								     override). Editable so the Doctor's diameter backfill has somewhere to write. -->
-								<label>Workpiece Ø
-									<span class="unit-box"><input v-model.number="editOpWorkpieceDiam" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /><span class="unit">mm</span></span>
-								</label>
-								<label>Operator<input v-model="editOperatorName" type="text" :class="{ modified: editOperatorName !== srcMeta.operator }" /></label>
-								<label class="chk">New edge<input v-model="editOpNewEdge" type="checkbox" /></label>
-								<label class="chk">Coolant<input v-model="editOpCoolant" type="checkbox" /></label>
-								<label class="wide">Operation code
-									<input :value="fmtOrDash(srcMeta.passCode)" type="text" disabled title="Built by the database from the operation's fields; it updates when you save. Not editable here." />
-								</label>
-								<label class="wide">Notes<textarea v-model="editOutcomeNotes" rows="2" :class="{ modified: editOutcomeNotes !== srcMeta.outcomeNotes }"></textarea></label>
-							</div>
-							<button v-if="hasChanges" class="crop-save" @click="changesDialogOpen = true">Save changes</button>
-
 							<!-- Editable cut-parameter fields (spiral feed/Ø, Inner Ø, PPR, sample rate): drive the
 							     Live plot and are threaded into any host bake. Same label + unit-box style as the
 							     Operation record above; "Spiral" in the labels marks them as the capture's geometry,
@@ -2663,25 +2620,25 @@ function fmtDateTime(v: string | null | undefined) {
 							</div>
 							<div class="edit-grid">
 								<label>Spiral feed
-									<span class="unit-box"><input v-model.number="editFeed" type="number" step="0.01" min="0" :class="{ modified: !near(editFeed, srcCut.feed) }" /><span class="unit">mm/rev</span></span>
+									<span class="unit-box"><FixedNumberInput v-model="editFeed" step="0.01" min="0" :class="{ modified: !near(editFeed, srcCut.feed) }" /><span class="unit">mm/rev</span></span>
 								</label>
 								<label>Spiral Ø
-									<span class="unit-box"><input v-model.number="editDiam" type="number" step="1" min="0" :class="{ modified: !near(editDiam, srcCut.diam) }" /><span class="unit">mm</span></span>
+									<span class="unit-box"><FixedNumberInput v-model="editDiam" step="1" min="0" :class="{ modified: !near(editDiam, srcCut.diam) }" /><span class="unit">mm</span></span>
 								</label>
 								<label>Inner Ø
-									<span class="unit-box"><input v-model.number="editInnerDiam" type="number" step="1" min="0" title="Donut/diaphragm inner diameter — the spiral stops here. 0 = solid disc." :class="{ modified: !near(editInnerDiam, srcCut.inner) }" /><span class="unit">mm</span></span>
+									<span class="unit-box"><FixedNumberInput v-model="editInnerDiam" step="1" min="0" title="Donut/diaphragm inner diameter — the spiral stops here. 0 = solid disc." :class="{ modified: !near(editInnerDiam, srcCut.inner) }" /><span class="unit">mm</span></span>
 								</label>
 								<label>Pulses/rev
 									<span class="unit-box"><input v-model.number="editPpr" type="number" step="1" min="1" :class="{ modified: !near(editPpr, srcCut.ppr) }" /></span>
 								</label>
 								<label v-if="addsInfoOverOp(detail.surface_speed, srcMeta.cuttingSpeed)" class="wide"><span>Surface speed <span class="u">(capture)</span></span>
-									<span class="unit-box mismatch"><input :value="fmt(detail.surface_speed)" type="text" readonly /><span class="unit">m/min</span></span>
+									<span class="unit-box mismatch"><input :value="fmtFixed(detail.surface_speed)" type="text" readonly /><span class="unit">m/min</span></span>
 								</label>
 								<label v-if="addsInfoOverOp(detail.depth_of_cut, srcMeta.axialDoc)" class="wide"><span>Depth of cut <span class="u">(capture)</span></span>
-									<span class="unit-box mismatch"><input :value="fmt(detail.depth_of_cut)" type="text" readonly /><span class="unit">mm</span></span>
+									<span class="unit-box mismatch"><input :value="fmtFixed(detail.depth_of_cut)" type="text" readonly /><span class="unit">mm</span></span>
 								</label>
 								<label>Sample rate
-									<span class="unit-box"><input v-model.number="editRateKHz" type="number" step="0.1" min="0.1" :class="{ modified: !near(editRate, srcCut.rate) }" /><span class="unit">kHz</span></span>
+									<span class="unit-box"><FixedNumberInput v-model="editRateKHz" step="0.1" min="0.1" :class="{ modified: !near(editRate, srcCut.rate) }" /><span class="unit">kHz</span></span>
 								</label>
 								<label>Cut time
 									<input :value="fmtCutTime(detail)" type="text" disabled />
@@ -2704,6 +2661,51 @@ function fmtDateTime(v: string | null | undefined) {
 									</label>
 								</div>
 							</template>
+
+							<!-- Editable operation metadata: Subtype/New edge/Coolant/Operator/cutting params/
+							     notes. Machine/Method stay read-only above (see opMeta). Sequence and Operation
+							     code are shown here for context but are NOT editable: Operation code is built by
+							     the database from the fields around it, and Sequence is the key archive
+							     .mat filenames are matched to an operation by, so hand-editing either from this
+							     panel would silently desync that link. Combined
+							     with any pending crop edit into one "Save changes" summary dialog below. -->
+							<!-- "Cut parameters" below uses this same field style but is a different RECORD: this
+							     block is the operation as specified (manufacturing_operations), that one is what
+							     this capture actually used (machining_force_analysis, and the source of the
+							     spiral geometry), hence "Spiral feed" / "Spiral Ø" there. -->
+							<div class="stat-sep">Operation record <span class="u">(as specified)</span>
+								<button v-if="metaDirty" class="linkbtn" @click="seedMetaFromDetail">Reset</button>
+							</div>
+							<div class="edit-grid">
+								<label>Subtype<input v-model="editOpSubtype" type="text" :class="{ modified: editOpSubtype !== srcMeta.subtype }" /></label>
+								<label>Sequence<input :value="fmtOrDash(srcMeta.sequence)" type="text" disabled title="Derived — matches the archive .mat filename this operation was linked from. Not editable here." /></label>
+								<!-- Unit inside the field, right of the number, matching the Record page's
+								     .unit-box: folded into the label it wrapped these two-word labels onto a
+								     second line in this narrow column, which cost a row of height per field. -->
+								<label>Surface speed
+									<span class="unit-box"><FixedNumberInput v-model="editOpCuttingSpeed" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpCuttingSpeed), srcMeta.cuttingSpeed) }" /><span class="unit">m/min</span></span>
+								</label>
+								<label>Feed
+									<span class="unit-box"><FixedNumberInput v-model="editOpFeedMmPerRev" step="0.001" min="0" :class="{ modified: numDiffers(numOrNull(editOpFeedMmPerRev), srcMeta.feedMmPerRev) }" /><span class="unit">mm/rev</span></span>
+								</label>
+								<label>Depth of cut
+									<span class="unit-box"><FixedNumberInput v-model="editOpAxialDoc" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /><span class="unit">mm</span></span>
+								</label>
+								<!-- The operation's recorded stock diameter — distinct from the "Spiral Ø"
+								     field under Cut parameters (machining_force_analysis.outer_diameter, a spiral-geometry
+								     override). Editable so the Doctor's diameter backfill has somewhere to write. -->
+								<label>Workpiece Ø
+									<span class="unit-box"><FixedNumberInput v-model="editOpWorkpieceDiam" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /><span class="unit">mm</span></span>
+								</label>
+								<label>Operator<input v-model="editOperatorName" type="text" :class="{ modified: editOperatorName !== srcMeta.operator }" /></label>
+								<label class="chk">New edge<input v-model="editOpNewEdge" type="checkbox" /></label>
+								<label class="chk">Coolant<input v-model="editOpCoolant" type="checkbox" /></label>
+								<label class="wide">Operation code
+									<input :value="fmtOrDash(srcMeta.passCode)" type="text" disabled title="Built by the database from the operation's fields; it updates when you save. Not editable here." />
+								</label>
+								<label class="wide">Notes<textarea v-model="editOutcomeNotes" rows="2" :class="{ modified: editOutcomeNotes !== srcMeta.outcomeNotes }"></textarea></label>
+							</div>
+							<button v-if="hasChanges" class="crop-save" @click="changesDialogOpen = true">Save changes</button>
 
 							<button class="acc-head" @click="captureOpen = !captureOpen">
 								<v-icon :name="captureOpen ? 'expand_more' : 'chevron_right'" x-small /> Capture
