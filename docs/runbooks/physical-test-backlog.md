@@ -2488,3 +2488,34 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
 ## Done
 
 (Move ticked items here with their date and result.)
+
+### SEM reader: rehearsal on a copy of the live database (2026-10-16, d1-server)
+
+Run on a throwaway stack (`sem-copy-*` containers: a `pg_dump` restore of the live database at migration 195, a Directus on
+port 18061 with this branch's extensions, the crawler container with the real share mounted read-only, STARbase from `vite`
+on 5191 pointed at the copy). The live stack was only read (the dump). Not ticked above because each item was run on a
+**few folders** (about 60 trial images, not the whole corpus) and on a copy, not live. Test accounts were created on the copy only.
+
+| Item | Result |
+|---|---|
+| SEM7 | The pip lines import in a clean `python:3.12-slim` (PR #343). Reading real bars needed two fixes (below). |
+| SEM1 | `mtp23cab` (1,653 images, no OCR): 840 FEI TIFFs promoted, 50 earlier false `sem_image` rows demoted, every TIFF `kind_confidence` 0.95, all 8 fields present, `sources` all `metadata` (magnification `derived`), BST/GMT offsets all equal to London's (487 BST, 353 GMT, 0 wrong), no flags, owner stamps all the folder's person. With OCR on 57 more images in three `mtp23jjk` folders: **54 had `scale_bar_um: length_mismatch`** (bug 1). After the fix: 0 flags. Not covered: the 2,048-px image, a `40×` bar, the thermal/EDS controls by name. |
+| SEM2 | 8 contrast-edited PNG exports and 2 TIFFs without metadata: every value equal to the TIFF namesake's (wd to the bar's 1 decimal), `sources` `ocr`, confidence 0.8, no `check_this` once the bar length confirms. One wrong value found: mode read `None.` from a bar that prints `None` (bug 2). No JPEG or BMP namesake pairs tried. About 0.4 s per registered image on CPU with OCR (57 images in 23 s, folder listing included). |
+| SEM3 | Owner filter accepted by Directus (no `_some` error). A 200; B and a Lab Viewer 403; admin 200; unowned uploads stay open to every member; `PATCH owner_person_id` 403; B cannot patch or delete A's file (403); team folder: member reads, non-member 403, added 200, removed 403; sample link: B and the Viewer get `directus_files_id: null` with the row id present, A gets the file. Observed: deleting a file whose storage is `star` answers 500 after the row is gone (no `star` location is declared, so it is not new). |
+| SEM5 | Database half: migrations 196-199 apply in **3.1 s** on 82,519 candidates / 255,346 files; stamped 82,519 = candidates not linked and not in a junction; no junction-linked file stamped; `file_readers_drift_count()` 0; four `down`s then `up` again also 0. Crawler half: `--sem-backfill` without OCR 4 saved / 5 not an SEM image (a bar-only image is not recognised as SEM without OCR, so it is counted there and not under "no usable value"); with OCR 3 more; again 0 saved. Settings values equal the metadata. Not run: the `save_sem_settings` correction check by SQL, kill half way. |
+| SEM6 | On a queue cut to 90 rows: 8 promoted, 60 demoted (thermal JPEGs, "Microscope x5/x20" TIFFs, EDS spectra, charts, a TEM), 22 unchanged, 0 skipped; a second run 0/0/0 and no file opened. Not run: `--force` over the whole corpus, kill half way, share pulled mid-run. |
+| SEM8 | A GET `can_edit` true; B and a Lab Viewer `{locked:true}`; admin values with `can_edit` false, one `admin_read` row per call, none for A; A PATCH `kv` 20 → `sources.kv = manual`; B and admin PATCH 403; `read_by` 400; kV 99 400. Admin link/dismiss/undo 403 with the documented message. An unowned linked file: B reads the values, no edit. Inbox link then undo drops the settings row; Data Studio link, then Inbox link, then undo keeps it. **Finding:** magnification 5000.5 is accepted and saved as 5001 (SEM10 expects a refusal; decide if non-integers should be refused). |
+| SEM9 | FEI row: labelled values in the specified order with `metadata`/`derived`/`OCR` labels, "15 Apr 2026, 19:31 BST", winter rows `GMT`, no confidence shown; PNG export row all `OCR`, no "check this" (the bar confirmed). Not seen: a "check this" row, a "couldn't read" row, a JEOL row. |
+| SEM10 | As the owner: values, an Edit control on every field, "not set" for empty ones. As B: 37 locks "A file from another person's folder", the count 38 includes them. Not tried: typing a UK summer/winter time, the admin page view. |
+| SEM11 | First half: after handing the alias to B and a scan: B's Inbox lists none of A's files, the log says `N file(s) stamped to another owner left out of the inbox`, B's link of A's candidate 404, A's file stays A's, B 403 on it. The scan also deleted A's old candidates for that folder (`drop_foreign_state`), so "A's old candidates kept for the test" needed a hand stamp. Re-stamp half not run. |
+| SEM14 | 38 linked images, 37 owned: 38 `sem-settings` requests in 289 ms with **at most 4 in flight**. Admin view logged 8 rows: only images that have a settings row are logged, not every owned image on the page. |
+| SEM16 | Both `--reclassify` and `--sem-backfill` on an empty root: `aborted`, exit 1, nothing marked. |
+| SEM17 | 35 dismissed rows with missing files: `35 skipped`, exit 0, no abort, the same 35 skipped again. |
+| SEM18 | Deactivate saves; the owner still reads their file; `DELETE /items/people/<id>` answers **500 with the raw SQL** ("violates foreign key constraint directus_files_owner_person_id_fkey"). Understandable to a developer, not to a Directus admin. |
+| SEM19 | Confirmed: a Former member with an active login reads the team's file by id (200) while the Inbox shows them no team and 0 files. Decision for the maintainer. |
+| SEM21 | B gets 404 for thumb and preview of A-stamped candidates, the same answer as for an unknown id (no way to tell them apart); the 404 carries Express's weak ETag of its own JSON body, not a picture's. Ignore-folder half not run. |
+| Not run | SEM4 (GPU), SEM12 and SEM20 (need a writable share to move a file and the indexer), SEM13 as written (its `--sem-backfill` effect was seen under SEM5), SEM15 (live upgrade/rollback: only the migration timing and the down/up cycle were seen), the second half of SEM11, the ignore-folders half of SEM21. |
+
+Bugs found by this run (both fixed in PR #348): (1) the FEI scale bar is drawn through its own label, so `scale_bar_length_px` measured
+one half (89 px of 260) and the length check failed on nearly every real image, losing the exports' magnification; (2) the recogniser's
+trailing full stop on a text cell (`None.`).
