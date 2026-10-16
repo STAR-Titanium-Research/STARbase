@@ -14,8 +14,8 @@
 // 404 NOT_FOUND, 403 FORBIDDEN, 409 ALREADY_ADDED / NOT_A_SURFACE_SCAN / SURFACE_SCAN / SURFACE_SCANS_UNAVAILABLE. The options `scanItems`, `scanAllowed`,
 // `scanTableMissing` and `scanUndoAllowed` steer those; undo deletes the scan rows of the batch (403 when `scanUndoAllowed` is false).
 // Pictures (spec section 14): a file with `has_thumbnail: true` serves GET /d1-inbox/files/<id>/thumb and /preview as an image Blob (fakePictures.ts), as an
-// axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs`,
-// `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
+// axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs` (and
+// `previewDelayMs` for the preview alone), `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
 // were open at once.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
@@ -101,6 +101,8 @@ export interface FakeInboxOptions {
 	undoByLinkerOnly?: boolean;
 	/** How long a picture request takes, in ms (default 0). Lets a test or a screenshot see the loading state. */
 	pictureDelayMs?: number;
+	/** How long a preview request takes (default pictureDelayMs): a slow preview behind a quick thumbnail, as on a real share. */
+	previewDelayMs?: number;
 	/** Thumbnail requests are refused with 500 (true), or the first n of them are. */
 	thumbFails?: boolean | number;
 	/** Preview requests are refused with 500 (true), or the first n of them are. */
@@ -337,7 +339,8 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		pictureStats.open += 1;
 		pictureStats.maxOpen = Math.max(pictureStats.maxOpen, pictureStats.open);
 		try {
-			if (opts.pictureDelayMs) await new Promise((r) => setTimeout(r, opts.pictureDelayMs));
+			const delay = size === 'preview' ? opts.previewDelayMs ?? opts.pictureDelayMs : opts.pictureDelayMs;
+			if (delay) await new Promise((r) => setTimeout(r, delay));
 			const f = files.find((x) => x.candidate_id === id);
 			if (!f || !f.has_thumbnail) throw err(404, 'NOT_FOUND', 'That file has no picture.');
 			const fails = size === 'thumb' ? opts.thumbFails : opts.previewFails;
