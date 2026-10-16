@@ -37,11 +37,14 @@ def make_bar(
     white=255,
     scale_row=None,
     mid_row=False,
+    tight=False,
 ):
     """A grey-scale FEI-like bar: a white top row, white 1-px vertical dividers between equal cells, the header
     text on the upper half and the value text on the lower half of each cell, no horizontal line between them,
     and (when `scale_len`) a horizontal scale-bar line of that many pixels in the right cell. `white` lowers
-    every white (a contrast-edited export has about 207). `mid_row` adds a full-width row across the middle."""
+    every white (a contrast-edited export has about 207). `mid_row` adds a full-width row across the middle. `tight` is the real geometry: big text whose header ink
+    (rows 8 to 23) and value ink (rows 27 to 41) leave a gap of only three dark rows (24 to 26), so the
+    header/value split can only fall there (at row 25)."""
     n = len(labels)
     img = Image.new("L", (w, h), 0)
     d = ImageDraw.Draw(img)
@@ -49,10 +52,11 @@ def make_bar(
     edges = [round(i * w / n) for i in range(n + 1)]
     for x in edges[1:-1]:
         d.line((x, 0, x, h - 1), fill=white)
-    f = _font(14)
+    f = _font(22 if tight else 14)
+    head_y, value_y = (2, 20) if tight else (4, h // 2 + 3)
     for i, (label, value) in enumerate(zip(labels, values)):
-        d.text((edges[i] + 6, 4), label, fill=white, font=f)
-        d.text((edges[i] + 6, h // 2 + 3), value, fill=white, font=f)
+        d.text((edges[i] + 6, head_y), label, fill=white, font=f)
+        d.text((edges[i] + 6, value_y), value, fill=white, font=f)
     if scale_len:
         y = h - 12 if scale_row is None else scale_row
         x1 = w - 12
@@ -104,17 +108,34 @@ def test_cut_cells_header_and_value_hold_their_own_text():
         assert c.value.getextrema()[1] > 100
 
 
-def test_cut_cells_ignores_scale_bar_line():
-    plain = sem_bar.cut_cells(make_bar(HEADERS6 + ["100μm"], VALUES6 + [""]))
-    # a long line in the right cell, on the very row where a full-width mean would put the header/value split
+def _lined_and_plain():
+    # the real geometry: a three-row gap between header and value ink, and the scale-bar line drawn IN that gap
+    # (row 26, its last row) in the right cell
+    labels, values = HEADERS6 + ["100μm"], VALUES6 + [""]
+    plain = sem_bar.cut_cells(make_bar(labels, values, tight=True))
     lined = sem_bar.cut_cells(
-        make_bar(
-            HEADERS6 + ["100μm"], VALUES6 + [""], scale_len=100, scale_row=H // 2 + 1
-        )
+        make_bar(labels, values, scale_len=100, scale_row=26, tight=True)
     )
+    return plain, lined
+
+
+def test_cut_cells_ignores_scale_bar_line():
+    plain, lined = _lined_and_plain()
+    assert len(plain) == len(lined) == 7
     assert [(c.x0, c.x1) for c in lined] == [(c.x0, c.x1) for c in plain]
     assert [c.header.size for c in lined] == [c.header.size for c in plain]
     assert [c.value.size for c in lined] == [c.value.size for c in plain]
+    assert (
+        plain[0].header.size[1] == 23
+    )  # split at row 25, the middle of the gap (rows 24 to 26)
+
+
+def test_a_full_width_row_mean_would_be_fooled_by_the_scale_bar_line(monkeypatch):
+    # the regression guard has teeth: judge the split on the whole width (spec section 2's named mistake) and the
+    # line in the gap moves it, so the lined bar is cut differently from the plain one
+    monkeypatch.setattr(sem_bar, "SPLIT_LEFT", 1.0)
+    plain, lined = _lined_and_plain()
+    assert [c.header.size for c in lined] != [c.header.size for c in plain]
 
 
 def test_cut_cells_on_contrast_edited_bar():
@@ -389,17 +410,55 @@ def test_scale_bar_cross_check_uses_the_screen_width_the_field_width_identified(
     )  # the metadata's field width says this image has the narrower canvas
     r = parse(read_of(mag="1 200 x", scale="100μm"), scale_px=px, hfw_um=hfw)
     assert r.values["scale_bar_um"] == 100.0 and "check_this" not in r.flags
-    # without a field width nothing says which canvas applies: the first constant, so this length is off
+    # without a field width nothing says which canvas applies: the first constant, so this length is off. A bar-only
+    # export from a 0.858-canvas instrument therefore loses its magnification (the safe direction; SEM2 counts these)
     r = parse(read_of(mag="1 200 x", scale="100μm"), scale_px=px)
+    assert "scale_bar_um" not in r.values and "magnification" not in r.values
+    assert r.flags["scale_bar_um"] == r.flags["magnification"] == "length_mismatch"
+
+
+def test_a_failed_scale_check_omits_the_magnification_too():
+    # bar only (no hfw_um, as for every PNG/JPEG/BMP export): the label or the number is wrong and nothing says
+    # which, so neither is kept
+    px = scale_px_for(100, 1200)
+    r = parse(
+        read_of(mag="1 200 x", scale="100μm", hv="20.00 kV"), scale_px=round(px * 0.8)
+    )
+    assert "magnification" not in r.values and "scale_bar_um" not in r.values
+    assert r.flags["magnification"] == "length_mismatch"
+    assert r.flags["scale_bar_um"] == "length_mismatch"
+    assert r.values["kv"] == 20.0  # the other fields are not dragged down
+    assert r.flags["check_this"] is True
+    assert "magnification" not in r.sources and "magnification" not in r.confidence
+
+
+def test_a_misread_magnification_over_a_true_scale_bar_is_omitted():
+    # the true value is 1 200 x (the scale bar is drawn for it); the recogniser read 200
+    px = scale_px_for(100, 1200)
+    r = parse(read_of(mag="200 x", scale="100μm", hv="20.00 kV"), scale_px=px)
+    assert "magnification" not in r.values
+    assert r.flags["magnification"] == "length_mismatch"
+    assert r.values["kv"] == 20.0
+
+
+def test_a_merged_magnification_over_a_true_scale_bar_is_omitted():
+    # "40 100 x" is a well-formed grouping (40 100) with the wrong value: the bar is drawn for 100 x
+    px = scale_px_for(100, 100)
+    ok = parse(read_of(mag="100 x", scale="100μm"), scale_px=px)
+    assert ok.values["magnification"] == 100 and "check_this" not in ok.flags
+    r = parse(read_of(mag="40 100 x", scale="100μm"), scale_px=px)
+    assert "magnification" not in r.values
+    assert r.flags["magnification"] == "length_mismatch"
+
+
+def test_the_field_width_keeps_a_magnification_the_scale_bar_contradicts():
+    # the metadata's field width vouches for the number, so only the label is dropped
+    px = round(scale_px_for(100, 1200) * 0.8)
+    r = parse(read_of(mag="1 200 x", scale="100μm"), scale_px=px, hfw_um=248.67)
+    assert r.values["magnification"] == 1200 and "magnification" not in r.flags
     assert "scale_bar_um" not in r.values
     assert r.flags["scale_bar_um"] == "length_mismatch"
-
-
-def test_a_failed_scale_check_leaves_the_magnification_unconfirmed():
-    px = scale_px_for(100, 1200)
-    r = parse(read_of(mag="1 200 x", scale="100μm"), scale_px=round(px * 0.8))
-    assert r.values["magnification"] == 1200  # kept, but nothing vouches for it
-    assert r.flags["check_this"] is True
+    assert "check_this" not in r.flags
 
 
 def test_scale_bar_check_needs_a_magnification():

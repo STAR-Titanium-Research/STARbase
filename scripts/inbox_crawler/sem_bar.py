@@ -283,8 +283,10 @@ def parse_bar(
     with `"out_of_range"`, the field name being the flag key. Then the checks: `magnification x hfw_um` (when the
     field width is known) must equal a screen-width constant within 2%, else the magnification is omitted with
     `"hfw_mismatch"`; the scale-bar label must match `scale_px` (the bar's pixel length in an image `image_width`
-    wide) at that magnification within 5%, else `scale_bar_um` is omitted with `"length_mismatch"`. When something
-    was read and no check could vouch for it, `flags["check_this"] = True`."""
+    wide) at that magnification within 5%, else `scale_bar_um` is omitted with `"length_mismatch"` and, unless the
+    field width had already vouched for the magnification, so is the magnification (also `"length_mismatch"`: the
+    label or the number is wrong and nothing says which, so neither is kept). When something was read and no check
+    could vouch for it, `flags["check_this"] = True`."""
     out = BarValues()
 
     def keep(key: str, value, conf: float) -> None:
@@ -328,6 +330,7 @@ def parse_bar(
                 out.flags[key] = "unparseable"
 
     confirmed = False
+    mag_by_hfw = False
     canvas = None
     if "magnification" in out.values and hfw_um is not None and hfw_um > 0:
         canvas = _canvas_of(out.values["magnification"], hfw_um)
@@ -336,7 +339,7 @@ def parse_bar(
                 del table["magnification"]
             out.flags["magnification"] = "hfw_mismatch"
         else:
-            confirmed = True
+            confirmed = mag_by_hfw = True
     if "scale_bar_um" in out.values and "magnification" in out.values:
         if scale_px and image_width > 0:
             # the screen width the field width identified, else the first constant (nothing says which applies)
@@ -349,9 +352,15 @@ def parse_bar(
             if abs(out.values["scale_bar_um"] - implied) <= SCALE_TOLERANCE * implied:
                 confirmed = True
             else:
-                for table in (out.values, out.sources, out.confidence):
-                    del table["scale_bar_um"]
-                out.flags["scale_bar_um"] = "length_mismatch"
+                dropped = (
+                    ["scale_bar_um"]
+                    if mag_by_hfw
+                    else ["scale_bar_um", "magnification"]
+                )
+                for key in dropped:
+                    for table in (out.values, out.sources, out.confidence):
+                        del table[key]
+                    out.flags[key] = "length_mismatch"
     if out.values and not confirmed:
         out.flags["check_this"] = True
     return out

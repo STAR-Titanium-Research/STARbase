@@ -378,6 +378,12 @@ def _warn_once(kind: str, message: str, *args) -> None:
     _warned[kind] = True
 
 
+def _confidence_of(parsed, keys) -> dict:
+    """The recogniser's confidence for each of `keys` the bar read, rounded to 2 decimals. Recorded for whoever
+    looks at the value later, never a threshold (correct reads scored as low as 0.60)."""
+    return {key: round(parsed.confidence[key], 2) for key in keys}
+
+
 def _squash(text) -> str:
     return "".join(str(text).upper().split())
 
@@ -432,6 +438,8 @@ class FeiProfile:
                 "sources": parsed.sources,
                 "flags": parsed.flags,
             }
+            if parsed.confidence:
+                extracted["ocr_confidence"] = _confidence_of(parsed, parsed.values)
             return ProfileResult(
                 OCR_CLAIM_CONFIDENCE,
                 extracted,
@@ -480,6 +488,9 @@ class FeiProfile:
             elif key not in flags:
                 meta[key] = bar_value
                 sources[key] = "ocr"
+                meta.setdefault("ocr_confidence", {}).update(
+                    _confidence_of(parsed, [key])
+                )
                 if parsed.flags.get("check_this"):
                     flags["check_this"] = True
         if parsed.flags.get("magnification") == "hfw_mismatch":

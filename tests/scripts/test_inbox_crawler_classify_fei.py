@@ -430,8 +430,9 @@ def test_png_bar_checks_the_scale_bar_length():
         encode_cell(img), ocr=True, bar_reader=reader_for(kit, headers, values)
     )
     assert c.kind == "sem_image"
-    assert "scale_bar_um" not in c.extracted
+    assert "scale_bar_um" not in c.extracted and "magnification" not in c.extracted
     assert c.extracted["flags"]["scale_bar_um"] == "length_mismatch"
+    assert c.extracted["flags"]["magnification"] == "length_mismatch"
 
 
 def test_contrast_edited_png_is_read_the_same():
@@ -673,3 +674,90 @@ def test_cuda_without_a_gpu_falls_back_to_cpu(monkeypatch):
     monkeypatch.setattr(sem_bar, "_READERS", {})
     for device in ("cuda", "auto"):
         assert sem_bar.default_bar_reader(device)([1]) == [("x", 0.5)]
+
+
+# ---- OCR confidence is recorded in extracted (coordinator ruling R10), never a threshold --------------------
+
+
+def test_a_bar_only_claim_carries_the_ocr_confidence():
+    kit = _kit()
+    got = kit.Scripted(
+        [
+            ("HV", 0.9),
+            ("20.00 kV", 0.734),
+            ("det", 0.9),
+            ("ETD", 0.6),
+            ("WD", 0.9),
+            ("10.3 mm", 0.605),
+            ("mag", 0.9),
+            ("1 200 x", 0.99),
+            ("mode", 0.9),
+            ("SE", 0.5),
+            ("spot", 0.9),
+            ("3.0", 0.999),
+        ]
+    )
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=got)
+    assert c.kind == "sem_image"
+    conf = c.extracted["ocr_confidence"]
+    assert conf["kv"] == 0.73
+    assert conf == {
+        "kv": 0.73,
+        "detector": 0.6,
+        "working_distance_mm": 0.6,  # 0.605 rounds half to even
+        "magnification": 0.99,
+        "mode": 0.5,
+        "spot": 1.0,
+    }
+    assert set(conf) == set(c.extracted["sources"])  # exactly the fields read by OCR
+    assert (
+        json.loads(json.dumps(c.extracted)) == c.extracted
+    )  # survives a JSON round trip
+
+
+def test_a_low_confidence_value_is_kept_and_recorded():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit)),
+        ocr=True,
+        bar_reader=reader_for(kit, conf=0.51),
+    )
+    assert c.extracted["kv"] == 20.0 and c.extracted["ocr_confidence"]["kv"] == 0.51
+
+
+def test_a_metadata_claim_has_no_ocr_confidence():
+    kit = _kit()
+    assert "ocr_confidence" not in classify(make_fei_tiff()).extracted
+    # OCR on, and the bar agrees: nothing came from the bar, so nothing to record
+    values = ["2.00 kV", "ETD", "15.9 mm", "40×", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values, conf=0.7),
+    )
+    assert c.extracted["kv"] == 2.0 and "ocr_confidence" not in c.extracted
+
+
+def test_a_value_the_bar_adds_to_metadata_has_its_confidence_recorded():
+    kit = _kit()
+    headers = kit.HEADERS6 + ["10μm"]
+    values = ["2.00 kV", "ETD", "15.9 mm", "3 000 x", "SE", "3.5", ""]
+    text = FEI_TEXT.replace("HFW=0.00745157", "HFW=0.0000994667")
+    px = round(10 * 3000 * W / (0.2984 * 1e6))
+    c = classify(
+        encode_cell(
+            make_cell_image(kit, headers, values, scale_len=px), "TIFF", text=text
+        ),
+        ocr=True,
+        bar_reader=reader_for(kit, headers, values, conf=0.876),
+    )
+    assert c.extracted["scale_bar_um"] == 10.0
+    assert c.extracted["ocr_confidence"] == {"scale_bar_um": 0.88}
+    assert json.loads(json.dumps(c.extracted)) == c.extracted
+
+
+def test_a_claim_with_no_value_read_has_no_ocr_confidence():
+    kit = _kit()
+    got = reader_for(kit, ["HV", "WD", "", "", "", ""], ["~~", "", "", "", "", ""])
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=got)
+    assert c.kind == "sem_image" and "ocr_confidence" not in c.extracted
