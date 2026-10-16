@@ -23,15 +23,16 @@ Modes (exactly one; each takes the single-crawler database lock and exits 1 when
                   classifier version has not looked at: each is re-read through the read-only share
                   (throttled by the state row's read_mb_per_s, with INBOX_OCR as above), promoted to
                   sem_image or demoted to image, and stamped with the version. Never touches a linked row;
-                  resumable and idempotent (a second run reads nothing); an unreadable file is logged and
-                  marked, not retried. Logs the promoted, demoted and unchanged counts.
+                  resumable and idempotent (a second run reads only the rows the first one skipped). Logs
+                  the promoted, demoted and unchanged counts.
                   Only a permanent read failure (no permission, refused by the allow-list, over 64 MB) is
-                  marked; a missing file or a transient error is skipped and stays queued for the next run.
+                  marked, so it is not retried; a missing file or a transient error is skipped and stays
+                  queued for the next run (a missing file does not count toward an abort).
                   --force (only with --reclassify) ignores classified_by and re-reads every eligible row once:
                   run `--reclassify --force` once after rapidocr is installed and INBOX_OCR=1 is set, to
                   promote bar-only PNG/JPEG/BMP exports (without --force a second run reads nothing).
                   Exit 0 when it ran to its end or was stopped; exit 1 when it ABORTED because the share root
-                  stopped answering or 25 reads failed in a row (nothing after that point is marked, what was
+                  stopped answering (or its Users folder, as on an unmounted share), or 25 transient reads failed in a row (nothing after that point is marked, what was
                   committed stays), or the pass failed, or the lock is held; 2 for a configuration error.
     --sem-backfill  one pass over the pointer rows that are linked (to a sample, operation, test session or
                   surface scan), image-typed, unowned (no provenance owner) and have no imaging-settings row:

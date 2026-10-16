@@ -328,15 +328,16 @@ def test_a_file_too_large_to_read_into_memory_is_marked(world, pid, monkeypatch)
 
 
 class DropShare(FlagSpy):
-    """Removes the share's root when the `nth` file is about to be opened (the mount going away)."""
+    """Removes `target` (the share's root, or a base folder under it) when the `nth` file is about to be opened
+    (the mount going away)."""
 
-    def __init__(self, inner, root, nth):
+    def __init__(self, inner, target, nth):
         super().__init__(inner)
-        self._root, self._nth = root, nth
+        self._target, self._nth = target, nth
 
     def open_rb(self, rel, adopted=False):
         if len(self.opens) + 1 == self._nth:
-            shutil.rmtree(self._root)
+            shutil.rmtree(self._target)
         return super().open_rb(rel, adopted=adopted)
 
 
@@ -376,6 +377,73 @@ def test_consecutive_transient_failures_abort_the_run(world, pid):
     assert stats.aborted
     assert len(spy.opens) == scan.MAX_CONSECUTIVE_FAILURES  # stopped at the limit
     assert all(row(world, c)[3] is None for c in ids)  # nothing marked
+
+
+def test_many_missing_files_on_a_healthy_share_do_not_abort(world, pid):
+    """A dismissed or deleted candidate whose file is gone stays in the plain queue for ever: more than
+    MAX_CONSECUTIVE_FAILURES of them must not look like a share drop."""
+    missing = []
+    for i in range(scan.MAX_CONSECUTIVE_FAILURES + 5):
+        cid, rel = put(world, pid, f"m{i:02d}.tif", FEI, state="dismissed")
+        Path(world.root, rel).unlink()
+        missing.append(cid)
+    good = [put(world, pid, f"ok{i}.tif", FEI)[0] for i in range(3)]
+    stats, _ = reclassify(world)
+    assert not stats.aborted and stats.skipped == len(missing) and stats.promoted == 3
+    assert all(row(world, c)[3] is None for c in missing)  # none marked
+    assert all(
+        row(world, c)[3] == VERSION for c in good
+    )  # the files after them were read
+    again, _ = reclassify(world)  # and the next run is the same: skipped, never aborted
+    assert not again.aborted and again.skipped == len(missing)
+
+
+def test_the_command_does_not_abort_on_many_missing_files(env, pid):
+    for i in range(scan.MAX_CONSECUTIVE_FAILURES + 2):
+        _, rel = put(env, pid, f"m{i:02d}.tif", FEI, state="dismissed")
+        Path(env.root, rel).unlink()
+    put(env, pid, "ok.tif", FEI)
+    assert cli.main(["--reclassify", "--root", env.root]) == 0
+    assert cli.main(["--reclassify", "--root", env.root]) == 0
+
+
+def test_an_empty_mount_point_aborts_at_the_start_and_marks_nothing(env, pid, caplog):
+    """The root exists but `Users` does not (an unmounted share leaves its mount point as an empty directory)."""
+    cid, _ = put(env, pid, "a.tif", FEI)
+    shutil.rmtree(Path(env.root, "Users"))
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--root", env.root]) == 1
+    assert "aborted" in caplog.text and row(env, cid)[3] is None
+
+
+def test_a_base_folder_that_disappears_mid_run_aborts_at_the_next_missing_read(
+    world, pid
+):
+    ids = [put(world, pid, f"f{n}.tif", FEI)[0] for n in range(5)]
+    spy = DropShare(
+        fs_readonly.Share(world.root), str(Path(world.root, "Users")), 3
+    )  # the root stays, Users goes
+    stats, _ = reclassify(world, spy=spy)
+    assert stats.aborted and stats.promoted == 2 and stats.skipped == 0
+    assert sum(row(world, c)[3] is None for c in ids) == 3
+
+
+def test_a_transient_skipped_row_after_many_missing_ones_is_retried_by_the_next_run(
+    world, pid
+):
+    for i in range(scan.MAX_CONSECUTIVE_FAILURES + 3):
+        _, rel = put(world, pid, f"m{i:02d}.tif", FEI, state="dismissed")
+        Path(world.root, rel).unlink()
+    cid, flaky = put(world, pid, "flaky.tif", FEI)
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    spy.fail[("open", flaky)] = OSError(errno.EIO, "input/output error")
+    first, _ = reclassify(world, spy=spy)
+    assert not first.aborted and row(world, cid)[3] is None
+    second, spy2 = reclassify(
+        world
+    )  # a plain run: the flaky file is read, the missing ones skipped
+    assert not second.aborted and flaky in spy2.opens
+    assert row(world, cid)[3] == VERSION and row(world, cid)[0] == "sem_image"
 
 
 def test_the_command_exits_one_when_the_share_drops_mid_run(

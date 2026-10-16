@@ -8,15 +8,18 @@ go to `classify_sem.classify_image` as `io.BytesIO`; nothing here opens a path o
 `reclassify` (spec section 7) re-reads the undecided image candidates the current classifier version has not
 looked at, because a detector fix changes what `kind` and `extracted` should be: it promotes an image the new
 detector recognises, demotes a `sem_image` it no longer believes, and records the version, so a second run
-finds nothing and a killed run resumes. A `linked` row is never touched. Only a PERMANENT read failure
+reads only the rows the first one skipped and a killed run resumes. A `linked` row is never touched. Only a PERMANENT read failure
 (no permission, refused by the allow-list, too large to read into memory) is recorded as classified, so it is
 not retried in a loop; a file that is missing or fails with a transient error is skipped and stays in the queue
 for the next run (a share that drops must never mark rows it did not read). `--force` ignores `classified_by`
 (for example after OCR is switched on) and re-reads every eligible row once.
 
-Both passes guard the share like a scan: the root must answer before they start and again whenever a read fails
-with "missing" or a transient error, and `scan.MAX_CONSECUTIVE_FAILURES` such failures in a row abort the pass
-(`aborted` in its stats, exit code 1); rows already committed stay committed.
+Both passes guard the share like a scan (`Scanner.verify_share` with its `bases`): the root and the personal-folder
+base (`owners.PERSON_BASE`, which is what makes an empty mount point fail) must answer before they start, and again,
+together with the first folder of the file's path (`--reclassify`), whenever a read finds the file missing or fails
+with a transient error; if they do not answer the pass aborts at once (`aborted` in its stats, exit code 1). A file
+that is missing while they do answer is genuinely missing: skipped, not counted toward an abort. Only transient errors
+count, `scan.MAX_CONSECUTIVE_FAILURES` of them in a row abort the pass. Rows already committed stay committed.
 
 `sem_backfill` (spec section 7) gives the images people linked BEFORE settings were saved at link time their
 imaging settings: pointer rows that are linked, image-typed, unowned and have no `sem_image_settings` row. Each
@@ -33,7 +36,7 @@ import io
 import logging
 from dataclasses import dataclass
 
-from . import classify_sem, db, hashing, scan
+from . import classify_sem, db, hashing, owners, scan
 from .fs_readonly import ReadRefused
 from .identity import file_id
 from .owners import clean_rel_path
@@ -71,26 +74,36 @@ class PassStats:
 
 
 class ShareGuard:
-    """The scan's own share checks (`Scanner.verify_share`, `_note_failure`, `MAX_CONSECUTIVE_FAILURES`), reused
-    for a pass: `scan.ShareUnavailable` when the share root does not answer or too many reads failed in a row."""
+    """The scan's own share checks (`Scanner.verify_share` with its `bases`, `_note_failure`,
+    `MAX_CONSECUTIVE_FAILURES`), reused for a pass: `scan.ShareUnavailable` when the share root or a base folder
+    does not answer, or when too many transient read failures came in a row."""
 
     def __init__(self, share, store: db.Store):
         self._scanner = scan.Scanner(share, store)
 
-    def verify(self) -> None:
-        self._scanner.verify_share()
+    @staticmethod
+    def _anchor() -> list[str]:
+        return [owners.PERSON_BASE]
 
-    def failed(self, exc: OSError) -> None:
-        """A read failed as 'missing' or transiently: the root must still answer (else the share dropped), then
-        the failure is counted."""
-        self._scanner.verify_share()
-        self._scanner._note_failure(exc)
+    def verify(self) -> None:
+        """At the start of a pass: the root and the personal-folder base answer (an empty mount point has
+        neither)."""
+        self._scanner.verify_share(self._anchor())
+
+    def failed(self, exc: OSError, base: str | None = None) -> None:
+        """A read found the file missing or failed transiently: the root and the base folder (`base`, the
+        first folder of the file's path, else the personal-folder base) must still answer, else the share
+        dropped. A file that is merely missing while they answer is not a failure of the share and is not
+        counted; any other error is, and too many in a row end the pass."""
+        self._scanner.verify_share([base] if base else self._anchor())
+        if not isinstance(exc, FileNotFoundError | NotADirectoryError):
+            self._scanner._note_failure(exc)
 
     def worked(self) -> None:
         self._scanner._failures = 0
 
 
-def read_image(share, rel: str, throttle, guard: ShareGuard):
+def read_image(share, rel: str, throttle, guard: ShareGuard, base: str | None = None):
     """Read an image through the share's read-only `open_rb` (so the allow-list applies, never `adopted`),
     throttled, into memory. Returns (bytes or None, status, reason), status being:
 
@@ -99,8 +112,8 @@ def read_image(share, rel: str, throttle, guard: ShareGuard):
     * `too_large` more than scan.CLASSIFY_MAX_BYTES: marking the row is safe;
     * `skipped`   missing or a transient error (EIO, a host that went away, a timeout): never marked.
 
-    Raises scan.ShareUnavailable (through the guard) when the root no longer answers or too many reads failed
-    in a row. Never raises for a file that cannot be read."""
+    Raises scan.ShareUnavailable (through the guard) when the root or the base folder no longer answers, or too
+    many transient reads failed in a row. Never raises for a file that cannot be read."""
     log.debug("reading %s", rel)
     try:
         with share.open_rb(rel) as fh:
@@ -114,7 +127,7 @@ def read_image(share, rel: str, throttle, guard: ShareGuard):
     except (
         OSError
     ) as exc:  # FileNotFoundError included: a moved file or a share that went away
-        guard.failed(exc)
+        guard.failed(exc, base)
         return None, "skipped", f"{type(exc).__name__}: {exc}"[:500]
     guard.worked()
     if out.data is None:
@@ -156,7 +169,9 @@ def reclassify(
                 if stop():
                     break
                 after = cid
-                data, status, problem = read_image(share, rel, throttle, guard)
+                data, status, problem = read_image(
+                    share, rel, throttle, guard, rel.split("/")[0]
+                )
                 if status == "skipped":
                     stats.skipped += 1
                     log.warning(

@@ -39,10 +39,17 @@ docker compose --profile archive up -d inbox-crawler
 Both read an image only through the read-only share (`open_rb`, the allow-list applies, nothing is ever opened as
 a person's linked file), into memory, capped by `read_mb_per_s` (set when the pass starts), with `INBOX_OCR` as for
 a scan. Both commit file by file, so `SIGTERM` or a kill loses nothing: run the same command again to finish.
-Both guard the share like a scan: the share root must answer before the pass starts and again whenever a read finds
-a file missing or fails with a transient error (EIO, a host that went away), and 25 such failures in a row end the
-pass. **A pass that aborts (log line `... aborted`, `(ABORTED)` in the summary) exits 1**; nothing it read after
-that point is marked, and what it had committed stays. Both otherwise exit 0 when they ran to their end or were
+Both guard the share like a scan (the same `verify_share`): the share root **and the personal-folder base**
+(`Users`, or `INBOX_PERSON_DIR`) must answer before the pass starts, which is what makes an unmounted share whose
+empty mount point remains fail; they are checked again (with the first folder of the file's path, for
+`--reclassify`) whenever a read finds a file missing or fails with a transient error (EIO, a host that went away).
+If they do not answer the pass stops at once, and 25 **transient** errors in a row also end it. A file that is
+merely missing while they answer is not a share failure: it is skipped and counts toward nothing. **A pass that
+aborts (log line `... aborted`, `(ABORTED)` in the summary) exits 1**; nothing it read after that point is marked,
+and what it had committed stays. Permission errors are permanent and do not count toward the abort, so if the SMB
+session itself starts returning EACCES part-way (for example expired credentials after an `SMB_PASS` change),
+every remaining row would be marked without being read: check the log's `unreadable` count (the `not
+re-classifying ... PermissionError` lines) after a run, and recover with `--reclassify --force`. Both otherwise exit 0 when they ran to their end or were
 stopped, 1 also when another crawler holds the lock or the pass failed, 2 for a configuration error.
 
 - **`--reclassify`.** A detector fix changes what `kind` and `extracted` should be, but classification runs only
@@ -56,9 +63,11 @@ stopped, 1 also when another crawler holds the lock or the pass failed, 2 for a 
   not there to read). Only a **permanent** read failure is marked: no permission, a path the allow-list refuses,
   or a file larger than 64 MB. It is logged as a warning (or, for the large file, at INFO) and recorded as classified
   with the current version without changing its kind, so it is not retried in a loop. A file that is **missing** or
-  fails with a **transient** error is only counted as `skipped`, logged, and left in the queue (the scan marks truly
-  vanished files `gone`; this pass does not); it is offered again by the next run, not again in the same one (rows are
-  visited in id order). A second run reads nothing but the skipped rows. Newly scanned images get `classified_by` at
+  fails with a **transient** error is only counted as `skipped`, logged, and left in the queue. This pass never marks
+  a row `gone`, and the scan does so only for a `new` row, at the owner's next scan: a `dismissed` row whose file was
+  deleted or moved stays in the plain queue for ever and is skipped (not aborting) on every run. A skipped row is
+  offered again by the next run, not again in the same one (rows are visited in id order). A second run reads nothing
+  but the skipped rows. Newly scanned images get `classified_by` at
   registration, so they are not re-read either.
   **`--reclassify --force`** ignores `classified_by` and re-reads every eligible image candidate (still only `new` and
   `dismissed`, never a linked row, each row once per run). It is the one way to re-queue images that were classified

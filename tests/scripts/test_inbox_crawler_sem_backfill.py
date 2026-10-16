@@ -56,6 +56,9 @@ def pointer(
     """A pointer row as the indexer writes it (id = uuid5 of the path, metadata.archive_path), the bytes on the
     share, and (by default) a link to a record. Returns the files id."""
     fid = str(file_id(rel))
+    Path(world.root, "Users").mkdir(
+        exist_ok=True
+    )  # the personal-folder base: what an unmounted share lacks
     world.q(
         "INSERT INTO directus_files (id, storage, filename_download, type, metadata, owner_person_id) "
         "VALUES (%s, 'star', %s, 'image/tiff', %s, %s)",
@@ -400,6 +403,59 @@ def test_consecutive_transient_failures_abort_the_backfill(world):
     stats, _ = backfill(world, spy=spy)
     assert stats.aborted and len(spy.opens) == scan.MAX_CONSECUTIVE_FAILURES
     assert n_settings(world) == 0
+
+
+def test_many_missing_files_on_a_healthy_share_do_not_abort_the_backfill(world):
+    missing = [
+        pointer(world, f"Equipment/SEM/m{i:02d}.tif", write=False)
+        for i in range(scan.MAX_CONSECUTIVE_FAILURES + 5)
+    ]
+    good = [pointer(world, f"Equipment/SEM/ok{i}.tif") for i in range(3)]
+    stats, _ = backfill(world)
+    assert not stats.aborted and stats.saved == 3
+    assert stats.unreadable == len(missing)
+    assert all(settings(world, f) is not None for f in good)
+    assert all(settings(world, f) is None for f in missing)
+    again, _ = backfill(world)
+    assert not again.aborted and again.unreadable == len(missing)
+
+
+def test_an_empty_mount_point_aborts_the_backfill_at_the_start(env):
+    fid = pointer(env, "Equipment/SEM/a.tif")
+    shutil.rmtree(Path(env.root, "Users"))
+    assert cli.main(["--sem-backfill", "--root", env.root]) == 1
+    assert settings(env, fid) is None
+
+
+def test_a_base_folder_that_disappears_mid_run_aborts_the_backfill(world):
+    fids = [pointer(world, f"Equipment/SEM/f{n}.tif") for n in range(5)]
+
+    class DropBase(FlagSpy):
+        def open_rb(self, rel, adopted=False):
+            if (
+                len(self.opens) + 1 == 3
+            ):  # Users goes, and so does the file about to be read
+                shutil.rmtree(Path(world.root, "Users"))
+                Path(world.root, rel).unlink()
+            return super().open_rb(rel, adopted=adopted)
+
+    stats, _ = backfill(world, spy=DropBase(fs_readonly.Share(world.root)))
+    assert stats.aborted and stats.saved == 2
+    assert sum(settings(world, f) is not None for f in fids) == 2
+
+
+def test_a_transient_skipped_row_after_many_missing_ones_is_retried_by_the_next_backfill(
+    world,
+):
+    for i in range(scan.MAX_CONSECUTIVE_FAILURES + 3):
+        pointer(world, f"Equipment/SEM/m{i:02d}.tif", write=False)
+    flaky = pointer(world, "Equipment/SEM/flaky.tif")
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    spy.fail[("open", "Equipment/SEM/flaky.tif")] = OSError(errno.EIO, "io error")
+    first, _ = backfill(world, spy=spy)
+    assert not first.aborted and settings(world, flaky) is None
+    second, _ = backfill(world)
+    assert not second.aborted and settings(world, flaky) is not None
 
 
 def test_the_command_exits_one_when_the_share_drops_mid_run(env, monkeypatch):
