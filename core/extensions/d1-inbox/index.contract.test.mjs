@@ -40,7 +40,7 @@ test('the fixtures are the cases the client has to handle', () => {
     'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys', 'picture_headers', 'picture_404',
     'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_get_empty_viewer', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
     'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
-    'ignored_delete_ok_rate_limited', 'ignored_delete_404',
+    'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -265,8 +265,14 @@ test('ignored folders: the list is { data: [{ ignored_id, folder, owner: { kind,
   const team = built.get('ignored_post_ok_team.json');
   assert.equal(team.body.data.team_id, team.request.body.team_id);
   const removed = built.get('ignored_delete_ok.json').body.data;
-  assert.deepEqual(Object.keys(removed), ['ignored_id', 'folder', 'rescan_queued']);
+  assert.deepEqual(Object.keys(removed), ['ignored_id', 'folder', 'still_ignored', 'rescan_queued']);
   assert.equal(removed.rescan_queued, true);
+  assert.equal(removed.still_ignored, false);
+  const covered = built.get('ignored_delete_ok_still_ignored.json');
+  assert.equal(covered.status, 200);
+  assert.deepEqual(Object.keys(covered.body.data), ['ignored_id', 'folder', 'still_ignored', 'rescan_queued']);
+  assert.deepEqual([covered.body.data.still_ignored, covered.body.data.rescan_queued], [true, false], 'a folder another rule still covers: no rescan');
+  assert.equal(built.get('ignored_delete_ok_rate_limited.json').body.data.still_ignored, false);
   assert.equal(built.get('ignored_delete_ok_rate_limited.json').status, 200, 'the rescan limit never fails the delete');
   assert.equal(built.get('ignored_delete_ok_rate_limited.json').body.data.rescan_queued, false);
   assert.equal(built.get('ignored_post_409_already_ignored.json').body.errors[0].extensions.code, 'ALREADY_IGNORED');

@@ -337,10 +337,13 @@ export function buildFixtures() {
   put('ignored_post_409_already_ignored', failure('the same folder twice for one owner, whatever the letter case', request('POST', IGNORED_PATH, { body: { folder: 'world-ti paper/drafts' } }),
     ERRORS.alreadyIgnored('world-ti paper/drafts')));
   put('ignored_post_409_too_many_rules', failure('200 rules per owner at most', request('POST', IGNORED_PATH, { body: { folder: 'one more' } }), ERRORS.tooManyRules()));
-  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
-    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, true) }));
+  const REMOVED = { ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' };
+  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued (still_ignored false: no other rule covers the folder)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: true }) }));
   put('ignored_delete_ok_rate_limited', ok('a rule removed while the rescan limit says wait: the delete still works, rescan_queued is false', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
-    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, false) }));
+    { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: false }) }));
+  put('ignored_delete_ok_still_ignored', ok('a rule removed that sits under another rule of the same owner (World-Ti Paper/Drafts while World-Ti Paper is ignored): still_ignored is true, the folder stays unscanned, so no cache reset and no rescan (rescan_queued false)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { stillIgnored: true }) }));
   put('ignored_delete_404', failure("a rule that does not exist, or is not the caller's or their team's (the same answer)", request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), ERRORS.notIgnored()));
 
   // GET and PUT /prefs

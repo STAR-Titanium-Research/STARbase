@@ -7007,6 +7007,11 @@ CREATE TEMP TABLE ib_ig_list AS EXECUTE ignoredlist('$IB_P', '');
 SELECT 'ib_ign_list:' || count(*) || ':' || bool_and(owner_name = 'Inbox Person' AND owner_team_id IS NULL) FROM ib_ig_list;
 CREATE TEMP TABLE ib_ig_byid AS EXECUTE ignoredbyid(:'ib_ign_id');
 SELECT 'ib_ign_by_id:' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P') FROM ib_ig_byid;
+-- review Minor2: the owner's remaining rules, read after a delete to see whether the removed folder is still covered by a rule above it
+CREATE TEMP TABLE ib_ig_own AS EXECUTE ignoredofowner('$IB_P', NULL);
+SELECT 'ib_ign_of_owner:' || count(*) || ':' || min(rel_folder) FROM ib_ig_own;
+CREATE TEMP TABLE ib_ig_own_other AS EXECUTE ignoredofowner('$IB_Q', NULL);
+SELECT 'ib_ign_of_owner_other:' || count(*) FROM ib_ig_own_other;
 -- the owner's open candidates (review Minor1: by owner only, never gone or another owner's; which of them lie under the rule is decided in JS by isIgnored, so no
 -- lowercasing prefix in SQL can disagree with it). The ids to dismiss are then the ones on whole path parts, ignoring case (a, e and sub/b: not 'Ign Dir 2', not x/Ign Dir).
 SELECT 'ib_ign_open_owner:' || (pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL)', '$IB_P')) = (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$IB_P' AND state = 'new'));
@@ -7117,6 +7122,8 @@ SQL
     ib_check "ib_ign_duplicate:refused" "the unique index refuses the same folder in another case for one owner (the endpoint answers 409 ALREADY_IGNORED)"
     ib_check "ib_ign_list:1:true" "the rule list names the owner (person full name)"
     ib_check "ib_ign_by_id:1:true" "a rule is found by its id with its owner and folder"
+    ib_check "ib_ign_of_owner:1:Ign Dir" "the owner's rules are read for the 'still covered by another rule' answer of a delete"
+    ib_check "ib_ign_of_owner_other:0" "...and another owner's rules are not part of it"
     ib_check "ib_ign_open_owner:true" "the open files of an owner are selected by owner and state only (never gone ones; the rule is applied in JS, not by a SQL prefix)"
     ib_check "ib_ign_open_owner_only:0" "...and an owner with no open files has none"
     ib_check "ib_ign_open_under:3" "the open files under the rule (a, e and sub/b), on whole path parts and ignoring case: not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"

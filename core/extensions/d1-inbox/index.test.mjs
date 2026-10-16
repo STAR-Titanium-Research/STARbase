@@ -235,6 +235,7 @@ function statement(w, sql, b, txId) {
         .sort((x, y) => x.rel_folder.toLowerCase().localeCompare(y.rel_folder.toLowerCase()) || x.ignored_id.localeCompare(y.ignored_id)));
     }
     case 'ignoredById': return copy(w.ignored.filter((r) => r.ignored_id === b[0]));
+    case 'ignoredOfOwner': return w.ignored.filter((r) => sameOwner(r, b)).map((r) => ({ rel_folder: r.rel_folder }));
     case 'ignoredCount': return [{ n: w.ignored.filter((r) => sameOwner(r, b)).length }];
     case 'ignoredFind': return w.skipIgnoredFind ? [] : w.ignored.filter((r) => sameOwner(r, b) && r.rel_folder.toLowerCase() === b[2].toLowerCase()).map((r) => ({ ignored_id: r.ignored_id }));
     case 'ignoredInsert': {
@@ -3208,7 +3209,7 @@ test('DELETE /ignored-folders/:id: removes the rule and RESETS the folder cache 
   const { call } = setup(w);
   const res = await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: r.ignored_id.toUpperCase() } });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
-  assert.deepEqual(res.body, { data: { ignored_id: r.ignored_id, folder: 'World-Ti Paper/Drafts', rescan_queued: true } });
+  assert.deepEqual(res.body, { data: { ignored_id: r.ignored_id, folder: 'World-Ti Paper/Drafts', still_ignored: false, rescan_queued: true } });
   assert.deepEqual(w.ignored.map((x) => x.rel_folder), ['World-Ti Paper/Final']);
   assert.ok(w.ignored.includes(keep));
   assert.equal(w.dirs.length, 7, 'no cache row is deleted: the crawler reaches a folder through its cached parent');
@@ -3224,7 +3225,7 @@ test('DELETE /ignored-folders/:id: removes the rule and RESETS the folder cache 
   assert.equal(w.scanRequests.length, 1);
   assert.deepEqual([w.scanRequests[0].scope, w.scanRequests[0].person_id, w.scanRequests[0].requested_by], ['person', P.alice, U.alice]);
   const names = w.log.filter((l) => l.tx === 1).map((l) => l.name);
-  assert.deepEqual(names, ['setActor', 'ignoredById', 'ignoredDelete', 'ignoredResetDirs'], 'the rule and the cache go in one transaction, the actor first');
+  assert.deepEqual(names, ['setActor', 'ignoredById', 'lock', 'ignoredDelete', 'ignoredOfOwner', 'ignoredResetDirs'], 'the rule and the cache go in one transaction, the actor first, under the owner\'s rule lock');
   assert.deepEqual(w.log.find((l) => l.name === 'ignoredResetDirs').bindings, [P.alice, null, 'Users/ali1/World-Ti Paper/Drafts', 'Users/ali1/World-Ti Paper/Drafts/']);
 });
 
@@ -3250,7 +3251,7 @@ test('DELETE /ignored-folders/:id: the rescan limit never fails the delete: the 
   const { call, errors } = setup(w);
   const res = await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: r.ignored_id } });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.data, { ignored_id: r.ignored_id, folder: 'World-Ti Paper', rescan_queued: false });
+  assert.deepEqual(res.body.data, { ignored_id: r.ignored_id, folder: 'World-Ti Paper', still_ignored: false, rescan_queued: false });
   assert.equal(w.ignored.length, 0);
   assert.equal(w.scanRequests.length, 1, 'no second request was queued');
   assert.deepEqual(errors, []);
@@ -3387,6 +3388,65 @@ test('POST /accept-all with candidate_ids: an undecided file under an ignored fo
   assert.equal(fine.state, 'linked');
   assert.ok(w.log.some((l) => l.name === 'acceptCandidatesForUpdate'));
   assert.equal(w.log.some((l) => l.name === 'candidatesForUpdate'), false, 'accept-all never reads through the unfiltered statement');
+});
+
+test('DELETE /ignored-folders/:id: a rule under another rule of the same owner (A/B while A is ignored): still_ignored true, no cache reset, no rescan; the rule is gone', async () => {
+  const w = newWorld();
+  const above = rule(w, { rel_folder: 'World-Ti Paper' });
+  const below = rule(w, { rel_folder: 'world-ti paper/Drafts/v2' });
+  const dir = (rel_path) => ({ rel_path, owner_person_id: P.alice, owner_team_id: null, dir_mtime: '2026-10-10T00:00:00.000Z', last_listed_at: '2026-10-15T00:00:00.000Z', baselined_at: null });
+  w.dirs.push(dir('Users/ali1/World-Ti Paper'), dir('Users/ali1/World-Ti Paper/Drafts/v2'));
+  const { call } = setup(w);
+  const res = await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: below.ignored_id } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { ignored_id: below.ignored_id, folder: 'world-ti paper/Drafts/v2', still_ignored: true, rescan_queued: false } });
+  assert.deepEqual(w.ignored, [above], 'only the removed rule is gone');
+  assert.equal(w.log.some((l) => l.name === 'ignoredResetDirs'), false, 'the cache of a folder that stays ignored is not reset');
+  assert.deepEqual(w.dirs.map((d) => [d.dir_mtime, d.last_listed_at]), [['2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z'], ['2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z']]);
+  assert.equal(w.scanRequests.length, 0, 'and no rescan is queued');
+  assert.equal(w.log.some((l) => l.name === 'rescanInsert' || l.name === 'rescanBlocking'), false, 'nothing is even asked of the rescan queue');
+  // removing the rule above afterwards: nothing covers the folder any more
+  const last = await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: above.ignored_id } });
+  assert.deepEqual(last.body.data, { ignored_id: above.ignored_id, folder: 'World-Ti Paper', still_ignored: false, rescan_queued: true });
+  assert.deepEqual(w.dirs.map((d) => d.last_listed_at), [null, null], 'the folder and everything below it is listed again by the next scan');
+});
+
+test('DELETE /ignored-folders/:id: a rule beside, above or in another owner\'s tree does not count as covering; whole path parts only; a team rule is judged against the team\'s rules', async () => {
+  const w = newWorld();
+  rule(w, { rel_folder: 'World-Ti Paper 2' });
+  rule(w, { rel_folder: 'World-Ti Paper/Drafts/deeper' });
+  rule(w, { owner_person_id: P.bob, rel_folder: 'World-Ti Paper' });
+  rule(w, { owner_person_id: null, owner_team_id: TEAM, rel_folder: 'World-Ti Paper' });
+  const target = rule(w, { rel_folder: 'World-Ti Paper/Drafts' });
+  const { call } = setup(w);
+  const res = await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: target.ignored_id } });
+  assert.deepEqual(res.body.data, { ignored_id: target.ignored_id, folder: 'World-Ti Paper/Drafts', still_ignored: false, rescan_queued: true },
+    'a sibling that shares a prefix, a rule BELOW it, and the same folder in another owner\'s rules do not cover it');
+  // the team's own rule under the team's other rule
+  const teamBelow = rule(w, { owner_person_id: null, owner_team_id: TEAM, rel_folder: 'world-ti paper/x' });
+  w.scanRequests.length = 0;
+  const team = await call('DELETE /ignored-folders/:id', { user: U.bob, params: { id: teamBelow.ignored_id } });
+  assert.deepEqual([team.body.data.still_ignored, team.body.data.rescan_queued], [true, false]);
+});
+
+test('DELETE /ignored-folders/:id: two removals of A and of A/B at once cannot both decide "still ignored": they take the owner\'s rule lock, so the second sees the first\'s delete', async () => {
+  const w = newWorld();
+  const a = rule(w, { rel_folder: 'A' });
+  const b = rule(w, { rel_folder: 'A/B' });
+  w.dirs.push({ rel_path: 'Users/ali1/A/B', owner_person_id: P.alice, owner_team_id: null, dir_mtime: 'x', last_listed_at: 'y', baselined_at: null });
+  const { call } = setup(w);
+  const [one, two] = await Promise.all([
+    call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: a.ignored_id } }),
+    call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: b.ignored_id } }),
+  ]);
+  assert.deepEqual([one.statusCode, two.statusCode], [200, 200]);
+  assert.equal(w.ignored.length, 0);
+  assert.deepEqual([one.body.data.still_ignored, two.body.data.still_ignored].filter(Boolean).length <= 1, true, 'at most one of the two saw the other\'s rule');
+  assert.equal(two.body.data.still_ignored, false, 'the second removal sees no rule left above the folder');
+  assert.equal(w.dirs[0].last_listed_at, null, 'so the folder\'s cache was reset by one of them');
+  const locks = w.log.filter((x) => x.name === 'lock' && String(x.bindings[0]).startsWith('inbox-ignore:'));
+  assert.deepEqual(locks.map((l) => l.bindings), [[`inbox-ignore:${P.alice}`], [`inbox-ignore:${P.alice}`]], 'each removal locks the owner\'s rules before it deletes and reads (the fake serialises whole transactions; the real guarantee is this lock)');
+  for (const l of locks) assert.ok(w.log.findIndex((x) => x === l) < w.log.findIndex((x) => x.tx === l.tx && x.name === 'ignoredDelete'), 'the lock comes first');
 });
 
 // ---- wiring ------------------------------------------------------------------------------------------------------------------

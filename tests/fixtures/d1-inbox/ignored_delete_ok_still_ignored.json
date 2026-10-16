@@ -1,0 +1,16 @@
+{
+  "description": "a rule removed that sits under another rule of the same owner (World-Ti Paper/Drafts while World-Ti Paper is ignored): still_ignored is true, the folder stays unscanned, so no cache reset and no rescan (rescan_queued false)",
+  "request": {
+    "method": "DELETE",
+    "path": "/d1-inbox/ignored-folders/00000000-0000-4000-8000-000000009401"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "ignored_id": "00000000-0000-4000-8000-000000009401",
+      "folder": "World-Ti Paper/Drafts",
+      "still_ignored": true,
+      "rescan_queued": false
+    }
+  }
+}
