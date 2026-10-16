@@ -50,7 +50,7 @@ Time to the first hit (first group answering) must be no worse than today; the s
 - **A file's detail is its MIME type, not its owner:** `directus_files.owner_person_id` has a foreign key but no `directus_relations` row, so `owner_person_id.full_name` is not a field `/files` can read (the request would be refused).
 - **"More in <Page>…" is suppressed** for a multi-word query and for a group whose lost hits were pass 2 only: the Explorer search is one `_icontains` on the page's code and name fields and would find nothing. It is kept (alone) for a group the 12-row cap emptied, when its lost hits were pass 1.
 - **Form record pickers inherit multi-word matching** through `sourceParams` (it is the picker's query for the collections the finder knows). Materials and files are `finderOnly`, so the pickers keep their own template for them.
-- **Files are asked only when a word has 3 characters or more**, and migration 201 adds trigram indexes on `lower(filename_download)` and `lower(title)` (the form Directus builds for `_icontains`).
+- **Files are asked only when a word has 3 characters or more**, and migration 202 adds trigram indexes on `lower(filename_download)` and `lower(title)` (the form Directus builds for `_icontains`).
 - **Directus-special words:** `true`, `false` and `null` are sent capitalised and a leading `$` is dropped (Directus would otherwise turn them into a boolean, null or a variable and break the whole request); a word is cut at 100 characters. This changes the single-word filter only for words that were already broken.
 
 ## PR 2: preview pane (on top of PR 1)

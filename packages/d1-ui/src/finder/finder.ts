@@ -199,7 +199,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		collection: 'directus_files',
 		path: '/files',
 		finderOnly: true,
-		// migration 201: trigram indexes on lower(filename_download) and lower(title), which a word under 3 characters cannot use (it would scan every file).
+		// migration 202: trigram indexes on lower(filename_download) and lower(title), which a word under 3 characters cannot use (it would scan every file).
 		minWord: 3,
 		fields: ['id', 'filename_download', 'title', 'type'],
 		match: ['filename_download', 'title'],

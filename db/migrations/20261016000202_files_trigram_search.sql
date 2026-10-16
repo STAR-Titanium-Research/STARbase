@@ -22,8 +22,8 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS directus_files_filename_download_lower_trgm ON directus_files USING gin (lower(filename_download) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS directus_files_title_lower_trgm ON directus_files USING gin (lower(title) gin_trgm_ops);
 
-COMMENT ON INDEX directus_files_filename_download_lower_trgm IS 'Trigram index on lower(filename_download), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 201.';
-COMMENT ON INDEX directus_files_title_lower_trgm IS 'Trigram index on lower(title), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 201.';
+COMMENT ON INDEX directus_files_filename_download_lower_trgm IS 'Trigram index on lower(filename_download), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 202.';
+COMMENT ON INDEX directus_files_title_lower_trgm IS 'Trigram index on lower(title), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 202.';
 
 ANALYZE directus_files;
 
