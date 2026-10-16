@@ -25,6 +25,15 @@
 //                                      once it is linked when the original belongs to someone else. A record is named (suggestion, matches, linked record) only
 //                                      to a caller who can READ it. meta.acceptable (null unless the query has acceptable=1: it reads
 //                                      candidates and checks edit rights) = how many rows Accept all would link for the same filter.
+//                                      FoundFile.has_thumbnail (boolean, additive): true when the crawler stored thumbnails for the file (kinds image and
+//                                      sem_image only). The bytes are never part of the list.
+//   GET  /d1-inbox/files/:candidate_id/thumb | /preview
+//                                   -> the stored picture itself, NOT a { data } envelope: 200 image/jpeg (thumb about 320 px, preview about 1600 px: a reduced
+//                                      copy, never the original) with Cache-Control: private, max-age=3600 and a strong ETag (md5 of the bytes); 304 with no body
+//                                      when If-None-Match matches. Visible to exactly who sees the file in the list (canSee: the owner person's login, an
+//                                      active member of the owner team, administrators); 404 NOT_FOUND (the usual Directus-shaped JSON error) when the id is
+//                                      not a uuid, the candidate does not exist, is gone or is not the caller's to see, or has no picture: the same answer for
+//                                      all four, so no id is confirmed. Read-only: allowed to a Lab Viewer.
 //   POST /d1-inbox/link             { items: [{ candidate_id, collection, record_id } | <a surface scan>] }  (1 to 200, one transaction)
 //                                   -> { data: { link_batch_id, linked: <count of newly linked>, items: [{ candidate_id, collection, record_id,
 //                                                junction_id, adopted, already_linked? }] } }   link_batch_id is null and linked 0 when every item
@@ -67,7 +76,8 @@
 // Errors have the Directus shape { errors: [{ message, extensions: { code, source: 'd1-inbox', ... } }] }: 401 no user, 403 not allowed,
 // 404 unknown (or not yours to see), 409 refused state, 400 bad input, 429 rate limit.
 //
-// Visibility of a candidate: its owner person's login, any ACTIVE member (people.active) of its owner team, administrators (all).
+// Visibility of a candidate: its owner person's login, any ACTIVE member (people.active) of its owner team, administrators (all). One predicate, canSee,
+// serves the list and the picture routes.
 //
 // How a request runs (the d1-build / d1-record-access pattern):
 //   * Every write transaction starts with set_config('d1.actor_identity', <user id>, true), so the audit trigger names the person.
@@ -192,6 +202,9 @@ const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_i
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
   + ' c.link_batch_id, c.adopted_at, c.auto_undone_at';
 const IDS = "string_to_array(?, ',')::uuid[]";
+// The two pictures the crawler stores per image candidate: the route's last segment -> the column of d1_private.file_thumbnails.
+const PICTURES = { thumb: 'thumb', preview: 'preview' };
+const PICTURE_CACHE_CONTROL = 'private, max-age=3600';
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
 // lists once the original is LINKED, or DISMISSED BY THE SAME OWNER (the same person or team). Another owner dismissing their file must not hide yours: a
@@ -306,6 +319,13 @@ export const SQL = {
   // Which of the files already have a surface scan (any insert or edge). Binding: the file ids as one csv. Only asked where the table exists.
   scansOfFiles: `SELECT DISTINCT directus_files_id FROM surface_scans WHERE directus_files_id = ANY(${IDS})`,
   scanById: 'SELECT scan_id AS id, insert_id, edge_id, directus_files_id FROM surface_scans WHERE scan_id = ?',
+  // The picture routes. Step 1 (cheap, no bytes): who owns the candidate and does a picture pair exist, with the md5 of the chosen picture as its ETag. The
+  // owner columns go through canSee, the list's own predicate. Step 2 (only when the caller may see it and the ETag is not already theirs): the bytes.
+  // The column is chosen from the closed PICTURES map below, never from the request.
+  thumbMeta: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind,
+    `SELECT c.owner_person_id, c.owner_team_id, c.state, md5(t.${column}) AS etag FROM d1_private.file_candidates c`
+    + ' JOIN d1_private.file_thumbnails t ON t.candidate_id = c.candidate_id WHERE c.candidate_id = ?'])),
+  thumbBytes: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind, `SELECT t.${column} AS bytes FROM d1_private.file_thumbnails t WHERE t.candidate_id = ?`])),
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
   junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
@@ -335,6 +355,13 @@ export function canSee(scope, candidate) {
   return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
 }
 
+// Does an If-None-Match header name this strong ETag (a quoted string)? A list of tags, a weak tag (W/"...": the comparison ignores the weakness) and * count.
+export function etagMatches(header, etag) {
+  if (typeof header !== 'string' || header.trim() === '') return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').some((t) => t.trim().replace(/^W\//, '') === etag);
+}
+
 // The refusals the client acts on (each is a Directus-shaped error, see shapeError). The routes throw these, and the contract fixtures write them.
 const rateLimited = (wait) => new HttpError(429, 'RATE_LIMITED', 'Your folder was scanned or queued a moment ago. Try again in a few minutes.', { retry_after_seconds: wait });
 export const ERRORS = {
@@ -352,6 +379,8 @@ export const ERRORS = {
     new HttpError(404, 'NOT_FOUND', `That ${what} does not exist or you cannot see it.`, { candidate_id: candidateId, collection: SURFACE_SCANS, record_id: id }),
   scanUndoDenied: (candidateId) =>
     new HttpError(403, 'FORBIDDEN', 'You can no longer delete that surface scan, so adding it cannot be undone.', { candidate_id: candidateId }),
+  // The picture routes answer this for every reason alike (not a uuid, no such file, gone, not the caller's, no picture), so no id is confirmed.
+  noPicture: () => new HttpError(404, 'NOT_FOUND', 'There is no picture for that file.'),
   notInInbox: (candidateId) => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: candidateId }),
   noFolder: () => new HttpError(409, 'NO_FOLDER', 'There is no folder to scan yet. Ask an administrator to set your uni alias.'),
   alreadyQueued: (requestId) => new HttpError(409, 'ALREADY_QUEUED', 'A scan of everyone is already waiting or running.', { request_id: requestId }),
@@ -473,7 +502,8 @@ const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_down
   + ' c.rel_path, c.size_bytes, c.source_mtime, c.first_seen_at, c.decided_at, c.link_kind, c.linked_collection, c.link_batch_id,'
   + " coalesce(sj.sample_id, oj.operation_id, tj.session_id, CASE WHEN c.linked_collection = 'surface_scans' THEN c.linked_junction_id END) AS linked_record_id,"
   + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
-  + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at';
+  + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at,'
+  + ' EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id) AS has_thumbnail';
 const LIST_FROM = ' FROM d1_private.file_candidates c'
   + ' LEFT JOIN directus_files f ON f.id = c.directus_files_id'
   + ' LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
@@ -608,6 +638,7 @@ export function fileOut(row, info) {
       ? { kind: 'person', id: row.owner_person_id, name: row.owner_name ?? '' }
       : { kind: 'team', id: row.owner_team_id, name: row.owner_name ?? '' },
     adopted: row.adopted_at !== null && row.adopted_at !== undefined,
+    has_thumbnail: row.has_thumbnail === true,
   };
   // A row added as a surface scan also says which insert or edge it went to (the client links to that page).
   if (linked && row.linked_collection === SURFACE_SCANS) {
@@ -1271,6 +1302,35 @@ export function mount(router, context, deps = {}) {
     // `viewer` is who is asking, for the one thing a row names by folder: whose Inbox holds the original of a copy (duplicateOwnerOut)
     res.json(shapeFiles(rows, { ...info, viewer: scope }, { total: count, limit: f.limit, offset: f.offset, acceptable }));
   }));
+
+  // -- the pictures -------------------------------------------------------------------------------------------------------------
+
+  // GET /files/:candidate_id/thumb | /preview: the stored JPEG itself, never a { data } envelope (so no res.json on success). Visible to exactly who sees the
+  // file in the list: the owner columns go through canSee, the one visibility predicate (an administrator sees all, as there). Every reason to refuse is the
+  // same 404. The ETag is the md5 of the stored bytes (the database computes it, so a 304 never moves the bytes); the bytes are read only when needed.
+  const pictureRoute = (kind) => route(async ({ req, res, acc }) => {
+    const id = isUuid(req.params?.candidate_id) ? req.params.candidate_id.toLowerCase() : null;
+    if (id === null) throw ERRORS.noPicture();
+    const scope = await scopeOf(acc);
+    const [meta] = rowsOf(await database.raw(SQL.thumbMeta[kind], [id]));
+    if (!meta || meta.state === 'gone' || !canSee(scope, meta)) throw ERRORS.noPicture();
+    const etag = `"${meta.etag}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', PICTURE_CACHE_CONTROL);
+    if (etagMatches(req.headers?.['if-none-match'], etag)) {
+      res.status(304).end();
+      return;
+    }
+    const [row] = rowsOf(await database.raw(SQL.thumbBytes[kind], [id]));
+    if (!row || !Buffer.isBuffer(row.bytes) || row.bytes.length === 0) throw ERRORS.noPicture();
+    res.status(200);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Length', String(row.bytes.length));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(row.bytes);
+  });
+  router.get('/files/:candidate_id/thumb', pictureRoute('thumb'));
+  router.get('/files/:candidate_id/preview', pictureRoute('preview'));
 
   // -- rescan, prefs ----------------------------------------------------------------------------------------------------------
 
