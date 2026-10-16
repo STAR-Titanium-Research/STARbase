@@ -60,6 +60,8 @@ interface Part {
 	total: number;
 	acceptable: number | null;
 }
+/** The server stops counting what Accept all would link at about this many: from here the number on the button is a floor, so it is not shown. */
+const ACCEPT_COUNT_CAP = 500;
 const empty = (): Part => ({ rows: [], total: 0, acceptable: null });
 
 export function createInbox(deps: InboxDeps) {
@@ -84,6 +86,10 @@ export function createInbox(deps: InboxDeps) {
 	/** The Undo that is running (a batch id): a second click on any Undo waits for it. */
 	const undoing = ref<string | null>(null);
 
+	/** How many files Accept all would link under the whole filter (the server's count, asked apart so the rows are not kept waiting); null until known. */
+	const acceptCount = ref<number | null>(null);
+	const countGate = useRequestGate();
+
 	const isBusy = (id: string) => busy.value.includes(id);
 	const say = (n: Notice | null) => (notice.value = n);
 	const message = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
@@ -96,16 +102,13 @@ export function createInbox(deps: InboxDeps) {
 			return;
 		}
 		const token = mainGate.begin();
-		// The first page also asks the server how many files Accept all would link (meta.acceptable), so the button says the truth for the
-		// whole filter and not just for the rows on screen. Later pages keep that number.
-		const asksCount = !append && (deps.getFilters().tab === 'new' || deps.getFilters().tab === 'older');
-		const query: FilesQuery = { ...plan.main, offset: append ? main.value.rows.length : 0, ...(asksCount ? { acceptable: 1 } : {}) };
+		const query: FilesQuery = { ...plan.main, offset: append ? main.value.rows.length : 0 };
 		if (append) moreLoading.value = true;
 		else loading.value = main.value.rows.length === 0;
 		try {
 			const page = await loadFiles(api, query);
 			if (!mainGate.isCurrent(token)) return;
-			main.value = { rows: append ? [...main.value.rows, ...page.rows] : page.rows, total: page.total, acceptable: append ? main.value.acceptable : page.acceptable };
+			main.value = { rows: append ? [...main.value.rows, ...page.rows] : page.rows, total: page.total, acceptable: page.acceptable };
 			error.value = '';
 		} catch (e) {
 			if (!mainGate.isCurrent(token)) return;
@@ -134,7 +137,7 @@ export function createInbox(deps: InboxDeps) {
 		try {
 			const page = await loadFiles(api, query);
 			if (!otherGate.isCurrent(token)) return;
-			other.value = { rows: full ? (append ? [...other.value.rows, ...page.rows] : page.rows) : [], total: page.total, acceptable: append ? main.value.acceptable : page.acceptable };
+			other.value = { rows: full ? (append ? [...other.value.rows, ...page.rows] : page.rows) : [], total: page.total, acceptable: page.acceptable };
 			otherFull.value = full;
 			otherError.value = '';
 		} catch (e) {
@@ -146,10 +149,26 @@ export function createInbox(deps: InboxDeps) {
 	}
 
 	/** (Re)load both lists for the current filters. */
+	async function loadAcceptCount(): Promise<void> {
+		const filters = deps.getFilters();
+		const token = countGate.begin();
+		if (filters.tab !== 'new' && filters.tab !== 'older') {
+			acceptCount.value = null;
+			return;
+		}
+		try {
+			const page = await loadFiles(api, { ...acceptFilter(filters), tab: filters.tab, limit: 1, offset: 0, acceptable: 1 });
+			if (countGate.isCurrent(token)) acceptCount.value = page.acceptable;
+		} catch {
+			// no count: the button falls back to the rows on screen
+			if (countGate.isCurrent(token)) acceptCount.value = null;
+		}
+	}
+
 	async function load(): Promise<void> {
 		otherOpen.value = listPlan(deps.getFilters()).openOther;
 		otherFull.value = false;
-		await Promise.all([loadMain(), loadOther()]);
+		await Promise.all([loadMain(), loadOther(), loadAcceptCount()]);
 	}
 
 	async function toggleOther(open: boolean): Promise<void> {
@@ -162,6 +181,10 @@ export function createInbox(deps: InboxDeps) {
 
 	function drop(ids: string[]): void {
 		const gone = new Set(ids);
+		if (acceptCount.value !== null) {
+			const left = [...main.value.rows, ...other.value.rows].filter((f) => gone.has(f.candidate_id) && isAcceptable(f)).length;
+			acceptCount.value = Math.max(0, acceptCount.value - left);
+		}
 		for (const part of [main, other]) {
 			const before = part.value.rows.length;
 			part.value = { ...part.value, rows: part.value.rows.filter((f) => !gone.has(f.candidate_id)) };
@@ -276,8 +299,8 @@ export function createInbox(deps: InboxDeps) {
 		// a collapsed Other files section holds no rows at all: its documents may be accepted too, so the count is not the whole until it is opened
 		const otherAll = !plan.other || other.value.total === 0 || (otherFull.value && other.value.rows.length >= other.value.total);
 		const shown = acceptPreview([...main.value.rows, ...other.value.rows], mainAll && otherAll);
-		// the server's count covers the whole filter: when it is known it is the count, whatever page is on screen
-		return main.value.acceptable === null ? shown : { ...shown, count: main.value.acceptable, exact: true };
+		// the server's count for the same filter Accept all uses (images and documents alike) is the count, when it is known and under the cap
+		return acceptCount.value === null ? shown : { ...shown, count: acceptCount.value, exact: acceptCount.value < ACCEPT_COUNT_CAP };
 	});
 	/** A list is still loading or growing: its count would be stale, so Accept all waits for it. */
 	const listBusy = computed(() => loading.value || otherLoading.value || moreLoading.value);
@@ -395,7 +418,7 @@ export function createInbox(deps: InboxDeps) {
 
 	return {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
-		preview, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
+		preview, acceptCount, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
 		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
 		dismissNotice: () => say(null),
 		cancel: () => {

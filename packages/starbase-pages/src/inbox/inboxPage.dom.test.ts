@@ -207,7 +207,7 @@ describe('the Inbox page', () => {
 	it('with no file naming a record, Accept all is replaced by a note that says why, and Link to… stays', async () => {
 		await mount(defaultFiles().filter((f) => f.match_strength !== 'short_id'));
 		expect(document.querySelector('[data-test="accept-all"]')).toBeNull();
-		expect(document.querySelector('[data-test="accept-none"]')?.textContent).toContain('Nothing to accept in bulk');
+		expect(document.querySelector('[data-test="accept-none"]')?.textContent).toContain('None of these files can be linked in bulk');
 		expect(rows().length).toBeGreaterThan(0);
 	});
 

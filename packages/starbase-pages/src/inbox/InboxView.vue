@@ -132,7 +132,7 @@ async function addScan(form: ScanAddForm) {
 // ---- Accept all: its confirm opens on a dry run ----
 const acceptable = computed(() => (tab.value === 'new' || tab.value === 'older'));
 // The server has said that no file under this filter qualifies: the button would only open a confirm for zero files, so say why instead.
-const nothingToAccept = computed(() => acceptable.value && !loading.value && preview.value.exact && preview.value.count === 0 && main.value.acceptable === 0);
+const nothingToAccept = computed(() => acceptable.value && !loading.value && inbox.acceptCount.value === 0);
 async function accept() {
 	const r = await inbox.confirmAccept();
 	if (r.ok) (region.value as HTMLElement | null)?.focus();
@@ -157,7 +157,7 @@ async function accept() {
 
 		<div v-if="acceptable" class="accept">
 			<template v-if="nothingToAccept">
-				<span class="hint" data-test="accept-none">Nothing to accept in bulk: no file here has the exact short ID of a record you can edit in its name or folder. Use “Link to…” on a file to link it yourself.</span>
+				<span class="hint" data-test="accept-none">None of these files can be linked in bulk. Use “Link to…” on a file to link it yourself.</span>
 			</template>
 			<template v-else>
 				<v-button small :disabled="!canAcceptAll" data-test="accept-all" @click="inbox.openAccept()">{{ acceptButtonText(preview) }}</v-button>

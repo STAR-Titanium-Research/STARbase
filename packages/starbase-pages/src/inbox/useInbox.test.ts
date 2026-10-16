@@ -141,29 +141,39 @@ describe('Accept all (a dry run first, then Confirm)', () => {
 		await loadingNow;
 		expect(inbox.preview.value).toMatchObject({ count: 2, exact: true });
 		expect(inbox.canAcceptAll.value).toBe(true);
-		// the first page of the list asks the server for its acceptable count, and the preview then holds that number for the whole filter
-		expect(fake.calls.find((c) => c.path === '/d1-inbox/files')?.params).toMatchObject({ acceptable: 1 });
-		expect(inbox.main.value.acceptable).toBe(2);
+		// the count comes from its own request for the filter Accept all uses (every kind), not from the rows' list request
+		const asks = fake.calls.filter((c) => c.path === '/d1-inbox/files' && (c.params as { acceptable?: number }).acceptable === 1);
+		expect(asks).toHaveLength(1);
+		expect(asks[0].params).toMatchObject({ limit: 1, strength: 'short_id' });
+		expect(asks[0].params).not.toHaveProperty('kind');
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/files' && 'acceptable' in (c.params ?? {})).length).toBe(1);
+		expect(inbox.acceptCount.value).toBe(2);
 	});
 
 	it('when the server counts none, Accept all has nothing to do: the button is off and the count is known', async () => {
 		const { inbox } = setup([foundFile(), foundFile({ rel_path: 'Users/abc12de/b.png' })]);
 		await inbox.load();
-		expect(inbox.main.value.acceptable).toBe(0);
+		expect(inbox.acceptCount.value).toBe(0);
 		expect(inbox.preview.value).toMatchObject({ count: 0, exact: true });
 		expect(inbox.canAcceptAll.value).toBe(false);
 	});
 
-	it('a later page keeps the count the first page brought, and asks for none of its own', async () => {
-		const many = Array.from({ length: 60 }, (_, i) => foundFile({ candidate_id: `c${i}`, rel_path: `Users/abc12de/f${i}.png` }));
-		const { inbox, fake } = setup([exactMatch(), ...many]);
+	it('an exact-ID document under Other files still counts (kind Any: the images list alone would say none)', async () => {
+		const doc = exactMatch({ kind: 'document', mime_type: 'application/pdf', rel_path: 'Users/abc12de/notes_3fa9c1d2.pdf' });
+		const { inbox } = setup([doc]);
 		await inbox.load();
-		const first = inbox.main.value.acceptable;
-		expect(first).toBe(1);
-		await inbox.loadMoreMain();
-		expect(inbox.main.value.acceptable).toBe(first);
-		const paged = fake.calls.filter((c) => c.path === '/d1-inbox/files' && (c.params as { offset?: number }).offset);
-		expect(paged.every((c) => !('acceptable' in (c.params ?? {})))).toBe(true);
+		expect(inbox.other.value.total).toBe(1);
+		expect(inbox.acceptCount.value).toBe(1);
+		expect(inbox.canAcceptAll.value).toBe(true);
+	});
+
+	it('linking or dismissing one of the counted files lowers the count by one', async () => {
+		const { inbox } = setup(exactFiles());
+		await inbox.load();
+		expect(inbox.acceptCount.value).toBe(2);
+		const file = inbox.main.value.rows.find((f) => f.match_strength === 'short_id')!;
+		await inbox.dismiss(file);
+		expect(inbox.acceptCount.value).toBe(1);
 	});
 
 	it('opening it asks the server for a dry run, changes nothing, and Confirm links exactly the files it listed', async () => {

@@ -2,7 +2,7 @@
 // what the model, API and page tests (and the Playwright spec's stand-in server) run against.
 //
 // The shapes are d1-inbox's own, as built (core/extensions/d1-inbox/index.js, stream B): every answer is `{ data: ... }`; a list also has
-// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1, which the page never does); `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
+// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1: the page asks once per filter, with limit 1); `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
 // cannot edit (403 FORBIDDEN) and a file someone else linked (409 ALREADY_LINKED); `accept-all` answers `{ link_batch_id, linked, items, skipped,
 // has_more }`, its dry run `{ link_batch_id: null, linked: 0, count, acceptable, ids, items: [], skipped, has_more, dry_run: true }`, takes
 // `candidate_ids` (links exactly those), and skips surface scans (SURFACE_SCAN), copies (COPY), records the caller cannot edit (NOT_EDITABLE) and
