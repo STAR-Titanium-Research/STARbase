@@ -8,6 +8,9 @@
 
 import { asRecord } from '@d1/ui';
 
+/** The instrument PC's clock: times are read and shown as UK time. */
+const INSTRUMENT_TZ = 'Europe/London';
+
 export type SemFieldType = 'number' | 'integer' | 'text' | 'time';
 
 export interface SemField {
@@ -97,7 +100,7 @@ export function scaleBarText(um: number): string {
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
-const UK_TIME = new Intl.DateTimeFormat(GB, { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
+const UK_TIME = new Intl.DateTimeFormat(GB, { timeZone: INSTRUMENT_TZ, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
 /** An ISO 8601 instant as UK time with its zone, "2 Mar 2026, 10:15 GMT" (BST in summer). What cannot be read as a date is returned as it was. */
 export function ukTime(iso: string): string {
 	const t = new Date(iso);
@@ -170,7 +173,7 @@ export function settingRows(view: SettingsView, opts: { all?: boolean } = {}): S
 
 // ---- correcting a value ----
 
-const PARTS = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+const PARTS = new Intl.DateTimeFormat('en-GB', { timeZone: INSTRUMENT_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 const ukFields = (ms: number): string => {
 	const p = Object.fromEntries(PARTS.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
 	return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
