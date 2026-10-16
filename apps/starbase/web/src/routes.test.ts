@@ -5,6 +5,8 @@ import {
 	CampaignPage, HomeView, IndexRoute, InboxPage, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, CrawlerPage, RegisterSample, ReportBugPage, SamplePage, TeamPage, TestPage,
 } from '@d1/starbase-pages';
 import AcceptInvite from './pages/AcceptInvite.vue';
+import ForgotPassword from './pages/ForgotPassword.vue';
+import ResetPassword from './pages/ResetPassword.vue';
 import { buildRoutes } from './router';
 import { plotRoutes } from './plot/routes';
 
@@ -45,6 +47,17 @@ describe('STARbase routes', () => {
 		expect(r.matched.at(-1)?.components?.default).toBe(AcceptInvite);
 		expect(r.meta.public).toBe(true);
 		expect(r.matched).toHaveLength(1);
+	});
+	it('/forgot-password and /reset-password resolve to their pages, public and outside the shell', () => {
+		const router = memoryRouter();
+		const forgot = router.resolve('/forgot-password');
+		expect(forgot.matched.at(-1)?.components?.default).toBe(ForgotPassword);
+		const reset = router.resolve('/reset-password?token=abc');
+		expect(reset.matched.at(-1)?.components?.default).toBe(ResetPassword);
+		for (const r of [forgot, reset]) {
+			expect(r.meta.public).toBe(true);
+			expect(r.matched).toHaveLength(1);
+		}
 	});
 	it('an old /home link redirects with its query and encoding', async () => {
 		const router = memoryRouter();

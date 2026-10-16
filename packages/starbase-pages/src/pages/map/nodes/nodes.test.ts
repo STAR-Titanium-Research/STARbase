@@ -229,6 +229,15 @@ describe('RecordNode', () => {
 		expect(ids(html)).toEqual(['s:s1:in:0', 's:s1:out:0']);
 	});
 
+	it('a material card shows its name as the title, with its code on the meta line; without a name, its code', async () => {
+		const mat = (label?: string): RecordData => ({ id: 'm:s1', type: 'record', kind: 'material', ref: { collection: 'materials', id: 'm1', code: 'AA', ...(label ? { label } : {}) }, ins: [], outs: ['m:s1:out:0'] });
+		const named = await render(RecordNode, { id: 'm:s1', data: mat('Ti-6Al-4V Grade 5') });
+		expect(named).toMatch(/<div class="code"[^>]*title="Ti-6Al-4V Grade 5"[^>]*>Ti-6Al-4V Grade 5<\/div>/);
+		expect(text(named)).toContain('AA');
+		const bare = await render(RecordNode, { id: 'm:s1', data: mat() });
+		expect(bare).toMatch(/<div class="code"[^>]*>AA<\/div>/);
+	});
+
 	it('marks the selected card focal', async () => {
 		expect(await render(RecordNode, { id: sample.id, data: sample, selected: true })).toMatch(/class="[^"]*\bfocal\b/);
 		expect(await render(RecordNode, { id: sample.id, data: sample })).not.toMatch(/class="[^"]*\bfocal\b/);

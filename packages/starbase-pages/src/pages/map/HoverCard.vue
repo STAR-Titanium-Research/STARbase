@@ -2,7 +2,9 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { RecordRail, StatusBadge, hasDrawableDims, sampleDims } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
+import type { ElementRow } from '@d1/ui';
 import DataThumb from './DataThumb.vue';
+import MaterialComposition from './MaterialComposition.vue';
 import { placeCard, type Placement } from './model/placeCard';
 import type { DataPreview } from './model/dataPreview';
 import type { RecordInfo } from './model/recordInfo';
@@ -10,10 +12,11 @@ import { KINDS, kindVar, statusKindOf } from './nodes/kinds';
 
 // The hover card (spec D16, §6.6): the rail's identity block, a data thumbnail when the record has
 // data, the facts and counts, and a hint line, raised beside the hovered element inside the canvas. It
-// opens after the page's 250 ms delay (the page mounts it then), goes to the right of the element, flips
+// A material also shows its nominal composition once that has been read (the page reads it on hover).
+// It opens after the page's 250 ms delay (the page mounts it then), goes to the right of the element, flips
 // to its left and then below to stay inside the canvas, and takes no pointer and no focus: it is
 // aria-hidden, the same facts are in the rail when the record is selected.
-const props = defineProps<{ info: RecordInfo; preview?: DataPreview; target: HTMLElement; canvas: HTMLElement }>();
+const props = defineProps<{ info: RecordInfo; preview?: DataPreview; composition?: ElementRow[] | null; target: HTMLElement; canvas: HTMLElement }>();
 
 const style = computed(() => KINDS[props.info.kind]);
 const drawable = computed(() => !!props.info.geometry && hasDrawableDims(props.info.geometry));
@@ -28,7 +31,7 @@ async function place(): Promise<void> {
 	placed.value = placeCard(props.target.getBoundingClientRect(), props.canvas.getBoundingClientRect(), { width: el.offsetWidth, height: el.offsetHeight });
 }
 onMounted(place);
-watch(() => [props.target, props.info.id, props.preview], place);
+watch(() => [props.target, props.info.id, props.preview, props.composition], place);
 </script>
 
 <template>
@@ -47,6 +50,7 @@ watch(() => [props.target, props.info.id, props.preview], place);
 				<DataThumb :preview="preview" />
 			</template>
 			<template #after-facts>
+				<MaterialComposition v-if="info.kind === 'material'" :elements="composition" class="comp" />
 				<div v-if="info.counts.length" class="counts">
 					<span v-for="c in info.counts" :key="c.label"><b>{{ c.value }}</b> {{ c.label }}</span>
 				</div>
@@ -76,6 +80,7 @@ watch(() => [props.target, props.info.id, props.preview], place);
 }
 /* Most of the card's width, so the shape and its dimensions read at a glance (labels sized for ~200px). */
 .geo { width: 100%; max-width: 220px; margin: 0 auto 6px; }
+.comp { margin-bottom: 8px; }
 .counts { display: flex; flex-wrap: wrap; gap: 0 14px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .counts b { font-size: var(--fs-md, 13px); color: var(--theme--foreground); font-variant-numeric: tabular-nums; }
 .hint { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--d1-line); font-size: var(--fs-sm, 12px); color: var(--d1-dim); }

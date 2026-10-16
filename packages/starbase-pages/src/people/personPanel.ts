@@ -44,6 +44,12 @@ export function loginLine(row: PeopleRow, viewer: Viewer): LoginLine {
 	}
 }
 
+/**
+ * "Send reset email": any administrator, for a login that is Active (an invited one has no password yet, a suspended one cannot sign in).
+ * Never for a read-only viewer or a member.
+ */
+export const canSendReset = (row: PeopleRow, viewer: Viewer): boolean => viewer.admin && !viewer.readOnly && !!row.user_id && row.login?.status === 'active';
+
 /** The Role select is enabled only for an account administrator, and only when there is a login to give a role to. Never for a read-only viewer. */
 export const canEditRole = (row: PeopleRow, viewer: Viewer): boolean => viewer.accounts && !viewer.readOnly && !!row.login && !!row.user_id;
 

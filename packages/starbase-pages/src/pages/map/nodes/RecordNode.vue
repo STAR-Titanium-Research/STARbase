@@ -19,7 +19,7 @@ const style = computed(() => KINDS[props.data.kind]);
 // Stock flows (lots, powder batches, material) wire in the material colour, samples in the sample colour.
 const flow = computed(() => (['stock_lot', 'powder_batch', 'material'].includes(props.data.kind) ? 'var(--k-material)' : 'var(--k-sample)'));
 const open = useExpanded(() => props.id);
-// A tool or a campaign is named by its name; its code moves to the meta line.
+// A tool, a campaign or a material is named by its name (the full name in the title when the card clips it); its code moves to the meta line.
 const name = computed(() => slotText(props.data.ref));
 const meta = computed(() => (name.value !== props.data.ref.code ? [props.data.ref.code, props.data.meta].filter(Boolean).join(' · ') : props.data.meta));
 const card = cardHandlers(actions, () => props.id, () => open.value);
@@ -54,7 +54,7 @@ const hiddenSides = useHiddenSides(() => props.id);
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 				<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
-			<div class="code">{{ name }}</div>
+			<div class="code" :title="name">{{ name }}</div>
 			<div v-if="data.kind === 'sample' && data.ref.label" class="nick" :title="data.ref.label">{{ data.ref.label }}</div>
 			<div v-if="meta" class="meta">{{ meta }}</div>
 		</div>

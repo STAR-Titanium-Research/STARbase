@@ -242,6 +242,48 @@ describe('HoverCard', () => {
   });
 });
 
+describe('HoverCard, a material', () => {
+  const target = { isConnected: true, getBoundingClientRect: () => ({ left: 0, top: 0, right: 10, bottom: 10, width: 10, height: 10 }) } as unknown as HTMLElement;
+  const mdata = mkData({ samples: [mkSample('p', { materialRef: { collection: 'materials', id: 'm1', code: 'AA', label: 'Ti-6Al-4V Grade 5' } })] });
+  const mgraph = buildGraph(mdata, groupsOf(mdata), { slots: () => [] });
+  const minfo = recordInfo(mdata, mgraph, 'm:p')!;
+  const elements = [{ symbol: 'Ti', weight_percent: 89.5 }, { symbol: 'Al', weight_percent: 6 }, { symbol: 'V', weight_percent: 4 }];
+
+  it('with elements: the full name, the nominal composition as a list and the composition bar', async () => {
+    for (const component of [HoverCard, MapRail]) {
+      const html = await render(component, component === HoverCard ? { info: minfo, composition: elements, target, canvas: target } : railProps({ info: minfo, connections: {}, composition: elements }));
+      expect(text(html)).toContain('Ti-6Al-4V Grade 5');
+      expect(text(html)).toMatch(/nominal/i);
+      expect(html).toContain('d1-composition');
+      expect(html).toContain('role="img"');
+      expect(text(html)).toMatch(/Ti(?:\s|&nbsp;)+89\.5 wt%/);
+      expect(text(html)).toMatch(/Al(?:\s|&nbsp;)+6\.0 wt%/);
+    }
+  });
+
+  it('without a composition (none yet, none recorded, or refused): the name only, no plot', async () => {
+    for (const composition of [undefined, null, []]) {
+      const html = await render(HoverCard, { info: minfo, composition, target, canvas: target });
+      expect(text(html)).toContain('Ti-6Al-4V Grade 5');
+      expect(html).not.toContain('d1-composition');
+      expect(text(html)).not.toMatch(/nominal/i);
+    }
+  });
+
+  it('elements with no weight are named in a caption under the bar, not drawn in it', async () => {
+    const html = await render(HoverCard, { info: minfo, composition: [...elements, { symbol: 'Si', weight_percent: null }, { symbol: 'Mn' }], target, canvas: target });
+    expect(html).toContain('d1-composition');
+    expect(text(html)).toContain('Also: Si, Mn (no wt%)');
+    const all = await render(HoverCard, { info: minfo, composition: elements, target, canvas: target });
+    expect(text(all)).not.toContain('Also:');
+  });
+
+  it('a record that is not a material shows no composition, whatever it is given', async () => {
+    const html = await render(HoverCard, { info: info('s:p'), composition: elements, target, canvas: target });
+    expect(html).not.toContain('d1-composition');
+  });
+});
+
 describe('DataThumb', () => {
   it('a force figure is a small asset image, never a data file', async () => {
     const html = await render(DataThumb, { preview: { kind: 'force', imageFileId: 'fz1', plotterPath: '/d1-force-dashboard?operation=o1' }, link: true });
