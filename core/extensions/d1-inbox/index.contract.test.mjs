@@ -38,9 +38,9 @@ test('the fixtures are the cases the client has to handle', () => {
     'link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'files_linked_surface_scan', 'undo_ok_surface_scan',
     'undo_403_surface_scan', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
     'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys', 'picture_headers', 'picture_404',
-    'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
+    'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_get_empty_viewer', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
     'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
-    'ignored_delete_ok_rate_limited', 'ignored_delete_404',
+    'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -130,7 +130,7 @@ test('every answer has the envelope the client reads: { data } with a status, or
     } else {
       assert.ok(fx.body.data !== undefined, `${name} has no data`);
       assert.deepEqual(Object.keys(fx.body).filter((k) => k !== 'data' && k !== 'meta'), [], name);
-      assert.equal('meta' in fx.body, fx.request.path === '/d1-inbox/files', `${name}: only the list carries meta`);
+      assert.equal('meta' in fx.body, fx.request.path === '/d1-inbox/files' || (fx.request.path === '/d1-inbox/ignored-folders' && fx.request.method === 'GET'), `${name}: only the file list and the ignored folders list carry meta`);
     }
   }
   assert.equal(read('rescan_429.json').body.errors[0].extensions.retry_after_seconds, 420);
@@ -235,7 +235,7 @@ test('a surface scan item always carries a condition the person chose: the fixtu
   assert.match(linked.linked_label, /worn/);
 });
 
-test('ignored folders: a rule is { ignored_id, folder, owner: { kind, id, name }, created_at, can_remove }; adding answers the rule and what was dismissed; removing says whether a rescan was queued', () => {
+test('ignored folders: the list is { data: [{ ignored_id, folder, owner: { kind, id, name }, created_at, can_remove }], meta: { can_change } }; adding answers the rule and what was dismissed; removing says whether a rescan was queued', () => {
   const list = built.get('ignored_get.json').body.data;
   assert.ok(list.some((r) => r.owner.kind === 'team') && list.some((r) => r.owner.kind === 'person'), 'a team rule and a personal rule');
   for (const r of list) {
@@ -248,6 +248,14 @@ test('ignored folders: a rule is { ignored_id, folder, owner: { kind, id, name }
   }
   assert.ok(built.get('ignored_get_viewer.json').body.data.every((r) => r.can_remove === false), 'a Lab Viewer removes nothing');
   assert.deepEqual(built.get('ignored_get_empty.json').body.data, []);
+  // meta.can_change: whether the caller may change rules at all, whatever the number of rules (an empty list has no row to say it)
+  for (const [name, expected] of [['ignored_get', true], ['ignored_get_empty', true], ['ignored_get_viewer', false], ['ignored_get_empty_viewer', false]]) {
+    const { body } = built.get(`${name}.json`);
+    assert.deepEqual(Object.keys(body), ['data', 'meta'], name);
+    assert.deepEqual(body.meta, { can_change: expected }, name);
+    assert.ok(body.data.every((r) => r.can_remove === expected), `${name}: every row repeats it`);
+  }
+  assert.deepEqual(built.get('ignored_get_empty_viewer.json').body.data, []);
   const person = built.get('ignored_post_ok.json');
   assert.equal(person.status, 201);
   assert.deepEqual(Object.keys(person.body.data), ['ignored_id', 'folder', 'team_id', 'dismissed']);
@@ -257,8 +265,14 @@ test('ignored folders: a rule is { ignored_id, folder, owner: { kind, id, name }
   const team = built.get('ignored_post_ok_team.json');
   assert.equal(team.body.data.team_id, team.request.body.team_id);
   const removed = built.get('ignored_delete_ok.json').body.data;
-  assert.deepEqual(Object.keys(removed), ['ignored_id', 'folder', 'rescan_queued']);
+  assert.deepEqual(Object.keys(removed), ['ignored_id', 'folder', 'still_ignored', 'rescan_queued']);
   assert.equal(removed.rescan_queued, true);
+  assert.equal(removed.still_ignored, false);
+  const covered = built.get('ignored_delete_ok_still_ignored.json');
+  assert.equal(covered.status, 200);
+  assert.deepEqual(Object.keys(covered.body.data), ['ignored_id', 'folder', 'still_ignored', 'rescan_queued']);
+  assert.deepEqual([covered.body.data.still_ignored, covered.body.data.rescan_queued], [true, false], 'a folder another rule still covers: no rescan');
+  assert.equal(built.get('ignored_delete_ok_rate_limited.json').body.data.still_ignored, false);
   assert.equal(built.get('ignored_delete_ok_rate_limited.json').status, 200, 'the rescan limit never fails the delete');
   assert.equal(built.get('ignored_delete_ok_rate_limited.json').body.data.rescan_queued, false);
   assert.equal(built.get('ignored_post_409_already_ignored.json').body.errors[0].extensions.code, 'ALREADY_IGNORED');

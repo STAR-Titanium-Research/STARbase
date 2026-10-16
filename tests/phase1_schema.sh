@@ -7007,14 +7007,68 @@ CREATE TEMP TABLE ib_ig_list AS EXECUTE ignoredlist('$IB_P', '');
 SELECT 'ib_ign_list:' || count(*) || ':' || bool_and(owner_name = 'Inbox Person' AND owner_team_id IS NULL) FROM ib_ig_list;
 CREATE TEMP TABLE ib_ig_byid AS EXECUTE ignoredbyid(:'ib_ign_id');
 SELECT 'ib_ign_by_id:' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P') FROM ib_ig_byid;
--- the candidates under the folder: open ones, of this owner, on whole path parts and ignoring case (not 'Ign Dir 2', not a gone file, not another owner's, not 'x/Ign Dir')
-SELECT 'ib_ign_open:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+-- review Minor2: the owner's remaining rules, read after a delete to see whether the removed folder is still covered by a rule above it
+CREATE TEMP TABLE ib_ig_own AS EXECUTE ignoredofowner('$IB_P', NULL);
+SELECT 'ib_ign_of_owner:' || count(*) || ':' || min(rel_folder) FROM ib_ig_own;
+CREATE TEMP TABLE ib_ig_own_other AS EXECUTE ignoredofowner('$IB_Q', NULL);
+SELECT 'ib_ign_of_owner_other:' || count(*) FROM ib_ig_own_other;
+-- the owner's open candidates (review Minor1: by owner only, never gone or another owner's; which of them lie under the rule is decided in JS by isIgnored, so no
+-- lowercasing prefix in SQL can disagree with it). The ids to dismiss are then the ones on whole path parts, ignoring case (a, e and sub/b: not 'Ign Dir 2', not x/Ign Dir).
+SELECT 'ib_ign_open_owner:' || (pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL)', '$IB_P')) = (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$IB_P' AND state = 'new'));
+SELECT 'ib_ign_open_owner_only:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL)', 'a1b00000-0000-4000-8000-0000000000e1'));
 SELECT string_agg(candidate_id::text, ',') AS ib_ign_ids FROM d1_private.file_candidates
  WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/')) \gset
+SELECT 'ib_ign_open_under:' || array_length(string_to_array(:'ib_ign_ids', ','), 1);
 -- the same dismissal statement as POST /dismiss
 SELECT 'ib_ign_dismissed:' || pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_ign_ids'));
 SELECT 'ib_ign_states:' || string_agg(regexp_replace(rel_path, '^Users/ibx1/', '') || '=' || state, ',' ORDER BY rel_path COLLATE "C") FROM d1_private.file_candidates WHERE directus_files_id::text LIKE 'a1b00000-0000-4000-8000-0000000002%';
-SELECT 'ib_ign_open_after:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+SELECT 'ib_ign_open_after:' || count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/'));
+-- Review M1: files the crawler registered AFTER the rule was added (it loads the rules once per scan) stay open under the folder. The list, its count, the summary,
+-- accept-all's selection and its candidate reads leave an undecided row under a rule of ITS OWNER out; a linked row under a rule is still listed in the Linked tab.
+-- Rows (ids ...0208 to ...0216): 208 late (P, under Ign Dir, exact match), 209 late in a sub folder, other letter case, 210 linked under the rule, 211 a sibling folder that
+-- shares the prefix (not under the rule), 212 team row under the team's rule, 213 team row outside it, 214 to 216 a rule of two parts (Deep/Down): 214 under it (other letter case), 215 beside it, 216 a sibling that shares the prefix. The rule of ANOTHER owner (Q ignores 'Ign Dir 2') must not hide P's 211.
+INSERT INTO teams (team_id, name, share_folder) VALUES ('a1b00000-0000-4000-8000-0000000000c1', 'Inbox Rules Team', 'Ibx Team');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('a1b00000-0000-4000-8000-0000000000c1', 'old');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$IB_Q', 'Ign Dir 2'), ('$IB_P', 'Deep/Down');
+CREATE TEMP TABLE ib_m1_cnt0 AS EXECUTE count_new('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+CREATE TEMP TABLE ib_m1_open0 AS EXECUTE count_open('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+CREATE TEMP TABLE ib_m1_sm0 AS EXECUTE summary('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+CREATE TEMP TABLE ib_m1_acc0 AS EXECUTE accept_open('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+INSERT INTO directus_files (id) SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(g::text, 2, '0'))::uuid FROM generate_series(8, 16) g;
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, origin, state, match_strength, suggested_collection, suggested_record_id, matches, rel_path,
+                                        link_kind, linked_collection, linked_junction_id, link_batch_id)
+SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(n::text, 2, '0'))::uuid, CASE WHEN n NOT IN (12, 13) THEN '$IB_P'::uuid END, CASE WHEN n IN (12, 13) THEN 'a1b00000-0000-4000-8000-0000000000c1'::uuid END,
+       'image', 'new', st, 'short_id', 'physical_samples', '$IB_S'::uuid,
+       jsonb_build_array(jsonb_build_object('collection', 'physical_samples', 'record_id', '$IB_S', 'via', 'short_id', 'token', 'abcd1234')), path,
+       CASE WHEN st = 'linked' THEN 'manual' END, CASE WHEN st = 'linked' THEN 'physical_samples' END,
+       CASE WHEN st = 'linked' THEN gen_random_uuid() END, CASE WHEN st = 'linked' THEN gen_random_uuid() END
+  FROM (VALUES (8, 'new', 'Users/ibx1/Ign Dir/late.tif'), (9, 'new', 'users/IBX1/ign dir/sub/late2.tif'), (10, 'linked', 'Users/ibx1/Ign Dir/linked.tif'),
+               (11, 'new', 'Users/ibx1/Ign Dir 2/ok.tif'), (12, 'new', 'Shared/Ibx Team/Old/late.tif'), (13, 'new', 'Shared/Ibx Team/Older/ok.tif'),
+               (14, 'new', 'Users/ibx1/deep/down/x.tif'), (15, 'new', 'Users/ibx1/Deep/other.tif'), (16, 'new', 'Users/ibx1/Deep/Down2/y.tif')) v(n, st, path);
+CREATE TEMP TABLE ib_m1_ls AS EXECUTE list_new('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
+SELECT 'ib_ign_late_listed:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE directus_files_id::text ~ '^a1b00000-0000-4000-8000-0000000002(08|09|10|11|12|13|14|15|16)$'), '') FROM ib_m1_ls;
+CREATE TEMP TABLE ib_m1_ls_scans AS EXECUTE list_new_scans('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
+SELECT 'ib_ign_late_listed_scans:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE directus_files_id::text ~ '^a1b00000-0000-4000-8000-0000000002(08|09|10|11|12|13|14|15|16)$'), '') FROM ib_m1_ls_scans;
+CREATE TEMP TABLE ib_m1_cnt AS EXECUTE count_new('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+SELECT 'ib_ign_late_count:' || ((SELECT total FROM ib_m1_cnt) - (SELECT total FROM ib_m1_cnt0));
+CREATE TEMP TABLE ib_m1_open AS EXECUTE count_open('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+SELECT 'ib_ign_late_open_count:' || ((SELECT total FROM ib_m1_open) - (SELECT total FROM ib_m1_open0));
+CREATE TEMP TABLE ib_m1_sm AS EXECUTE summary('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+SELECT 'ib_ign_late_summary:' || (coalesce(sum(n) FILTER (WHERE owner_person_id IS NOT NULL), 0) - (SELECT coalesce(sum(n) FILTER (WHERE owner_person_id IS NOT NULL), 0) FROM ib_m1_sm0))
+       || ':' || (coalesce(sum(n) FILTER (WHERE owner_team_id IS NOT NULL), 0) - (SELECT coalesce(sum(n) FILTER (WHERE owner_team_id IS NOT NULL), 0) FROM ib_m1_sm0)) FROM ib_m1_sm;
+CREATE TEMP TABLE ib_m1_sm_scans AS EXECUTE summarywithscans('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+SELECT 'ib_ign_late_summary_scans:' || ((SELECT coalesce(sum(n), 0) FROM ib_m1_sm_scans) = (SELECT coalesce(sum(n), 0) FROM ib_m1_sm));
+CREATE TEMP TABLE ib_m1_acc AS EXECUTE accept_open('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
+SELECT 'ib_ign_late_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path COLLATE "C") FILTER (WHERE c.candidate_id NOT IN (SELECT candidate_id FROM ib_m1_acc0)), '')
+  FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_m1_acc);
+SELECT string_agg(candidate_id::text, ',') AS ib_m1_ids FROM d1_private.file_candidates WHERE directus_files_id::text ~ '^a1b00000-0000-4000-8000-0000000002(08|09|10|11|12|13|14|15|16)$' \gset
+CREATE TEMP TABLE ib_m1_byid AS EXECUTE acceptcandidatesbyid(:'ib_m1_ids');
+SELECT 'ib_ign_late_accept_read:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path COLLATE "C"), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_m1_byid);
+CREATE TEMP TABLE ib_m1_lock AS EXECUTE acceptcandidatesforupdate(:'ib_m1_ids');
+SELECT 'ib_ign_late_accept_lock:' || ((SELECT count(*) FROM ib_m1_lock) = (SELECT count(*) FROM ib_m1_byid));
+CREATE TEMP TABLE ib_m1_lk AS EXECUTE list_linked('$IB_P', 'manual', 200, 0);
+SELECT 'ib_ign_linked_listed:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE rel_path ~ 'linked[.]tif$'), '') FROM ib_m1_lk;
+DELETE FROM d1_private.inbox_ignored_dirs WHERE owner_team_id IS NOT NULL OR owner_person_id = '$IB_Q' OR rel_folder = 'Deep/Down';
 -- removing the rule: the folder's cache rows are RESET (kept, mtime and listed time NULL; any case, below it, this owner only)
 INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at) VALUES
   ('Users/ibx1/Ign Dir', '$IB_P', now(), now()), ('Users/ibx1/ign dir/sub', '$IB_P', now(), now()), ('Users/ibx1/Ign Dir 2', '$IB_P', now(), now());
@@ -7069,10 +7123,24 @@ SQL
     ib_check "ib_ign_duplicate:refused" "the unique index refuses the same folder in another case for one owner (the endpoint answers 409 ALREADY_IGNORED)"
     ib_check "ib_ign_list:1:true" "the rule list names the owner (person full name)"
     ib_check "ib_ign_by_id:1:true" "a rule is found by its id with its owner and folder"
-    ib_check "ib_ign_open:3" "the open files under a rule: the folder and below (a, e and sub/b) on whole path parts and ignoring case; not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
+    ib_check "ib_ign_of_owner:1:Ign Dir" "the owner's rules are read for the 'still covered by another rule' answer of a delete"
+    ib_check "ib_ign_of_owner_other:0" "...and another owner's rules are not part of it"
+    ib_check "ib_ign_open_owner:true" "the open files of an owner are selected by owner and state only (never gone ones; the rule is applied in JS, not by a SQL prefix)"
+    ib_check "ib_ign_open_owner_only:0" "...and an owner with no open files has none"
+    ib_check "ib_ign_open_under:3" "the open files under the rule (a, e and sub/b), on whole path parts and ignoring case: not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
     ib_check "ib_ign_dismissed:3" "the rule's dismissal is the very statement of POST /dismiss"
     ib_check "ib_ign_states:Ign Dir 2/c.tif=new,Ign Dir/a.tif=dismissed,Ign Dir/e.tif=dismissed,Ign Dir/gone.tif=gone,Ign Dir/q.tif=new,ign dir/sub/b.tif=dismissed,x/Ign Dir/d.tif=new" "only the open files under the rule changed state"
     ib_check "ib_ign_open_after:0" "nothing open is left under the rule"
+    ib_check "ib_ign_late_listed:Shared/Ibx Team/Older/ok.tif,Users/ibx1/Deep/Down2/y.tif,Users/ibx1/Deep/other.tif,Users/ibx1/Ign Dir 2/ok.tif" "list (M1): a row registered under an ignored folder after the rule (any letter case, in a sub folder, a team's rule too) is not listed; a sibling that shares the prefix, and a folder another owner ignores, stay; a linked row is not in the undecided tabs"
+    ib_check "ib_ign_late_listed_scans:Shared/Ibx Team/Older/ok.tif,Users/ibx1/Deep/Down2/y.tif,Users/ibx1/Deep/other.tif,Users/ibx1/Ign Dir 2/ok.tif" "the same in the variant where the surface_scans table exists"
+    ib_check "ib_ign_late_count:4" "count (M1): the late rows are not counted either (only the four rows outside every rule are; a rule of two parts covers its folder, not a sibling that shares the prefix)"
+    ib_check "ib_ign_late_open_count:4" "the open tab's count leaves them out too"
+    ib_check "ib_ign_late_summary:3:1" "summary (M1): the badge counts the three person rows and the one team row outside the rules, not the late ones"
+    ib_check "ib_ign_late_summary_scans:true" "...and the surface_scans variant of the summary agrees"
+    ib_check "ib_ign_late_accept:Shared/Ibx Team/Older/ok.tif,Users/ibx1/Deep/Down2/y.tif,Users/ibx1/Deep/other.tif,Users/ibx1/Ign Dir 2/ok.tif" "accept-all (M1): selects the rows outside every rule, never a late one under a rule"
+    ib_check "ib_ign_late_accept_read:Shared/Ibx Team/Older/ok.tif,Users/ibx1/Deep/Down2/y.tif,Users/ibx1/Deep/other.tif,Users/ibx1/Ign Dir 2/ok.tif,Users/ibx1/Ign Dir/linked.tif" "accept-all's candidate read (M1): an undecided late row reads as not found, a decided one is still returned (its answer stays NOT_NEW)"
+    ib_check "ib_ign_late_accept_lock:true" "...and the locking read returns the same rows"
+    ib_check "ib_ign_linked_listed:Users/ibx1/Ign Dir/linked.tif" "a linked file under a rule is still listed in the Linked tab"
     ib_check "ib_ign_dirs:Users/ibx1/Ign Dir=truetrue,Users/ibx1/Ign Dir 2=falsefalse,Users/ibx1/ign dir/sub=truetrue" "the rows are kept with dir_mtime and last_listed_at NULL; a sibling that shares a prefix is untouched"
     ib_check "ib_ign_reset_wrong_owner_kept:true" "another owner's reset of the same path changes nothing: the row keeps its times"
     ib_check "ib_ign_deleted:1" "a rule is deleted by id"

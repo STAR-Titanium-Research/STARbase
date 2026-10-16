@@ -67,9 +67,11 @@
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
 //                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
-//   GET  /d1-inbox/ignored-folders  -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }] }  the rules of the
-//                                   caller's own folder and of the teams they are an ACTIVE member of (spec section 15; a Lab Viewer reads them with
-//                                   can_remove false). folder is relative to the owner's root, as it was sent.
+//   GET  /d1-inbox/ignored-folders  -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }],
+//                                   meta: { can_change: boolean } }  the rules of the caller's own folder and of the teams they are an ACTIVE member of
+//                                   (spec section 15). meta.can_change says whether the caller may change rules at all: false for a Lab Viewer (who reads
+//                                   them, every can_remove false), true for everyone else, whatever the number of rules (an empty list included; the
+//                                   client hides "Ignore this folder" and the add field on false). folder is relative to the owner's root, as it was sent.
 //   POST /d1-inbox/ignored-folders  { folder, team_id? }  -> 201 { data: { ignored_id, folder, team_id, dismissed } }   "Ignore this folder when scanning": a
 //                                   rule for the caller's personal folder, or for the team folder of team_id (an active member only). folder is relative to
 //                                   the owner's root (World-Ti Paper/Drafts, never Users/<alias>/...), no leading or trailing slash, no empty, . or .. part,
@@ -77,11 +79,18 @@
 //                                   409 ALREADY_IGNORED, 400 INVALID_PAYLOAD otherwise (extensions.field is 'folder'). In the SAME transaction the owner's
 //                                   open ('new') found files in that folder and below are dismissed exactly as POST /dismiss does it (restorable; linked
 //                                   and gone files are untouched); dismissed says how many. The crawler reads the rules and never lists the subtree.
-//   DELETE /d1-inbox/ignored-folders/:id  -> { data: { ignored_id, folder, rescan_queued } }   removes the rule and RESETS the folder's cache rows (inbox_dirs: dir_mtime
+//                                   `dismissed` counts every open ('new') row of the owner under the rule that moved to Dismissed: it can include rows the
+//                                   list does not show (a copy hidden while its original is decided by the same owner, a surface scan file that already
+//                                   has a scan), so it can be larger than the number of files the Inbox listed under the folder. It is not changed to
+//                                   match the list: those rows were open and are now dismissed, restorable like any other. folder is trimmed of leading
+//                                   and trailing whitespace before it is checked and stored.
+//   DELETE /d1-inbox/ignored-folders/:id  -> { data: { ignored_id, folder, still_ignored, rescan_queued } }   removes the rule and RESETS the folder's cache rows (inbox_dirs: dir_mtime
 //                                   and last_listed_at NULL, for the folder and everything below it; never deleted, or a crawler that finds the parent
 //                                   unchanged would never rediscover the folder: it keeps a 'seen, not listed' row for every ignored folder), so the next
 //                                   scan lists the folder again; a person-scope rescan is queued when the 10-minute limit of POST /rescan allows
-//                                   (rescan_queued says whether one was; the limit never fails the delete). Files the rule dismissed stay in Dismissed
+//                                   (rescan_queued says whether one was; the limit never fails the delete). still_ignored is true when the folder is STILL
+//                                   covered by another rule of the same owner (removing A/B while A is ignored): nothing changes for the crawler, so the cache
+//                                   is not reset and no rescan is queued (rescan_queued false); false otherwise. Files the rule dismissed stay in Dismissed
 //                                   until restored. A rule that is not the caller's or their team's is 404 NOT_FOUND. No administrator override: rules are
 //                                   a person's or a team's own (admin-wide rules are not in v1).
 //   POST /d1-inbox/auto-link        MACHINE ONLY (the crawler): header X-Inbox-Crawler-Secret = env D1_INBOX_CRAWLER_SECRET
@@ -245,6 +254,23 @@ const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
   .map(([collection, t]) => `NOT (c.suggested_collection = '${collection}' AND EXISTS (SELECT 1 FROM ${t.junction} j WHERE j.${t.fk} = c.suggested_record_id AND j.directus_files_id = c.directus_files_id))`)
   .join(' AND ');
 
+// Ignored folders (spec section 15, M1 of the review): the crawler loads the owner's rules once per scan, so it can register a file under a folder that was
+// ignored a moment ago, after POST /ignored-folders dismissed what was there. Such an undecided ('new') row must never show, never count in the badge and never
+// be accepted in bulk: this one clause, shared by the list, the count, the summary and accept-all, leaves it out. It is the crawler's own db._not_ignored: the rule
+// is relative to the owner's root, which is the first two parts of the file's own path ('Users/<alias>', 'Shared/<share folder>'); a rule covers the folder and
+// everything below it on WHOLE path parts (the prefix 'root/rule/' is compared with left(), never LIKE, so no wildcard in a folder name is special) and ignoring
+// case. The owner-person and owner-team tests are two separate NOT EXISTS (each an equality on its own column) so the planner can use the partial indexes
+// idx_inbox_ignored_dirs_owner_person and _owner_team; a file owned by a team has a NULL person id and the person subquery then finds nothing, and the reverse.
+// Only the undecided tabs and the summary use it: a LINKED row under a rule is still listed in the Linked tab, a dismissed one in Dismissed.
+const IGNORED_PREFIX = "lower(split_part(c.rel_path, '/', 1) || '/' || split_part(c.rel_path, '/', 2) || '/' || ig.rel_folder)";
+// The first condition is an equality on the first folder below the root (part 3 of the file's path, part 1 of the rule), which every covered file satisfies: it is
+// only there so Postgres can HASH-join files and rules (owner and first part) instead of testing every file against every rule of its owner, which measured at
+// seconds for 30 000 open files and 150 rules. The left() test after it is the real, whole-parts comparison.
+const UNDER_RULE = "lower(split_part(c.rel_path, '/', 3)) = lower(split_part(ig.rel_folder, '/', 1))"
+  + ` AND left(lower(c.rel_path), length(${IGNORED_PREFIX}) + 1) = ${IGNORED_PREFIX} || '/'`;
+const NOT_UNDER_IGNORED = 'NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_person_id = c.owner_person_id'
+  + ` AND ${UNDER_RULE}) AND NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_team_id = c.owner_team_id AND ${UNDER_RULE})`;
+
 // A surface scan file that was already added (through the Alicona feature's own dialog, or here) is not a new thing to add: not counted, not listed as
 // undecided. Only meaningful where the surface_scans table exists (the endpoint asks first), so it is a separate fragment, never part of NOT_ON_RECORD.
 const SCAN_ADDED = "NOT (c.kind = 'surface_scan' AND EXISTS (SELECT 1 FROM surface_scans s WHERE s.directus_files_id = c.directus_files_id))";
@@ -252,7 +278,7 @@ const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.orig
   + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
   + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${NOT_UNDER_IGNORED}${scans ? ` AND ${SCAN_ADDED}` : ''}`
   + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
 
 export const SQL = {
@@ -270,6 +296,10 @@ export const SQL = {
   candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
   candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
+  // The same two reads for accept-all, which must never link a row under an ignored folder (see NOT_UNDER_IGNORED): such an undecided row reads as not found. A row
+  // that is already decided is returned whatever its folder, so the answer for it stays NOT_NEW.
+  acceptCandidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id`,
+  acceptCandidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id FOR UPDATE`,
   batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
@@ -318,11 +348,17 @@ export const SQL = {
     'INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, owner_team_id, rel_folder, created_by) VALUES (?::uuid, ?::uuid, ?, ?)'
     + ' RETURNING ignored_id, rel_folder, created_at',
   ignoredDelete: 'DELETE FROM d1_private.inbox_ignored_dirs WHERE ignored_id = ? RETURNING ignored_id',
-  // The owner's open candidates in the folder and below, locked in id order like /dismiss does. Bindings: person id, team id, the path prefix 'root/folder/'.
+  // The folders of the owner's rules (bindings: person id, team id), read after a delete to see whether the removed folder is still covered by a rule above it.
+  ignoredOfOwner:
+    'SELECT rel_folder FROM d1_private.inbox_ignored_dirs WHERE owner_person_id IS NOT DISTINCT FROM ?::uuid AND owner_team_id IS NOT DISTINCT FROM ?::uuid',
+  // The owner's open candidates, by owner only (the (owner, state) indexes serve it): which of them lie under the new rule is decided in JS by isIgnored, the one
+  // matcher the crawler's Python twin is tested against. A SQL prefix test lowercases in Postgres while the final check lowercases in JS, and the two differ for
+  // some characters (a final sigma, a dotted capital I), so a prefilter could drop a row the matcher would cover. Only id and path are read, and nothing is
+  // locked here: the dismissal that follows (SQL.dismiss, as POST /dismiss) changes a row only while it is still 'new', so a file linked or dismissed in
+  // between stays as it is. Bindings: person id, team id.
   openUnderFolder:
     "SELECT c.candidate_id, c.rel_path FROM d1_private.file_candidates c WHERE c.state = 'new'"
-    + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid'
-    + ' AND starts_with(lower(c.rel_path), lower(?)) ORDER BY c.candidate_id FOR UPDATE',
+    + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid ORDER BY c.candidate_id',
   // A removed rule: reset the cache rows of the folder (its own row and everything below) to "seen, not listed" (last_listed_at and dir_mtime NULL, as
   // relistDirs does; never baselined_at, and the rows are NOT deleted: the crawler reaches a folder through its cached parent, so a deleted row would hide
   // the folder for as long as the parent's modification time stays the same; a NULL mtime never equals the share's). Bindings: person id, team id, the
@@ -590,9 +626,9 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
     where.push(`(c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`);
     bindings.push(mine ? scope.personId : null, scope.teamIds.join(','));
   }
-  if (f.tab === 'new') where.push("c.state = 'new'", "c.origin = 'new'", COPY_HIDDEN);
-  else if (f.tab === 'older') where.push("c.state = 'new'", "c.origin = 'backlog'", COPY_HIDDEN);
-  else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN);
+  if (f.tab === 'new') where.push("c.state = 'new'", "c.origin = 'new'", COPY_HIDDEN, NOT_UNDER_IGNORED);
+  else if (f.tab === 'older') where.push("c.state = 'new'", "c.origin = 'backlog'", COPY_HIDDEN, NOT_UNDER_IGNORED);
+  else if (f.tab === 'open') where.push("c.state = 'new'", COPY_HIDDEN, NOT_UNDER_IGNORED);
   else where.push(`c.state = '${f.tab}'`); // linked or dismissed (validated by parseFileFilters)
   // a surface scan file that already has a scan is not undecided any more (only where the table exists: `scans`)
   if (scans && !accept && ['new', 'older', 'open'].includes(f.tab)) where.push(SCAN_ADDED);
@@ -606,6 +642,7 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
     // What accept-all can ever link: exact short ID naming one record, not a surface scan, not a copy, not already on its record
     where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL', "c.kind <> 'surface_scan'", 'c.duplicate_of IS NULL',
       'jsonb_array_length(c.matches) = 1', NOT_ON_RECORD);
+    if (!where.includes(NOT_UNDER_IGNORED)) where.push(NOT_UNDER_IGNORED); // (the undecided tabs have it already)
     if (after) { where.push('(c.first_seen_at, c.candidate_id) > (?::timestamptz, ?::uuid)'); bindings.push(after.at, after.id); }
     const size = Math.max(1, Math.floor(Number(pageSize)) || ACCEPT_PAGE);
     return { sql: `SELECT c.candidate_id, c.first_seen_at${SLIM_FROM} WHERE ${where.join(' AND ')} ORDER BY c.first_seen_at, c.candidate_id LIMIT ${size}`, bindings };
@@ -761,11 +798,13 @@ export function folderOfCandidate(relPath, root) {
 
 // The folder of a new rule, checked: relative to the owner's root, no leading or trailing slash, no empty, '.' or '..' part (the same rules as the
 // table's CHECKs, so a refusal here is a 400 with a message, never a constraint error), and never the root itself or a path that starts with it.
-// `root` is 'Users/<alias>' or 'Shared/<share folder>'. Returns the folder as sent.
-export function parseIgnoredFolder(value, root) {
+// `root` is 'Users/<alias>' or 'Shared/<share folder>'. Leading and trailing whitespace is trimmed BEFORE anything is checked (the client trims too; a pasted
+// path often carries a newline or a space), and the trimmed folder is what is validated, compared, stored and answered. Returns that folder.
+export function parseIgnoredFolder(raw, root) {
   const fail = (message) => new HttpError(400, 'INVALID_PAYLOAD', message, { field: 'folder' });
-  if (typeof value !== 'string') throw fail('Choose the folder to ignore.');
-  if (value.trim() === '') throw fail('Choose a folder below your own folder: the whole folder cannot be ignored.');
+  if (typeof raw !== 'string') throw fail('Choose the folder to ignore.');
+  const value = raw.trim();
+  if (value === '') throw fail('Choose a folder below your own folder: the whole folder cannot be ignored.');
   if (value.length > MAX_IGNORED_FOLDER) throw fail(`The folder is too long (at most ${MAX_IGNORED_FOLDER} characters).`);
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) throw fail('The folder contains characters that are not allowed.');
@@ -810,20 +849,29 @@ export const shapeStateChange = ({ done, unchanged, change }) => ({
 export const shapeUndo = (batch, done) => ({ link_batch_id: batch.toLowerCase(), undone: done.length });
 // POST /rescan and /admin/scan-all (202)
 export const shapeQueued = (row) => ({ queued: true, request_id: row.request_id, status: row.status, requested_at: toIso(row.requested_at) });
-// GET /ignored-folders: rows as ignoredList selects them; canRemove is false for a caller who may only read (a Lab Viewer).
-export const shapeIgnoredFolders = (rows, canRemove) => rows.map((r) => ({
-  ignored_id: r.ignored_id,
-  folder: r.rel_folder,
-  owner: r.owner_person_id
-    ? { kind: 'person', id: r.owner_person_id, name: r.owner_name ?? '' }
-    : { kind: 'team', id: r.owner_team_id, name: r.owner_name ?? '' },
-  created_at: toIso(r.created_at),
-  can_remove: canRemove,
-}));
-// POST /ignored-folders
+// GET /ignored-folders: rows as ignoredList selects them, as the whole body { data, meta }. canChange is false for a caller who may only read (a Lab Viewer)
+// and true for everyone else, whatever the number of rules: meta.can_change is what the client asks before it offers to add a rule (an empty list has
+// no row to carry can_remove), and each row's can_remove repeats it.
+export const shapeIgnoredFolders = (rows, canChange) => ({
+  data: rows.map((r) => ({
+    ignored_id: r.ignored_id,
+    folder: r.rel_folder,
+    owner: r.owner_person_id
+      ? { kind: 'person', id: r.owner_person_id, name: r.owner_name ?? '' }
+      : { kind: 'team', id: r.owner_team_id, name: r.owner_name ?? '' },
+    created_at: toIso(r.created_at),
+    can_remove: canChange,
+  })),
+  meta: { can_change: canChange },
+});
+// POST /ignored-folders. `dismissed` is the number of rows the dismissal changed: every open row of the owner under the rule, so it can include hidden copies and
+// rows the list does not show; it is not a count of what the list displayed.
 export const shapeIgnoredAdded = (rule, teamId, dismissed) => ({ ignored_id: rule.ignored_id, folder: rule.rel_folder, team_id: teamId ?? null, dismissed });
 // DELETE /ignored-folders/:id
-export const shapeIgnoredRemoved = (rule, rescanQueued) => ({ ignored_id: rule.ignored_id, folder: rule.rel_folder, rescan_queued: rescanQueued });
+// stillIgnored: the folder is still covered by another rule of the same owner (a rule above it), so nothing about it changed: no cache reset, no rescan.
+export const shapeIgnoredRemoved = (rule, { stillIgnored = false, rescanQueued = false } = {}) => ({
+  ignored_id: rule.ignored_id, folder: rule.rel_folder, still_ignored: stillIgnored, rescan_queued: rescanQueued,
+});
 // GET and PUT /prefs
 export const shapePrefs = (row) => ({ auto_link: row?.auto_link === true });
 // The error body of every refusal (Directus's shape); an unknown error is a 500 that says nothing of its cause.
@@ -1273,7 +1321,7 @@ export function mount(router, context, deps = {}) {
   // whether rows may remain (the last page was full), and `next_cursor` carries on. `lock` takes the row locks of a real run.
   async function planAccept(db, { acc, schema, scope, f, lock, ids = null, cursor = null }) {
     if (ids) {
-      const rows = new Map(rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [ids.join(',')])).map((r) => [r.candidate_id, r]));
+      const rows = new Map(rowsOf(await db.raw(lock ? SQL.acceptCandidatesForUpdate : SQL.acceptCandidatesById, [ids.join(',')])).map((r) => [r.candidate_id, r]));
       const missing = ids.filter((id) => !rows.get(id) || !canSee(scope, rows.get(id))).map((id) => ({ candidate_id: id, reason: 'NOT_FOUND' }));
       const planned = await classify(db, { acc, schema, scope, cands: ids.map((id) => rows.get(id)).filter(Boolean) });
       return { entries: planned.entries, skipped: [...planned.skipped, ...missing], has_more: false, next_cursor: null };
@@ -1287,7 +1335,7 @@ export function mount(router, context, deps = {}) {
       const query = buildListQuery(scope, f, { accept: true, after, pageSize: acceptPage });
       const found = rowsOf(await db.raw(query.sql, query.bindings));
       if (found.length) {
-        const cands = rowsOf(await db.raw(lock ? SQL.candidatesForUpdate : SQL.candidatesById, [found.map((r) => r.candidate_id).join(',')]));
+        const cands = rowsOf(await db.raw(lock ? SQL.acceptCandidatesForUpdate : SQL.acceptCandidatesById, [found.map((r) => r.candidate_id).join(',')]));
         const planned = await classify(db, { acc, schema, scope, cands });
         entries.push(...planned.entries);
         skipped.push(...planned.skipped);
@@ -1529,7 +1577,7 @@ export function mount(router, context, deps = {}) {
     const rows = scope.personId || scope.teamIds.length
       ? rowsOf(await database.raw(SQL.ignoredList, [scope.personId, scope.teamIds.join(',')]))
       : [];
-    res.json({ data: shapeIgnoredFolders(rows, !isViewerAccountability(acc)) });
+    res.json(shapeIgnoredFolders(rows, !isViewerAccountability(acc)));
   }));
 
   router.post('/ignored-folders', route(async ({ req, res, acc }) => {
@@ -1552,9 +1600,9 @@ export function mount(router, context, deps = {}) {
         throw err;
       }
       // The owner's open files in the folder and below, dismissed with the SAME statement and state rule as POST /dismiss (only 'new' changes: linked and
-      // gone files are untouched). The prefix match is on whole path parts; isIgnored re-checks every row, so a file the crawler would still scan (the same
-      // rule, in Python) is never dismissed on the strength of a database case-folding difference.
-      const open = rowsOf(await trx.raw(SQL.openUnderFolder, [owner.personId, owner.teamId, `${owner.root}/${folder}/`]))
+      // gone files are untouched). The database only selects the owner's open rows; isIgnored decides which of them the rule covers, so a file the crawler would
+      // still scan (the same rule, in Python) is never dismissed, and one it would skip is never missed, on the strength of a database case-folding difference.
+      const open = rowsOf(await trx.raw(SQL.openUnderFolder, [owner.personId, owner.teamId]))
         .filter((r) => isIgnored(folderOfCandidate(r.rel_path, owner.root), [folder]));
       const done = open.length ? rowsOf(await trx.raw(SQL.dismiss, [acc.user, open.map((r) => r.candidate_id).join(',')])) : [];
       return shapeIgnoredAdded(rule, owner.teamId, done.length);
@@ -1566,11 +1614,18 @@ export function mount(router, context, deps = {}) {
     const id = req.params?.id;
     if (!isUuid(id)) throw badInput('The ignored folder id is not valid.');
     const scope = await scopeOf(acc);
-    const rule = await inTransaction(acc.user, async (trx) => {
+    const removed = await inTransaction(acc.user, async (trx) => {
       const [found] = rowsOf(await trx.raw(SQL.ignoredById, [id.toLowerCase()]));
       // a rule that is not yours is the same 404 as one that does not exist
       if (!found || !ownsRule(scope, found)) throw ERRORS.notIgnored();
+      // the owner's rule lock, as POST takes it: two removals (of A and of A/B) must not each see the other's rule and both decide "still ignored", which would
+      // leave a folder nobody ignores any more with a cache that says it was listed
+      await trx.raw(SQL.lock, [`inbox-ignore:${found.owner_person_id ?? found.owner_team_id}`]);
       if (!rowsOf(await trx.raw(SQL.ignoredDelete, [found.ignored_id])).length) throw ERRORS.notIgnored();
+      // Removing a rule that sits under another rule of the same owner (A/B while A is ignored) changes nothing the crawler does: the folder is still not
+      // scanned, so its cache rows are left as they are and no rescan is asked for.
+      const others = rowsOf(await trx.raw(SQL.ignoredOfOwner, [found.owner_person_id, found.owner_team_id])).map((r) => r.rel_folder);
+      if (isIgnored(found.rel_folder, others)) return { rule: found, stillIgnored: true };
       // The folder's cache rows are reset, not deleted (see SQL.ignoredResetDirs), so the next scan lists the folder again. An owner whose folder was unset
       // since has no cache left to reset.
       const root = rootOfRule(scope, found);
@@ -1578,11 +1633,12 @@ export function mount(router, context, deps = {}) {
         const path = `${root}/${found.rel_folder}`;
         await trx.raw(SQL.ignoredResetDirs, [found.owner_person_id, found.owner_team_id, path, `${path}/`]);
       }
-      return found;
+      return { rule: found, stillIgnored: false };
     });
-    // A rescan, only where the limit of POST /rescan allows it; the rule is gone either way, so nothing here may fail the request.
+    // A rescan, only where the limit of POST /rescan allows it (and not when the folder is still ignored: there is nothing new to list); the rule is gone
+    // either way, so nothing here may fail the request.
     let queued = false;
-    if (scope.personId && (Boolean(scope.person?.uni_alias) || scope.teams.some((t) => !isBlank(t.share_folder)))) {
+    if (!removed.stillIgnored && scope.personId && (Boolean(scope.person?.uni_alias) || scope.teams.some((t) => !isBlank(t.share_folder)))) {
       try {
         await queueRescan(acc, scope);
         queued = true;
@@ -1590,7 +1646,7 @@ export function mount(router, context, deps = {}) {
         if (!(err instanceof HttpError && err.status === 429)) logger?.warn?.(`${SOURCE}: could not queue a rescan after removing an ignored folder: ${err?.message || err}`);
       }
     }
-    res.json({ data: shapeIgnoredRemoved(rule, queued) });
+    res.json({ data: shapeIgnoredRemoved(removed.rule, { stillIgnored: removed.stillIgnored, rescanQueued: queued }) });
   }));
 
   router.get('/prefs', route(async ({ res, acc }) => {

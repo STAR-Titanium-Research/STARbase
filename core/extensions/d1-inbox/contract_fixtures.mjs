@@ -320,9 +320,10 @@ export function buildFixtures() {
     { ignored_id: RULE_PERSON, owner_person_id: P_ALICE, owner_team_id: null, rel_folder: 'World-Ti Paper/Drafts', created_at: at('2026-10-16T08:00:00.000Z'), owner_name: 'Alice A' },
   ];
   const folderRefusal = (value) => { try { parseIgnoredFolder(value, 'Users/ali1'); } catch (e) { return e; } return new Error('expected a 400'); };
-  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true)", request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, true) }));
-  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false)', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, false) }));
-  put('ignored_get_empty', ok('nothing ignored yet', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders([], true) }));
+  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true, meta.can_change true)", request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, true)));
+  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false, meta.can_change false)', request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, false)));
+  put('ignored_get_empty', ok('nothing ignored yet (meta.can_change is still true: the caller may add rules)', request('GET', IGNORED_PATH), shapeIgnoredFolders([], true)));
+  put('ignored_get_empty_viewer', ok('a Lab Viewer with nothing ignored: no row carries can_remove, so meta.can_change false is the only sign that rules cannot be changed', request('GET', IGNORED_PATH), shapeIgnoredFolders([], false)));
   put('ignored_post_ok', ok("a folder of the caller's own folder ignored: the rule, and how many open files below it were dismissed",
     request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper/Drafts' } }), { data: shapeIgnoredAdded({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, null, 12) }, 201));
   put('ignored_post_ok_team', ok('a folder of a team folder ignored by a member of the team (team_id is in the answer)',
@@ -336,10 +337,13 @@ export function buildFixtures() {
   put('ignored_post_409_already_ignored', failure('the same folder twice for one owner, whatever the letter case', request('POST', IGNORED_PATH, { body: { folder: 'world-ti paper/drafts' } }),
     ERRORS.alreadyIgnored('world-ti paper/drafts')));
   put('ignored_post_409_too_many_rules', failure('200 rules per owner at most', request('POST', IGNORED_PATH, { body: { folder: 'one more' } }), ERRORS.tooManyRules()));
-  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
-    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, true) }));
+  const REMOVED = { ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' };
+  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued (still_ignored false: no other rule covers the folder)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: true }) }));
   put('ignored_delete_ok_rate_limited', ok('a rule removed while the rescan limit says wait: the delete still works, rescan_queued is false', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
-    { data: shapeIgnoredRemoved({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, false) }));
+    { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: false }) }));
+  put('ignored_delete_ok_still_ignored', ok('a rule removed that sits under another rule of the same owner (World-Ti Paper/Drafts while World-Ti Paper is ignored): still_ignored is true, the folder stays unscanned, so no cache reset and no rescan (rescan_queued false)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { stillIgnored: true }) }));
   put('ignored_delete_404', failure("a rule that does not exist, or is not the caller's or their team's (the same answer)", request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), ERRORS.notIgnored()));
 
   // GET and PUT /prefs
