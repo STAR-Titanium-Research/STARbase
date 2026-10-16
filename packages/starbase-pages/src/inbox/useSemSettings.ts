@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue';
-import { useRequestGate, type HostApi } from '@d1/ui';
+import { errorText, useRequestGate, type HostApi } from '@d1/ui';
 import { InboxApiError, correctSemSetting, getSemSettings, type SemSettingsAnswer, type SemSettingsRead } from './inboxApi';
 import { editDraft, parseEdit, settingRows } from './semSettings';
 
@@ -44,7 +44,7 @@ export function createSemSettings(api: HostApi, fileId: () => string) {
 			const a = await getSemSettings(api, id);
 			if (gate.isCurrent(token)) answer.value = a;
 		} catch (e) {
-			if (gate.isCurrent(token)) error.value = e instanceof Error && e.message ? e.message : 'Could not load the imaging settings.';
+			if (gate.isCurrent(token)) error.value = errorText(e, 'Could not load the imaging settings.');
 		}
 	}
 
@@ -83,7 +83,7 @@ export function createSemSettings(api: HostApi, fileId: () => string) {
 				if (d) answer.value = { ...d, locked: false, can_edit: false };
 				editing.value = null;
 			} else {
-				fieldError.value = { key, text: e instanceof Error && e.message ? e.message : 'Could not save that.' };
+				fieldError.value = { key, text: errorText(e, 'Could not save that.') };
 			}
 		} finally {
 			saving.value = false;
