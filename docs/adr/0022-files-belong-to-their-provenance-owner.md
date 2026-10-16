@@ -27,7 +27,12 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
 2. **Raw reads are filtered on the owner**: a Directus permission filter on `directus_files` (and so `/assets`)
    for Lab Member and Lab Viewer. Rows with no owner stay readable as today. Administrators are not filtered.
 3. **Others see a locked file**, never the file: on a record linked to a file they do not own they see that a link
-   exists and nothing else. Administrators see owned files read-only, and each such read is logged.
+   exists and nothing else. Administrators' reads of an owned file's settings are logged and read-only **within the
+   `d1-inbox` settings endpoint only** (`GET /d1-inbox/sem-settings`, one `sem_settings_access_log` row per read, no
+   correction allowed). The log is not a general audit of administrators: a Directus administrator can read, edit and
+   re-own owned files and their `/assets` directly, through Directus, without any log row (administrators are not
+   filtered, as above), and the Inbox list returns an owned candidate's `extracted` (the values the crawler
+   read) to administrators without a log row.
 4. **Derived data follows the file.** The imaging settings read from an SEM image sit in `d1_private`, are read
    only through the `d1-inbox` endpoint, and obey the same rule. Only the owner can correct them.
 5. **Linked and legacy files are not retroactive.** Already-linked files and the legacy archive stay open until the
@@ -62,6 +67,15 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
   privacy statement stays "for files registered after this change".
 - Surface scans stay lab-wide until the separate stream lands; ADR-0021 is then marked superseded.
 - The crawler becomes the stamp writer for owned files; the indexer still registers unowned legacy files.
+- A folder that changes hands (an alias given to someone else or corrected) leaves the files stamped to the person
+  they came from: the new holder's Inbox does not list them and `d1-inbox` refuses a candidate whose file is stamped to
+  someone else; an administrator re-stamps by SQL when the files really are the new holder's
+  (`docs/runbooks/inbox-crawler.md`, "An alias handed to someone else").
+- **Two team-membership rules differ on purpose, for now.** `d1-inbox` counts only `people.active` members of a team
+  (a Former person sees no team files in the Inbox), while the `file_readers` table of migration 196 holds a row for
+  every team member with a login, active or not, so a Former member who still has a login can still read a
+  team-owned file by id through Directus. Migration 196 is already on main and is not changed; the difference is
+  checked in physical-test item SEM19 and a later migration can align it (either way round).
 
 ## Verification
 

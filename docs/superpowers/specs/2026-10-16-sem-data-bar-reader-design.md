@@ -1,11 +1,11 @@
 # SEM data-bar reader and provenance-owned files: design
 
 **Date:** 2026-10-16
-**Status:** Design only; plan [`2026-10-16-sem-reader.md`](../plans/2026-10-16-sem-reader.md). Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
+**Status:** Built and merged on the integration branch `claude/gracious-heisenberg-x7to0t` (streams A to F, the final review and its fix wave; its physical-test items in the backlog, SEM1 onward, still open); plan [`2026-10-16-sem-reader.md`](../plans/2026-10-16-sem-reader.md). Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
 confirmed by them unless it says "assumed"). ADR: [0022](../../adr/0022-files-belong-to-their-provenance-owner.md).
 Terms: `CONTEXT.md` → *Files on the share* (**SEM image**, **data bar**, **imaging settings**, **provenance owner**,
 **locked file**). Builds on [found files and the Inbox](2026-10-15-found-files-inbox-design.md) (ADR-0020).
-Nothing here is built. **Amended 2026-10-16** after the d1-server session reported real data: the inbox crawler is
+**Amended 2026-10-16** after the d1-server session reported real data: the inbox crawler is
 live on d1-server (since 2026-10-16, eight people's `Users` folders, about 82,000 files), so existing rows have to be
 migrated and re-classified (sections 3, 4 and 7); the numbers below are theirs, not measured here.
 
@@ -175,15 +175,15 @@ carries it and SEM2 passes.
 ### Value rules (all tiers)
 
 Sanity ranges: `kv` 0.1 to 30, `working_distance_mm` 0.1 to 50, `magnification` 5 to 1,000,000, `spot` 1 to 10. A
-value that fails them is omitted with a note. **OCR confidence is recorded in `sources` but never used as a
-threshold.** The cross-checks: `mag x HFW` against the two screen-width constants (D3, within 2%, because a printed
+value that fails them is omitted with a note. **OCR confidence is recorded, as `extracted.ocr_confidence` (a
+map of field to confidence, ruling R10; `sources` holds only source names), but never used as a threshold.** The cross-checks: `mag x HFW` against the two screen-width constants (D3, within 2%, because a printed
 `40×` is a rounded 40.05), and, for a bar with no metadata, the scale-bar label against the bar's pixel length and the
 magnification. A value that cannot be cross-checked is saved with `flags.check_this = true`. When metadata and the
 bar both exist (OCR switched on to cross-check), metadata wins and the mismatch is recorded in `flags`.
 
 `extracted` (what the crawler already writes to `d1_private.file_candidates.extracted`) gets these keys:
 `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `pixel_size_nm`, `scale_bar_um`, `detector`, `mode`,
-`instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects. Unknown fields are
+`instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects and, for fields read by OCR, `ocr_confidence` (field to confidence, rounded to two decimals; never a threshold, and ignored by `save_sem_settings`, which maps known keys only). Unknown fields are
 omitted, never null. The crawler session's rule (numeric, unit in the key) is followed; the string `scale_bar`
 the JEOL path emits today becomes `scale_bar_um` too, which touches `parse_text` and its tests.
 

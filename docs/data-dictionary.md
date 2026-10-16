@@ -543,12 +543,12 @@ is unknown, failed a cross-check or fell outside its range; it is never zero.
 | `acquired_at` | TIMESTAMPTZ | When the image was taken; the instrument clock is UK time (`Europe/London`), stored as the instant; NULL for a local time that does not exist (the skipped spring hour) |
 | `sources` | JSONB NOT NULL, default `{}` | Per saved field: `metadata`, `derived`, `ocr` or `manual` (a person's correction, never overwritten by a re-read) |
 | `flags` | JSONB NOT NULL, default `{}` | Notes on the read: `check_this` (could not be cross-checked), a field name with a reason (`acquired_at = invalid_local_time`), a metadata/bar mismatch |
-| `read_by` | TEXT NOT NULL | The profile and version that read it (for example `sem-2`) |
+| `read_by` | TEXT NOT NULL | Who wrote the values: `inbox` (saved when a person linked the file in the Inbox) or `backfill` (`python -m inbox_crawler --sem-backfill`). Not the classifier version: that is `file_candidates.classified_by` (for example `sem-2`). The column comment in migration 197 still says "the profile and version (for example sem-2)"; migration 197 is already on main and a comment is not worth a new migration, so this table is the reference |
 | `read_at` | TIMESTAMPTZ NOT NULL | When it was last read or saved from a read |
 | `corrected_by`, `corrected_at` | UUID, TIMESTAMPTZ | The Directus user and time of the last correction (no foreign key: the history outlives the user) |
 
 **`d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean`** is the only place `extracted` becomes columns (`SECURITY INVOKER`). It maps the
-keys above, drops a value of the wrong JSON type or outside its range (after rounding to the column's scale, so a bad value costs that field, never the link),
+keys above, drops a value of the wrong JSON type or outside its range (the value is range-tested as given and only then rounded to the column's scale, so 0.095 kV is dropped, not saved as 0.10; a bad value costs that field, never the link),
 keeps only the `sources` of saved fields and never a source of `manual`, and upserts. It **merges** into the row (ruling R12): only the keys present and usable in
 `extracted` are updated; a key it does not carry keeps its stored value, `sources` entry and flags, and a key that is present but unusable (out of range, null,
 the wrong type) is dropped without erasing the stored value, so a re-read with fewer fields (a back-fill without OCR) cannot erase what an earlier read found. An
