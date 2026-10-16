@@ -1,7 +1,7 @@
 """Everything the crawler reads from and writes to Postgres, in one place.
 
 Tables: `d1_private.file_candidates`, `inbox_dirs`, `inbox_scan_requests`, `inbox_crawler_state`,
-`inbox_prefs` (migration 193), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
+`inbox_prefs` (migration 193), `file_thumbnails` (migration 198, derived pictures), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
 `teams`, `short_ids` and the record tables it reads for recognition. The crawler never writes a junction
 row or a link (invariant 5): that is the d1-inbox extension's job.
 
@@ -95,6 +95,16 @@ class Cand:
 
 
 @dataclass(frozen=True)
+class ThumbTarget:
+    """A candidate that needs its thumbnails made (or made again): what to read and what it looked like."""
+
+    candidate_id: str
+    rel_path: str
+    size: int
+    mtime: datetime
+
+
+@dataclass(frozen=True)
 class Copy:
     cand: Cand
     size: int
@@ -133,6 +143,7 @@ class Store:
         self._warned: set[str] = (
             set()
         )  # candidates already complained about (once per process)
+        self._thumbs_warned = False
 
     # ---- plumbing --------------------------------------------------------------------
 
@@ -628,6 +639,9 @@ class Store:
             "UPDATE file_candidates SET duplicate_of = NULL WHERE duplicate_of = ANY(%s::uuid[])",
             (candidate_ids,),
         )
+        # a file that is not on the share has no picture of it (spec section 14); one that comes back is
+        # backfilled
+        self.delete_thumbnails(candidate_ids, only_gone=True, quiet=True)
         return n
 
     def revive(self, candidate_id: str) -> None:
@@ -711,8 +725,10 @@ class Store:
         recognition: recognise.Recognition,
         origin: str,
         hashed: HashOutcome | None,
+        thumbs=None,
     ) -> RegisterResult:
-        """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint.
+        """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint, and the
+        thumbnails (a `thumbs.Thumbs`, when the caller made them from the bytes it holds) in the same transaction.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
         previous run's) are left alone, and an existing candidate for the file is left alone.
@@ -784,6 +800,10 @@ class Store:
                     ),
                 )
                 row = cur.fetchone()
+            if row is not None and thumbs is not None:
+                # same transaction; a failure (the table is not there yet) loses only the pictures, which
+                # the backfill makes later
+                self.store_thumbnails(row[0], thumbs, size, mtime, quiet=True)
             with self.conn.cursor() as cur:
                 cur.execute("RELEASE SAVEPOINT register_file")
         except Exception:
@@ -884,6 +904,109 @@ class Store:
             )
             changed += 1
         return changed
+
+    # ---- thumbnails (spec section 14) -------------------------------------------------
+
+    def _thumb_write(self, query: str, params, quiet: bool) -> int:
+        """Run one statement on file_thumbnails. `quiet`: inside a savepoint, and a failure (above all the
+        table not being there yet) is logged once and answered with -1 instead of failing the caller's
+        transaction."""
+        if not quiet:
+            return self._run(query, params)
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT thumbs")
+        try:
+            n = self._run(query, params)
+        except Exception as exc:  # noqa: BLE001
+            with self.conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT thumbs")
+                cur.execute("RELEASE SAVEPOINT thumbs")
+            if not self._thumbs_warned:
+                self._thumbs_warned = True
+                log.warning(
+                    "file_thumbnails could not be written (%s): is migration 198 applied?",
+                    type(exc).__name__,
+                )
+            return -1
+        with self.conn.cursor() as cur:
+            cur.execute("RELEASE SAVEPOINT thumbs")
+        return n
+
+    def store_thumbnails(
+        self,
+        candidate_id: str,
+        thumbs,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """The pictures (a `thumbs.Thumbs`) of the file as it was at `size` and `mtime`, replacing any earlier
+        pair. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, source_size, source_mtime) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = EXCLUDED.thumb, preview = EXCLUDED.preview, "
+            " thumb_width = EXCLUDED.thumb_width, thumb_height = EXCLUDED.thumb_height, "
+            " preview_width = EXCLUDED.preview_width, preview_height = EXCLUDED.preview_height, "
+            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            (
+                candidate_id,
+                thumbs.thumb,
+                thumbs.preview,
+                thumbs.thumb_width,
+                thumbs.thumb_height,
+                thumbs.preview_width,
+                thumbs.preview_height,
+                size,
+                mtime,
+            ),
+            quiet,
+        )
+        return n > 0
+
+    def candidates_missing_thumbnails(
+        self, limit: int, *, max_bytes: int | None = None, skip=()
+    ) -> list[ThumbTarget]:
+        """Image and SEM-image candidates a person can still see (new, dismissed, linked: not gone) that have
+        no thumbnails, or whose thumbnails were made from a file of another size or modification time than the
+        candidate's. Undecided ones first, newest first. `max_bytes` leaves out a file too big to decode and
+        `skip` the ids already tried (a file that cannot be decoded would otherwise be offered every tick). A file
+        whose discovery hash failed is left to the hash retry (an hour later), not read again from here."""
+        rows = self._all(
+            "SELECT c.candidate_id::text, c.rel_path, c.size_bytes, c.source_mtime "
+            "FROM file_candidates c LEFT JOIN file_thumbnails t ON t.candidate_id = c.candidate_id "
+            "WHERE c.kind IN ('image', 'sem_image') AND c.state IN ('new', 'dismissed', 'linked') "
+            "  AND c.size_bytes IS NOT NULL AND c.source_mtime IS NOT NULL "
+            "  AND (%s::bigint IS NULL OR c.size_bytes <= %s::bigint) "
+            "  AND (t.candidate_id IS NULL OR t.source_size <> c.size_bytes OR t.source_mtime <> c.source_mtime) "
+            "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
+            "  AND NOT EXISTS (SELECT 1 FROM file_fingerprints f "
+            "                  WHERE f.directus_files_id = c.directus_files_id AND f.status = 'error') "
+            "ORDER BY (c.state = 'new') DESC, c.first_seen_at DESC, c.candidate_id LIMIT %s",
+            (max_bytes, max_bytes, list(skip), limit),
+        )
+        return [ThumbTarget(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def delete_thumbnails(
+        self, candidate_ids: list[str], *, only_gone: bool = False, quiet: bool = False
+    ) -> int:
+        """Drop the pictures of these candidates (all of them, or with `only_gone` only those whose candidate
+        is in state 'gone'). Does not commit. Returns how many rows went."""
+        if not candidate_ids:
+            return 0
+        n = self._thumb_write(
+            "DELETE FROM file_thumbnails WHERE candidate_id = ANY(%s::uuid[])"
+            + (
+                " AND candidate_id IN (SELECT candidate_id FROM file_candidates WHERE state = 'gone')"
+                if only_gone
+                else ""
+            ),
+            (candidate_ids,),
+            quiet,
+        )
+        return max(n, 0)
 
     # ---- hashing queues --------------------------------------------------------------
 

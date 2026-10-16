@@ -608,6 +608,9 @@ services:
       D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
       # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
       INBOX_OCR: ${INBOX_OCR:-}
+      # Thumbnails for the Inbox (spec section 14): 1 (default) makes a small and a reduced picture of each image
+      # and SEM image, in the database; 0 turns that and the backfill of older files off.
+      INBOX_THUMBNAILS: ${INBOX_THUMBNAILS:-1}
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
       # The folder holding the personal folders: the lab share spells it `User` (Z:\star_group1\User).
       INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}

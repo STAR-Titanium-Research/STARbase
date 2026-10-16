@@ -31,6 +31,7 @@ administrators (admin tab on `/crawler`) and are not scanned.
 | `D1_INBOX_URL` | `.env` | `http://directus:8055` |
 | `D1_INBOX_CRAWLER_SECRET` | `.env`, the same value Directus gets | empty: auto-link is off |
 | `INBOX_OCR=1` | `.env` (passed through by compose) | off (not validated; needs `pytesseract` and tesseract in the image) |
+| `INBOX_THUMBNAILS=0` | `.env` (passed through by compose; recreate the service after changing it) | `1`: on. `0` turns off both the pictures made at registration and the backfill of older files (see *Thumbnails*) |
 | `INBOX_PERSON_DIR` | `.env` (passed through by compose) | `User`, the lab share's folder of personal folders (the code's own default, `Users`, is the spec's spelling) |
 | `INBOX_ONLY_FOLDERS` | `.env` (passed through by compose; recreate the service after changing it) | empty: everyone with a folder; a comma-separated list of uni aliases / share folders scans only those (trial runs) |
 | `INBOX_LOG_LEVEL=DEBUG` | `.env` (passed through by compose; recreate the service after changing it) | `INFO`; DEBUG logs every file the crawler opens; a value that is not a level falls back to INFO with a warning |
@@ -67,6 +68,8 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   raw and unknown types are listed by name, size and date. A document is read once, to hash it, after a person
   links it. A picture is decoded only if it is TIFF, JPEG, PNG or BMP and at most 50 million pixels (judged from
   the header); anything else, or any decoding failure, is a plain image.
+- **Thumbnails** (spec section 14): see the next section. They add no read of the share for a new file and a
+  throttled, allow-listed read for an older one; the picture code only ever gets bytes already in memory.
 - **Dependencies are pinned.** The service installs `psycopg2-binary==2.9.13` and `Pillow==12.3.0` (the
   versions CI resolved) at every start, in the compose command and in `make inbox-crawler-once`. Pillow parses
   pictures from the share, so a bump is a reviewed change to both places (and to `scripts/requirements.txt`'s
@@ -126,6 +129,49 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   alone (rows flagged missing by an older run stay flagged: clear `metadata.missing` by hand if it matters).
   When the indexer moves a file, the crawler re-reads its candidates' paths from the pointer rows first.
 
+## Thumbnails
+
+Each image and SEM image gets two small derived pictures, a thumbnail (about 320 px on the long side) and a
+reduced preview (about 1600 px), both JPEG, in `d1_private.file_thumbnails` (migration 198). The `d1-inbox`
+extension serves them to whoever may see the file, and STARbase shows them in the row and in a full view. They
+are replaceable copies, never the original, and the table is outside Directus's schema scan.
+
+- **At registration** the crawler already holds the image's bytes (it has hashed and classified them), so
+  the pictures cost no second read: they are made from those bytes and stored in the same transaction as the
+  candidate. Only kinds `image` and `sem_image` get any; a document is never opened for this, `.al3d` has none,
+  and neither has a picture that Pillow cannot decode (it is still a found file). The decode limits are
+  classification's: TIFF, JPEG, PNG and BMP only, at most 50 million pixels, a file of at most 64 MB. A big JPEG is
+  decoded at a reduced scale. 16-bit, 32-bit and float grey is stretched to 8 bits, palette, CMYK and
+  transparent pictures become RGB, a multi-page TIFF shows its first frame, EXIF orientation is applied, and a
+  picture is never enlarged.
+- **Backfill.** Images registered before this existed, or whose size or modification time differ from those
+  the pictures were made from, are filled in by a step at the end of a tick (only when nothing else is waiting to be
+  hashed): up to 25 images or 20 seconds per tick, undecided files first, newest first. It reads through
+  `fs_readonly.open_rb` like the scan does (`adopted=False`, so only allow-listed images), at the same
+  `read_mb_per_s` throttle, and keeps the heartbeat beating. It makes a picture only of a file that is still the
+  one the candidate describes (same size and modification time); one that vanished is skipped (the scan
+  decides what is gone). A file that cannot be decoded, or changed since, is tried once per process and not again
+  until the daemon restarts. A file whose discovery hash failed waits for that hash's hourly retry.
+- **Gone.** Marking a candidate `gone` deletes its pictures; one that comes back gets them again from the
+  backfill. Dismissed and linked files keep theirs.
+- **Switch.** `INBOX_THUMBNAILS=0` (recreate the service) stops both. The pictures already made stay.
+- **Without the table.** If migration 198 is not applied yet the crawler logs `file_thumbnails could not be
+  written ... is migration 198 applied?` once, registers files without pictures, and the backfill stays off for
+  10 minutes at a time. Nothing else is affected.
+- **Storage.** A thumbnail is about 10 to 25 KB and a preview about 150 to 400 KB (JPEG quality 78 and 80), so
+  budget about **0.3 MB per image**: 10,000 images are about 3 GB, 100,000 about 30 GB. JPEG does not compress
+  further in Postgres, and the table is in `pg_dump` backups. The count to multiply is
+  `SELECT count(*) FROM d1_private.file_candidates WHERE kind IN ('image', 'sem_image') AND state <> 'gone'`
+  (a first scan of a big share registers its whole history as *Older files*, and the backfill then makes a
+  picture of each); the size so far is
+  `SELECT count(*), pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))) FROM d1_private.file_thumbnails`.
+  The backlog is worked through at up to 25 images per 30-second tick, about 3,000 an hour, less when the read
+  throttle or big TIFFs slow it. To save the space, set `INBOX_THUMBNAILS=0` or
+  `TRUNCATE d1_private.file_thumbnails` (they are made again from the share if it is switched on).
+- **Memory.** A 50 megapixel 16-bit TIFF is decoded to about 300 MB at its peak; the service has no limit of its own
+  today, so give the container room for that (backlog IF54).
+- What only the real share and real SEM images can show is in the backlog: IF53 to IF56.
+
 ## Known limits
 
 - **A share that hangs blocks.** There is no timeout on a call to the share: if it stops answering without
@@ -168,8 +214,10 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
 
 ## Rolling back
 
-Migrations are `20261015000193_found_files_inbox` and `20261015000194_people_create_no_inbox_fields`. Roll back
-194 before 193 (`make migrate-down` undoes the latest one, so run it twice, checking `make migrate-status`
+Migrations are `20261015000193_found_files_inbox` and `20261015000194_people_create_no_inbox_fields`, and
+`20261016000198_file_thumbnails` (the derived pictures: rolling it back loses nothing that cannot be made again from
+the share, but stop the crawler or set `INBOX_THUMBNAILS=0` first, or it logs the missing table every ten minutes).
+Roll back 198 first, then 194 before 193 (`make migrate-down` undoes the latest one, so run it once per migration, checking `make migrate-status`
 between). Stop the crawler first (`docker compose --profile archive stop inbox-crawler`).
 
 Rolling back 193 **drops** every uni alias and share folder (the `people` and `teams` columns), every candidate
