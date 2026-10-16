@@ -139,6 +139,12 @@ Private schema (not exposed)
                              crawler found in people's and teams' folders on the share, its folder
                              cache, its scan queue, its control row and the auto-link opt-in. Reached
                              only through the d1-inbox endpoint and the crawler; see "Found files".
+  d1_private.sem_image_settings, sem_settings_access_log
+                             imaging settings per SEM image (kV, spot, working distance, magnification,
+                             field width, ...) saved when a person links the image, with where each
+                             value came from, and the log of administrator reads (migration 197,
+                             ADR-0022). Written only by d1_private.save_sem_settings and
+                             correct_sem_setting; reached only through the d1-inbox endpoint.
 ```
 
 ---
@@ -509,6 +515,51 @@ refuses); the rule is instead one legal membership test on the hidden top-level 
 (`directus_files` owner change, `team_members` join, leave or move, `people.user_id` set or removed);
 `d1_private.file_readers_drift_count()` counts the differences from `d1_private.file_readers_expected()` (0 is correct) and `d1_private.file_readers_refresh()`
 repairs them. Not granted to the LLM role.
+
+### SEM image settings: `d1_private.sem_image_settings`, `sem_settings_access_log`, `file_candidates.classified_by`
+
+Migration `…197` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 2 and 3). The inbox crawler reads an SEM image's imaging settings (TIFF metadata, or OCR of the data bar) into
+`d1_private.file_candidates.extracted`; when a person links the image they are saved per image. Both tables are in `d1_private`: not exposed by
+Directus, not in `v_schema_dictionary`, not granted to the LLM role; reached only through the `d1-inbox` endpoint, which shows a row to the file's owner
+(an administrator read-only and logged) and a locked answer to everyone else. No audit or OCC trigger (derived bookkeeping).
+
+**`d1_private.sem_image_settings`**: one row per file, `directus_files_id` UUID PK, FK to `directus_files` (`ON DELETE CASCADE`). A column is NULL when the value
+is unknown, failed a cross-check or fell outside its range; it is never zero.
+
+| Column | Type | Description |
+|---|---|---|
+| `kv` | NUMERIC(6,2) | Accelerating voltage in kV, 0.1 to 30 (CHECK) |
+| `spot` | NUMERIC(4,1) | Spot size, 1 to 10 (CHECK) |
+| `working_distance_mm` | NUMERIC(6,2) | Working distance in mm, 0.1 to 50 (CHECK) |
+| `magnification` | INTEGER | Magnification as printed, 5 to 1,000,000 (CHECK); derived from the screen-width constant and the field width when read from metadata |
+| `hfw_um` | NUMERIC(10,2) | Horizontal field width in micrometres, greater than 0 |
+| `pixel_size_nm` | NUMERIC(12,4) | One pixel in nanometres, greater than 0 |
+| `scale_bar_um` | NUMERIC(12,3) | The length the printed scale bar stands for, in micrometres, greater than 0 |
+| `detector`, `mode`, `instrument` | TEXT | As the instrument records them, up to 200 characters (CHECK) |
+| `acquired_at` | TIMESTAMPTZ | When the image was taken; the instrument clock is UK time (`Europe/London`), stored as the instant; NULL for a local time that does not exist (the skipped spring hour) |
+| `sources` | JSONB NOT NULL, default `{}` | Per saved field: `metadata`, `derived`, `ocr` or `manual` (a person's correction, never overwritten by a re-read) |
+| `flags` | JSONB NOT NULL, default `{}` | Notes on the read: `check_this` (could not be cross-checked), a field name with a reason (`acquired_at = invalid_local_time`), a metadata/bar mismatch |
+| `read_by` | TEXT NOT NULL | The profile and version that read it (for example `sem-2`) |
+| `read_at` | TIMESTAMPTZ NOT NULL | When it was last read or saved from a read |
+| `corrected_by`, `corrected_at` | UUID, TIMESTAMPTZ | The Directus user and time of the last correction (no foreign key: the history outlives the user) |
+
+**`d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean`** is the only place `extracted` becomes columns (`SECURITY INVOKER`). It maps the
+keys above, drops a value of the wrong JSON type or outside its range (after rounding to the column's scale, so a bad value costs that field, never the link),
+keeps only the `sources` of saved fields and never a source of `manual`, and upserts. A re-read **replaces** every field the earlier read set (a field the new read
+does not carry becomes absent) but **skips every field whose existing source is `manual`**, and takes no flag named after such a field. It returns whether a row
+exists afterwards: `false` for an `extracted` with nothing usable on a file with no row (nothing is written), `true` otherwise (an existing row is left as it is when
+nothing usable was given). **`d1_private.correct_sem_setting(file, field, value, user) RETURNS void`** is the owner's correction: it sets one of the eleven settings from
+a JSON value (same type and range rules), marks `sources.<field> = 'manual'`, removes the flag named after the field, and records `corrected_by` and `corrected_at`;
+it refuses other columns (`read_by`, `sources`, ...), bad values, a missing user and a file with no row. The endpoint decides who may call it.
+Helpers `sem_clean_number`, `sem_clean_text` and `sem_try_timestamptz` turn a malformed value into NULL instead of an error.
+
+**`d1_private.sem_settings_access_log`**: one row per administrator read of settings that are not theirs. `id` BIGSERIAL PK, `directus_files_id` UUID NOT NULL,
+`read_by_user` UUID NOT NULL, `read_at` TIMESTAMPTZ NOT NULL (default now), `reason` TEXT NOT NULL (not blank). No foreign keys (the log outlives the file and the
+user); index on `(directus_files_id, read_at)`.
+
+**`d1_private.file_candidates.classified_by`** TEXT, nullable: the classifier profile and version that set `kind`, `kind_confidence` and `extracted` (for example
+`sem-2`); a re-classification pass skips rows already at the current version.
 
 ### `surface_scans`
 
