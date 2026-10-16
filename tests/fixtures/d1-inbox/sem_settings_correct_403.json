@@ -1,0 +1,23 @@
+{
+  "description": "anyone but the owner (an administrator included) corrects a value",
+  "request": {
+    "method": "PATCH",
+    "path": "/d1-inbox/sem-settings/00000000-0000-4000-8000-000000003001",
+    "body": {
+      "field": "kv",
+      "value": 20
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "Only the owner of a file can correct its imaging settings.",
+        "extensions": {
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

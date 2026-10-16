@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
-  shapeLink, shapePrefs, shapeQueued, shapeStateChange, shapeSummary, shapeUndo, unfit,
+  shapeLink, shapePrefs, shapeQueued, shapeSemLocked, shapeSemNone, shapeSemSettings, shapeStateChange, shapeSummary, shapeUndo, unfit,
 } from './index.js';
 
 export const FIXTURE_DIR = fileURLToPath(new URL('../../../tests/fixtures/d1-inbox/', import.meta.url));
@@ -174,6 +174,20 @@ const summary = (description, rows, scope, teams, person) => ok(description, req
 
 const ALL_NEW = [NEW_ORIGINAL, COPY, SURFACE_SCAN, EDGE_SCAN, DOCUMENT, NOT_EDITABLE, HIDDEN_RECORD, DOC_EXACT];
 const FILTER = { tab: 'new', strength: 'short_id' };
+// ---- the imaging settings (stream D) -------------------------------------------------------------------------------------------
+
+const SEM_FILE = ID(3001); // the file of NEW_ORIGINAL
+const SEM_PATH = '/d1-inbox/sem-settings';
+// A row of d1_private.sem_image_settings as pg returns it: numeric columns as strings, the time as a Date, jsonb as objects. Every value is made up.
+const semRow = (over = {}) => ({
+  directus_files_id: SEM_FILE, kv: '15.00', spot: '3.0', working_distance_mm: '8.50', magnification: 5000, hfw_um: '59.70', pixel_size_nm: '29.1400', scale_bar_um: '10.000',
+  detector: 'ETD', mode: 'SE', instrument: 'Quanta 650', acquired_at: at('2026-03-02T10:15:30.000Z'),
+  sources: { kv: 'metadata', spot: 'metadata', working_distance_mm: 'metadata', magnification: 'derived', hfw_um: 'metadata', pixel_size_nm: 'metadata', scale_bar_um: 'ocr', detector: 'metadata', mode: 'metadata', instrument: 'metadata', acquired_at: 'metadata' },
+  flags: { check_this: true }, read_by: 'inbox', read_at: at('2026-10-14T10:00:00.000Z'), corrected_by: null, corrected_at: null, ...over,
+});
+const semGet = (description, body) => ok(description, request('GET', SEM_PATH, { query: { file: SEM_FILE } }), { data: body });
+const semPatch = (field, value) => request('PATCH', `${SEM_PATH}/${SEM_FILE}`, { body: { field, value } });
+
 // ---- the admin page ----------------------------------------------------------------------------------------------------------
 
 const crawlerState = (over) => ({
@@ -309,6 +323,19 @@ export function buildFixtures() {
   put('admin_stale', admin('a daemon that has not heartbeated for an hour (stale wins over paused)', crawlerState({ desired_state: 'paused', last_heartbeat_at: at('2026-10-15T11:00:00.000Z') })));
   put('admin_never', admin('no state row yet: the daemon never started', undefined));
   put('admin_403', failure('a person who is not an administrator', request('GET', '/d1-inbox/admin'), ERRORS.adminOnly()));
+
+  // GET and PATCH /sem-settings
+  put('sem_settings_owner', semGet('the owner (or a member of the owner team) reads the settings of their file and may correct them', shapeSemSettings(semRow(), { canEdit: true })));
+  put('sem_settings_admin', semGet('an administrator who is not the owner reads the same values read-only (the server logs the read, reason admin_read)', shapeSemSettings(semRow(), { canEdit: false })));
+  put('sem_settings_locked', semGet('a file the caller may not read: HTTP 200, locked, and no value, source or flag at all', shapeSemLocked()));
+  put('sem_settings_none', semGet('an allowed reader of a file with no settings saved', shapeSemNone()));
+  put('sem_settings_correct_ok', ok('the owner corrects the kV: the answer is the settings again, with sources.kv manual',
+    semPatch('kv', 20), { data: shapeSemSettings(semRow({ kv: '20.00', sources: { ...semRow().sources, kv: 'manual' }, flags: {}, corrected_by: ID(1), corrected_at: NOW }), { canEdit: true }) }));
+  put('sem_settings_correct_403', failure('anyone but the owner (an administrator included) corrects a value', semPatch('kv', 20), ERRORS.notSettingsOwner()));
+  put('sem_settings_correct_400_field', failure('a field that is not a setting (read_by, sources, ...)', semPatch('read_by', 'x'), ERRORS.settingUnknown()));
+  put('sem_settings_correct_400_value', failure('a value the database refuses (out of range, wrong type)', semPatch('kv', 99), ERRORS.settingInvalid()));
+  put('link_403_admin_read_only', failure('an administrator links a file that is not theirs: administrators read other people\'s files, they do not change them',
+    request('POST', '/d1-inbox/link', { body: { items: oneLink } }), ERRORS.adminReadOnly(ID(1001))));
 
   // errors every route can answer
   put('error_401', failure('no signed-in user', request('GET', '/d1-inbox/summary'), new HttpError(401, 'UNAUTHORIZED', 'Sign in first.')));

@@ -2236,6 +2236,21 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   also work on the real data. Down is lossy: it drops the stamps, the settings, the owners' manual corrections and the administrator
   access log, so dump `d1_private.sem_image_settings` and `d1_private.sem_settings_access_log` first if the copy holds any. Since: provenance owner and SEM settings (database,
   migrations 196 and 197). The crawler half of SEM5 (`--sem-backfill`) is the crawler stream's.
+- [ ] **SEM8 — The `d1-inbox` imaging settings routes on the real Directus (two accounts and an administrator).** With **SEM3** passed, and an SEM
+  image (a FEI TIFF) in account A's personal folder that the crawler has registered and stamped: as A, link it to a sample A can edit, then call
+  `GET /d1-inbox/sem-settings?file=<directus_files id>` (browser address bar while signed in, or the Data Studio network tab). Expect
+  `locked: false`, the printed settings, `sources`, and `can_edit: true`. As B (another Lab Member who can read that sample) the same call must answer
+  `{"data":{"locked":true}}` with HTTP 200 and nothing else. As an administrator who is not A it answers the values with `can_edit: false` and
+  `SELECT * FROM d1_private.sem_settings_access_log ORDER BY id DESC LIMIT 3` gains exactly one row with `reason = 'admin_read'` per call (and none
+  for A's own reads). As A, `PATCH /d1-inbox/sem-settings/<id>` with `{"field":"kv","value":20}` answers 200 with `sources.kv = "manual"`; the same
+  PATCH as B and as the administrator answers 403, and `{"field":"read_by","value":"x"}` as A answers 400. For a file with no owner (one linked
+  before migration 196) linked to a sample B can read, B's GET answers the values (this is the first live check that the junction read as the caller
+  follows the record's read rule) and a Lab Member who cannot read the sample gets `locked: true`. Then, as the administrator, try
+  `POST /d1-inbox/link`, `/dismiss` and `/undo` on a file of A's: each must answer 403 *"An administrator can read other people's files but not
+  change them"* and change nothing, while the Inbox list and the badge still show the administrator the rows they could see before. Last, link
+  one image to a second record in Data Studio as well and undo the Inbox link: `d1_private.sem_image_settings` must still hold the file's row. Delete
+  the Data Studio link, link the file in the Inbox again and undo that: the row must be gone.
+  Since: `d1-inbox` imaging settings routes (stream D of the SEM reader plan).
 
 ## Done
 
