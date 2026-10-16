@@ -1,5 +1,5 @@
 // The text of a wire's hover tooltip (spec D17): the sample it carries, where it comes from, where it
-// goes. Plain lines; WireEdge's page-level tooltip joins them. Pure.
+// goes (and, on the wire between two passes of an unstacked stack, how to stack them again). Plain lines; WireEdge's page-level tooltip joins them. Pure.
 
 import { LINEAGE_LABEL, KINDS } from './kinds';
 import { nodeOfSocket } from '../model/sockets';
@@ -28,6 +28,7 @@ export function wireTooltip(wire: Wire, nodesById: ReadonlyMap<string, MapNode>)
 	if (from) lines.push(`from ${from}`);
 	const into = nodeLabel(nodesById.get(nodeOfSocket(wire.to)));
 	if (into) lines.push(`into ${into}`);
+	if (wire.stackable) lines.push('Double-click a pass to stack again');
 	return lines;
 }
 
