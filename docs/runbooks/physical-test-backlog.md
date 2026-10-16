@@ -2343,6 +2343,28 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   passes, STARbase built, crawler started, `--reclassify`, `--sem-backfill`. Then the rollback on the copy in the documented order (crawler, extension,
   `down` 197, `down` 196, restart): expect the old Inbox working, files readable by every member again, and note what was lost (settings, owner stamps).
   Record the total time and every surprise. Since: SEM reader final fix wave (I4).
+- [ ] **SEM16 — A one-shot pass started on an empty mount point.** With the real share's mount point present but the share not mounted (`umount` it, or
+  stop the SMB mount, so `ARCHIVE_ROOT` is an empty directory), start `python -m inbox_crawler --reclassify` and then `--sem-backfill` on a copy of the
+  database. Expect each to refuse at once: `aborted` in the log (the share root or the personal-folder base, `User` or `INBOX_PERSON_DIR`, does not answer),
+  exit code 1, and no row marked (`classified_by` unchanged, no `sem_image_settings` row added). Mount the share again and expect both to run to their end.
+  Since: SEM reader final fix wave.
+- [ ] **SEM17 — More than 25 deleted dismissed rows do not abort `--reclassify`.** On a copy of the database, dismiss (or find) at least 30 image candidates
+  whose files have since been deleted from the share (state `dismissed`, file gone). Run `--reclassify` with the share mounted: expect the log
+  `reclassify: ... N skipped ...` with N at least 30, no `aborted`, exit code 0, and every other eligible row still processed (a missing file is skipped, it
+  never counts toward the 25 transient errors that abort a pass). Run it again: the same rows are skipped again (they stay queued), still no abort.
+  Since: SEM reader final fix wave.
+- [ ] **SEM18 — Deactivating, and deleting, a person who owns files (`ON DELETE RESTRICT`).** In Data Studio, set a person who owns found files (an alias, a
+  login, owned rows in `directus_files`) inactive: expect it to save, the person's folder to stop being scanned (unless "scan while Former"), their owned
+  files to stay owned by them and readable by their login, and the admin tab to list nothing new as unowned. Then try to delete that person (People page, and
+  `DELETE /items/people/<id>`): expect a refusal (a foreign-key violation, `directus_files_owner_person_id_fkey`), and the person and their files unchanged. Check
+  that the message Directus shows is understandable, and write down what an administrator must do to remove such a person (re-stamp their files first, see
+  the runbook "An alias handed to someone else"). Since: SEM reader final fix wave (ADR-0022 consequences).
+- [ ] **SEM19 — Team membership: `d1-inbox` counts active members, `file_readers` counts every member with a login (M3, ADR-0022 consequences).** With a team
+  that has a share folder and a team-owned file, and a team member who is a Former (inactive) person with a login still active in Directus: as that
+  person, `GET /files/<id>` of the team's file answers 200 (the readers table holds them) while the Inbox shows them no team files, badge 0 and no team in the
+  summary (d1-inbox counts only `people.active` members). As an active member both work. Decide which rule is right (a Former member keeping read access by id is
+  probably not), and record the answer: the fix is a later migration (change `file_readers_expected` to join `people.active`, then
+  `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
 
 ## Done
 
