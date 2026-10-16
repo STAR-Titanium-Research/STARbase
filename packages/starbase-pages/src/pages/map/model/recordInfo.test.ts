@@ -187,4 +187,14 @@ describe('recordInfo: tray records (card tweaks)', () => {
     const op = g.nodes.find((n) => n.type === 'container')!;
     expect(fact(recordInfo(d, g, op.id), 'Tool')).toBe('Roughing holder');
   });
+
+  it('a material card is headed by its name, with its code under it; without a name, by its code', () => {
+    const named = mkSample('n', { materialRef: { collection: 'materials', id: 'm9', code: 'AA', label: 'Ti-6Al-4V Grade 5' } });
+    const bare = mkSample('b', { materialRef: { collection: 'materials', id: 'm8', code: 'AB' } });
+    const d = mkData({ samples: [named, bare] });
+    const g = build(d);
+    expect(recordInfo(d, g, 'm:n')).toMatchObject({ kind: 'material', code: 'Ti-6Al-4V Grade 5', title: 'AA', plain: true, ref: { id: 'm9' } });
+    expect(recordInfo(d, g, 'm:b')).toMatchObject({ kind: 'material', code: 'AB' });
+    expect(recordInfo(d, g, 'm:b')!.plain).toBeUndefined();
+  });
 });

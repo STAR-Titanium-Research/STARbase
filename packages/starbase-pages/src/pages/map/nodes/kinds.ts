@@ -54,7 +54,7 @@ export function statusKindOf(kind: Kind): 'sample' | 'test' | 'campaign' {
 	return 'campaign';
 }
 
-/** Collections whose records read better by name than by code in an Inside slot (a tool's code is a short hash, a campaign's a number). */
-const BY_NAME: ReadonlySet<string> = new Set(['tools', 'campaigns']);
-/** What an Inside slot shows for a record: its name for a tool or a campaign when it has one, else its code. */
+/** Collections whose records read better by name than by code on a card or in an Inside slot (a tool's code is a short hash, a campaign's a number, a material's two letters). */
+const BY_NAME: ReadonlySet<string> = new Set(['tools', 'campaigns', 'materials']);
+/** What a card or an Inside slot shows for a record: its name for a tool, a campaign or a material when it has one, else its code. */
 export const slotText = (r: Pick<Ref, 'collection' | 'code' | 'label'>): string => (BY_NAME.has(r.collection) && r.label ? r.label : r.code);

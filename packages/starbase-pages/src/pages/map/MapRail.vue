@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { AppLink, RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, mapPath, sampleDims } from '@d1/ui';
+import { AppLink, RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, mapPath, sampleDims, type ElementRow } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
+import MaterialComposition from './MaterialComposition.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
 import { openPath, type RecordInfo } from './model/recordInfo';
@@ -13,7 +14,7 @@ import { SETTINGS_CHIP } from './model/showChips';
 
 // The rail of the Process map (spec §6.5), from the top: the selected record's identity (kind, status,
 // code, title), its actions (Open record, Process map of it, Expand, Centre), the sample drawing for a sample, the data
-// thumbnail when it has data, its facts; then Connections (hover shows the hover card on the canvas,
+// thumbnail when it has data, a material's nominal composition, its facts; then Connections (hover shows the hover card on the canvas,
 // click selects and centres), Show (what the map draws) and Reach (how many steps). The page owns the
 // state; this only draws it and reports what the person did.
 const props = defineProps<{
@@ -21,6 +22,8 @@ const props = defineProps<{
 	/** The record the map is focused on (the URL's), so the rail does not offer a map of the map it is already showing. */
 	focus?: { collection: string; id: string } | null;
 	preview?: DataPreview;
+	/** The selected material's alloying elements, once read; absent, null or empty: none to show. */
+	composition?: ElementRow[] | null;
 	/** The selected record is a card on the map (Expand and Centre need one). */
 	onMap: boolean;
 	connections: Connections;
@@ -69,6 +72,8 @@ const mapLabel = computed(() => {
 });
 const drawable = computed(() => !!props.info?.geometry && hasDrawableDims(props.info.geometry));
 const dims = computed(() => sampleDims(props.info?.geometry));
+/** A material with a composition on record: the plot has a place in the rail (an empty block would only take room). */
+const showComposition = computed(() => props.info?.kind === 'material' && !!props.composition?.length);
 
 const groups = computed(() => orderedGroups(props.connections));
 const total = computed(() => groups.value.reduce((n, g) => n + g.items.length, 0));
@@ -127,9 +132,10 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 			</template>
-			<template v-if="drawable || (preview && preview.kind !== 'none')" #extra>
+			<template v-if="drawable || (preview && preview.kind !== 'none') || showComposition" #extra>
 				<SampleGeometry v-if="drawable" :dims="dims" aria-hidden="true" />
 				<DataThumb :preview="preview" link />
+				<MaterialComposition v-if="showComposition" :elements="composition" />
 			</template>
 		</RecordRail>
 		<div v-else class="pm-none">Select a record on the map to see it here.</div>
