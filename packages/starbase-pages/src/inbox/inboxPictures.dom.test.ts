@@ -216,7 +216,10 @@ describe('the preview dialog', () => {
 		dialog()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
 		await new Promise((r) => setTimeout(r, 10));
 		expect(dialog()).not.toBeNull();
-		document.querySelector('[data-test="preview-backdrop"]')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+		const outside = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+		document.querySelector('[data-test="preview-backdrop"]')!.dispatchEvent(outside);
+		// the browser's own mousedown would take focus away from where the dialog gives it back
+		expect(outside.defaultPrevented).toBe(true);
 		await vi.waitFor(() => expect(dialog()).toBeNull());
 		await vi.waitFor(() => expect(document.activeElement).toBe(btn));
 	});

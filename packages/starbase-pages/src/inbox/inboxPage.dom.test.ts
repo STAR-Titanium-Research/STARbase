@@ -142,10 +142,11 @@ describe('the Inbox page', () => {
 		expect(scan.textContent).not.toMatch(/attach|soon/i);
 	});
 
-	it('draws no thumbnail and asks for no asset: every row shows the icon of its kind', async () => {
+	it('a file without has_thumbnail draws no picture and asks for none: its row shows the icon of its kind (pictures: inboxPictures.dom.test.ts)', async () => {
 		await mount();
 		expect(document.querySelectorAll('img')).toHaveLength(0);
 		expect(rowOf('3fa9c1d2_A1.tif').querySelector('.thumb')).not.toBeNull();
+		expect(fake.pictureStats.requests).toBe(0);
 	});
 
 	it('Link on a suggested file links it, the row goes, focus moves to the next row, and Undo brings it back', async () => {

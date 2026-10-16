@@ -8,7 +8,8 @@ import { usePicture } from './usePicture';
 // The full view of a found file's picture (spec 2026-10-15-found-files-inbox-design.md section 14): a modal with the reduced-size preview, a spinner
 // while it loads (the thumbnail the row already has shows, blurred and scaled up, meanwhile), an error with Retry, and the file's name, folder and
 // what the crawler read. Esc, a click outside and the Close button close it; focus starts on Close and stays inside (Tab wraps). The row that opened it
-// puts focus back on its thumbnail button. It is its own modal rather than v-dialog so it can be wide, and so it behaves the same in both hosts.
+// puts focus back on its thumbnail button. It is its own modal rather than v-dialog so it can be wide, and so it behaves the same in both hosts. It
+// wears d1-kit: teleported to <body> it is outside the page frame that sets the --d1-* tokens.
 const props = defineProps<{
 	file: FoundFile;
 	/** The row's thumbnail as an object URL, when it has loaded: shown blurred until the preview is in. */
@@ -71,7 +72,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 
 <template>
 	<Teleport to="body">
-		<div class="pv-backdrop" data-test="preview-backdrop" @mousedown.self="emit('close')">
+		<div class="d1-kit pv-backdrop" data-test="preview-backdrop" @mousedown.self.prevent="emit('close')">
 			<div ref="box" class="pv" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1" data-test="preview-dialog" :data-state="state">
 				<h2 :id="titleId" class="pv-title">{{ name }}</h2>
 
@@ -111,7 +112,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 .pv-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.6); overscroll-behavior: contain; }
 .pv {
 	box-sizing: border-box; width: min(960px, 100%); max-height: calc(100dvh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px 20px 16px;
-	border: 1px solid var(--d1-line); border-radius: 12px; background: var(--theme--background, #fff); color: var(--theme--foreground);
+	border: 1px solid var(--d1-line); border-radius: 12px; background: var(--d1-surface, var(--theme--background, #fff)); color: var(--theme--foreground);
 	box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 }
 .pv:focus { outline: none; }
