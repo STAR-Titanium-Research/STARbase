@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
-  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, mount, parseFileFilters, parseScanItem, safeEqual, shapeSummary, unfit,
+  HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canSee, folderOfCandidate, isIgnored, mount, parseFileFilters, parseIgnoredFolder, parseScanItem,
+  safeEqual, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -100,6 +101,8 @@ function newWorld() {
     scanRequests: [],
     // the crawler's folder cache (d1_private.inbox_dirs): { rel_path, owner_person_id, owner_team_id, dir_mtime, last_listed_at }
     dirs: [],
+    // ignored folders (d1_private.inbox_ignored_dirs): { ignored_id, owner_person_id, owner_team_id, rel_folder, created_at, created_by }
+    ignored: [], skipIgnoredFind: false,
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
       daemon_started_at: new Date('2026-10-15T08:00:00.000Z'), current_activity: 'idle', last_scan_started_at: new Date('2026-10-15T11:30:00.000Z'),
@@ -127,13 +130,15 @@ for (const [key, value] of Object.entries(SQL)) {
   else for (const [sub, text] of Object.entries(value)) NAMES.set(text, `${key}.${sub}`);
 }
 const csv = (v) => String(v ?? '').split(',').filter(Boolean);
+// does a row (a rule, a cache row, a candidate) belong to the owner given as the first two bindings (person id, team id; one of them null)?
+const sameOwner = (row, b) => (row.owner_person_id ?? null) === (b[0] ?? null) && (row.owner_team_id ?? null) === (b[1] ?? null);
 const copy = (v) => structuredClone(v);
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), ignored: copy(w.ignored) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.ignored = s.ignored;
 };
 
 function statement(w, sql, b, txId) {
@@ -207,6 +212,38 @@ function statement(w, sql, b, txId) {
       }
       return [];
     }
+    // ignored folders: the owner is the pair of bindings (person id, team id), one of them null
+    case 'ignoredList': {
+      const teams = csv(b[1]);
+      return copy(w.ignored.filter((r) => (b[0] !== null && r.owner_person_id === b[0]) || teams.includes(r.owner_team_id))
+        .map((r) => ({ ...r, owner_name: r.owner_person_id ? w.people.find((p) => p.person_id === r.owner_person_id)?.full_name : w.teams.find((t) => t.team_id === r.owner_team_id)?.name }))
+        .sort((x, y) => x.rel_folder.toLowerCase().localeCompare(y.rel_folder.toLowerCase()) || x.ignored_id.localeCompare(y.ignored_id)));
+    }
+    case 'ignoredById': return copy(w.ignored.filter((r) => r.ignored_id === b[0]));
+    case 'ignoredCount': return [{ n: w.ignored.filter((r) => sameOwner(r, b)).length }];
+    case 'ignoredFind': return w.skipIgnoredFind ? [] : w.ignored.filter((r) => sameOwner(r, b) && r.rel_folder.toLowerCase() === b[2].toLowerCase()).map((r) => ({ ignored_id: r.ignored_id }));
+    case 'ignoredInsert': {
+      // the unique index (owner, lower(rel_folder)) and the table's form CHECKs
+      if (w.ignored.some((r) => sameOwner(r, b) && r.rel_folder.toLowerCase() === b[2].toLowerCase())) throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+      if (b[2] === '' || /^\/|\/$|\/\//.test(b[2]) || b[2].split('/').some((x) => x === '.' || x === '..')) throw Object.assign(new Error('violates check constraint'), { code: '23514' });
+      const row = { ignored_id: ID(9500 + w.ignored.length + w.txCount), owner_person_id: b[0], owner_team_id: b[1], rel_folder: b[2], created_at: w.now.toISOString(), created_by: b[3] };
+      w.ignored.push(row);
+      return [{ ignored_id: row.ignored_id, rel_folder: row.rel_folder, created_at: row.created_at }];
+    }
+    case 'ignoredDelete': {
+      const hit = w.ignored.filter((r) => r.ignored_id === b[0]);
+      w.ignored = w.ignored.filter((r) => r.ignored_id !== b[0]);
+      return hit.map((r) => ({ ignored_id: r.ignored_id }));
+    }
+    case 'openUnderFolder':
+      return [...w.candidates.values()].filter((c) => c.state === 'new' && sameOwner(c, b) && c.rel_path.toLowerCase().startsWith(b[2].toLowerCase()))
+        .sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map((c) => ({ candidate_id: c.candidate_id, rel_path: c.rel_path }));
+    case 'ignoredClearDirs':
+      w.dirs = w.dirs.filter((d) => !(sameOwner(d, b) && (d.rel_path.toLowerCase() === b[2].toLowerCase() || d.rel_path.toLowerCase().startsWith(b[3].toLowerCase()))));
+      return [];
+    case 'ignoredRelistParent':
+      for (const d of w.dirs) if (sameOwner(d, b) && d.rel_path.toLowerCase() === b[2].toLowerCase()) Object.assign(d, { last_listed_at: null, dir_mtime: null });
+      return [];
     case 'prefsGet': return w.prefs.has(b[0]) ? [{ auto_link: w.prefs.get(b[0]) }] : [];
     case 'prefsPut': w.prefs.set(b[0], b[1]); return [{ auto_link: b[1] }];
     case 'rescanBlocking': {
@@ -633,7 +670,7 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
 
 const USER_ROUTES = [
   'GET /summary', 'GET /files', 'POST /link', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
-  'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all',
+  'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id',
 ];
 
 test('every route but auto-link needs a signed-in user: 401, Directus-shaped, source d1-inbox', async () => {
@@ -667,6 +704,7 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
   const writes = [
     ['POST /link', { items: [link(c)] }], ['POST /accept-all', { filter: {} }], ['POST /dismiss', { candidate_ids: [c.candidate_id] }],
     ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
+    ['POST /ignored-folders', { folder: 'x' }], ['DELETE /ignored-folders/:id', undefined],
   ];
   for (const [key, body] of writes) {
     const res = await call(key, { user: U.viewer, role: LAB_VIEWER_ROLE_ID, body });
@@ -676,6 +714,7 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
   assert.equal(w.junctions.sample_data_files.length, 0);
   assert.equal(w.scanRequests.length, 0);
   assert.equal(w.prefs.size, 0);
+  assert.equal(w.ignored.length, 0);
   assert.equal(c.state, 'new');
   assert.equal((await call('GET /summary', { user: U.viewer, role: LAB_VIEWER_ROLE_ID })).statusCode, 200);
   assert.equal((await call('GET /prefs', { user: U.viewer, role: LAB_VIEWER_ROLE_ID })).statusCode, 200);
@@ -2632,8 +2671,8 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   const router = fakeRouter();
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
-    'GET /admin', 'GET /files', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss',
-    'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
+    'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /ignored-folders', 'GET /prefs', 'GET /summary', 'POST /accept-all', 'POST /admin/scan-all',
+    'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders', 'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });
 
