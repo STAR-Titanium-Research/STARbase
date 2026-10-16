@@ -624,9 +624,11 @@ services:
       - archive_share:/mnt/archive:ro
     working_dir: /scripts
     # Exact versions (the ones CI resolved): a bump is a reviewed change, not whatever pip finds at a restart.
-    # INBOX_OCR=1 also needs rapidocr-onnxruntime and numpy, not installed here until a clean image has been shown to
-    # import them (physical-test backlog SEM7); `make inbox-crawler-once` has its own copy of this pip line.
-    command: ["sh", "-c", "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && exec python -m inbox_crawler --daemon"]
+    # INBOX_OCR=1 also needs rapidocr-onnxruntime (about 380 MB), installed only when it is set so the default start stays
+    # light. The versions are the ones a clean python:3.12-slim imported (physical-test backlog SEM7); rapidocr goes in
+    # with --no-deps because its metadata asks for opencv-python (needs libGL), and the headless build stands in.
+    # `make inbox-crawler-once` has its own copy of these pip lines.
+    command: ["sh", "-c", "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && if [ -n \"$$INBOX_OCR\" ]; then pip install -q --no-deps 'rapidocr-onnxruntime==1.2.3' && pip install -q 'onnxruntime==1.31.0' 'numpy==2.5.4' 'opencv-python-headless==5.0.0.93' 'pyclipper==1.4.0' 'Shapely==2.2.0' 'PyYAML==6.0.3' 'six==1.17.0'; fi && exec python -m inbox_crawler --daemon"]
     networks: [d1net]
 
 volumes:
