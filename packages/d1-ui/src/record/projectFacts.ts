@@ -62,6 +62,8 @@ export interface ProjectContentsInput {
 	samples: number | null;
 	operations: number | null;
 	tests: number | null;
+	/** Operations and tests in the activity window; null while that read is loading. */
+	activity: number | null;
 	equipment: number | null;
 }
 
@@ -74,7 +76,7 @@ export function projectContents(i: ProjectContentsInput): ContentsEntry[] {
 		{ id: 'unassigned-samples', title: 'Samples not in a campaign', count: i.samples },
 		{ id: 'unassigned-operations', title: 'Operations not in a campaign', count: i.operations },
 		{ id: 'unassigned-tests', title: 'Tests not in a campaign', count: i.tests },
-		{ id: 'activity', title: 'Activity', count: null },
+		{ id: 'activity', title: 'Activity', count: i.activity },
 		{ id: 'equipment', title: 'Equipment used', count: i.equipment },
 	);
 	return entries;

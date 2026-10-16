@@ -3,7 +3,7 @@ import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, AccessDialog, DEFAULT_WEEKS, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
 	pinTargetForRecord,
 	mapPath,
@@ -44,6 +44,14 @@ const active = computed(() => project.value?.is_active !== false);
 // the project rule (projectScope.ts), so they are text here, not links (see record/projectFacts.ts).
 const railFacts = computed(() => projectRailFacts(project.value, investigators.value.data, counts.value.data, counts.value.loading));
 
+// Operations and tests in the activity window: null while loading, 0 when there is nothing to draw
+// (then the panel is its lid only, and the contents list dims it, like the other empty panels).
+const activityCount = computed(() => {
+	const a = activity.value;
+	if (a.loading) return null;
+	return a.data.data ? a.data.data.totalOps + a.data.data.totalTests : 0;
+});
+
 // "On this page": the panels in page order. A count is null while its read loads.
 const rows = (s: { loading: boolean; data: unknown[] }) => (s.loading ? null : Math.min(s.data.length, LIST_CAP));
 const contents = computed<ContentsEntry[]>(() => projectContents({
@@ -52,6 +60,7 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 	samples: rows(looseSamples.value),
 	operations: rows(looseOperations.value),
 	tests: rows(looseTests.value),
+	activity: activityCount.value,
 	equipment: equipment.value.loading ? null : equipment.value.data.length,
 }));
 
@@ -109,7 +118,13 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 					</div>
 
 					<div class="d1-cols project-cols">
-						<Section id="activity" title="Activity">
+						<Section
+							id="activity"
+							title="Activity"
+							:count="activityCount"
+							:empty="!activity.loading && !activity.error && activityCount === 0"
+							:empty-text="`No operations or tests in the last ${DEFAULT_WEEKS} weeks.`"
+						>
 							<LoadState :loading="activity.loading" :error="activity.error">
 								<Sparkline
 									v-if="activity.data.data"
@@ -133,7 +148,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 							<LoadState :loading="equipment.loading" :error="equipment.error">
 								<ul class="equipment">
 									<li v-for="e in equipment.data" :key="e.equipment_id">
-										<span class="e-name">{{ e.name }}</span>
+										<RecordLink collection="equipment" :id="e.equipment_id" class="e-name">{{ e.name }}</RecordLink>
 										<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
 									</li>
 								</ul>
@@ -174,7 +189,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 .equipment { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .equipment li {
 	display: flex; flex-direction: column; padding: 7px 10px; border-radius: 8px;
-	border: 1px solid var(--d1-line); background: var(--d1-tile);
+	border: 1px solid var(--d1-line); background: var(--d1-surface);
 }
 .e-name { font-weight: 650; font-size: var(--fs-md); }
 .e-count { font-size: var(--fs-xs); font-weight: 600; color: var(--d1-dim); }

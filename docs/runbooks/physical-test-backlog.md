@@ -223,6 +223,13 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
 `npm run build:extensions` at the repo root so the rebuilt `d1-lab-dashboard` and
 `d1-composition-bar` load, and apply migrations 138 and 139.
 
+- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** Open a project with a campaign and equipment
+  on its operations (for example macrozone cubes), in light and dark. Expect: the campaign card in **Campaigns** looks the
+  same as on the Campaigns list in Cards view (white, rounded, shadowed); each **Equipment used** tile is white too and its
+  name is a link that opens that equipment's page. On a project whose operations and tests are all undated or older than 26
+  weeks, **Activity** is a single lid with a 0 and "No operations or tests in the last 26 weeks.", and "On this page" lists
+  it dimmed with 0. With recent records it shows the chart, a count chip and a normal "On this page" row. Since: Project
+  page visual consistency (PR pending).
 - [ ] **E1 — edit drawer saves through real interfaces.** On a sample page click **Edit**. Expect:
   the drawer shows the same form as Content (sample code builder, material and project pickers,
   geometry preview, linked files), with the record's values. Change the nickname and the form's
