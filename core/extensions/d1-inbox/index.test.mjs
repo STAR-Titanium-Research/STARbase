@@ -239,11 +239,10 @@ function statement(w, sql, b, txId) {
     case 'openUnderFolder':
       return [...w.candidates.values()].filter((c) => c.state === 'new' && sameOwner(c, b) && c.rel_path.toLowerCase().startsWith(b[2].toLowerCase()))
         .sort((x, y) => x.candidate_id.localeCompare(y.candidate_id)).map((c) => ({ candidate_id: c.candidate_id, rel_path: c.rel_path }));
-    case 'ignoredClearDirs':
-      w.dirs = w.dirs.filter((d) => !(sameOwner(d, b) && (d.rel_path.toLowerCase() === b[2].toLowerCase() || d.rel_path.toLowerCase().startsWith(b[3].toLowerCase()))));
-      return [];
-    case 'ignoredRelistParent':
-      for (const d of w.dirs) if (sameOwner(d, b) && d.rel_path.toLowerCase() === b[2].toLowerCase()) Object.assign(d, { last_listed_at: null, dir_mtime: null });
+    case 'ignoredResetDirs':
+      for (const d of w.dirs) {
+        if (sameOwner(d, b) && (d.rel_path.toLowerCase() === b[2].toLowerCase() || d.rel_path.toLowerCase().startsWith(b[3].toLowerCase()))) Object.assign(d, { last_listed_at: null, dir_mtime: null });
+      }
       return [];
     case 'prefsGet': return w.prefs.has(b[0]) ? [{ auto_link: w.prefs.get(b[0]) }] : [];
     case 'prefsPut': w.prefs.set(b[0], b[1]); return [{ auto_link: b[1] }];
@@ -2668,41 +2667,47 @@ test('POST /admin/scan-all: administrators only; queues an all-scope request onc
 
 // ---- ignored folders (spec section 15) ----------------------------------------------------------------------------------------
 
-// The table of cases for the matcher. The crawler's Python test (tests/scripts/test_inbox_crawler_ignored.py) runs the SAME rows through
-// scripts/inbox_crawler's is_ignored: change them together. [folder relative to the owner's root, rules, ignored?]
+// The table of cases for the matcher. The crawler's Python test (tests/scripts/test_inbox_crawler_ignored.py) runs the SAME 30 rows through
+// scripts/inbox_crawler's is_ignored, row for row: change them together. [folder relative to the owner's root, rules, ignored?]
 export const IGNORE_CASES = [
+  // the folder itself, and anything beneath it
   ['World-Ti Paper', ['World-Ti Paper'], true],
   ['World-Ti Paper/Drafts', ['World-Ti Paper'], true],
-  ['World-Ti Paper/Drafts/v2/final', ['World-Ti Paper'], true],
-  ['world-ti paper', ['World-Ti Paper'], true],
-  ['WORLD-TI PAPER/drafts', ['World-Ti Paper'], true],
-  ['World-Ti Paper', ['world-ti paper'], true],
+  ['World-Ti Paper/Drafts/v2/figs', ['World-Ti Paper'], true],
+  // whole path parts only: a lookalike name is not covered
   ['World-Ti Paper 2', ['World-Ti Paper'], false],
   ['World-Ti Paper 2/Drafts', ['World-Ti Paper'], false],
-  ['World-Ti Paper-old', ['World-Ti Paper'], false],
+  ['World-Ti Paperwork', ['World-Ti Paper'], false],
   ['World-Ti', ['World-Ti Paper'], false],
+  ['Old World-Ti Paper', ['World-Ti Paper'], false],
+  // a rule does not cover its parent or its siblings
   ['World-Ti Paper', ['World-Ti Paper/Drafts'], false],
+  ['World-Ti Paper/Final', ['World-Ti Paper/Drafts'], false],
   ['World-Ti Paper/Drafts', ['World-Ti Paper/Drafts'], true],
   ['World-Ti Paper/Drafts/old', ['World-Ti Paper/Drafts'], true],
-  ['World-Ti Paper/Drafts2', ['World-Ti Paper/Drafts'], false],
-  ['World-Ti Paper/Final', ['World-Ti Paper/Drafts'], false],
-  ['a/World-Ti Paper', ['World-Ti Paper'], false],
-  ['', ['World-Ti Paper'], false],
-  ['', [''], false],
-  ['sem', [], false],
-  ['sem/run1', ['Other', 'sem/run1'], true],
-  ['sem/run2', ['Other', 'sem/run1'], false],
-  ['sem/run1/img', ['sem', 'sem/run1'], true],
-  ['Ünï/Çode', ['ünï'], true],
-  ['a b/c', ['a b'], true],
-  ['a.b/c', ['a.b'], true],
-  ['axb/c', ['a.b'], false],
-  ['a*/c', ['a*'], true],
-  ['abc/c', ['a*'], false],
-  ['a%', ['a%'], true],
-  ['abc', ['a%'], false],
-  ['a_', ['a_'], true],
-  ['ab', ['a_'], false],
+  // the share is case-insensitive: so is the match, in both directions
+  ['world-ti paper/drafts', ['World-Ti Paper'], true],
+  ['WORLD-TI PAPER', ['world-ti paper'], true],
+  ['World-Ti Paper/DRAFTS', ['world-ti paper/drafts'], true],
+  // nested rules and several rules
+  ['a/b/c', ['a/b', 'a/b/c'], true],
+  ['a/b', ['a/b/c', 'a/b'], true],
+  ['a/x', ['a/b', 'a/b/c'], false],
+  ['z', ['a', 'z'], true],
+  ['z/y', ['a', 'z'], true],
+  ['m', ['a', 'z'], false],
+  // no wildcards: a star or a question mark is an ordinary character
+  ['anything', ['*'], false],
+  ['a/b', ['a/*'], false],
+  ['a/*', ['a/*'], true],
+  // no rules, and the owner's root (empty) are never ignored
+  ['a', [], false],
+  ['', ['a'], false],
+  ['', [], false],
+  // a name with a dot or a space is just a name
+  ['data.v2/raw', ['data.v2'], true],
+  ['data.v2x', ['data.v2'], false],
+  ['data v2', ['data.v2'], false],
 ];
 
 test('isIgnored: the shared table of cases (the crawler runs the same rows in Python)', () => {
@@ -2926,13 +2931,13 @@ test('POST /ignored-folders: if the dismissal fails nothing is kept, the rule in
   assert.equal(errors.length, 1);
 });
 
-test('DELETE /ignored-folders/:id: removes the rule, forgets the folder cache below it and relists its parent, and queues a rescan', async () => {
+test('DELETE /ignored-folders/:id: removes the rule and RESETS the folder cache below it (rows kept, mtime and listed time NULL); queues a rescan', async () => {
   const w = newWorld();
   const r = rule(w, { rel_folder: 'World-Ti Paper/Drafts' });
   const keep = rule(w, { rel_folder: 'World-Ti Paper/Final' });
   const dir = (rel_path, over = {}) => ({ rel_path, owner_person_id: P.alice, owner_team_id: null, dir_mtime: '2026-10-10T00:00:00.000Z', last_listed_at: '2026-10-15T00:00:00.000Z', baselined_at: null, ...over });
   w.dirs.push(
-    dir('Users/ali1', { baselined_at: '2026-10-01T00:00:00.000Z' }), dir('Users/ali1/World-Ti Paper'), dir('Users/ali1/World-Ti Paper/Drafts'),
+    dir('Users/ali1', { baselined_at: '2026-10-01T00:00:00.000Z' }), dir('Users/ali1/World-Ti Paper'), dir('Users/ali1/World-Ti Paper/Drafts', { dir_mtime: null, last_listed_at: null }),
     dir('Users/ali1/world-ti paper/drafts/v2'), dir('Users/ali1/World-Ti Paper/Drafts2'), dir('Users/ali1/World-Ti Paper/Final'),
     dir('Users/bob2/World-Ti Paper/Drafts', { owner_person_id: P.bob }),
   );
@@ -2943,22 +2948,24 @@ test('DELETE /ignored-folders/:id: removes the rule, forgets the folder cache be
   assert.deepEqual(res.body, { data: { ignored_id: r.ignored_id, folder: 'World-Ti Paper/Drafts', rescan_queued: true } });
   assert.deepEqual(w.ignored.map((x) => x.rel_folder), ['World-Ti Paper/Final']);
   assert.ok(w.ignored.includes(keep));
-  assert.deepEqual(w.dirs.map((d) => d.rel_path), ['Users/ali1', 'Users/ali1/World-Ti Paper', 'Users/ali1/World-Ti Paper/Drafts2', 'Users/ali1/World-Ti Paper/Final', 'Users/bob2/World-Ti Paper/Drafts'],
-    'the folder\'s own row and everything below it (any case) go; a sibling that shares a prefix, other folders and another owner\'s rows stay');
-  const parent = w.dirs.find((d) => d.rel_path === 'Users/ali1/World-Ti Paper');
-  assert.deepEqual([parent.last_listed_at, parent.dir_mtime], [null, null], 'the parent is listed again, or an unchanged parent would hide the folder');
-  const root = w.dirs.find((d) => d.rel_path === 'Users/ali1');
-  assert.equal(root.last_listed_at, '2026-10-15T00:00:00.000Z', 'the root row is not touched when the folder is not directly under it');
-  assert.equal(root.baselined_at, '2026-10-01T00:00:00.000Z');
+  assert.equal(w.dirs.length, 7, 'no cache row is deleted: the crawler reaches a folder through its cached parent');
+  const state = (path) => { const d = w.dirs.find((x) => x.rel_path === path); return [d.dir_mtime, d.last_listed_at]; };
+  assert.deepEqual(state('Users/ali1/World-Ti Paper/Drafts'), [null, null]);
+  assert.deepEqual(state('Users/ali1/world-ti paper/drafts/v2'), [null, null], 'everything below it, whatever the letter case');
+  const untouched = ['2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z'];
+  for (const path of ['Users/ali1', 'Users/ali1/World-Ti Paper', 'Users/ali1/World-Ti Paper/Drafts2', 'Users/ali1/World-Ti Paper/Final', 'Users/bob2/World-Ti Paper/Drafts']) {
+    assert.deepEqual(state(path), untouched, `${path}: the parent, a sibling that shares a prefix, other folders and another owner's rows are left alone`);
+  }
+  assert.equal(w.dirs.find((d) => d.rel_path === 'Users/ali1').baselined_at, '2026-10-01T00:00:00.000Z');
   assert.equal(dismissed.state, 'dismissed', 'files the rule dismissed stay dismissed until restored by hand');
   assert.equal(w.scanRequests.length, 1);
   assert.deepEqual([w.scanRequests[0].scope, w.scanRequests[0].person_id, w.scanRequests[0].requested_by], ['person', P.alice, U.alice]);
   const names = w.log.filter((l) => l.tx === 1).map((l) => l.name);
-  assert.deepEqual(names, ['setActor', 'ignoredById', 'ignoredDelete', 'ignoredClearDirs', 'ignoredRelistParent'], 'the rule and the cache go in one transaction, the actor first');
-  assert.equal(w.log.filter((l) => l.name === 'ignoredRelistParent')[0].bindings[2], 'Users/ali1/World-Ti Paper');
+  assert.deepEqual(names, ['setActor', 'ignoredById', 'ignoredDelete', 'ignoredResetDirs'], 'the rule and the cache go in one transaction, the actor first');
+  assert.deepEqual(w.log.find((l) => l.name === 'ignoredResetDirs').bindings, [P.alice, null, 'Users/ali1/World-Ti Paper/Drafts', 'Users/ali1/World-Ti Paper/Drafts/']);
 });
 
-test('DELETE /ignored-folders/:id: a folder directly under the root relists the root row but never its baseline', async () => {
+test('DELETE /ignored-folders/:id: a folder directly under the root: its own row is reset, the root row and its baseline are not touched', async () => {
   const w = newWorld();
   const r = rule(w, { rel_folder: 'sem' });
   w.dirs.push(
@@ -2967,7 +2974,10 @@ test('DELETE /ignored-folders/:id: a folder directly under the root relists the 
   );
   const { call } = setup(w);
   assert.equal((await call('DELETE /ignored-folders/:id', { user: U.alice, params: { id: r.ignored_id } })).statusCode, 200);
-  assert.deepEqual(w.dirs, [{ rel_path: 'Users/ali1', owner_person_id: P.alice, owner_team_id: null, dir_mtime: null, last_listed_at: null, baselined_at: 'b' }]);
+  assert.deepEqual(w.dirs, [
+    { rel_path: 'Users/ali1', owner_person_id: P.alice, owner_team_id: null, dir_mtime: 'x', last_listed_at: 'y', baselined_at: 'b' },
+    { rel_path: 'Users/ali1/sem', owner_person_id: P.alice, owner_team_id: null, dir_mtime: null, last_listed_at: null, baselined_at: null },
+  ]);
 });
 
 test('DELETE /ignored-folders/:id: the rescan limit never fails the delete: the rule is gone and rescan_queued is false', async () => {
@@ -2996,7 +3006,7 @@ test('DELETE /ignored-folders/:id: the rescan limit never fails the delete: the 
   assert.deepEqual(errors, [], 'a warning, not an error: the delete worked');
 });
 
-test('DELETE /ignored-folders/:id: a team member removes the team\'s rule (the cache under the TEAM folder goes, the member\'s own rescan is queued); a non-member and an administrator are 404', async () => {
+test('DELETE /ignored-folders/:id: a team member removes the team\'s rule (the cache under the TEAM folder is reset, the member\'s own rescan is queued); a non-member and an administrator are 404', async () => {
   const w = newWorld();
   const r = rule(w, { owner_person_id: null, owner_team_id: TEAM, rel_folder: 'runs/old', created_by: U.bob });
   w.dirs.push(
@@ -3015,7 +3025,7 @@ test('DELETE /ignored-folders/:id: a team member removes the team\'s rule (the c
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.data.folder, 'runs/old');
   assert.equal(w.ignored.length, 0);
-  assert.deepEqual(w.dirs.map((d) => [d.rel_path, d.last_listed_at]), [['Shared/SEM/runs', null]]);
+  assert.deepEqual(w.dirs.map((d) => [d.rel_path, d.last_listed_at]), [['Shared/SEM/runs', 'y'], ['Shared/SEM/runs/old/deeper', null]], 'the team folder\'s rows below the rule are reset, the parent is not');
   assert.deepEqual([w.scanRequests[0].scope, w.scanRequests[0].person_id], ['person', P.alice]);
 });
 
@@ -3040,7 +3050,7 @@ test('DELETE /ignored-folders/:id: a rule whose owner folder was unset since is 
   const res = await call('DELETE /ignored-folders/:id', { user: U.dave, params: { id: r.ignored_id } });
   assert.equal(res.statusCode, 200);
   assert.equal(w.ignored.length, 0);
-  assert.equal(w.log.some((l) => l.name === 'ignoredClearDirs'), false);
+  assert.equal(w.log.some((l) => l.name === 'ignoredResetDirs'), false);
   assert.equal(res.body.data.rescan_queued, false, 'a person with no folder has nothing to rescan (POST /rescan says NO_FOLDER)');
   assert.equal(w.scanRequests.length, 0);
 });

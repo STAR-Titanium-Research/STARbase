@@ -67,8 +67,10 @@
 //                                   409 ALREADY_IGNORED, 400 INVALID_PAYLOAD otherwise (extensions.field is 'folder'). In the SAME transaction the owner's
 //                                   open ('new') found files in that folder and below are dismissed exactly as POST /dismiss does it (restorable; linked
 //                                   and gone files are untouched); dismissed says how many. The crawler reads the rules and never lists the subtree.
-//   DELETE /d1-inbox/ignored-folders/:id  -> { data: { ignored_id, folder, rescan_queued } }   removes the rule and the folder cache rows (inbox_dirs) under it,
-//                                   so the next scan lists the folder again; a person-scope rescan is queued when the 10-minute limit of POST /rescan allows
+//   DELETE /d1-inbox/ignored-folders/:id  -> { data: { ignored_id, folder, rescan_queued } }   removes the rule and RESETS the folder's cache rows (inbox_dirs: dir_mtime
+//                                   and last_listed_at NULL, for the folder and everything below it; never deleted, or a crawler that finds the parent
+//                                   unchanged would never rediscover the folder: it keeps a 'seen, not listed' row for every ignored folder), so the next
+//                                   scan lists the folder again; a person-scope rescan is queued when the 10-minute limit of POST /rescan allows
 //                                   (rescan_queued says whether one was; the limit never fails the delete). Files the rule dismissed stay in Dismissed
 //                                   until restored. A rule that is not the caller's or their team's is 404 NOT_FOUND. No administrator override: rules are
 //                                   a person's or a team's own (admin-wide rules are not in v1).
@@ -304,17 +306,13 @@ export const SQL = {
     "SELECT c.candidate_id, c.rel_path FROM d1_private.file_candidates c WHERE c.state = 'new'"
     + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid'
     + ' AND starts_with(lower(c.rel_path), lower(?)) ORDER BY c.candidate_id FOR UPDATE',
-  // A removed rule: forget the cache rows of the folder (its own row and everything below), so the next scan lists them from scratch. Bindings: person id,
-  // team id, the folder's path 'root/folder', then the same path with a slash.
-  ignoredClearDirs:
-    'DELETE FROM d1_private.inbox_dirs WHERE owner_person_id IS NOT DISTINCT FROM ?::uuid AND owner_team_id IS NOT DISTINCT FROM ?::uuid'
-    + ' AND (lower(rel_path) = lower(?) OR starts_with(lower(rel_path), lower(?)))',
-  // ...and the folder's PARENT must be listed again, or a crawler that finds the parent unchanged never reaches the folder: its cache row is forgotten as
-  // "listed" (last_listed_at and dir_mtime NULL, as relistDirs does; never baselined_at). Bindings: person id, team id, the parent's path (the owner's root for
-  // a folder directly under it).
-  ignoredRelistParent:
+  // A removed rule: reset the cache rows of the folder (its own row and everything below) to "seen, not listed" (last_listed_at and dir_mtime NULL, as
+  // relistDirs does; never baselined_at, and the rows are NOT deleted: the crawler reaches a folder through its cached parent, so a deleted row would hide
+  // the folder for as long as the parent's modification time stays the same; a NULL mtime never equals the share's). Bindings: person id, team id, the
+  // folder's path 'root/folder', then the same path with a slash.
+  ignoredResetDirs:
     'UPDATE d1_private.inbox_dirs SET last_listed_at = NULL, dir_mtime = NULL WHERE owner_person_id IS NOT DISTINCT FROM ?::uuid'
-    + ' AND owner_team_id IS NOT DISTINCT FROM ?::uuid AND lower(rel_path) = lower(?)',
+    + ' AND owner_team_id IS NOT DISTINCT FROM ?::uuid AND (lower(rel_path) = lower(?) OR starts_with(lower(rel_path), lower(?)))',
   prefsGet: 'SELECT auto_link FROM d1_private.inbox_prefs WHERE user_id = ?',
   prefsPut:
     'INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES (?, ?)'
@@ -1500,15 +1498,12 @@ export function mount(router, context, deps = {}) {
       // a rule that is not yours is the same 404 as one that does not exist
       if (!found || !ownsRule(scope, found)) throw ERRORS.notIgnored();
       if (!rowsOf(await trx.raw(SQL.ignoredDelete, [found.ignored_id])).length) throw ERRORS.notIgnored();
-      // The folder's cache rows go (the next scan lists the folder from scratch) and its parent is listed again, so the crawler reaches it. An owner whose
-      // folder was unset since has no cache left to clear.
+      // The folder's cache rows are reset, not deleted (see SQL.ignoredResetDirs), so the next scan lists the folder again. An owner whose folder was unset
+      // since has no cache left to reset.
       const root = rootOfRule(scope, found);
       if (root) {
-        const owner = [found.owner_person_id, found.owner_team_id];
         const path = `${root}/${found.rel_folder}`;
-        await trx.raw(SQL.ignoredClearDirs, [...owner, path, `${path}/`]);
-        const cut = path.lastIndexOf('/');
-        await trx.raw(SQL.ignoredRelistParent, [...owner, cut > root.length ? path.slice(0, cut) : root]);
+        await trx.raw(SQL.ignoredResetDirs, [found.owner_person_id, found.owner_team_id, path, `${path}/`]);
       }
       return found;
     });

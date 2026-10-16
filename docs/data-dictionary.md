@@ -501,8 +501,8 @@ folders the crawler leaves alone ("ignore this folder when scanning"). Also in `
 
 Unique on `(coalesce(owner_person_id, owner_team_id), lower(rel_folder))` (`inbox_ignored_dirs_owner_folder_key`); partial indexes on
 each owner column and on `created_by`. At most 200 rules per owner, enforced by the endpoint. Adding a rule dismisses the owner's `new`
-candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one clears the folder's `inbox_dirs` rows so the
-next scan lists it again.
+candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one resets the folder's `inbox_dirs` rows (`dir_mtime` and `last_listed_at` NULL for the
+folder and everything below it; kept, not deleted) so the next scan lists it again.
 ### `surface_scans`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona

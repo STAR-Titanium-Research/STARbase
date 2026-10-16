@@ -1,5 +1,5 @@
 {
-  "description": "a rule removed: the folder is listed again by the next scan, and a rescan was queued",
+  "description": "a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued",
   "request": {
     "method": "DELETE",
     "path": "/d1-inbox/ignored-folders/00000000-0000-4000-8000-000000009401"

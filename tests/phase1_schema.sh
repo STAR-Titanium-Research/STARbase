@@ -6873,6 +6873,55 @@ CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
 CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
+-- Ignored folders (spec section 15): the rule statements, run on rows of their own after everything above (ids a1b00000-...-0000000002NN).
+INSERT INTO directus_files (id) SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(g::text, 2, '0'))::uuid FROM generate_series(1, 7) g;
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES
+  ('a1b00000-0000-4000-8000-000000000201', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/a.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000202', '$IB_P', 'image', 'new', 'Users/ibx1/ign dir/sub/b.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000203', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir 2/c.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000204', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/gone.tif', 'gone'),
+  ('a1b00000-0000-4000-8000-000000000205', '$IB_Q', 'image', 'new', 'Users/ibx1/Ign Dir/q.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000206', '$IB_P', 'image', 'new', 'Users/ibx1/x/Ign Dir/d.tif', 'new'),
+  ('a1b00000-0000-4000-8000-000000000207', '$IB_P', 'image', 'new', 'Users/ibx1/Ign Dir/e.tif', 'new');
+SELECT pg_temp.ib_run(format('EXECUTE ignoredinsert(%L, NULL, %L, %L)', '$IB_P', 'Ign Dir', '$IB_U')) AS ib_ign_n \gset
+SELECT 'ib_ign_insert:' || :ib_ign_n || ':' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P' AND owner_team_id IS NULL AND created_by = '$IB_U') FROM d1_private.inbox_ignored_dirs;
+SELECT ignored_id AS ib_ign_id FROM d1_private.inbox_ignored_dirs \gset
+CREATE TEMP TABLE ib_ig_cnt AS EXECUTE ignoredcount('$IB_P', NULL);
+SELECT 'ib_ign_count:' || n FROM ib_ig_cnt;
+CREATE TEMP TABLE ib_ig_cnt_other AS EXECUTE ignoredcount(NULL, 'a2000000-0000-4000-8000-0000000000b1');
+SELECT 'ib_ign_count_other_owner:' || n FROM ib_ig_cnt_other;
+CREATE TEMP TABLE ib_ig_find AS EXECUTE ignoredfind('$IB_P', NULL, 'IGN DIR');
+SELECT 'ib_ign_find_any_case:' || count(*) FROM ib_ig_find;
+CREATE TEMP TABLE ib_ig_find2 AS EXECUTE ignoredfind('$IB_Q', NULL, 'IGN DIR');
+SELECT 'ib_ign_find_other_owner:' || count(*) FROM ib_ig_find2;
+CREATE TEMP TABLE ib_ig_flags (v text);
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE ignoredinsert(%L, NULL, %L, NULL)', '$IB_P', 'ign DIR'));
+  INSERT INTO ib_ig_flags VALUES ('inserted');
+EXCEPTION WHEN unique_violation THEN INSERT INTO ib_ig_flags VALUES ('refused');
+END \$\$;
+SELECT 'ib_ign_duplicate:' || v FROM ib_ig_flags;
+CREATE TEMP TABLE ib_ig_list AS EXECUTE ignoredlist('$IB_P', '');
+SELECT 'ib_ign_list:' || count(*) || ':' || bool_and(owner_name = 'Inbox Person' AND owner_team_id IS NULL) FROM ib_ig_list;
+CREATE TEMP TABLE ib_ig_byid AS EXECUTE ignoredbyid(:'ib_ign_id');
+SELECT 'ib_ign_by_id:' || count(*) || ':' || bool_and(rel_folder = 'Ign Dir' AND owner_person_id = '$IB_P') FROM ib_ig_byid;
+-- the candidates under the folder: open ones, of this owner, on whole path parts and ignoring case (not 'Ign Dir 2', not a gone file, not another owner's, not 'x/Ign Dir')
+SELECT 'ib_ign_open:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+SELECT string_agg(candidate_id::text, ',') AS ib_ign_ids FROM d1_private.file_candidates
+ WHERE owner_person_id = '$IB_P' AND state = 'new' AND starts_with(lower(rel_path), lower('Users/ibx1/Ign Dir/')) \gset
+-- the same dismissal statement as POST /dismiss
+SELECT 'ib_ign_dismissed:' || pg_temp.ib_run(format('EXECUTE dismiss(%L, %L)', '$IB_U', :'ib_ign_ids'));
+SELECT 'ib_ign_states:' || string_agg(regexp_replace(rel_path, '^Users/ibx1/', '') || '=' || state, ',' ORDER BY rel_path COLLATE "C") FROM d1_private.file_candidates WHERE directus_files_id::text LIKE 'a1b00000-0000-4000-8000-0000000002%';
+SELECT 'ib_ign_open_after:' || pg_temp.ib_run(format('EXECUTE openunderfolder(%L, NULL, %L)', '$IB_P', 'Users/ibx1/Ign Dir/'));
+-- removing the rule: the folder's cache rows are RESET (kept, mtime and listed time NULL; any case, below it, this owner only)
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, dir_mtime, last_listed_at) VALUES
+  ('Users/ibx1/Ign Dir', '$IB_P', now(), now()), ('Users/ibx1/ign dir/sub', '$IB_P', now(), now()), ('Users/ibx1/Ign Dir 2', '$IB_P', now(), now());
+SELECT pg_temp.ib_run(format('EXECUTE ignoredresetdirs(%L, NULL, %L, %L)', '$IB_P', 'Users/ibx1/Ign Dir', 'Users/ibx1/Ign Dir/')) AS ib_ign_r1 \gset
+SELECT 'ib_ign_dirs:' || string_agg(rel_path || '=' || (dir_mtime IS NULL) || (last_listed_at IS NULL), ',' ORDER BY rel_path COLLATE "C") FROM d1_private.inbox_dirs WHERE rel_path LIKE 'Users/ibx1/%ign dir%' OR rel_path LIKE 'Users/ibx1/Ign Dir%';
+SELECT pg_temp.ib_run(format('EXECUTE ignoredresetdirs(%L, NULL, %L, %L)', 'a1b00000-0000-4000-8000-000000000007', 'Users/ibx1/Ign Dir 2', 'Users/ibx1/Ign Dir 2/')) AS ib_ign_r2 \gset
+SELECT 'ib_ign_reset_wrong_owner_kept:' || (dir_mtime IS NOT NULL AND last_listed_at IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1/Ign Dir 2';
+SELECT 'ib_ign_deleted:' || pg_temp.ib_run(format('EXECUTE ignoreddelete(%L)', :'ib_ign_id'));
+SELECT 'ib_ign_rules_left:' || count(*) FROM d1_private.inbox_ignored_dirs;
 ROLLBACK;
 SQL
 )
@@ -6910,6 +6959,22 @@ SQL
     ib_check "ib_prefs:1" "the auto-link preference upserts"
     ib_check "ib_first_rescan:1" "a rescan request is queued"
     ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"
+    ib_check "ib_ign_insert:1:1:true" "an ignored folder rule inserts for a person (the other owner column NULL, created_by set)"
+    ib_check "ib_ign_count:1" "the rule count for the 200-rule cap is per owner"
+    ib_check "ib_ign_count_other_owner:0" "...and another owner (a team) has none"
+    ib_check "ib_ign_find_any_case:1" "the duplicate check finds the rule whatever the letter case"
+    ib_check "ib_ign_find_other_owner:0" "...and for the same folder another owner has no rule"
+    ib_check "ib_ign_duplicate:refused" "the unique index refuses the same folder in another case for one owner (the endpoint answers 409 ALREADY_IGNORED)"
+    ib_check "ib_ign_list:1:true" "the rule list names the owner (person full name)"
+    ib_check "ib_ign_by_id:1:true" "a rule is found by its id with its owner and folder"
+    ib_check "ib_ign_open:3" "the open files under a rule: the folder and below (a, e and sub/b) on whole path parts and ignoring case; not 'Ign Dir 2', not a gone file, not another owner's, not x/Ign Dir"
+    ib_check "ib_ign_dismissed:3" "the rule's dismissal is the very statement of POST /dismiss"
+    ib_check "ib_ign_states:Ign Dir 2/c.tif=new,Ign Dir/a.tif=dismissed,Ign Dir/e.tif=dismissed,Ign Dir/gone.tif=gone,Ign Dir/q.tif=new,ign dir/sub/b.tif=dismissed,x/Ign Dir/d.tif=new" "only the open files under the rule changed state"
+    ib_check "ib_ign_open_after:0" "nothing open is left under the rule"
+    ib_check "ib_ign_dirs:Users/ibx1/Ign Dir=truetrue,Users/ibx1/Ign Dir 2=falsefalse,Users/ibx1/ign dir/sub=truetrue" "the rows are kept with dir_mtime and last_listed_at NULL; a sibling that shares a prefix is untouched"
+    ib_check "ib_ign_reset_wrong_owner_kept:true" "another owner's reset of the same path changes nothing: the row keeps its times"
+    ib_check "ib_ign_deleted:1" "a rule is deleted by id"
+    ib_check "ib_ign_rules_left:0" "...and none is left"
 else
     echo "  skip: node is not installed here, so the d1-inbox SQL is not run (CI has node)"
 fi

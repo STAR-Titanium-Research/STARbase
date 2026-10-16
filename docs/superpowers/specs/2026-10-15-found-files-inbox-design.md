@@ -406,7 +406,9 @@ user's request as the only input; each is cheap to change:
   is *not scanned*, which is different from *empty*: the missing-file sweep must never mark candidates under it `gone`. A
   rule that is added or removed mid-scan takes effect from the next scan.
 - **Existing files.** Adding a rule dismisses the owner's open (`new`) candidates under it in the same transaction, as an
-  ordinary, restorable dismissal; linked files are untouched. Removing a rule clears the folder's cache so the next
+  ordinary, restorable dismissal; linked files are untouched. Removing a rule resets the folder's cache rows
+  (`dir_mtime` and `last_listed_at` set to NULL for the folder and everything below it; the rows are kept, because the crawler
+  reaches a folder through its cached parent and keeps a "seen, not listed" row for every ignored folder) so the next
   scan lists it again (queued as a rescan when the rate limit allows); files dismissed by the rule stay in Dismissed until
   restored by hand.
 - **Endpoint.** `GET /d1-inbox/ignored-folders`, `POST /d1-inbox/ignored-folders { folder, team_id? }` (answers
