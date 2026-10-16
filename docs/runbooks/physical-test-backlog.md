@@ -2437,7 +2437,8 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   folder `Users/<alias>` holding a few images A's crawler scan registered: change A's `uni_alias` to something else and give the old alias to B
   (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
   *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
-  afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
+  afterwards listed. The scan **deletes A's undecided and dismissed candidates** under that folder (`drop_foreign_state`: the candidate table is unique on the file, so B's scan could not register
+  the same files otherwise; A's linked ones stay), so none of A's candidate ids survive it: to try `POST /d1-inbox/link` with one, take its id before the scan and expect 404 (not found) after. A's own linked
   files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else", including the `inbox_dirs` reset, without which the rescan skips the unchanged folder) for one folder: expect
   `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
 - [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
@@ -2481,19 +2482,20 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
 - [ ] **SEM18 — Deactivating, and deleting, a person who owns files (`ON DELETE RESTRICT`).** In Data Studio, set a person who owns found files (an alias, a
   login, owned rows in `directus_files`) inactive: expect it to save, the person's folder to stop being scanned (unless "scan while Former"), their owned
   files to stay owned by them and readable by their login, and the admin tab to list nothing new as unowned. Then try to delete that person (People page, and
-  `DELETE /items/people/<id>`): expect a refusal (a foreign-key violation, `directus_files_owner_person_id_fkey`), and the person and their files unchanged. Check
-  that the message Directus shows is understandable, and write down what an administrator must do to remove such a person (re-stamp their files first, see
-  the runbook "An alias handed to someone else"). Since: SEM reader final fix wave (ADR-0022 consequences).
+  `DELETE /items/people/<id>`): expect a refusal, and the person and their files unchanged. Since migration 201 the message names the person and the count ("X cannot
+  be deleted: they own N found file(s) on the share. Set them inactive instead, or re-stamp their files first ..."; Directus still answers HTTP 500 with a `delete from "people" ... -` prefix; before 201 it showed
+  only the raw `directus_files_owner_person_id_fkey` error). The same for a team that owns files. An administrator removes such a person by re-stamping their files first (the runbook "An alias handed to
+  someone else"). Since: SEM reader final fix wave (ADR-0022 consequences); message: migration 201.
 - [ ] **SEM19 — Team membership: `d1-inbox` counts active members, `file_readers` counts every member with a login (M3, ADR-0022 consequences).** With a team
   that has a share folder and a team-owned file, and a team member who is a Former (inactive) person with a login still active in Directus: as that
-  person, `GET /files/<id>` of the team's file answers 200 (the readers table holds them) while the Inbox shows them no team files, badge 0 and no team in the
-  summary (d1-inbox counts only `people.active` members). As an active member both work. Decide which rule is right (a Former member keeping read access by id is
-  probably not), and record the answer: the fix is a later migration (change `file_readers_expected` to join `people.active`, then
-  `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
+  person, `GET /files/<id>` of the team's file must answer 403 and the Inbox shows them no team files, badge 0 and no team in the summary (d1-inbox counts only
+  `people.active` members). As an active member both work; setting the person active again gives `GET /files/<id>` 200 at once and inactive 403 again, with
+  `file_readers_drift_count()` 0 (migration 201 made a team owner count active members only, and `people.active` refreshes the readers; before it the Former member got 200). A **person** owner who is inactive
+  still reads their own files. Since: SEM reader final fix wave (M3); migration 201.
 
 - [ ] **SEM20 — The indexer's own move keeps the owner (re-review finding).** On a copy of the database with 196 applied, take an owned image registered by the crawler, move it on the share out of `Users/<alias>` into a project folder, and run `make index-archive` (full run). Expect one `directus_files` row for the file at the new path with the same `owner_person_id` as before (not NULL), no row for the old path, and `file_readers_drift_count()` 0; a member who is not the owner cannot read it. Since: SEM reader final fix wave (`index_archive.carry_owner_stamp`, ADR-0022 D13).
-- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (A's old
-  candidates kept in the database for the test, their files stamped to A, the alias now B's) and the crawler having stored thumbnails for some of them:
+- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (the alias now B's; **the scan deletes A's unlinked candidates**, so after B's scan stamp one of B's registered candidates and its file to A by hand
+  to stand in for "A's old candidates kept") and the crawler having stored thumbnails for some of them:
   as B, `GET /d1-inbox/files/<one of A's candidate ids>/thumb` and `/preview` answer 404 NOT_FOUND with no ETag or caching headers, while B's own images
   still show their thumbnails. Then, as B, *Ignore this folder* on a folder that holds both B's own open files and A's old ones: expect the notice's
   count to include B's files only, B's files in Dismissed, and A's old candidates untouched (still `state = 'new'`, `decided_by` NULL). As A (or an
@@ -2503,3 +2505,34 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
 ## Done
 
 (Move ticked items here with their date and result.)
+
+### SEM reader: rehearsal on a copy of the live database (2026-10-16, d1-server)
+
+Run on a throwaway stack (`sem-copy-*` containers: a `pg_dump` restore of the live database at migration 195, a Directus on
+port 18061 with this branch's extensions, the crawler container with the real share mounted read-only, STARbase from `vite`
+on 5191 pointed at the copy). The live stack was only read (the dump). Not ticked above because each item was run on a
+**few folders** (about 60 trial images, not the whole corpus) and on a copy, not live. Test accounts were created on the copy only.
+
+| Item | Result |
+|---|---|
+| SEM7 | The pip lines import in a clean `python:3.12-slim` (PR #343). Reading real bars needed two fixes (below). |
+| SEM1 | `mtp23cab` (1,653 images, no OCR): 840 FEI TIFFs promoted, 50 earlier false `sem_image` rows demoted, every TIFF `kind_confidence` 0.95, all 8 fields present, `sources` all `metadata` (magnification `derived`), BST/GMT offsets all equal to London's (487 BST, 353 GMT, 0 wrong), no flags, owner stamps all the folder's person. With OCR on 57 more images in three `mtp23jjk` folders: **54 had `scale_bar_um: length_mismatch`** (bug 1). After the fix: 0 flags. Not covered: the 2,048-px image, a `40×` bar, the thermal/EDS controls by name. |
+| SEM2 | 8 contrast-edited PNG exports and 2 TIFFs without metadata: every value equal to the TIFF namesake's (wd to the bar's 1 decimal), `sources` `ocr`, confidence 0.8, no `check_this` once the bar length confirms. One wrong value found: mode read `None.` from a bar that prints `None` (bug 2). No JPEG or BMP namesake pairs tried. About 0.4 s per registered image on CPU with OCR (57 images in 23 s, folder listing included). |
+| SEM3 | Owner filter accepted by Directus (no `_some` error). A 200; B and a Lab Viewer 403; admin 200; unowned uploads stay open to every member; `PATCH owner_person_id` 403; B cannot patch or delete A's file (403); team folder: member reads, non-member 403, added 200, removed 403; sample link: B and the Viewer get `directus_files_id: null` with the row id present, A gets the file. Observed: deleting a file whose storage is `star` answers 500 after the row is gone (no `star` location is declared, so it is not new). |
+| SEM5 | Database half: migrations 196-199 apply in **3.1 s** on 82,519 candidates / 255,346 files; stamped 82,519 = candidates not linked and not in a junction; no junction-linked file stamped; `file_readers_drift_count()` 0; four `down`s then `up` again also 0. Crawler half: `--sem-backfill` without OCR 4 saved / 5 not an SEM image (a bar-only image is not recognised as SEM without OCR, so it is counted there and not under "no usable value"); with OCR 3 more; again 0 saved. Settings values equal the metadata. Not run: the `save_sem_settings` correction check by SQL, kill half way. |
+| SEM6 | On a queue cut to 90 rows: 8 promoted, 60 demoted (thermal JPEGs, "Microscope x5/x20" TIFFs, EDS spectra, charts, a TEM), 22 unchanged, 0 skipped; a second run 0/0/0 and no file opened. Not run: `--force` over the whole corpus, kill half way, share pulled mid-run. |
+| SEM8 | A GET `can_edit` true; B and a Lab Viewer `{locked:true}`; admin values with `can_edit` false, one `admin_read` row per call, none for A; A PATCH `kv` 20 → `sources.kv = manual`; B and admin PATCH 403; `read_by` 400; kV 99 400. Admin link/dismiss/undo 403 with the documented message. An unowned linked file: B reads the values, no edit. Inbox link then undo drops the settings row; Data Studio link, then Inbox link, then undo keeps it. **Finding:** magnification 5000.5 is accepted and saved as 5001 (SEM10 expects a refusal; decide if non-integers should be refused). |
+| SEM9 | FEI row: labelled values in the specified order with `metadata`/`derived`/`OCR` labels, "15 Apr 2026, 19:31 BST", winter rows `GMT`, no confidence shown; PNG export row all `OCR`, no "check this" (the bar confirmed). Not seen: a "check this" row, a "couldn't read" row, a JEOL row. |
+| SEM10 | As the owner: values, an Edit control on every field, "not set" for empty ones. As B: 37 locks "A file from another person's folder", the count 38 includes them. Not tried: typing a UK summer/winter time, the admin page view. |
+| SEM11 | First half: after handing the alias to B and a scan: B's Inbox lists none of A's files, the log says `N file(s) stamped to another owner left out of the inbox`, B's link of A's candidate 404, A's file stays A's, B 403 on it. The scan also deleted A's old candidates for that folder (`drop_foreign_state`), so "A's old candidates kept for the test" needed a hand stamp. Re-stamp half not run. |
+| SEM14 | 38 linked images, 37 owned: 38 `sem-settings` requests in 289 ms with **at most 4 in flight**. Admin view logged 8 rows: only images that have a settings row are logged, not every owned image on the page. |
+| SEM16 | Both `--reclassify` and `--sem-backfill` on an empty root: `aborted`, exit 1, nothing marked. |
+| SEM17 | 35 dismissed rows with missing files: `35 skipped`, exit 0, no abort, the same 35 skipped again. |
+| SEM18 | Deactivate saves; the owner still reads their file; `DELETE /items/people/<id>` answers **500 with the raw SQL** ("violates foreign key constraint directus_files_owner_person_id_fkey"). Understandable to a developer, not to a Directus admin. |
+| SEM19 | Confirmed: a Former member with an active login reads the team's file by id (200) while the Inbox shows them no team and 0 files. Decision for the maintainer. |
+| SEM21 | B gets 404 for thumb and preview of A-stamped candidates, the same answer as for an unknown id (no way to tell them apart); the 404 carries Express's weak ETag of its own JSON body, not a picture's. Ignore-folder half not run. |
+| Not run | SEM4 (GPU), SEM12 and SEM20 (need a writable share to move a file and the indexer), SEM13 as written (its `--sem-backfill` effect was seen under SEM5), SEM15 (live upgrade/rollback: only the migration timing and the down/up cycle were seen), the second half of SEM11, the ignore-folders half of SEM21. |
+
+Bugs found by this run (both fixed in PR #348): (1) the FEI scale bar is drawn through its own label, so `scale_bar_length_px` measured
+one half (89 px of 260) and the length check failed on nearly every real image, losing the exports' magnification; (2) the recogniser's
+trailing full stop on a text cell (`None.`).

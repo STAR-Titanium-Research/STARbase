@@ -516,6 +516,13 @@ def test_garbage_detector_text_is_not_stored():
     assert r.flags["detector"] == "unparseable" and r.flags["mode"] == "unparseable"
 
 
+def test_a_trailing_full_stop_on_a_text_cell_is_the_recognisers_not_the_instruments():
+    r = parse(
+        read_of(det="ETD.", mode="None. ")
+    )  # read on d1-server from a bar that prints "None"
+    assert r.values["detector"] == "ETD" and r.values["mode"] == "None"
+
+
 def test_a_scale_label_without_a_unit_is_not_a_scale_bar():
     r = parse(read_of(scale="100"))
     assert "scale_bar_um" not in r.values and r.flags["scale_bar_um"] == "not_a_number"
@@ -550,6 +557,18 @@ def test_scale_bar_length_px_measures_the_line():
 def test_scale_bar_length_px_on_contrast_edited_bar():
     bar = make_bar(HEADERS6 + ["100μm"], VALUES6 + [""], scale_len=120, white=207)
     assert sem_bar.scale_bar_length_px(bar) == 120
+
+
+def test_scale_bar_length_px_spans_a_line_broken_by_its_label():
+    # the real FEI bar: "---- 50 um ----", the label drawn through the line (measured on d1-server: 89 and 86 px
+    # of a 260-px bar, which made the length cross-check fail on nearly every real image)
+    bar = make_bar(HEADERS6 + ["50μm"], VALUES6 + [""], scale_len=100)
+    d = ImageDraw.Draw(bar)
+    y = H - 12
+    d.line(
+        (W - 12 - 65, y, W - 12 - 35, y), fill=0
+    )  # the label's gap in the line: 35 + 30 + 35 px
+    assert sem_bar.scale_bar_length_px(bar) == 100
 
 
 def test_scale_bar_length_px_none_without_a_line():

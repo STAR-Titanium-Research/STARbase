@@ -3805,7 +3805,11 @@ fpo_down=$(awk '/-- migrate:down/{f=1;next}f' "$FPO_MIG")
 # 20261016000197 (SEM image settings) adds two tables, five functions and a column in d1_private and nothing else, so its down goes first of all (before 196's), and it is not replayed.
 SEM_MIG=db/migrations/20261016000197_sem_image_settings.sql
 sem_down=$(awk '/-- migrate:down/{f=1;next}f' "$SEM_MIG")
-lv_down="$sem_down
+# 20261016000201 (file owner follow-ups) replaces 196's readers function and people trigger and adds two guard triggers and their functions, so its down goes before everything else and it is not replayed.
+FOF_MIG=db/migrations/20261016000201_file_owner_followups.sql
+fof_down=$(awk '/-- migrate:down/{f=1;next}f' "$FOF_MIG")
+lv_down="$fof_down
+$sem_down
 $fpo_down
 $lv_down"
 lv_up="$lv_up
@@ -7431,10 +7435,26 @@ UPDATE directus_files SET owner_team_id = '$FO_T1' WHERE id = '$FO_F1';")
 grep -q 'directus_files_one_owner_check' <<<"$fo_out" && ok "setting a team owner on a person-owned file is refused (the owner is changed, not added)" || bad "a second owner was not refused (output: $fo_out)"
 fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
 DELETE FROM people WHERE person_id = '$FO_P1';")
-grep -q 'violates foreign key constraint' <<<"$fo_out" && ok "deleting a person who owns a file is refused (RESTRICT: deactivate instead)" || bad "deleting an owning person was not refused (output: $fo_out)"
+grep -q 'Owner Test One cannot be deleted: they own 1 found file(s)' <<<"$fo_out" && ok "deleting a person who owns a file is refused (RESTRICT: deactivate instead), with a message that names them and the count (migration 201)" || bad "deleting an owning person was not refused with the message (output: $fo_out)"
 fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
 DELETE FROM teams WHERE team_id = '$FO_T1';")
-grep -q 'violates foreign key constraint' <<<"$fo_out" && ok "deleting a team that owns a file is refused" || bad "deleting an owning team was not refused (output: $fo_out)"
+grep -q 'The team Owner Test Team cannot be deleted: it owns 1 found file(s)' <<<"$fo_out" && ok "deleting a team that owns a file is refused, with a message that names it and the count (migration 201)" || bad "deleting an owning team was not refused with the message (output: $fo_out)"
+fo_out=$(fo_sql "SELECT 'fo_guard_fk:' || count(*) FROM pg_constraint WHERE conname = 'directus_files_owner_person_id_fkey' AND confdeltype = 'r';")
+grep -q 'fo_guard_fk:1' <<<"$fo_out" && ok "the foreign key stays RESTRICT behind the delete guard (the guard only replaces its message)" || bad "the owner foreign key is no longer RESTRICT (output: $fo_out)"
+# migration 201: a team's files are read by its ACTIVE members with a login; a person owner keeps reading their own files when inactive
+fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_team_id) VALUES ('$FO_F2', '$FO_T1');
+INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P2');
+$(fo_users "$FO_F2" fo_team_active)
+UPDATE people SET active = false WHERE person_id = '$FO_P2';
+$(fo_users "$FO_F2" fo_team_former)
+$(fo_users "$FO_F1" fo_own_former)
+SELECT 'fo_team_drift:' || d1_private.file_readers_drift_count();
+UPDATE people SET active = true WHERE person_id = '$FO_P2';
+$(fo_users "$FO_F2" fo_team_back)")
+grep -q 'fo_team_active:u2$' <<<"$fo_out" && ok "a team's file is read by an active member with a login" || bad "an active team member does not read the team's file (output: $fo_out)"
+grep -q 'fo_team_former:$' <<<"$fo_out" && ok "a Former (inactive) member loses the team's file at once (migration 201)" || bad "a Former member still reads the team's file (output: $fo_out)"
+grep -q 'fo_own_former:u2$' <<<"$fo_out" && ok "an inactive person still reads the files they own" || bad "an inactive owner lost their own file (output: $fo_out)"
+grep -q 'fo_team_drift:0' <<<"$fo_out" && grep -q 'fo_team_back:u2$' <<<"$fo_out" && ok "making the member active again restores the team's file, with no drift" || bad "reactivating a member did not restore access (output: $fo_out)"
 fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
 UPDATE directus_files SET owner_person_id = NULL WHERE id = '$FO_F1';
 DELETE FROM people WHERE person_id = '$FO_P1';
@@ -7499,7 +7519,8 @@ grep -qx 'fo_bf_again:4' <<<"$fo_out" && ok "back-fill: running it twice changes
 # up, down, up inside one transaction: the stamp from the back-fill, the objects gone after down, the permission rows restored exactly
 if [[ -n "$FO_MIG" && -f "$FO_MIG" ]]; then
 fo_up="$fpo_up"
-fo_down="$fpo_down"
+fo_down="$fof_down
+$fpo_down"
 fo_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 -- what the migration saved before it changed the rows: the down must put exactly that back
