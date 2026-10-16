@@ -35,21 +35,6 @@ THUMBNAILS = (
 FILE_MTIME = 1_500_000_000  # the default modification time of a file the tests put on the fake share
 
 
-# STAND-IN, delete after the merge of the server worker's change to migration 198 (review fix M2). That change makes
-# file_thumbnails.thumb and .preview NULLable, adds failed_reason text and the CHECK "both pictures and no reason, or
-# neither picture and a reason". Until the migration on this branch has it, the fixture applies the same shape here, and
-# only when the migration did not already (no failed_reason column), so it is harmless once the migration carries it.
-THUMBNAILS_FAILED_STANDIN = """
-ALTER TABLE file_thumbnails
-    ALTER COLUMN thumb DROP NOT NULL,
-    ALTER COLUMN preview DROP NOT NULL,
-    ADD COLUMN failed_reason TEXT,
-    ADD CONSTRAINT file_thumbnails_picture_or_failed_check CHECK (
-        (thumb IS NOT NULL AND preview IS NOT NULL AND failed_reason IS NULL)
-        OR (thumb IS NULL AND preview IS NULL AND failed_reason IS NOT NULL));
-"""
-
-
 def migration_up(path: Path, schema: str | None = None) -> str:
     sql = (
         path.read_text(encoding="utf-8")
@@ -200,13 +185,6 @@ def world(tmp_path):
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
         cur.execute(migration_up(THUMBNAILS, schema))
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_schema = %s "
-            "AND table_name = 'file_thumbnails' AND column_name = 'failed_reason'",
-            (schema,),
-        )
-        if cur.fetchone() is None:  # STAND-IN, see THUMBNAILS_FAILED_STANDIN
-            cur.execute(THUMBNAILS_FAILED_STANDIN)
         cur.execute(migration_up(IGNORED, schema))
         conn.commit()
         yield World(conn, schema, str(root), DSN)
