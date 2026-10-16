@@ -87,12 +87,9 @@ const BATCH = ID(901);
 
 const FILE_FIXTURES = ['files_new', 'files_new_acceptable', 'files_older', 'files_linked', 'files_dismissed', 'files_team_folder', 'files_empty'];
 
-/**
- * The keys a parsed row has: every key the fixture row sends, plus `has_thumbnail`, which the client always sets (an older server leaves it out
- * and it reads as false). The golden fixtures written after the thumbnails feature carry it; their value is then compared like any other key.
- */
+/** The keys a parsed row has: every key the fixture row sends (`suggested_can_edit` only when the client keeps it). */
 const expectedKeys = (r: Record<string, unknown>, parsed: Record<string, unknown>): string[] =>
-	[...new Set([...Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed), 'has_thumbnail'])].sort();
+	Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort();
 
 describe('GET /d1-inbox/files', () => {
 	it.each(FILE_FIXTURES)('%s: every row parses, key for key, and the page is read', async (name) => {

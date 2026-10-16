@@ -29,21 +29,6 @@ INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
 THUMBNAILS = (
     ROOT / "db/migrations/20261016000198_file_thumbnails.sql"
 )  # stream A of the thumbnails plan
-# The contract of the thumbnails plan (docs/superpowers/plans/2026-10-16-inbox-thumbnails.md), used only while
-# the migration above is not in this tree: stream B's branch was cut before stream A's merged. Once it is, the
-# world builds the real table and this stand-in is dead code that can go.
-THUMBNAILS_CONTRACT = """
-CREATE TABLE file_thumbnails (
-    candidate_id uuid NOT NULL,
-    thumb bytea NOT NULL, preview bytea NOT NULL,
-    thumb_width integer, thumb_height integer, preview_width integer, preview_height integer,
-    source_size bigint NOT NULL, source_mtime timestamptz NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT file_thumbnails_pkey PRIMARY KEY (candidate_id),
-    CONSTRAINT file_thumbnails_candidate_id_fkey FOREIGN KEY (candidate_id)
-        REFERENCES file_candidates (candidate_id) ON DELETE CASCADE
-);
-"""
 FILE_MTIME = 1_500_000_000  # the default modification time of a file the tests put on the fake share
 
 
@@ -182,11 +167,7 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
-        cur.execute(
-            migration_up(THUMBNAILS, schema)
-            if THUMBNAILS.exists()
-            else THUMBNAILS_CONTRACT
-        )
+        cur.execute(migration_up(THUMBNAILS, schema))
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:
