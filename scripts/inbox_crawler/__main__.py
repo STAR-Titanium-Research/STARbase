@@ -5,7 +5,9 @@ Environment:
     ARCHIVE_ROOT               the star_group1 root (default /mnt/archive/star_group1); mounted read-only.
     D1_INBOX_URL               the Directus base URL for auto-link (default http://directus:8055).
     D1_INBOX_CRAWLER_SECRET    the shared secret for POST /d1-inbox/auto-link; empty switches auto-link off.
-    INBOX_OCR                  1 to read data-bar text with pytesseract (default off, not validated yet).
+    INBOX_OCR                  1 to read the FEI data bar with rapidocr-onnxruntime (default off; the crawler
+                               image installs it only when this is 1).
+    INBOX_OCR_DEVICE           auto|cpu|cuda for that OCR (default cpu; auto takes the GPU when onnxruntime has one).
     INBOX_TICK_S               seconds between claims of scan requests (default 30).
     INBOX_PRIVATE_SCHEMA       the schema holding the inbox tables (default d1_private; tests use another).
     STORAGE_NAME, ROOT_FOLDER  as for scripts/index_archive.py (defaults star, star_group1).

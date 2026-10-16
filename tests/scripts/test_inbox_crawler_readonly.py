@@ -151,8 +151,9 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "dataclasses",
             "typing",
             "io",
+            "logging",
+            "os",
             "PIL",
-            "pytesseract",
         }
     ),
     "daemon": frozenset({"logging", "threading", "dataclasses", "datetime"}),
@@ -186,6 +187,7 @@ PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 ATTR_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
     ("__main__", "os"): frozenset({"environ"}),
     ("__main__", "sys"): frozenset({"exit"}),
+    ("classify_sem", "os"): frozenset({"environ"}),  # INBOX_OCR_DEVICE
     ("identity", "sys"): frozenset({"path"}),
     ("identity", "os"): frozenset({"path"}),
     # numpy on in-memory arrays only: no load, fromfile, memmap, genfromtxt, save ...

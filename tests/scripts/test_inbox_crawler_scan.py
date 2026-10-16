@@ -877,6 +877,36 @@ def test_a_synthetic_sem_image_is_tagged_and_a_plain_one_is_not(world):
     assert got["Users/abc12de/plain.png"][2] == "image"
 
 
+def test_the_scanner_carries_the_bar_reader_to_the_classifier(world):
+    pytest.importorskip("numpy")
+    from PIL import Image
+    from test_inbox_crawler_sem_bar import (
+        HEADERS6,
+        VALUES6,
+        Scripted,
+        interleave,
+        make_bar,
+    )
+
+    world.person("abc12de")
+    img = Image.new("L", (1024, 943))
+    img.paste(Image.effect_noise((1024, 884), 30).convert("L"), (0, 0))
+    img.paste(make_bar(HEADERS6, VALUES6), (0, 884))
+    b = io.BytesIO()
+    img.save(b, "PNG")
+    world.write("Users/abc12de/export.png", b.getvalue())
+    settle(world)
+    reader = Scripted(interleave(HEADERS6, VALUES6))
+    run(world, ocr=True, bar_reader=reader)
+    assert cands(world)["Users/abc12de/export.png"][2] == "sem_image"
+    extracted = world.one(
+        "SELECT extracted FROM file_candidates WHERE rel_path = %s",
+        ("Users/abc12de/export.png",),
+    )[0]
+    assert extracted["kv"] == 20.0 and extracted["sources"]["kv"] == "ocr"
+    assert len(reader.calls) == 1
+
+
 def test_an_image_too_big_to_keep_is_hashed_but_not_classified(one_person, monkeypatch):
     world, _, _ = one_person
     monkeypatch.setattr(scan, "CLASSIFY_MAX_BYTES", 10)
