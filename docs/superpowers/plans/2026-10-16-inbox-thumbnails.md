@@ -25,10 +25,10 @@ only reads the share; the new table holds derived pictures, never share bytes se
 
 | Stream | What | Agent profile | Worktree / branch | State |
 |---|---|---|---|---|
-| A | Migration, `d1-inbox` thumb/preview routes, `has_thumbnail`, golden fixtures, schema tests | `d1-server-implementer` | `feat/thumbs-a-server` | **in progress** (Sonnet, high) |
-| B | `scripts/inbox_crawler/thumbs.py`, registration hook, backfill step, cleanup on gone, `INBOX_THUMBNAILS`, runbook | `inbox-crawler-implementer` | `feat/thumbs-b-crawler` | **in progress** (Sonnet, high) |
-| C | STARbase: lazy thumbnail in the row, shimmer, lightbox with preview and spinner, fake server, tests | `directus-ui-implementer` | `feat/thumbs-c-ui` | **in progress** (Sonnet, high) |
-| R | Opus review of all three, fixes, CI | reviewers + coordinator | `ccr-f5ece72d-pvkcct` | not started |
+| A | Migration, `d1-inbox` thumb/preview routes, `has_thumbnail`, golden fixtures, schema tests | `d1-server-implementer` | `feat/thumbs-a-server` | merged, reviewed, fixed |
+| B | `scripts/inbox_crawler/thumbs.py`, registration hook, backfill step, cleanup on gone, `INBOX_THUMBNAILS`, runbook | `inbox-crawler-implementer` | `feat/thumbs-b-crawler` | merged, reviewed, fixed |
+| C | STARbase: lazy thumbnail in the row, shimmer, lightbox with preview and spinner, fake server, tests | `directus-ui-implementer` | `feat/thumbs-c-ui` | merged, reviewed, fixed; UI minor fixes in progress |
+| R | Opus review of all three, fixes, CI | reviewers + coordinator | `ccr-f5ece72d-pvkcct` | review done; UI minor fixes in progress |
 
 ## Stream A: server (`d1-server-implementer`)
 

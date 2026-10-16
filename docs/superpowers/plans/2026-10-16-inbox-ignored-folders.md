@@ -21,10 +21,10 @@ crawler read *less*; it adds no share access.
 
 | Stream | What | Agent profile | Worktree / branch | State |
 |---|---|---|---|---|
-| IA | Migration, endpoint routes, matching helper, golden fixtures, schema tests | `d1-server-implementer` | `feat/ignore-a-server` | not started |
-| IB | Crawler skips ignored subtrees, sweep never marks them gone, rule changes honoured next scan, tests, runbook, backlog | `inbox-crawler-implementer` | `feat/ignore-b-crawler` | not started |
-| IC | STARbase: "Ignore this folder" on a row, Ignored folders section, confirm text, fake server, tests (after the thumbnails UI stream is merged: same files) | `directus-ui-implementer` | `feat/ignore-c-ui` | not started |
-| R | Opus review, fixes, CI | reviewers + coordinator | `ccr-f5ece72d-pvkcct` | not started |
+| IA | Migration, endpoint routes, matching helper, golden fixtures, schema tests | `d1-server-implementer` | `feat/ignore-a-server` | merged, reviewed; Opus review fixes in progress |
+| IB | Crawler skips ignored subtrees, sweep never marks them gone, rule changes honoured next scan, tests, runbook, backlog | `inbox-crawler-implementer` | `feat/ignore-b-crawler` | merged, reviewed; fixes in progress (`feat/ignore-fix-crawler`: M1 crawler half, Minor1, 3, 7, 8) |
+| IC | STARbase: "Ignore this folder" on a row, Ignored folders section, confirm text, fake server, tests (after the thumbnails UI stream is merged: same files) | `directus-ui-implementer` | `feat/ignore-c-ui` | merged, reviewed; Opus review fixes in progress |
+| R | Opus review, fixes, CI | reviewers + coordinator | `ccr-f5ece72d-pvkcct` | review done, fixes in progress |
 
 ## Stream IA: server
 
