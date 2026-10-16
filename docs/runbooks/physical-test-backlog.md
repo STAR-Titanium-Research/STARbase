@@ -2335,6 +2335,14 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   open the same page: expect one `sem_settings_access_log` row per owned file read, so `SELECT count(*) FROM d1_private.sem_settings_access_log
   WHERE read_at > now() - interval '5 minutes'` equals the number of owned images on the page: record that count and decide whether the admin log
   volume is acceptable (every admin page view of such a record writes that many rows). Since: SEM reader final fix wave (I3).
+- [ ] **SEM15 — The live upgrade and the rollback, with `EXTENSIONS_AUTO_RELOAD` on (I4).** On a restored copy of the production database and the same
+  compose file (bind-mounted `core/extensions`, `EXTENSIONS_AUTO_RELOAD=true`), follow "Upgrading to the SEM reader" in `docs/runbooks/inbox-crawler.md`
+  exactly. First, to see why the order matters, on a throwaway copy: leave Directus running, pull, and open the Inbox before migrating: expect 500s
+  from `/d1-inbox/*` (and an undo that still works, since it checks for the settings table), then roll that copy back and start again in the right
+  order. Then, in order: crawler and Directus stopped, pull, `make migrate` (time 196's back-fill and readers refresh), drift 0, Directus started once, SEM3
+  passes, STARbase built, crawler started, `--reclassify`, `--sem-backfill`. Then the rollback on the copy in the documented order (crawler, extension,
+  `down` 197, `down` 196, restart): expect the old Inbox working, files readable by every member again, and note what was lost (settings, owner stamps).
+  Record the total time and every surprise. Since: SEM reader final fix wave (I4).
 
 ## Done
 

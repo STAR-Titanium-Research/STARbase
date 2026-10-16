@@ -360,6 +360,9 @@ export const SQL = {
     + ' acquired_at, sources, flags, read_by, read_at, corrected_by, corrected_at FROM d1_private.sem_image_settings WHERE directus_files_id = ?',
   semAccessLogInsert: 'INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES (?, ?, ?)',
   semCorrect: 'SELECT d1_private.correct_sem_setting(?, ?, ?::jsonb, ?)',
+  // Undo runs before migration 197 can have been applied (the extension reloads the moment the files are pulled, the migration is a separate step):
+  // is there a settings table yet? Asked by undo; only a positive answer is remembered.
+  semTableExists: "SELECT to_regclass('d1_private.sem_image_settings') IS NOT NULL AS available",
   // Undo: a file's settings go only when NO row is left in any of the four tables that link a file (a file linked twice keeps them while one link
   // stands). Binding: the file ids as one csv.
   deleteUnlinkedSemSettings: `DELETE FROM d1_private.sem_image_settings s WHERE s.directus_files_id = ANY(${IDS})${
@@ -877,6 +880,15 @@ export function mount(router, context, deps = {}) {
     return scansKnown;
   }
 
+  // Is the settings table (migration 197) there? Only a yes is remembered, so applying 197 under a running server takes effect at the next undo.
+  let semTableKnown = false;
+  async function semTableAvailable(db = database) {
+    if (semTableKnown) return true;
+    const [row] = rowsOf(await db.raw(SQL.semTableExists, []));
+    semTableKnown = row?.available === true;
+    return semTableKnown;
+  }
+
   // -- who is asking -------------------------------------------------------------------------------------------------------
 
   // The caller's person and the teams they are an ACTIVE member of (a Former person is a member of none).
@@ -1337,7 +1349,8 @@ export function mount(router, context, deps = {}) {
         }
       }
       // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
-      await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
+      // (before migration 197 there is no table to delete from: an undo must still work then)
+      if (await semTableAvailable(trx)) await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
       // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
       if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);

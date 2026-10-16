@@ -281,6 +281,7 @@ function statement(w, sql, b, txId) {
       }
       return gone;
     }
+    case 'semTableExists': return [{ available: w.semTable !== false }];
     case 'semFile': return w.files.has(b[0]) ? [copy(w.files.get(b[0]))] : [];
     case 'semSettingsGet': return w.settings.has(b[0]) ? [copy(w.settings.get(b[0]))] : [];
     case 'semAccessLogInsert': w.settingsLog.push({ directus_files_id: b[0], read_by_user: b[1], reason: b[2] }); return [];
@@ -3393,4 +3394,48 @@ test('C1: every query that loads or counts candidates holds the file-owner predi
   }
   assert.match(buildListQuery(scope, parseFileFilters({}, { defaultTab: 'open' }), { accept: true }).sql, predicate, 'accept-all');
   assert.match(SQL.candidatesForUpdate, /FOR UPDATE/);
+});
+
+// ---- I4: an undo before migration 197 is applied --------------------------------------------------------------------------------------
+
+test('POST /undo before migration 197 (no sem_image_settings table) undoes the link and does not touch the settings table', async () => {
+  const w = newWorld();
+  w.semTable = false;
+  const a = add(w, cand({ kind: 'image' }));
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a)] } })).body.data.link_batch_id;
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(a.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(w.log.some((l) => l.name === 'deleteUnlinkedSemSettings'), false, 'the settings table is not there: nothing is deleted from it');
+  assert.ok(w.log.some((l) => l.name === 'semTableExists'), 'it asked first');
+});
+
+test('POST /undo once 197 is applied asks no more and removes the settings as before (the positive answer is remembered)', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const b = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(a)] } })).body.data.link_batch_id;
+  const second = (await call('POST /link', { user: U.alice, body: { items: [link(b)] } })).body.data.link_batch_id;
+  await call('POST /undo', { user: U.alice, body: { link_batch_id: first } });
+  await call('POST /undo', { user: U.alice, body: { link_batch_id: second } });
+  assert.equal(w.settings.size, 0);
+  assert.equal(w.log.filter((l) => l.name === 'semTableExists').length, 1);
+  assert.equal(w.log.filter((l) => l.name === 'deleteUnlinkedSemSettings').length, 2);
+});
+
+test('POST /undo notices a 197 applied while the server runs (a negative answer is asked again)', async () => {
+  const w = newWorld();
+  w.semTable = false;
+  const a = add(w, cand({ kind: 'image' }));
+  const b = add(w, cand({ kind: 'image' }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(a)] } })).body.data.link_batch_id;
+  await call('POST /undo', { user: U.alice, body: { link_batch_id: first } });
+  w.semTable = true;
+  const second = (await call('POST /link', { user: U.alice, body: { items: [link(b)] } })).body.data.link_batch_id;
+  await call('POST /undo', { user: U.alice, body: { link_batch_id: second } });
+  assert.equal(w.log.filter((l) => l.name === 'deleteUnlinkedSemSettings').length, 1);
 });

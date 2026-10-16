@@ -277,6 +277,39 @@ what is missing now that the files are theirs. Backlog **SEM11**.
   [the physical test backlog](./physical-test-backlog.md) (IF1 to IF14, IF15 onward, and the IF20 to IF23 and
   IF30 to IF33 groups that other streams own).
 
+## Upgrading to the SEM reader (migrations 196 and 197, ADR-0022)
+
+**Why the order matters.** `docker-compose.yml` sets `EXTENSIONS_AUTO_RELOAD: "true"` and bind-mounts
+`./core/extensions`, so a running Directus **hot-loads whatever the pull puts there**: the new `d1-inbox` reads
+`directus_files.owner_person_id` and `owner_team_id` (migration 196) in every list, link and summary query and the
+`d1_private.sem_image_settings` table (migration 197) in the settings routes and in link and undo of an SEM image.
+Loaded before the migrations it answers 500. Directus also reads relations and permissions at start-up and caches
+them (this compose file sets no `CACHE_*`; Redis here holds the rq queues of the workers, so **never `FLUSHALL`**
+it: restarting Directus is the flush), so the readers alias that migration 196 adds is unknown to it until it
+restarts. Nothing of this may be visible to a running Directus: it is stopped before the pull and started once,
+after the migrations. Do it in a quiet window and tell members first.
+
+1. **Back up** (`make backup`) and try the whole sequence **on a copy first**, ending with backlog **SEM3** (two
+   accounts and a locked file) and **SEM5** (the migrations on a copy of the production database).
+2. **Stop the crawler and Directus:** `docker compose --profile archive stop inbox-crawler` and
+   `docker compose stop directus`.
+3. **Pull and build:** `git pull && npm ci && npm run build:extensions`.
+4. **Migrate:** `make migrate`, then `make migrate-status` (no pending). Check
+   `SELECT d1_private.file_readers_drift_count();` is 0 (migration 196 back-fills about 82,000 owner stamps: time it).
+5. **Start Directus** (`docker compose up -d directus`: a fresh start is the permissions and relations flush) and run
+   the SEM3 checks as two Lab Members and an administrator before anyone else comes back.
+6. **Build STARbase:** `npm run build:starbase` (it shows the imaging settings and the locked file).
+7. **Restart the crawler** (`docker compose --profile archive up -d inbox-crawler`; it stamps owners from now on;
+   OCR also needs backlog **SEM7**).
+8. **Re-read the existing images:** with the daemon stopped again (see "One-shot passes"),
+   `python -m inbox_crawler --reclassify` (backlog **SEM6**), then `python -m inbox_crawler --sem-backfill`
+   (**SEM5**, **SEM13**), then start the daemon again. Backlog **SEM15** walks this sequence on a copy.
+
+Note on `INBOX_PERSON_DIR`: the lab share's folder of personal folders is `User`, not the spec's `Users`, so with the
+compose default every `Users/<alias>` in this runbook and in the backlog reads `User/<alias>` (and the stored paths in
+`metadata.archive_path` and `file_candidates.rel_path` begin with whatever the setting was when the file was registered:
+do not change it on a database that already has candidates).
+
 ## Rolling back
 
 Migrations are `20261015000193_found_files_inbox` and `20261015000194_people_create_no_inbox_fields`. Roll back
@@ -297,3 +330,25 @@ linked is lost. Export what cannot be recomputed first:
 After re-applying 193 and 194 and restoring those values, every owner gets a first scan, and everything it finds
 shows as *Older* (backlog): the dismissals and *Recently linked* history are gone, but files linked through the
 Inbox stay linked.
+
+## Rolling back the SEM reader (197, 196)
+
+Order: **the crawler, then the extension, then 197, then 196, then restart.** Newer migrations come off first, so
+this section applies before the one above (194 and 193).
+
+1. `docker compose --profile archive stop inbox-crawler`. When it starts again, run the previous commit's crawler (the
+   older one never writes owner columns or settings, and would register files unowned).
+2. Put the previous `core/extensions/d1-inbox` back (`git checkout <previous commit> -- core/extensions/d1-inbox`), so no
+   route reads `sem_image_settings` or the owner columns while they are being dropped. With `EXTENSIONS_AUTO_RELOAD`
+   Directus loads it at once; stop Directus (`docker compose stop directus`) first if the old extension must not meet the
+   new schema for a moment.
+3. `make migrate-down` once (197) and check `make migrate-status`; again for 196. **Both are lossy.** 197 drops the stored
+   imaging settings, the owners' manual corrections and the administrators' access log, and `file_candidates.classified_by`.
+   196 drops every owner stamp and the readers table and restores the saved `directus_files` permission rows, so files
+   that were owned are readable by every member again. Dump what cannot be recomputed first:
+   `d1_private.sem_image_settings`, `d1_private.sem_settings_access_log`, and
+   `SELECT id, owner_person_id, owner_team_id FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL`.
+4. `docker compose up -d directus` (a restart clears the cached relations and permissions), then the crawler.
+
+Until step 3 has run, undo in the Inbox keeps working with the settings table gone (the extension checks
+`to_regclass('d1_private.sem_image_settings')` first); link and the list do not work without the owner columns.
