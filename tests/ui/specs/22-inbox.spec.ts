@@ -183,6 +183,9 @@ test('a preview that fails says so and Retry loads it; a thumbnail that fails le
 	await dialog.getByRole('button', { name: 'Retry' }).click();
 	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
 	await expect(dialog.locator('[data-test="preview-error"]')).toHaveCount(0);
+	// Retry took itself away: focus went to Close, not to the page; the one status region stays and says so
+	await expect(dialog.locator('[data-test="preview-close"]')).toBeFocused();
+	await expect(dialog.getByRole('status')).toHaveText('Preview ready.');
 	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/preview'))).toHaveLength(2);
 	await page.context().close();
 
@@ -192,6 +195,24 @@ test('a preview that fails says so and Retry loads it; a thumbnail that fails le
 	await expect(row(failing.page, '3fa9c1d2_A1.tif').locator('.thumb')).toBeVisible();
 	await expect(failing.page.locator('[role="alert"]')).toHaveCount(0);
 	await failing.page.context().close();
+});
+
+test('a thumbnail clicked while it still shimmers and then fails stays under its preview, and focus lands on the row\'s first button when the preview closes', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox', 1280, { thumbFails: true, pictureDelayMs: 700 });
+	const first = row(page, '3fa9c1d2_A1.tif');
+	const btn = thumb(page, '3fa9c1d2_A1.tif');
+	await expect(btn).toHaveAttribute('data-state', 'loading');
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog).toBeVisible();
+	await expect.poll(() => btn.getAttribute('data-state')).toBe('failed');
+	await expect(btn).toHaveCount(1);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(dialog).toHaveCount(0);
+	await expect(btn).toHaveCount(0);
+	await expect(first.locator('.buttons button').first()).toBeFocused();
+	await page.context().close();
 });
 
 test('the full view fits a phone screen', async ({ browser }) => {

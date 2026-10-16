@@ -2209,6 +2209,15 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   folders hold images with pictures, copy the `thumb` URL of one person's file from the network tab and request it as the
   other person (their session): expect 404, not the picture; and as a signed-out browser, expect no picture (the
   endpoint needs the session). Since: Inbox thumbnails (stream C: the client side of the server's visibility rule).
+- [ ] **IF62 — Pictures inside Data Studio: look-ahead, stalled loads and focus.** On the Inbox page inside Data Studio
+  (Home's Inbox, where the page scrolls in `#main-content`) with a long list of image rows: scroll slowly and expect the
+  pictures a screen or so ahead to be loaded before the row arrives (network tab: `/thumb` requests start for rows just
+  below the visible area, none for rows far down). Throttle the network to *Offline* after the list has loaded, scroll to a
+  row and click its picture while it still shimmers: the preview opens, and after Esc focus is on the row's first button,
+  not on the page. Block a `/preview` request without answering (DevTools request blocking does not stall; use a proxy
+  or throttle to a very slow profile): after 30 seconds the dialog shows *The preview could not be loaded.* with **Retry**,
+  and Retry puts focus on **Close**. A screen reader (NVDA or Narrator) announces *Loading preview…* when the dialog opens
+  and *Preview ready.* when it is in. Since: Inbox thumbnails UI review fixes.
 
 - [ ] **IF70 — An ignored folder is never listed, statted or opened on the real share.** Needs a test person with a
   folder tree on the lab share that has a subfolder with files (and a sibling named like it plus a suffix, for
