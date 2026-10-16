@@ -10,11 +10,11 @@
   },
   "keywords": ["directus", "directus-extension", "directus-custom-module"],
   "devDependencies": {
-    "@directus/extensions-sdk": "^17",
+    "@directus/extensions-sdk": "^18",
     "@vue/compiler-sfc": "^3.5.43",
     "typescript": "^7",
     "vue": "^3",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^3.3.13"
   },
   "directus:extension": {
     "type": "module",
