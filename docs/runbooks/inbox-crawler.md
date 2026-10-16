@@ -249,10 +249,18 @@ WHERE owner_person_id = '<wrong person id>' AND metadata->>'archive_path' LIKE '
 UPDATE d1_private.file_candidates c SET owner_person_id = '<right person id>'
 FROM directus_files f WHERE f.id = c.directus_files_id AND f.owner_person_id = '<right person id>'
   AND c.owner_person_id = '<wrong person id>' AND c.state IN ('new', 'gone', 'dismissed');
+-- B's first scan after the handover already listed the folder (and skipped these files as another owner's), and
+-- a folder whose modification time has not changed is not listed again, so make the next scan list it afresh
+UPDATE d1_private.inbox_dirs SET last_listed_at = NULL, dir_mtime = NULL
+WHERE rel_path = '<base>/<alias>' OR rel_path LIKE '<base>/<alias>/%';
 SELECT d1_private.file_readers_drift_count();   -- 0 afterwards: the readers table follows the owner column
 ```
 
-Escape `_` and `%` in an alias with a backslash in the `LIKE` pattern. A team folder is the same with
+Escape `_` and `%` in an alias with a backslash in the `LIKE` pattern. Candidates the old holder had already
+**linked** keep the old holder as owner while their file now belongs to the new one, so neither person sees them in
+*Recently linked* and they cannot be undone there (the link itself stays on the record); re-own `state = 'linked'`
+rows in the same statement if that matters. A file renamed or moved by hand inside the new holder's folder gets a
+new pointer row stamped to the new holder, so it is theirs. A team folder is the same with
 `owner_team_id` and `Shared/<folder>`. Candidates the old holder had already deleted are not recreated by the
 re-stamp: run `make inbox-crawler-once` (or *Rescan my folder*) afterwards, and the new holder's scan registers
 what is missing now that the files are theirs. Backlog **SEM11**.
@@ -284,7 +292,7 @@ what is missing now that the files are theirs. Backlog **SEM11**.
 `directus_files.owner_person_id` and `owner_team_id` (migration 196) in every list, link and summary query and the
 `d1_private.sem_image_settings` table (migration 197) in the settings routes and in link and undo of an SEM image.
 Loaded before the migrations it answers 500. Directus also reads relations and permissions at start-up and caches
-them (this compose file sets no `CACHE_*`; Redis here holds the rq queues of the workers, so **never `FLUSHALL`**
+them (this compose file sets no `CACHE_*`; Redis here holds the rq queues of the workers, so **never `FLUSHALL`**, whatever the header comment of migration 196 says about flushing Redis
 it: restarting Directus is the flush), so the readers alias that migration 196 adds is unknown to it until it
 restarts. Nothing of this may be visible to a running Directus: it is stopped before the pull and started once,
 after the migrations. Do it in a quiet window and tell members first.
@@ -350,5 +358,6 @@ this section applies before the one above (194 and 193).
    `SELECT id, owner_person_id, owner_team_id FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL`.
 4. `docker compose up -d directus` (a restart clears the cached relations and permissions), then the crawler.
 
-Until step 3 has run, undo in the Inbox keeps working with the settings table gone (the extension checks
-`to_regclass('d1_private.sem_image_settings')` first); link and the list do not work without the owner columns.
+The undo path checks `to_regclass('d1_private.sem_image_settings')` first, so an undo does not fail on a database
+that has not had migration 197 yet (it matters on the upgrade, not on this rollback, where the old extension is
+already back at step 2); link and the list need the owner columns of 196 whenever the new extension is loaded.

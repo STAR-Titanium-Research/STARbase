@@ -42,12 +42,12 @@ One row per stream. Update when a stream starts, finishes, is reviewed or is mer
 
 | Stream | Area | Agent profile | Worktree id | Branch | Depends on | State |
 |---|---|---|---|---|---|---|
-| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | merged (PR #341) |
-| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | merged (PR #341) |
-| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | merged (PR #341) |
-| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | merged (PR #341) |
-| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | merged (PR #341) |
-| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | merged (PR #341) |
+| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | merged into the integration branch |
+| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | merged into the integration branch |
+| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | merged into the integration branch |
+| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | merged into the integration branch |
+| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | merged into the integration branch |
+| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | merged into the integration branch |
 
 All six streams merged into the integration branch and reviewed. The whole-branch review's fix wave (C1, I1-I5, M1-M3) and the `/simplify` cleanup are merged too; a scoped re-review of the fix wave is the last gate before PR #341 merges.
 

@@ -204,6 +204,25 @@ def is_confident_move(
     return bool(old_name) and old_name == PurePosixPath(new_rel).name
 
 
+def carry_owner_stamp(cur, old_id, new_id) -> None:
+    """A moved file keeps its first owner (ADR-0022 D13): copy the provenance owner of the old pointer row
+    onto the new one before the old row is deleted, or the move would leave an owned file readable by every
+    member. A no-op before migration 196 (no owner columns) and when the old row is unowned."""
+    cur.execute(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+        "AND table_name = 'directus_files' AND column_name IN ('owner_person_id', 'owner_team_id')"
+    )
+    if cur.fetchone()[0] < 2:
+        return
+    cur.execute(
+        "UPDATE directus_files n SET owner_person_id = o.owner_person_id, owner_team_id = o.owner_team_id "
+        "FROM directus_files o WHERE o.id = %s AND n.id = %s "
+        "AND (o.owner_person_id IS NOT NULL OR o.owner_team_id IS NOT NULL) "
+        "AND n.owner_person_id IS NULL AND n.owner_team_id IS NULL",
+        (old_id, new_id),
+    )
+
+
 def repoint_file_references(
     cur, fks: list[tuple[str, str, int]], old_id: str, new_id: str
 ) -> int:
@@ -661,6 +680,7 @@ def main() -> int:
                     new_id, _new_path = matches[0]
                     if new_id == old_id:
                         continue
+                    carry_owner_stamp(cur, old_id, new_id)
                     left = repoint_file_references(cur, fks, old_id, new_id)
                     if left == 0:
                         cur.execute("DELETE FROM directus_files WHERE id=%s", (old_id,))

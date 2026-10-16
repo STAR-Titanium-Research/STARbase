@@ -2313,7 +2313,7 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
   *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
   afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
-  files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else") for one folder: expect
+  files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else", including the `inbox_dirs` reset, without which the rescan skips the unchanged folder) for one folder: expect
   `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
 - [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
   196 applied and a person with a login whose folder holds a registered image, move the file to another subfolder on the share and run
@@ -2365,6 +2365,8 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   summary (d1-inbox counts only `people.active` members). As an active member both work. Decide which rule is right (a Former member keeping read access by id is
   probably not), and record the answer: the fix is a later migration (change `file_readers_expected` to join `people.active`, then
   `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
+
+- [ ] **SEM20 — The indexer's own move keeps the owner (re-review finding).** On a copy of the database with 196 applied, take an owned image registered by the crawler, move it on the share out of `Users/<alias>` into a project folder, and run `make index-archive` (full run). Expect one `directus_files` row for the file at the new path with the same `owner_person_id` as before (not NULL), no row for the old path, and `file_readers_drift_count()` 0; a member who is not the owner cannot read it. Since: SEM reader final fix wave (`index_archive.carry_owner_stamp`, ADR-0022 D13).
 
 ## Done
 
