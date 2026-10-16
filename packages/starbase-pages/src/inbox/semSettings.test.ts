@@ -89,6 +89,13 @@ describe('settingRows', () => {
 		expect(r.map((x) => x.key)).toEqual(['kv', 'magnification', 'scale_bar_um', 'acquired_at']);
 	});
 
+	it('words every reason the crawler can flag, so none is shown raw (no_screen_width, bar_mismatch)', () => {
+		const k = byKey(rows({}, {}, { magnification: 'no_screen_width', scale_bar_um: 'bar_mismatch', hfw_um: 'no_hfw', kv: 'not_a_number', pixel_size_nm: 'out_of_range' }));
+		expect(k.magnification.reason).toBe('the image does not say how wide the screen was, so the magnification cannot be worked out');
+		expect(k.scale_bar_um.reason).toBe('the data bar disagrees with the image metadata');
+		for (const r of Object.values(k)) expect(r.reason).not.toMatch(/^[a-z]+(_[a-z]+)+$/);
+	});
+
 	it('does not say "couldn\'t read" when the field has a value, and ignores a flag that is not a reason', () => {
 		const k = byKey(rows({ kv: 15 }, {}, { kv: 'out_of_range', spot: true, nonsense: 'x' }));
 		expect(k.kv.failed).toBeNull();

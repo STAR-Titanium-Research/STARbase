@@ -52,6 +52,8 @@ const REASON_TEXT: Record<string, string> = {
 	length_mismatch: 'the scale bar label does not match the bar',
 	out_of_range: 'the value was outside the possible range',
 	no_hfw: 'there is no field width to check it against',
+	no_screen_width: 'the image does not say how wide the screen was, so the magnification cannot be worked out',
+	bar_mismatch: 'the data bar disagrees with the image metadata',
 	invalid_local_time: 'that local time does not exist (the clocks went forward)',
 	not_a_number: 'it was not a number',
 	unparseable: 'it could not be read as text',
