@@ -242,9 +242,12 @@ class Daemon:
         whose file changed since they were made). Each is read through the share's `open_rb` (not adopted, so
         only allow-listed images) at the shared throttle, and only if it is still the file the candidate
         describes (same size and modification time): a picture of a different file would not match its row.
-        A file that vanished, cannot be read or cannot be decoded is skipped for the rest of the process; the
-        scan, not this step, decides what is gone. A call stops after THUMB_BUDGET_S seconds. Returns how many
-        were made."""
+        A file that cannot be decoded gets a marker row (`failed_reason`) so it is read once, not every tick,
+        until it changes. A file that vanished, is not the file the row describes or is refused to us is skipped
+        for the rest of the process (`_thumbs_tried`); the scan, not this step, decides what is gone. A share
+        hiccup (an OSError other than those) ends this tick's batch and marks nothing as tried, so the files
+        behind it are offered again next tick. A call stops after THUMB_BUDGET_S seconds. Returns how many
+        pictures were made."""
         if not self.config.thumbnails:
             return 0
         if self._thumbs_retry_at is not None and self._now() < self._thumbs_retry_at:
@@ -271,32 +274,45 @@ class Daemon:
                 break
             if self._now() - started >= timedelta(seconds=THUMB_BUDGET_S):
                 break  # the rest next tick
-            if len(self._thumbs_tried) >= THUMB_TRIED_MAX:
-                self._thumbs_tried.clear()
-            self._thumbs_tried.add(target.candidate_id)
             try:
-                if self._make_thumbnails(target):
-                    made += 1
+                outcome = self._make_thumbnails(target)
+            except OSError as exc:  # the share hiccuped: not this file's fault, so it is not marked as tried
+                store.rollback()
+                log.warning(
+                    "thumbnail backfill stops for this tick (%s): the share did not answer",
+                    type(exc).__name__,
+                )
+                break
             except Exception as exc:  # noqa: BLE001 (one file must not stop the others, or the loop)
                 store.rollback()
                 log.warning(
                     "thumbnails of %s failed: %s", target.rel_path, type(exc).__name__
                 )
+                outcome = "skip"
+            if outcome == "made":
+                made += 1
+            elif outcome == "skip":
+                if len(self._thumbs_tried) >= THUMB_TRIED_MAX:
+                    self._thumbs_tried.clear()
+                self._thumbs_tried.add(target.candidate_id)
         if made:
             log.info("thumbnails made for %d images", made)
         return made
 
-    def _make_thumbnails(self, target: db.ThumbTarget) -> bool:
+    def _make_thumbnails(self, target: db.ThumbTarget) -> str:
+        """One backfill target: "made" (pictures stored), "marked" (a marker row stored: it cannot be decoded or
+        is too big) or "skip" (not this file any more, or not readable by us: tried again only after a restart).
+        An OSError from the share (not "gone", not "refused") propagates: the caller ends the batch."""
         rel = target.rel_path
         try:
             st = self.share.stat(rel)
-        except (OSError, ValueError):
-            return False  # gone or unreadable: the scan decides, not this step
+        except (FileNotFoundError, NotADirectoryError, PermissionError, ValueError):
+            return "skip"  # gone or refused: the scan decides, not this step
         if not st.is_file or (st.size, db.to_datetime(st.mtime_ns)) != (
             target.size,
             target.mtime,
         ):
-            return False  # not the file the candidate describes any more
+            return "skip"  # not the file the candidate describes any more
         pulse_args = {} if self._clock is None else {"clock": self._clock}
         pulse = hashing.Pulse(
             self.config.heartbeat_s,
@@ -311,21 +327,36 @@ class Daemon:
             progress=pulse,
         )
         if out.status == "done":
-            try:
-                out = scan.still_the_same(self.share, rel, st, out)
-            except OSError:
-                return False
-        if out.status != "done" or out.data is None:
-            return False
+            out = scan.still_the_same(
+                self.share, rel, st, out
+            )  # an OSError here ends the batch
+        if out.status == "missing":
+            return "skip"
+        if out.status != "done":
+            error = out.error or ""
+            if error.startswith(("PermissionError", "the file changed")):
+                return "skip"  # ours to leave alone, not a hiccup
+            raise OSError(
+                error[:100] or "read failed"
+            )  # the share failed under the read
+        if out.data is None:
+            return self._mark_thumbnails(target, "too large")
         pictures = thumbs.make_thumbnails(out.data)
         if pictures is None:
             log.info("no thumbnails for %s: it could not be decoded", rel)
-            return False
+            return self._mark_thumbnails(target, "not decoded")
         self.store.store_thumbnails(
             target.candidate_id, pictures, target.size, target.mtime
         )
         self.store.commit()
-        return True
+        return "made"
+
+    def _mark_thumbnails(self, target: db.ThumbTarget, reason: str) -> str:
+        self.store.store_thumbnail_failure(
+            target.candidate_id, reason, target.size, target.mtime
+        )
+        self.store.commit()
+        return "marked"
 
     # ---- forever -----------------------------------------------------------------------
 

@@ -701,6 +701,7 @@ class Scanner:
                 if cls.reason.startswith("not decoded"):
                     log.info("%s is registered as a plain image: %s", rel, cls.reason)
         pictures = None
+        pictures_failed = None
         if (
             self.thumbnails
             and cls.kind in ("image", "sem_image")
@@ -710,6 +711,9 @@ class Scanner:
         ):
             # the bytes are already in memory (hashed and classified): no second read of the share
             pictures = thumbs.make_thumbnails(hashed.data)
+            if pictures is None:
+                # a marker, so the backfill does not read this file again until it changes
+                pictures_failed = "not decoded"
         rec = recognise.recognise(rel, self.lookup, below=owner.root)
         result = self.store.register_file(
             owner=owner,
@@ -721,6 +725,7 @@ class Scanner:
             origin=origin,
             hashed=hashed,
             thumbs=pictures,
+            thumbs_failed=pictures_failed,
         )
         if not result.created or result.candidate_id is None:
             return None

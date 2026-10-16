@@ -774,9 +774,12 @@ class Store:
         origin: str,
         hashed: HashOutcome | None,
         thumbs=None,
+        thumbs_failed: str | None = None,
     ) -> RegisterResult:
         """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint, and the
         thumbnails (a `thumbs.Thumbs`, when the caller made them from the bytes it holds) in the same transaction.
+        When it tried and could not (`thumbs_failed`, a short reason), a marker row says so instead, so the
+        backfill does not read the file again until it changes.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
         previous run's) are left alone, and an existing candidate for the file is left alone.
@@ -852,6 +855,10 @@ class Store:
                 # same transaction; a failure (the table is not there yet) loses only the pictures, which
                 # the backfill makes later
                 self.store_thumbnails(row[0], thumbs, size, mtime, quiet=True)
+            elif row is not None and thumbs_failed is not None:
+                self.store_thumbnail_failure(
+                    row[0], thumbs_failed, size, mtime, quiet=True
+                )
             with self.conn.cursor() as cur:
                 cur.execute("RELEASE SAVEPOINT register_file")
         except Exception:
@@ -998,7 +1005,8 @@ class Store:
             "ON CONFLICT (candidate_id) DO UPDATE SET thumb = EXCLUDED.thumb, preview = EXCLUDED.preview, "
             " thumb_width = EXCLUDED.thumb_width, thumb_height = EXCLUDED.thumb_height, "
             " preview_width = EXCLUDED.preview_width, preview_height = EXCLUDED.preview_height, "
-            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, failed_reason = NULL, "
+            " created_at = now()",
             (
                 candidate_id,
                 thumbs.thumb,
@@ -1010,6 +1018,32 @@ class Store:
                 size,
                 mtime,
             ),
+            quiet,
+        )
+        return n > 0
+
+    def store_thumbnail_failure(
+        self,
+        candidate_id: str,
+        reason: str,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """A marker that the file, as it was at `size` and `mtime`, has no picture (it was read and could not
+        be decoded, or is too big): both pictures NULL and a short `reason`. It replaces any earlier row and
+        is DONE for `candidates_missing_thumbnails` until the file's size or modification time changes, when
+        it is tried again. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, failed_reason, source_size, source_mtime) "
+            "VALUES (%s, NULL, NULL, NULL, NULL, NULL, NULL, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = NULL, preview = NULL, thumb_width = NULL, "
+            " thumb_height = NULL, preview_width = NULL, preview_height = NULL, "
+            " failed_reason = EXCLUDED.failed_reason, source_size = EXCLUDED.source_size, "
+            " source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            (candidate_id, reason[:200], size, mtime),
             quiet,
         )
         return n > 0
