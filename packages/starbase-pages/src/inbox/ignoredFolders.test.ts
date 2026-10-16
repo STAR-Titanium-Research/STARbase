@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { foundFile } from './fakeInboxServer';
 import type { IgnoredRule } from './inboxApi';
-import { MAX_FOLDER_LENGTH, folderProblem, ignoreConfirm, ignoreTarget, ignoredText, isBelow, knownFolders, ownerKey, shownBelow, unignoredText } from './ignoredFolders';
+import { IGNORE_HINT, MAX_FOLDER_LENGTH, coveringRule, folderProblem, ignoreConfirm, ignoreTarget, ignoredText, isBelow, knownFolders, ownerKey, shownBelow, unignoredText } from './ignoredFolders';
 
 const TEAM = { kind: 'team', id: 't1', name: 'SEM team' } as const;
 const rule = (folder: string, owner: IgnoredRule['owner'] = { kind: 'person', id: 'p1', name: 'Ann Lee' }): IgnoredRule => ({ ignored_id: `r-${folder}`, folder, owner, created_at: null, can_remove: true });
@@ -96,17 +96,29 @@ describe('knownFolders', () => {
 	});
 });
 
+describe('coveringRule', () => {
+	it('is another rule of the same owner at or above the folder (the broadest), else null', () => {
+		const removed = rule('Paper/Drafts');
+		expect(coveringRule([rule('Paper/Drafts'), rule('Paper')], removed)?.folder).toBe('Paper');
+		expect(coveringRule([rule('Paper/Drafts/v2'), rule('Paper/Drafts', TEAM)], removed)).toBeNull();
+		expect(coveringRule([rule('Paper 2'), rule('Other')], removed)).toBeNull();
+		// the same folder under another rule id (the other rule of a duplicate) also covers it; the removed rule itself never does
+		expect(coveringRule([{ ...rule('paper/drafts'), ignored_id: 'other' }], removed)?.ignored_id).toBe('other');
+		expect(coveringRule([removed], removed)).toBeNull();
+	});
+});
+
 describe('words', () => {
 	it('the confirm says exactly what happens, with the count as an estimate', () => {
 		expect(ignoreConfirm({ folder: 'World-Ti Paper' }, 0)).toEqual({
 			title: 'Stop scanning World-Ti Paper?',
 			lines: [
-				'The crawler will leave this folder and everything in it alone.',
-				'Any found files below it that are still in your Inbox move to Dismissed. You can restore them.',
-				'Files already linked stay linked. Nothing on the share is changed.',
+				'The crawler stops looking for new files in World-Ti Paper and below.',
+				'Files there that are still in your Inbox move to Dismissed. You can restore them.',
+				'Files already linked stay linked and tracked. Nothing on the share is changed.',
 			],
 		});
-		expect(ignoreConfirm({ folder: 'x' }, 1).lines[1]).toBe('Any found files below it that are still in your Inbox (1 found file shown here) move to Dismissed. You can restore them.');
+		expect(ignoreConfirm({ folder: 'x' }, 1).lines[1]).toBe('Files there that are still in your Inbox (1 found file shown here) move to Dismissed. You can restore them.');
 		expect(ignoreConfirm({ folder: 'x' }, 3).lines[1]).toContain('(3 found files shown here)');
 	});
 
@@ -117,5 +129,15 @@ describe('words', () => {
 		expect(unignoredText('Paper', true)).toContain('A rescan is queued');
 		expect(unignoredText('Paper', false)).toContain('at the next scan');
 		expect(unignoredText('Paper', false)).toContain('stay in Dismissed');
+	});
+
+	it('removing a rule another rule still covers says so, names that rule when it is known, and does not mention a rescan', () => {
+		expect(unignoredText('Paper/Drafts', false, true, 'Paper')).toBe('Rule removed. Paper/Drafts is still ignored by another rule (Paper).');
+		expect(unignoredText('Paper/Drafts', false, true)).toBe('Rule removed. Paper/Drafts is still ignored by another rule.');
+		expect(unignoredText('Paper/Drafts', true, true, 'Paper')).not.toMatch(/rescan|next scan/i);
+	});
+
+	it('the hint says what stops: new files are not looked for', () => {
+		expect(IGNORE_HINT).toBe('The crawler stops looking for new files in these folders and below. Nothing on the share is changed.');
 	});
 });
