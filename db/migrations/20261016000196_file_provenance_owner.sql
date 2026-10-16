@@ -13,7 +13,11 @@
 --     because Directus uses one database role for every user, so a trigger cannot tell an administrator from a member.
 --   * the back-fill (D10): the live crawler has registered pointer rows already, and d1_private.file_candidates.owner_* (written by the crawler,
 --     exactly one per row, so a trusted source unlike the editable archive_path) says whose they are. Every candidate that is not 'linked' stamps
---     its file; a linked file, a file with no candidate and an existing stamp are left alone, so nobody loses access they have today.
+--     its file, EXCEPT a file that is linked anywhere: the candidate's state does not say so (a file linked in Data Studio's picker or the Alicona
+--     dialog keeps a dismissed, new or gone candidate), so the back-fill also leaves alone every file that has a row in sample_data_files,
+--     operation_data_files, session_data_files or surface_scans (the crawler's own definition, inbox_crawler/db.py already_linked; all four tables
+--     exist at this migration, so no existence guard is needed). A file with no candidate and an existing stamp are left alone too, so nobody
+--     loses access they have today.
 --   * public.file_readers   WHO MAY READ AN OWNED FILE, one row per (file, login): the owner's login, or the login of every member of the owning
 --     team. This is the ADR-0014 readers pattern (migration 166) and it is here because the plan's step 4 probe could not run: the team test
 --     "the caller is in the owning team" is a to-many hop (team -> members) inside `_some`, which Directus 11.17 refuses (ADR-0016 context;
@@ -22,14 +26,16 @@
 --     It is kept by triggers on directus_files (owner columns), team_members (join, leave) and people (a login added or removed), and
 --     d1_private.file_readers_drift_count() proves it equals what the owner columns say. Derived data: not audited, like the other readers tables.
 --   * the Directus rules (scripts/access_rules.json "custom", pasted by gen_access_rules.py): Lab Member and Lab Viewer read directus_files (and so
---     /assets) only when both owner columns are null or the caller has a file_readers row; Lab Member create and update list every directus_files
---     column except the two owners; file_readers is readable for the caller's own rows (the `_some` applies the related rule for the same
+--     /assets) only when both owner columns are null or the caller has a file_readers row; Lab Member UPDATE and DELETE of a file carry the same test
+--     in its bare-hop form (`readers.user_id`, no `_some`, the form access_rules.json prescribes for update and delete: a legal `_some` would apply the
+--     readers table's own rule for the action), so a member cannot rewrite or delete (and so cascade away the settings of) a file they cannot read;
+--     Lab Member create and update list every directus_files column except the two owners; file_readers is readable for the caller's own rows (the `_some` applies the related rule for the same
 --     action). Administrators are not filtered. The rows are `python3 scripts/gen_access_rules.py --values --only directus_files,file_readers`
 --     and `--viewer-values` (a snapshot of the rules on 2026-10-16, as in migrations 166 and 185). What they replace is kept in
 --     d1_private.directus_files_rules_backup so `down` restores the exact old rows.
 --
--- Not done here: update and delete of a file by a member are not filtered (they were not before; the spec scopes this to reads), linked and
--- legacy files stay open (D10), and surface scans stay lab-wide until their own stream (spec section 11).
+-- Not done here: linked and legacy files stay open (D10), the junction creates and surface_scans.create still accept an owned file's id (outside this
+-- stream), and surface scans stay lab-wide until their own stream (spec section 11).
 -- After applying: flush Redis and restart Directus (it caches permissions and reads relations at start-up). The new `readers` alias on a system
 -- collection could not be tried against a live Directus here: physical-test item SEM3 checks it with two accounts.
 SET LOCAL lock_timeout = '10s';
@@ -51,7 +57,7 @@ COMMENT ON INDEX idx_directus_files_owner_person_id IS 'Files owned by a person 
 COMMENT ON INDEX idx_directus_files_owner_team_id IS 'Files owned by a team (partial: most files have no owner); used by the readers refresh when a member joins or leaves. migration 196.';
 COMMENT ON CONSTRAINT directus_files_one_owner_check ON directus_files IS 'A file has at most one provenance owner, a person or a team, never both (ADR-0022).';
 
--- 2. The back-fill (D10): found files that are not linked yet take the owner the crawler recorded. The statement between the markers is
+-- 2. The back-fill (D10): found files that are not linked anywhere take the owner the crawler recorded. The statement between the markers is
 -- run on its own by tests/phase1_schema.sh.
 -- backfill:begin
 UPDATE directus_files f
@@ -61,7 +67,11 @@ UPDATE directus_files f
  WHERE c.directus_files_id = f.id
    AND c.state <> 'linked'
    AND f.owner_person_id IS NULL
-   AND f.owner_team_id IS NULL;
+   AND f.owner_team_id IS NULL
+   AND NOT EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = f.id)
+   AND NOT EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = f.id)
+   AND NOT EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = f.id)
+   AND NOT EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = f.id);
 -- backfill:end
 
 -- 3. The readers table.
@@ -224,8 +234,8 @@ FROM (VALUES
     -- Lab Member (python3 scripts/gen_access_rules.py --values --only directus_files,file_readers)
     ('20000002-0000-0000-0000-000000000002', 'directus_files', 'create', '{}', '{}', 'id,storage,filename_disk,filename_download,title,type,folder,uploaded_by,created_on,modified_by,modified_on,charset,filesize,width,height,duration,embed,description,location,tags,metadata,focal_point_x,focal_point_y,tus_id,tus_data,uploaded_on'),
     ('20000002-0000-0000-0000-000000000002', 'directus_files', 'read', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*'),
-    ('20000002-0000-0000-0000-000000000002', 'directus_files', 'update', '{}', '{}', 'id,storage,filename_disk,filename_download,title,type,folder,uploaded_by,created_on,modified_by,modified_on,charset,filesize,width,height,duration,embed,description,location,tags,metadata,focal_point_x,focal_point_y,tus_id,tus_data,uploaded_on'),
-    ('20000002-0000-0000-0000-000000000002', 'directus_files', 'delete', '{}', '{}', '*'),
+    ('20000002-0000-0000-0000-000000000002', 'directus_files', 'update', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}]}', '{}', 'id,storage,filename_disk,filename_download,title,type,folder,uploaded_by,created_on,modified_by,modified_on,charset,filesize,width,height,duration,embed,description,location,tags,metadata,focal_point_x,focal_point_y,tus_id,tus_data,uploaded_on'),
+    ('20000002-0000-0000-0000-000000000002', 'directus_files', 'delete', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}]}', '{}', '*'),
     ('20000002-0000-0000-0000-000000000002', 'file_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
     -- Lab Viewer (python3 scripts/gen_access_rules.py --viewer-values): the Lab Member read rows under the viewer's policy
     ('20000002-0000-0000-0000-000000000003', 'directus_files', 'read', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*'),
