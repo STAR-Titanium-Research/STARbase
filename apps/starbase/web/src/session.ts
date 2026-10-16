@@ -1,6 +1,6 @@
 import { ref, type Ref } from 'vue';
 import type { AxiosError, AxiosInstance } from 'axios';
-import { refreshSession } from './api';
+import { isRestarting, looksRestarting, ownOriginReachable, refreshSession, unreachableText } from './api';
 
 // Who is signed in to STARbase. There is no STARbase account: the browser holds Directus's session
 // cookie (set by /auth/login in session mode, here or in Data Studio), and this asks d1-server whose it
@@ -24,6 +24,8 @@ export interface AuthProvider {
 export interface Session {
 	state: Ref<SessionState>;
 	user: Ref<SessionUser | null>;
+	/** While state is 'unreachable': d1-server answered 502/503/504 (restarting), not just silent. */
+	restarting: Ref<boolean>;
 	isAdmin: Ref<boolean>;
 	adminKnown: Ref<boolean>;
 	load(): Promise<SessionState>;
@@ -56,10 +58,11 @@ function toUser(u: any): SessionUser {
 	return user;
 }
 
-export function createSession(api: AxiosInstance): Session {
+export function createSession(api: AxiosInstance, probe: () => Promise<boolean> = ownOriginReachable): Session {
 	const state = ref<SessionState>('unknown');
 	const user = ref<SessionUser | null>(null);
 	const isAdmin = ref(false);
+	const restarting = ref(false);
 	const adminKnown = ref(false);
 	let loading: Promise<SessionState> | null = null;
 
@@ -89,10 +92,16 @@ export function createSession(api: AxiosInstance): Session {
 		try {
 			res = await me();
 		} catch (e) {
-			if (classifyLoadError(e) === 'unreachable') return (state.value = 'unreachable');
+			if (classifyLoadError(e) === 'unreachable') {
+				restarting.value = await looksRestarting(e, probe);
+				return (state.value = 'unreachable');
+			}
 			// No session, or only its access token lapsed: one renewal decides.
 			const renewed = await refreshSession(api);
-			if (renewed === 'unreachable') return (state.value = 'unreachable');
+			if (renewed === 'unreachable') {
+				restarting.value = await probe();
+				return (state.value = 'unreachable');
+			}
 			if (renewed === 'refused') {
 				markSignedOut();
 				return state.value;
@@ -100,7 +109,10 @@ export function createSession(api: AxiosInstance): Session {
 			try {
 				res = await me();
 			} catch (again) {
-				if (classifyLoadError(again) === 'unreachable') return (state.value = 'unreachable');
+				if (classifyLoadError(again) === 'unreachable') {
+					restarting.value = await looksRestarting(again, probe);
+				return (state.value = 'unreachable');
+				}
 				markSignedOut();
 				return state.value;
 			}
@@ -134,7 +146,7 @@ export function createSession(api: AxiosInstance): Session {
 		markSignedOut();
 	}
 
-	return { state, user, isAdmin, adminKnown, load, ensure, signIn, signOut, markSignedOut };
+	return { state, user, isAdmin, restarting, adminKnown, load, ensure, signIn, signOut, markSignedOut };
 }
 
 // Where to go after signing in: a path of this app only. Another site (//host, a scheme, a backslash
@@ -171,10 +183,10 @@ export function providerLoginUrl(directusUrl: string, provider: string, appOrigi
 	return `${directusUrl.replace(/\/+$/, '')}/auth/login/${encodeURIComponent(provider)}?redirect=${encodeURIComponent(back)}`;
 }
 
-export function signInErrorText(e: unknown): string {
+export async function signInErrorText(e: unknown, probe?: () => Promise<boolean>): Promise<string> {
 	if (e instanceof Error && e.message === SESSION_NOT_KEPT) return SESSION_NOT_KEPT;
 	const err = e as AxiosError<{ errors?: { message?: string }[] }>;
-	if (!err?.response) return "Can't reach the database. Check that this device is on the tailnet, then try again.";
+	if (!err?.response || isRestarting(e)) return unreachableText(e, probe);
 	if (err.response.status === 401) return 'Wrong email or password.';
 	return err.response.data?.errors?.[0]?.message || 'Sign-in failed.';
 }

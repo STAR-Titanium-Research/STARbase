@@ -71,10 +71,11 @@ describe('resetPassword', () => {
 });
 
 describe('requestErrorText', () => {
-	it('names the tailnet when nothing answered, and the server\'s own message otherwise', async () => {
+	it('names Tailscale when nothing answered, and the server\'s own message otherwise', async () => {
 		const noAnswer = await requestPasswordReset(server('network').api, 'a@b.c', 'https://x').catch((e) => e);
-		expect(requestErrorText(noAnswer)).toMatch(/tailnet/);
+		expect(await requestErrorText(noAnswer, async () => false)).toMatch(/Tailscale/);
+		expect(await requestErrorText(noAnswer, async () => true)).toMatch(/under maintenance/);
 		const refused = await requestPasswordReset(server(fail(400, 'INVALID_PAYLOAD', 'URL not allowed')).api, 'a@b.c', 'https://x').catch((e) => e);
-		expect(requestErrorText(refused)).toBe('URL not allowed');
+		expect(await requestErrorText(refused)).toBe('URL not allowed');
 	});
 });

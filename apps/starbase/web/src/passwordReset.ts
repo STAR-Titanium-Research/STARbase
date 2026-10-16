@@ -1,4 +1,5 @@
 import type { AxiosError, AxiosInstance } from 'axios';
+import { isRestarting, unreachableText } from './api';
 
 // Forgotten passwords (the counterpart of acceptInvite.ts). Directus 11.17 (@directus/api controllers/auth.js, services/users.js):
 //   POST /auth/password/request { email, reset_url }
@@ -45,8 +46,8 @@ export async function resetPassword(api: AxiosInstance, token: string, password:
 }
 
 /** The text for a reset request that failed (no answer, or a refused reset_url). */
-export function requestErrorText(e: unknown): string {
+export async function requestErrorText(e: unknown, probe?: () => Promise<boolean>): Promise<string> {
 	const err = e as AxiosError<{ errors?: { message?: string }[] }>;
-	if (!err?.response) return "Can't reach the database. Check that this device is on the tailnet, then try again.";
+	if (!err?.response || isRestarting(e)) return unreachableText(e, probe);
 	return err.response.data?.errors?.[0]?.message || 'Could not send the reset e-mail.';
 }

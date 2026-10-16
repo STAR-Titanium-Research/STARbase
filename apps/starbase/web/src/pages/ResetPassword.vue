@@ -6,6 +6,7 @@ import { policyChecks, tokenEmail, tokenFrom } from '../acceptInvite';
 import { useApp } from '../context';
 import { RESET_LINK_UNUSABLE, resetPassword } from '../passwordReset';
 import { signInErrorText } from '../session';
+import { unreachableText } from '../api';
 
 // The page a password-reset e-mail links to, outside the signed-in shell like the sign-in page: set a new password, then be signed in and
 // sent Home. The token (a link Directus signed, good for a day, once) carries the e-mail of the account.
@@ -50,13 +51,13 @@ async function submit() {
 		try {
 			await session.signIn(email.value, password.value);
 		} catch (e) {
-			error.value = signInErrorText(e);
+			error.value = await signInErrorText(e);
 			setButNotSignedIn.value = true;
 			return;
 		}
 		await router.replace('/');
-	} catch {
-		error.value = "Can't reach the database. Check that this device is on the tailnet, then try again.";
+	} catch (e) {
+		error.value = await unreachableText(e);
 	} finally {
 		busy.value = false;
 	}

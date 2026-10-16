@@ -27,7 +27,7 @@ async function retry() {
 </script>
 
 <template>
-	<UnreachablePage v-if="view === 'unreachable'" :retrying="retrying" @retry="retry" />
+	<UnreachablePage v-if="view === 'unreachable'" :retrying="retrying" :restarting="session.restarting.value" @retry="retry" />
 	<router-view v-else-if="view === 'route'" />
 	<EditorDialog :editor="editor" />
 </template>

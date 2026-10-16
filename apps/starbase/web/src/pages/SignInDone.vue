@@ -20,7 +20,7 @@ onMounted(async () => {
 	}
 	const state = await session.load();
 	if (state === 'signed-in') await router.replace(safeNext(route.query.next));
-	else if (state === 'unreachable') problem.value = "Can't reach the database to finish signing in.";
+	else if (state === 'unreachable') problem.value = session.restarting.value ? "The database is under maintenance, so sign-in couldn't finish. Try again in a moment." : "Can't reach the database to finish signing in.";
 	else problem.value = 'The sign-in did not reach STARbase. Try again, or use your email and password.';
 });
 </script>
