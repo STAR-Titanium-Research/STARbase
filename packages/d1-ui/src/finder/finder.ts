@@ -22,6 +22,9 @@ export interface FinderHit {
 	record?: { collection: string; id: string };
 	// A pass 2 hit (the words are in a field the label does not show): that field's name, e.g. "notes" or "owner".
 	matchedIn?: string;
+	// Where in the value it was found, for a field on the row itself (notes, location). Never set for a field read through a relation (project, owner):
+	// the finder names that field and shows nothing of its value, so it cannot reveal a project code the user may not read.
+	matchedSnippet?: string;
 	// The "More in <Page>…" row that ends a group with hits left out. Not a record: it opens that page searched for the query.
 	more?: true;
 }
@@ -64,6 +67,8 @@ export const RECORD_CAP = 12;
 const MAX_WORDS = 6;
 // Pass 2 hits rank below every pass 1 hit.
 export const DEEP_RANK = 4;
+// Characters kept on each side of the word in a matched-in snippet.
+const SNIPPET_CONTEXT = 30;
 const LOCAL_GROUPS = new Set<FinderGroup>(['Pages', 'Saved views']);
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
@@ -269,9 +274,20 @@ function foundByPass1(src: FinderSource, row: any, words: string[]): boolean {
 	return words.every((w) => src.match.some((f) => valueAt(row, f).includes(w)) || (!!src.shortId && SHORT_ID_RE.test(w) && str(row.short_id).toLowerCase() === w));
 }
 
-// The first pass 2 field that holds one of the words: what the row is "matched in".
-function matchedIn(src: FinderSource, row: any, words: string[]): string | undefined {
-	return src.deep?.find((d) => words.some((w) => valueAt(row, d.field).includes(w)))?.label;
+// The first pass 2 field that holds one of the words: what the row is "matched in", and a short piece of the value around the word when the field is
+// the row's own (a dotted field is another record's, and only its name is given).
+function matchedIn(src: FinderSource, row: any, words: string[]): { label: string; snippet?: string } | undefined {
+	for (const d of src.deep ?? []) {
+		const value = valueAt(row, d.field);
+		const word = words.find((w) => value.includes(w));
+		if (word === undefined) continue;
+		if (d.field.includes('.')) return { label: d.label };
+		const at = value.indexOf(word);
+		const from = Math.max(0, at - SNIPPET_CONTEXT);
+		const to = Math.min(value.length, at + word.length + SNIPPET_CONTEXT);
+		return { label: d.label, snippet: `${from > 0 ? '…' : ''}${(row[d.field] as string).slice(from, to)}${to < value.length ? '…' : ''}` };
+	}
+	return undefined;
 }
 
 // Rows from one source as hits. An exact short-id match is read off the row's own short_id. Rows that answer deepParams (pass 2) rank 4 and say what
@@ -288,7 +304,10 @@ export function toHits(src: FinderSource, q: string, rows: any[], pass: 1 | 2 = 
 		if (detail) hit.detail = detail;
 		if (pass === 2) {
 			const where = matchedIn(src, row, words);
-			if (where) hit.matchedIn = where;
+			if (where) {
+				hit.matchedIn = where.label;
+				if (where.snippet) hit.matchedSnippet = where.snippet;
+			}
 		}
 		return [hit];
 	});
@@ -342,7 +361,8 @@ function dedupe(hits: FinderHit[]): FinderHit[] {
 
 // Groups in spec order, best rank first inside each (ties keep their arrival order). A remote group shows at most 5 hits (Inventory is six sources but
 // one group), all remote groups together at most 12: the best ranked stay, kept in group order (a tie goes to the earlier group). A group that lost hits
-// ends with a "More in <Page>…" row for the page that lost the most; those rows are not counted in the 12.
+// ends with a "More in <Page>…" row for the page that lost the most; those rows are not counted in the 12. The Explorer page searches one phrase in its code
+// and name fields, so the row is only offered for a one-word query and for pass 1 hits that were left out: it would find nothing for the others.
 export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 	if (!isSearchable(q)) return [];
 	const all = dedupe(groups.flat());
@@ -374,7 +394,8 @@ export function mergeHits(q: string, groups: FinderHit[][]): FinderHit[] {
 		while (end < kept.length && kept[end].hit.group === group) end++;
 		out.push(...kept.slice(at, end).map((s) => s.hit));
 		const counts = new Map<string, number>();
-		for (const h of lost.get(group) ?? []) if (h.record) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);
+		const single = queryWords(q).length === 1;
+		for (const h of single ? lost.get(group) ?? [] : []) if (h.record && h.rank < DEEP_RANK) counts.set(h.record.collection, (counts.get(h.record.collection) ?? 0) + 1);
 		const [collection] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
 		if (collection) {
 			const target = moreTarget(collection, q);

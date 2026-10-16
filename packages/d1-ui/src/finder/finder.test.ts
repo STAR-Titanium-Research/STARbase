@@ -295,6 +295,22 @@ describe('toHits pass 2', () => {
 		expect(toHits(sample, 's-0042 anneal', rows, 2)[0].matchedIn).toBe('notes');
 	});
 
+	it('gives a snippet of the value for a field on the row itself, and never for a relation', () => {
+		const long = `${'x'.repeat(50)} Annealed in argon ${'y'.repeat(50)}`;
+		const [own] = toHits(sample, 'annealed', [{ sample_id: 's1', sample_code: 'S-1', notes: long }], 2);
+		expect(own.matchedSnippet).toMatch(/^….*Annealed.*…$/);
+		expect(own.matchedSnippet!.length).toBeLessThan(long.length);
+		const [short] = toHits(sample, 'shed', [{ sample_id: 's2', sample_code: 'S-2', location: 'Shed 4' }], 2);
+		expect(short.matchedSnippet).toBe('Shed 4');
+		const [project] = toHits(sample, 'prj-9', [{ sample_id: 's3', sample_code: 'S-3', project_id: { project_code: 'PRJ-9' } }], 2);
+		expect(project).toMatchObject({ matchedIn: 'project' });
+		expect(project.matchedSnippet).toBeUndefined();
+		expect(JSON.stringify(project)).not.toContain('PRJ-9');
+		const [owner] = toHits(sample, 'nealson', [{ sample_id: 's4', sample_code: 'S-4', owner_person_id: { full_name: 'Ann Nealson' } }], 2);
+		expect(owner.matchedSnippet).toBeUndefined();
+		expect(JSON.stringify(owner)).not.toContain('Nealson');
+	});
+
 	it('leaves matchedIn off when no deep field holds a word', () => {
 		const [h] = toHits(sample, 'zzz', [{ sample_id: 's1', sample_code: 'S-1' }], 2);
 		expect(h.matchedIn).toBeUndefined();
@@ -367,11 +383,18 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 	});
 
 	it('ends a group that has more than 5 hits with a "More in <Page>…" row opening the Explorer search', () => {
-		const merged = mergeHits('ab c', [samples(6)]);
+		const merged = mergeHits('ab', [samples(6)]);
 		expect(merged).toHaveLength(6);
 		expect(merged.slice(0, 5).every((h) => !h.more)).toBe(true);
-		expect(merged[5]).toMatchObject({ group: 'Samples', label: 'More in Samples…', more: true, to: '/home/samples?q=ab%20c' });
+		expect(merged[5]).toMatchObject({ group: 'Samples', label: 'More in Samples…', more: true, to: '/home/samples?q=ab' });
 		expect(merged[5].record).toBeUndefined();
+	});
+
+	it('has none for a query of several words (the Explorer search would find nothing), nor for hits left out that were only pass 2', () => {
+		expect(mergeHits('ab cd', [samples(6)]).some((h) => h.more)).toBe(false);
+		expect(mergeHits('ab', [samples(5), samples(3, 4, 5)]).some((h) => h.more)).toBe(false);
+		// left out of the 12 as well: a pass 1 hit that lost its place to better ranked ones in other groups still counts
+		expect(mergeHits('ab', [samples(5), samples(1, 3, 5)]).at(-1)).toMatchObject({ more: true });
 	});
 
 	it('has no such row when nothing was left out', () => {
@@ -386,7 +409,7 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 		// 5 tools fill the group (all rank 3, arrival order), so the 3 lots are what was left out
 		expect(inv.at(-1)).toMatchObject({ more: true, label: 'More in Raw stock lots…', to: '/home/stock-lots?q=ab' });
 		const people = Array.from({ length: 6 }, (_, i) => rec('People', 'people', `p${i}`, 3));
-		expect(mergeHits('jo s', [people]).at(-1)).toMatchObject({ label: 'More in People…', to: '/home/people?q=jo%20s' });
+		expect(mergeHits('jo', [people]).at(-1)).toMatchObject({ label: 'More in People…', to: '/home/people?q=jo' });
 		const files = Array.from({ length: 6 }, (_, i) => rec('Files', 'directus_files', `f${i}`, 3));
 		expect(mergeHits('jo', [files]).at(-1)).toMatchObject({ label: 'More in Files…', to: '/files' });
 		const projects = Array.from({ length: 6 }, (_, i) => rec('Projects', 'projects', `j${i}`, 3));
@@ -394,12 +417,12 @@ describe('mergeHits ranking, caps and "More in" rows', () => {
 	});
 
 	it('caps the whole record list at 12, keeping the best ranked across groups in group order', () => {
-		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 4));
+		const ops = Array.from({ length: 5 }, (_, i) => rec('Operations', 'manufacturing_operations', `o${i}`, 3));
 		const people = Array.from({ length: 5 }, (_, i) => rec('People', 'people', `p${i}`, 1));
-		const merged = mergeHits('ab', [samples(5), ops, people]);
+		const merged = mergeHits('ab', [samples(5, 2), ops, people]);
 		const records = merged.filter((h) => !h.more);
 		expect(records).toHaveLength(12);
-		// the three rank 4 operations that missed the cut are the last ones in; all samples and people stay
+		// the three operations that missed the cut ranked lowest; all samples and people stay
 		expect(records.filter((h) => h.group === 'Samples')).toHaveLength(5);
 		expect(records.filter((h) => h.group === 'People')).toHaveLength(5);
 		expect(records.filter((h) => h.group === 'Operations')).toHaveLength(2);
