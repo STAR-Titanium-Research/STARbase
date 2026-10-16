@@ -2328,6 +2328,13 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   `sem-backfill: 1 saved ...`, a settings row with `read_by = 'backfill'` for that file, and the record page showing the values to A (Edit control
   present) and a lock to B (**SEM10**). A found file in A's folder that nobody linked must not be read (`INBOX_LOG_LEVEL=DEBUG`: no `reading` line for it).
   Run it again: 0 saved, nothing re-read for the finished file. Since: SEM reader final fix wave (I2).
+- [ ] **SEM14 — A record with many images (STARbase, real Directus; I3).** Open a sample (or operation or test) that has 30 or more linked image files, as
+  their owner and as another Lab Member. Expect the page usable at once (the Files list appears and scrolls while the settings fill in a few rows at
+  a time), the browser network tab showing no more than 4 `/d1-inbox/sem-settings` requests in flight at any moment, every image ending with its
+  settings (owner) or a lock (other member) and none stuck on "Reading imaging settings…". Note the load time to the last row. As an administrator
+  open the same page: expect one `sem_settings_access_log` row per owned file read, so `SELECT count(*) FROM d1_private.sem_settings_access_log
+  WHERE read_at > now() - interval '5 minutes'` equals the number of owned images on the page: record that count and decide whether the admin log
+  volume is acceptable (every admin page view of such a record writes that many rows). Since: SEM reader final fix wave (I3).
 
 ## Done
 
