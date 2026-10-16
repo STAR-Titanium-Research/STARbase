@@ -2164,16 +2164,21 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   A file already linked to a record before migration 196 (no owner) stays readable by every member. As A, upload a new image through Data Studio
   and the Force App: expect no 403 (the Lab Member create field list names every `directus_files` column), and expect that a Lab Member
   cannot set the owner (`PATCH /files/<id>` with `owner_person_id` answers 403). Then link A's file to a sample that B can read and open
-  that sample as B: expect a link B cannot open. Finally an administrator reads A's file's settings and the log gains a row (that half needs
+  that sample as B: expect a link B cannot open. Then, as B, try to change or remove A's file: `PATCH /files/<id>` with a new `title` and `DELETE /files/<id>` must be refused (403), and A's file
+  must be unchanged and still there; as A the same calls succeed on a throwaway owned file, and any member can still `PATCH` and `DELETE` an
+  unowned file they can read. Finally an administrator reads A's file's settings and the log gains a row (that half needs
   the `d1-inbox` stream). Since: provenance owner (database, migration 196).
 - [ ] **SEM5 — Migrations 196 and 197 and the back-fill on the real database (database half).** On a copy of the production database, apply
   both (`dbmate up`) and check: `SELECT count(*) FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL` equals
-  the number of `d1_private.file_candidates` rows whose state is not `linked` (about 82,000 when this was written), no linked file was
-  stamped, and `SELECT d1_private.file_readers_drift_count()` is 0. Time the apply (the back-fill and the readers refresh scan every file
+  the number of `d1_private.file_candidates` rows whose state is not `linked` **and** whose file has no row in `sample_data_files`,
+  `operation_data_files`, `session_data_files` or `surface_scans` (not linked anywhere; about 82,000 when this was written, a few fewer
+  than the candidates that are not `linked`), no file with such a row was stamped (a dismissed candidate whose file was linked in Data Studio is
+  the case to look for), and `SELECT d1_private.file_readers_drift_count()` is 0. Time the apply (the back-fill and the readers refresh scan every file
   once). Read an SEM image's `extracted` from `file_candidates` and run `SELECT d1_private.save_sem_settings(<file id>, extracted,
   'sem-2')` for a few real rows: expect the columns to equal the printed bar and a second call to change nothing; then
   `correct_sem_setting` one value and run the save again: expect the corrected value to stay. `dbmate down` twice and `up` twice must
-  also work on the real data (down drops the stamps and the settings). Since: provenance owner and SEM settings (database,
+  also work on the real data. Down is lossy: it drops the stamps, the settings, the owners' manual corrections and the administrator
+  access log, so dump `d1_private.sem_image_settings` and `d1_private.sem_settings_access_log` first if the copy holds any. Since: provenance owner and SEM settings (database,
   migrations 196 and 197). The crawler half of SEM5 (`--sem-backfill`) is the crawler stream's.
 
 ## Done

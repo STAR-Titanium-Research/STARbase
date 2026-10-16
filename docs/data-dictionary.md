@@ -502,8 +502,10 @@ system table; the migration adds two columns to it and a readers table beside it
 `CHECK directus_files_one_owner_check`: at most one of the two is set. Both null means the file is open, as before (linked files and the legacy archive
 stay open until the file-access stream, D10). Partial indexes `idx_directus_files_owner_person_id` and `idx_directus_files_owner_team_id`
 (`WHERE ... IS NOT NULL`). The crawler stamps a pointer row when it registers it and never overwrites a stamp. The migration back-fills the files the live crawler had
-already registered from `d1_private.file_candidates.owner_*` for every candidate whose state is not `linked`. Lab Members cannot write either column:
-the Lab Member `create` and `update` field lists of `directus_files` name every other column (as `people.uni_alias`; there is no Postgres trigger, because Directus
+already registered from `d1_private.file_candidates.owner_*` for every file that is **not linked anywhere**: its candidate's state is not `linked` *and* it has no
+row in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans` (a file linked in Data Studio's picker or the Alicona dialog keeps a
+dismissed, new or gone candidate, so the candidate alone cannot say). Lab Members cannot write either column:
+the Lab Member `create` and `update` field lists of `directus_files` name every other column (the 26 of the `db/schema.sql` snapshot, pinned by a test) (as `people.uni_alias`; there is no Postgres trigger, because Directus
 uses one database role for every user). Administrators are not filtered and can change an owner.
 
 **`file_readers`** (public, hidden Directus collection, derived like the other readers tables, not audited): `reader_id` BIGINT identity PK,
@@ -511,7 +513,8 @@ uses one database role for every user). Administrators are not filtered and can 
 `user_id`. One row per owned file and login that may read it: the owning person's login, or the login of every member of the owning team. A file with no owner
 has no rows. It exists because the Directus read rule cannot say "the caller is a member of the owning team" (a to-many hop inside `_some`, which Directus 11.17
 refuses); the rule is instead one legal membership test on the hidden top-level alias `directus_files.readers`: **the file has no owner, or the caller has a
-`file_readers` row**. The Lab Member and Lab Viewer read rows of `directus_files` carry that filter, and so does `/assets/<id>`. Triggers keep the table right
+`file_readers` row**. The Lab Member and Lab Viewer read rows of `directus_files` carry that filter, and so does `/assets/<id>`. The Lab Member **update and delete** rows of `directus_files` carry the same test in its bare-hop form (`readers.user_id = $CURRENT_USER`, no
+`_some`), so a member cannot rewrite or delete a file they cannot read (deleting a file cascades its candidate, settings and readers). Triggers keep the table right
 (`directus_files` owner change, `team_members` join, leave or move, `people.user_id` set or removed);
 `d1_private.file_readers_drift_count()` counts the differences from `d1_private.file_readers_expected()` (0 is correct) and `d1_private.file_readers_refresh()`
 repairs them. Not granted to the LLM role.
@@ -529,7 +532,7 @@ is unknown, failed a cross-check or fell outside its range; it is never zero.
 
 | Column | Type | Description |
 |---|---|---|
-| `kv` | NUMERIC(6,2) | Accelerating voltage in kV, 0.1 to 30 (CHECK) |
+| `kv` | NUMERIC(6,2) | Accelerating voltage in kV, 0.1 to 30 (CHECK). A value is tested against its range as given, then rounded, so 0.095 is dropped, not saved as 0.10 |
 | `spot` | NUMERIC(4,1) | Spot size, 1 to 10 (CHECK) |
 | `working_distance_mm` | NUMERIC(6,2) | Working distance in mm, 0.1 to 50 (CHECK) |
 | `magnification` | INTEGER | Magnification as printed, 5 to 1,000,000 (CHECK); derived from the screen-width constant and the field width when read from metadata |
@@ -546,10 +549,13 @@ is unknown, failed a cross-check or fell outside its range; it is never zero.
 
 **`d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean`** is the only place `extracted` becomes columns (`SECURITY INVOKER`). It maps the
 keys above, drops a value of the wrong JSON type or outside its range (after rounding to the column's scale, so a bad value costs that field, never the link),
-keeps only the `sources` of saved fields and never a source of `manual`, and upserts. A re-read **replaces** every field the earlier read set (a field the new read
-does not carry becomes absent) but **skips every field whose existing source is `manual`**, and takes no flag named after such a field. It returns whether a row
-exists afterwards: `false` for an `extracted` with nothing usable on a file with no row (nothing is written), `true` otherwise (an existing row is left as it is when
-nothing usable was given). **`d1_private.correct_sem_setting(file, field, value, user) RETURNS void`** is the owner's correction: it sets one of the eleven settings from
+keeps only the `sources` of saved fields and never a source of `manual`, and upserts. It **merges** into the row (ruling R12): only the keys present and usable in
+`extracted` are updated; a key it does not carry keeps its stored value, `sources` entry and flags, and a key that is present but unusable (out of range, null,
+the wrong type) is dropped without erasing the stored value, so a re-read with fewer fields (a back-fill without OCR) cannot erase what an earlier read found. An
+updated key takes the source the read gave it (none if it gave none) and loses the flag named after it. It **skips every field whose existing source is `manual`**
+and takes no flag named after such a field. It returns whether a row exists afterwards: `false` for an `extracted` with nothing usable on a file with no row
+(nothing is written), `true` otherwise (an existing row is left exactly as it is when nothing usable was given). The migration's down is lossy: the
+owners' manual corrections and the administrator access log are dropped with the tables. **`d1_private.correct_sem_setting(file, field, value, user) RETURNS void`** is the owner's correction: it sets one of the eleven settings from
 a JSON value (same type and range rules), marks `sources.<field> = 'manual'`, removes the flag named after the field, and records `corrected_by` and `corrected_at`;
 it refuses other columns (`read_by`, `sources`, ...), bad values, a missing user and a file with no row. The endpoint decides who may call it.
 Helpers `sem_clean_number`, `sem_clean_text` and `sem_try_timestamptz` turn a malformed value into NULL instead of an error.

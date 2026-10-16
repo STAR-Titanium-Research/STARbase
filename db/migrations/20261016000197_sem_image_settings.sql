@@ -17,13 +17,16 @@
 --     and the user it records (the same reason the settings' corrected_by has none).
 --   * d1_private.file_candidates.classified_by   which profile and version set kind, kind_confidence and extracted (for example sem-2), so a
 --     re-classification pass can skip rows that are current.
---   * d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean   the ONLY place `extracted` becomes columns. It maps the documented keys,
---     drops a value that is not of the right JSON type or is outside its range (after rounding to the column's scale, so it can never overflow a column
---     or trip a CHECK: a bad value costs that field, never the link), keeps only the sources of the fields it saved (and never a source of 'manual':
---     only a person's correction is manual), and upserts. A re-read REPLACES every field the earlier read set (a field the new read does not carry
---     becomes absent), except that it SKIPS every field whose existing source is 'manual', and it takes no flag named after such a field. It returns
---     whether a row exists afterwards: false for an extracted with nothing usable on a file that has no row (no row is written); true, with the row
---     left as it is, for a file that already has one.
+--   * d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean   the ONLY place `extracted` becomes columns. It maps the documented keys
+--     and drops a value that is not of the right JSON type or is outside its range (the value AS GIVEN is tested against the range, then rounded to the
+--     column's scale, so a bad value costs that field, never the link, and a value that rounding would bring inside the range, such as kv 0.095, is
+--     still dropped). It MERGES into the row (ruling R12): only the keys present in `extracted` are updated, a key it does not carry keeps its stored
+--     value and its stored sources and flags entries, and a key that is present but unusable (out of range, null, the wrong type) is dropped and does
+--     not erase the stored value, so a re-read that carries fewer fields (a back-fill without OCR) cannot erase what an earlier read found. An updated key
+--     takes the source the read gave it (or none), and loses the flag that was named after it; it keeps only the sources of the fields it saved and
+--     never a source of 'manual' (only a person's correction is manual). It SKIPS every field whose stored source is 'manual' and takes no flag named
+--     after one. It returns whether a row exists afterwards: false for an extracted with nothing usable on a file that has no row (no row is written);
+--     true for a file that has one (left exactly as it is when nothing usable was given).
 --   * d1_private.correct_sem_setting(file, field, value, user) RETURNS void   the owner's correction: sets the one field from a JSON value (same type and
 --     range rules; unknown fields, such as read_by or sources, are refused), marks sources.<field> = 'manual', drops the flag named after the field,
 --     and records corrected_by and corrected_at. The endpoint checks that the caller owns the file; the function checks the value.
@@ -31,7 +34,10 @@
 --     validated the values, this is the second line.
 --
 -- SECURITY INVOKER: nothing here needs more than the caller's own rights; the caller is the d1-inbox endpoint's database role.
--- Down drops both tables, the four functions and the column. The rows are derived (the crawler can read them again), so dropping them loses nothing.
+-- Down drops both tables, the functions and the column. It is LOSSY: the crawler can read the values again, but the owners' manual corrections
+-- (sources = manual, corrected_by, corrected_at) and the administrator access log cannot be recovered. Dump d1_private.sem_image_settings and
+-- d1_private.sem_settings_access_log first if a rollback on real data is ever needed.
+SET LOCAL lock_timeout = '10s';
 
 CREATE TABLE d1_private.sem_image_settings (
     directus_files_id UUID NOT NULL,
@@ -111,7 +117,7 @@ COMMENT ON COLUMN d1_private.file_candidates.classified_by IS 'The classifier pr
 -- Helpers: a value that is not of the right type or range becomes NULL instead of raising.
 CREATE FUNCTION d1_private.sem_clean_number(p_field TEXT, p_value JSONB) RETURNS NUMERIC
 LANGUAGE sql IMMUTABLE AS $fn$
-    SELECT CASE WHEN r.v BETWEEN b.lo AND b.hi THEN r.v END
+    SELECT CASE WHEN r.v BETWEEN b.lo AND b.hi THEN round(r.v, b.scale) END
       FROM (VALUES
               ('kv', 0.1, 30::numeric, 2),
               ('spot', 1, 10, 1),
@@ -121,10 +127,10 @@ LANGUAGE sql IMMUTABLE AS $fn$
               ('pixel_size_nm', 0.0001, 99999999.9999, 4),
               ('scale_bar_um', 0.001, 999999999.999, 3)
            ) AS b (field, lo, hi, scale)
-     CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(p_value) = 'number' THEN round((p_value #>> '{}')::numeric, b.scale) END AS v) r
+     CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(p_value) = 'number' THEN (p_value #>> '{}')::numeric END AS v) r
      WHERE b.field = p_field
 $fn$;
-COMMENT ON FUNCTION d1_private.sem_clean_number(TEXT, JSONB) IS 'The numeric value of a JSON number for one imaging field, rounded to the column''s scale and kept only inside its range (kv 0.1 to 30, spot 1 to 10, working_distance_mm 0.1 to 50, magnification 5 to 1,000,000, hfw_um, pixel_size_nm and scale_bar_um above 0 and inside their column); NULL for anything else (not a number, outside the range, unknown field). The one place the ranges live in code; the table CHECKs repeat the first four. migration 197.';
+COMMENT ON FUNCTION d1_private.sem_clean_number(TEXT, JSONB) IS 'The numeric value of a JSON number for one imaging field: the value as given must be inside the range (so 0.095 is not a kv), and it is then rounded to the column''s scale (kv 0.1 to 30, spot 1 to 10, working_distance_mm 0.1 to 50, magnification 5 to 1,000,000, hfw_um, pixel_size_nm and scale_bar_um above 0 and inside their column); NULL for anything else (not a number, outside the range as given, unknown field). The one place the ranges live in code; the table CHECKs repeat the first four. migration 197.';
 
 CREATE FUNCTION d1_private.sem_clean_text(p_value JSONB) RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $fn$
@@ -152,6 +158,7 @@ LANGUAGE sql SECURITY INVOKER AS $fn$
     WITH x AS (
         SELECT CASE WHEN jsonb_typeof(p_extracted) = 'object' THEN p_extracted ELSE '{}'::jsonb END AS j
     ), f AS (
+        -- what this read carries: NULL for a key that is absent or unusable (wrong type, outside its range)
         SELECT d1_private.sem_clean_number('kv', j -> 'kv')::numeric(6, 2) AS kv,
                d1_private.sem_clean_number('spot', j -> 'spot')::numeric(4, 1) AS spot,
                d1_private.sem_clean_number('working_distance_mm', j -> 'working_distance_mm')::numeric(6, 2) AS working_distance_mm,
@@ -167,7 +174,7 @@ LANGUAGE sql SECURITY INVOKER AS $fn$
                CASE WHEN jsonb_typeof(j -> 'flags') = 'object' THEN j -> 'flags' ELSE '{}'::jsonb END AS flags_in
           FROM x
     ), n AS (
-        -- the row to write: only when at least one field survived; a source entry is kept only for a saved field and is never 'manual'
+        -- the read to merge: only when at least one field survived; a source entry is kept only for a field this read saved and is never 'manual'
         SELECT f.*,
                (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
                   FROM jsonb_each(f.sources_in) e
@@ -183,39 +190,83 @@ LANGUAGE sql SECURITY INVOKER AS $fn$
           FROM f
          WHERE num_nonnulls(f.kv, f.spot, f.working_distance_mm, f.magnification, f.hfw_um, f.pixel_size_nm, f.scale_bar_um,
                             f.detector, f.mode, f.instrument, f.acquired_at) > 0
+    ), old AS (
+        -- the stored row, locked so a correction made at the same moment is merged, not overwritten
+        SELECT s.* FROM d1_private.sem_image_settings s WHERE s.directus_files_id = p_files_id FOR UPDATE
+    ), jo AS (
+        SELECT n.*,
+               o.kv AS o_kv,
+               o.spot AS o_spot,
+               o.working_distance_mm AS o_working_distance_mm,
+               o.magnification AS o_magnification,
+               o.hfw_um AS o_hfw_um,
+               o.pixel_size_nm AS o_pixel_size_nm,
+               o.scale_bar_um AS o_scale_bar_um,
+               o.detector AS o_detector,
+               o.mode AS o_mode,
+               o.instrument AS o_instrument,
+               o.acquired_at AS o_acquired_at,
+               o.sources AS o_sources, o.flags AS o_flags
+          FROM n LEFT JOIN old o ON true
+    ), u AS (
+        -- the fields this read updates: it carries a usable value and the stored one is not a person's correction
+        SELECT jo.*,
+               array_remove(ARRAY[
+                   CASE WHEN jo.kv IS NOT NULL AND coalesce(jo.o_sources ->> 'kv', '') <> 'manual' THEN 'kv' END,
+                   CASE WHEN jo.spot IS NOT NULL AND coalesce(jo.o_sources ->> 'spot', '') <> 'manual' THEN 'spot' END,
+                   CASE WHEN jo.working_distance_mm IS NOT NULL AND coalesce(jo.o_sources ->> 'working_distance_mm', '') <> 'manual' THEN 'working_distance_mm' END,
+                   CASE WHEN jo.magnification IS NOT NULL AND coalesce(jo.o_sources ->> 'magnification', '') <> 'manual' THEN 'magnification' END,
+                   CASE WHEN jo.hfw_um IS NOT NULL AND coalesce(jo.o_sources ->> 'hfw_um', '') <> 'manual' THEN 'hfw_um' END,
+                   CASE WHEN jo.pixel_size_nm IS NOT NULL AND coalesce(jo.o_sources ->> 'pixel_size_nm', '') <> 'manual' THEN 'pixel_size_nm' END,
+                   CASE WHEN jo.scale_bar_um IS NOT NULL AND coalesce(jo.o_sources ->> 'scale_bar_um', '') <> 'manual' THEN 'scale_bar_um' END,
+                   CASE WHEN jo.detector IS NOT NULL AND coalesce(jo.o_sources ->> 'detector', '') <> 'manual' THEN 'detector' END,
+                   CASE WHEN jo.mode IS NOT NULL AND coalesce(jo.o_sources ->> 'mode', '') <> 'manual' THEN 'mode' END,
+                   CASE WHEN jo.instrument IS NOT NULL AND coalesce(jo.o_sources ->> 'instrument', '') <> 'manual' THEN 'instrument' END,
+                   CASE WHEN jo.acquired_at IS NOT NULL AND coalesce(jo.o_sources ->> 'acquired_at', '') <> 'manual' THEN 'acquired_at' END
+               ], NULL) AS upd
+          FROM jo
+    ), m AS (
+        SELECT
+               CASE WHEN coalesce(u.o_sources ->> 'kv', '') = 'manual' THEN u.o_kv ELSE coalesce(u.kv, u.o_kv) END AS kv,
+               CASE WHEN coalesce(u.o_sources ->> 'spot', '') = 'manual' THEN u.o_spot ELSE coalesce(u.spot, u.o_spot) END AS spot,
+               CASE WHEN coalesce(u.o_sources ->> 'working_distance_mm', '') = 'manual' THEN u.o_working_distance_mm ELSE coalesce(u.working_distance_mm, u.o_working_distance_mm) END AS working_distance_mm,
+               CASE WHEN coalesce(u.o_sources ->> 'magnification', '') = 'manual' THEN u.o_magnification ELSE coalesce(u.magnification, u.o_magnification) END AS magnification,
+               CASE WHEN coalesce(u.o_sources ->> 'hfw_um', '') = 'manual' THEN u.o_hfw_um ELSE coalesce(u.hfw_um, u.o_hfw_um) END AS hfw_um,
+               CASE WHEN coalesce(u.o_sources ->> 'pixel_size_nm', '') = 'manual' THEN u.o_pixel_size_nm ELSE coalesce(u.pixel_size_nm, u.o_pixel_size_nm) END AS pixel_size_nm,
+               CASE WHEN coalesce(u.o_sources ->> 'scale_bar_um', '') = 'manual' THEN u.o_scale_bar_um ELSE coalesce(u.scale_bar_um, u.o_scale_bar_um) END AS scale_bar_um,
+               CASE WHEN coalesce(u.o_sources ->> 'detector', '') = 'manual' THEN u.o_detector ELSE coalesce(u.detector, u.o_detector) END AS detector,
+               CASE WHEN coalesce(u.o_sources ->> 'mode', '') = 'manual' THEN u.o_mode ELSE coalesce(u.mode, u.o_mode) END AS mode,
+               CASE WHEN coalesce(u.o_sources ->> 'instrument', '') = 'manual' THEN u.o_instrument ELSE coalesce(u.instrument, u.o_instrument) END AS instrument,
+               CASE WHEN coalesce(u.o_sources ->> 'acquired_at', '') = 'manual' THEN u.o_acquired_at ELSE coalesce(u.acquired_at, u.o_acquired_at) END AS acquired_at,
+               -- sources: the stored entries of fields not updated (manual ones among them), plus this read's entries for the fields it updates
+               (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(coalesce(u.o_sources, '{}'::jsonb)) e
+                 WHERE e.key <> ALL (u.upd))
+               || (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(u.sources) e
+                    WHERE e.key = ANY (u.upd)) AS sources,
+               -- flags: the stored ones except those named after an updated field, plus this read's, except those named after a manual field
+               (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(coalesce(u.o_flags, '{}'::jsonb)) e
+                 WHERE e.key <> ALL (u.upd))
+               || (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(u.flags_in) e
+                    WHERE coalesce(u.o_sources ->> e.key, '') <> 'manual') AS flags
+          FROM u
     ), ins AS (
         INSERT INTO d1_private.sem_image_settings AS t
                (directus_files_id, kv, spot, working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um,
                 detector, mode, instrument, acquired_at, sources, flags, read_by)
-        SELECT p_files_id, n.kv, n.spot, n.working_distance_mm, n.magnification, n.hfw_um, n.pixel_size_nm, n.scale_bar_um,
-               n.detector, n.mode, n.instrument, n.acquired_at, n.sources, n.flags_in, p_read_by
-          FROM n
+        SELECT p_files_id, m.kv, m.spot, m.working_distance_mm, m.magnification, m.hfw_um, m.pixel_size_nm, m.scale_bar_um,
+               m.detector, m.mode, m.instrument, m.acquired_at, m.sources, m.flags, p_read_by
+          FROM m
         ON CONFLICT (directus_files_id) DO UPDATE SET
-            kv = CASE WHEN t.sources ->> 'kv' = 'manual' THEN t.kv ELSE EXCLUDED.kv END,
-            spot = CASE WHEN t.sources ->> 'spot' = 'manual' THEN t.spot ELSE EXCLUDED.spot END,
-            working_distance_mm = CASE WHEN t.sources ->> 'working_distance_mm' = 'manual' THEN t.working_distance_mm ELSE EXCLUDED.working_distance_mm END,
-            magnification = CASE WHEN t.sources ->> 'magnification' = 'manual' THEN t.magnification ELSE EXCLUDED.magnification END,
-            hfw_um = CASE WHEN t.sources ->> 'hfw_um' = 'manual' THEN t.hfw_um ELSE EXCLUDED.hfw_um END,
-            pixel_size_nm = CASE WHEN t.sources ->> 'pixel_size_nm' = 'manual' THEN t.pixel_size_nm ELSE EXCLUDED.pixel_size_nm END,
-            scale_bar_um = CASE WHEN t.sources ->> 'scale_bar_um' = 'manual' THEN t.scale_bar_um ELSE EXCLUDED.scale_bar_um END,
-            detector = CASE WHEN t.sources ->> 'detector' = 'manual' THEN t.detector ELSE EXCLUDED.detector END,
-            mode = CASE WHEN t.sources ->> 'mode' = 'manual' THEN t.mode ELSE EXCLUDED.mode END,
-            instrument = CASE WHEN t.sources ->> 'instrument' = 'manual' THEN t.instrument ELSE EXCLUDED.instrument END,
-            acquired_at = CASE WHEN t.sources ->> 'acquired_at' = 'manual' THEN t.acquired_at ELSE EXCLUDED.acquired_at END,
-            sources = (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(EXCLUDED.sources) e
-                        WHERE t.sources -> e.key IS DISTINCT FROM '"manual"'::jsonb)
-                      || (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(t.sources) e
-                           WHERE e.value = '"manual"'::jsonb),
-            flags = (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(EXCLUDED.flags) e
-                      WHERE t.sources -> e.key IS DISTINCT FROM '"manual"'::jsonb),
-            read_by = EXCLUDED.read_by,
-            read_at = now()
+            kv = EXCLUDED.kv, spot = EXCLUDED.spot, working_distance_mm = EXCLUDED.working_distance_mm, magnification = EXCLUDED.magnification,
+            hfw_um = EXCLUDED.hfw_um, pixel_size_nm = EXCLUDED.pixel_size_nm, scale_bar_um = EXCLUDED.scale_bar_um,
+            detector = EXCLUDED.detector, mode = EXCLUDED.mode, instrument = EXCLUDED.instrument, acquired_at = EXCLUDED.acquired_at,
+            sources = EXCLUDED.sources, flags = EXCLUDED.flags, read_by = EXCLUDED.read_by, read_at = now()
         RETURNING 1
     )
     SELECT EXISTS (SELECT 1 FROM ins)
         OR EXISTS (SELECT 1 FROM d1_private.sem_image_settings s WHERE s.directus_files_id = p_files_id)
 $fn$;
-COMMENT ON FUNCTION d1_private.save_sem_settings(UUID, JSONB, TEXT) IS 'The only place d1_private.file_candidates.extracted becomes imaging settings (migration 197, spec 2026-10-16 section 3). Maps kv, spot, working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument, acquired_at, sources and flags; drops a value of the wrong JSON type or outside its range (after rounding to the column''s scale); keeps only the sources of saved fields, never a source of manual; upserts. A re-read replaces every field the earlier read set and SKIPS every field whose existing sources entry is manual (a person''s correction), and takes no flag named after such a field. Returns whether a row exists afterwards: false when nothing usable was given and the file has no row (no row written), true otherwise (an existing row is left as it is when nothing usable was given).';
+COMMENT ON FUNCTION d1_private.save_sem_settings(UUID, JSONB, TEXT) IS 'The only place d1_private.file_candidates.extracted becomes imaging settings (migration 197, spec 2026-10-16 section 3). Maps kv, spot, working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument, acquired_at, sources and flags; drops a value of the wrong JSON type or outside its range (tested as given, then rounded to the column''s scale). MERGES into the row (ruling R12): only keys present and usable in extracted are updated; a key it does not carry keeps its stored value, sources entry and flags, and a key that is present but unusable is dropped without erasing the stored value. An updated key takes the source the read gave it (none if it gave none) and loses the flag named after it; sources are kept only for saved fields and never as manual. SKIPS every field whose stored sources entry is manual (a person''s correction) and takes no flag named after such a field. Returns whether a row exists afterwards: false when nothing usable was given and the file has no row (no row written), true otherwise (an existing row is left exactly as it is when nothing usable was given).';
 
 -- The owner's correction.
 CREATE FUNCTION d1_private.correct_sem_setting(p_files_id UUID, p_field TEXT, p_value JSONB, p_user UUID) RETURNS VOID

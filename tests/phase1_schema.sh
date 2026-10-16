@@ -7155,7 +7155,7 @@ fo_check "fo_up_linked_elsewhere:0" "up: no file with a junction row or a surfac
 fo_check "fo_up_readers_f1:u1" "up: a person-owned file's readers are that person's login"
 fo_check "fo_up_readers_f2:u2" "up: a team-owned file's readers are the logins of the team's members (the member without a login adds none)"
 fo_check "fo_up_drift:0" "up: the readers table has no drift from the owner columns"
-fo_check "fo_up_perms:2" "up: the Lab Member read row and the Lab Viewer read row carry the owner filter"
+fo_check "fo_up_perms:4" "up: the Lab Member read, update and delete rows and the Lab Viewer read row carry the owner filter"
 fo_check "fo_redown_columns:0" "down runs again after up"
 fi
 
@@ -7384,7 +7384,7 @@ SELECT d1_private.save_sem_settings('$SE_F1', '{\"mode\": \"SE\", \"sources\": {
 $(se_row se_merge_new_key "$SE_F1")
 SELECT d1_private.save_sem_settings('$SE_F1', '{\"detector\": \"BSE\", \"sources\": {\"detector\": \"metadata\"}}'::jsonb, 'sem-3');
 $(se_row se_merge_flag_follows "$SE_F1")")
-grep -qxF "se_merge_new_key:$(se_exp 2.00 3.5 '' '' '' '' '' ETD SE '' '' '{"mode": "metadata", "detector": "ocr"}' '{"check_this": true, "detector": "unsure"}' sem-3 -)" <<<"$se_out" && ok "a key the first read did not have is added, and the stored values, sources and flags of the other keys stay" || bad "merge of a new key wrong (output: $se_out)"
+grep -qxF "se_merge_new_key:$(se_exp 2.00 3.5 '' '' '' '' '' ETD SE '' '' '{"mode": "metadata", "detector": "ocr"}' '{"detector": "unsure", "check_this": true}' sem-3 -)" <<<"$se_out" && ok "a key the first read did not have is added, and the stored values, sources and flags of the other keys stay" || bad "merge of a new key wrong (output: $se_out)"
 grep -qxF "se_merge_flag_follows:$(se_exp 2.00 3.5 '' '' '' '' '' BSE SE '' '' '{"mode": "metadata", "detector": "metadata"}' '{"check_this": true}' sem-3 -)" <<<"$se_out" && ok "an updated key takes its new source and drops the flag that was named after it" || bad "source or flag of an updated key wrong (output: $se_out)"
 # a value just outside its range is dropped even when rounding would bring it inside (the raw value is tested, then rounded)
 for pair in "kv|0.095" "kv|30.004" "spot|0.95" "spot|10.04" "working_distance_mm|0.095" "working_distance_mm|50.004" "magnification|4.5" "magnification|1000000.4" "hfw_um|0.004"; do
