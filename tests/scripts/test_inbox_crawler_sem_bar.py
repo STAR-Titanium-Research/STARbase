@@ -517,7 +517,9 @@ def test_garbage_detector_text_is_not_stored():
 
 
 def test_a_trailing_full_stop_on_a_text_cell_is_the_recognisers_not_the_instruments():
-    r = parse(read_of(det="ETD.", mode="None. "))  # read on d1-server from a bar that prints "None"
+    r = parse(
+        read_of(det="ETD.", mode="None. ")
+    )  # read on d1-server from a bar that prints "None"
     assert r.values["detector"] == "ETD" and r.values["mode"] == "None"
 
 
@@ -563,7 +565,9 @@ def test_scale_bar_length_px_spans_a_line_broken_by_its_label():
     bar = make_bar(HEADERS6 + ["50μm"], VALUES6 + [""], scale_len=100)
     d = ImageDraw.Draw(bar)
     y = H - 12
-    d.line((W - 12 - 65, y, W - 12 - 35, y), fill=0)  # the label's gap in the line: 35 + 30 + 35 px
+    d.line(
+        (W - 12 - 65, y, W - 12 - 35, y), fill=0
+    )  # the label's gap in the line: 35 + 30 + 35 px
     assert sem_bar.scale_bar_length_px(bar) == 100
 
 
