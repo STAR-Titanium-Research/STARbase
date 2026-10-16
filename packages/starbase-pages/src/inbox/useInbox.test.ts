@@ -141,8 +141,29 @@ describe('Accept all (a dry run first, then Confirm)', () => {
 		await loadingNow;
 		expect(inbox.preview.value).toMatchObject({ count: 2, exact: true });
 		expect(inbox.canAcceptAll.value).toBe(true);
-		// the list never asks for the server's acceptable count
-		expect(fake.calls.filter((c) => c.path === '/d1-inbox/files').every((c) => !('acceptable' in (c.params ?? {})))).toBe(true);
+		// the first page of the list asks the server for its acceptable count, and the preview then holds that number for the whole filter
+		expect(fake.calls.find((c) => c.path === '/d1-inbox/files')?.params).toMatchObject({ acceptable: 1 });
+		expect(inbox.main.value.acceptable).toBe(2);
+	});
+
+	it('when the server counts none, Accept all has nothing to do: the button is off and the count is known', async () => {
+		const { inbox } = setup([foundFile(), foundFile({ rel_path: 'Users/abc12de/b.png' })]);
+		await inbox.load();
+		expect(inbox.main.value.acceptable).toBe(0);
+		expect(inbox.preview.value).toMatchObject({ count: 0, exact: true });
+		expect(inbox.canAcceptAll.value).toBe(false);
+	});
+
+	it('a later page keeps the count the first page brought, and asks for none of its own', async () => {
+		const many = Array.from({ length: 60 }, (_, i) => foundFile({ candidate_id: `c${i}`, rel_path: `Users/abc12de/f${i}.png` }));
+		const { inbox, fake } = setup([exactMatch(), ...many]);
+		await inbox.load();
+		const first = inbox.main.value.acceptable;
+		expect(first).toBe(1);
+		await inbox.loadMoreMain();
+		expect(inbox.main.value.acceptable).toBe(first);
+		const paged = fake.calls.filter((c) => c.path === '/d1-inbox/files' && (c.params as { offset?: number }).offset);
+		expect(paged.every((c) => !('acceptable' in (c.params ?? {})))).toBe(true);
 	});
 
 	it('opening it asks the server for a dry run, changes nothing, and Confirm links exactly the files it listed', async () => {

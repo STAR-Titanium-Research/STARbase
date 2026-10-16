@@ -24,8 +24,9 @@
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
 //
-// The client does not ask for meta.acceptable (the list's count of what Accept all would link): the dry run, asked when the confirm opens, is the
-// one count it trusts. A dry run that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
+// The first page of a New or Older list asks for meta.acceptable (acceptable=1: how many files Accept all would link under the whole filter), so the
+// button can say so, or say that there is nothing to accept. The dry run, asked when the confirm opens, is still the count the confirm trusts. A dry run
+// that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
 import { errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 
 const BASE = '/d1-inbox';
@@ -124,6 +125,8 @@ export interface FilesQuery {
 	owner?: string;
 	strength?: string;
 	link_kind?: LinkKind;
+	/** 1 on a list's first page: the answer carries meta.acceptable, how many of the matching files Accept all would link. */
+	acceptable?: 0 | 1;
 	limit?: number;
 	offset?: number;
 }

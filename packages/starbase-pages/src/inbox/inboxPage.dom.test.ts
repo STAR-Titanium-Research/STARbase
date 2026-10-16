@@ -203,10 +203,17 @@ describe('the Inbox page', () => {
 		expect(fake.files[2].state).toBe('new');
 	});
 
+	it('with no file naming a record, Accept all is replaced by a note that says why, and Link to… stays', async () => {
+		await mount(defaultFiles().filter((f) => f.match_strength !== 'short_id'));
+		expect(document.querySelector('[data-test="accept-all"]')).toBeNull();
+		expect(document.querySelector('[data-test="accept-none"]')?.textContent).toContain('Nothing to accept in bulk');
+		expect(rows().length).toBeGreaterThan(0);
+	});
+
 	it('Accept all opens on a dry run: Confirm waits for it, the dialog names the count and where files go, and Confirm links exactly those', async () => {
 		await mount();
 		const accept = document.querySelector<HTMLButtonElement>('[data-test="accept-all"]')!;
-		expect(accept.textContent?.trim()).toBe('Accept all');
+		expect(accept.textContent?.trim()).toBe('Accept all (2)');
 		click(accept);
 		await vi.waitFor(() => expect(document.querySelector('[data-test="accept-confirm"]')).not.toBeNull());
 		const body = document.querySelector('[role="dialog"]')!.textContent!;

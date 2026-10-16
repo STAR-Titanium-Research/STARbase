@@ -96,13 +96,16 @@ export function createInbox(deps: InboxDeps) {
 			return;
 		}
 		const token = mainGate.begin();
-		const query: FilesQuery = { ...plan.main, offset: append ? main.value.rows.length : 0 };
+		// The first page also asks the server how many files Accept all would link (meta.acceptable), so the button says the truth for the
+		// whole filter and not just for the rows on screen. Later pages keep that number.
+		const asksCount = !append && (deps.getFilters().tab === 'new' || deps.getFilters().tab === 'older');
+		const query: FilesQuery = { ...plan.main, offset: append ? main.value.rows.length : 0, ...(asksCount ? { acceptable: 1 } : {}) };
 		if (append) moreLoading.value = true;
 		else loading.value = main.value.rows.length === 0;
 		try {
 			const page = await loadFiles(api, query);
 			if (!mainGate.isCurrent(token)) return;
-			main.value = { rows: append ? [...main.value.rows, ...page.rows] : page.rows, total: page.total, acceptable: page.acceptable };
+			main.value = { rows: append ? [...main.value.rows, ...page.rows] : page.rows, total: page.total, acceptable: append ? main.value.acceptable : page.acceptable };
 			error.value = '';
 		} catch (e) {
 			if (!mainGate.isCurrent(token)) return;
@@ -131,7 +134,7 @@ export function createInbox(deps: InboxDeps) {
 		try {
 			const page = await loadFiles(api, query);
 			if (!otherGate.isCurrent(token)) return;
-			other.value = { rows: full ? (append ? [...other.value.rows, ...page.rows] : page.rows) : [], total: page.total, acceptable: page.acceptable };
+			other.value = { rows: full ? (append ? [...other.value.rows, ...page.rows] : page.rows) : [], total: page.total, acceptable: append ? main.value.acceptable : page.acceptable };
 			otherFull.value = full;
 			otherError.value = '';
 		} catch (e) {
@@ -272,7 +275,9 @@ export function createInbox(deps: InboxDeps) {
 		const mainAll = !plan.main || main.value.rows.length >= main.value.total;
 		// a collapsed Other files section holds no rows at all: its documents may be accepted too, so the count is not the whole until it is opened
 		const otherAll = !plan.other || other.value.total === 0 || (otherFull.value && other.value.rows.length >= other.value.total);
-		return acceptPreview([...main.value.rows, ...other.value.rows], mainAll && otherAll);
+		const shown = acceptPreview([...main.value.rows, ...other.value.rows], mainAll && otherAll);
+		// the server's count covers the whole filter: when it is known it is the count, whatever page is on screen
+		return main.value.acceptable === null ? shown : { ...shown, count: main.value.acceptable, exact: true };
 	});
 	/** A list is still loading or growing: its count would be stale, so Accept all waits for it. */
 	const listBusy = computed(() => loading.value || otherLoading.value || moreLoading.value);

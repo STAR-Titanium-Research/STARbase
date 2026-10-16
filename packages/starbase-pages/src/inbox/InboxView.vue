@@ -130,6 +130,8 @@ async function addScan(form: ScanAddForm) {
 
 // ---- Accept all: its confirm opens on a dry run ----
 const acceptable = computed(() => (tab.value === 'new' || tab.value === 'older'));
+// The server has said that no file under this filter qualifies: the button would only open a confirm for zero files, so say why instead.
+const nothingToAccept = computed(() => acceptable.value && !loading.value && preview.value.exact && preview.value.count === 0 && main.value.acceptable === 0);
 async function accept() {
 	const r = await inbox.confirmAccept();
 	if (r.ok) (region.value as HTMLElement | null)?.focus();
@@ -153,8 +155,13 @@ async function accept() {
 		<InboxFilters :filters="filters" :teams="teams" :has-own="hasOwn" @patch="patch" @clear="clearFilters" />
 
 		<div v-if="acceptable" class="accept">
-			<v-button small :disabled="!canAcceptAll" data-test="accept-all" @click="inbox.openAccept()">{{ acceptButtonText(preview) }}</v-button>
-			<span class="hint">Links the files whose name or folder carries the exact short ID of one record you can edit.</span>
+			<template v-if="nothingToAccept">
+				<span class="hint" data-test="accept-none">Nothing to accept in bulk: no file here has the exact short ID of a record you can edit in its name or folder. Use “Link to…” on a file to link it yourself.</span>
+			</template>
+			<template v-else>
+				<v-button small :disabled="!canAcceptAll" data-test="accept-all" @click="inbox.openAccept()">{{ acceptButtonText(preview) }}</v-button>
+				<span class="hint">Links the files whose name or folder carries the exact short ID of one record you can edit.</span>
+			</template>
 		</div>
 
 		<!-- One status region, always in the page, so a screen reader hears each message as it arrives. -->
