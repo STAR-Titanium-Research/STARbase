@@ -6628,7 +6628,7 @@ run_eq "d1_llm_readonly cannot read the thumbnails" \
     "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.file_thumbnails', 'SELECT')" "f"
 run_eq "file_thumbnails columns and types match the contract" \
     "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_thumbnails'" \
-    "candidate_id:uuid:NO,thumb:bytea:NO,preview:bytea:NO,thumb_width:integer:YES,thumb_height:integer:YES,preview_width:integer:YES,preview_height:integer:YES,source_size:bigint:NO,source_mtime:timestamp with time zone:NO,created_at:timestamp with time zone:NO"
+    "candidate_id:uuid:NO,thumb:bytea:YES,preview:bytea:YES,thumb_width:integer:YES,thumb_height:integer:YES,preview_width:integer:YES,preview_height:integer:YES,source_size:bigint:NO,source_mtime:timestamp with time zone:NO,failed_reason:text:YES,created_at:timestamp with time zone:NO"
 run_eq "the key and the foreign key have the repo's names, and the foreign key cascades from file_candidates" \
     "SELECT string_agg(conname || ':' || contype::text || ':' || coalesce(confrelid::regclass::text, '-') || ':' || coalesce(nullif(confdeltype::text, ' '), '-'), ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f')" \
     "file_thumbnails_candidate_id_fkey:f:d1_private.file_candidates:c,file_thumbnails_pkey:p:-:-"
@@ -6642,12 +6642,31 @@ $FT_ROW")
 grep -q 'file_thumbnails_pkey' <<<"$fi_out" && ok "a candidate has at most one picture pair" || bad "a second picture pair for one candidate was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime) VALUES (gen_random_uuid(), '\\x00', '\\x00', 1, now());")
 grep -q 'file_thumbnails_candidate_id_fkey' <<<"$fi_out" && ok "pictures for an unknown candidate are rejected (foreign key)" || bad "a picture for a candidate that does not exist was not rejected (output: $fi_out)"
-for ft_col in thumb preview source_size source_mtime; do
+for ft_col in source_size source_mtime; do
     fi_out=$(fi_sql "$FT_CAND
 INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime) SELECT candidate_id, '\\x00', '\\x00', 1, now() FROM d1_private.file_candidates;
 UPDATE d1_private.file_thumbnails SET $ft_col = NULL;")
     grep -q "null value in column \"$ft_col\"" <<<"$fi_out" && ok "file_thumbnails.$ft_col cannot be NULL" || bad "file_thumbnails.$ft_col accepted NULL (output: $fi_out)"
 done
+# a picture pair or a failure marker, never a mixture (file_thumbnails_pictures_or_failure_check)
+FT_MARK="INSERT INTO d1_private.file_thumbnails (candidate_id, source_size, source_mtime, failed_reason) SELECT candidate_id, 1234, '2026-10-10T09:00:00Z', 'could not be decoded' FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';"
+fi_out=$(fi_sql "$FT_CAND
+$FT_MARK
+SELECT 'ft_marker:' || (thumb IS NULL) || ':' || (preview IS NULL) || ':' || failed_reason FROM d1_private.file_thumbnails;")
+grep -q 'ft_marker:true:true:could not be decoded' <<<"$fi_out" && ok "a failure marker (both pictures NULL, failed_reason set) is accepted" || bad "a failure marker was not accepted (output: $fi_out)"
+for ft_case in \
+    "thumb = NULL|only the thumbnail missing" \
+    "preview = NULL|only the preview missing" \
+    "failed_reason = 'x'|pictures and a failure reason together"; do
+    fi_out=$(fi_sql "$FT_CAND
+$FT_ROW
+UPDATE d1_private.file_thumbnails SET ${ft_case%%|*};")
+    grep -q 'file_thumbnails_pictures_or_failure_check' <<<"$fi_out" && ok "a row with ${ft_case##*|} is rejected" || bad "a row with ${ft_case##*|} was accepted (output: $fi_out)"
+done
+fi_out=$(fi_sql "$FT_CAND
+$FT_MARK
+UPDATE d1_private.file_thumbnails SET failed_reason = NULL;")
+grep -q 'file_thumbnails_pictures_or_failure_check' <<<"$fi_out" && ok "a marker without a reason (neither pictures nor failed_reason) is rejected" || bad "a row with no pictures and no reason was accepted (output: $fi_out)"
 for ft_col in thumb_width thumb_height preview_width preview_height; do
     fi_out=$(fi_sql "$FT_CAND
 $FT_ROW
@@ -6675,6 +6694,8 @@ run_eq "the table, every column and the key and foreign key have a comment (with
         SELECT a.attname FROM pg_attribute a WHERE a.attrelid = 'd1_private.file_thumbnails'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
         UNION ALL
         SELECT conname FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f') AND coalesce(obj_description(oid, 'pg_constraint'), '') = '') q" ""
+run_eq "the pictures-or-failure check has a comment" \
+    "SELECT (coalesce(obj_description(oid, 'pg_constraint'), '') <> '')::text FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND conname = 'file_thumbnails_pictures_or_failure_check'" "true"
 # Down and up again, inside one rolled-back transaction: down drops the table (the candidate stays), up brings it back empty.
 if [[ -n "$FT_MIG" && -f "$FT_MIG" ]]; then
     ft_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FT_MIG")
@@ -6686,9 +6707,12 @@ SELECT 'ft_dn_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid =
 SELECT 'ft_dn_candidates:' || count(*) FROM d1_private.file_candidates;
 $ft_up
 SELECT 'ft_up_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'file_thumbnails';
-SELECT 'ft_up_rows:' || count(*) FROM d1_private.file_thumbnails;")
+SELECT 'ft_up_rows:' || count(*) FROM d1_private.file_thumbnails;
+SELECT 'ft_up_check:' || count(*) || ':' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_thumbnails' AND column_name = 'failed_reason') FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND conname = 'file_thumbnails_pictures_or_failure_check';
+INSERT INTO d1_private.file_thumbnails (candidate_id, source_size, source_mtime, failed_reason) SELECT candidate_id, 1, now(), 'x' FROM d1_private.file_candidates;
+SELECT 'ft_up_marker:' || count(*) FROM d1_private.file_thumbnails WHERE thumb IS NULL;")
     grep -q 'ft_dn_table:0' <<<"$fi_out" && grep -q 'ft_dn_candidates:1' <<<"$fi_out" && ok "down drops the thumbnails table and keeps the candidates" || bad "down left the table or removed candidates (output: $fi_out)"
-    grep -q 'ft_up_table:1' <<<"$fi_out" && grep -q 'ft_up_rows:0' <<<"$fi_out" && ok "up again restores the table, empty (the pictures are made again from the share)" || bad "up after down failed (output: $fi_out)"
+    grep -q 'ft_up_table:1' <<<"$fi_out" && grep -q 'ft_up_rows:0' <<<"$fi_out" && grep -q 'ft_up_check:1:1' <<<"$fi_out" && grep -q 'ft_up_marker:1' <<<"$fi_out" && ok "up again restores the table, empty, with failed_reason and the pictures-or-failure check (the pictures are made again from the share)" || bad "up after down failed (output: $fi_out)"
 fi
 
 echo "== Ignored folders: d1_private.inbox_ignored_dirs =="
