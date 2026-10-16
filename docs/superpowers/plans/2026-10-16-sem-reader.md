@@ -42,12 +42,14 @@ One row per stream. Update when a stream starts, finishes, is reviewed or is mer
 
 | Stream | Area | Agent profile | Worktree id | Branch | Depends on | State |
 |---|---|---|---|---|---|---|
-| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | not started |
-| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | not started |
-| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | not started |
-| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | not started |
-| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | not started |
-| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | not started |
+| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | merged (PR #341) |
+| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | merged (PR #341) |
+| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | merged (PR #341) |
+| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | merged (PR #341) |
+| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | merged (PR #341) |
+| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | merged (PR #341) |
+
+All six streams merged into the integration branch and reviewed. The whole-branch review's fix wave (C1, I1-I5, M1-M3) and the `/simplify` cleanup are merged too; a scoped re-review of the fix wave is the last gate before PR #341 merges.
 
 **Coordinator duties (this session, not a worker):** run A and C first (parallel, Sonnet, high effort); review each stream branch before merging it into the integration branch `claude/gracious-heisenberg-x7to0t`; **before D starts, message session `session_01YGVh6kfgvqZMHaVmHn39dw` (the inbox-crawler chat asked to be told before `core/extensions/d1-inbox` or `inboxContract` change)**; open one PR per stream (or one for the whole branch when small) when ready, not per commit. Build order from the spec (section 10): A (+ `--reclassify` from E) first because the detector is the live bug.
 
