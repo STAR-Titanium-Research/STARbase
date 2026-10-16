@@ -2,7 +2,7 @@
 // section 6). Pure formatting, so every rule here is checked without a page.
 import { describe, expect, it } from 'vitest';
 import { extractedText } from './inboxModel';
-import { editableFields, parseEdit, scaleBarText, settingRows, ukLocalToIso, ukTime, extractedView } from './semSettings';
+import { editDraft, editableFields, extractedView, parseEdit, scaleBarText, settingRows, ukLocalToIso, ukTime } from './semSettings';
 
 const FULL = {
 	kv: 15, spot: 3, working_distance_mm: 8.5, magnification: 5000, hfw_um: 59.7, pixel_size_nm: 29.14, scale_bar_um: 10, detector: 'ETD', mode: 'SE',
@@ -168,5 +168,31 @@ describe('editing a value', () => {
 		expect(ukLocalToIso('2026-03-29T01:30')).toBeNull();
 		expect(ukLocalToIso('2026-03-29T02:30')).toBe('2026-03-29T02:30:00+01:00');
 		expect(ukLocalToIso('2026-02-30T10:00')).toBeNull();
+	});
+});
+
+describe('rows for the owner, who may fill in any setting', () => {
+	it('with all: true every setting has a row, the ones with no value as "not set"', () => {
+		const r = settingRows({ values: { kv: 15 }, sources: { kv: 'ocr' }, flags: { magnification: 'hfw_mismatch' } }, { all: true });
+		expect(r.map((x) => x.key)).toEqual(editableFields().map((f) => f.key));
+		const k = byKey(r);
+		expect(k.kv.text).toBe('15 kV');
+		expect(k.magnification.failed).toBe("couldn't read magnification");
+		expect(k.spot).toMatchObject({ text: null, failed: null, source: null, check: false });
+	});
+});
+
+describe('the text an edit box starts with', () => {
+	it('is the value as typed back, the time in UK local form, and empty for a setting with none', () => {
+		expect(editDraft('kv', { kv: 15 })).toBe('15');
+		expect(editDraft('magnification', { magnification: 5000 })).toBe('5000');
+		expect(editDraft('detector', { detector: 'ETD' })).toBe('ETD');
+		expect(editDraft('acquired_at', { acquired_at: '2026-07-01T09:05:00+00:00' })).toBe('2026-07-01T10:05');
+		expect(editDraft('acquired_at', { acquired_at: '2026-03-02T10:15:30.000Z' })).toBe('2026-03-02T10:15');
+		expect(editDraft('spot', {})).toBe('');
+		expect(editDraft('acquired_at', { acquired_at: 'nope' })).toBe('');
+	});
+	it('reads back through parseEdit to the same value', () => {
+		expect(parseEdit('acquired_at', editDraft('acquired_at', { acquired_at: '2026-07-01T09:05:00+00:00' }))).toEqual({ value: '2026-07-01T10:05:00+01:00' });
 	});
 });

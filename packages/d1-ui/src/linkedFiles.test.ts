@@ -33,14 +33,16 @@ describe('linkedFiles', () => {
 		expect(row.name).toBe('z.csv');
 	});
 
-	it('skips a junction row whose file is unreadable, and survives bad metadata', () => {
+	it('keeps a junction row whose file is unreadable as a locked file, with its id and nothing else, and survives bad metadata', () => {
 		const rows = linkedFiles([
 			{ directus_files_id: 'just-an-id' },
 			null,
+			{ directus_files_id: null },
 			{ directus_files_id: { id: 'f5', filename_download: 'x', metadata: '{broken' } },
 		]);
-		expect(rows).toHaveLength(1);
-		expect(rows[0].kind).toBe('upload');
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toEqual({ id: 'just-an-id', name: '', kind: 'locked', unc: null, folder: null, fileUri: null });
+		expect(rows[1].kind).toBe('upload');
 	});
 
 	it('handles no links at all', () => {
