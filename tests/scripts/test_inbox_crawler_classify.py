@@ -18,7 +18,7 @@ PIL = pytest.importorskip("PIL")
 from inbox_crawler import classify_scan as cscan  # noqa: E402
 from inbox_crawler import classify_sem as csem  # noqa: E402
 from inbox_crawler import kinds  # noqa: E402
-from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin  # noqa: E402
 
 # ---- synthetic fixtures ------------------------------------------------------------------
 
@@ -78,6 +78,23 @@ def classify(img, fmt="TIFF", **kw):
     return csem.classify_image(encode(img, fmt, **kw), **ck)
 
 
+JEOL_TEXT = "JEOL JSM-7800F"
+
+
+def encode_jeol(img, fmt="TIFF"):
+    """A picture whose metadata names JEOL: the positive evidence a bar alone cannot give (TIFF description,
+    or a PNG text chunk)."""
+    if fmt == "PNG":
+        info = PngImagePlugin.PngInfo()
+        info.add_text("Description", JEOL_TEXT)
+        return encode(img, fmt, pnginfo=info)
+    return encode(img, fmt, description=JEOL_TEXT)
+
+
+def classify_jeol(img, fmt="TIFF", **ck):
+    return csem.classify_image(encode_jeol(img, fmt), **ck)
+
+
 # ---- surface scans -----------------------------------------------------------------------
 
 
@@ -124,8 +141,16 @@ def test_al3d_by_name_is_a_surface_scan():
 
 
 @pytest.mark.parametrize("fmt", ["TIFF", "PNG", "BMP", "JPEG"])
-def test_a_jeol_like_data_bar_makes_a_sem_image(fmt):
+def test_a_jeol_like_data_bar_alone_is_no_longer_a_sem_image(fmt):
     c = classify(make_sem(), fmt)
+    assert c.kind == "image", c.reason
+    assert c.confidence is None and c.extracted == {}
+    assert c.reason == "data-bar-like strip, no SEM evidence"
+
+
+@pytest.mark.parametrize("fmt", ["TIFF", "PNG"])
+def test_a_jeol_like_data_bar_with_jeol_metadata_makes_a_sem_image(fmt):
+    c = classify_jeol(make_sem(), fmt)
     assert c.kind == "sem_image", c.reason
     assert c.confidence >= 0.9
 
@@ -133,20 +158,28 @@ def test_a_jeol_like_data_bar_makes_a_sem_image(fmt):
 def test_nothing_is_extracted_that_was_not_read():
     c = classify(make_sem())
     assert c.extracted == {}  # no metadata, OCR off: not even "instrument"
+    assert classify_jeol(make_sem()).extracted == {
+        "instrument": "JEOL"
+    }  # only what the text says
 
 
 def test_a_bar_without_a_scale_line_is_a_weaker_sem_guess():
-    c = classify(make_sem(line=False))
-    assert c.kind == "sem_image" and c.confidence == pytest.approx(0.6)
+    c = classify_jeol(make_sem(line=False))
+    assert c.kind == "sem_image" and c.confidence == pytest.approx(0.7)
+
+
+def bar_was_found(c):
+    """With JEOL metadata a picture is a sem_image either way; only a found bar says "data bar with text"."""
+    return c.kind == "sem_image" and c.reason.startswith("data bar with text")
 
 
 def test_a_bar_works_on_a_large_and_on_a_small_image():
-    assert classify(make_sem(w=5120, h=3840)).kind == "sem_image"
-    assert classify(make_sem(w=640, h=480)).kind == "sem_image"
+    assert bar_was_found(classify_jeol(make_sem(w=5120, h=3840)))
+    assert bar_was_found(classify_jeol(make_sem(w=640, h=480)))
 
 
 def test_a_dark_micrograph_above_the_bar_still_finds_the_bar():
-    assert classify(make_sem(above=45)).kind == "sem_image"
+    assert bar_was_found(classify_jeol(make_sem(above=45)))
 
 
 @pytest.mark.parametrize(
@@ -188,8 +221,8 @@ def test_a_white_page_of_text_is_not_a_sem_image():
 
 
 def test_a_colour_image_works():
-    c = classify(make_sem().convert("RGB"), "PNG")
-    assert c.kind == "sem_image"
+    c = classify_jeol(make_sem().convert("RGB"), "PNG")
+    assert bar_was_found(c)
 
 
 def test_a_corrupt_file_is_an_image_not_an_error():
@@ -243,8 +276,8 @@ def boom(_img):  # an OCR that must not be called
 
 
 def test_ocr_is_off_by_default():
-    c = classify(make_sem(), ocr_func=boom)
-    assert c.kind == "sem_image" and c.extracted == {}
+    c = classify_jeol(make_sem(), ocr_func=boom)
+    assert c.kind == "sem_image" and c.extracted == {"instrument": "JEOL"}
 
 
 def test_ocr_text_is_parsed_when_switched_on():
@@ -254,8 +287,9 @@ def test_ocr_text_is_parsed_when_switched_on():
         seen["size"] = bar.size
         return "JSM-7800F 15.0kV x5,000 5µm WD 10.0mm"
 
-    c = classify(make_sem(), ocr=True, ocr_func=fake)
+    c = classify_jeol(make_sem(), ocr=True, ocr_func=fake)
     assert c.extracted == {
+        "instrument": "JEOL",
         "kv": 15.0,
         "magnification": 5000,
         "working_distance_mm": 10.0,
@@ -268,14 +302,14 @@ def test_a_failing_ocr_keeps_the_tag_and_invents_nothing():
     def broken(_bar):
         raise RuntimeError("tesseract missing")
 
-    c = classify(make_sem(), ocr=True, ocr_func=broken)
-    assert c.kind == "sem_image" and c.extracted == {}
+    c = classify_jeol(make_sem(), ocr=True, ocr_func=broken)
+    assert c.kind == "sem_image" and c.extracted == {"instrument": "JEOL"}
 
 
 def test_ocr_without_the_package_installed_keeps_the_tag(monkeypatch):
     monkeypatch.setitem(sys.modules, "pytesseract", None)  # import raises ImportError
-    c = classify(make_sem(), ocr=True)
-    assert c.kind == "sem_image" and c.extracted == {}
+    c = classify_jeol(make_sem(), ocr=True)
+    assert c.kind == "sem_image" and c.extracted == {"instrument": "JEOL"}
 
 
 @pytest.mark.parametrize(
@@ -325,8 +359,8 @@ class BrokenProfile:
         raise ValueError("bug in a profile")
 
 
-def test_the_default_profile_list_is_jeol():
-    assert [p.name for p in csem.PROFILES] == ["JEOL"]
+def test_the_default_profile_list_is_jeol_then_fei():
+    assert [p.name for p in csem.PROFILES] == ["JEOL", "FEI"]
 
 
 def test_another_profile_can_claim_an_image():
