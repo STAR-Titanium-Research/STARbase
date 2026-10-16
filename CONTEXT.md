@@ -52,6 +52,16 @@ _Avoid_: permalink, QR link, deep link
 
 ### Records and forms
 
+**Project**:
+A named, usually funded piece of research with a principal investigator, dates and a document number.
+It groups campaigns, and it can also hold samples, operations and tests directly, outside any campaign.
+_Avoid_: programme, research campaign
+
+**Campaign**:
+One planned set of operations or tests on a set of samples within a project: a **machining trial** or a
+**testing campaign**, with its own owner, dates and status (planned, active, complete, on hold).
+_Avoid_: project (for this), study, trial (alone)
+
 **Sample**:
 A physical piece of material the lab makes, cuts or tests. The rows Data Studio lists as items are
 Samples, except the rig kit stored with them (see Flagged ambiguities).
@@ -431,6 +441,9 @@ _Avoid_: private file, hidden file
   a new operation from an existing one. Resolved: the first is **attach**, the second **new from**.
 - "Supervisor" was asked for as the thing that shows what a draft is missing, but in the lab a supervisor
   is a person. Resolved: that list is **checks**.
+- The database described projects as "research campaigns / projects", so a project and a campaign read as
+  one thing. Resolved: a **project** is the research and its funding, and it holds **campaigns**. A
+  campaign is one planned set of operations or tests inside a project.
 - "Attach" was used both for wiring an operation to a sample on the process map and for tying a file on the
   share to a record. Resolved: the first stays **attach**; the second is **link**, and a file nobody has
   linked yet is a **found file**.
