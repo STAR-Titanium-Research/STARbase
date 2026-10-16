@@ -53,7 +53,7 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
 
 ## Consequences
 
-- A new column pair on a Directus system table, an immutable-owner trigger, and a filter in the Lab Member and Lab
+- A new column pair on a Directus system table, Directus field lists that keep the owner columns out of members' writes, and a filter in the Lab Member and Lab
   Viewer policies that every `/assets` read pays for (indexed; measured in the plan).
 - A person with owned files cannot be deleted (`ON DELETE RESTRICT`); they are deactivated instead.
 - A linked record can show a link its reader cannot open. The link's existence is visible; the file's name,

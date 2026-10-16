@@ -1,7 +1,7 @@
 # SEM data-bar reader and provenance-owned files: design
 
 **Date:** 2026-10-16
-**Status:** Design only. Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
+**Status:** Design only; plan [`2026-10-16-sem-reader.md`](../plans/2026-10-16-sem-reader.md). Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
 confirmed by them unless it says "assumed"). ADR: [0022](../../adr/0022-files-belong-to-their-provenance-owner.md).
 Terms: `CONTEXT.md` → *Files on the share* (**SEM image**, **data bar**, **imaging settings**, **provenance owner**,
 **locked file**). Builds on [found files and the Inbox](2026-10-15-found-files-inbox-design.md) (ADR-0020).
@@ -53,7 +53,7 @@ TIFF seen so far, exactly, and the PNG exports need the bar.
 | # | Decision |
 |---|---|
 | D1 | A new `FeiProfile` in `scripts/inbox_crawler/classify_sem.py`, registered beside `JeolProfile`. `find_data_bar` accepts divider rows. A claim needs **positive evidence** (instrument metadata, or a recognised bar structure with its labels read), and optical-microscope images are a **negative signal** (section 1). *Amended 2026-10-16 from real data.* |
-| D2 | Values are read in order of trust: embedded TIFF metadata (exact), then **cell-split OCR of the data bar**: the bar is cut into its cells and only RapidOCR's *recogniser* runs (never its text detector). A trial read every field right on all 246 real FEI bars (section 2). Glyph matching is dropped from v1 and stays a later option. *Amended 2026-10-16 (OCR trial); this reverses the "glyph matching first" decision of the interview, pending the maintainer's confirmation.* |
+| D2 | Values are read in order of trust: embedded TIFF metadata (exact), then **cell-split OCR of the data bar**: the bar is cut into its cells and only RapidOCR's *recogniser* runs (never its text detector). A trial read every field right on all 246 real FEI bars (section 2). Glyph matching is dropped from v1 and stays a later option. *Amended 2026-10-16 (OCR trial); this reverses the "glyph matching first" decision of the interview, confirmed by the maintainer the same day.* |
 | D3 | Magnification from metadata is derived: `ScreenMagCanvasRealWidth / HFW`. A value is kept only if it passes format and range checks; OCR confidence is recorded but is **not** a filter (correct reads scored as low as 0.60). A bar-read magnification is cross-checked: `mag x HFW` must equal one of the two screen-width constants seen on real files (0.2984 m, or 0.858 of that) within 2%, and the scale-bar label must agree with the bar's pixel length. A value that cannot be cross-checked is saved flagged `check_this`; a value that fails is left absent with a "couldn't read X" note. |
 | D4 | Keys are numeric with the unit in the name; every value records its source (`metadata`, `derived`, `ocr`, `manual`). Metadata beats the bar when they disagree and the mismatch is noted. |
 | D5 | The acquisition time is read as UK time (`Europe/London`) and stored as a `timestamptz`. At the autumn clock change the repeated hour takes the first occurrence. |
@@ -61,9 +61,9 @@ TIFF seen so far, exactly, and the PNG exports need the bar.
 | D7 | The provenance owner is stamped by the crawler when it registers a pointer row: `directus_files.owner_person_id`, or `owner_team_id` for a team folder. Only an administrator can change it. |
 | D8 | Raw reads of `directus_files` and `/assets` are filtered on the stamp. Rows with no owner stay open, as today. |
 | D9 | Only the owner sees or links the file and its settings. Others on a linked record see a **locked file**. Administrators see them read-only and are audited. Only the owner can correct a value; a correction is `manual` and never overwritten by a re-read. |
-| D10 | Linked files stay unowned (nobody loses access they have today). Found files that are not linked yet are owned: the migration stamps the ones the live crawler already registered from `file_candidates`, and the crawler stamps new ones. *Amended 2026-10-16: the interview said "only files registered after the change"; with the crawler live, stamping unlinked found files takes nothing from anyone, and leaving them open would make the privacy rule false for about 82,000 files. Flagged for the maintainer to confirm.* |
+| D10 | Linked files stay unowned (nobody loses access they have today). Found files that are not linked yet are owned: the migration stamps the ones the live crawler already registered from `file_candidates`, and the crawler stamps new ones. *Amended 2026-10-16: the interview said "only files registered after the change"; with the crawler live, stamping unlinked found files takes nothing from anyone, and leaving them open would make the privacy rule false for about 82,000 files. Confirmed by the maintainer 2026-10-16, database only: nothing is written to the share.* |
 | D11 | `python -m inbox_crawler --sem-backfill` reads already-linked images. Settings of an unowned file follow whoever can read the record. |
-| D12 | An optional GPU switch for OCR, `INBOX_OCR_DEVICE=auto\|cpu\|cuda`, CPU by default. The trial ran at about 0.16 s per file on a CPU, and a TIFF with metadata needs no OCR at all, so the GPU is not needed for this corpus; it stays a cheap, low-priority option. *Amended 2026-10-16: the maintainer asked to use the GPU where possible; the measurements say it buys little, flagged for them to confirm.* |
+| D12 | An optional GPU switch for OCR, `INBOX_OCR_DEVICE=auto\|cpu\|cuda`, CPU by default. The trial ran at about 0.16 s per file on a CPU, and a TIFF with metadata needs no OCR at all, so the GPU is not needed for this corpus; it stays a cheap, low-priority option. *Amended 2026-10-16: the maintainer asked to use the GPU where possible; the measurements say it buys little; confirmed as an optional switch.* |
 | D13 | *Assumed:* a file moved between folders keeps its first owner; two copies in two folders are two files with two owners; a team-owned file is visible to members of that team; admin reads go to a small log table. |
 
 ## 1. Recognising the image
@@ -76,7 +76,7 @@ the highest confidence. `FeiProfile.inspect` claims an image from either signal:
 - **Data bar.** The bottom strip, found by its divider rows and by the cell structure rather than by a mean
   brightness: full-width bright rows at the top and/or middle, vertical divider columns, text-like content in
   the cells. `PrivateFei.DatabarHeight` gives the height when present; otherwise it is found from the divider
-  rows (the trial's `bar_of`: the first full-white row in the bottom quarter followed by dark rows). The same font is
+  rows (the trial's `bar_of`, made relative after contrast-edited exports broke the absolute version: the first row in the bottom quarter whose mean is above 150 and at least 2.5 times the mean of the row two below). The same font is
   used at 2×: the 2048-px sample has a 119-px bar, the 1024-px samples a 59-px bar, so nothing may assume a height.
 
 The result stays a guess scored by confidence (at least `SEM_MIN_CONFIDENCE` = 0.6 makes `kind='sem_image'`), worded
@@ -129,8 +129,8 @@ crawler), and it has these parts, each of which mattered:
 
 1. **Do not run RapidOCR's text detector on the bar.** It smears the whole bar into one garbage line. Cut the cells
    yourself and call only `RapidOCR().text_recognizer([images])`.
-2. **Find the cells.** The vertical divider columns are those bright (over 200) in more than 90% of the bar's height,
-   measured on the body rows. The header row and the value row are split at the darkest row gap in the middle band
+2. **Find the cells.** The vertical divider columns are those where more than 90% of the body rows are brighter than 0.4 times the
+   bar's maximum (relative, because contrast-edited exports lower the dividers from 255 to about 207). The header row and the value row are split at the darkest row gap in the middle band
    (30% to 70% of the height), judged on the left 40% of the width. There is **no** horizontal line between the two
    rows inside the cells; the only horizontal lines are under the scale bar on the right, and a full-width row mean
    mistakes that line for a divider.
@@ -155,9 +155,15 @@ labels read as `100μm`, `500μm` and `3mm`. The lowest correct confidence was 0
 table this section carried earlier,** which came from a cruder pipeline (own line splitting, no padding rules) and
 showed dropped digits and wrong WD values; those were faults of that preparation, not of the recogniser.
 
-The trial used TIFFs. **Not yet shown:** the same bars as PNG, BMP and JPEG exports (JPEG compression blurs the
-font), which is what this tier is for. The round-trip test in section 9 and the maintainer's PNG exports (for
-example `D2_Bulk_3000x.png`, next to their TIFFs) are the check, and a failure there reopens glyph matching.
+A second trial ran every FEI-sized PNG, JPEG and BMP in SEM-named folders: 37 of 37 read cleanly (32 are
+contrast-edited `*_contrasted.PNG`). The six with a same-name TIFF match it, except one JPEG whose bar says 10 kV and
+whose TIFF namesake says 20 kV, which is a different capture under one name, not a misread. JPEG blur was not a
+problem at these sizes. The two thresholds above had to become relative for the edited files; the TIFF result stayed
+246/246. The bar's vertical position is fixed (the bottom 59 to 60 of 943 rows, 119 of 1887) but its columns are not
+(120 bars showed 16 layouts, because cell widths follow the text), so the cells are still found from the dividers.
+Most other PNG and BMP files in SEM folders are not exports at all (charts, 256x200 EDS thumbnails, phone photos);
+expect "no bar" for them. The synthetic round-trip test in section 9 stays as the regression guard, and SEM2 checks the
+real database.
 
 **Dependency.** `rapidocr-onnxruntime==1.2.3` (the tested version) requires `opencv-python`, which is not the headless
 build and needs system libraries the `python:3.12-slim` crawler image lacks; the install here is about 380 MB. The
@@ -183,21 +189,21 @@ the JEOL path emits today becomes `scale_bar_um` too, which touches `parse_text`
 
 ## 3. Data model
 
-One migration after 194 (number taken at build time; `db-migration` skill). Reversible; COMMENT on everything.
+Migrations after 195, the latest when this was written (numbers taken at build time; `db-migration` skill). Reversible; COMMENT on everything.
 
 - `directus_files.owner_person_id UUID NULL REFERENCES people (person_id) ON DELETE RESTRICT` and
   `owner_team_id UUID NULL REFERENCES teams (team_id) ON DELETE RESTRICT`, with
   `CHECK (num_nonnulls(owner_person_id, owner_team_id) <= 1)`. `RESTRICT`, not `SET NULL`: deleting an owner must
-  not silently open their files. A trigger refuses an update of either column unless the session is an
-  administrator or the database owner; the Directus Lab Member policy also lists the columns as non-writable.
-  Indexed (`WHERE owner_person_id IS NOT NULL`, same for team). The migration **back-fills** both columns from
+  not silently open their files. Members cannot change them: the Lab Member `create` and `update` field lists of `directus_files` leave both
+  columns out (the pattern migration 193 uses for `people.uni_alias`); there is no trigger, because Directus uses one
+  database role for every user, so a trigger cannot tell an administrator from a member. Indexed (`WHERE owner_person_id IS NOT NULL`, same for team). The migration **back-fills** both columns from
   `d1_private.file_candidates.owner_person_id` / `owner_team_id` (written by the crawler, exactly one per row by
   `file_candidates_one_owner_check`, so a trusted source, unlike the editable `archive_path`) for every candidate
   whose state is not `linked` (D10), so the rule holds at once for the files the live crawler has already
   registered, not only for the ones it meets later. Note the existing candidate FKs use `ON DELETE CASCADE` on
   the owner; the new columns deliberately differ (`RESTRICT`).
 - `d1_private.file_candidates.classified_by TEXT` (new, nullable): the profile and version that set `kind`,
-  `kind_confidence` and `extracted` (for example `fei-2`). A re-classification pass (section 7) skips rows already
+  `kind_confidence` and `extracted` (for example `sem-2`). A re-classification pass (section 7) skips rows already
   at the current version.
 - `d1_private.sem_image_settings`, one row per file (`directus_files_id UUID PRIMARY KEY REFERENCES directus_files
   ON DELETE CASCADE`): `kv NUMERIC(6,2)`, `spot NUMERIC(4,1)`, `working_distance_mm NUMERIC(6,2)`,
@@ -284,8 +290,9 @@ simply absent).
 
 ## 9. Testing
 
-- **Golden fixtures.** Cropped data bars (a few kB each) and the metadata text of the five samples, never the
-  3 to 11 MB images. Expected values from the metadata, checked against the printed bar for the OCR.
+- **Fixtures.** Synthetic bars drawn in the test and the metadata text (values only) of the five samples; no research
+  image is committed (the rule in `tests/scripts/test_inbox_crawler_classify.py`). Real bars are checked by SEM1, SEM2
+  and the d1-server spike harness. Expected values from the metadata, checked against the printed bar for the OCR.
 - **Round trips.** Strip the metadata, save as PNG, BMP and JPEG (several qualities), read, compare with the
   metadata values: every field must equal them, and a mismatch is a test failure, not a flag. Include the maintainer's
   real PNG exports against their TIFFs' metadata.
@@ -339,15 +346,11 @@ Until then scans keep ADR-0021's behaviour, except that a scan's *file* may beco
 - The Directus filter's team test may need a readers table (ADR-0014 pattern); decided in the plan with a measurement.
 - A linked junction row still exposes the file's id to a non-owner; the placeholder hides the name and values but
   not that a link exists. Accepted by D9.
-- Confirm D2: the interview chose glyph matching first; the trial makes cell-split OCR the tier-2 method instead.
-- Confirm D12: the GPU switch stays but is not needed for this corpus.
-- PNG, BMP and JPEG bars are not yet tested (the trial used TIFFs): the round-trip test and the maintainer's PNG
-  exports decide whether the OCR tier holds, or glyph matching is reopened.
+- PNG, BMP and JPEG bars read cleanly on the maintainer's real exports (37 of 37); SEM2 repeats it on the real database.
 - `rapidocr-onnxruntime` needs `opencv-python` and about 380 MB; whether it imports in `python:3.12-slim` and which
   fix to take is a plan task.
-- **Decide before the plan:** the positive-evidence rule demotes every bar-only JEOL claim to `image`. The real data
-  says almost all `sem_image` rows are false positives, and JEOL is unvalidated (backlog IF8), so the spec
-  recommends the demotion; the alternative is to keep a bar-only JEOL claim at a confidence just above the
-  threshold and let `--reclassify` leave it.
+- **Decided 2026-10-16 (maintainer):** D2 cell-split OCR replaces glyph matching; D12 the GPU switch stays optional;
+  the positive-evidence rule demotes every bar-only JEOL claim to `image`; D10 stamping of unlinked found files
+  stays inside Directus (the `directus_files` pointer rows; nothing is written to the share).
 - Whether `onnxruntime-gpu` runs on the RTX 5080 inside the crawler container (optional SEM4).
 - The JEOL profile remains unvalidated (backlog IF8).
