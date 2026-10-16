@@ -867,7 +867,7 @@ def test_a_synthetic_sem_image_is_tagged_and_a_plain_one_is_not(world):
         d.text((x, 880 + (i % 2) * 40), "15.0kV x5,000 5um", fill=255)
     d.line((950, 915, 1100, 915), fill=255, width=3)
     b = io.BytesIO()
-    img.save(b, "TIFF")
+    img.save(b, "TIFF", description="JEOL JSM-7800F")  # a bar alone is no SEM evidence
     world.write("Users/abc12de/jeol.tif", b.getvalue())
     world.write("Users/abc12de/plain.png", png())
     settle(world)

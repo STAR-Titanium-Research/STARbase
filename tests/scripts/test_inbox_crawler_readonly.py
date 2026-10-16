@@ -163,6 +163,8 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "owners": frozenset({"collections.abc", "dataclasses"}),
     "recognise": frozenset({"re", "collections.abc", "dataclasses"}),
     "scan": frozenset({"io", "logging", "time", "dataclasses"}),
+    # pure functions of an in-memory image: standard library text and time maths only
+    "sem_meta": frozenset({"configparser", "math", "re", "datetime", "zoneinfo"}),
 }
 PACKAGE_MODULES = frozenset(ALLOWED_IMPORTS) | {"fs_readonly"}
 # (module, imported name) -> the attributes of it that module may use; anything else is refused. `io` is
