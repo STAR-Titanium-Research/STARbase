@@ -43,6 +43,12 @@
 //        email_sent: Directus sends the mail without waiting, so true means "handed to its mailer", and a delivery failure shows only
 //        in Directus's log. A mail error that does surface keeps the login and the link: email_sent false, a warning logged.
 //   POST /d1-people-admin/invite/resend   body { user_id }  -> { email_sent }   (409 NOT_INVITED unless the login's status is 'invited')
+//   POST /d1-people-admin/password-reset   body { user_id }  -> { email_sent }   (409 NOT_ACTIVE unless the login's status is 'active';
+//        409 NOT_LOCAL for a login that signs in through SSO, which has no password here)
+//        Any administrator. Mails the login a password-reset link, STARBASE_URL + '/reset-password' (503 STARBASE_URL_UNSET when blank;
+//        docker-compose.yml puts it in PASSWORD_RESET_URL_ALLOW_LIST). Directus's UsersService.requestPasswordReset signs the link (good for
+//        a day, once: it carries a hash of the current password) and sends the mail without waiting: email_sent true means "handed to its
+//        mailer". The password itself is untouched until the person follows the link.
 //
 // Who may call: /people and /attention are for administrators and Lab Viewers (401 without a user, 403 otherwise; a viewer reads what an
 // administrator reads and changes nothing, so every write route answers a viewer 403 READ_ONLY_ROLE). /access is for an administrator, a
@@ -485,6 +491,41 @@ export default {
         if (login.status !== 'invited') throw new HttpError(409, 'NOT_INVITED', 'Only an invited login can be sent a new invite.');
         return sendInvite(trx, req, login.email, login.role, url, true);
       });
+      res.json({ email_sent: emailSent });
+    }));
+
+    // -- password reset ------------------------------------------------------------------------------------------
+
+    // Directus 11.17 UsersService.requestPasswordReset(email, url) (verified in the image, @directus/api services/users.js): the URL must pass
+    // PASSWORD_RESET_URL_ALLOW_LIST (InvalidPayloadError); a login that is not 'active' or not on the default (local) provider is
+    // ForbiddenError after a 500 ms stall; the mail is fire-and-forget (`mailService.send(...).catch(log)`), as for invites.
+    const resetUrl = () => {
+      const base = trimmed(env?.STARBASE_URL);
+      if (!base) throw new HttpError(503, 'STARBASE_URL_UNSET', 'STARBASE_URL is not set, so a reset e-mail has nowhere to point.');
+      return `${base}/reset-password`; // verbatim, as PASSWORD_RESET_URL_ALLOW_LIST is set in docker-compose.yml
+    };
+
+    router.post('/password-reset', route(async ({ req, res, admin }) => {
+      requireAdmin(admin);
+      const url = resetUrl();
+      const userId = req.body?.user_id;
+      if (typeof userId !== 'string' || !UUID.test(userId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'user_id must be a login id.');
+      const login = await database('directus_users').where('id', userId).first('id', 'email', 'status', 'provider');
+      if (!login) throw new HttpError(404, 'NOT_FOUND', 'That login does not exist.');
+      if (login.status !== 'active') throw new HttpError(409, 'NOT_ACTIVE', 'Only an active login can be sent a password reset.');
+      if (!isBlank(login.provider) && login.provider !== 'default') throw new HttpError(409, 'NOT_LOCAL', 'That login signs in through single sign-on, so it has no password to reset.');
+      const users = new services.UsersService({ schema: req.schema, accountability: SYSTEM_ADMIN });
+      let emailSent = true;
+      try {
+        await users.requestPasswordReset(login.email, url);
+      } catch (err) {
+        // Directus's ForbiddenError here means the login changed under us (suspended, moved to SSO): report that, not a mail failure
+        if (err?.code === 'FORBIDDEN') throw new HttpError(409, 'NOT_ACTIVE', 'That login can no longer be sent a password reset.');
+        // an allow-list out of step with STARBASE_URL is a configuration fault to surface, not a mail failure
+        if (err?.code === 'INVALID_PAYLOAD') throw err;
+        logger?.warn?.(`${SOURCE}: the password-reset mail for login ${login.id} was not sent: ${err?.message || err}`);
+        emailSent = false;
+      }
       res.json({ email_sent: emailSent });
     }));
 

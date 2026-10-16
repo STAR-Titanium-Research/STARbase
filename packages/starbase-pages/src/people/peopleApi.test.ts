@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
-import { PeopleApiError, invite, personAttention, listTeamsBrief, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
+import { PeopleApiError, invite, personAttention, listTeamsBrief, loadAccess, loadPeople, patchLogin, removeDirectGrant, sendPasswordReset } from './peopleApi';
 
 const fakeApi = (over: Partial<Record<keyof HostApi, any>> = {}): HostApi & Record<keyof HostApi, ReturnType<typeof vi.fn>> =>
 	({
@@ -168,6 +168,17 @@ describe('the other calls', () => {
 			const api = fakeApi({ post: vi.fn(async () => ({ status, data: { user_id: 'u1', person_id: 'p1', status: 'invited', email_sent: true } })) });
 			expect(await invite(api, { email: 'a@x.y', full_name: 'Ann' })).toMatchObject({ user_id: 'u1', email_sent: true });
 		}
+	});
+
+	it('sendPasswordReset posts the login to the password-reset route, and a refusal keeps its code', async () => {
+		const api = fakeApi({ post: vi.fn(async () => ({ status: 200, data: { email_sent: true } })) });
+		expect(await sendPasswordReset(api, 'u1')).toEqual({ email_sent: true });
+		expect(api.post).toHaveBeenCalledWith('/d1-people-admin/password-reset', { user_id: 'u1' });
+		const err = Object.assign(new Error('Request failed with status code 409'), {
+			response: { status: 409, data: { errors: [{ message: 'Only an active login can be sent a password reset.', extensions: { code: 'NOT_ACTIVE' } }] } },
+		});
+		const caught = await sendPasswordReset(fakeApi({ post: vi.fn(async () => { throw err; }) }), 'u1').catch((e) => e);
+		expect(caught).toMatchObject({ status: 409, code: 'NOT_ACTIVE' });
 	});
 
 	it('a refusal keeps its status, code and extensions (EMAIL_HAS_LOGIN names the person)', async () => {

@@ -124,11 +124,12 @@ function makeDb(tables, rawAnswers) {
 // user; an 'invited' one has its role changed when a different role is asked; any other status is left alone. The mail itself
 // is fire-and-forget in Directus, so it can never throw out of inviteUser. `mailFail` is the switch the endpoint is built to
 // survive in case that ever changes: 'after' throws after the user is saved, 'before' throws before any row is written.
-function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, updateFail = null } = {}) {
+function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, updateFail = null, resetFail = false, resetThrows = null } = {}) {
   const db = makeDb(tables, raw);
   const errors = [];
   const warnings = [];
   const invites = [];
+  const resets = [];
   const updates = [];
   const handlers = {};
   const router = {
@@ -164,10 +165,17 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, upd
         }
         if (mailFail === 'after') throw new Error('mail down');
       }
+      // requestPasswordReset (Directus 11.17): the mail is fire-and-forget, so `resetFail` stands in for an error that ever surfaces;
+      // `resetThrows` is a thrown Directus error (FORBIDDEN: not an active local login; INVALID_PAYLOAD: URL off the allow-list)
+      async requestPasswordReset(email, url, subject) {
+        resets.push({ email, url, subject, accountability: this.opts.accountability });
+        if (resetThrows) throw Object.assign(new Error(resetThrows), { code: resetThrows });
+        if (resetFail) throw new Error('mail down');
+      }
     },
   };
   ext.handler(router, { database: db, services, logger: { sink: errors, error(m) { this.sink.push(m); }, warn(m) { warnings.push(m); } }, env });
-  return { db, tables, handlers, errors, warnings, invites, updates, cleared };
+  return { db, tables, handlers, errors, warnings, invites, resets, updates, cleared };
 }
 
 const admin = (user) => ({ user, admin: true, app: true });
@@ -905,6 +913,70 @@ test('resend: a mail failure reports email_sent false', async () => {
   assert.equal(warnings.length, 1);
 });
 
+// ---- POST /password-reset -----------------------------------------------------------------------------------
+
+const RESET = 'POST /password-reset';
+const RESET_URL = 'https://sb.example/reset-password';
+const reset = (handlers, acc, user_id) => call(handlers[RESET], { acc, body: { user_id } });
+
+test('password-reset mails an active login the STARbase reset link', async () => {
+  const { handlers, resets, tables } = mount({ env: ENV });
+  for (const acc of [admin(U.labAdmin), admin(U.superAdmin)]) {
+    const r = await reset(handlers, acc, U.ann);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { email_sent: true });
+  }
+  assert.equal(resets.length, 2);
+  assert.deepEqual([resets[0].email, resets[0].url], ['ann@login.example', RESET_URL]);
+  assert.equal(resets[0].accountability.admin, true);
+  assert.equal(userRow(tables, U.ann).status, 'active');
+});
+
+test('password-reset: only an active login, an existing one, an administrator, a valid id', async () => {
+  const { handlers, resets } = mount({ env: ENV });
+  for (const id of [U.bob, U.orphan]) {
+    const r = await reset(handlers, admin(U.superAdmin), id);
+    assert.equal(r.status, 409, id);
+    assert.equal(errorOf(r).extensions.code, 'NOT_ACTIVE');
+  }
+  assert.equal((await reset(handlers, admin(U.superAdmin), ID(777))).status, 404);
+  assert.equal((await reset(handlers, admin(U.superAdmin), 'nope')).status, 400);
+  assert.equal((await reset(handlers, admin(U.superAdmin), undefined)).status, 400);
+  assert.equal((await reset(handlers, member(U.ann), U.ann)).status, 403);
+  assert.equal((await reset(handlers, { user: null }, U.ann)).status, 401);
+  assert.equal(resets.length, 0);
+});
+
+test('password-reset: a single-sign-on login has no password to reset', async () => {
+  const tables = baseTables();
+  userRow(tables, U.ann).provider = 'oidc';
+  const { handlers, resets } = mount({ tables, env: ENV });
+  const r = await reset(handlers, admin(U.superAdmin), U.ann);
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'NOT_LOCAL');
+  assert.equal(resets.length, 0);
+});
+
+test('password-reset: 503 when STARBASE_URL is unset', async () => {
+  const { handlers, resets } = mount();
+  const r = await reset(handlers, admin(U.superAdmin), U.ann);
+  assert.equal(r.status, 503);
+  assert.equal(errorOf(r).extensions.code, 'STARBASE_URL_UNSET');
+  assert.equal(resets.length, 0);
+});
+
+test('password-reset: a mail failure reports email_sent false; a login that changed under us is 409', async () => {
+  const failing = mount({ env: ENV, resetFail: true });
+  const r = await reset(failing.handlers, admin(U.superAdmin), U.ann);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { email_sent: false });
+  assert.equal(failing.warnings.length, 1);
+  const forbidden = mount({ env: ENV, resetThrows: 'FORBIDDEN' });
+  const f = await reset(forbidden.handlers, admin(U.superAdmin), U.ann);
+  assert.equal(f.status, 409);
+  assert.equal(errorOf(f).extensions.code, 'NOT_ACTIVE');
+});
+
 test('a failed role change on an invited login is an error, not a mail failure', async () => {
   const { handlers, tables, db, warnings } = mount({ env: ENV, mailFail: 'update' });
   const r = await invite(handlers, admin(U.superAdmin), { email: 'bob@login.example', role: R.lab });
@@ -990,6 +1062,7 @@ test('Lab Viewer: no role change, no invite, no resend (403 READ_ONLY_ROLE), eve
     ['PATCH /logins/:user_id', { role: R.member }, { user_id: U.ann }],
     ['POST /invite', { email: 'new@people.example' }, {}],
     ['POST /invite/resend', { user_id: U.bob }, {}],
+    ['POST /password-reset', { user_id: U.ann }, {}],
   ]) {
     const r = await call(handlers[route], { acc: viewer, body, params, method: route.split(' ')[0] });
     assert.equal(r.status, 403, route);
