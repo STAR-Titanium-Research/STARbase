@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, shouldOpenFinder, toSections } from './finderNav';
+import { bestIndex, isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, sameHitIndex, shouldOpenFinder, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -144,5 +144,37 @@ describe('openHit', () => {
 		const calls: unknown[] = [];
 		openHit(hit('Pages', 'Samples'), (to) => calls.push(['navigate', to]), (r) => calls.push(['pick', r]));
 		expect(calls).toEqual([['navigate', '/x/Samples']]);
+	});
+});
+
+describe('bestIndex', () => {
+	const h = (group: FinderHit['group'], label: string, rank: number, more?: true): FinderHit => ({ group, label, to: `/x/${label}`, rank, ...(more ? { more } : {}) });
+
+	it('is the first row when it is a pass 1 hit, and -1 for no rows', () => {
+		expect(bestIndex([h('Pages', 'a', 2), h('Samples', 'b', 4)])).toBe(0);
+		expect(bestIndex([])).toBe(-1);
+	});
+
+	it('skips pass 2 hits (rank 4) while a pass 1 hit exists', () => {
+		expect(bestIndex([h('Samples', 'deep', 4), h('Samples', 'deeper', 4), h('Operations', 'code', 3)])).toBe(2);
+	});
+
+	it('is the first row when every hit is pass 2, and never a "More in" row', () => {
+		expect(bestIndex([h('Samples', 'deep', 4), h('Operations', 'deeper', 4)])).toBe(0);
+		expect(bestIndex([h('Samples', 'more', Number.POSITIVE_INFINITY, true), h('Operations', 'code', 3)])).toBe(1);
+	});
+});
+
+describe('sameHitIndex', () => {
+	const h = (label: string, rank = 3, group: FinderHit['group'] = 'Samples'): FinderHit => ({ group, label, to: `/x/${label}`, rank });
+
+	it('finds the hit the user had made active in the new list', () => {
+		expect(sameHitIndex(h('b'), [h('a'), h('x', 1), h('b')])).toBe(2);
+	});
+
+	it('falls back to the best match when it is gone or there was none', () => {
+		expect(sameHitIndex(h('gone'), [h('deep', 4), h('code', 2)])).toBe(1);
+		expect(sameHitIndex(undefined, [h('deep', 4), h('code', 2)])).toBe(1);
+		expect(sameHitIndex(h('a'), [])).toBe(-1);
 	});
 });
