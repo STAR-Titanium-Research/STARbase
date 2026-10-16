@@ -13,7 +13,7 @@
 import { nextTick, ref, type Ref } from 'vue';
 import { useVueFlow } from '@vue-flow/core';
 import { saveFile } from '../../labels/saveFile';
-import { inlineSvgPaint } from './exportSvg';
+import { inlineSvgPaint, showSvgOverflow } from './exportSvg';
 import { captureFilter, exportPlan, mergeBounds, type Bounds, type ExportPlan } from './model/exportPlan';
 import type { Kind } from './model/types';
 import type { useMapCanvas } from './useMapCanvas';
@@ -127,6 +127,8 @@ export function useMapExport({ canvas, projectFrame, map, person, deps: given = 
       copy.style.transform = `translate(${plan.graph.x}px, ${plan.graph.y}px) scale(1)`;
       // html-to-image does not style what is inside an svg (the wires): give the copy its paint from the live pane.
       inlineSvgPaint(live, copy);
+      // The wires' svgs are clipped at their box in the picture: a card at a negative position puts its wire outside it.
+      showSvgOverflow(copy);
       graph.appendChild(copy);
       return frame;
     },

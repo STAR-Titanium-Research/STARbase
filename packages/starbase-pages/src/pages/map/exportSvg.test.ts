@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineSvgPaint, SVG_PAINT } from './exportSvg';
+import { inlineSvgPaint, showSvgOverflow, SVG_PAINT } from './exportSvg';
 
 const shape = () => {
   const set: Record<string, string> = {};
@@ -41,5 +41,15 @@ describe('inlineSvgPaint', () => {
     );
     expect(asked).toEqual(['svg *']);
     expect(Object.keys(copy[0].set)).toEqual([...SVG_PAINT]);
+  });
+});
+
+describe('showSvgOverflow', () => {
+  it('sets overflow: visible inline on every svg of the copy, so wires of cards at negative positions are not clipped at the origin', () => {
+    const svgs = [{ style: { overflow: 'hidden' } }, { style: { overflow: '' } }];
+    const asked: string[] = [];
+    showSvgOverflow({ querySelectorAll: (s) => (asked.push(s), svgs) });
+    expect(asked).toEqual(['svg']);
+    expect(svgs.map((s) => s.style.overflow)).toEqual(['visible', 'visible']);
   });
 });
