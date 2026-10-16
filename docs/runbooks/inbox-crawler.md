@@ -38,9 +38,12 @@ docker compose --profile archive up -d inbox-crawler
 
 Both read an image only through the read-only share (`open_rb`, the allow-list applies, nothing is ever opened as
 a person's linked file), into memory, capped by `read_mb_per_s` (set when the pass starts), with `INBOX_OCR` as for
-a scan. Both commit file by file, so `SIGTERM` or a kill loses nothing: run the same command again to finish. Both
-exit 0 when they ran to their end or were stopped, 1 when another crawler holds the lock or the pass failed, 2 for
-a configuration error.
+a scan. Both commit file by file, so `SIGTERM` or a kill loses nothing: run the same command again to finish.
+Both guard the share like a scan: the share root must answer before the pass starts and again whenever a read finds
+a file missing or fails with a transient error (EIO, a host that went away), and 25 such failures in a row end the
+pass. **A pass that aborts (log line `... aborted`, `(ABORTED)` in the summary) exits 1**; nothing it read after
+that point is marked, and what it had committed stays. Both otherwise exit 0 when they ran to their end or were
+stopped, 1 also when another crawler holds the lock or the pass failed, 2 for a configuration error.
 
 - **`--reclassify`.** A detector fix changes what `kind` and `extracted` should be, but classification runs only
   when a file is first registered. This pass re-reads the image candidates in state `new` or `dismissed` whose
@@ -48,12 +51,21 @@ a configuration error.
   for example `sem-2`), classifies the bytes again and writes `kind`, `kind_confidence`, `extracted` and
   `classified_by` (nothing else). A `sem_image` the new detector no longer believes becomes `image` (demoted); an
   `image` it now recognises becomes `sem_image` (promoted); the rest are unchanged. The end of the run logs
-  `reclassify: N promoted, N demoted, N unchanged (N unreadable, N too large, N decided meanwhile)`, and each
+  `reclassify: N promoted, N demoted, N unchanged (N unreadable, N too large, N skipped, N decided meanwhile)`, and each
   promotion and demotion is logged with its path. A `linked` row is never touched, nor is a `gone` one (its file is
-  not there to read). A file that cannot be read (no permission, vanished, refused by the allow-list, or larger
-  than 64 MB) is logged as a warning and recorded as classified with the current version without changing its kind,
-  so it is not retried in a loop. A second run reads nothing. Newly scanned images get `classified_by` at
-  registration, so they are not re-read either. Backlog **SEM6**.
+  not there to read). Only a **permanent** read failure is marked: no permission, a path the allow-list refuses,
+  or a file larger than 64 MB. It is logged as a warning (or, for the large file, at INFO) and recorded as classified
+  with the current version without changing its kind, so it is not retried in a loop. A file that is **missing** or
+  fails with a **transient** error is only counted as `skipped`, logged, and left in the queue (the scan marks truly
+  vanished files `gone`; this pass does not); it is offered again by the next run, not again in the same one (rows are
+  visited in id order). A second run reads nothing but the skipped rows. Newly scanned images get `classified_by` at
+  registration, so they are not re-read either.
+  **`--reclassify --force`** ignores `classified_by` and re-reads every eligible image candidate (still only `new` and
+  `dismissed`, never a linked row, each row once per run). It is the one way to re-queue images that were classified
+  without OCR: `classified_by` records the version, not whether OCR was on. After rapidocr is installed in the image
+  (backlog **SEM7**) and `INBOX_OCR=1` is set, run `--reclassify --force` once to promote bar-only PNG, JPEG and BMP
+  exports; without `--force` a second run reads nothing. `--force` is refused with any other mode. A killed `--force`
+  run starts over from the first row (a re-read row looks like any other). Backlog **SEM6**.
 - **`--sem-backfill`.** Images people linked before settings were saved at link time have no imaging settings. This
   pass takes the pointer rows (`directus_files`) that are image-typed (extension `.tif .tiff .jpg .jpeg .png .bmp`),
   linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, unowned (no
@@ -63,7 +75,7 @@ a configuration error.
   stored value, and a value a person corrected (`sources.<field> = 'manual'`) is never overwritten, so a run
   without `INBOX_OCR` cannot erase what an earlier run read. The path comes from `metadata.archive_path` (editable
   by any Lab Member), so a row is read only when that path is clean and the row's id is the indexer's id for that
-  very path; any other row is logged and skipped. A run visits each row once; a row that got settings leaves the
+  very path; any other row is logged and skipped. The share guard above applies. A run visits each row once; a row that got settings leaves the
   list, so a killed run is finished by the next one. An unreadable file, a non-SEM image and an SEM image that gave
   no usable value (a bar-only PNG or JPEG without OCR) write nothing and are read again by the next run, which is
   what you want once `INBOX_OCR=1` works (backlog **SEM7**). The end of the run logs

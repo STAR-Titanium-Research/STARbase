@@ -2257,14 +2257,21 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   d1_private.file_candidates GROUP BY kind` and `SELECT count(*) FROM d1_private.file_candidates WHERE state IN ('new','dismissed')
   AND kind IN ('image','sem_image') AND classified_by IS DISTINCT FROM 'sem-2'` (the queue). Expect the log line
   `reclassify: N promoted, N demoted, N unchanged (...)`, with N promoted + N demoted + N unchanged + N unreadable + N too large
-  equal to that queue (less rows linked meanwhile), and the queue count 0 afterwards. Then check the real files: the maintainer's six FEI
+  + N skipped equal to that queue (less rows linked meanwhile), and the queue count equal to N skipped afterwards (a skipped file is
+  missing or failed transiently: it is not marked, the next run offers it again). Then check the real files: the maintainer's six FEI
   TIFFs and their PNG exports are `kind = 'sem_image'` (the PNG exports only once `INBOX_OCR=1` works, **SEM7**; before that
-  expect the TIFFs and "unchanged" for the PNGs), thermal-camera JPEGs, "Microscope x20" optical TIFFs and EDS maps with a legend bar are
+  expect the TIFFs and "unchanged" for the PNGs, and once SEM7 is done and `INBOX_OCR=1` is set, run `--reclassify --force` once:
+  a plain second run finds an empty queue and will NOT promote them, `--force` re-reads every eligible row), thermal-camera JPEGs, "Microscope x20" optical TIFFs and EDS maps with a legend bar are
   back to (or stay) `image`, and the previous false `sem_image` rows (about 1,586 were tagged by the first detector) now
   show as demoted. A `linked` candidate's kind must be exactly what it was (`SELECT ... WHERE state = 'linked'` compared with a copy taken
-  before). Run it a second time: expect `0 promoted, 0 demoted, 0 unchanged` and no files opened (watch `INBOX_LOG_LEVEL=DEBUG` for
-  `reading ...` lines). Kill a first run half way and run it again: it must finish the rest. Look at any `not re-classifying ...`
-  warning (a permission error or a file that vanished) and confirm it is not retried by the next run. Record the time and the
+  before). Run it a second time: expect `0 promoted, 0 demoted, 0 unchanged` (a skipped row may be read again) and no other file opened
+  (watch `INBOX_LOG_LEVEL=DEBUG` for `reading ...` lines). Kill a first run half way and run it again: it must finish the rest.
+  Look at any `not re-classifying ...` warning: a permission error or an allow-list refusal is marked and not retried by the next
+  run; a file that vanished or a transient error is skipped and offered again. Unmount or block the share part-way through a run
+  (on a copy of the database): expect `reclassify aborted` in the log, exit code 1, and no row marked after that point
+  (`classified_by` of the rest still not `sem-2`); run again with the share back and expect it to finish. Run
+  `--reclassify --force` once and expect every eligible row to be read (the counts are the whole of `new` and `dismissed` image
+  candidates) and a linked row untouched. Record the time and the
   promoted, demoted and unchanged counts. Since: SEM reader plan, stream E.
 
 ## Done
