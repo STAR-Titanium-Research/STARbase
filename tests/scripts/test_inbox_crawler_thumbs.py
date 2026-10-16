@@ -432,7 +432,7 @@ def test_a_sem_image_gets_thumbnails_too(folder):
     class Claims:
         name = "stub"
 
-        def inspect(self, img, ocr, ocr_func):
+        def inspect(self, img, ocr, ocr_func, bar_reader=None):
             return classify_sem.ProfileResult(0.9, {}, "stub")
 
     run_scan(world, profiles=(Claims(),))
