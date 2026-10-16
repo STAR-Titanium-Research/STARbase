@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import type { FinderHit } from './finder';
+import { sameHitIndex } from './finderNav';
 import { PREVIEW_SETTLE_MS, usePreview } from './usePreview';
 
 const hit = (id: string, extra: Partial<FinderHit> = {}): FinderHit => ({
@@ -92,6 +93,7 @@ describe('usePreview', () => {
 		answer(calls[1], { location: 'Bay' });
 		await vi.advanceTimersByTimeAsync(0);
 		active.value = hit('1');
+		await nextTick();
 		// no waiting, no request
 		expect(preview.state.value).toBe('ready');
 		expect(preview.card.value?.facts).toEqual([{ label: 'Location', value: 'Shelf 2' }]);
@@ -104,6 +106,7 @@ describe('usePreview', () => {
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		expect(calls[0].signal?.aborted).toBe(false);
 		active.value = hit('2');
+		await nextTick();
 		expect(calls[0].signal?.aborted).toBe(true);
 		expect(preview.state.value).toBe('idle');
 		// the answer for row 1 arrives late
@@ -126,6 +129,7 @@ describe('usePreview', () => {
 		expect(preview.state.value).toBe('loading');
 		// ... and is not cached as a result for row 1
 		active.value = hit('1');
+		await nextTick();
 		expect(preview.state.value).toBe('idle');
 	});
 
@@ -137,7 +141,9 @@ describe('usePreview', () => {
 		expect(preview.state.value).toBe('unavailable');
 		expect(preview.card.value).toMatchObject({ title: 'S-1', facts: [] });
 		active.value = hit('2');
+		await nextTick();
 		active.value = hit('1');
+		await nextTick();
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		expect(calls).toHaveLength(2);
 		expect(preview.state.value).toBe('loading');
@@ -178,8 +184,33 @@ describe('usePreview', () => {
 		const second = setup(hit('1'));
 		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
 		second.on.value = false;
+		await nextTick();
 		expect(second.calls[0].signal?.aborted).toBe(true);
 		expect(second.preview.card.value).toBeNull();
+	});
+
+	// Finder.vue's wiring: the active hit is hits[active], and active is re-pointed by a watcher on hits (pre flush) after a streamed answer has landed.
+	it('an answer that inserts rows above the active row does not abort or repeat the read', async () => {
+		const calls: Call[] = [];
+		const api = { get: (path: string, cfg?: any) => new Promise<any>((resolve, reject) => { calls.push({ path, params: cfg?.params, signal: cfg?.signal, resolve, reject }); }) };
+		const hits = ref<FinderHit[]>([hit('1'), hit('2')]);
+		const active = ref(1);
+		watch(hits, (h, old) => { active.value = sameHitIndex(old?.[active.value], h); });
+		const preview = usePreview(computed(() => hits.value[active.value]), api, ref(true));
+		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].path).toBe('/items/physical_samples/2');
+		// a pass 2 answer puts a new row first: row 2 is now at index 2
+		hits.value = [hit('0'), hit('1'), hit('2')];
+		await nextTick();
+		await vi.advanceTimersByTimeAsync(PREVIEW_SETTLE_MS * 2);
+		expect(active.value).toBe(2);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].signal?.aborted).toBe(false);
+		answer(calls[0], { location: 'Bay' });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(preview.state.value).toBe('ready');
+		expect(preview.card.value?.title).toBe('S-2');
 	});
 
 	it('reads a file through /files', async () => {

@@ -305,7 +305,7 @@ function onKeydown(e: KeyboardEvent) {
 /* Below this the pane has no room: the dialog keeps its 560px look (the script does not render the pane either). */
 @media (max-width: 719px) {
 	.d1-finder.wide { width: min(560px, 100%); }
-	.d1-finder-preview { display: none; }
+	.d1-finder .d1-finder-preview { display: none; }
 }
 .head {
 	padding: 8px 8px 2px; font-size: var(--fs-xs, 11px); font-weight: 700;

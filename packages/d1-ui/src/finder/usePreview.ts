@@ -91,7 +91,9 @@ export function usePreview(hit: Ref<FinderHit | null | undefined>, api: Pick<Hos
 				void load(k, h);
 			}, settleMs);
 		},
-		{ immediate: true, flush: 'sync' },
+		// After the render, not in the middle of the change: Finder.vue re-points the active row (a watcher on the hits) once a streamed answer has landed, and a
+		// key read in between would see another record, abort the read in flight and start the wait again.
+		{ immediate: true, flush: 'post' },
 	);
 
 	const card = computed<PreviewCard | null>(() => {
