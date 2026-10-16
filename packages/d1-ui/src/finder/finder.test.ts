@@ -161,9 +161,9 @@ describe('visibleSources', () => {
 		expect(visibleSources(null)).toEqual([]);
 	});
 
-	it('covers the five inventory sources', () => {
+	it('covers the six inventory sources', () => {
 		expect(FINDER_SOURCES.filter((s) => s.group === 'Inventory').map((s) => s.collection)).toEqual(
-			['tools', 'tool_boxes', 'cutting_inserts', 'insert_edges', 'raw_stock_lots'],
+			['tools', 'tool_boxes', 'cutting_inserts', 'insert_edges', 'raw_stock_lots', 'equipment'],
 		);
 	});
 });
