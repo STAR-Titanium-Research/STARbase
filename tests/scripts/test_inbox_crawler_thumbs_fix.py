@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 pytest.importorskip("PIL")
 from inbox_crawler import owners  # noqa: E402
 from test_inbox_crawler_thumbs import (  # noqa: E402, F401
+    A,
     folder,
     offered,
     picture,
