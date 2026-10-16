@@ -6,6 +6,7 @@
 // surface scan is "added", never "linked" or "attached".
 import type { FileKind, FilesQuery, FoundFile, InboxTab, MatchStrength } from './inboxApi';
 import { SCAN_ADD_LABEL } from './inboxScan';
+import { scaleBarText } from './semSettings';
 
 // ---- tabs ----
 
@@ -214,8 +215,11 @@ export function extractedText(extracted: Record<string, unknown>): string {
 	const mag = extracted.magnification;
 	if (typeof mag === 'number' && Number.isFinite(mag)) parts.push(`×${mag.toLocaleString('en-GB')}`);
 	else if (typeof mag === 'string' && mag) parts.push(mag.startsWith('×') || mag.toLowerCase().startsWith('x') ? mag : `×${mag}`);
+	// the crawler reads the scale bar as micrometres (`scale_bar_um`); a candidate stored before that carries the label as text (`scale_bar`)
+	const barUm = extracted.scale_bar_um;
 	const bar = extracted.scale_bar;
-	if (typeof bar === 'string' && bar) parts.push(bar);
+	if (typeof barUm === 'number' && Number.isFinite(barUm)) parts.push(scaleBarText(barUm));
+	else if (typeof bar === 'string' && bar) parts.push(bar);
 	const inst = extracted.instrument;
 	if (typeof inst === 'string' && inst) parts.push(inst);
 	return parts.join(' · ');

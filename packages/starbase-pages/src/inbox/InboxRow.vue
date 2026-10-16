@@ -7,6 +7,8 @@ import {
 	primaryAction, sizeText, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
+import SemSettingsList from './SemSettingsList.vue';
+import { extractedView, settingRows } from './semSettings';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
 
 // One found file: the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
@@ -33,6 +35,12 @@ const folder = computed(() => folderOf(props.file.rel_path));
 const suggestion = computed(() => suggestionOf(props.file));
 const action = computed(() => primaryAction(props.file));
 const read = computed(() => extractedText(props.file.extracted));
+// A row the crawler read with the settings reader carries `sources` or `flags`: its values are listed with their source and marks. An older row
+// (no sources, no flags) keeps the one line above.
+const settings = computed(() => {
+	const view = extractedView(props.file.extracted);
+	return Object.keys(view.sources).length || Object.keys(view.flags).length ? settingRows(view) : [];
+});
 const copy = computed(() => duplicateText(props.file));
 const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
 const reads = computed(() => needsReadNotice(props.file.kind));
@@ -66,7 +74,8 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 				<span v-if="meta" class="meta">{{ meta }}</span>
 				<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
 			</div>
-			<div v-if="read" class="read">{{ read }}</div>
+			<SemSettingsList v-if="settings.length" :rows="settings" />
+			<div v-else-if="read" class="read">{{ read }}</div>
 			<div v-if="copy" class="copy">{{ copy }}</div>
 
 			<div v-if="tab === 'linked' && addedScan" class="why" data-test="linked-to">
