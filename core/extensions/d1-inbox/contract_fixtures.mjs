@@ -320,9 +320,10 @@ export function buildFixtures() {
     { ignored_id: RULE_PERSON, owner_person_id: P_ALICE, owner_team_id: null, rel_folder: 'World-Ti Paper/Drafts', created_at: at('2026-10-16T08:00:00.000Z'), owner_name: 'Alice A' },
   ];
   const folderRefusal = (value) => { try { parseIgnoredFolder(value, 'Users/ali1'); } catch (e) { return e; } return new Error('expected a 400'); };
-  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true)", request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, true) }));
-  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false)', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders(ruleRows, false) }));
-  put('ignored_get_empty', ok('nothing ignored yet', request('GET', IGNORED_PATH), { data: shapeIgnoredFolders([], true) }));
+  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true, meta.can_change true)", request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, true)));
+  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false, meta.can_change false)', request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, false)));
+  put('ignored_get_empty', ok('nothing ignored yet (meta.can_change is still true: the caller may add rules)', request('GET', IGNORED_PATH), shapeIgnoredFolders([], true)));
+  put('ignored_get_empty_viewer', ok('a Lab Viewer with nothing ignored: no row carries can_remove, so meta.can_change false is the only sign that rules cannot be changed', request('GET', IGNORED_PATH), shapeIgnoredFolders([], false)));
   put('ignored_post_ok', ok("a folder of the caller's own folder ignored: the rule, and how many open files below it were dismissed",
     request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper/Drafts' } }), { data: shapeIgnoredAdded({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, null, 12) }, 201));
   put('ignored_post_ok_team', ok('a folder of a team folder ignored by a member of the team (team_id is in the answer)',

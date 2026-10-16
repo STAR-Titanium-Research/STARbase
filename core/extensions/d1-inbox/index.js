@@ -67,9 +67,11 @@
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
 //                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
-//   GET  /d1-inbox/ignored-folders  -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }] }  the rules of the
-//                                   caller's own folder and of the teams they are an ACTIVE member of (spec section 15; a Lab Viewer reads them with
-//                                   can_remove false). folder is relative to the owner's root, as it was sent.
+//   GET  /d1-inbox/ignored-folders  -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }],
+//                                   meta: { can_change: boolean } }  the rules of the caller's own folder and of the teams they are an ACTIVE member of
+//                                   (spec section 15). meta.can_change says whether the caller may change rules at all: false for a Lab Viewer (who reads
+//                                   them, every can_remove false), true for everyone else, whatever the number of rules (an empty list included; the
+//                                   client hides "Ignore this folder" and the add field on false). folder is relative to the owner's root, as it was sent.
 //   POST /d1-inbox/ignored-folders  { folder, team_id? }  -> 201 { data: { ignored_id, folder, team_id, dismissed } }   "Ignore this folder when scanning": a
 //                                   rule for the caller's personal folder, or for the team folder of team_id (an active member only). folder is relative to
 //                                   the owner's root (World-Ti Paper/Drafts, never Users/<alias>/...), no leading or trailing slash, no empty, . or .. part,
@@ -828,16 +830,21 @@ export const shapeStateChange = ({ done, unchanged, change }) => ({
 export const shapeUndo = (batch, done) => ({ link_batch_id: batch.toLowerCase(), undone: done.length });
 // POST /rescan and /admin/scan-all (202)
 export const shapeQueued = (row) => ({ queued: true, request_id: row.request_id, status: row.status, requested_at: toIso(row.requested_at) });
-// GET /ignored-folders: rows as ignoredList selects them; canRemove is false for a caller who may only read (a Lab Viewer).
-export const shapeIgnoredFolders = (rows, canRemove) => rows.map((r) => ({
-  ignored_id: r.ignored_id,
-  folder: r.rel_folder,
-  owner: r.owner_person_id
-    ? { kind: 'person', id: r.owner_person_id, name: r.owner_name ?? '' }
-    : { kind: 'team', id: r.owner_team_id, name: r.owner_name ?? '' },
-  created_at: toIso(r.created_at),
-  can_remove: canRemove,
-}));
+// GET /ignored-folders: rows as ignoredList selects them, as the whole body { data, meta }. canChange is false for a caller who may only read (a Lab Viewer)
+// and true for everyone else, whatever the number of rules: meta.can_change is what the client asks before it offers to add a rule (an empty list has
+// no row to carry can_remove), and each row's can_remove repeats it.
+export const shapeIgnoredFolders = (rows, canChange) => ({
+  data: rows.map((r) => ({
+    ignored_id: r.ignored_id,
+    folder: r.rel_folder,
+    owner: r.owner_person_id
+      ? { kind: 'person', id: r.owner_person_id, name: r.owner_name ?? '' }
+      : { kind: 'team', id: r.owner_team_id, name: r.owner_name ?? '' },
+    created_at: toIso(r.created_at),
+    can_remove: canChange,
+  })),
+  meta: { can_change: canChange },
+});
 // POST /ignored-folders
 export const shapeIgnoredAdded = (rule, teamId, dismissed) => ({ ignored_id: rule.ignored_id, folder: rule.rel_folder, team_id: teamId ?? null, dismissed });
 // DELETE /ignored-folders/:id
@@ -1547,7 +1554,7 @@ export function mount(router, context, deps = {}) {
     const rows = scope.personId || scope.teamIds.length
       ? rowsOf(await database.raw(SQL.ignoredList, [scope.personId, scope.teamIds.join(',')]))
       : [];
-    res.json({ data: shapeIgnoredFolders(rows, !isViewerAccountability(acc)) });
+    res.json(shapeIgnoredFolders(rows, !isViewerAccountability(acc)));
   }));
 
   router.post('/ignored-folders', route(async ({ req, res, acc }) => {

@@ -3001,6 +3001,25 @@ test('GET /ignored-folders: the caller\'s own rules and their teams\', each with
   assert.equal(w.txCount, 0, 'a read opens no transaction');
 });
 
+test('GET /ignored-folders: meta.can_change is false for a Lab Viewer and true for everyone else, whatever the number of rules (none included)', async () => {
+  const w = newWorld();
+  const { call } = setup(w);
+  const viewerEmpty = await call('GET /ignored-folders', { user: U.viewer, role: LAB_VIEWER_ROLE_ID });
+  assert.deepEqual(viewerEmpty.body, { data: [], meta: { can_change: false } }, 'a Lab Viewer with no rules: nothing else says that rules cannot be changed');
+  const viewerByParent = await call('GET /ignored-folders', { user: U.viewer, role: ID(70), roles: [ID(70), LAB_VIEWER_ROLE_ID] });
+  assert.equal(viewerByParent.body.meta.can_change, false, 'the viewer role anywhere in the role list counts, as it does for every write');
+  for (const user of [U.alice, U.bob, U.carol, U.dave, U.former, U.nobody]) {
+    assert.deepEqual((await call('GET /ignored-folders', { user })).body, { data: [], meta: { can_change: true } }, `${user}: true with no rules, even a person with no folder (the add itself answers NO_FOLDER)`);
+  }
+  assert.deepEqual((await call('GET /ignored-folders', { user: U.admin, admin: true })).body.meta, { can_change: true });
+  rule(w, { rel_folder: 'a' });
+  rule(w, { owner_person_id: P.viewer, rel_folder: 'v' });
+  const withRules = await call('GET /ignored-folders', { user: U.alice });
+  assert.deepEqual([withRules.body.meta, withRules.body.data.map((r) => r.can_remove)], [{ can_change: true }, [true]]);
+  const viewer = await call('GET /ignored-folders', { user: U.viewer, role: LAB_VIEWER_ROLE_ID });
+  assert.deepEqual([viewer.body.meta, viewer.body.data.map((r) => r.can_remove)], [{ can_change: false }, [false]], 'independent of how many rules exist');
+});
+
 test('POST /ignored-folders: a rule for the caller\'s folder; the open files below it are dismissed in the same transaction, nothing else is', async () => {
   const w = newWorld();
   const inside = add(w, under('Users/ali1/World-Ti Paper/a.tif'), under('Users/ali1/World-Ti Paper/Drafts/deep/b.tif'), under('Users/ali1/world-ti paper/c.tif', { origin: 'backlog' }));

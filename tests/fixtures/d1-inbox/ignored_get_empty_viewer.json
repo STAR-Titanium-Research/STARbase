@@ -1,0 +1,14 @@
+{
+  "description": "a Lab Viewer with nothing ignored: no row carries can_remove, so meta.can_change false is the only sign that rules cannot be changed",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/ignored-folders"
+  },
+  "status": 200,
+  "body": {
+    "data": [],
+    "meta": {
+      "can_change": false
+    }
+  }
+}
