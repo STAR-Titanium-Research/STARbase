@@ -45,11 +45,11 @@ describe('inlineSvgPaint', () => {
 });
 
 describe('showSvgOverflow', () => {
-  it('sets overflow: visible inline on every svg of the copy, so wires of cards at negative positions are not clipped at the origin', () => {
+  it('sets overflow: visible inline on every wire svg of the copy, which is outside .vue-flow, so wires are not clipped at the map\'s origin', () => {
     const svgs = [{ style: { overflow: 'hidden' } }, { style: { overflow: '' } }];
     const asked: string[] = [];
     showSvgOverflow({ querySelectorAll: (s) => (asked.push(s), svgs) });
-    expect(asked).toEqual(['svg']);
+    expect(asked).toEqual(['svg.vue-flow__edges']);
     expect(svgs.map((s) => s.style.overflow)).toEqual(['visible', 'visible']);
   });
 });

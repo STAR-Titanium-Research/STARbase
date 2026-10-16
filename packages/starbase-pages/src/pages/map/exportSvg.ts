@@ -42,11 +42,13 @@ export function inlineSvgPaint<T extends Styled>(live: Holder<T>, copy: Holder<T
 }
 
 /**
- * Vue Flow draws each wire in an svg that is only as big as the pane's origin box, with `overflow: visible` so the wire can run past it:
- * a card at a negative flow position puts its wire above or left of that box. The picture does not honour the copied `overflow: visible`
- * (it clips at the svg's box, so on a large map the wires stop dead at the map's origin), so the copy's svgs say it again, inline.
+ * Vue Flow draws each wire in an svg that is only as big as the pane's origin box, and lets the wire run past it with
+ * `.vue-flow .vue-flow__edges { overflow: visible }`. The export copy lives outside `.vue-flow` (the ExportFrame is a sibling of the canvas),
+ * so that rule no longer reaches it, the browser's default `svg { overflow: hidden }` applies, and html-to-image copies that into the picture:
+ * every wire outside the box from the map's origin (0,0) to the frame's size was cut, which on a large map is most of them. The copy's
+ * wire svgs get the lost rule back, inline.
  */
 export function showSvgOverflow(copy: { querySelectorAll(selector: string): ArrayLike<{ style: { overflow: string } }> }): void {
-  const svgs = copy.querySelectorAll('svg');
+  const svgs = copy.querySelectorAll('svg.vue-flow__edges');
   for (let i = 0; i < svgs.length; i++) svgs[i].style.overflow = 'visible';
 }

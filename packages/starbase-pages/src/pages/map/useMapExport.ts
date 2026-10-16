@@ -127,7 +127,7 @@ export function useMapExport({ canvas, projectFrame, map, person, deps: given = 
       copy.style.transform = `translate(${plan.graph.x}px, ${plan.graph.y}px) scale(1)`;
       // html-to-image does not style what is inside an svg (the wires): give the copy its paint from the live pane.
       inlineSvgPaint(live, copy);
-      // The wires' svgs are clipped at their box in the picture: a card at a negative position puts its wire outside it.
+      // The copy is outside `.vue-flow`, so the rule that lets a wire run past its svg's box does not reach it (see showSvgOverflow).
       showSvgOverflow(copy);
       graph.appendChild(copy);
       return frame;
