@@ -4,7 +4,7 @@
 Postgres-backed (the world fixture creates `inbox_ignored_dirs` from the plan's DDL, see
 test_inbox_crawler_world.py) with a real temp tree as the share. Not scanned is not empty: nothing below an
 ignored folder is listed, statted or opened, no candidate under it is marked gone (whatever its state), and
-its folder-cache rows stay. The rules are read once per scan. Linked files stay tracked by the adopted-hash
+its folder-cache rows stay. The rules are read when an owner starts (and again as a scan goes on). Linked files stay tracked by the adopted-hash
 queue. The pure matching is in test_inbox_crawler_ignored.py.
 """
 
@@ -347,10 +347,10 @@ def test_a_scan_that_aborts_midway_marks_nothing_gone(world, after):
     )  # not one state moved, under the folder or outside it
 
 
-# ---- the rules are read once per scan ------------------------------------------------------------
+# ---- the rules are read when an owner starts (a rule changing later in a scan: test_inbox_crawler_ignored_race.py)
 
 
-def test_a_rule_added_during_a_scan_takes_effect_on_the_next_scan(papers):
+def test_a_rule_added_during_a_scan_before_the_owner_starts_is_honoured(papers):
     world, pid = papers
     sc, spy, _ = make(world)
     real = spy.scandir
@@ -362,26 +362,19 @@ def test_a_rule_added_during_a_scan_takes_effect_on_the_next_scan(papers):
             fired.append(rel)
             world.ignore(
                 "World-Ti Paper", person=pid
-            )  # another session adds it mid-scan
+            )  # another session adds it while the scan lists Users
         return out
 
     spy.scandir = scandir_then_add_rule
     sc.scan()
-    assert f"{PAPER}/x.png" in cands(
-        world
-    )  # this scan had loaded the rules before: it still listed it
-    world.commit()
-    settle(world)
-    world.write(f"{PAPER}/later.png", png((7, 7, 7)))
-    bump(world, PAPER)
-    bump(world, ME)
-    sc2, spy2, _ = make(world)
-    sc2.scan()
-    assert touched(spy2, PAPER) == []
-    assert f"{PAPER}/later.png" not in cands(world)
+    assert fired == ["Users"]
+    # the owner's rules are read when the owner starts, which is after that
+    assert touched(spy, PAPER) == []
+    assert f"{PAPER}/x.png" not in cands(world)
+    assert f"{PAPER} 2/z.png" in cands(world)
 
 
-def test_a_rule_removed_during_a_scan_takes_effect_on_the_next_scan(papers):
+def test_a_rule_removed_during_a_scan_before_the_owner_starts_is_honoured(papers):
     world, pid = papers
     world.ignore("World-Ti Paper", person=pid)
     world.commit()
@@ -398,11 +391,9 @@ def test_a_rule_removed_during_a_scan_takes_effect_on_the_next_scan(papers):
 
     spy.scandir = scandir_then_drop_rule
     sc.scan()
-    assert touched(spy, PAPER) == []
-    assert f"{PAPER}/x.png" not in cands(world)
-    world.commit()
-    _, spy2, _ = run(world)
-    assert PAPER in spy2.scandirs
+    # removing a rule only makes the crawler read more, and only what the person asked for: the folder is
+    # listed from the moment the owner starts
+    assert PAPER in spy.scandirs
     assert f"{PAPER}/x.png" in cands(world)
 
 
