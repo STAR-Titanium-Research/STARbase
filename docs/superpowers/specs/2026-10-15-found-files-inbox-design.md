@@ -363,8 +363,30 @@ Things only the real share/rig can confirm go into `docs/runbooks/physical-test-
 
 ## 13. Out of scope (v1)
 
-Thumbnails of found files: Directus declares no `star` storage, so its asset route cannot serve pointer rows, and serving share bytes through Directus is out of scope. v1 shows the kind's icon and the extracted metadata; the UI falls back quietly. A follow-up could have the crawler write small derived thumbnails (not the share) as separate files.
-
 OCR validation, instruments beyond JEOL, force/`.D1*` file recognition, GitHub resources, a general
 notification centre, a group-wide auto-link switch, scanning `Shared/` root files, file editing of any kind,
 serving share bytes through Directus.
+
+## 14. Thumbnails and full view (follow-up, 2026-10-16)
+
+Directus declares no `star` storage, so its asset route cannot serve pointer rows, and serving share bytes through
+Directus stays out of scope (Directus does not even mount the share). Instead the **crawler writes small derived
+pictures into the database**, and `d1-inbox` serves those. The share is still only read.
+
+- **Who and when.** Only kinds `image` and `sem_image` (decoded with the same limits as classification: formats TIFF,
+  JPEG, PNG, BMP; `MAX_PIXELS`; files up to `CLASSIFY_MAX_BYTES`). Documents, surface scans and everything else get none, and a
+  document is still never opened. At registration the crawler already holds the image bytes in memory (it hashes and
+  classifies them), so a new file costs no extra share read. Files registered before this existed are filled in by a
+  throttled backfill step that reads through `fs_readonly` like any other read.
+- **What.** A `thumb` (about 320 px on the long side, JPEG) for the row and a `preview` (about 1600 px, JPEG) for the
+  full view. The preview is a reduced copy, never the original: the dialog says so. Both are derived data, replaceable
+  from the share, and live in `d1_private.file_thumbnails` (not exposed in Directus). Rows go with their candidate
+  (`ON DELETE CASCADE`) and are removed when the file is marked gone. Switch off with `INBOX_THUMBNAILS=0`.
+- **Serving.** `GET /d1-inbox/files/:candidate_id/thumb` and `/preview` answer `image/jpeg` with the same visibility as
+  the list (a person's own Inbox and their teams'), `Cache-Control: private`, an ETag, and 404 when the caller cannot
+  see the file or it has none. `FoundFile` gains one additive field, `has_thumbnail: boolean`.
+- **UI.** A row with `has_thumbnail` shows the thumbnail in place of the icon, loaded lazily (visible rows only, a few
+  at a time) with a shimmer while it loads and the kind's icon if it fails. Clicking opens a dialog with the preview
+  (spinner while it loads, the thumbnail shown meanwhile, Esc/click outside closes, keyboard reachable). Pictures
+  are fetched with the signed-in session as blobs, so no unauthenticated URL exists.
+- **Not in v1.** Zoom/pan, thumbnails for linked records elsewhere in STARbase, `.al3d` renders, document previews.
