@@ -326,11 +326,29 @@ describe('groupBatches: stacks of passes on one sample', () => {
     expect(stacks(groupBatches(rows, [], opts))).toEqual([['a', 'b']]);
   });
 
-  it('never stacks recorded batches, FAST runs, unstacked rows; nothing with stack off', () => {
-    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, { batchId: 'B1' }), pass('d', 4), pass('e', 5, { sourceRunUid: 'r' }), pass('f', 6), pass('g', 7)];
-    expect(stacks(groupBatches(rows, [], opts))).toEqual([['a', 'b'], ['f', 'g']]);
-    expect(stacks(groupBatches(rows, [], { ...opts, unstacked: new Set(['g']) }))).toEqual([['a', 'b']]);
+  it('never stacks recorded batches or unstacked rows; nothing with stack off', () => {
+    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, { batchId: 'B1' }), pass('d', 4), pass('e', 5), pass('f', 6), pass('g', 7)];
+    expect(stacks(groupBatches(rows, [], opts))).toEqual([['a', 'b'], ['d', 'e', 'f', 'g']]);
+    expect(stacks(groupBatches(rows, [], { ...opts, unstacked: new Set(['g']) }))).toEqual([['a', 'b'], ['d', 'e', 'f']]);
     expect(stacks(groupBatches(rows, [], { probable: true }))).toEqual([]);
+  });
+
+  it('in-place machining passes that carry a source_run_uid (imported with force data) stack like those without', () => {
+    const rows = [1, 2, 3, 4].map((d) => pass(`m${d}`, d, { sourceRunUid: `run-${d}` }));
+    const gs = groupBatches(rows, [], opts);
+    expect(stacks(gs)).toEqual([['m1', 'm2', 'm3', 'm4']]);
+    // A mix of passes with and without a run uid is still one stack.
+    const mixed = [pass('a', 1), pass('b', 2, { sourceRunUid: 'r' }), pass('c', 3)];
+    expect(stacks(groupBatches(mixed, [], opts))).toEqual([['a', 'b', 'c']]);
+  });
+
+  it('FAST / sintering runs (a source_run_uid that makes an output sample) never stack', () => {
+    const run = (id: string, d: number) =>
+      op({ id, sampleId: 's', outputSampleId: `out-${id}`, methodId: 'fast', equipmentId: 'press', category: 'sintering', date: day(d), sourceRunUid: `u-${id}` });
+    expect(stacks(groupBatches([run('r1', 1), run('r2', 2), run('r3', 3)], [], opts))).toEqual([]);
+    // Runs with no input sample (powder to a new sample) have no chain to stack on either.
+    const fromPowder = [1, 2].map((d) => op({ id: `p${d}`, sampleId: null, outputSampleId: `new${d}`, methodId: 'fast', equipmentId: 'press', category: 'sintering', date: day(d), sourceRunUid: `pu${d}` }));
+    expect(stacks(groupBatches(fromPowder, [], opts))).toEqual([]);
   });
 
   it('every row is still in exactly one group', () => {
