@@ -328,7 +328,9 @@ under that folder stamped to A (`directus_files.owner_person_id`), because the o
 folder name (ADR-0022 D13). B's Inbox does not list them and B cannot read them (migration 196's filter). That is
 the safe outcome when the folder really changed hands, but wrong when the alias was only mistyped on A, or the files
 in the folder are in fact B's. An administrator re-stamps them by SQL, as the database owner, after checking who the
-files belong to. **Describe, check, then run; this is not something the crawler does:**
+files belong to. B's first scan also **deletes A's undecided and dismissed candidates** under that folder (a candidate
+is unique per file, so the files could not be registered for B otherwise; A's linked ones stay), and a person or team
+that still owns files cannot be deleted (migration 201 says so in the message). **Describe, check, then run; this is not something the crawler does:**
 
 ```sql
 -- how many files would move (the alias is the folder name, <base> is Users or INBOX_PERSON_DIR)

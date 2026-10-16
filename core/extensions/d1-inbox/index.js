@@ -1631,6 +1631,8 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const [file] = rowsOf(await database.raw(SQL.semFile, [id]));
     if (!file || semAccess(scope, file) !== 'owner') throw ERRORS.notSettingsOwner();
+    // a magnification is a whole number as the instrument prints it: refuse 5000.5, do not round it to 5001 (the function rounds to the column's scale)
+    if (body.field === 'magnification' && typeof body.value === 'number' && !Number.isInteger(body.value)) throw ERRORS.settingInvalid();
     const row = await inTransaction(acc.user, async (trx) => {
       try {
         await trx.raw(SQL.semCorrect, [id, body.field, JSON.stringify(body.value), acc.user]);

@@ -2815,7 +2815,7 @@ test('PATCH /sem-settings/<file>: an unknown field (read_by, sources, directus_f
     assert.equal(codeOf(res), 'INVALID_PAYLOAD', field);
     assert.equal(errorOf(res).extensions.field, 'field', field);
   }
-  for (const [field, value] of [['kv', 99], ['kv', 'ten'], ['kv', null], ['magnification', 2], ['spot', 0], ['detector', ''], ['acquired_at', 'not a time']]) {
+  for (const [field, value] of [['kv', 99], ['kv', 'ten'], ['kv', null], ['magnification', 2], ['magnification', 5000.5], ['spot', 0], ['detector', ''], ['acquired_at', 'not a time']]) {
     const res = await patchSem(call, file, { field, value }, ALICE);
     assert.equal(res.statusCode, 400, `${field}=${value}`);
     assert.equal(errorOf(res).extensions.field, 'value', field);
