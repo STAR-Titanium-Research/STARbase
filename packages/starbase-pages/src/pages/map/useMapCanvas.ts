@@ -447,13 +447,25 @@ export function useMapCanvas(map: ProcessMap) {
   // The shown set (a Show chip, Reach, a fold, an expand, "+N more") changed: rebuild and lay out what is new. Cards that
   // were already placed keep their places (spec D18); the merge hints say where the new ones go after an expand. Only a
   // new direction lays everything out again, like Re-layout.
+  /**
+   * ＋ or − on a record card can give the same record another id (a material card `m:<sample>` is the fan root `f:materials:<id>` once its
+   * fan is open, and back again on −). The card pressed must keep its place all the same: its replacement is named as the anchor and takes
+   * the old one's place (the `from` swap below), pin included.
+   */
+  function reanchored(hint: MergeHint): MergeHint {
+    if (!hint.full || !hint.anchor || map.nodes.value.some((n) => n.id === hint.anchor)) return hint;
+    const old = vf.findNode(hint.anchor)?.data as MapNode | undefined;
+    if (old?.type !== 'record') return hint;
+    const next = map.nodes.value.find((n) => n.type === 'record' && n.ref.collection === old.ref.collection && n.ref.id === old.ref.id && !vf.findNode(n.id));
+    return next ? { ...hint, anchor: next.id, from: hint.anchor } : hint;
+  }
   let lastDir = map.dir.value;
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
     const hints = map.takeMergeHints();
     if (turned) dragged.clear();
-    const merges = turned || !placed.size ? null : hints;
+    const merges = turned || !placed.size ? null : hints.map(reanchored);
     merging = merges?.find((m) => m.anchor) ?? null;
     // A collapsed container that opened may come back under another id (a batch): it takes the old one's place and size.
     for (const merge of merges ?? []) {

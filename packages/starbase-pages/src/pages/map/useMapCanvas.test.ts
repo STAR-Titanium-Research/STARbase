@@ -662,6 +662,46 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
   });
 });
 
+describe('useMapCanvas: the card pressed keeps its place when its id changes (a material card that opens its fan)', () => {
+  // The material card of a sample is `m:<sample>`; once its used-in fan is open the same record is the fan's root `f:materials:<id>`.
+  const material = { collection: 'materials', id: 'mat1', code: 'MAT-1' };
+  async function openMaterial() {
+    const data = mkData({
+      samples: ['a', 'b'].map((id, i) => mkSample(id, i === 0 ? { materialRef: material } : {})),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: ['a', 'z1', 'z2'].map((id) => mkSample(id)), total: 3 });
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    useMapCanvas(map);
+    await settle();
+    return map;
+  }
+  const columnWithGap = (graph: FakeGraph, shown: Set<string>) => Object.fromEntries(graph.nodes.filter((n) => shown.has(n.id)).map((n, i) => [n.id, { x: 0, y: i * 300 }]));
+
+  it('＋ on the material card: its fan root takes its place, nothing jumps', async () => {
+    const map = await openMaterial();
+    expect(nodesOf().some((n) => n.id === 'm:a')).toBe(true);
+    store.elk = columnWithGap;
+    const was = { ...at('m:a') };
+    await map.expand('m:a');
+    await settle();
+    expect(nodesOf().some((n) => n.id === 'm:a')).toBe(false);
+    expect(nodesOf().some((n) => n.id === 'f:materials:mat1')).toBe(true);
+    expect(at('f:materials:mat1')).toEqual(was);
+  });
+
+  it('a dragged material card stays dragged when it becomes the fan root', async () => {
+    const map = await openMaterial();
+    store.elk = columnWithGap;
+    drag('m:a', { x: 900, y: 900 });
+    await map.expand('m:a');
+    await settle();
+    expect(at('f:materials:mat1')).toEqual({ x: 900, y: 900 });
+  });
+});
+
 describe('useMapCanvas: the sockets of a card are in the order of its wires (socketOrder)', () => {
   // A sample made from two parents (two lineage junctions into its two in-sockets). The parents' junctions are laid out by hand: the
   // parent p1 below the sample's row and p2 above it, which is the model's order reversed (p1's wire is wired to the first socket).
