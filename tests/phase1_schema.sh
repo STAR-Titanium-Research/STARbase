@@ -7214,6 +7214,202 @@ fo_check "readers_read:2" "Lab Member and Lab Viewer read the readers table for 
 fo_check "readers_write:0" "nobody but the triggers writes the readers table"
 fo_check "update_delete_no_some:0" "the files update and delete rows carry no _some"
 
+echo "== SEM image settings, save_sem_settings, access log, classified_by (migration 197, ADR-0022) =="
+# Spec docs/superpowers/specs/2026-10-16-sem-data-bar-reader-design.md section 3; plan task C2. Every check is a rolled-back transaction (ids prefix
+# a4000000-0000-4000-8000-). The CI database has the stub directus_files and directus_users (id only), so the fixture rows set just the id.
+SE_MIG=$(ls db/migrations/*_sem_image_settings.sql 2>/dev/null | head -1)
+[[ -n "$SE_MIG" && -f "$SE_MIG" ]] && ok "found the SEM image settings migration (${SE_MIG:-none})" || bad "the SEM image settings migration is missing (db/migrations/*_sem_image_settings.sql)"
+SE_F1='a4000000-0000-4000-8000-0000000000c1'
+SE_F2='a4000000-0000-4000-8000-0000000000c2'
+SE_U1='a4000000-0000-4000-8000-0000000000d1'
+SE_FULL='{"kv": 2.0, "spot": 3.5, "working_distance_mm": 15.92, "magnification": 40, "hfw_um": 7460.0, "pixel_size_nm": 7283.8, "scale_bar_um": 1000, "detector": "ETD", "mode": "SE", "instrument": "Quanta 650", "acquired_at": "2025-08-07T14:59:45+01:00", "sources": {"kv": "metadata", "spot": "metadata", "magnification": "derived"}, "flags": {"check_this": true}}'
+se_sql() { # se_sql <statements>: run them after a fixture file and user, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_files (id) VALUES ('$SE_F1'), ('$SE_F2');
+INSERT INTO directus_users (id) VALUES ('$SE_U1');
+$1
+ROLLBACK;
+SQL
+}
+se_row() { # se_row <label> <file id>: the row as one line, 15 slots (an absent value is an empty slot)
+    printf "SELECT '%s:' || coalesce((SELECT array_to_string(ARRAY[coalesce(kv::text, ''), coalesce(spot::text, ''), coalesce(working_distance_mm::text, ''), coalesce(magnification::text, ''), coalesce(hfw_um::text, ''), coalesce(pixel_size_nm::text, ''), coalesce(scale_bar_um::text, ''), coalesce(detector, ''), coalesce(mode, ''), coalesce(instrument, ''), coalesce(to_char(acquired_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS'), ''), sources::text, flags::text, read_by, coalesce(corrected_by::text, '-')], '|') FROM d1_private.sem_image_settings WHERE directus_files_id = '%s'), 'none');\n" "$1" "$2"
+}
+se_exp() { local IFS='|'; echo "$*"; } # se_exp <15 slots>: the line se_row prints
+# the objects
+run_eq "sem_image_settings and sem_settings_access_log are tables of d1_private, not in public" \
+    "SELECT string_agg(c.relname || ':' || n.nspname, ',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND c.relname IN ('sem_image_settings', 'sem_settings_access_log')" \
+    "sem_image_settings:d1_private,sem_settings_access_log:d1_private"
+run_eq "sem_image_settings has the spec's columns and types" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(numeric_precision::text, '') || ',' || coalesce(numeric_scale::text, ''), ';' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'sem_image_settings'" \
+    "directus_files_id:uuid:NO:,;kv:numeric:YES:6,2;spot:numeric:YES:4,1;working_distance_mm:numeric:YES:6,2;magnification:integer:YES:32,0;hfw_um:numeric:YES:10,2;pixel_size_nm:numeric:YES:12,4;scale_bar_um:numeric:YES:12,3;detector:text:YES:,;mode:text:YES:,;instrument:text:YES:,;acquired_at:timestamp with time zone:YES:,;sources:jsonb:NO:,;flags:jsonb:NO:,;read_by:text:NO:,;read_at:timestamp with time zone:NO:,;corrected_by:uuid:YES:,;corrected_at:timestamp with time zone:YES:,"
+run_eq "sem_image_settings is keyed by the file and cascades with it" \
+    "SELECT string_agg(contype::text || ':' || CASE WHEN contype = 'f' THEN confrelid::regclass::text ELSE '' END || ':' || CASE WHEN contype = 'f' THEN confdeltype::text ELSE '' END, ',' ORDER BY contype::text) FROM pg_constraint WHERE conrelid = 'd1_private.sem_image_settings'::regclass AND contype IN ('p', 'f')" \
+    "f:directus_files:c,p::"
+run_eq "sem_settings_access_log has the spec's columns" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ';' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'sem_settings_access_log'" \
+    "id:bigint:NO;directus_files_id:uuid:NO;read_by_user:uuid:NO;read_at:timestamp with time zone:NO;reason:text:NO"
+run_eq "file_candidates.classified_by is a nullable text column" \
+    "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_candidates' AND column_name = 'classified_by'" "text:YES"
+run_eq "every new table, column, function and constraint-bearing column carries a COMMENT (tables, columns, classified_by, the four functions)" \
+    "SELECT (SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'd1_private'::regnamespace AND c.relname IN ('sem_image_settings', 'sem_settings_access_log') AND obj_description(c.oid, 'pg_class') IS NULL)
+          + (SELECT count(*) FROM pg_attribute a WHERE a.attrelid IN ('d1_private.sem_image_settings'::regclass, 'd1_private.sem_settings_access_log'::regclass) AND a.attnum > 0 AND NOT a.attisdropped AND col_description(a.attrelid, a.attnum) IS NULL)
+          + (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'd1_private.file_candidates'::regclass AND a.attname = 'classified_by' AND col_description(a.attrelid, a.attnum) IS NULL)
+          + (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND p.proname IN ('save_sem_settings', 'correct_sem_setting', 'sem_clean_number', 'sem_try_timestamptz') AND obj_description(p.oid, 'pg_proc') IS NULL)" "0"
+run_eq "the functions exist: save_sem_settings returns boolean, correct_sem_setting returns void, both SECURITY INVOKER" \
+    "SELECT string_agg(p.proname || ':' || format_type(p.prorettype, NULL) || ':' || p.prosecdef::text, ',' ORDER BY p.proname) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND p.proname IN ('save_sem_settings', 'correct_sem_setting')" \
+    "correct_sem_setting:void:false,save_sem_settings:boolean:false"
+run_eq "the text-to-SQL role reads neither table and none appears in v_schema_dictionary or directus_collections" \
+    "SELECT bool_or(has_table_privilege('d1_llm_readonly', 'd1_private.' || t, 'SELECT'))::text || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name IN ('sem_image_settings', 'sem_settings_access_log')) || ',' || (SELECT count(*) FROM directus_collections WHERE collection IN ('sem_image_settings', 'sem_settings_access_log')) FROM unnest(ARRAY['sem_image_settings', 'sem_settings_access_log']) AS t" "false,0,0"
+# table constraints (the ranges of spec section 2)
+for bad in "kv = 250" "kv = 0.05" "spot = 0" "spot = 11" "working_distance_mm = 51" "working_distance_mm = 0.05" "magnification = 4" "magnification = 1000001" "hfw_um = 0" "pixel_size_nm = 0" "scale_bar_um = 0"; do
+    col=${bad%% =*}
+    se_out=$(se_sql "INSERT INTO d1_private.sem_image_settings (directus_files_id, read_by, $col) VALUES ('$SE_F1', 'sem-2', ${bad##*= });")
+    grep -q 'sem_image_settings_.*_check' <<<"$se_out" && ok "the table refuses $bad" || bad "the table accepted $bad (output: $se_out)"
+done
+se_out=$(se_sql "INSERT INTO d1_private.sem_image_settings (directus_files_id, read_by, kv, spot, working_distance_mm, magnification) VALUES ('$SE_F1', 'sem-2', 0.1, 1, 0.1, 5), ('$SE_F2', 'sem-2', 30, 10, 50, 1000000);
+SELECT 'se_edges:' || count(*) FROM d1_private.sem_image_settings;")
+grep -qx 'se_edges:2' <<<"$se_out" && ok "the range edges are accepted (kv 0.1 and 30, spot 1 and 10, working distance 0.1 and 50, magnification 5 and 1,000,000)" || bad "range edges refused (output: $se_out)"
+se_out=$(se_sql "INSERT INTO d1_private.sem_image_settings (directus_files_id, read_by) VALUES ('$SE_F1', 'sem-2');
+SELECT 'se_defaults:' || sources::text || flags::text || (read_at IS NOT NULL) FROM d1_private.sem_image_settings;")
+grep -qxF 'se_defaults:{}{}true' <<<"$se_out" && ok "sources and flags default to {} and read_at to now()" || bad "defaults wrong (output: $se_out)"
+se_out=$(se_sql "INSERT INTO d1_private.sem_image_settings (directus_files_id) VALUES ('$SE_F1');")
+grep -q 'null value in column "read_by"' <<<"$se_out" && ok "read_by is required" || bad "a row without read_by was accepted (output: $se_out)"
+# the access log
+se_out=$(se_sql "INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES ('$SE_F1', '$SE_U1', NULL);")
+grep -q 'null value in column "reason"' <<<"$se_out" && ok "the access log refuses a null reason" || bad "the access log accepted a null reason (output: $se_out)"
+se_out=$(se_sql "INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES ('$SE_F1', '$SE_U1', 'administrator read');
+SELECT 'se_log:' || count(*) || (SELECT (read_at IS NOT NULL)::text FROM d1_private.sem_settings_access_log LIMIT 1) FROM d1_private.sem_settings_access_log;
+DELETE FROM directus_files WHERE id = '$SE_F1';
+SELECT 'se_log_after_file_delete:' || count(*) FROM d1_private.sem_settings_access_log;")
+grep -qx 'se_log:1true' <<<"$se_out" && grep -qx 'se_log_after_file_delete:1' <<<"$se_out" && ok "an access log row stamps read_at and outlives the file it records" || bad "access log behaviour wrong (output: $se_out)"
+# classified_by
+se_out=$(se_sql "INSERT INTO people (person_id, full_name) VALUES ('a4000000-0000-4000-8000-0000000000a1', 'Sem Test');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, classified_by) VALUES ('$SE_F1', 'a4000000-0000-4000-8000-0000000000a1', 'sem_image', 'new', 'Users/x/1.tif', 'sem-2');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$SE_F2', 'a4000000-0000-4000-8000-0000000000a1', 'image', 'new', 'Users/x/2.png');
+SELECT 'se_classified:' || string_agg(coalesce(classified_by, '<null>'), ',' ORDER BY rel_path) FROM d1_private.file_candidates WHERE directus_files_id IN ('$SE_F1', '$SE_F2');")
+grep -qx 'se_classified:sem-2,<null>' <<<"$se_out" && ok "classified_by is stored, and NULL for a row never classified by a profile version" || bad "classified_by misbehaved (output: $se_out)"
+# save_sem_settings
+se_out=$(se_sql "SELECT 'se_ret1:' || d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
+$(se_row se_full "$SE_F1")")
+grep -qx 'se_ret1:t' <<<"$se_out" && ok "save_sem_settings returns true when a row exists afterwards" || bad "save_sem_settings did not return true (output: $se_out)"
+grep -qxF "se_full:$(se_exp 2.00 3.5 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "metadata", "spot": "metadata", "magnification": "derived"}' '{"check_this": true}' sem-2 -)" <<<"$se_out" \
+    && ok "save_sem_settings maps a full extracted to the row (acquired_at with offset stored as the instant, sources and flags kept)" || bad "full extracted mapped wrongly (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 5.0, \"spot\": 3.5}'::jsonb, 'sem-3');
+$(se_row se_second "$SE_F1")
+SELECT 'se_rows:' || count(*) FROM d1_private.sem_image_settings WHERE directus_files_id = '$SE_F1';")
+grep -qxF "se_second:$(se_exp 5.00 3.5 '' '' '' '' '' '' '' '' '' '{}' '{}' sem-3 -)" <<<"$se_out" && ok "a second call updates the row: the new read replaces the old one (fields it does not carry become absent), read_by follows" || bad "second save wrong (output: $se_out)"
+grep -qx 'se_rows:1' <<<"$se_out" && ok "a second call keeps one row per file" || bad "second save made another row (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '$SE_FULL'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'kv', '20.5'::jsonb, '$SE_U1');
+$(se_row se_after_correct "$SE_F1")
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0, \"spot\": 4.0, \"working_distance_mm\": 10, \"sources\": {\"kv\": \"metadata\", \"spot\": \"ocr\"}, \"flags\": {\"check_this\": true, \"kv\": \"x\"}}'::jsonb, 'sem-3');
+$(se_row se_resave "$SE_F1")")
+grep -qxF "se_after_correct:$(se_exp 20.50 3.5 15.92 40 7460.00 7283.8000 1000.000 ETD SE 'Quanta 650' 2025-08-07T13:59:45 '{"kv": "manual", "spot": "metadata", "magnification": "derived"}' '{"check_this": true}' sem-2 $SE_U1)" <<<"$se_out" \
+    && ok "correct_sem_setting sets the value, marks sources.kv as manual and records who corrected" || bad "correction wrong (output: $se_out)"
+grep -qxF "se_resave:$(se_exp 20.50 4.0 10.00 '' '' '' '' '' '' '' '' '{"kv": "manual", "spot": "ocr"}' '{"check_this": true}' sem-3 $SE_U1)" <<<"$se_out" \
+    && ok "sem_settings: manual field survives a re-save (kv stays 20.5 and stays manual; the other fields follow the new read; a flag named after a manual field is not taken)" || bad "manual field did not survive a re-save (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 250, \"spot\": 3.5, \"working_distance_mm\": 15.92, \"magnification\": 40}'::jsonb, 'sem-2');
+$(se_row se_range "$SE_F1")")
+grep -qxF "se_range:$(se_exp '' 3.5 15.92 40 '' '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "kv 250 is dropped (outside 0.1 to 30) and the rest is saved" || bad "out-of-range kv was not dropped cleanly (output: $se_out)"
+se_out=$(se_sql "SELECT 'se_ranges:' || d1_private.save_sem_settings('$SE_F1', '{\"kv\": 0.05, \"spot\": 0.5, \"working_distance_mm\": 51, \"magnification\": 4, \"hfw_um\": 0, \"pixel_size_nm\": -1, \"scale_bar_um\": 0}'::jsonb, 'sem-2');
+SELECT 'se_ranges_rows:' || count(*) FROM d1_private.sem_image_settings;")
+grep -qx 'se_ranges:f' <<<"$se_out" && grep -qx 'se_ranges_rows:0' <<<"$se_out" && ok "when every value is outside its range nothing is saved and the call returns false" || bad "all-out-of-range extracted wrote a row (output: $se_out)"
+se_out=$(se_sql "SELECT 'se_empty:' || d1_private.save_sem_settings('$SE_F1', '{}'::jsonb, 'sem-2');
+SELECT 'se_empty_flags_only:' || d1_private.save_sem_settings('$SE_F1', '{\"flags\": {\"check_this\": true}, \"sources\": {}}'::jsonb, 'sem-2');
+SELECT 'se_empty_null:' || d1_private.save_sem_settings('$SE_F1', NULL, 'sem-2');
+SELECT 'se_empty_rows:' || count(*) FROM d1_private.sem_image_settings;")
+grep -qx 'se_empty:f' <<<"$se_out" && grep -qx 'se_empty_flags_only:f' <<<"$se_out" && grep -qx 'se_empty_null:f' <<<"$se_out" && grep -qx 'se_empty_rows:0' <<<"$se_out" && ok "an empty extracted (also one with only flags, or NULL) returns false and writes no row" || bad "empty extracted misbehaved (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT 'se_empty_after:' || d1_private.save_sem_settings('$SE_F1', '{}'::jsonb, 'sem-3');
+$(se_row se_empty_kept "$SE_F1")")
+grep -qx 'se_empty_after:t' <<<"$se_out" && grep -qxF "se_empty_kept:$(se_exp 2.00 '' '' '' '' '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "an empty re-read of a file that has a row returns true and leaves the row as it is" || bad "empty re-read of an existing row misbehaved (output: $se_out)"
+se_out=$(se_sql "SELECT 'se_round:' || d1_private.save_sem_settings('$SE_F1', '{\"kv\": 0.104, \"spot\": 9.96, \"working_distance_mm\": 0.104, \"magnification\": 40.05, \"hfw_um\": 7460.004}'::jsonb, 'sem-2');
+$(se_row se_rounded "$SE_F1")")
+grep -qx 'se_round:t' <<<"$se_out" && grep -qxF "se_rounded:$(se_exp 0.10 10.0 0.10 40 7460.00 '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "values are rounded to their column's scale before the range test (kv 0.104 -> 0.10, spot 9.96 -> 10.0, magnification 40.05 -> 40), never an overflow or a CHECK error" || bad "rounding wrong (output: $se_out)"
+# pathological extracted: no exception, the field is omitted, the rest is saved
+se_out=$(se_sql "SELECT 'se_path:' || d1_private.save_sem_settings('$SE_F1', jsonb_build_object('kv', 'abc', 'spot', true, 'working_distance_mm', '[1]'::jsonb, 'magnification', 1e400, 'hfw_um', 1e12, 'pixel_size_nm', 1e9, 'scale_bar_um', 1e12, 'detector', repeat('x', 20000), 'mode', 7, 'instrument', 'Quanta', 'acquired_at', 'not a date', 'sources', '[1]'::jsonb, 'flags', 'text'::jsonb), 'sem-2');
+$(se_row se_pathological "$SE_F1")")
+grep -qx 'se_path:t' <<<"$se_out" && grep -qxF "se_pathological:$(se_exp '' '' '' '' '' '' '' '' '' Quanta '' '{}' '{}' sem-2 -)" <<<"$se_out" && ok "pathological values (strings and booleans in numeric fields, 1e400, values past a column's capacity, a 20,000-character text, a date that is not a date, sources and flags that are not objects) raise nothing and are omitted" || bad "pathological extracted misbehaved (output: $se_out)"
+se_out=$(se_sql "SELECT 'se_dates:' || d1_private.save_sem_settings('$SE_F1', '{\"acquired_at\": \"2025-13-45T99:00:00+01:00\"}'::jsonb, 'sem-2');
+SELECT 'se_dates2:' || d1_private.save_sem_settings('$SE_F1', '{\"acquired_at\": \"2025-10-26T01:30:00Z\", \"kv\": 5}'::jsonb, 'sem-2');
+$(se_row se_date "$SE_F1")")
+grep -qx 'se_dates:f' <<<"$se_out" && grep -qx 'se_dates2:t' <<<"$se_out" && grep -qxF "se_date:$(se_exp 5.00 '' '' '' '' '' '' '' '' '' 2025-10-26T01:30:00 '{}' '{}' sem-2 -)" <<<"$se_out" && ok "an impossible calendar date is dropped; a UTC time is stored as given" || bad "date handling wrong (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0, \"sources\": {\"kv\": \"manual\", \"spot\": \"ocr\"}}'::jsonb, 'sem-2');
+$(se_row se_claim "$SE_F1")
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 3.0}'::jsonb, 'sem-3');
+$(se_row se_claim2 "$SE_F1")")
+grep -qxF "se_claim:$(se_exp 2.00 '' '' '' '' '' '' '' '' '' '' '{}' '{}' sem-2 -)" <<<"$se_out" && grep -qxF "se_claim2:$(se_exp 3.00 '' '' '' '' '' '' '' '' '' '' '{}' '{}' sem-3 -)" <<<"$se_out" && ok "a read cannot claim 'manual': that source entry is dropped, so a later re-read still updates the field" || bad "an extracted source of manual was kept (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0, \"detector\": \"ETD\", \"instrument\": \"Quanta\"}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'detector', '\"BSE\"'::jsonb, '$SE_U1');
+SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 3.0, \"detector\": \"ETD\", \"instrument\": \"Other\"}'::jsonb, 'sem-3');
+$(se_row se_text_manual "$SE_F1")")
+grep -qxF "se_text_manual:$(se_exp 3.00 '' '' '' '' '' '' BSE '' Other '' '{"detector": "manual"}' '{}' sem-3 $SE_U1)" <<<"$se_out" && ok "a corrected text field survives a re-save too" || bad "a manual text field was overwritten (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"magnification\": 40, \"hfw_um\": 7460, \"flags\": {\"check_this\": true, \"magnification\": \"unverified\", \"acquired_at\": \"invalid_local_time\"}, \"sources\": {\"magnification\": \"ocr\"}}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'magnification', '80'::jsonb, '$SE_U1');
+$(se_row se_flag_cleared "$SE_F1")")
+grep -qxF "se_flag_cleared:$(se_exp '' '' '' 80 7460.00 '' '' '' '' '' '' '{"magnification": "manual"}' '{"check_this": true, "acquired_at": "invalid_local_time"}' sem-2 $SE_U1)" <<<"$se_out" && ok "correcting a field takes away the flag that was named after it and keeps the others" || bad "correction flag handling wrong (output: $se_out)"
+# correct_sem_setting refuses
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'read_by', '\"someone\"'::jsonb, '$SE_U1');")
+grep -qi 'not a correctable field\|unknown field' <<<"$se_out" && ok "correct_sem_setting refuses field = 'read_by'" || bad "correct_sem_setting accepted read_by (output: $se_out)"
+for f in sources flags directus_files_id corrected_by corrected_at read_at 'kv; DROP TABLE x'; do
+    se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', '$f', '\"x\"'::jsonb, '$SE_U1');")
+    grep -qi 'not a correctable field\|unknown field' <<<"$se_out" && ok "correct_sem_setting refuses the field '$f'" || bad "correct_sem_setting accepted the field '$f' (output: $se_out)"
+done
+for pair in "kv|250" "kv|0.05" "spot|0" "working_distance_mm|51" "magnification|4" "magnification|2000000" "hfw_um|0" "kv|\"abc\"" "kv|true" "kv|null" "detector|5" "acquired_at|\"not a date\"" "acquired_at|5"; do
+    f=${pair%%|*}; v=${pair#*|}
+    se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', '$f', '$v'::jsonb, '$SE_U1');")
+    grep -qi 'out of range\|not a valid' <<<"$se_out" && ok "correct_sem_setting refuses $f = $v" || bad "correct_sem_setting accepted $f = $v (output: $se_out)"
+done
+se_out=$(se_sql "SELECT d1_private.correct_sem_setting('$SE_F1', 'kv', '5'::jsonb, '$SE_U1');")
+grep -qi 'no sem_image_settings row' <<<"$se_out" && ok "correct_sem_setting refuses a file that has no settings row" || bad "correct_sem_setting accepted a file with no row (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'acquired_at', '\"2025-08-07T14:59:45+01:00\"'::jsonb, '$SE_U1');
+SELECT d1_private.correct_sem_setting('$SE_F1', 'mode', '\"BSE\"'::jsonb, '$SE_U1');
+SELECT 'se_corr:' || to_char(acquired_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS') || ':' || mode || ':' || (corrected_at IS NOT NULL)::text || ':' || sources::text FROM d1_private.sem_image_settings;")
+grep -qxF 'se_corr:2025-08-07T13:59:45:BSE:true:{"mode": "manual", "acquired_at": "manual"}' <<<"$se_out" && ok "a corrected time and a corrected text are stored with their source and corrected_at" || bad "correct_sem_setting stored time or text wrongly (output: $se_out)"
+# the row follows the file
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('$SE_F1', '{\"kv\": 2.0}'::jsonb, 'sem-2');
+DELETE FROM directus_files WHERE id = '$SE_F1';
+SELECT 'se_cascade:' || count(*) FROM d1_private.sem_image_settings;")
+grep -qx 'se_cascade:0' <<<"$se_out" && ok "deleting the directus_files row deletes its settings" || bad "settings outlived their file (output: $se_out)"
+se_out=$(se_sql "SELECT d1_private.save_sem_settings('a4000000-0000-4000-8000-0000000000ff', '{\"kv\": 2.0}'::jsonb, 'sem-2');")
+grep -q 'violates foreign key constraint' <<<"$se_out" && ok "settings for a file that does not exist are refused" || bad "settings for an unknown file were accepted (output: $se_out)"
+# up, down, up in one transaction
+if [[ -n "$SE_MIG" && -f "$SE_MIG" ]]; then
+se_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$SE_MIG")
+se_down=$(awk '/-- migrate:down/{f=1;next}f' "$SE_MIG")
+se_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_files (id) VALUES ('$SE_F1');
+INSERT INTO d1_private.sem_image_settings (directus_files_id, read_by, kv) VALUES ('$SE_F1', 'sem-2', 2);
+INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES ('$SE_F1', '$SE_F1', 'x');
+$se_down
+SELECT 'se_dn_tables:' || coalesce(to_regclass('d1_private.sem_image_settings')::text, 'gone') || ',' || coalesce(to_regclass('d1_private.sem_settings_access_log')::text, 'gone');
+SELECT 'se_dn_functions:' || (SELECT count(*) FROM pg_proc WHERE pronamespace = 'd1_private'::regnamespace AND proname IN ('save_sem_settings', 'correct_sem_setting', 'sem_clean_number', 'sem_try_timestamptz'));
+SELECT 'se_dn_column:' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_candidates' AND column_name = 'classified_by');
+$se_down
+$se_up
+SELECT 'se_up_tables:' || (to_regclass('d1_private.sem_image_settings') IS NOT NULL) || ',' || (to_regclass('d1_private.sem_settings_access_log') IS NOT NULL);
+SELECT 'se_up_ret:' || d1_private.save_sem_settings('$SE_F1', '{"kv": 2.0}'::jsonb, 'sem-2');
+$se_down
+SELECT 'se_redown_tables:' || coalesce(to_regclass('d1_private.sem_image_settings')::text, 'gone');
+ROLLBACK;
+SQL
+)
+se_check() { grep -qx "$1" <<<"$se_out" && ok "$2" || bad "$2 (psql output: $se_out)"; }
+se_check "se_dn_tables:gone,gone" "down: both tables are dropped"
+se_check "se_dn_functions:0" "down: the four functions are dropped"
+se_check "se_dn_column:0" "down: file_candidates.classified_by is dropped"
+se_check "se_up_tables:true,true" "up after down: both tables are back"
+se_check "se_up_ret:t" "up after down: save_sem_settings works"
+se_check "se_redown_tables:gone" "down runs again after up (and a second down in a row does nothing)"
+fi
+
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
