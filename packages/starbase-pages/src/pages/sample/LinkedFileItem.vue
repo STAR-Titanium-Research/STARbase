@@ -7,17 +7,18 @@ import { createSemSettings } from '../../inbox/useSemSettings';
 
 // One linked file of a record: its name with the copy, open or download buttons, and for an SEM image its imaging settings (the owner may
 // correct them, anyone else who may read the file only reads them). A file the reader may not see is a locked file and nothing else (ADR-0022):
-// a lock and "A file from another person's folder", no name, no values, no link, no owner. Directus says so by leaving only the file's id in the
+// a lock and "A file from another person's folder", no name, no values, no link, no owner. Directus says so by answering `directus_files_id: null` in the
 // junction row (kind 'locked'); the settings route says so too (`locked: true`), and then a name Directus did let through is taken off the row.
 const props = defineProps<{ file: LinkedFile }>();
 
 const host = useExplorerHost();
 const { state, rows, canEdit, error, editing, draft, saving, fieldError, load, start, cancel, save, cancelPending } = createSemSettings(host.api, () => props.file.id);
 
-// Only these formats are ever read as an SEM image (the crawler decodes TIFF, JPEG, PNG and BMP): any other file has no settings to ask for.
+// Only these formats are ever read as an SEM image (the crawler decodes TIFF, JPEG, PNG and BMP): any other file has no settings to ask for. And only
+// a Directus file linked through data_files: a share path (operation_files) has no directus_files id, so the route would only ever answer locked.
 const IMAGE_NAME = /\.(tiff?|png|jpe?g|bmp)$/i;
-const asks = computed(() => props.file.kind !== 'locked' && IMAGE_NAME.test(props.file.name));
-const locked = computed(() => props.file.kind === 'locked' || state.value === 'locked');
+const asks = computed(() => props.file.source === 'data_files' && props.file.kind !== 'locked' && IMAGE_NAME.test(props.file.name));
+const locked = computed(() => props.file.kind === 'locked' || (asks.value && state.value === 'locked'));
 
 watch(
 	() => [props.file.id, asks.value] as const,

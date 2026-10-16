@@ -2264,8 +2264,11 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   out of range (kV 99, magnification 5000.5) shows the server's message beside the field and keeps the box open; a time typed as UK local time is
   saved with the right offset (check a summer and a winter time). As B the same page shows a lock and "A file from another person's folder" and
   nothing else (no name, no values, no download or copy-path button, no owner; the page source and network tab hold no filename), and B's Directus
-  read of `/items/physical_samples/<id>?fields=data_files.directus_files_id.id` returns the bare id for that file, not an object (the page relies on
-  that to know the file is locked without asking). As an administrator the page shows the values and no Edit control, and the access log gains a row.
+  read of `/items/physical_samples/<id>?fields=data_files.id,data_files.directus_files_id.id` returns, for that file, a row with its own `id` present and
+  `directus_files_id` **null** (not an object and not the bare file id; the page relies on that null to know the file is locked without asking, as `hiddenLinks.ts`
+  documents for row filters); look at the page too: the lock row is shown for it and the Files count includes it (a count one short means the null row was dropped).
+  The same Files section on an operation page also lists legacy share paths (`operation_files`, administrators): a `.tif` there must still show its name
+  and copy-path buttons, never the lock. As an administrator the page shows the values and no Edit control, and the access log gains a row.
   For a file with no owner (linked before migration 196) a reader of the sample sees the values with no Edit control. The same Files section on an
   operation page and a test page behaves the same. Since: STARbase imaging settings and locked files (stream F of the SEM reader plan).
 
