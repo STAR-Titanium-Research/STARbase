@@ -25,6 +25,16 @@ RANGES: dict[str, tuple[float, float]] = {
     "spot": (1, 10),
 }
 
+# Micrometres per printed length unit (a scale-bar label), shared by the text parser and the bar reader. The key
+# stored is `scale_bar_um`, a number, never the printed label.
+UM_PER: dict[str, float] = {
+    "nm": 0.001,
+    "um": 1.0,
+    "\u00b5m": 1.0,  # micro sign
+    "\u03bcm": 1.0,  # Greek mu
+    "mm": 1000.0,
+}
+
 _CREATED_FORMAT = "%d.%m.%Y %H:%M:%S"  # [PrivateFei] TimeOfCreation
 _USER_DATE_FORMAT = "%m/%d/%Y"  # [User] Date
 _USER_TIME = re.compile(r"\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])?[Mm]?\s*$")

@@ -307,9 +307,34 @@ def test_a_failing_ocr_keeps_the_tag_and_invents_nothing():
 
 
 def test_ocr_without_the_package_installed_keeps_the_tag(monkeypatch):
-    monkeypatch.setitem(sys.modules, "pytesseract", None)  # import raises ImportError
+    # INBOX_OCR=1 with no rapidocr in the image: the JEOL tag survives, and nothing is read
+    monkeypatch.setitem(
+        sys.modules, "rapidocr_onnxruntime", None
+    )  # import raises ImportError
     c = classify_jeol(make_sem(), ocr=True)
     assert c.kind == "sem_image" and c.extracted == {"instrument": "JEOL"}
+
+
+def test_jeol_ocr_runs_only_with_a_caller_supplied_function():
+    # pytesseract was never installed or validated: there is no default text OCR any more
+    assert not hasattr(csem, "default_ocr")
+    c = classify_jeol(make_sem(), ocr=True)
+    assert c.extracted == {"instrument": "JEOL"}
+
+
+def test_a_bar_only_jeol_strip_is_not_worth_ocr():
+    # capped below the claim threshold without JEOL metadata, so reading its text would be wasted work
+    calls = []
+
+    # boom() would be swallowed by the profile's own try/except, so record the call instead
+    def spy(bar):
+        calls.append(bar)
+        return "15.0kV x5,000"
+
+    c = classify(make_sem(), ocr=True, ocr_func=spy)
+    assert c.kind == "image" and calls == []
+    assert classify_jeol(make_sem(), ocr=True, ocr_func=spy).kind == "sem_image"
+    assert len(calls) == 1  # with JEOL metadata the text is worth reading
 
 
 @pytest.mark.parametrize(
@@ -460,14 +485,14 @@ class FixedProfile:
     def __init__(self, name, conf, extracted=None):
         self.name, self.conf, self.extracted = name, conf, extracted or {}
 
-    def inspect(self, img, ocr, ocr_func):
+    def inspect(self, img, ocr, ocr_func, bar_reader=None):
         return csem.ProfileResult(self.conf, self.extracted, self.name)
 
 
 class BrokenProfile:
     name = "broken"
 
-    def inspect(self, img, ocr, ocr_func):
+    def inspect(self, img, ocr, ocr_func, bar_reader=None):
         raise ValueError("bug in a profile")
 
 

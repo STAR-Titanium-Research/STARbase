@@ -298,3 +298,466 @@ def test_classified_by_defaults_to_empty_for_a_name_only_kind():
 
 def test_the_default_profiles_are_jeol_then_fei():
     assert [p.name for p in csem.PROFILES] == ["JEOL", "FEI"]
+
+
+# ---- the data bar read by OCR (SEM reader spec section 2, tier 2) --------------------------------------
+#
+# The recogniser is a scripted fake (the real one needs rapidocr); the bars are drawn by the sem_bar tests'
+# `make_bar`, imported lazily because that module needs numpy and this one does not.
+
+
+def _kit():
+    pytest.importorskip("numpy")
+    import test_inbox_crawler_sem_bar as kit
+
+    return kit
+
+
+def make_cell_image(kit, headers=None, values=None, *, scale_len=None, white=255):
+    """A noisy 'micrograph' with a header/value cell bar under it (the bar `make_bar` draws)."""
+    headers = kit.HEADERS6 if headers is None else headers
+    values = kit.VALUES6 if values is None else values
+    bar = kit.make_bar(headers, values, scale_len, w=W, h=BAR_H, white=white)
+    img = Image.new("L", (W, IMG_H + BAR_H))
+    img.paste(Image.effect_noise((W, IMG_H), 30).convert("L"), (0, 0))
+    img.paste(bar, (0, IMG_H))
+    return img
+
+
+def encode_cell(img, fmt="PNG", *, text=None, model=None) -> io.BytesIO:
+    ifd = TiffImagePlugin.ImageFileDirectory_v2()
+    if text is not None:
+        ifd[34682] = text
+    if model is not None:
+        ifd[272] = model
+    b = io.BytesIO()
+    if fmt == "TIFF":
+        img.save(b, format="TIFF", tiffinfo=ifd)
+    else:
+        img.save(b, format=fmt)
+    b.seek(0)
+    return b
+
+
+def reader_for(kit, headers=None, values=None, conf=0.8):
+    return kit.Scripted(
+        kit.interleave(
+            kit.HEADERS6 if headers is None else headers,
+            kit.VALUES6 if values is None else values,
+            conf,
+        )
+    )
+
+
+def forbidden_reader(_crops):
+    raise AssertionError("the bar reader ran")
+
+
+def test_png_bar_with_two_labels_is_sem_image_when_ocr_on():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit)), ocr=True, bar_reader=reader_for(kit)
+    )
+    assert c.kind == "sem_image", c.reason
+    assert c.confidence == pytest.approx(0.8)
+    assert c.extracted["kv"] == 20.0
+    assert c.extracted["sources"]["kv"] == "ocr"
+    assert c.extracted["working_distance_mm"] == 10.3
+    assert c.extracted["magnification"] == 1200
+    assert c.extracted["spot"] == 3.0
+    assert c.extracted["detector"] == "ETD" and c.extracted["mode"] == "SE"
+    assert set(c.extracted["sources"].values()) == {"ocr"}
+    assert c.extracted["flags"] == {
+        "check_this": True
+    }  # nothing could vouch for a bar alone
+    assert c.classified_by == "sem-2"
+    assert json.loads(json.dumps(c.extracted)) == c.extracted
+
+
+def test_png_bar_ocr_off_stays_image():
+    kit = _kit()
+    c = classify(encode_cell(make_cell_image(kit)), bar_reader=forbidden_reader)
+    assert c.kind == "image" and c.extracted == {}
+    assert c.reason == "data-bar-like strip, no SEM evidence"
+
+
+def test_one_label_is_not_enough():
+    kit = _kit()
+    only_hv = kit.Scripted(
+        kit.interleave(["HV", "", "", "", "", ""], kit.VALUES6)
+    )  # every other header unreadable
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=only_hv)
+    assert c.kind == "image" and c.extracted == {} and c.confidence is None
+
+
+def test_two_labels_are_enough_even_if_a_value_is_garbage():
+    kit = _kit()
+    values = ["~~", "", "", "", "", ""]
+    got = reader_for(kit, ["HV", "WD", "", "", "", ""], values)
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=got)
+    assert c.kind == "sem_image" and c.confidence == pytest.approx(0.8)
+    assert "kv" not in c.extracted and c.extracted["flags"]["kv"] == "not_a_number"
+
+
+def test_the_scale_label_alone_is_not_a_label():
+    kit = _kit()
+    # one header label (HV) and the scale-bar cell: the scale label is not one of the two labels a claim needs
+    headers = ["HV", "", "", "", "", "", "100μm"]
+    values = ["20.00 kV", "", "", "", "", "", ""]
+    img = make_cell_image(kit, ["x"] * 7, values)
+    c = classify(
+        encode_cell(img), ocr=True, bar_reader=reader_for(kit, headers, values)
+    )
+    assert c.kind == "image"
+
+
+def test_png_bar_checks_the_scale_bar_length():
+    kit = _kit()
+    headers = kit.HEADERS6 + ["10μm"]
+    values = ["20.00 kV", "ETD", "10.3 mm", "3 000 x", "SE", "3.0", ""]
+    px = round(10 * 3000 * W / (0.2984 * 1e6))  # a 10 µm bar at 3 000 x
+    img = make_cell_image(kit, headers, values, scale_len=px)
+    c = classify(
+        encode_cell(img), ocr=True, bar_reader=reader_for(kit, headers, values)
+    )
+    assert c.kind == "sem_image"
+    assert c.extracted["scale_bar_um"] == 10.0
+    assert c.extracted["magnification"] == 3000
+    assert "check_this" not in c.extracted["flags"]
+    # the same label over a bar of the wrong length: the label is dropped and noted
+    img = make_cell_image(kit, headers, values, scale_len=px // 2)
+    c = classify(
+        encode_cell(img), ocr=True, bar_reader=reader_for(kit, headers, values)
+    )
+    assert c.kind == "sem_image"
+    assert "scale_bar_um" not in c.extracted and "magnification" not in c.extracted
+    assert c.extracted["flags"]["scale_bar_um"] == "length_mismatch"
+    assert c.extracted["flags"]["magnification"] == "length_mismatch"
+
+
+def test_contrast_edited_png_is_read_the_same():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit, white=207)),
+        ocr=True,
+        bar_reader=reader_for(kit),
+    )
+    assert c.kind == "sem_image" and c.extracted["kv"] == 20.0
+
+
+def test_optical_microscope_with_a_readable_bar_stays_image():
+    kit = _kit()
+    fh = encode_cell(make_cell_image(kit), "TIFF", model="Microscope x20")
+    c = classify(fh, ocr=True, bar_reader=reader_for(kit))
+    assert c.kind == "image" and "optical" in c.reason and c.extracted == {}
+
+
+def test_a_picture_without_a_bar_never_reaches_the_reader():
+    c = classify(
+        encode_cell(make_fei_image(bar=False), "PNG"),
+        ocr=True,
+        bar_reader=forbidden_reader,
+    )
+    assert c.kind == "image"
+
+
+def test_metadata_wins_over_bar_and_mismatch_is_noted():
+    kit = _kit()
+    # FEI_TEXT says 2.0 kV, 15.9 mm, spot 3.5, ETD/SE, and a field width that gives 40x
+    values = ["20.00 kV", "ETD", "15.9 mm", "40×", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values),
+    )
+    assert c.kind == "sem_image"
+    assert c.confidence == pytest.approx(0.95)  # metadata plus bar structure
+    assert c.extracted["kv"] == 2.0 and c.extracted["sources"]["kv"] == "metadata"
+    assert c.extracted["flags"]["kv"] == "bar_mismatch"
+    # what agrees is not flagged and is not overwritten
+    assert c.extracted["working_distance_mm"] == 15.92
+    assert c.extracted["magnification"] == 40
+    assert c.extracted["spot"] == 3.5
+    assert set(c.extracted["flags"]) == {"kv"}
+
+
+def test_a_bar_that_agrees_with_the_metadata_adds_no_flag():
+    kit = _kit()
+    values = ["2.00 kV", "ETD", "15.9 mm", "40×", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values),
+    )
+    assert c.extracted["kv"] == 2.0 and c.extracted["flags"] == {}
+    assert set(c.extracted["sources"].values()) <= {"metadata", "derived"}
+
+
+def test_a_bar_magnification_that_contradicts_the_field_width_is_a_mismatch():
+    kit = _kit()
+    values = ["2.00 kV", "ETD", "15.9 mm", "200 x", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values),
+    )
+    assert c.extracted["magnification"] == 40  # the metadata's, derived
+    assert c.extracted["sources"]["magnification"] == "derived"
+    assert c.extracted["flags"]["magnification"] == "bar_mismatch"
+
+
+def test_detector_mismatch_is_noted():
+    kit = _kit()
+    values = ["2.00 kV", "CDEM", "15.9 mm", "40×", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values),
+    )
+    assert c.extracted["detector"] == "ETD"
+    assert c.extracted["flags"]["detector"] == "bar_mismatch"
+
+
+def test_the_bar_fills_what_the_metadata_does_not_state():
+    kit = _kit()
+    headers = kit.HEADERS6 + ["10μm"]
+    values = ["2.00 kV", "ETD", "15.9 mm", "3 000 x", "SE", "3.5", ""]
+    text = FEI_TEXT.replace("HFW=0.00745157", "HFW=0.0000994667")  # 0.2984 / 3 000 x
+    px = round(10 * 3000 * W / (0.2984 * 1e6))
+    img = make_cell_image(kit, headers, values, scale_len=px)
+    c = classify(
+        encode_cell(img, "TIFF", text=text),
+        ocr=True,
+        bar_reader=reader_for(kit, headers, values),
+    )
+    assert c.extracted["magnification"] == 3000
+    assert c.extracted["scale_bar_um"] == 10.0
+    assert c.extracted["sources"]["scale_bar_um"] == "ocr"
+    assert c.extracted["sources"]["kv"] == "metadata"
+
+
+def test_metadata_tiff_with_ocr_off_does_not_run_the_reader():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit), "TIFF", text=FEI_TEXT),
+        bar_reader=forbidden_reader,
+    )
+    assert c.kind == "sem_image" and c.extracted["flags"] == {}
+
+
+def test_reader_exception_does_not_lose_the_image():
+    kit = _kit()
+
+    def broken(_crops):
+        raise RuntimeError("onnxruntime exploded")
+
+    tiff = encode_cell(make_cell_image(kit), "TIFF", text=FEI_TEXT)
+    c = classify(tiff, ocr=True, bar_reader=broken)
+    assert c.kind == "sem_image" and c.extracted["kv"] == 2.0  # still from metadata
+    assert c.extracted["flags"] == {}
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=broken)
+    assert c.kind == "image" and c.extracted == {}  # no metadata: a plain image
+
+
+def test_a_recogniser_with_the_wrong_answer_count_reads_nothing():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit)),
+        ocr=True,
+        bar_reader=lambda crops: [("HV", 0.9), ("20 kV", 0.9)],
+    )
+    assert c.kind == "image"
+
+
+def test_the_default_reader_is_built_from_the_device_variable(monkeypatch):
+    kit = _kit()
+    from inbox_crawler import sem_bar
+
+    seen = []
+
+    def fake_default(device="cpu"):
+        seen.append(device)
+        return reader_for(kit)
+
+    monkeypatch.setattr(sem_bar, "default_bar_reader", fake_default)
+    monkeypatch.setenv("INBOX_OCR_DEVICE", "auto")
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True)
+    assert c.kind == "sem_image" and seen == ["auto"]
+    monkeypatch.delenv("INBOX_OCR_DEVICE")
+    classify(encode_cell(make_cell_image(kit)), ocr=True)
+    assert seen == ["auto", "cpu"]
+
+
+def test_an_explicit_reader_means_no_default_reader(monkeypatch):
+    kit = _kit()
+    from inbox_crawler import sem_bar
+
+    def boom(device="cpu"):
+        raise AssertionError("the default reader was built")
+
+    monkeypatch.setattr(sem_bar, "default_bar_reader", boom)
+    c = classify(
+        encode_cell(make_cell_image(kit)), ocr=True, bar_reader=reader_for(kit)
+    )
+    assert c.kind == "sem_image"
+
+
+def test_ocr_on_without_rapidocr_keeps_the_metadata_image(monkeypatch):
+    kit = _kit()
+    from inbox_crawler import sem_bar
+
+    monkeypatch.setattr(sem_bar, "_READERS", {})
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", None)  # the import fails
+    tiff = encode_cell(make_cell_image(kit), "TIFF", text=FEI_TEXT)
+    c = classify(tiff, ocr=True)
+    assert c.kind == "sem_image" and c.extracted["kv"] == 2.0
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True)
+    assert c.kind == "image"
+
+
+def test_the_default_recogniser_wraps_rapidocr(monkeypatch):
+    kit = _kit()
+    from inbox_crawler import sem_bar
+
+    built = []
+
+    class FakeRecogniser:
+        def __call__(self, crops):
+            return [("20.00 kV", 0.91)] * len(crops), 0.01
+
+    class FakeRapidOCR:
+        def __init__(self, **kw):
+            built.append(kw)
+            self.text_recognizer = FakeRecogniser()
+
+    fake_module = type(sys)("rapidocr_onnxruntime")
+    fake_module.RapidOCR = FakeRapidOCR
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", fake_module)
+    monkeypatch.setattr(sem_bar, "_READERS", {})
+    reader = sem_bar.default_bar_reader("cpu")
+    assert sem_bar.default_bar_reader("CPU") is reader  # built once per process
+    assert len(built) == 1
+    assert reader([object(), object()]) == [("20.00 kV", 0.91)] * 2
+    assert reader([]) == []
+    assert kit  # numpy is there (the module under test imports it)
+
+
+def test_an_unknown_device_means_cpu(monkeypatch):
+    _kit()
+    from inbox_crawler import sem_bar
+
+    class FakeRapidOCR:
+        def __init__(self, **kw):
+            self.text_recognizer = lambda crops: ([], 0)
+
+    fake_module = type(sys)("rapidocr_onnxruntime")
+    fake_module.RapidOCR = FakeRapidOCR
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", fake_module)
+    monkeypatch.setattr(sem_bar, "_READERS", {})
+    assert sem_bar.default_bar_reader("tpu") is sem_bar.default_bar_reader("cpu")
+
+
+def test_cuda_without_a_gpu_falls_back_to_cpu(monkeypatch):
+    _kit()
+    from inbox_crawler import sem_bar
+
+    class FakeRapidOCR:
+        def __init__(self, **kw):
+            self.text_recognizer = lambda crops: ([("x", 0.5)] * len(crops), 0)
+
+    fake_module = type(sys)("rapidocr_onnxruntime")
+    fake_module.RapidOCR = FakeRapidOCR
+    fake_ort = type(sys)("onnxruntime")
+    fake_ort.get_available_providers = lambda: ["CPUExecutionProvider"]
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", fake_module)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr(sem_bar, "_READERS", {})
+    for device in ("cuda", "auto"):
+        assert sem_bar.default_bar_reader(device)([1]) == [("x", 0.5)]
+
+
+# ---- OCR confidence is recorded in extracted (coordinator ruling R10), never a threshold --------------------
+
+
+def test_a_bar_only_claim_carries_the_ocr_confidence():
+    kit = _kit()
+    got = kit.Scripted(
+        [
+            ("HV", 0.9),
+            ("20.00 kV", 0.734),
+            ("det", 0.9),
+            ("ETD", 0.6),
+            ("WD", 0.9),
+            ("10.3 mm", 0.605),
+            ("mag", 0.9),
+            ("1 200 x", 0.99),
+            ("mode", 0.9),
+            ("SE", 0.5),
+            ("spot", 0.9),
+            ("3.0", 0.999),
+        ]
+    )
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=got)
+    assert c.kind == "sem_image"
+    conf = c.extracted["ocr_confidence"]
+    assert conf["kv"] == 0.73
+    assert conf == {
+        "kv": 0.73,
+        "detector": 0.6,
+        "working_distance_mm": 0.6,  # 0.605 rounds half to even
+        "magnification": 0.99,
+        "mode": 0.5,
+        "spot": 1.0,
+    }
+    assert set(conf) == set(c.extracted["sources"])  # exactly the fields read by OCR
+    assert (
+        json.loads(json.dumps(c.extracted)) == c.extracted
+    )  # survives a JSON round trip
+
+
+def test_a_low_confidence_value_is_kept_and_recorded():
+    kit = _kit()
+    c = classify(
+        encode_cell(make_cell_image(kit)),
+        ocr=True,
+        bar_reader=reader_for(kit, conf=0.51),
+    )
+    assert c.extracted["kv"] == 20.0 and c.extracted["ocr_confidence"]["kv"] == 0.51
+
+
+def test_a_metadata_claim_has_no_ocr_confidence():
+    kit = _kit()
+    assert "ocr_confidence" not in classify(make_fei_tiff()).extracted
+    # OCR on, and the bar agrees: nothing came from the bar, so nothing to record
+    values = ["2.00 kV", "ETD", "15.9 mm", "40×", "SE", "3.5"]
+    c = classify(
+        encode_cell(make_cell_image(kit, values=values), "TIFF", text=FEI_TEXT),
+        ocr=True,
+        bar_reader=reader_for(kit, values=values, conf=0.7),
+    )
+    assert c.extracted["kv"] == 2.0 and "ocr_confidence" not in c.extracted
+
+
+def test_a_value_the_bar_adds_to_metadata_has_its_confidence_recorded():
+    kit = _kit()
+    headers = kit.HEADERS6 + ["10μm"]
+    values = ["2.00 kV", "ETD", "15.9 mm", "3 000 x", "SE", "3.5", ""]
+    text = FEI_TEXT.replace("HFW=0.00745157", "HFW=0.0000994667")
+    px = round(10 * 3000 * W / (0.2984 * 1e6))
+    c = classify(
+        encode_cell(
+            make_cell_image(kit, headers, values, scale_len=px), "TIFF", text=text
+        ),
+        ocr=True,
+        bar_reader=reader_for(kit, headers, values, conf=0.876),
+    )
+    assert c.extracted["scale_bar_um"] == 10.0
+    assert c.extracted["ocr_confidence"] == {"scale_bar_um": 0.88}
+    assert json.loads(json.dumps(c.extracted)) == c.extracted
+
+
+def test_a_claim_with_no_value_read_has_no_ocr_confidence():
+    kit = _kit()
+    got = reader_for(kit, ["HV", "WD", "", "", "", ""], ["~~", "", "", "", "", ""])
+    c = classify(encode_cell(make_cell_image(kit)), ocr=True, bar_reader=got)
+    assert c.kind == "sem_image" and "ocr_confidence" not in c.extracted

@@ -183,6 +183,7 @@ class Scanner:
         lookup: recognise.Lookup | None = None,
         ocr: bool = False,
         ocr_func=None,
+        bar_reader=None,
         profiles=None,
         stop=lambda: False,
         activity=lambda text: None,
@@ -195,6 +196,7 @@ class Scanner:
         self.lookup = lookup
         self.ocr = ocr
         self.ocr_func = ocr_func
+        self.bar_reader = bar_reader
         self.profiles = profiles
         self.stop = stop
         self.activity = activity
@@ -643,6 +645,7 @@ class Scanner:
                     io.BytesIO(hashed.data),
                     ocr=self.ocr,
                     ocr_func=self.ocr_func,
+                    bar_reader=self.bar_reader,
                     profiles=self.profiles,
                 )
                 if cls.reason.startswith("not decoded"):
