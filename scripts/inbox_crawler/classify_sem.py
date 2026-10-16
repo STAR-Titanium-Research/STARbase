@@ -67,33 +67,44 @@ class SemProfile(Protocol):
 
 # ---- text parsing (metadata, OCR) -------------------------------------------------------
 
-_KV = re.compile(r"(\d+(?:\.\d+)?)\s*kV", re.I)
+_KV = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*kV", re.I
+)  # the lookbehind keeps a long digit run linear
+_SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
+_NUM = rf"\d{{1,3}}(?:{_SEP}\d{{3}}){{1,2}}|\d{{1,6}}"  # at most 999 999 999: bounds the scan of a long digit run
 _MAG = re.compile(
+    # "x5,000" or "×250" (the sign first, commas only: a space would swallow the next number)
     r"(?:(?<![A-Za-z0-9])[x×]\s?(\d{1,3}(?:,\d{3})+|\d{2,6})(?![\d.]))"
-    r"|(?:\bmag\w*\s*[=:]\s*(\d{1,3}(?:,\d{3})+|\d{2,6})\b)",
+    # "mag: 5000"
+    r"|(?:\bmag\w*\s*[=:]\s*(\d{1,3}(?:,\d{3})+|\d{2,6})\b)"
+    # "1 200 x", "40×", "3 000 x" (an instrument bar prints the sign last, thin spaces between thousands)
+    rf"|(?:(?<![\d.,])({_NUM})\s*[x×](?![A-Za-z0-9]))",
     re.I,
 )
 _SCALE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(nm|µm|μm|um|mm)(?![A-Za-z])", re.I)
-_UNITS = {
-    "nm": "nm",
-    "mm": "mm",
-    "um": "\u00b5m",
-    "\u00b5m": "\u00b5m",
-    "\u03bcm": "\u00b5m",
+# micrometres per unit: the key is scale_bar_um, a number, never the printed label
+_UM_PER = {
+    "nm": 0.001,
+    "um": 1.0,
+    "\u00b5m": 1.0,  # micro sign
+    "\u03bcm": 1.0,  # Greek mu
+    "mm": 1000.0,
 }
 _WD = re.compile(r"\bWD\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm", re.I)
 
 
 def parse_text(text: str, *, scale_bar: bool = False) -> dict:
     """The values a block of text states: kV, magnification, working distance (and, for a data bar read
-    by OCR, the scale-bar label). Only what is there; absent keys stay absent."""
+    by OCR, the scale-bar label as `scale_bar_um`, a number of micrometres). Only what is there; absent keys
+    stay absent."""
     out: dict = {}
     m = _KV.search(text)
     if m:
         out["kv"] = float(m.group(1))
     m = _MAG.search(text)
     if m:
-        out["magnification"] = int(re.sub(",", "", m.group(1) or m.group(2)))
+        digits = m.group(1) or m.group(2) or m.group(3)
+        out["magnification"] = int(re.sub(_SEP, "", digits))
     m = _WD.search(text)
     if m:
         out["working_distance_mm"] = float(m.group(1))
@@ -102,8 +113,9 @@ def parse_text(text: str, *, scale_bar: bool = False) -> dict:
         for s in _SCALE.finditer(text):
             if wd_end and wd_end.start() <= s.start() < wd_end.end():
                 continue  # the working distance is not the scale bar
-            unit = _UNITS[s.group(2).lower()]
-            out["scale_bar"] = f"{s.group(1)} {unit}"
+            out["scale_bar_um"] = round(
+                float(s.group(1)) * _UM_PER[s.group(2).lower()], 6
+            )
             break
     return out
 
