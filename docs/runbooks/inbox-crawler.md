@@ -254,6 +254,17 @@ an export that was resized or cropped still gets its own size per pixel. When th
 the metadata's value: on the trial images 192.3 against 194.3 nm and 724.6 against 728.5 nm. A bar-derived value that is more than 5% from the
 metadata's is flagged `bar_mismatch` on that field.
 
+## Frames that are probably from a TEM
+
+A JEOL transmission electron microscope writes its history as an XML block (`<TemReporter2 ... JEOL.EO.EM.Libraries.TemReporter>`) into the
+TIFF description (a JPEG export carries it as a comment). Because it names JEOL, the JEOL profile used to file such a frame under
+*Possible SEM image* at confidence 0.65, with no values. The classifier now recognises the marker and keeps the file a plain `image`, with
+`extracted = {"possible_tem": true, "instrument": "JEOL"}` and the reason "possible TEM image (JEOL TEM metadata), not an SEM". There is no
+kind of its own yet: find them with
+`SELECT rel_path FROM d1_private.file_candidates WHERE extracted->>'possible_tem' = 'true'`. On live, 22 files in three of one person's
+folders (`.../TEM/Sam/...`, `x40k_150mm_BFBottom_...tif` and its JPEG) were the first. The next `--reclassify` (after clearing their
+`classified_by`, because the classifier version is unchanged) tags them.
+
 ## Thumbnails
 
 Each image and SEM image gets two small derived pictures, a thumbnail (about 320 px on the long side) and a
