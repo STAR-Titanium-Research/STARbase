@@ -242,6 +242,18 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   alone (rows flagged missing by an older run stay flagged: clear `metadata.missing` by hand if it matters).
   When the indexer moves a file, the crawler re-reads its candidates' paths from the pointer rows first.
 
+## Measuring on an image (scale)
+
+For a later measurement the size of one pixel is what counts. A TIFF with FEI metadata carries it (`pixel_size_nm`, `hfw_um`, source
+`metadata`). An image without metadata (a PNG, JPEG or BMP export, with `INBOX_OCR=1`) gets it from its own scale bar: when the printed
+label (`scale_bar_um`), the magnification and the bar's measured length agree (the 5% cross-check), the crawler stores the bar's length in
+pixels (`scale_bar_px`, in `extracted`), the image's width (`image_width_px`), `pixel_size_nm` = label / length and `hfw_um` = that times the
+width, all with source `derived` (the last two are also saved in the imaging settings). Because the bar is measured on the image itself,
+an export that was resized or cropped still gets its own size per pixel. When the check fails or no bar line is found nothing is stored
+(`scale_bar_um` carries `length_mismatch` or `check_this`). The bar's length is a few pixels in a few hundred, so expect about 1% against
+the metadata's value: on the trial images 192.3 against 194.3 nm and 724.6 against 728.5 nm. A bar-derived value that is more than 5% from the
+metadata's is flagged `bar_mismatch` on that field.
+
 ## Thumbnails
 
 Each image and SEM image gets two small derived pictures, a thumbnail (about 320 px on the long side) and a

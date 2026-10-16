@@ -41,6 +41,9 @@ CANVAS_M = (
     0.2984 * 0.858,
 )  # `magnification x HFW` (metres) on real files: two screen widths
 MAG_TOLERANCE = 0.02  # a printed 40x is a rounded 40.05
+# Calculated from the bar's pixel length and its label once the length check passed (`parse_bar`), not read: the bar's length in pixels
+# and the image's width, the size of one pixel and the field width they give. Their source is `derived`.
+DERIVED_KEYS = frozenset({"scale_bar_px", "image_width_px", "pixel_size_nm", "hfw_um"})
 SCALE_TOLERANCE = 0.05  # the scale-bar label against the bar's pixel length
 
 MIN_CELL_PX = 12  # a narrower strip between dividers is not a cell
@@ -94,7 +97,7 @@ class BarValues:
 
     @property
     def sources(self) -> dict:
-        return {key: "ocr" for key in self.values}
+        return {key: "derived" if key in DERIVED_KEYS else "ocr" for key in self.values}
 
 
 # ---- cells ----------------------------------------------------------------------------------
@@ -362,6 +365,14 @@ def parse_bar(
             )
             if abs(out.values["scale_bar_um"] - implied) <= SCALE_TOLERANCE * implied:
                 confirmed = True
+                # label, magnification and the bar's length agree, so the label over the length is the size of one pixel of
+                # THIS image (an export that was resized or cropped carries its own bar): kept for later measurements.
+                # Calculated, not read, so no recogniser confidence is recorded for them (DERIVED_KEYS).
+                um = out.values["scale_bar_um"]
+                out.values["scale_bar_px"] = int(scale_px)
+                out.values["image_width_px"] = int(image_width)
+                out.values["pixel_size_nm"] = round(um * 1000 / scale_px, 4)
+                out.values["hfw_um"] = round(um * image_width / scale_px, 3)
             else:
                 # the field width (canvas) had vouched for the magnification: only the label goes
                 for key in (

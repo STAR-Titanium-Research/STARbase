@@ -355,6 +355,9 @@ _BAR_TOLERANCE = {  # how far the bar's printed value may be from the metadata's
     "magnification": lambda meta: max(
         1.0, 0.02 * meta
     ),  # a printed 40x is a rounded 40.05
+    # calculated from the bar's pixel length and its label: a pixel or two of the bar is a percent of it, as in `sem_bar.SCALE_TOLERANCE`
+    "pixel_size_nm": lambda meta: 0.05 * meta,
+    "hfw_um": lambda meta: 0.05 * meta,
 }
 _warned: dict[
     str, bool
@@ -369,7 +372,11 @@ def _warn_once(kind: str, message: str, *args) -> None:
 def _confidence_of(parsed, keys) -> dict:
     """The recogniser's confidence for each of `keys` the bar read, rounded to 2 decimals. Recorded for whoever
     looks at the value later, never a threshold (correct reads scored as low as 0.60)."""
-    return {key: round(parsed.confidence[key], 2) for key in keys}
+    return {
+        key: round(parsed.confidence[key], 2)
+        for key in keys
+        if key in parsed.confidence
+    }
 
 
 def _squash(text) -> str:
@@ -479,7 +486,7 @@ class FeiProfile:
                     flags[key] = "bar_mismatch"
             elif key not in flags:
                 meta[key] = bar_value
-                sources[key] = "ocr"
+                sources[key] = parsed.sources[key]
                 meta.setdefault("ocr_confidence", {}).update(
                     _confidence_of(parsed, [key])
                 )

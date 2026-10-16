@@ -396,6 +396,33 @@ def test_scale_bar_cross_check():
     assert r.flags["scale_bar_um"] == "length_mismatch"
 
 
+def test_a_confirmed_scale_bar_gives_the_size_of_one_pixel_for_later_measurements():
+    px = scale_px_for(100, 1200)
+    r = parse(read_of(mag="1 200 x", scale="100μm"), scale_px=px)
+    assert r.values["scale_bar_px"] == px and r.values["image_width_px"] == W
+    assert r.values["pixel_size_nm"] == pytest.approx(100 * 1000 / px, rel=1e-4)
+    assert r.values["hfw_um"] == pytest.approx(100 * W / px, rel=1e-4)
+    # calculated, not read: their source is `derived` and no recogniser confidence is recorded for them
+    assert r.sources["pixel_size_nm"] == "derived" and r.sources["hfw_um"] == "derived"
+    assert r.sources["scale_bar_px"] == "derived" and r.sources["scale_bar_um"] == "ocr"
+    assert "pixel_size_nm" not in r.confidence and "scale_bar_um" in r.confidence
+
+
+def test_no_pixel_size_when_the_bar_was_not_confirmed_or_not_measured():
+    px = scale_px_for(100, 1200)
+    for read, scale_px in (
+        (
+            read_of(mag="1 200 x", scale="100μm"),
+            round(px * 0.8),
+        ),  # length mismatch: the label is dropped
+        (read_of(mag="1 200 x", scale="100μm"), None),  # no bar line measured
+        (read_of(scale="100μm"), px),  # nothing to check the label against
+    ):
+        r = parse(read, scale_px=scale_px)
+        for key in ("pixel_size_nm", "hfw_um", "scale_bar_px", "image_width_px"):
+            assert key not in r.values, (scale_px, key)
+
+
 def test_scale_bar_cross_check_edges():
     px = scale_px_for(100, 1200)
     for factor, ok in ((0.96, True), (1.04, True), (0.9, False), (1.1, False)):
