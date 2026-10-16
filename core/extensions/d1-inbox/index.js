@@ -26,14 +26,15 @@
 //                                      to a caller who can READ it. meta.acceptable (null unless the query has acceptable=1: it reads
 //                                      candidates and checks edit rights) = how many rows Accept all would link for the same filter.
 //                                      FoundFile.has_thumbnail (boolean, additive): true when the crawler stored thumbnails for the file (kinds image and
-//                                      sem_image only). The bytes are never part of the list.
+//                                      sem_image only; a failure marker row, thumb NULL, does not count). The bytes are never part of the list.
 //   GET  /d1-inbox/files/:candidate_id/thumb | /preview
 //                                   -> the stored picture itself, NOT a { data } envelope: 200 image/jpeg (thumb about 320 px, preview about 1600 px: a reduced
-//                                      copy, never the original) with Cache-Control: private, max-age=3600 and a strong ETag (md5 of the bytes); 304 with no body
-//                                      when If-None-Match matches. Visible to exactly who sees the file in the list (canSee: the owner person's login, an
+//                                      copy, never the original) with Cache-Control: private, no-cache (the browser may keep the picture but asks again every time,
+//                                      so canSee runs on every request) and a strong ETag (md5 of the bytes, computed per request, not stored); 304 with no body
+//                                      when If-None-Match matches (sent only after canSee). Vary: Cookie, Authorization. Visible to exactly who sees the file in the list (canSee: the owner person's login, an
 //                                      active member of the owner team, administrators); 404 NOT_FOUND (the usual Directus-shaped JSON error) when the id is
-//                                      not a uuid, the candidate does not exist, is gone or is not the caller's to see, or has no picture: the same answer for
-//                                      all four, so no id is confirmed. Read-only: allowed to a Lab Viewer.
+//                                      not a uuid, the candidate does not exist, is gone or is not the caller's to see, or has no picture (no row, or a failure
+//                                      marker row): the same answer for all of them, so no id is confirmed; a 404 carries no ETag and no caching headers. Read-only: allowed to a Lab Viewer.
 //   POST /d1-inbox/link             { items: [{ candidate_id, collection, record_id } | <a surface scan>] }  (1 to 200, one transaction)
 //                                   -> { data: { link_batch_id, linked: <count of newly linked>, items: [{ candidate_id, collection, record_id,
 //                                                junction_id, adopted, already_linked? }] } }   link_batch_id is null and linked 0 when every item
@@ -224,7 +225,10 @@ const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_i
 const IDS = "string_to_array(?, ',')::uuid[]";
 // The two pictures the crawler stores per image candidate: the route's last segment -> the column of d1_private.file_thumbnails.
 const PICTURES = { thumb: 'thumb', preview: 'preview' };
-const PICTURE_CACHE_CONTROL = 'private, max-age=3600';
+// no-cache, not max-age: a browser that kept a picture for an hour would show it without the server running canSee (a shared lab PC, a person removed from a team).
+// no-cache lets it keep the bytes but revalidate every time; the 304 is only answered after canSee. Vary tells caches the answer depends on who asks.
+const PICTURE_CACHE_CONTROL = 'private, no-cache';
+const PICTURE_VARY = 'Cookie, Authorization';
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
 // lists once the original is LINKED, or DISMISSED BY THE SAME OWNER (the same person or team). Another owner dismissing their file must not hide yours: a
@@ -371,13 +375,15 @@ export const SQL = {
   // Which of the files already have a surface scan (any insert or edge). Binding: the file ids as one csv. Only asked where the table exists.
   scansOfFiles: `SELECT DISTINCT directus_files_id FROM surface_scans WHERE directus_files_id = ANY(${IDS})`,
   scanById: 'SELECT scan_id AS id, insert_id, edge_id, directus_files_id FROM surface_scans WHERE scan_id = ?',
-  // The picture routes. Step 1 (cheap, no bytes): who owns the candidate and does a picture pair exist, with the md5 of the chosen picture as its ETag. The
-  // owner columns go through canSee, the list's own predicate. Step 2 (only when the caller may see it and the ETag is not already theirs): the bytes.
-  // The column is chosen from the closed PICTURES map below, never from the request.
+  // The picture routes. Step 1 (cheap, no bytes): who owns the candidate and does a picture exist, with the md5 of the chosen picture as its ETag (NULL for a
+  // failure marker row, whose pictures are NULL: that is a 404 like no row). The ETag is computed by the database on every request, not stored (md5 of a few
+  // hundred KB is cheap next to moving them). The owner columns go through canSee, the list's own predicate. Step 2 (only when the caller may see it and the
+  // ETag is not already theirs): the bytes AND their md5 in ONE query, so the ETag sent always belongs to the bytes sent, even if the picture was replaced
+  // between the two steps. The column is chosen from the closed PICTURES map below, never from the request.
   thumbMeta: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind,
     `SELECT c.owner_person_id, c.owner_team_id, c.state, md5(t.${column}) AS etag FROM d1_private.file_candidates c`
     + ' JOIN d1_private.file_thumbnails t ON t.candidate_id = c.candidate_id WHERE c.candidate_id = ?'])),
-  thumbBytes: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind, `SELECT t.${column} AS bytes FROM d1_private.file_thumbnails t WHERE t.candidate_id = ?`])),
+  thumbBytes: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind, `SELECT md5(t.${column}) AS etag, t.${column} AS bytes FROM d1_private.file_thumbnails t WHERE t.candidate_id = ?`])),
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
   junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
@@ -559,7 +565,7 @@ const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_down
   + " coalesce(sj.sample_id, oj.operation_id, tj.session_id, CASE WHEN c.linked_collection = 'surface_scans' THEN c.linked_junction_id END) AS linked_record_id,"
   + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
   + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at,'
-  + ' EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id) AS has_thumbnail';
+  + ' EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id AND th.thumb IS NOT NULL) AS has_thumbnail';
 const LIST_FROM = ' FROM d1_private.file_candidates c'
   + ' LEFT JOIN directus_files f ON f.id = c.directus_files_id'
   + ' LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
@@ -1426,22 +1432,29 @@ export function mount(router, context, deps = {}) {
 
   // GET /files/:candidate_id/thumb | /preview: the stored JPEG itself, never a { data } envelope (so no res.json on success). Visible to exactly who sees the
   // file in the list: the owner columns go through canSee, the one visibility predicate (an administrator sees all, as there). Every reason to refuse is the
-  // same 404. The ETag is the md5 of the stored bytes (the database computes it, so a 304 never moves the bytes); the bytes are read only when needed.
+  // same 404, and a 404 never carries caching headers: ETag, Cache-Control and Vary are set only immediately before the 304 or the 200 goes out. The ETag is the
+  // md5 of the stored bytes (the database computes it, per request, so a 304 never moves the bytes); the 200 reads the bytes and their md5 together.
   const pictureRoute = (kind) => route(async ({ req, res, acc }) => {
     const id = isUuid(req.params?.candidate_id) ? req.params.candidate_id.toLowerCase() : null;
     if (id === null) throw ERRORS.noPicture();
     const scope = await scopeOf(acc);
     const [meta] = rowsOf(await database.raw(SQL.thumbMeta[kind], [id]));
-    if (!meta || meta.state === 'gone' || !canSee(scope, meta)) throw ERRORS.noPicture();
-    const etag = `"${meta.etag}"`;
-    res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', PICTURE_CACHE_CONTROL);
-    if (etagMatches(req.headers?.['if-none-match'], etag)) {
+    // a failure marker row has no picture (etag NULL): the same 404
+    if (!meta || meta.state === 'gone' || !canSee(scope, meta) || typeof meta.etag !== 'string' || meta.etag === '') throw ERRORS.noPicture();
+    const cachingHeaders = (etag) => {
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', PICTURE_CACHE_CONTROL);
+      res.setHeader('Vary', PICTURE_VARY);
+    };
+    if (etagMatches(req.headers?.['if-none-match'], `"${meta.etag}"`)) {
+      cachingHeaders(`"${meta.etag}"`);
       res.status(304).end();
       return;
     }
+    // the row may have vanished, or become a marker, since step 1: a 404 then, with nothing set yet
     const [row] = rowsOf(await database.raw(SQL.thumbBytes[kind], [id]));
-    if (!row || !Buffer.isBuffer(row.bytes) || row.bytes.length === 0) throw ERRORS.noPicture();
+    if (!row || !Buffer.isBuffer(row.bytes) || row.bytes.length === 0 || typeof row.etag !== 'string' || row.etag === '') throw ERRORS.noPicture();
+    cachingHeaders(`"${row.etag}"`);
     res.status(200);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Content-Length', String(row.bytes.length));
