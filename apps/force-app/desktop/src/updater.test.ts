@@ -344,7 +344,7 @@ describe('update-downloaded dialog release notes (R13)', () => {
   it('trims very long notes', async () => {
     const detail = await dialogDetail('x '.repeat(5000));
     expect(detail.length).toBeLessThan(2000);
-    expect(detail).toContain('full notes: https://github.com/dpremoli/D1-Database/releases');
+    expect(detail).toContain('full notes: https://github.com/STAR-Titanium-Research/STARbase/releases');
   });
 });
 

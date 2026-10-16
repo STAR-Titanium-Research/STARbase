@@ -11,7 +11,7 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
-    [string]$Repo = 'dpremoli/D1-Database'
+    [string]$Repo = 'STAR-Titanium-Research/STARbase'
 )
 $ErrorActionPreference = 'Stop'
 

@@ -6,7 +6,7 @@ argument-hint: [label or issue numbers, default all open in-app reports]
 
 # Triage the in-app bug reports
 
-The app files reports through `bug-report-relay` as issues on `dpremoli/D1-Database` with the labels
+The app files reports through `bug-report-relay` as issues on `STAR-Titanium-Research/STARbase` with the labels
 `force-app`, `in-app-report`, `bug` or `enhancement`, and one `area:*` (`gui`, `recording`,
 `plotting`, `diagnostics`, `settings`, `labamp`, `nidaq`, `general`). The body has the app
 version, route, diagnostics and a redacted log tail.

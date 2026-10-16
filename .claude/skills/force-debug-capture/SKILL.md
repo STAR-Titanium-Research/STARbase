@@ -22,7 +22,7 @@ from the GitHub issue.
 
 | Source | How |
 |---|---|
-| In-app bug report | GitHub issue on `dpremoli/D1-Database`, labelled `force-app` + `in-app-report` (+ `bug`, `area:*`). The body carries the app version, route, diagnostics and the log tail. Read it with the GitHub MCP tools |
+| In-app bug report | GitHub issue on `STAR-Titanium-Research/STARbase`, labelled `force-app` + `in-app-report` (+ `bug`, `area:*`). The body carries the app version, route, diagnostics and the log tail. Read it with the GitHub MCP tools |
 | Capture folder | `python3 .claude/skills/force-debug-capture/inspect_capture.py <folder or captures root>`. It checks raw/manifest/summary/cache/.mat consistency, the incomplete state, tacho, clipping and the `.mat` skip |
 | Backend log | `backend.log` (+3 rotated) in `log_dir`, or `GET <backend_url>/logs?level=WARNING&q=<capture id>&limit=2000` on the rig |
 | Live state | `GET /record/status`, `/recovery/check`, `/health/check` (the Connectivity Doctor's data), `/backup/status`, `/backup/remote-sessions` |

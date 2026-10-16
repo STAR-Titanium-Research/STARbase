@@ -166,7 +166,7 @@ onMounted(async () => {
 		<div class="changelog-head mt">
 			<h2>What's new</h2>
 			<!-- #43 -->
-			<a href="https://github.com/dpremoli/D1-Database/releases" target="_blank" rel="noopener" class="releases-link">
+			<a href="https://github.com/STAR-Titanium-Research/STARbase/releases" target="_blank" rel="noopener" class="releases-link">
 				<span class="material-symbols-rounded">open_in_new</span> View all releases on GitHub
 			</a>
 		</div>
