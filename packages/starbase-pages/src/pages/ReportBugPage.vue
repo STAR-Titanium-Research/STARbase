@@ -73,9 +73,8 @@ async function send() {
 
 <template>
 	<ExplorerView title="Report a bug">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell narrow>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Report a bug</span></nav>
-
 			<Section title="Report a bug or ask for a feature">
 				<form class="rb-form" @submit.prevent="send">
 					<p class="rb-hint">

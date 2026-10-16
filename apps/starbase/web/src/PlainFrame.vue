@@ -14,32 +14,31 @@ watchEffect(() => {
 <template>
 	<div class="sb-frame">
 		<header class="sb-frame-head">
+			<slot name="title-outer:prepend" />
 			<div v-if="$slots.headline" class="sb-headline"><slot name="headline" /></div>
-			<div class="sb-title-row">
-				<slot name="title-outer:prepend" />
-				<h1 class="sb-title">{{ title }}</h1>
-				<div class="sb-actions"><slot name="actions" /></div>
-			</div>
+			<h1 class="sb-title">{{ title }}</h1>
+			<div class="sb-actions"><slot name="actions" /></div>
 		</header>
 		<div class="sb-frame-body"><slot /></div>
 	</div>
 </template>
 
 <style scoped>
-.sb-frame { --d1-header-offset: 58px; min-height: 100%; }
+/* One row: [back button] Home › Title ............ actions. The breadcrumb is the title's prefix, not a line of its own. */
+.sb-frame { --d1-header-offset: 52px; min-height: 100%; }
 .sb-frame-head {
-	position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: 50px; padding: 4px var(--content-padding, 32px) 0;
-	display: flex; flex-direction: column; justify-content: center;
+	position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: 44px; padding: 0 var(--content-padding, 32px);
+	display: flex; align-items: center; gap: 8px; min-width: 0;
 	background: var(--theme--background); border-bottom: 1px solid var(--theme--border-color-subdued);
 }
-.sb-headline { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued); }
-.sb-headline :deep(.crumb) { cursor: pointer; }
-.sb-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.sb-title { margin: 0; flex: 1 1 auto; min-width: 0; font-size: var(--fs-xl, 18px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-headline { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; font-size: var(--fs-md, 13px); color: var(--theme--foreground-subdued); }
+.sb-headline::after { content: '\203A'; }
+.sb-headline :deep(a), .sb-headline :deep(.crumb) { color: inherit; font-weight: 500; text-decoration: none; cursor: pointer; }
+.sb-headline :deep(a:hover), .sb-headline :deep(.crumb:hover) { color: var(--theme--foreground); text-decoration: underline; }
+.sb-title { margin: 0; flex: 1 1 auto; min-width: 0; font-size: var(--fs-lg, 15px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-actions { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 767px) {
-	.sb-frame-head { position: static; height: auto; min-height: 56px; padding-top: 8px; padding-bottom: 8px; }
-	.sb-title { font-size: var(--fs-lg, 15px); white-space: normal; }
-	.sb-actions { flex-wrap: wrap; }
+	.sb-frame-head { position: static; height: auto; min-height: 44px; padding-top: 6px; padding-bottom: 6px; flex-wrap: wrap; }
+	.sb-title { white-space: normal; }
 }
 </style>

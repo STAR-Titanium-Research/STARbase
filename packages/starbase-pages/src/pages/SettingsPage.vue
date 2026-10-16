@@ -16,8 +16,8 @@ const saves = useSaves();
 
 <template>
 	<ExplorerView title="Settings">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell narrow>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Settings</span></nav>
 			<AppearanceSection :saves="saves" />
 			<SidebarSection :saves="saves" />
 			<PinnedSection :saves="saves" />
