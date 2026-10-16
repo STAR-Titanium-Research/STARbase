@@ -1,4 +1,4 @@
-"""One-shot passes over candidates that already exist: `--reclassify` (and, in this module too, `--sem-backfill`).
+"""One-shot passes over rows that already exist: `--reclassify` and `--sem-backfill`.
 
 Both run under the crawler's advisory lock (`__main__` takes it, so a daemon, a `--once` run and a pass are
 never alongside each other) and read an image only through the share's read-only `open_rb` (the allow-list
@@ -10,6 +10,14 @@ looked at, because a detector fix changes what `kind` and `extracted` should be:
 detector recognises, demotes a `sem_image` it no longer believes, and records the version, so a second run
 finds nothing and a killed run resumes. A `linked` row is never touched. An unreadable file is recorded as
 classified (and logged) so it is not retried in a loop.
+
+`sem_backfill` (spec section 7) gives the images people linked BEFORE settings were saved at link time their
+imaging settings: pointer rows that are linked, image-typed, unowned and have no `sem_image_settings` row. Each
+is read, classified, and when it is an SEM image `save_sem_settings` (migration 197, the only place `extracted`
+becomes settings, merging and never overwriting a person's correction) writes the row. A run visits each row
+once (it walks the files ids in order), a row that got settings leaves the list, so a killed run is finished by
+the next; an unreadable file is logged and skipped (and tried again by the next run, as is an SEM image whose
+read gave no value: INBOX_OCR may be on by then).
 """
 
 from __future__ import annotations
@@ -20,6 +28,8 @@ from dataclasses import dataclass
 
 from . import classify_sem, db, hashing, scan
 from .fs_readonly import ReadRefused
+from .identity import file_id
+from .owners import clean_rel_path
 
 log = logging.getLogger("inbox_crawler.maintenance")
 
@@ -148,6 +158,90 @@ def reclassify(
         stats.unreadable,
         stats.too_large,
         stats.decided,
+        " (STOPPED, run it again to finish)" if stop() else "",
+    )
+    return stats
+
+
+READ_BY = "backfill"  # sem_image_settings.read_by for rows this pass writes
+
+
+@dataclass
+class BackfillStats:
+    saved: int = 0  # an SEM image whose settings row now exists
+    not_sem: int = 0  # read, not an SEM image: nothing written
+    no_values: int = 0  # an SEM image with no usable value (a bar-only image without OCR): no row, tried again later
+    unreadable: int = (
+        0  # not read (permission, vanished, too large, refused): logged, skipped
+    )
+    bad_path: int = 0  # the stored path is not the file's own: never read
+
+    @property
+    def examined(self) -> int:
+        return (
+            self.saved + self.not_sem + self.no_values + self.unreadable + self.bad_path
+        )
+
+
+def sem_backfill(
+    store: db.Store,
+    share,
+    *,
+    throttle: hashing.Throttle | None = None,
+    ocr: bool = False,
+    ocr_func=None,
+    bar_reader=None,
+    profiles=None,
+    stop=lambda: False,
+    batch: int = BATCH,
+) -> BackfillStats:
+    """Read each linked, unowned, image-typed pointer row that has no settings and save what the image says.
+    One commit per file. The path is the row's metadata.archive_path, believed only when it is clean and the
+    row's id is the indexer's uuid5 of it (any Lab Member can edit the metadata)."""
+    stats = BackfillStats()
+    after: str | None = None
+    while not stop():
+        rows = store.backfill_batch(batch, after)
+        store.commit()
+        if not rows:
+            break
+        for fid, rel in rows:
+            if stop():
+                break
+            after = fid
+            if not clean_rel_path(rel) or str(file_id(rel)) != fid:
+                stats.bad_path += 1
+                log.warning("not reading file %s: its stored path is not its own", fid)
+                continue
+            data, problem = read_image(share, rel, throttle)
+            if data is None:
+                stats.unreadable += 1
+                log.warning("not reading %s for settings: %s; skipped", rel, problem)
+                continue
+            cls = classify_sem.classify_image(
+                io.BytesIO(data),
+                ocr=ocr,
+                ocr_func=ocr_func,
+                bar_reader=bar_reader,
+                profiles=profiles,
+            )
+            if cls.kind != "sem_image":
+                stats.not_sem += 1
+                continue
+            if store.save_sem_settings(fid, cls.extracted, READ_BY):
+                stats.saved += 1
+            else:
+                stats.no_values += 1
+                log.info("%s is an SEM image but gave no usable value", rel)
+            store.commit()
+    log.info(
+        "sem-backfill: %d saved, %d not an SEM image, %d SEM images with no usable value, "
+        "%d unreadable, %d with a path that is not their own%s",
+        stats.saved,
+        stats.not_sem,
+        stats.no_values,
+        stats.unreadable,
+        stats.bad_path,
         " (STOPPED, run it again to finish)" if stop() else "",
     )
     return stats

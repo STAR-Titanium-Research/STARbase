@@ -1,4 +1,4 @@
-"""python -m inbox_crawler --daemon | --once | --reclassify
+"""python -m inbox_crawler --daemon | --once | --reclassify | --sem-backfill
 
 Environment:
     DATABASE_URL               required, the Postgres DSN (never printed).
@@ -25,6 +25,13 @@ Modes (exactly one; each takes the single-crawler database lock and exits 1 when
                   sem_image or demoted to image, and stamped with the version. Never touches a linked row;
                   resumable and idempotent (a second run reads nothing); an unreadable file is logged and
                   marked, not retried. Logs the promoted, demoted and unchanged counts. Exit 0.
+    --sem-backfill  one pass over the pointer rows that are linked (to a sample, operation, test session or
+                  surface scan), image-typed, unowned (no provenance owner) and have no imaging-settings row:
+                  each is read through the read-only share (throttled, INBOX_OCR as above), and when it is an
+                  SEM image d1_private.save_sem_settings writes its settings (read_by 'backfill'; a person's
+                  corrections are never overwritten, and a re-read that carries fewer values keeps the
+                  stored ones). Resumable, one visit per row per run; an unreadable file is logged and
+                  skipped. Logs the saved count. Exit 0.
 """
 
 from __future__ import annotations
@@ -70,6 +77,11 @@ def _parse(argv):
         "--reclassify",
         action="store_true",
         help="re-read undecided image candidates with the current classifier version, then exit",
+    )
+    mode.add_argument(
+        "--sem-backfill",
+        action="store_true",
+        help="save imaging settings for linked, unowned SEM images that have none, then exit",
     )
     ap.add_argument(
         "--root",
@@ -131,8 +143,9 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
     if not root_ok:
         log.error("ARCHIVE_ROOT does not exist or is not a directory: %s", args.root)
         return 2
+    one_pass = args.reclassify or args.sem_backfill
     linker = None
-    if not args.reclassify:  # a pass over existing rows never auto-links
+    if not one_pass:  # a pass over existing rows never auto-links
         try:
             linker = autolink.AutoLinker(
                 os.environ.get("D1_INBOX_URL", "http://directus:8055"),
@@ -161,7 +174,7 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         )
         return 1
     stop = threading.Event()
-    if args.reclassify:
+    if one_pass:
         return _run_pass(args, store, share, stop)
     d = daemon.Daemon(
         store,
@@ -209,7 +222,7 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
 
 
 def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
-    """--reclassify: one pass under the lock the caller took. SIGTERM or SIGINT stops it between files (what
+    """--reclassify or --sem-backfill: one pass under the lock the caller took. SIGTERM or SIGINT stops it between files (what
     is done is committed; run it again to finish)."""
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
@@ -220,7 +233,7 @@ def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
         throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
     log.info("reading %s READ-ONLY", args.root)
     try:
-        maintenance.reclassify(
+        (maintenance.reclassify if args.reclassify else maintenance.sem_backfill)(
             store,
             share,
             throttle=throttle,

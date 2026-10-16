@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from . import classify_sem, identity, owners, recognise
-from .fs_readonly import extension
+from .fs_readonly import IMAGE_EXTENSIONS, extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
 from .owners import Owner, clean_rel_path
@@ -1043,6 +1043,50 @@ class Store:
             )
             > 0
         )
+
+    # ---- the imaging-settings back-fill (--sem-backfill) -------------------------------------
+
+    def backfill_batch(
+        self, limit: int, after: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Pointer rows the SEM back-fill may read: image-typed (an extension of fs_readonly.IMAGE_EXTENSIONS),
+        linked in one of the four tables migration 196 counts (the three junctions and surface_scans, the same
+        set as `already_linked`), unowned (both owner columns null) and without a `sem_image_settings` row.
+        Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
+        so one run visits each row once; the caller checks the path is the file's own before it reads
+        anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
+        scans = (
+            " OR EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = f.id)"
+            if self._has_surface_scans()
+            else ""
+        )
+        exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
+        rows = self._all(
+            "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
+            "WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL "
+            "  AND f.metadata::jsonb->>'archive_path' ~* %s "
+            "  AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = f.id) "
+            "    OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = f.id) "
+            "    OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = f.id)"
+            + scans
+            + ") "
+            "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
+            "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "
+            "ORDER BY f.id LIMIT %s",
+            (r"\.(" + exts + ")$", after, after, limit),
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def save_sem_settings(self, files_id: str, extracted: dict, read_by: str) -> bool:
+        """The ONLY place `extracted` becomes settings is the SQL function `save_sem_settings` (migration
+        197); this calls it. It MERGES (a key `extracted` does not carry keeps its stored value, a person's
+        correction is never overwritten) and returns whether a row exists afterwards. The function is named
+        bare: the connection's search_path puts the private schema (d1_private) first."""
+        row = self._one(
+            "SELECT save_sem_settings(%s, %s::jsonb, %s)",
+            (files_id, json.dumps(extracted), read_by),
+        )
+        return bool(row and row[0])
 
     # ---- auto-link ---------------------------------------------------------------------
 
