@@ -1,0 +1,16 @@
+{
+  "description": "a file the caller may not read: HTTP 200, locked, and no value, source or flag at all",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/sem-settings",
+    "query": {
+      "file": "00000000-0000-4000-8000-000000003001"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "locked": true
+    }
+  }
+}

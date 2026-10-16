@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import numpy
 from PIL import Image, ImageOps
 
-from .sem_meta import RANGES, UM_PER
+from .sem_meta import DIVIDER_BRIGHT_FRAC, DIVIDER_ROW_FRAC, RANGES, SEP, um_of
 
 log = logging.getLogger("inbox_crawler.sem_bar")
 
@@ -45,10 +45,6 @@ SCALE_TOLERANCE = 0.05  # the scale-bar label against the bar's pixel length
 
 MIN_CELL_PX = 12  # a narrower strip between dividers is not a cell
 INSET_PX = 2  # crops stay this far inside a cell, off the divider and the top row
-DIVIDER_ROW_FRAC = (
-    0.9  # a divider column is bright in more than this share of the body rows ...
-)
-DIVIDER_BRIGHT_FRAC = 0.4  # ... where bright is above this share of the bar's maximum
 SPLIT_BAND = (
     0.3,
     0.7,
@@ -89,13 +85,16 @@ class BarCell:
 @dataclass
 class BarValues:
     """What the bar states, in the keys of `extracted`: `values` (numeric, unit in the key, absent when unknown),
-    `sources` (every kept key `ocr`), `flags` (why a value is absent or unconfirmed) and `confidence` (the
+    `sources` (every kept key `ocr`, derived from `values`), `flags` (why a value is absent or unconfirmed) and `confidence` (the
     recogniser's score for each kept key; recorded, never a threshold)."""
 
     values: dict = field(default_factory=dict)
-    sources: dict = field(default_factory=dict)
     flags: dict = field(default_factory=dict)
     confidence: dict = field(default_factory=dict)
+
+    @property
+    def sources(self) -> dict:
+        return {key: "ocr" for key in self.values}
 
 
 # ---- cells ----------------------------------------------------------------------------------
@@ -146,11 +145,13 @@ def cut_cells(bar) -> list[BarCell]:
     return cells if len(cells) >= MIN_CELLS else []
 
 
-def scale_bar_length_px(bar) -> int | None:
+def scale_bar_length_px(bar, cells: list[BarCell] | None = None) -> int | None:
     """The scale bar's length in pixels, or None: the longest run of bright pixels of at least 20 px in any single
     row of the rightmost cell. The top row is not looked at, and a run that spans the whole cell is a divider row,
-    not a scale bar. "Bright" is relative (200 of 255 of the bar's maximum) so a contrast-edited bar still reads."""
-    cells = cut_cells(bar)
+    not a scale bar. "Bright" is relative (200 of 255 of the bar's maximum) so a contrast-edited bar still reads.
+    `cells` are the bar's `cut_cells` when the caller already has them."""
+    if cells is None:
+        cells = cut_cells(bar)
     if not cells:
         return None
     a = numpy.asarray(_gray(bar))
@@ -183,13 +184,17 @@ def _prepare(crop) -> numpy.ndarray:
     )
 
 
-def read_bar(bar, recognise: Recogniser) -> dict[str, tuple[str, float]]:
+def read_bar(
+    bar, recognise: Recogniser, cells: list[BarCell] | None = None
+) -> dict[str, tuple[str, float]]:
     """The text of each field the bar shows, `{key: (text, confidence)}` with key one of `hv det wd mag mode spot
     scale`. One `recognise` call reads every crop (a header and a value per cell, in cell order). A header is
     matched by its start (`hv`, `det`, `wd`, `mag`, `mode`, `spot`; others are ignored); when no header matches but
     it reads like a length (`40 µm`), the cell is the scale bar and that label is the `scale` text. `{}` when the
-    bar has no cells or the recogniser did not answer for every crop."""
-    cells = cut_cells(bar)
+    bar has no cells or the recogniser did not answer for every crop. `cells` are the bar's `cut_cells` when the
+    caller already has them."""
+    if cells is None:
+        cells = cut_cells(bar)
     if not cells:
         return {}
     crops = []
@@ -219,9 +224,8 @@ def read_bar(bar, recognise: Recogniser) -> dict[str, tuple[str, float]]:
 # ---- parsing and checks ---------------------------------------------------------------------
 
 _DECIMAL = re.compile(r"\d+(?:[.,]\d+)?")
-_SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
-_INT_CHAIN = re.compile(rf"\d+(?:{_SEP}\d+)*")
-_SEP_SPLIT = re.compile(_SEP)
+_INT_CHAIN = re.compile(rf"\d+(?:{SEP}\d+)*")
+_SEP_SPLIT = re.compile(SEP)
 _SCALE_TEXT = re.compile(r"(\d+(?:[.,]\d+)?)\s*(nm|µm|μm|um|mm)(?![A-Za-z])", re.I)
 _TEXT_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .+/-]{0,23}")
 
@@ -256,7 +260,7 @@ def _scale_label_um(text: str) -> float | None:
     m = _SCALE_TEXT.search(text)
     if m is None:
         return None
-    return round(float(re.sub(",", ".", m.group(1))) * UM_PER[m.group(2).lower()], 6)
+    return um_of(re.sub(",", ".", m.group(1)), m.group(2))
 
 
 def _canvas_of(magnification: int, hfw_um: float) -> float | None:
@@ -291,8 +295,11 @@ def parse_bar(
 
     def keep(key: str, value, conf: float) -> None:
         out.values[key] = value
-        out.sources[key] = "ocr"
         out.confidence[key] = conf
+
+    def drop(key: str, flag: str) -> None:
+        del out.values[key], out.confidence[key]
+        out.flags[key] = flag
 
     def numeric(cell: str, key: str, parse: Callable[[str], float | None]) -> None:
         if cell not in read:
@@ -330,16 +337,13 @@ def parse_bar(
                 out.flags[key] = "unparseable"
 
     confirmed = False
-    mag_by_hfw = False
     canvas = None
     if "magnification" in out.values and hfw_um is not None and hfw_um > 0:
         canvas = _canvas_of(out.values["magnification"], hfw_um)
         if canvas is None:
-            for table in (out.values, out.sources, out.confidence):
-                del table["magnification"]
-            out.flags["magnification"] = "hfw_mismatch"
+            drop("magnification", "hfw_mismatch")
         else:
-            confirmed = mag_by_hfw = True
+            confirmed = True
     if "scale_bar_um" in out.values and "magnification" in out.values:
         if scale_px and image_width > 0:
             # the screen width the field width identified, else the first constant (nothing says which applies)
@@ -352,15 +356,13 @@ def parse_bar(
             if abs(out.values["scale_bar_um"] - implied) <= SCALE_TOLERANCE * implied:
                 confirmed = True
             else:
-                dropped = (
+                # the field width (canvas) had vouched for the magnification: only the label goes
+                for key in (
                     ["scale_bar_um"]
-                    if mag_by_hfw
+                    if canvas is not None
                     else ["scale_bar_um", "magnification"]
-                )
-                for key in dropped:
-                    for table in (out.values, out.sources, out.confidence):
-                        del table[key]
-                    out.flags[key] = "length_mismatch"
+                ):
+                    drop(key, "length_mismatch")
     if out.values and not confirmed:
         out.flags["check_this"] = True
     return out
@@ -369,9 +371,9 @@ def parse_bar(
 # ---- the default recogniser -----------------------------------------------------------------
 
 _CPU, _CUDA = "CPUExecutionProvider", "CUDAExecutionProvider"
-_READERS: dict[
-    str, Recogniser
-] = {}  # one recogniser per device and process (the models load once)
+# One recogniser per device and process (the models load once). A device whose rapidocr import failed holds that
+# ImportError instead, so every later bar fails at once and the import is not retried for each image.
+_READERS: dict[str, Recogniser | ImportError] = {}
 
 
 def _on_cuda(recogniser) -> str:
@@ -414,9 +416,15 @@ def default_bar_reader(device: str = "cpu") -> Recogniser:
         log.warning("INBOX_OCR_DEVICE=%r is not auto, cpu or cuda: using cpu", device)
         device = "cpu"
     cached = _READERS.get(device)
+    if isinstance(cached, ImportError):
+        raise type(cached)(*cached.args)
     if cached is not None:
         return cached
-    from rapidocr_onnxruntime import RapidOCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        _READERS[device] = exc
+        raise
 
     recogniser = RapidOCR(use_text_det=False, use_angle_cls=False).text_recognizer
     provider = _CPU

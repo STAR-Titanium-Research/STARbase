@@ -7007,6 +7007,46 @@ CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
 CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
+-- stream D (ADR-0022): the imaging settings the link saves through d1_private.save_sem_settings and the undo removes. File ...0101 is saved; ...0103 has a
+-- sample junction row, ...0107 a surface scan row and ...0105 no link: after the undo's delete only ...0105's settings are gone.
+CREATE TEMP TABLE ib_sv AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000101', '{"kv": 15, "magnification": 5000, "ocr_confidence": {"kv": 0.9}}', 'inbox');
+SELECT 'ib_sem_saved:' || saved FROM ib_sv;
+SELECT 'ib_sem_row:' || kv || ':' || magnification || ':' || read_by FROM d1_private.sem_image_settings WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000101';
+CREATE TEMP TABLE ib_sv2 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000103', '{"kv": 10}', 'inbox');
+CREATE TEMP TABLE ib_sv3 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000105', '{"kv": 10}', 'inbox');
+CREATE TEMP TABLE ib_sv4 AS EXECUTE savesemsettings('a1b00000-0000-4000-8000-000000000107', '{"kv": 10}', 'inbox');
+-- (ib_run's row count is 0 for a DELETE through EXECUTE, so the rows left are checked)
+SELECT pg_temp.ib_run(format('EXECUTE deleteunlinkedsemsettings(%L)', 'a1b00000-0000-4000-8000-000000000103,a1b00000-0000-4000-8000-000000000105,a1b00000-0000-4000-8000-000000000107')) AS ib_sd \gset
+SELECT 'ib_sem_kept:' || coalesce(string_agg(right(directus_files_id::text, 3), ',' ORDER BY directus_files_id), '') FROM d1_private.sem_image_settings;
+-- the owner of a file, for the settings route's decision (the same row read back)
+UPDATE directus_files SET owner_person_id = '$IB_P' WHERE id = 'a1b00000-0000-4000-8000-000000000101';
+CREATE TEMP TABLE ib_sf AS EXECUTE semfile('a1b00000-0000-4000-8000-000000000101');
+SELECT 'ib_sem_file:' || (owner_person_id = '$IB_P')::text || ':' || (owner_team_id IS NULL)::text FROM ib_sf;
+CREATE TEMP TABLE ib_sg AS EXECUTE semsettingsget('a1b00000-0000-4000-8000-000000000101');
+SELECT 'ib_sem_get:' || kv || ':' || magnification || ':' || coalesce(sources ->> 'kv', '-') FROM ib_sg;
+-- the owner's correction: the value, the manual mark, the user; a field that is not a setting and a value out of range are refused
+SELECT 'ib_sem_correct:' || pg_temp.ib_run(format('EXECUTE semcorrect(%L, %L, %L, %L)', 'a1b00000-0000-4000-8000-000000000101', 'kv', '20', '$IB_U')) AS ib_cc \gset
+SELECT 'ib_sem_corrected:' || kv || ':' || (sources ->> 'kv') || ':' || (corrected_by = '$IB_U')::text FROM d1_private.sem_image_settings WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000101';
+CREATE TEMP TABLE ib_sflags (v text);
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE semcorrect(%L, %L, %L, %L)', 'a1b00000-0000-4000-8000-000000000101', 'read_by', '"x"', '$IB_U'));
+  INSERT INTO ib_sflags VALUES ('read_by:changed');
+EXCEPTION WHEN invalid_parameter_value THEN INSERT INTO ib_sflags VALUES ('read_by:refused');
+END \$\$;
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE semcorrect(%L, %L, %L, %L)', 'a1b00000-0000-4000-8000-000000000101', 'kv', '99', '$IB_U'));
+  INSERT INTO ib_sflags VALUES ('kv99:changed');
+EXCEPTION WHEN invalid_parameter_value THEN INSERT INTO ib_sflags VALUES ('kv99:refused');
+END \$\$;
+DO \$\$ BEGIN
+  PERFORM pg_temp.ib_run(format('EXECUTE semaccessloginsert(%L, %L, %L)', 'a1b00000-0000-4000-8000-000000000101', '$IB_U', '  '));
+  INSERT INTO ib_sflags VALUES ('blank_reason:inserted');
+EXCEPTION WHEN check_violation THEN INSERT INTO ib_sflags VALUES ('blank_reason:refused');
+END \$\$;
+SELECT 'ib_sem_refused:' || string_agg(v, ',' ORDER BY v) FROM ib_sflags;
+-- an administrator's read is logged with a reason (ib_run's row count is 0 through EXECUTE, so the table is read back)
+SELECT pg_temp.ib_run(format('EXECUTE semaccessloginsert(%L, %L, %L)', 'a1b00000-0000-4000-8000-000000000101', '$IB_U', 'admin_read')) AS ib_sl \gset
+SELECT 'ib_sem_log_row:' || count(*) || ':' || min(reason) FROM d1_private.sem_settings_access_log WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000101';
 -- Ignored folders (spec section 15): the rule statements, run on rows of their own after everything above (ids a1b00000-...-0000000002NN).
 INSERT INTO directus_files (id) SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(g::text, 2, '0'))::uuid FROM generate_series(1, 7) g;
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES
@@ -7144,6 +7184,14 @@ SQL
     ib_check "ib_scan_list_linked_kept:a1b00000-0000-4000-8000-000000000006" "the linked tab keeps a scan file after the exclusion variant (it is only for undecided tabs)"
     ib_check "ib_scan_linked:1:linked:surface_scans" "a surface scan add passes the link CHECKs (linked_collection surface_scans with the scan id as the junction id)"
     ib_check "ib_scan_list:a1b00000-0000-4000-8000-000000000006" "the Recently linked list names the scan id as the linked record without joining a table that may not exist yet"
+    ib_check "ib_sem_saved:true" "stream D: save_sem_settings (called as the link calls it) saves a row and answers true"
+    ib_check "ib_sem_row:15.00:5000:inbox" "stream D: the saved row holds the mapped keys and read_by inbox; ocr_confidence is ignored by the function"
+    ib_check "ib_sem_kept:101,103,107" "stream D: undo's delete removes the settings of a file with no link left (105) and keeps those of a file still linked (103 sample junction row, 107 surface scan row)"
+    ib_check "ib_sem_file:true:true" "stream D: the settings route reads the file's owner columns from directus_files"
+    ib_check "ib_sem_get:15.00:5000:-" "stream D: the settings route reads the row (values as numeric text; no source is invented when extracted carried none)"
+    ib_check "ib_sem_corrected:20.00:manual:true" "stream D: a correction sets the value, marks it manual and names the user"
+    ib_check "ib_sem_refused:blank_reason:refused,kv99:refused,read_by:refused" "stream D: a correction of read_by, or of kv out of range, is refused (the route answers 400), and so is a blank log reason"
+    ib_check "ib_sem_log_row:1:admin_read" "stream D: an administrator's read inserts one access log row with the reason admin_read"
     ib_check "ib_prefs:1" "the auto-link preference upserts"
     ib_check "ib_first_rescan:1" "a rescan request is queued"
     ib_check "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"

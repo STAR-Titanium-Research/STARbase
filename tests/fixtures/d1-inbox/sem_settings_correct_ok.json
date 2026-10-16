@@ -1,0 +1,45 @@
+{
+  "description": "the owner corrects the kV: the answer is the settings again, with sources.kv manual",
+  "request": {
+    "method": "PATCH",
+    "path": "/d1-inbox/sem-settings/00000000-0000-4000-8000-000000003001",
+    "body": {
+      "field": "kv",
+      "value": 20
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "locked": false,
+      "settings": {
+        "kv": 20,
+        "spot": 3,
+        "working_distance_mm": 8.5,
+        "magnification": 5000,
+        "hfw_um": 59.7,
+        "pixel_size_nm": 29.14,
+        "scale_bar_um": 10,
+        "detector": "ETD",
+        "mode": "SE",
+        "instrument": "Quanta 650",
+        "acquired_at": "2026-03-02T10:15:30.000Z"
+      },
+      "sources": {
+        "kv": "manual",
+        "spot": "metadata",
+        "working_distance_mm": "metadata",
+        "magnification": "derived",
+        "hfw_um": "metadata",
+        "pixel_size_nm": "metadata",
+        "scale_bar_um": "ocr",
+        "detector": "metadata",
+        "mode": "metadata",
+        "instrument": "metadata",
+        "acquired_at": "metadata"
+      },
+      "flags": {},
+      "can_edit": true
+    }
+  }
+}

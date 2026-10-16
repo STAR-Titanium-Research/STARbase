@@ -1,11 +1,11 @@
 # SEM data-bar reader and provenance-owned files: design
 
 **Date:** 2026-10-16
-**Status:** Design only; plan [`2026-10-16-sem-reader.md`](../plans/2026-10-16-sem-reader.md). Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
+**Status:** Built and merged on the integration branch `claude/gracious-heisenberg-x7to0t` (streams A to F, the final review and its fix wave; its physical-test items in the backlog, SEM1 onward, still open); plan [`2026-10-16-sem-reader.md`](../plans/2026-10-16-sem-reader.md). Agreed with the maintainer in a design interview on 2026-10-16 (every decision below was
 confirmed by them unless it says "assumed"). ADR: [0022](../../adr/0022-files-belong-to-their-provenance-owner.md).
 Terms: `CONTEXT.md` → *Files on the share* (**SEM image**, **data bar**, **imaging settings**, **provenance owner**,
 **locked file**). Builds on [found files and the Inbox](2026-10-15-found-files-inbox-design.md) (ADR-0020).
-Nothing here is built. **Amended 2026-10-16** after the d1-server session reported real data: the inbox crawler is
+**Amended 2026-10-16** after the d1-server session reported real data: the inbox crawler is
 live on d1-server (since 2026-10-16, eight people's `Users` folders, about 82,000 files), so existing rows have to be
 migrated and re-classified (sections 3, 4 and 7); the numbers below are theirs, not measured here.
 
@@ -62,7 +62,7 @@ TIFF seen so far, exactly, and the PNG exports need the bar.
 | D8 | Raw reads of `directus_files` and `/assets` are filtered on the stamp. Rows with no owner stay open, as today. |
 | D9 | Only the owner sees or links the file and its settings. Others on a linked record see a **locked file**. Administrators see them read-only and are audited. Only the owner can correct a value; a correction is `manual` and never overwritten by a re-read. |
 | D10 | Linked files stay unowned (nobody loses access they have today). Found files that are not linked yet are owned: the migration stamps the ones the live crawler already registered from `file_candidates`, and the crawler stamps new ones. *Amended 2026-10-16: the interview said "only files registered after the change"; with the crawler live, stamping unlinked found files takes nothing from anyone, and leaving them open would make the privacy rule false for about 82,000 files. Confirmed by the maintainer 2026-10-16, database only: nothing is written to the share.* |
-| D11 | `python -m inbox_crawler --sem-backfill` reads already-linked images. Settings of an unowned file follow whoever can read the record. |
+| D11 | `python -m inbox_crawler --sem-backfill` reads already-linked images, owned or not (*amended in the final fix wave: an owned file linked in Data Studio has no settings row either*). Settings of an unowned file follow whoever can read the record; those of an owned file stay the owner's. |
 | D12 | An optional GPU switch for OCR, `INBOX_OCR_DEVICE=auto\|cpu\|cuda`, CPU by default. The trial ran at about 0.16 s per file on a CPU, and a TIFF with metadata needs no OCR at all, so the GPU is not needed for this corpus; it stays a cheap, low-priority option. *Amended 2026-10-16: the maintainer asked to use the GPU where possible; the measurements say it buys little; confirmed as an optional switch.* |
 | D13 | *Assumed:* a file moved between folders keeps its first owner; two copies in two folders are two files with two owners; a team-owned file is visible to members of that team; admin reads go to a small log table. |
 
@@ -175,15 +175,15 @@ carries it and SEM2 passes.
 ### Value rules (all tiers)
 
 Sanity ranges: `kv` 0.1 to 30, `working_distance_mm` 0.1 to 50, `magnification` 5 to 1,000,000, `spot` 1 to 10. A
-value that fails them is omitted with a note. **OCR confidence is recorded in `sources` but never used as a
-threshold.** The cross-checks: `mag x HFW` against the two screen-width constants (D3, within 2%, because a printed
+value that fails them is omitted with a note. **OCR confidence is recorded, as `extracted.ocr_confidence` (a
+map of field to confidence, ruling R10; `sources` holds only source names), but never used as a threshold.** The cross-checks: `mag x HFW` against the two screen-width constants (D3, within 2%, because a printed
 `40×` is a rounded 40.05), and, for a bar with no metadata, the scale-bar label against the bar's pixel length and the
 magnification. A value that cannot be cross-checked is saved with `flags.check_this = true`. When metadata and the
 bar both exist (OCR switched on to cross-check), metadata wins and the mismatch is recorded in `flags`.
 
 `extracted` (what the crawler already writes to `d1_private.file_candidates.extracted`) gets these keys:
 `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `pixel_size_nm`, `scale_bar_um`, `detector`, `mode`,
-`instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects. Unknown fields are
+`instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects and, for fields read by OCR, `ocr_confidence` (field to confidence, rounded to two decimals; never a threshold, and ignored by `save_sem_settings`, which maps known keys only). Unknown fields are
 omitted, never null. The crawler session's rule (numeric, unit in the key) is followed; the string `scale_bar`
 the JEOL path emits today becomes `scale_bar_um` too, which touches `parse_text` and its tests.
 
@@ -264,7 +264,8 @@ contract is not changed (section 5).
   `sem_image` to `image` (its auto-link eligibility is unchanged: both kinds are on the auto-link list). It runs
   after the detector fix ships, started by the maintainer, and its counts (promoted, demoted, unchanged) are logged.
 - `--sem-backfill` in `__main__.py`: a mode beside `--daemon` and `--once`. It lists pointer rows that are
-  linked, image-typed, unowned and without a settings row, opens each through `fs_readonly.open_rb`
+  linked, image-typed (owned or not: who may read the settings is d1-inbox's rule, and a file linked in Data
+  Studio or before `--reclassify` is owned yet has none) and without a settings row, opens each through `fs_readonly.open_rb`
   (images are on the allow-list), reads it and writes `sem_image_settings`. Resumable, throttled by
   `read_mb_per_s`, an unreadable file is recorded and skipped.
 - **GPU (D12).** `INBOX_OCR_DEVICE` selects the onnxruntime provider for the recogniser: `auto` takes CUDA when

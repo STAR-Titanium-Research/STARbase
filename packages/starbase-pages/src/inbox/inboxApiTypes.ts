@@ -26,7 +26,7 @@ export interface FileOwner {
 /**
  * One found file, as GET /d1-inbox/files returns it: the d1_private.file_candidates columns the page uses, plus labels the server resolves
  * (the page never reads another table to name a record). Dates are ISO strings. `extracted` holds only what the crawler actually read:
- * `kv`, `magnification`, `scale_bar`, `instrument` for an SEM image.
+ * an SEM image's imaging settings (see semSettings.ts): `kv`, `magnification`, `scale_bar_um` (older rows: the text `scale_bar`), `instrument`, and more, with their `sources` and `flags`.
  */
 export interface FoundFile {
 	candidate_id: string;

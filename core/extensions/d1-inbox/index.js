@@ -52,6 +52,9 @@
 //                                   feature's own dialog: asked up front, before any record is read; the table's unique constraints are the backstop),
 //                                   409 SURFACE_SCANS_UNAVAILABLE (no such table yet). Where the table exists, the summary and the new, older and open
 //                                   lists leave out undecided surface scan files that already have a scan (older databases use the plain queries).
+//                                   IMAGING SETTINGS (ADR-0022, spec 2026-10-16 section 5): every newly linked candidate of kind 'sem_image' (here, in accept-all and in
+//                                   auto-link) has its `extracted` passed to d1_private.save_sem_settings(file, extracted, 'inbox') in the same transaction. That
+//                                   function is the only place `extracted` becomes columns; this endpoint never maps it.
 //   POST /d1-inbox/accept-all       { filter?, dry_run?, candidate_ids?, cursor? }   links the exact short-ID suggestions the caller can edit
 //                                   (images, and documents or other files, never surface scans) -> { data: { link_batch_id, linked: <count>,
 //                                   items, skipped: [{ candidate_id, reason }] (the first 200), skipped_total, has_more, next_cursor } }.
@@ -63,7 +66,9 @@
 //   POST /d1-inbox/dismiss | /restore  { candidate_ids: [...] }  -> { data: { changed: <count>, changed_ids, unchanged_ids } }
 //                                   A restore (and an undo) also makes the crawler list the file's folder again (D12): see SQL.relistDirs.
 //   POST /d1-inbox/undo             { link_batch_id }       removes the junction rows that batch created (and the surface_scans rows it added,
-//                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }
+//                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }. A file's imaging settings go with
+//                                   its LAST link: they are deleted only when no row is left in sample_data_files, operation_data_files, session_data_files or
+//                                   surface_scans for that file (a file linked to two records keeps them while one link stands).
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
 //                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
@@ -96,6 +101,23 @@
 //   POST /d1-inbox/auto-link        MACHINE ONLY (the crawler): header X-Inbox-Crawler-Secret = env D1_INBOX_CRAWLER_SECRET
 //                                   { candidate_ids: [...] } (or candidate_id) -> { data: { results: [{ candidate_id, status: 'linked' | 'skipped'
 //                                   | 'error', reason?, link_batch_id? }] } }. Images only (sem_image, image): never a surface scan.
+//   GET  /d1-inbox/sem-settings?file=<directus_files uuid>
+//                                   the imaging settings of an SEM image (ADR-0022, spec 2026-10-16 sections 4 and 5), decided from the file's pointer row (the
+//                                   provenance owner columns of directus_files) BEFORE anything is read:
+//                                     the owner (the person, or an active member of the owner team) -> { data: { locked: false, settings: { kv, spot,
+//                                       working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument, acquired_at:
+//                                       only those that have a value }, sources: { <field>: metadata | derived | ocr | manual }, flags: {...}, can_edit } };
+//                                     an administrator who is not the owner -> the same, read-only (can_edit false), and ONE row in
+//                                       d1_private.sem_settings_access_log with reason 'admin_read' whenever values are returned (none for an owner);
+//                                     an UNOWNED file (linked and legacy files stay open, D10) -> whoever can read a record it is linked to, decided by
+//                                       reading the three junctions AS THE CALLER through ItemsService (Directus's own read rule), can_edit false;
+//                                     anyone else, and a file that is not there -> HTTP 200 { data: { locked: true } } and nothing else (no value, no source,
+//                                       not even whether settings exist);
+//                                     an allowed reader of a file with no settings saved -> { data: { locked: false, settings: null } }.
+//   PATCH /d1-inbox/sem-settings/<directus_files uuid>   { field, value }: the OWNER corrects one setting through d1_private.correct_sem_setting, which marks
+//                                   it manual (a re-read never overwrites it). 403 FORBIDDEN for everyone else, an administrator who is not the owner and an
+//                                   unowned file too; 400 INVALID_PAYLOAD (extensions.field 'field' or 'value') for an unknown field (read_by, sources, ...) or a
+//                                   value the function refuses; 404 when no settings are saved. Answers like the GET.
 //   GET  /d1-inbox/admin            administrators only -> { data: { status: {...}, errors: [{at, message}], unmatched_folders: [...],
 //                                   people_without_alias: [{person_id, full_name, active, has_login}], queued_requests, queue, candidates } }
 //   POST /d1-inbox/admin/scan-all   administrators only -> 202 { data: { queued: true, ... } }; 409 ALREADY_QUEUED while one waits
@@ -105,6 +127,9 @@
 //
 // Visibility of a candidate: its owner person's login, any ACTIVE member (people.active) of its owner team, administrators (all). One predicate, canSee,
 // serves the list and the picture routes.
+// Who may CHANGE a candidate (link, accept-all, dismiss, restore, undo): its owner person or an active member of its owner team and NOBODY else. An
+// administrator who is neither is refused 403 FORBIDDEN on those routes: administrators read other people's files, they do not change them (ADR-0022
+// decision 3). They keep the list, the summary and the admin routes. The crawler's machine auto-link acts for the owner and is not affected.
 //
 // How a request runs (the d1-build / d1-record-access pattern):
 //   * Every write transaction starts with set_config('d1.actor_identity', <user id>, true), so the audit trigger names the person.
@@ -133,6 +158,13 @@ import { readFileSync } from 'node:fs';
 import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE, isWriteRequest } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-inbox';
+// read_by of the settings a link saves: the inbox (the crawler's own reads say sem-<version> in the candidate's classified_by).
+const SEM_READ_BY = 'inbox';
+// the reason an administrator's read of someone else's settings is logged with
+const ADMIN_READ_REASON = 'admin_read';
+// the settings the answer carries, by type (the columns of d1_private.sem_image_settings; `sources` and `flags` travel beside them)
+const SEM_NUMBERS = ['kv', 'spot', 'working_distance_mm', 'magnification', 'hfw_um', 'pixel_size_nm', 'scale_bar_um'];
+const SEM_TEXTS = ['detector', 'mode', 'instrument'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CURRENT_USER = '$CURRENT_USER';
 const MAX_BATCH = 200;
@@ -230,8 +262,14 @@ const isUuid = (v) => typeof v === 'string' && UUID.test(v);
 
 const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_id, c.owner_team_id, c.kind, c.state, c.origin, c.match_strength, c.matches,'
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
-  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at';
+  + ' c.link_batch_id, c.adopted_at, c.auto_undone_at, c.extracted';
 const IDS = "string_to_array(?, ',')::uuid[]";
+// A folder that changes hands (alias handed to someone else, ADR-0022 D13): the file's pointer row stays stamped to the owner it came from. A candidate
+// whose file is stamped to someone OTHER than the candidate's own owner is not the holder's to see or change: every query that loads or counts candidates
+// holds this one predicate (an unstamped file, a linked one, or one stamped to the candidate's own owner passes). Belt and braces with the crawler, which
+// no longer makes such a candidate.
+const FILE_OWNER_MATCHES = 'NOT EXISTS (SELECT 1 FROM directus_files pf WHERE pf.id = c.directus_files_id AND (pf.owner_person_id IS NOT NULL OR pf.owner_team_id IS NOT NULL)'
+  + ' AND (pf.owner_person_id IS DISTINCT FROM c.owner_person_id OR pf.owner_team_id IS DISTINCT FROM c.owner_team_id))';
 // The two pictures the crawler stores per image candidate: the route's last segment -> the column of d1_private.file_thumbnails.
 const PICTURES = { thumb: 'thumb', preview: 'preview' };
 // no-cache, not max-age: a browser that kept a picture for an hour would show it without the server running canSee (a shared lab PC, a person removed from a team).
@@ -278,7 +316,7 @@ const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.orig
   + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
   + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${NOT_UNDER_IGNORED}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${FILE_OWNER_MATCHES} AND ${NOT_UNDER_IGNORED}${scans ? ` AND ${SCAN_ADDED}` : ''}`
   + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
 
 export const SQL = {
@@ -293,14 +331,16 @@ export const SQL = {
   // The same where the surface_scans table exists (the endpoint checks first): without the surface scan files that already have a scan.
   summaryWithScans: summarySql(true),
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
-  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
+  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
-  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
+  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id`,
   // The same two reads for accept-all, which must never link a row under an ignored folder (see NOT_UNDER_IGNORED): such an undecided row reads as not found. A row
-  // that is already decided is returned whatever its folder, so the answer for it stays NOT_NEW.
-  acceptCandidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id`,
-  acceptCandidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id FOR UPDATE`,
-  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
+  // that is already decided is returned whatever its folder, so the answer for it stays NOT_NEW. The file-owner predicate holds whatever the state, as everywhere.
+  acceptCandidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES}`
+    + ` AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id`,
+  acceptCandidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES}`
+    + ` AND (c.state <> 'new' OR (${NOT_UNDER_IGNORED})) ORDER BY c.candidate_id FOR UPDATE`,
+  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
     "UPDATE d1_private.file_candidates SET state = 'linked', decided_at = now(), decided_by = ?, link_kind = ?, linked_collection = ?,"
@@ -355,10 +395,11 @@ export const SQL = {
   // matcher the crawler's Python twin is tested against. A SQL prefix test lowercases in Postgres while the final check lowercases in JS, and the two differ for
   // some characters (a final sigma, a dotted capital I), so a prefilter could drop a row the matcher would cover. Only id and path are read, and nothing is
   // locked here: the dismissal that follows (SQL.dismiss, as POST /dismiss) changes a row only while it is still 'new', so a file linked or dismissed in
-  // between stays as it is. Bindings: person id, team id.
+  // between stays as it is. The file-owner predicate (FILE_OWNER_MATCHES) holds as in every candidate read: a row whose file is stamped to another owner is not
+  // this owner's to dismiss (POST /dismiss would refuse it too). Bindings: person id, team id.
   openUnderFolder:
     "SELECT c.candidate_id, c.rel_path FROM d1_private.file_candidates c WHERE c.state = 'new'"
-    + ' AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid ORDER BY c.candidate_id',
+    + ` AND c.owner_person_id IS NOT DISTINCT FROM ?::uuid AND c.owner_team_id IS NOT DISTINCT FROM ?::uuid AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id`,
   // A removed rule: reset the cache rows of the folder (its own row and everything below) to "seen, not listed" (last_listed_at and dir_mtime NULL, as
   // relistDirs does; never baselined_at, and the rows are NOT deleted: the crawler reaches a folder through its cached parent, so a deleted row would hide
   // the folder for as long as the parent's modification time stays the same; a NULL mtime never equals the share's). Bindings: person id, team id, the
@@ -415,15 +456,36 @@ export const SQL = {
   // failure marker row, whose pictures are NULL: that is a 404 like no row). The ETag is computed by the database on every request, not stored (md5 of a few
   // hundred KB is cheap next to moving them). The owner columns go through canSee, the list's own predicate. Step 2 (only when the caller may see it and the
   // ETag is not already theirs): the bytes AND their md5 in ONE query, so the ETag sent always belongs to the bytes sent, even if the picture was replaced
-  // between the two steps. The column is chosen from the closed PICTURES map below, never from the request.
+  // between the two steps. The column is chosen from the closed PICTURES map below, never from the request. Step 1 also holds the file-owner predicate
+  // (FILE_OWNER_MATCHES), as the list does: a candidate whose file is stamped to another owner is not listed, so its picture is the same 404.
   thumbMeta: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind,
     `SELECT c.owner_person_id, c.owner_team_id, c.state, md5(t.${column}) AS etag FROM d1_private.file_candidates c`
-    + ' JOIN d1_private.file_thumbnails t ON t.candidate_id = c.candidate_id WHERE c.candidate_id = ?'])),
+    + ` JOIN d1_private.file_thumbnails t ON t.candidate_id = c.candidate_id WHERE c.candidate_id = ? AND ${FILE_OWNER_MATCHES}`])),
   thumbBytes: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind, `SELECT md5(t.${column}) AS etag, t.${column} AS bytes FROM d1_private.file_thumbnails t WHERE t.candidate_id = ?`])),
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
   junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
   junctionById: perTarget((t) => `SELECT id, ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE id = ?`),
+  // Imaging settings (stream D, ADR-0022). d1_private.save_sem_settings is the ONLY place `extracted` becomes columns (it maps the keys it knows,
+  // merges, keeps a person's manual fields): this endpoint passes the candidate's extracted on and never maps it. Bindings: the file id, extracted as
+  // JSON text, read_by.
+  saveSemSettings: 'SELECT d1_private.save_sem_settings(?, ?::jsonb, ?) AS saved',
+  // GET and PATCH /sem-settings: the file's pointer row (the provenance owner columns decide who may read and correct), its settings row, the
+  // administrator access log (binding: file, administrator, reason) and the owner's correction (bindings: file, field, value as JSON text, user;
+  // d1_private.correct_sem_setting refuses an unknown field and an out-of-range value, and marks the field manual).
+  semFile: 'SELECT id, owner_person_id, owner_team_id FROM directus_files WHERE id = ?',
+  semSettingsGet: 'SELECT directus_files_id, kv, spot, working_distance_mm, magnification, hfw_um, pixel_size_nm, scale_bar_um, detector, mode, instrument,'
+    + ' acquired_at, sources, flags, read_by, read_at, corrected_by, corrected_at FROM d1_private.sem_image_settings WHERE directus_files_id = ?',
+  semAccessLogInsert: 'INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES (?, ?, ?)',
+  semCorrect: 'SELECT d1_private.correct_sem_setting(?, ?, ?::jsonb, ?)',
+  // Undo runs before migration 197 can have been applied (the extension reloads the moment the files are pulled, the migration is a separate step):
+  // is there a settings table yet? Asked by undo; only a positive answer is remembered.
+  semTableExists: "SELECT to_regclass('d1_private.sem_image_settings') IS NOT NULL AS available",
+  // Undo: a file's settings go only when NO row is left in any of the four tables that link a file (a file linked twice keeps them while one link
+  // stands). Binding: the file ids as one csv.
+  deleteUnlinkedSemSettings: `DELETE FROM d1_private.sem_image_settings s WHERE s.directus_files_id = ANY(${IDS})${
+    [...Object.values(LINK_TARGETS).map((t) => t.junction), SURFACE_SCANS]
+      .map((table) => ` AND NOT EXISTS (SELECT 1 FROM ${table} j WHERE j.directus_files_id = s.directus_files_id)`).join('')}`,
 };
 
 // ---- pure helpers (exported for the tests) -----------------------------------------------------------------------------------
@@ -444,9 +506,22 @@ export function isViewerAccountability(acc) {
 }
 
 export function canSee(scope, candidate) {
-  if (scope.admin === true) return true;
+  return scope.admin === true || canChange(scope, candidate);
+}
+
+// The WRITE rule (stream D, ADR-0022 decision 3): who may link, dismiss, restore or undo a candidate, and correct a file's settings. Only the owner
+// person or an active member of the owner team: an administrator is NOT one unless they are (administrators read other people's files, they never
+// change them). canSee is the READ rule of the list and of the picture routes and stays as it is; this is a separate predicate on purpose.
+export function canChange(scope, candidate) {
   if (scope.personId && candidate.owner_person_id === scope.personId) return true;
   return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
+}
+
+// How a caller stands to a file (its pointer row's owner columns): 'owner' (the owner person, or a member of the owner team: canChange), 'unowned' (no
+// owner stamp: legacy and linked files stay open, D10) or 'other' (someone else's file).
+export function semAccess(scope, file) {
+  if (canChange(scope, file)) return 'owner';
+  return isBlank(file.owner_person_id) && isBlank(file.owner_team_id) ? 'unowned' : 'other';
 }
 
 // Does an If-None-Match header name this strong ETag (a quoted string)? A list of tags, a weak tag (W/"...": the comparison ignores the weakness) and * count.
@@ -473,6 +548,12 @@ export const ERRORS = {
     new HttpError(404, 'NOT_FOUND', `That ${what} does not exist or you cannot see it.`, { candidate_id: candidateId, collection: SURFACE_SCANS, record_id: id }),
   scanUndoDenied: (candidateId) =>
     new HttpError(403, 'FORBIDDEN', 'You can no longer delete that surface scan, so adding it cannot be undone.', { candidate_id: candidateId }),
+  adminReadOnly: (candidateId) =>
+    new HttpError(403, 'FORBIDDEN', 'An administrator can read other people\'s files but not change them.', { candidate_id: candidateId }),
+  notSettingsOwner: () => new HttpError(403, 'FORBIDDEN', 'Only the owner of a file can correct its imaging settings.'),
+  settingUnknown: () => new HttpError(400, 'INVALID_PAYLOAD', 'That is not a setting that can be corrected.', { field: 'field' }),
+  settingInvalid: () => new HttpError(400, 'INVALID_PAYLOAD', 'That value is not valid for this setting.', { field: 'value' }),
+  noSettings: () => new HttpError(404, 'NOT_FOUND', 'That file has no imaging settings.'),
   // The picture routes answer this for every reason alike (not a uuid, no such file, gone, not the caller's, no picture), so no id is confirmed.
   noPicture: () => new HttpError(404, 'NOT_FOUND', 'There is no picture for that file.'),
   notInInbox: (candidateId) => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: candidateId }),
@@ -616,7 +697,7 @@ const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers; { scans: true }: the surface_scans table exists, so
 // undecided surface scan files that already have a scan are left out). Everything a client chose is a binding.
 export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false } = {}) {
-  const where = [];
+  const where = [FILE_OWNER_MATCHES];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
   if (f.owner?.kind === 'me') { where.push('c.owner_person_id = ?'); bindings.push(mine ? scope.personId : null); }
@@ -849,6 +930,19 @@ export const shapeStateChange = ({ done, unchanged, change }) => ({
 export const shapeUndo = (batch, done) => ({ link_batch_id: batch.toLowerCase(), undone: done.length });
 // POST /rescan and /admin/scan-all (202)
 export const shapeQueued = (row) => ({ queued: true, request_id: row.request_id, status: row.status, requested_at: toIso(row.requested_at) });
+// GET /sem-settings. A row of d1_private.sem_image_settings as the answer: the settings that have a value (numbers as numbers, the time as ISO 8601; a
+// column that is NULL is absent, never null), where each came from (`sources`), the notes on the read (`flags`) and whether the caller may correct them.
+export function shapeSemSettings(row, { canEdit }) {
+  const settings = {};
+  for (const key of SEM_NUMBERS) if (!isBlank(row[key])) settings[key] = Number(row[key]);
+  for (const key of SEM_TEXTS) if (!isBlank(row[key])) settings[key] = row[key];
+  if (!isBlank(row.acquired_at)) settings.acquired_at = toIso(row.acquired_at);
+  return { locked: false, settings, sources: asJson(row.sources) ?? {}, flags: asJson(row.flags) ?? {}, can_edit: canEdit === true };
+}
+// A file the caller may not read: it says so and NOTHING else (no value, no source, no flag, not even whether settings exist).
+export const shapeSemLocked = () => ({ locked: true });
+// A reader who is allowed, and a file with no settings saved.
+export const shapeSemNone = () => ({ locked: false, settings: null });
 // GET /ignored-folders: rows as ignoredList selects them, as the whole body { data, meta }. canChange is false for a caller who may only read (a Lab Viewer)
 // and true for everyone else, whatever the number of rules: meta.can_change is what the client asks before it offers to add a rule (an empty list has
 // no row to carry can_remove), and each row's can_remove repeats it.
@@ -992,6 +1086,15 @@ export function mount(router, context, deps = {}) {
     const [row] = rowsOf(await db.raw(SQL.scanTableExists, []));
     scansKnown = row?.available === true;
     return scansKnown;
+  }
+
+  // Is the settings table (migration 197) there? Only a yes is remembered, so applying 197 under a running server takes effect at the next undo.
+  let semTableKnown = false;
+  async function semTableAvailable(db = database) {
+    if (semTableKnown) return true;
+    const [row] = rowsOf(await db.raw(SQL.semTableExists, []));
+    semTableKnown = row?.available === true;
+    return semTableKnown;
   }
 
   // -- who is asking -------------------------------------------------------------------------------------------------------
@@ -1195,6 +1298,8 @@ export function mount(router, context, deps = {}) {
       const adopt = !IMAGE_KINDS.includes(cand.kind);
       const done = rowsOf(await trx.raw(SQL.markLinked, [acc.user, linkKind, collection, junctionId, batchId, adopt, cand.candidate_id]));
       if (!done.length) throw ERRORS.dealtWith(cand.candidate_id);
+      // the image's imaging settings are saved per file, in this transaction, by the one function that maps them (an SEM image only)
+      if (cand.kind === 'sem_image') await trx.raw(SQL.saveSemSettings, [cand.directus_files_id, JSON.stringify(asJson(cand.extracted) ?? {}), SEM_READ_BY]);
       linked.push(linkedItemOut({ cand, collection, recordId, scan }, junctionId, adopt));
     }
     return linked;
@@ -1228,6 +1333,8 @@ export function mount(router, context, deps = {}) {
       for (const w of wanted) {
         const cand = rows.get(w.id);
         if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(w.id);
+        // an administrator reads other people's files but never links them (ADR-0022): only the owner or a member of the owner team
+        if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(w.id);
         if (cand.state === 'new') {
           // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test;
           // and only a surface scan is added that way
@@ -1297,6 +1404,9 @@ export function mount(router, context, deps = {}) {
     const fit = [];
     for (const cand of cands) {
       if (!canSee(scope, cand)) continue;
+      // an administrator's view of someone else's files (a person filter, or candidate_ids): never linked here. The accept-all route refuses the call
+      // for it (refuseReadOnly); the list's "acceptable" count simply does not count it.
+      if (!canChange(scope, cand)) { skipped.push({ candidate_id: cand.candidate_id, reason: 'NOT_OWNER' }); continue; }
       const why = unfit(cand, { auto: false });
       if (why) skipped.push({ candidate_id: cand.candidate_id, reason: why });
       else fit.push(cand);
@@ -1347,6 +1457,11 @@ export function mount(router, context, deps = {}) {
     }
     return { entries, skipped, has_more: !exhausted, next_cursor: exhausted || !last ? null : encodeCursor(last) };
   }
+  // Accept all by an administrator for files that are not theirs is refused as a whole (the same 403 as Link), a preview included.
+  const refuseReadOnly = (skipped) => {
+    const hit = skipped.find((s) => s.reason === 'NOT_OWNER');
+    if (hit) throw ERRORS.adminReadOnly(hit.candidate_id);
+  };
   router.post('/accept-all', route(async ({ req, res, acc }) => {
     const body = req.body === undefined || req.body === null ? {} : bodyOf(req);
     if (!body) throw badInput('The request is not valid.');
@@ -1359,11 +1474,13 @@ export function mount(router, context, deps = {}) {
     requireOwnerVisible(scope, f);
     if (body.dry_run === true) {
       const found = await planAccept(database, { acc, schema, scope, f, lock: false, ids, cursor });
+      refuseReadOnly(found.skipped);
       res.json({ data: shapeAcceptDryRun(found) });
       return;
     }
     const out = await inTransaction(acc.user, async (trx) => {
       const found = await planAccept(trx, { acc, schema, scope, f, lock: true, ids, cursor });
+      refuseReadOnly(found.skipped);
       if (!found.entries.length) return { ...found, batchId: null, items: [] };
       const batchId = newId();
       return { ...found, batchId, items: await performLink(trx, { acc, schema, entries: found.entries, linkKind: 'bulk', batchId }) };
@@ -1386,6 +1503,7 @@ export function mount(router, context, deps = {}) {
       for (const id of ids) {
         const cand = byId.get(id);
         if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(id);
+        if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(id);
         if (cand.state === from) change.push(id);
         else if (cand.state === to) unchanged.push(id);
         else throw new HttpError(409, refusal.code, refusal.message, { candidate_id: id });
@@ -1408,6 +1526,8 @@ export function mount(router, context, deps = {}) {
     const out = await inTransaction(acc.user, async (trx) => {
       const rows = rowsOf(await trx.raw(SQL.batchForUpdate, [batch.toLowerCase()])).filter((r) => r.state === 'linked' && canSee(scope, r));
       if (!rows.length) throw new HttpError(404, 'NOT_FOUND', 'That batch does not exist or was already undone.');
+      const readOnly = rows.find((r) => !canChange(scope, r));
+      if (readOnly) throw ERRORS.adminReadOnly(readOnly.candidate_id);
       if (!scope.admin && rows.some((r) => r.decided_by !== acc.user)) throw new HttpError(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
       for (const row of rows) {
         // A surface scan this batch added: only that row, and only while it still holds the file it was made for, deleted as the caller (the member
@@ -1436,6 +1556,9 @@ export function mount(router, context, deps = {}) {
           throw err;
         }
       }
+      // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
+      // (before migration 197 there is no table to delete from: an undo must still work then)
+      if (await semTableAvailable(trx)) await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
       // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
       if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
@@ -1451,6 +1574,75 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const rows = scope.personId ? rowsOf(await database.raw((await scanTableAvailable()) ? SQL.summaryWithScans : SQL.summary, [scope.personId, scope.teamIds.join(',')])) : [];
     res.json({ data: shapeSummary(rows, scope, scope.teams, scope.person) });
+  }));
+
+  // -- imaging settings -------------------------------------------------------------------------------------------------------
+
+  // Does the caller read a record this file is linked to? The three junctions are read AS THE CALLER through ItemsService, so Directus's own read rule
+  // of each junction (it follows the record's read rule) decides; a refused read is "no". One row is enough.
+  async function linkedRecordReadable(acc, schema, fileId) {
+    const reads = Object.values(LINK_TARGETS).map(async (target) => {
+      try {
+        const rows = await itemsFor(schema, acc, target.junction).readByQuery({ fields: ['id'], filter: { directus_files_id: { _eq: fileId } }, limit: 1 });
+        return rows.length > 0;
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+        return false;
+      }
+    });
+    return (await Promise.all(reads)).some(Boolean);
+  }
+
+  // GET /sem-settings?file=<directus_files id>. Who may read a file's settings is decided from the pointer row's OWNER columns (ADR-0022):
+  //   owner (the person, or a member of the owner team)  -> the settings, and may correct them
+  //   an administrator who is not the owner              -> the same, read-only, and ONE access log row (reason admin_read) when values are returned
+  //   an unowned file                                    -> whoever can read a record it is linked to (read as the caller)
+  //   anyone else, and a file that is not there          -> { locked: true } and nothing else, with HTTP 200
+  // The decision comes BEFORE the settings are read, so a locked answer says nothing about whether settings exist.
+  router.get('/sem-settings', route(async ({ req, res, acc }) => {
+    const fileId = req.query?.file;
+    if (!isUuid(fileId)) throw badInput('file must be a file id.');
+    const id = fileId.toLowerCase();
+    const scope = await scopeOf(acc);
+    const [file] = rowsOf(await database.raw(SQL.semFile, [id]));
+    const locked = () => res.json({ data: shapeSemLocked() });
+    if (!file) return locked();
+    const standing = semAccess(scope, file);
+    if (standing === 'other' && !scope.admin) return locked();
+    if (standing === 'unowned' && !scope.admin && !(await linkedRecordReadable(acc, await schemaOf(req), id))) return locked();
+    const [row] = rowsOf(await database.raw(SQL.semSettingsGet, [id]));
+    if (!row) return res.json({ data: shapeSemNone() });
+    // an administrator reading settings that are not theirs: logged BEFORE anything is sent (a failed log is a 500 and no values)
+    if (scope.admin && standing !== 'owner') await inTransaction(acc.user, (trx) => trx.raw(SQL.semAccessLogInsert, [id, acc.user, ADMIN_READ_REASON]));
+    return res.json({ data: shapeSemSettings(row, { canEdit: standing === 'owner' }) });
+  }));
+
+  // PATCH /sem-settings/<file>  { field, value }: the OWNER (the person or a member of the owner team) corrects one setting through
+  // d1_private.correct_sem_setting, which refuses an unknown field and a value out of range (400) and marks the field manual. Everyone else is 403, an
+  // administrator who is not the owner too, and so is a file nobody owns. Answers the settings as the GET does.
+  router.patch('/sem-settings/:file', route(async ({ req, res, acc }) => {
+    const fileId = req.params?.file;
+    if (!isUuid(fileId)) throw badInput('file must be a file id.');
+    const body = bodyOf(req);
+    if (!body || Object.keys(body).sort().join() !== 'field,value' || typeof body.field !== 'string' || body.field.trim() === '' || body.value === undefined) {
+      throw badInput('The request must be { "field": <a setting>, "value": <its new value> }.');
+    }
+    const id = fileId.toLowerCase();
+    const scope = await scopeOf(acc);
+    const [file] = rowsOf(await database.raw(SQL.semFile, [id]));
+    if (!file || semAccess(scope, file) !== 'owner') throw ERRORS.notSettingsOwner();
+    const row = await inTransaction(acc.user, async (trx) => {
+      try {
+        await trx.raw(SQL.semCorrect, [id, body.field, JSON.stringify(body.value), acc.user]);
+      } catch (err) {
+        // 22023 invalid_parameter_value: an unknown field, or a value the function refuses; P0002 no_data_found: no settings saved for this file
+        if (err?.code === '22023') throw /not a correctable field/.test(String(err.message)) ? ERRORS.settingUnknown() : ERRORS.settingInvalid();
+        if (err?.code === 'P0002') throw ERRORS.noSettings();
+        throw err;
+      }
+      return rowsOf(await trx.raw(SQL.semSettingsGet, [id]))[0];
+    });
+    res.json({ data: shapeSemSettings(row, { canEdit: true }) });
   }));
 
   router.get('/files', route(async ({ req, res, acc }) => {

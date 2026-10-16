@@ -7,8 +7,16 @@ export const DEFAULT_UNC_PREFIX = '\\\\uosfstore.shef.ac.uk\\shared\\star_group1
 export interface LinkedFile {
 	id: string;
 	name: string;
-	/** 'archive': lives on the group share; 'upload': stored in Directus. */
-	kind: 'archive' | 'upload';
+	/**
+	 * 'archive': lives on the group share; 'upload': stored in Directus; 'locked': the link exists but the reader may not see the file (the
+	 * junction holds only its id): the page shows "a file from another person's folder" and nothing else, so `name` is empty.
+	 */
+	kind: 'archive' | 'upload' | 'locked';
+	/**
+	 * Where the row came from: 'data_files' (a Directus file linked through the record's data_files junction, so `id` is a directus_files id and the
+	 * d1-inbox settings route can be asked about it) or 'share' (an operation_files row: `id` is the share link's own, never a directus_files id).
+	 */
+	source: 'data_files' | 'share';
 	unc: string | null;
 	folder: string | null;
 	fileUri: string | null;
@@ -42,20 +50,34 @@ function metadataOf(file: any): Record<string, any> {
 }
 
 // `links` are the junction rows of `data_files` read with
-// `data_files.directus_files_id.{id,title,filename_download,metadata}`.
+// `data_files.id` and `data_files.directus_files_id.{id,title,filename_download,metadata}`. A file Directus will not show the reader (ADR-0022: files
+// belong to their provenance owner) comes back as `directus_files_id: null`: it is listed as `kind: 'locked'`, keyed by the junction row's own id.
 export function linkedFiles(links: any[] | null | undefined, prefix = DEFAULT_UNC_PREFIX): LinkedFile[] {
 	const out: LinkedFile[] = [];
+	let hidden = 0;
 	for (const l of links ?? []) {
 		const f = l?.directus_files_id;
-		if (!f || typeof f !== 'object') continue; // unreadable file: the junction holds only the id
+		// A file the reader may not see: under row filters Directus answers null for `directus_files_id.<field>` (see hiddenLinks.ts), and the column is
+		// NOT NULL on all three junctions, so a junction row with null there is a hidden file. It is kept as a locked file: a link exists, nothing more is
+		// known or shown. The row's own id (`data_files.id`) keys it; a row read without it gets a key of its own. A bare id string is the same, kept
+		// as a fallback.
+		if (l && typeof l === 'object' && f === null) {
+			out.push({ id: l.id ? String(l.id) : `locked-${hidden++}`, name: '', kind: 'locked', source: 'data_files', unc: null, folder: null, fileUri: null });
+			continue;
+		}
+		if (typeof f === 'string' && f !== '') {
+			out.push({ id: f, name: '', kind: 'locked', source: 'data_files', unc: null, folder: null, fileUri: null });
+			continue;
+		}
+		if (!f || typeof f !== 'object') continue;
 		const archivePath: string = metadataOf(f).archive_path || '';
 		const name = f.filename_download || f.title || archivePath.split('/').pop() || '(file)';
 		if (!archivePath) {
-			out.push({ id: String(f.id), name, kind: 'upload', unc: null, folder: null, fileUri: null });
+			out.push({ id: String(f.id), name, kind: 'upload', source: 'data_files', unc: null, folder: null, fileUri: null });
 			continue;
 		}
 		const unc = toUnc(archivePath, prefix);
-		out.push({ id: String(f.id), name, kind: 'archive', unc, folder: parentUnc(unc), fileUri: toFileUri(unc) });
+		out.push({ id: String(f.id), name, kind: 'archive', source: 'data_files', unc, folder: parentUnc(unc), fileUri: toFileUri(unc) });
 	}
 	return out;
 }
@@ -74,6 +96,7 @@ export function shareFiles(rows: any[] | null | undefined): LinkedFile[] {
 			id: String(r.file_id ?? path),
 			name: r.file_name || base,
 			kind: 'archive',
+			source: 'share',
 			unc: path,
 			folder: folder === path ? null : folder,
 			fileUri: null,

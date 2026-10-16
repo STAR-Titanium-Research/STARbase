@@ -109,6 +109,11 @@ describe('how a file reads', () => {
 	it('shows only what the crawler read from an SEM image', () => {
 		expect(extractedText({ kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' })).toBe('15 kV · ×5,000 · 2 µm · JEOL');
 		expect(extractedText({ magnification: '×200' })).toBe('×200');
+		// the crawler now reads the scale bar as micrometres; the text a stored candidate carries still shows
+		expect(extractedText({ kv: 15, scale_bar_um: 500 })).toBe('15 kV · 500 µm');
+		expect(extractedText({ scale_bar_um: 3000 })).toBe('3 mm');
+		expect(extractedText({ scale_bar_um: 0.2 })).toBe('200 nm');
+		expect(extractedText({ scale_bar: '2 µm' })).toBe('2 µm');
 		expect(extractedText({})).toBe('');
 	});
 	it('names a team folder as one, and a copy as a copy', () => {

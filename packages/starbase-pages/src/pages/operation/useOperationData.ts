@@ -120,6 +120,8 @@ export function useOperationData(id: Ref<string>) {
 			fill(files, token, 'linked files', async () => {
 				const item = await getItem('manufacturing_operations', opId, {
 					fields: [
+						// the junction row's own id keys a locked file (Directus answers directus_files_id null for a file the reader may not see)
+						'data_files.id',
 						'data_files.directus_files_id.id',
 						'data_files.directus_files_id.title',
 						'data_files.directus_files_id.filename_download',

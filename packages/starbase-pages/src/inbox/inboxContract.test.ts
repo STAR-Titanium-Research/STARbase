@@ -11,7 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
-	InboxApiError, acceptAll, addIgnored, dismissFiles, filesParams, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, acceptAll, addIgnored, correctSemSetting, dismissFiles, filesParams, getSemSettings, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile,
+	removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 	type FilesQuery, type FoundFile,
 } from './inboxApi';
 import {
@@ -26,6 +27,7 @@ import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem
 import { createAutoLink, RECENT_LIMIT } from './useAutoLink';
 import { createInbox } from './useInbox';
 import { createInboxAdmin } from './useInboxAdmin';
+import { createSemSettings } from './useSemSettings';
 import { createIgnoredFolders } from './useIgnoredFolders';
 import { ignoredText, unignoredText } from './ignoredFolders';
 
@@ -950,6 +952,188 @@ describe('adding a surface scan', () => {
 		expect(batch).toMatchObject({ id: ID(903), count: 1, kind: 'manual', scans: 1 });
 		expect(batchTitle(batch)).toBe('Added as a surface scan, 1 file');
 		expect(groupLinked(page1.rows).every((g) => g.batch !== null)).toBe(true);
+	});
+});
+
+// ---- imaging settings and read-only administrators (the d1-inbox sem-settings routes and the read-only administrator rule) ----------------------
+
+const SEM_FILE = '00000000-0000-4000-8000-000000003001';
+const semGet = (name: string) => {
+	const f = fx(name);
+	const { api, calls } = only(f);
+	return { f, calls, read: () => getSemSettings(api, SEM_FILE) };
+};
+
+describe('reading a file\'s imaging settings', () => {
+	it('asks GET /d1-inbox/sem-settings with the file as the query, as the fixtures say', async () => {
+		const { f, calls, read } = semGet('sem_settings_owner');
+		expect(f.request).toMatchObject({ method: 'GET', path: '/d1-inbox/sem-settings', query: { file: SEM_FILE } });
+		await read();
+		expect(calls).toEqual([{ method: 'GET', path: '/d1-inbox/sem-settings', params: { file: SEM_FILE }, body: undefined }]);
+	});
+
+	it('a locked file is { locked: true } and nothing else', async () => {
+		const got = await semGet('sem_settings_locked').read();
+		expect(got).toEqual({ locked: true });
+		expect(Object.keys(got)).toEqual(['locked']);
+	});
+
+	it('drops anything a locked answer carries besides locked (a bug in the server cannot show values)', async () => {
+		const f = fx('sem_settings_owner');
+		const odd = { ...f, body: { data: { ...f.body.data, locked: true } } };
+		expect(await getSemSettings(only(odd).api, SEM_FILE)).toEqual({ locked: true });
+	});
+
+	it('the owner gets the values, their sources, the flags and can_edit true', async () => {
+		const got = await semGet('sem_settings_owner').read();
+		expect(got).toMatchObject({ locked: false, can_edit: true, settings: { kv: 15, scale_bar_um: 10, acquired_at: '2026-03-02T10:15:30.000Z' }, sources: { magnification: 'derived', scale_bar_um: 'ocr' }, flags: { check_this: true } });
+	});
+
+	it('an administrator who is not the owner reads the same values with can_edit false', async () => {
+		const owner = await semGet('sem_settings_owner').read();
+		const admin = await semGet('sem_settings_admin').read();
+		expect(admin).toEqual({ ...owner, can_edit: false });
+	});
+
+	it('an allowed reader of a file with no settings gets settings null and no edit', async () => {
+		expect(await semGet('sem_settings_none').read()).toEqual({ locked: false, settings: null });
+	});
+
+	it('takes can_edit only when it is exactly true (a missing or odd one is no edit)', async () => {
+		const f = fx('sem_settings_owner');
+		for (const can_edit of [undefined, 'true', 1, null]) {
+			const odd = { ...f, body: { data: { ...f.body.data, can_edit } } };
+			expect(await getSemSettings(only(odd).api, SEM_FILE)).toMatchObject({ locked: false, can_edit: false });
+		}
+	});
+
+	it('survives an answer that is not an object', async () => {
+		const f = fx('sem_settings_none');
+		expect(await getSemSettings(only({ ...f, body: { data: [] } }).api, SEM_FILE)).toEqual({ locked: false, settings: null });
+	});
+});
+
+describe('correcting one setting', () => {
+	it('sends { field, value } to the file\'s path and answers the settings again with the field manual', async () => {
+		const f = fx('sem_settings_correct_ok');
+		const { api, calls } = only(f);
+		expect(f.request).toMatchObject({ method: 'PATCH', body: { field: 'kv', value: 20 } });
+		const got = await correctSemSetting(api, SEM_FILE, 'kv', 20);
+		expect(calls).toEqual([{ method: 'PATCH', path: `/d1-inbox/sem-settings/${SEM_FILE}`, params: undefined, body: { field: 'kv', value: 20 } }]);
+		expect(got).toMatchObject({ locked: false, can_edit: true, settings: { kv: 20 }, sources: { kv: 'manual' } });
+	});
+
+	it('a field the server does not accept is 400 with the server\'s words and the part it names', async () => {
+		const f = fx('sem_settings_correct_400_field');
+		const err = await correctSemSetting(only(f).api, SEM_FILE, 'read_by', 'x').catch((e) => e);
+		expect(err).toBeInstanceOf(InboxApiError);
+		expect(err).toMatchObject({ status: 400, code: 'INVALID_PAYLOAD', message: f.body.errors[0].message, extensions: { field: 'field' } });
+	});
+
+	it('a value the database refuses is 400 with the server\'s words', async () => {
+		const f = fx('sem_settings_correct_400_value');
+		const err = await correctSemSetting(only(f).api, SEM_FILE, 'kv', 99).catch((e) => e);
+		expect(err).toMatchObject({ status: 400, code: 'INVALID_PAYLOAD', message: 'That value is not valid for this setting.', extensions: { field: 'value' } });
+	});
+
+	it('anyone but the owner is 403 FORBIDDEN', async () => {
+		const f = fx('sem_settings_correct_403');
+		const err = await correctSemSetting(only(f).api, SEM_FILE, 'kv', 20).catch((e) => e);
+		expect(err).toMatchObject({ status: 403, code: 'FORBIDDEN' });
+	});
+});
+
+describe('the settings of a file in the page\'s own state (createSemSettings), driven by the fixtures', () => {
+	const route = (name: string): [string, Fixture] => {
+		const f = fx(name);
+		return [`${f.request.method} ${f.request.path}`, f];
+	};
+	const make = (get: string, patch?: string) => {
+		const routes = Object.fromEntries([route(get), ...(patch ? [route(patch)] : [])]);
+		const { api, calls } = replay(routes);
+		return { s: createSemSettings(api, () => SEM_FILE), calls };
+	};
+	const row = (s: ReturnType<typeof createSemSettings>, key: string) => s.rows.value.find((r) => r.key === key)!;
+
+	it('the owner gets the rows and may edit; a save shows the field as manual', async () => {
+		const { s } = make('sem_settings_owner', 'sem_settings_correct_ok');
+		await s.load();
+		expect(s.state.value).toBe('settings');
+		expect(s.canEdit.value).toBe(true);
+		expect(row(s, 'kv')).toMatchObject({ text: '15 kV', source: 'metadata' });
+		s.start('kv');
+		expect(s.draft.value).toBe('15');
+		s.draft.value = '20';
+		await s.save();
+		expect(s.editing.value).toBeNull();
+		expect(row(s, 'kv')).toMatchObject({ text: '20 kV', source: 'manual' });
+	});
+
+	it('an administrator, or anyone who is not the owner, has no edit control', async () => {
+		const { s } = make('sem_settings_admin');
+		await s.load();
+		expect(s.state.value).toBe('settings');
+		expect(s.canEdit.value).toBe(false);
+		expect(row(s, 'kv').text).toBe('15 kV');
+		s.start('kv');
+		expect(s.editing.value).toBeNull();
+	});
+
+	it('a locked file has no rows at all', async () => {
+		const { s } = make('sem_settings_locked');
+		await s.load();
+		expect(s.state.value).toBe('locked');
+		expect(s.rows.value).toEqual([]);
+	});
+
+	it('a file with no settings has no rows and no edit', async () => {
+		const { s } = make('sem_settings_none');
+		await s.load();
+		expect(s.state.value).toBe('none');
+		expect(s.rows.value).toEqual([]);
+		expect(s.canEdit.value).toBe(false);
+	});
+
+	it('a 400 puts the server\'s message beside the field and keeps the edit open', async () => {
+		const { s } = make('sem_settings_owner', 'sem_settings_correct_400_value');
+		await s.load();
+		s.start('kv');
+		s.draft.value = '99';
+		await s.save();
+		expect(s.fieldError.value).toEqual({ key: 'kv', text: 'That value is not valid for this setting.' });
+		expect(s.editing.value).toBe('kv');
+		expect(row(s, 'kv').source).toBe('metadata');
+	});
+
+	it('a 403 says only the owner can correct it, and takes the edit controls away', async () => {
+		const { s } = make('sem_settings_owner', 'sem_settings_correct_403');
+		await s.load();
+		s.start('kv');
+		s.draft.value = '20';
+		await s.save();
+		expect(s.fieldError.value).toEqual({ key: 'kv', text: "Only the file's owner can correct this." });
+		expect(s.canEdit.value).toBe(false);
+		expect(s.editing.value).toBeNull();
+	});
+
+	it('sends nothing for a value that is not a number', async () => {
+		const { s, calls } = make('sem_settings_owner', 'sem_settings_correct_ok');
+		await s.load();
+		s.start('kv');
+		s.draft.value = 'abc';
+		await s.save();
+		expect(s.fieldError.value).toMatchObject({ key: 'kv' });
+		expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+	});
+});
+
+describe('administrators read, they do not change', () => {
+	it('an administrator linking a file that is not theirs is a plain 403 FORBIDDEN with the server\'s words, which the Link error path shows as it shows any refusal', async () => {
+		const f = fx('link_403_admin_read_only');
+		const { api } = only(f);
+		const err = await linkFiles(api, f.request.body.items).catch((e) => e);
+		expect(err).toBeInstanceOf(InboxApiError);
+		expect(err).toMatchObject({ status: 403, code: 'FORBIDDEN', message: f.body.errors[0].message });
 	});
 });
 

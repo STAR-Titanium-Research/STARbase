@@ -410,3 +410,53 @@ def test_surface_scan_worker_derives_file_ids_like_the_indexer():
     assert uuid.uuid5(uuid.NAMESPACE_DNS, m.group(1)) == ia._NS
     assert '"file:" + archive_path' in text
     assert ia.file_id("rig/x.al3d") == uuid.uuid5(ia._NS, "file:rig/x.al3d")
+
+
+# ---- a moved owned file keeps its first owner (ADR-0022 D13) ------------------------
+
+
+def test_carry_owner_stamp_copies_the_owner_to_the_new_row(sweep_env):
+    conn, cur, _root = sweep_env
+    cur.execute(
+        "ALTER TABLE directus_files ADD COLUMN owner_person_id uuid, ADD COLUMN owner_team_id uuid"
+    )
+    owner = str(uuid.uuid4())
+    old, new = _row(cur, "Users/a/x.tif", ".tif"), _row(cur, "Projects/p/x.tif", ".tif")
+    cur.execute(
+        "UPDATE directus_files SET owner_person_id = %s WHERE id = %s", (owner, old)
+    )
+    ia.carry_owner_stamp(cur, old, new)
+    cur.execute(
+        "SELECT owner_person_id::text, owner_team_id FROM directus_files WHERE id = %s",
+        (new,),
+    )
+    assert cur.fetchone() == (owner, None)
+
+
+def test_carry_owner_stamp_leaves_unowned_and_already_stamped_rows_alone(sweep_env):
+    conn, cur, _root = sweep_env
+    cur.execute(
+        "ALTER TABLE directus_files ADD COLUMN owner_person_id uuid, ADD COLUMN owner_team_id uuid"
+    )
+    first, second = str(uuid.uuid4()), str(uuid.uuid4())
+    old, new = _row(cur, "Users/a/y.tif", ".tif"), _row(cur, "Projects/p/y.tif", ".tif")
+    ia.carry_owner_stamp(cur, old, new)  # old row unowned: nothing to carry
+    cur.execute("SELECT owner_person_id FROM directus_files WHERE id = %s", (new,))
+    assert cur.fetchone() == (None,)
+    cur.execute(
+        "UPDATE directus_files SET owner_person_id = %s WHERE id = %s", (first, old)
+    )
+    cur.execute(
+        "UPDATE directus_files SET owner_person_id = %s WHERE id = %s", (second, new)
+    )
+    ia.carry_owner_stamp(cur, old, new)  # the new row already has an owner: kept
+    cur.execute(
+        "SELECT owner_person_id::text FROM directus_files WHERE id = %s", (new,)
+    )
+    assert cur.fetchone() == (second,)
+
+
+def test_carry_owner_stamp_is_a_no_op_before_the_owner_columns_exist(sweep_env):
+    conn, cur, _root = sweep_env
+    old, new = _row(cur, "Users/a/z.tif", ".tif"), _row(cur, "Projects/p/z.tif", ".tif")
+    ia.carry_owner_stamp(cur, old, new)  # must not raise

@@ -23,6 +23,9 @@
 //   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
 //                                       queued or running; 409 NO_FOLDER when the person has no folder
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
+//   GET  /d1-inbox/sem-settings?file=<directus_files uuid>  -> { data: SemSettingsAnswer }: { locked: true } for a file the caller may not see (and nothing
+//                                       else), { locked: false, settings: null } with none saved, else { locked: false, settings, sources, flags, can_edit }
+//   PATCH /d1-inbox/sem-settings/<uuid> { field, value } -> the same answer with sources.<field> = 'manual'; 400 (extensions.field: field | value), 403
 //   GET  /d1-inbox/ignored-folders      -> { data: [{ ignored_id, folder, owner: { kind: 'person' | 'team', id, name }, created_at, can_remove }], meta: { can_change } }:
 //                                       the caller's own rules and their teams'; `folder` is relative to the owner's root. meta.can_change is false for a Lab Viewer and
 //                                       true otherwise, whatever the number of rules (an older server sends no meta: the page then judges by can_remove on the rules).
@@ -38,7 +41,7 @@
 // The first page of a New or Older list asks for meta.acceptable (acceptable=1: how many files Accept all would link under the whole filter), so the
 // button can say so, or say that there is nothing to accept. The dry run, asked when the confirm opens, is still the count the confirm trusts. A dry run
 // that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
-import { errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
+import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
 	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
 	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, Skipped,
@@ -340,3 +343,34 @@ export const loadAdmin = (api: HostApi): Promise<InboxAdmin> =>
 	);
 
 export const scanAll = (api: HostApi): Promise<void> => call(() => api.post(`${BASE}/admin/scan-all`, {}), () => undefined);
+
+// ---- imaging settings of a file (d1-inbox /sem-settings; spec 2026-10-16-sem-data-bar-reader-design.md sections 4 to 6) ----
+
+/** What an allowed reader gets for a file with settings. `can_edit` is true only for the file's owner (or a member of the owner team). */
+export interface SemSettingsRead {
+	/** Only the fields that have a value, numbers as numbers, `acquired_at` ISO 8601. */
+	settings: Record<string, unknown>;
+	/** Field name -> metadata | derived | ocr | manual. */
+	sources: Record<string, unknown>;
+	/** Field name -> a reason string, plus `check_this: true` when nothing could vouch for the values. */
+	flags: Record<string, unknown>;
+	can_edit: boolean;
+}
+/** `{ locked: true }` is all a locked file ever carries: no name, no value, no owner. */
+export type SemSettingsAnswer = { locked: true } | { locked: false; settings: null } | ({ locked: false } & SemSettingsRead);
+
+/** The answer as the page uses it: a locked file keeps nothing but `locked`; `can_edit` is true only when the server said exactly true. */
+export function parseSemAnswer(b: unknown): SemSettingsAnswer {
+	const r = asRecord(b) ?? {};
+	if (r.locked === true) return { locked: true };
+	const settings = asRecord(r.settings);
+	if (!settings) return { locked: false, settings: null };
+	return { locked: false, settings, sources: asRecord(r.sources) ?? {}, flags: asRecord(r.flags) ?? {}, can_edit: r.can_edit === true };
+}
+
+export const getSemSettings = (api: HostApi, fileId: string): Promise<SemSettingsAnswer> =>
+	call(() => api.get(`${BASE}/sem-settings`, { params: { file: fileId } }), parseSemAnswer);
+
+/** The owner corrects one setting (`value` is a number, text or an ISO time with its offset); the answer is the settings again with the field `manual`. */
+export const correctSemSetting = (api: HostApi, fileId: string, field: string, value: number | string): Promise<SemSettingsAnswer> =>
+	call(() => api.patch(`${BASE}/sem-settings/${encodeURIComponent(fileId)}`, { field, value }), parseSemAnswer);

@@ -35,6 +35,35 @@ UM_PER: dict[str, float] = {
     "mm": 1000.0,
 }
 
+# Shared by the text parser (`classify_sem`) and the bar reader (`sem_bar`), which cannot import each other (the
+# bar reader needs numpy).
+DIVIDER_ROW_FRAC = (
+    0.9  # a divider column is bright in more than this share of the body rows ...
+)
+DIVIDER_BRIGHT_FRAC = (
+    0.4  # ... where bright means above this share of the bar's maximum
+)
+SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
+
+
+def um_of(number, unit: str) -> float:
+    """A printed length (`number` in `unit`, a key of `UM_PER` in any case) as micrometres, rounded to 6 places."""
+    return round(float(number) * UM_PER[unit.lower()], 6)
+
+
+def tiff_tag_text(img, key: int) -> str | None:
+    """TIFF tag `key` of `img` as text (bytes are decoded as latin-1), or None when the image is not a TIFF, the
+    tag is absent or it is not text."""
+    try:
+        tags = img.tag_v2  # TIFF only
+    except AttributeError:
+        return None
+    val = tags.get(key)
+    if isinstance(val, bytes):
+        val = val.decode("latin-1", "ignore")
+    return val if isinstance(val, str) else None
+
+
 _CREATED_FORMAT = "%d.%m.%Y %H:%M:%S"  # [PrivateFei] TimeOfCreation
 _USER_DATE_FORMAT = "%m/%d/%Y"  # [User] Date
 _USER_TIME = re.compile(r"\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])?[Mm]?\s*$")
@@ -83,24 +112,27 @@ def _user_naive(date: str, time: str) -> datetime | None:
         return None
 
 
-def _read_ini(img) -> dict[str, configparser.SectionProxy] | None:
-    """The tag's sections (lower-cased names; option names are lower-cased by the parser), or None when the
-    tag is absent, not text, too long or not INI."""
-    try:
-        tags = img.tag_v2  # TIFF only
-    except AttributeError:
-        return None
-    val = tags.get(FEI_TAG)
-    if isinstance(val, bytes):
-        val = val.decode("latin-1", "ignore")
-    if not isinstance(val, str) or len(val) > MAX_META_CHARS:
+def _read_ini(img) -> tuple[dict[str, configparser.SectionProxy], bool] | None:
+    """The tag's sections (lower-cased names; option names are lower-cased by the parser) and whether some line
+    could not be parsed, or None when the tag is absent, not text, too long or not INI at all (no section header).
+
+    A line the parser cannot read (one without `=`) raises ParsingError only AFTER it has read the rest of the
+    text, so the sections it did parse are kept (spec section 8: a metadata block that parses badly gives the
+    fields it could parse); the caller notes it as `flags.metadata_error`."""
+    val = tiff_tag_text(img, FEI_TAG)
+    if val is None or len(val) > MAX_META_CHARS:
         return None
     cp = configparser.ConfigParser(strict=False, interpolation=None)
+    bad_lines = False
     try:
         cp.read_string(val.rstrip("\x00"))
+    except configparser.MissingSectionHeaderError:
+        return None
+    except configparser.ParsingError:
+        bad_lines = True
     except configparser.Error:
         return None
-    return {name.lower(): cp[name] for name in cp.sections()}
+    return {name.lower(): cp[name] for name in cp.sections()}, bad_lines
 
 
 class _Reader:
@@ -148,17 +180,23 @@ def fei_metadata(img) -> dict | None:
     None when tag 34682 is absent, not text, longer than 20,000 characters, not INI, or lacks `[System]
     Type=SEM` and a `[PrivateFei]` section. Otherwise a dict of the keys the file states (numeric, unit in the
     key, absent when unknown), plus `bar_height_px` when `DatabarHeight` exists, `sources` (every key
-    `metadata`, `magnification` `derived`) and `flags` (why a present value was left out). `acquired_at` is an
+    `metadata`, `magnification` `derived`) and `flags` (why a present value was left out; `metadata_error` when some line of the tag could not be
+    parsed and the rest was kept). `acquired_at` is an
     aware `datetime`; the caller turns it into ISO text.
     """
-    sections = _read_ini(img)
-    if sections is None or "privatefei" not in sections:
+    parsed = _read_ini(img)
+    if parsed is None:
+        return None
+    sections, bad_lines = parsed
+    if "privatefei" not in sections:
         return None
     sys_sec = sections.get("system")
     if sys_sec is None or sys_sec.get("type", "").strip().upper() != "SEM":
         return None
 
     flags: dict[str, str] = {}
+    if bad_lines:
+        flags["metadata_error"] = "unparseable_lines"
     rd = _Reader(sections, flags)
     out: dict = {}
 
@@ -176,11 +214,11 @@ def fei_metadata(img) -> dict | None:
 
     hfw = rd.number("ebeam", "hfw", "hfw_um")
     canvas = rd.number("image", "screenmagcanvasrealwidth", "magnification")
-    if hfw is not None and hfw <= 0:
-        flags["hfw_um"] = "out_of_range"
     if (
         hfw is None or hfw <= 0
     ):  # no field width: no magnification (and no division by zero)
+        if hfw is not None:
+            flags["hfw_um"] = "out_of_range"
         flags["magnification"] = "no_hfw"
     else:
         out["hfw_um"] = round(hfw * 1e6, 4)

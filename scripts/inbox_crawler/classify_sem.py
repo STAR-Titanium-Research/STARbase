@@ -26,7 +26,15 @@ from io import BytesIO
 from typing import Protocol
 
 from .kinds import Classification
-from .sem_meta import RANGES, UM_PER, fei_metadata
+from .sem_meta import (
+    DIVIDER_BRIGHT_FRAC,
+    DIVIDER_ROW_FRAC,
+    RANGES,
+    SEP,
+    fei_metadata,
+    tiff_tag_text,
+    um_of,
+)
 
 log = logging.getLogger("inbox_crawler.classify_sem")
 
@@ -81,8 +89,7 @@ class SemProfile(Protocol):
 _KV = re.compile(
     r"(?<![\d.])(\d+(?:\.\d+)?)\s*kV", re.I
 )  # the lookbehind keeps a long digit run linear
-_SEP = "[,\u2009\u00a0\u202f ]"  # thousands separators: comma, thin, no-break, narrow no-break, ordinary space
-_NUM = rf"\d{{1,3}}(?:{_SEP}\d{{3}}){{1,2}}|\d{{1,6}}"  # at most 999 999 999: bounds the scan of a long digit run
+_NUM = rf"\d{{1,3}}(?:{SEP}\d{{3}}){{1,2}}|\d{{1,6}}"  # at most 999 999 999: bounds the scan of a long digit run
 _MAG = re.compile(
     # "x5,000" or "×250" (the sign first, commas only: a space would swallow the next number)
     r"(?:(?<![A-Za-z0-9])[x×]\s?(\d{1,3}(?:,\d{3})+|\d{2,6})(?![\d.]))"
@@ -113,7 +120,7 @@ def parse_text(text: str, *, scale_bar: bool = False) -> dict:
     m = _MAG.search(text)
     if m:
         digits = m.group(1) or m.group(2) or m.group(3)
-        keep("magnification", int(re.sub(_SEP, "", digits)))
+        keep("magnification", int(re.sub(SEP, "", digits)))
     m = _WD.search(text)
     if m:
         keep("working_distance_mm", float(m.group(1)))
@@ -122,9 +129,7 @@ def parse_text(text: str, *, scale_bar: bool = False) -> dict:
         for s in _SCALE.finditer(text):
             if wd_end and wd_end.start() <= s.start() < wd_end.end():
                 continue  # the working distance is not the scale bar
-            out["scale_bar_um"] = round(
-                float(s.group(1)) * UM_PER[s.group(2).lower()], 6
-            )
+            out["scale_bar_um"] = um_of(s.group(1), s.group(2))
             break
     return out
 
@@ -233,12 +238,6 @@ def bar_features(gray, y: int) -> tuple[bool, bool]:
 
 BAR_TOP_MIN_MEAN = 150  # the bar's white top row: a row mean above this ...
 BAR_TOP_RATIO = 2.5  # ... and at least this many times the mean of the row two below
-DIVIDER_ROW_FRAC = (
-    0.9  # a divider column is bright in more than this share of the body rows
-)
-DIVIDER_BRIGHT_FRAC = (
-    0.4  # ... where bright means above this share of the bar's maximum
-)
 MIN_DIVIDERS = 3  # fewer vertical dividers is not a cell structure
 BODY_MAX_BRIGHT = 0.5  # a bar body is mostly dark: more bright pixels than this is a picture, not a bar
 
@@ -289,21 +288,10 @@ def bar_structure(gray, y: int) -> int | None:
     return groups if groups >= MIN_DIVIDERS else None
 
 
-def _tiff_text(tags, key: int) -> str:
-    val = tags.get(key)
-    if isinstance(val, bytes):
-        val = val.decode("latin-1", "ignore")
-    return val if isinstance(val, str) else ""
-
-
 def negative_signal(img) -> str | None:
     """Why this image is not an SEM, or None: TIFF tag 272 (Model) matching `Microscope x<N>` (an optical
     microscope camera), or tag 271/272 naming a DirectShow capture device."""
-    try:
-        tags = img.tag_v2  # TIFF only
-    except AttributeError:
-        return None
-    make, model = _tiff_text(tags, 271), _tiff_text(tags, 272)
+    make, model = tiff_tag_text(img, 271) or "", tiff_tag_text(img, 272) or ""
     if _OPTICAL.search(model):
         return (
             f"optical microscope image (TIFF model {model.strip()[:40]!r}), not an SEM"
@@ -415,6 +403,9 @@ class FeiProfile:
         bar_reader: Callable | None = None,
     ) -> ProfileResult | None:
         meta = fei_metadata(img)
+        reading = ocr and bar_reader is not None
+        if meta is None and not reading:
+            return None  # no metadata and no bar reading: nothing can claim the image
         gray = _gray(img)
         y = find_fei_bar(gray)
         if meta is not None:
@@ -425,7 +416,7 @@ class FeiProfile:
                 )  # DatabarHeight places a bar whose top row is not bright
         structured = y is not None and bar_structure(gray, y) is not None
         read = None
-        if ocr and bar_reader is not None and structured:
+        if reading and structured:
             read = self._read_bar(
                 gray, y, bar_reader, None if meta is None else meta.get("hfw_um")
             )
@@ -461,12 +452,13 @@ class FeiProfile:
 
             w, h = gray.size
             bar = gray.crop((0, y, w, h))
-            read = sem_bar.read_bar(bar, bar_reader)
+            cells = sem_bar.cut_cells(bar)
+            read = sem_bar.read_bar(bar, bar_reader, cells)
             labels = sum(1 for key in read if key != "scale")
             parsed = sem_bar.parse_bar(
                 read,
                 image_width=w,
-                scale_px=sem_bar.scale_bar_length_px(bar),
+                scale_px=sem_bar.scale_bar_length_px(bar, cells) if read else None,
                 hfw_um=hfw_um,
             )
             return labels, parsed

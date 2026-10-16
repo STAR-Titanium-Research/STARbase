@@ -37,7 +37,10 @@ test('the fixtures are the cases the client has to handle', () => {
     'link_surface_scan_already_linked', 'link_surface_scan_400_condition', 'link_surface_scan_400_item', 'link_surface_scan_400_date', 'link_surface_scan_404_not_found',
     'link_surface_scan_403_not_allowed', 'link_surface_scan_409_already_added', 'link_surface_scan_409_unavailable', 'files_linked_surface_scan', 'undo_ok_surface_scan',
     'undo_403_surface_scan', 'undo_ok', 'dismiss_ok', 'restore_ok', 'rescan_202', 'rescan_429', 'rescan_409_no_folder', 'prefs_get_off', 'prefs_put_on',
-    'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys', 'picture_headers', 'picture_404',
+    'admin_alive', 'admin_paused', 'admin_stale', 'admin_never', 'scan_all_202', 'scan_all_409_already_queued', 'filter_keys',
+    'sem_settings_owner', 'sem_settings_admin', 'sem_settings_locked', 'sem_settings_none', 'sem_settings_correct_ok', 'sem_settings_correct_403',
+    'sem_settings_correct_400_field', 'sem_settings_correct_400_value', 'link_403_admin_read_only',
+    'picture_headers', 'picture_404',
     'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_get_empty_viewer', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
     'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
     'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404',
@@ -106,6 +109,13 @@ test('every request in a fixture is one the server accepts', () => {
       if (body.dry_run !== undefined) assert.equal(typeof body.dry_run, 'boolean', label);
       for (const id of body.candidate_ids ?? []) assert.match(id, UUID, label);
       assert.deepEqual(Object.keys(body).filter((k) => !['filter', 'dry_run', 'candidate_ids', 'cursor'].includes(k)), [], label);
+    } else if (req.path === '/d1-inbox/sem-settings') {
+      assert.deepEqual(Object.keys(req.query), ['file'], label);
+      assert.match(req.query.file, UUID, label);
+    } else if (req.path.startsWith('/d1-inbox/sem-settings/')) {
+      assert.match(req.path.slice('/d1-inbox/sem-settings/'.length), UUID, label);
+      assert.deepEqual(Object.keys(body).sort(), ['field', 'value'], label);
+      assert.equal(typeof body.field, 'string', label);
     } else if (req.path === '/d1-inbox/dismiss' || req.path === '/d1-inbox/restore') {
       assert.ok(body.candidate_ids.length >= 1, label);
       for (const id of body.candidate_ids) assert.match(id, UUID, label);
@@ -287,6 +297,28 @@ test('a copy of a file in an Inbox the caller has no part in carries { kind: oth
   assert.deepEqual(other.duplicate_of_owner, { kind: 'other' });
   assert.ok(!JSON.stringify(other).includes('Bob B'), "the other person's name is not in the row");
   assert.equal(rows.find((r) => r.candidate_id === '00000000-0000-4000-8000-000000001002').duplicate_of_owner, 'Alice A');
+});
+
+test('an imaging settings answer: a locked file carries nothing but locked; an owner and an administrator see the same values, only the owner can edit; values are never null', () => {
+  assert.deepEqual(built.get('sem_settings_locked.json').body, { data: { locked: true } });
+  assert.deepEqual(built.get('sem_settings_none.json').body, { data: { locked: false, settings: null } });
+  const owner = built.get('sem_settings_owner.json').body.data;
+  const admin = built.get('sem_settings_admin.json').body.data;
+  assert.deepEqual({ ...owner, can_edit: false }, admin);
+  assert.equal(owner.can_edit, true);
+  assert.equal(admin.can_edit, false);
+  assert.equal(owner.locked, false);
+  assert.ok(Object.keys(owner.settings).length > 5);
+  for (const value of Object.values(owner.settings)) assert.ok(value !== null && value !== undefined);
+  for (const field of Object.keys(owner.settings)) assert.ok(['metadata', 'derived', 'ocr', 'manual'].includes(owner.sources[field]), field);
+  assert.equal(built.get('sem_settings_correct_ok.json').body.data.sources.kv, 'manual');
+  assert.equal(built.get('sem_settings_correct_ok.json').body.data.settings.kv, 20);
+  // the refusals say which part of the request was wrong, the client marks that control
+  assert.equal(built.get('sem_settings_correct_400_field.json').body.errors[0].extensions.field, 'field');
+  assert.equal(built.get('sem_settings_correct_400_value.json').body.errors[0].extensions.field, 'value');
+  assert.equal(built.get('sem_settings_correct_403.json').status, 403);
+  assert.equal(built.get('link_403_admin_read_only.json').body.errors[0].extensions.code, 'FORBIDDEN');
+  assert.equal(built.get('link_403_admin_read_only.json').status, 403);
 });
 
 test('the folder filter reads the folder part of the path, not the file name (the client words it that way)', () => {

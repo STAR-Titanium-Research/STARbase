@@ -3,8 +3,9 @@
 `world` builds, in a uniquely named schema that is dropped afterwards, the tables the crawler touches: stand-ins
 for what Directus owns (`directus_files`, `directus_folders`, `directus_users`; a migrated database only has
 one-column stubs), small stand-ins for `people`, `teams` and the three record tables, and the REAL migrations
-for `file_fingerprints` (T0e), the inbox (193) and the thumbnails table (198), with `d1_private.` pointed at the
-throwaway schema. It touches nothing else in the database. The "share" is a directory under tmp_path.
+for `file_fingerprints` (T0e), the inbox (193), the owner columns and the readers table of 196 (sections 1 and 3 to 5, verbatim), the SEM
+settings (197: `sem_image_settings`, `file_candidates.classified_by`, `save_sem_settings`), the thumbnails table (198) and the ignored folders
+(199), with `d1_private.` pointed at the throwaway schema. It touches nothing else in the database. The "share" is a directory under tmp_path.
 
 Skipped when DATABASE_URL is unset or unreachable (CI sets REQUIRE_DB_TESTS=1, which turns a skip into a
 failure, see conftest.py). A few smoke tests at the bottom check the fixture itself.
@@ -26,6 +27,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 DSN = os.environ.get("DATABASE_URL")
 FINGERPRINTS = ROOT / "db/migrations/20261010000159_file_fingerprints.sql"
 INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
+PROVENANCE = ROOT / "db/migrations/20261016000196_file_provenance_owner.sql"
+SEM_SETTINGS = ROOT / "db/migrations/20261016000197_sem_image_settings.sql"
 IGNORED = (
     ROOT / "db/migrations/20261016000199_inbox_ignored_dirs.sql"
 )  # stream IA of the ignored folders plan
@@ -42,6 +45,27 @@ def migration_up(path: Path, schema: str | None = None) -> str:
         .split("-- migrate:down", 1)[0]
     )
     return sql.replace("d1_private.", f"{schema}.") if schema else sql
+
+
+def owner_columns_up(path: Path = PROVENANCE) -> str:
+    """Section 1 of migration 196 as written: the two owner columns, their foreign keys, the one-owner CHECK,
+    the partial indexes and the comments. The rest of 196 (the readers table and its triggers, the Directus
+    permission rows) needs `directus_permissions` and `directus_fields`, which this world does not have."""
+    sql = migration_up(path)
+    return sql.split("-- 1. The owner columns.", 1)[1].split("-- 2. The back-fill", 1)[
+        0
+    ]
+
+
+def readers_up(path: Path = PROVENANCE, schema: str | None = None) -> str:
+    """Sections 3 to 5 of migration 196 as written: the `file_readers` table (a FK to directus_files, which the
+    indexer's repoint routine finds like any other), the functions that keep it, the readers back-fill and the
+    triggers. Section 2 (the back-fill of found files) needs `surface_scans`, and section 6 and 7 (the Directus
+    metadata and permission rows) need tables this world does not have."""
+    sql = migration_up(path, schema)
+    return sql.split("-- 3. The readers table.", 1)[1].split(
+        "-- 6. The Directus metadata", 1
+    )[0]
 
 
 STUBS = """
@@ -184,6 +208,11 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
+        # the owner columns and the readers table with its triggers of 196 (its sections 1 and 3 to 5, verbatim) and the whole of 197: d1_private.sem_image_settings,
+        # file_candidates.classified_by and the real d1_private.save_sem_settings
+        cur.execute(owner_columns_up())
+        cur.execute(readers_up(schema=schema))
+        cur.execute(migration_up(SEM_SETTINGS, schema))
         cur.execute(migration_up(THUMBNAILS, schema))
         cur.execute(migration_up(IGNORED, schema))
         conn.commit()
@@ -229,3 +258,28 @@ def test_the_world_gets_every_candidate_column_from_the_real_migration(world):
     }
     # the fixture has no ALTER of its own: migration 193 carries both
     assert {"adopted_at", "auto_undone_at"} <= cols
+
+
+def test_the_world_has_the_owner_columns_and_the_real_settings_function(world):
+    cols = {
+        r[0]
+        for r in world.q(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'directus_files'",
+            (world.schema,),
+        )
+    }
+    assert {"owner_person_id", "owner_team_id"} <= cols
+    assert world.one(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema = %s "
+        "AND table_name = 'file_candidates' AND column_name = 'classified_by'",
+        (world.schema,),
+    ) == (1,)
+    assert world.one(
+        "SELECT to_regclass(%s) IS NOT NULL", (f"{world.schema}.sem_image_settings",)
+    ) == (True,)
+    assert world.one(
+        "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = %s AND p.proname = 'save_sem_settings'",
+        (world.schema,),
+    ) == (1,)

@@ -17,8 +17,8 @@
 - **Decoded formats and limit:** TIFF, JPEG, PNG, BMP only; `MAX_PIXELS = 50_000_000` (unchanged).
 - **Claim rule (D1):** `kind='sem_image'` needs `SEM_MIN_CONFIDENCE = 0.6` reached with positive evidence: FEI metadata (tag 34682 with `[System] Type=SEM` and a `[PrivateFei]` section: 0.9, or 0.95 with a bar structure), the JEOL text the JEOL profile already finds, or a recognised bar structure with at least two header labels read by OCR (0.8). A bar-shaped strip alone never reaches 0.6. TIFF tag 272 matching `Microscope x<N>` (case-insensitive), or tag 271/272 containing `DirectShow`, is a negative signal that caps confidence at 0.55.
 - **Thresholds are relative, never absolute:** contrast-edited exports (about 32 of 37 real PNGs) lower the white dividers from 255 to about 207. A bar top is a row whose mean is above 150 and at least 2.5 times the mean of the row two below; a divider column has more than 90% of the bar's body rows brighter than 0.4 times the bar's maximum. The bar's vertical position is fixed (the bottom 59 to 60 of 943 rows, 119 of 1887) but its columns are not (16 layouts in 120 bars): find cells from dividers.
-- **Keys:** numeric, unit in the key, absent when unknown, never null: `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `pixel_size_nm`, `scale_bar_um`, `detector`, `mode`, `instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects. Source values: `metadata`, `derived`, `ocr`, `manual`.
-- **Ranges (omit with a flag when outside):** `kv` 0.1 to 30, `working_distance_mm` 0.1 to 50, `magnification` 5 to 1,000,000, `spot` 1 to 10. OCR confidence is recorded, never a threshold.
+- **Keys:** numeric, unit in the key, absent when unknown, never null: `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `pixel_size_nm`, `scale_bar_um`, `detector`, `mode`, `instrument`, `acquired_at` (ISO 8601 with offset), plus `sources` and `flags` objects and, for OCR-read fields, `ocr_confidence` (ruling R10). Source values: `metadata`, `derived`, `ocr`, `manual`.
+- **Ranges (omit with a flag when outside):** `kv` 0.1 to 30, `working_distance_mm` 0.1 to 50, `magnification` 5 to 1,000,000, `spot` 1 to 10. OCR confidence is recorded as `extracted.ocr_confidence` (ruling R10: a field-to-confidence map; `sources` holds only source names), never a threshold.
 - **Cross-checks:** `magnification x hfw` (metres) equals 0.2984 or 0.2984 x 0.858 within 2%; the scale-bar label against the bar's pixel length within 5%. A value that cannot be cross-checked gets `flags.check_this = true`.
 - **Time:** instrument clock is `Europe/London`; stored as `timestamptz`; the repeated autumn hour takes the first occurrence (`fold=0`); a local time that does not exist (the skipped spring hour) is omitted with `flags.acquired_at = "invalid_local_time"`.
 - **OCR is opt-in:** `INBOX_OCR=1`; `INBOX_OCR_DEVICE=auto|cpu|cuda`, default CPU; pins exact versions; every new compose variable has an uncommented `VAR=` line in `.env.example`.
@@ -42,12 +42,14 @@ One row per stream. Update when a stream starts, finishes, is reviewed or is mer
 
 | Stream | Area | Agent profile | Worktree id | Branch | Depends on | State |
 |---|---|---|---|---|---|---|
-| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | not started |
-| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | not started |
-| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | not started |
-| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | not started |
-| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | not started |
-| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | not started |
+| A | Detector, metadata tier, JEOL demotion | `inbox-crawler-implementer` | `sem-a` | `feat/sem-reader-a-detect` | none | merged into the integration branch |
+| B | Cell-split OCR tier, packaging | `inbox-crawler-implementer` | `sem-b` | `feat/sem-reader-b-ocr` | A | merged into the integration branch |
+| C | Migrations: owner columns, settings table and function, permissions | `d1-server-implementer` | `sem-c` | `feat/sem-reader-c-db` | none | merged into the integration branch |
+| D | `d1-inbox` endpoint | `d1-server-implementer` | `sem-d` | `feat/sem-reader-d-endpoint` | C | merged into the integration branch |
+| E | Crawler: stamping, `--reclassify`, `--sem-backfill` | `inbox-crawler-implementer` | `sem-e` | `feat/sem-reader-e-crawler` | A, B, C | merged into the integration branch |
+| F | STARbase pages | `directus-ui-implementer` | `sem-f` | `feat/sem-reader-f-ui` | D | merged into the integration branch |
+
+All six streams merged into the integration branch and reviewed. The whole-branch review's fix wave (C1, I1-I5, M1-M3) and the `/simplify` cleanup are merged too; a scoped re-review of the fix wave is the last gate before PR #341 merges.
 
 **Coordinator duties (this session, not a worker):** run A and C first (parallel, Sonnet, high effort); review each stream branch before merging it into the integration branch `claude/gracious-heisenberg-x7to0t`; **before D starts, message session `session_01YGVh6kfgvqZMHaVmHn39dw` (the inbox-crawler chat asked to be told before `core/extensions/d1-inbox` or `inboxContract` change)**; open one PR per stream (or one for the whole branch when small) when ready, not per commit. Build order from the spec (section 10): A (+ `--reclassify` from E) first because the detector is the live bug.
 

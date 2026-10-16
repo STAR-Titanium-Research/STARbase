@@ -166,6 +166,8 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "daemon": frozenset({"logging", "threading", "dataclasses", "datetime"}),
     "db": frozenset({"json", "logging", "dataclasses", "datetime", "psycopg2"}),
     "hashing": frozenset({"hashlib", "logging", "time", "dataclasses"}),
+    # the one-shot passes (--reclassify, --sem-backfill): bytes read through the share, classified as io.BytesIO
+    "maintenance": frozenset({"io", "logging", "dataclasses"}),
     "identity": frozenset({"os.path", "sys", "index_archive"}),
     "kinds": frozenset({"dataclasses"}),
     "owners": frozenset({"collections.abc", "dataclasses"}),
