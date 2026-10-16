@@ -53,6 +53,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": true,
         "suggested_can_edit": true
       }
     ],

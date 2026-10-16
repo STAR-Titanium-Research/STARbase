@@ -2,7 +2,8 @@
 // what the model, API and page tests (and the Playwright spec's stand-in server) run against.
 //
 // The shapes are d1-inbox's own, as built (core/extensions/d1-inbox/index.js, stream B): every answer is `{ data: ... }`; a list also has
-// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1, which the page never does); `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
+// `meta: { total, limit, offset }` (and `acceptable` only when the request asks with acceptable=1: the page asks once per filter, with limit 1);
+// `link` answers `{ link_batch_id, linked: <count>, items }` and refuses a record the caller
 // cannot edit (403 FORBIDDEN) and a file someone else linked (409 ALREADY_LINKED); `accept-all` answers `{ link_batch_id, linked, items, skipped,
 // has_more }`, its dry run `{ link_batch_id: null, linked: 0, count, acceptable, ids, items: [], skipped, has_more, dry_run: true }`, takes
 // `candidate_ids` (links exactly those), and skips surface scans (SURFACE_SCAN), copies (COPY), records the caller cannot edit (NOT_EDITABLE) and
@@ -17,10 +18,18 @@
 // the `data` of a contract fixture ({ locked: true } | { locked: false, settings: null } | { locked: false, settings, sources, flags, can_edit }); a file it does not
 // know is locked (as the server answers for an id that does not exist). A correction is 403 unless the file's entry has can_edit, 400 INVALID_PAYLOAD
 // (extensions.field: 'field' | 'value') for a field that is not a setting or a value out of its range, else it sets the field, marks it manual and drops its flag.
+// Pictures (spec section 14): a file with `has_thumbnail: true` serves GET /d1-inbox/files/<id>/thumb and /preview as an image Blob (fakePictures.ts), as an
+// axios client with responseType 'blob' receives it; any other file, and an id the fake does not know, is 404 NOT_FOUND. The options `pictureDelayMs` (and
+// `previewDelayMs` for the preview alone), `thumbFails` and `previewFails` (true, or the number of requests to refuse first) steer them, and `pictureStats` counts the requests and the most that
+// were open at once. `pictureHangs` makes a request that never answers: like axios it fails with ECONNABORTED when the request carries a `timeout`, and
+// stays open forever when it does not.
+// Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
 import type { FoundFile, LinkItem, ScanLinkItem, SemSettingsAnswer } from './inboxApi';
+import { fakePictureBlob } from './fakePictures';
+import { createFakeIgnored, type FakeIgnoredOptions } from './fakeIgnored';
 
 let counter = 0;
 
@@ -52,6 +61,7 @@ export function foundFile(over: Partial<FoundFile> = {}): FoundFile {
 		link_kind: null,
 		link_batch_id: null,
 		owner: { kind: 'person', id: 'p1', name: 'Ann Lee' },
+		has_thumbnail: false,
 		...over,
 	};
 }
@@ -72,7 +82,7 @@ export function exactMatch(over: Partial<FoundFile> = {}, token = '3fa9c1d2', la
 	});
 }
 
-export interface FakeInboxOptions {
+export interface FakeInboxOptions extends FakeIgnoredOptions {
 	files?: FoundFile[];
 	autoLink?: boolean;
 	summary?: Record<string, unknown>;
@@ -81,8 +91,6 @@ export interface FakeInboxOptions {
 	now?: () => number;
 	/** May the caller edit this record? Default: yes. A link to a record that fails is 403, and accept-all skips it (NOT_EDITABLE). */
 	editable?: (collection: string, recordId: string) => boolean;
-	/** The person has no folder: rescan answers 409 NO_FOLDER. */
-	noFolder?: boolean;
 	/** Accept-all takes `candidate_ids` and links exactly those (default true). */
 	acceptIds?: boolean;
 	/** A dry run lists the files it would link in `ids` (default true). */
@@ -99,6 +107,16 @@ export interface FakeInboxOptions {
 	sem?: Record<string, SemSettingsAnswer>;
 	/** The caller is not the person who linked a batch (and not an administrator): undo is 403 FORBIDDEN with no candidate_id, as the server's own check answers. */
 	undoByLinkerOnly?: boolean;
+	/** How long a picture request takes, in ms (default 0). Lets a test or a screenshot see the loading state. */
+	pictureDelayMs?: number;
+	/** How long a preview request takes (default pictureDelayMs): a slow preview behind a quick thumbnail, as on a real share. */
+	previewDelayMs?: number;
+	/** Thumbnail requests are refused with 500 (true), or the first n of them are. */
+	thumbFails?: boolean | number;
+	/** Preview requests are refused with 500 (true), or the first n of them are. */
+	previewFails?: boolean | number;
+	/** Picture requests never answer (a stalled share): they fail with a timeout error after the request's own `timeout`, or hang when it has none. */
+	pictureHangs?: boolean;
 }
 
 /** One surface_scans row the fake made. */
@@ -126,6 +144,7 @@ const err = (status: number, code: string, message: string, extra: Record<string
 		response: { status, data: { errors: [{ message, extensions: { ...extra, code, source: 'd1-inbox' } }] } },
 	});
 
+const PICTURE_ROUTE = /^\/d1-inbox\/files\/([^/]+)\/(thumb|preview)$/;
 const ACCEPT_LIMIT = 500;
 /** The ranges the database holds each setting to (migration 197): [min, max, whole number]. Text settings are 1 to 200 characters; acquired_at is a time with an offset. */
 const SEM_RANGES: Record<string, [number, number, boolean]> = {
@@ -349,7 +368,48 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		return entry;
 	}
 
+	const pictureStats = { requests: 0, thumbs: 0, previews: 0, open: 0, maxOpen: 0, paths: [] as string[] };
+	const refused: Record<string, number> = { thumb: 0, preview: 0 };
+	/** The picture routes: a Blob after the delay, or the error the endpoint would answer. */
+	async function picture(path: string, timeout?: number): Promise<Blob> {
+		const [, id, size] = PICTURE_ROUTE.exec(path) as RegExpExecArray & [string, string, 'thumb' | 'preview'];
+		pictureStats.requests += 1;
+		pictureStats[size === 'thumb' ? 'thumbs' : 'previews'] += 1;
+		pictureStats.paths.push(path);
+		pictureStats.open += 1;
+		pictureStats.maxOpen = Math.max(pictureStats.maxOpen, pictureStats.open);
+		try {
+			if (opts.pictureHangs) {
+				await new Promise<never>((_, reject) => {
+					if (timeout) setTimeout(() => reject(Object.assign(new Error(`timeout of ${timeout}ms exceeded`), { code: 'ECONNABORTED' })), timeout);
+				});
+			}
+			const delay = size === 'preview' ? opts.previewDelayMs ?? opts.pictureDelayMs : opts.pictureDelayMs;
+			if (delay) await new Promise((r) => setTimeout(r, delay));
+			const f = files.find((x) => x.candidate_id === id);
+			if (!f || !f.has_thumbnail) throw err(404, 'NOT_FOUND', 'That file has no picture.');
+			const fails = size === 'thumb' ? opts.thumbFails : opts.previewFails;
+			refused[size] += 1;
+			if (fails === true || (typeof fails === 'number' && refused[size] <= fails)) throw err(500, 'INTERNAL_SERVER_ERROR', 'The picture could not be read.');
+			return fakePictureBlob(size);
+		} finally {
+			pictureStats.open -= 1;
+		}
+	}
+
+	/** A rescan the way POST /rescan allows it: not within 10 minutes of the last one. The removal of an ignored folder asks for one this way. */
+	const queueRescan = () => {
+		const t = now();
+		if (lastRescan !== null && t - lastRescan < 10 * 60_000) return false;
+		lastRescan = t;
+		return true;
+	};
+	const ignored = createFakeIgnored({ opts, files, now, queueRescan, person: () => ({ kind: 'person', id: 'p1', name: 'Ann Lee' }) });
+	const IGNORED_ROUTE = /^\/d1-inbox\/ignored-folders\/([^/]+)$/;
+
 	const handlers: Record<string, (c: Call) => unknown> = {
+		'get /d1-inbox/ignored-folders': ignored.list,
+		'post /d1-inbox/ignored-folders': ignored.add,
 		'get /d1-inbox/summary': () => ok(summary()),
 		'get /d1-inbox/files': (c) => {
 			const p = c.params ?? {};
@@ -457,11 +517,16 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		},
 	};
 
-	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown> }) {
+	function run(method: Call['method'], path: string, body?: unknown, config?: { params?: Record<string, unknown>; timeout?: number }) {
 		const call: Call = { method, path, body, params: config?.params };
 		calls.push(call);
+		// A picture is the image itself (not { data }), so it is not cloned through JSON.
+		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path, config?.timeout).then((data) => ({ data }));
 		const semPatch = method === 'patch' ? /^\/d1-inbox\/sem-settings\/([^/]+)$/.exec(path) : null;
-		const h = semPatch ? (c: Call) => ok(semCorrect(decodeURIComponent(semPatch[1]), c.body)) : handlers[`${method} ${path}`];
+		const rule = method === 'delete' ? IGNORED_ROUTE.exec(path) : null;
+		const h = semPatch
+			? (c: Call) => ok(semCorrect(decodeURIComponent(semPatch[1]), c.body))
+			: rule ? () => ignored.remove(decodeURIComponent(rule[1])) : handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));
 		try {
 			// The answer is cloned, like an HTTP response: a page never holds the server's own rows.
@@ -479,5 +544,5 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		delete: (path, config) => run('delete', path, undefined, config),
 	};
 
-	return { api, files, calls, junctions, scans, setAutoLink: (v: boolean) => (autoLink = v) };
+	return { api, files, calls, junctions, scans, rules: ignored.rules, pictureStats, setAutoLink: (v: boolean) => (autoLink = v), hang: (v: boolean) => (opts.pictureHangs = v) };
 }

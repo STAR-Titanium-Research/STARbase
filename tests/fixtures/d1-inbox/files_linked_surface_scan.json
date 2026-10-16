@@ -46,6 +46,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "linked_insert_id": null,
         "linked_edge_id": "00000000-0000-4000-8000-000000000202"
       }

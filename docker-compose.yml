@@ -608,6 +608,9 @@ services:
       D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
       # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
       INBOX_OCR: ${INBOX_OCR:-}
+      # Thumbnails for the Inbox (spec section 14): 1 (default) makes a small and a reduced picture of each image
+      # and SEM image, in the database; 0 turns that and the backfill of older files off.
+      INBOX_THUMBNAILS: ${INBOX_THUMBNAILS:-1}
       # auto|cpu|cuda for the data-bar OCR: CPU unless asked; auto takes the GPU when onnxruntime offers one.
       INBOX_OCR_DEVICE: ${INBOX_OCR_DEVICE:-cpu}
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}

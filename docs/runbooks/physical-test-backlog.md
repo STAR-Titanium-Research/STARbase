@@ -2033,9 +2033,10 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   expect Undo to show *You can no longer delete that surface scan, so adding it cannot be undone.* and change
   nothing; the dialog fits a phone-width window. Since: found files inbox, streams F1 and F2.
 - [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
-  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
-  thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
-  `/assets/` request; check the browser's network tab shows none); a flagged file reading *short ID `…` in the
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (an
+  image with a stored picture shows it instead, see **IF60**; the page never makes an `/assets/` request for a
+  found file, because archive files are pointer rows Directus cannot serve: check the browser's network tab
+  shows none); a flagged file reading *short ID `…` in the
   file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
   Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
   past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
@@ -2145,6 +2146,115 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
   this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
   re-review fixes (server, S5).
+- [ ] **IF53 — Thumbnails of real SEM images look right.** Needs migration 198 and the crawler on the new code
+  (`INBOX_THUMBNAILS` unset or `1`). Save a real JEOL 16-bit TIFF, a JEOL 8-bit TIFF, a JPEG and a PNG into a test folder
+  and let the scan find them. Then, as the database owner,
+  `SELECT c.rel_path, octet_length(t.thumb), octet_length(t.preview), t.thumb_width, t.thumb_height, t.preview_width, t.preview_height
+  FROM d1_private.file_thumbnails t JOIN d1_private.file_candidates c USING (candidate_id)`: expect a row each, the thumbnail
+  about 320 px on its long side and 10 to 25 KB, the preview about 1600 px (or the original size if smaller) and 150 to 400 KB.
+  In the Inbox (stream C) or by saving `thumb` and `preview` out of the row: the 16-bit TIFF is a recognisable grey picture
+  (stretched, not black), the data bar and its scale bar are readable in the preview, and a rotated JPEG (camera or phone photo)
+  is upright. A multi-page TIFF shows its first frame. A PDF and an `.al3d` get no row. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF54 — The thumbnail backfill on the real share is throttled and bounded.** On the deployment, with older found files
+  that have no picture (everything registered before migration 198), start the crawler and watch
+  `SELECT count(*) FROM d1_private.file_thumbnails` over a few minutes: it grows by at most 25 per 30 second tick (and a tick
+  hands back after 20 seconds), reads stay at or below `read_mb_per_s` (check the share's or the container's network rate while
+  `docker compose --profile archive logs -f inbox-crawler` shows `thumbnails made for N images`), the admin tab's heartbeat does
+  not go stale, and a scan request queued meanwhile is picked up within about a minute. Restart the service in the middle: it
+  resumes where it left off and re-reads nothing that has a row. `docker stats` on the largest real image (a 50 megapixel 16-bit
+  TIFF peaks at about 500 MB): the container stays within its memory. Note how long the whole backlog takes and put it in
+  `docs/runbooks/inbox-crawler.md`. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF55 — The backfill reads only images and never writes to the share.** With `INBOX_LOG_LEVEL=DEBUG` (recreate the
+  service), let the backfill run on the real share: every `reading ...` line it logs is a `.tif .tiff .jpg .jpeg .png .bmp` path, never
+  a document, `.mat`, camera raw or `.al3d`, and a person's linked documents are not re-read for pictures. Compare the
+  modification times of a few folders and files before and after (and the SMB server's audit log if there is one): nothing
+  was created, changed or deleted. Since: Inbox thumbnails (stream B, crawler); read-only invariant of ADR-0020.
+- [ ] **IF56 — A file that goes gone loses its picture, and `INBOX_THUMBNAILS=0` stops it all.** Delete one undecided image
+  with pictures from the real share and run *Rescan my folder*: it becomes gone and its `file_thumbnails` row is deleted; put
+  it back and the next idle ticks make the picture again. Set `INBOX_THUMBNAILS=0` in `.env`, recreate the service
+  (`docker compose --profile archive up -d --force-recreate inbox-crawler`), save a new image: it is registered with no row, and
+  the row count does not grow while older images are still missing pictures. Back to `1` and it resumes. Finally compare
+  `SELECT pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))), count(*) FROM d1_private.file_thumbnails` with the
+  runbook's estimate (about 0.3 MB per image) and correct the estimate if it is off by more than half. Since: Inbox thumbnails
+  (stream B, crawler).
+- [ ] **IF57 — An image that cannot be decoded is read once, and a re-saved file keeps its old picture.** Needs migration 198 as
+  amended (NULLable pictures, `failed_reason`). Put a truncated or renamed-text `.png` and a good image in a test folder
+  and let the scan find them: expect a `file_thumbnails` row for the bad one with both pictures NULL and
+  `failed_reason = 'not decoded'`, and a normal row for the good one. Restart the crawler with `INBOX_LOG_LEVEL=DEBUG`: the bad
+  file is not opened again (no `reading ...` line for it). Then overwrite the good image in place with a different picture
+  (same name) and rescan: its picture does not change (the documented limit: made once, when first seen); move it to a new
+  name and the new path gets the new picture. Since: Inbox thumbnails review fixes (M2, Minor2; crawler).
+- [ ] **IF58 — The backfill leaves a Former person's, an old alias's and an ignored folder's files alone.** With older images
+  without pictures (switch the crawler off, delete their rows, switch it on), set a test person to Former (not *scan while
+  former*), change another test person's alias after linking one of their images, ignore a folder of a third, and run the
+  crawler with `INBOX_LOG_LEVEL=DEBUG`: no `reading ...` line for any file of those three, and with `INBOX_ONLY_FOLDERS` set to
+  one alias none for anybody else's. Undo each and expect the pictures to be made. Since: Inbox thumbnails review fixes (M1;
+  crawler).
+
+- [ ] **IF60 — Inbox thumbnails and the full view on real data (STARbase `/inbox`, and the same page inside Data Studio).**
+  Needs the deployed `d1-inbox` with the thumbnails migration and a crawler that has made the pictures (new files, and the
+  backfill for older ones). Save a few real SEM images (TIFF, JPEG) into a test folder and let the scan find them. Expect:
+  each image row shows a small picture in place of the icon, a shimmer for a moment first; rows far down a long list
+  load their pictures only when you scroll to them (network tab: `/d1-inbox/files/<id>/thumb`, at most four in flight, none
+  for rows not yet reached; each answers `image/jpeg` as a blob with the session cookie and none is an `<img src>` to the
+  endpoint); a document, an `.al3d` and an image the crawler could not decode keep the icon. Click a picture (or Tab to it
+  and press Enter): the dialog opens with the blurred thumbnail and a spinner, then the preview (`/preview`), shows the
+  file name, folder and the kV, magnification and scale bar the row shows, and the line *Reduced-size preview. The
+  original stays on the share.* Esc, a click outside and **Close** each close it, and focus is back on the picture; Tab
+  stays inside the dialog. Open the same file in **both** hosts (STARbase and Data Studio's Home) and expect the same
+  result. Switch the browser to *reduce motion*: the shimmer and the spinner stand still. Stop the `d1-inbox` route (or
+  reload with the network blocked) after the list has loaded and expect the rows to show their icons without an error, and
+  the dialog to show *The preview could not be loaded.* with **Retry**. Since: Inbox thumbnails (stream C).
+- [ ] **IF61 — A person only sees pictures of files they can see.** With two people (or a person and a team) whose
+  folders hold images with pictures, copy the `thumb` URL of one person's file from the network tab and request it as the
+  other person (their session): expect 404, not the picture; and as a signed-out browser, expect no picture (the
+  endpoint needs the session). Since: Inbox thumbnails (stream C: the client side of the server's visibility rule).
+- [ ] **IF62 — Pictures inside Data Studio: look-ahead, stalled loads and focus.** On the Inbox page inside Data Studio
+  (Home's Inbox, where the page scrolls in `#main-content`) with a long list of image rows: scroll slowly and expect the
+  pictures a screen or so ahead to be loaded before the row arrives (network tab: `/thumb` requests start for rows just
+  below the visible area, none for rows far down). Throttle the network to *Offline* after the list has loaded, scroll to a
+  row and click its picture while it still shimmers: the preview opens, and after Esc focus is on the row's first button,
+  not on the page. Block a `/preview` request without answering (DevTools request blocking does not stall; use a proxy
+  or throttle to a very slow profile): after 30 seconds the dialog shows *The preview could not be loaded.* with **Retry**,
+  and Retry puts focus on **Close**. A screen reader (NVDA or Narrator) announces *Loading preview…* when the dialog opens
+  and *Preview ready.* when it is in. Since: Inbox thumbnails UI review fixes.
+
+- [ ] **IF70 — An ignored folder is never listed, statted or opened on the real share.** Needs a test person with a
+  folder tree on the lab share that has a subfolder with files (and a sibling named like it plus a suffix, for
+  example `World-Ti Paper` and `World-Ti Paper 2`). Add the rule `World-Ti Paper` for that person (the Inbox's
+  *Ignore this folder*, or `INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) ...` as the
+  database owner), then run `make inbox-crawler-once` (or *Rescan my folder*) while watching the file server's
+  access log, or the crawler container with `strace -f -e trace=openat,getdents64,newfstatat -p <pid>`. Expect no
+  open, listing or stat of any path under `World-Ti Paper`, the lookalike `World-Ti Paper 2` scanned as before, and
+  the log line `N ignored folders were not scanned`. Time the scan against the same scan without the rule (like IF4):
+  it is not slower and is faster on a big ignored tree. Also try the rule spelled in another case
+  (`world-ti paper`): the real share is case-insensitive, so it must cover the folder the same. Since: ignored
+  folders (crawler, IB).
+- [ ] **IF71 — Not scanned is not gone, and removing a rule lists the folder again (real share).** With the rule from
+  IF70 in place and a file of that person's under the ignored folder that is still *New* (add the rule by SQL, not
+  the endpoint, so it is not dismissed), delete that whole folder on the share (or rename it) and scan: expect the
+  file to stay *New* in the Inbox (not *gone*, not removed) and the folder's `inbox_dirs` rows to stay. Disconnect
+  the share mid-scan as in IF10 with the rule in place: nothing is marked gone, as before. Then remove the rule and
+  scan: expect the folder to be listed again, the vanished file to become *gone* now, and a folder that was only
+  ignored (not deleted) to bring its files back in as *New* (files the rule had dismissed stay in *Dismissed*
+  until restored by hand). Add and remove a rule while a long scan runs: expect each change to show from the next
+  scan, not mid-scan. Since: ignored folders (crawler, IB).
+- [ ] **IF72 — A linked file under an ignored folder is still tracked.** Link a document (say a PDF) from a folder, then
+  ignore that folder for the person. Expect the document to be hashed once (a `file_fingerprints` row appears, as
+  in IF5) even though the folder is ignored, and its *Recently linked* row to stay; a found image under the same
+  folder that has a failed hash is not retried, and an exact short-ID image there is not offered to auto-link
+  (the crawler log with `INBOX_LOG_LEVEL=DEBUG` shows no open of it). Since: ignored folders (crawler, IB).
+- [ ] **IF80 — Ignoring a folder from the Inbox page, on real data (STARbase `/inbox`, and inside Data Studio).** As a Lab
+  Member with found files in a subfolder, open *New*, choose *Ignore this folder* beside a row. Expect the confirm to name
+  the folder relative to your own folder (no `Users/<alias>/`) and to say that files move to Dismissed, linked files stay
+  linked and nothing on the share changes. Confirm: expect the notice to give the real count, the files to leave *New*
+  and the badge to drop by that count, the files to be under *Dismissed* (Restore works), and the rule under *Ignored
+  folders*. A file in a team folder: the rule is the team's, and a teammate sees it listed with the team name. *Remove
+  rule* in the notice, and *Remove* in the list, both work; the next scan (or the queued rescan) lists the folder again.
+  Type an ignored folder again in another letter case, a lookalike (`Name 2`), and `Users/<alias>/Name`: expect the
+  first to be refused (already ignored), the lookalike to be accepted, and the last to say to give it relative to your own folder. As a Lab
+  Viewer: the rules are listed, *Remove* is off with the reason, and there is no *Ignore this folder* and no add field.
+  Since: ignored folders (STARbase, IC).
 
 ### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
 
@@ -2367,6 +2477,13 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
 
 - [ ] **SEM20 — The indexer's own move keeps the owner (re-review finding).** On a copy of the database with 196 applied, take an owned image registered by the crawler, move it on the share out of `Users/<alias>` into a project folder, and run `make index-archive` (full run). Expect one `directus_files` row for the file at the new path with the same `owner_person_id` as before (not NULL), no row for the old path, and `file_readers_drift_count()` 0; a member who is not the owner cannot read it. Since: SEM reader final fix wave (`index_archive.carry_owner_stamp`, ADR-0022 D13).
+- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (A's old
+  candidates kept in the database for the test, their files stamped to A, the alias now B's) and the crawler having stored thumbnails for some of them:
+  as B, `GET /d1-inbox/files/<one of A's candidate ids>/thumb` and `/preview` answer 404 NOT_FOUND with no ETag or caching headers, while B's own images
+  still show their thumbnails. Then, as B, *Ignore this folder* on a folder that holds both B's own open files and A's old ones: expect the notice's
+  count to include B's files only, B's files in Dismissed, and A's old candidates untouched (still `state = 'new'`, `decided_by` NULL). As A (or an
+  administrator) nothing of A's changed. Accept all as B for that filter links none of A's files. Since: merge of origin/main (ignored folders, PR #338)
+  into the SEM reader branch.
 
 ## Done
 

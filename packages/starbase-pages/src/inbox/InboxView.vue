@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { LoadState, Section, formatDate, useExplorerHost, useInboxSummary } from '@d1/ui';
 import AcceptDialog from './AcceptDialog.vue';
 import AddScanDialog from './AddScanDialog.vue';
+import IgnoreFolderDialog from './IgnoreFolderDialog.vue';
+import IgnoredFolders from './IgnoredFolders.vue';
 import InboxFilters from './InboxFilters.vue';
 import InboxRow from './InboxRow.vue';
 import InboxTabs from './InboxTabs.vue';
@@ -13,6 +15,7 @@ import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedG
 import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
+import { createIgnoredFolders } from './useIgnoredFolders';
 import '../labels/form.css';
 
 // The Inbox page (/inbox, spec section 10): the found files in the person's folder and their teams' folders, with tabs New, Older files,
@@ -32,9 +35,20 @@ const clearFilters = () => patch({ kind: 'any', folder: '', from: '', to: '', ow
 
 const inbox = createInbox({ api: host.api, getFilters: () => filters.value, onChanged: () => void summary.refresh() });
 const { main, other, loading, error, notice, preview, canAcceptAll } = inbox;
+// Ignored folders (spec section 15): after a rule is added or removed the lists and the counts are read again.
+const ig = createIgnoredFolders({
+	api: host.api,
+	say: inbox.say,
+	rows: () => [...main.value.rows, ...other.value.rows],
+	onChanged: async () => {
+		await inbox.load();
+		void summary.refresh();
+	},
+});
 
 onMounted(() => {
 	void inbox.load();
+	void ig.load();
 	void summary.refresh();
 });
 onBeforeUnmount(() => inbox.cancel());
@@ -72,7 +86,8 @@ async function keepPlace(f: FoundFile, work: () => Promise<Outcome>): Promise<Ou
 	await nextTick();
 	const rows = rowEls();
 	const next = rows[Math.min(Math.max(at, 0), rows.length - 1)];
-	const target = next?.querySelector<HTMLElement>('button:not([disabled]), a[href]') ?? region.value;
+	// the row's own actions first: its thumbnail button (a row with a picture) comes before them in the page but is not what a person was doing
+	const target = next?.querySelector<HTMLElement>('.buttons button:not([disabled])') ?? next?.querySelector<HTMLElement>('button:not([disabled]), a[href]') ?? region.value;
 	target?.focus();
 	return r;
 }
@@ -128,8 +143,38 @@ async function addScan(form: ScanAddForm) {
 	}
 }
 
+// ---- Ignore this folder: the confirm, then the rows below the folder are gone from the list ----
+// Focus goes back to the row's button when the confirm is cancelled (Cancel, Esc, click outside); after a confirmed ignore the row is gone, so it goes to the
+// status line, which says what happened.
+let ignoreOpener: HTMLElement | null = null;
+function openIgnore(f: FoundFile, opener: HTMLElement) {
+	ignoreOpener = opener;
+	ig.openIgnore(f);
+}
+async function afterIgnoreDialog(): Promise<void> {
+	await nextTick();
+	const back = ignoreOpener;
+	ignoreOpener = null;
+	const target = back?.isConnected && !back.hasAttribute('disabled') ? back : region.value;
+	target?.focus();
+}
+function cancelIgnore() {
+	// Esc makes the dialog say both "esc" and "closed": the second one finds nothing open and does nothing
+	if (!ig.dialog.value.open) return;
+	ig.closeIgnore();
+	// a confirm that is busy (the request is running) does not close: nothing to give back yet
+	if (!ig.dialog.value.open) void afterIgnoreDialog();
+}
+async function confirmIgnore() {
+	const r = await ig.confirmIgnore();
+	if (r.ok) await afterIgnoreDialog();
+}
+const canIgnore = computed(() => ig.available.value && !ig.loading.value && !ig.readOnly.value);
+
 // ---- Accept all: its confirm opens on a dry run ----
 const acceptable = computed(() => (tab.value === 'new' || tab.value === 'older'));
+// The server has said that no file under this filter qualifies: the button would only open a confirm for zero files, so say why instead.
+const nothingToAccept = computed(() => acceptable.value && !loading.value && inbox.acceptCount.value === 0);
 async function accept() {
 	const r = await inbox.confirmAccept();
 	if (r.ok) (region.value as HTMLElement | null)?.focus();
@@ -153,15 +198,38 @@ async function accept() {
 		<InboxFilters :filters="filters" :teams="teams" :has-own="hasOwn" @patch="patch" @clear="clearFilters" />
 
 		<div v-if="acceptable" class="accept">
-			<v-button small :disabled="!canAcceptAll" data-test="accept-all" @click="inbox.openAccept()">{{ acceptButtonText(preview) }}</v-button>
-			<span class="hint">Links the files whose name or folder carries the exact short ID of one record you can edit.</span>
+			<template v-if="nothingToAccept">
+				<span class="hint" data-test="accept-none">None of these files can be linked in bulk. Use “Link to…” on a file to link it yourself.</span>
+			</template>
+			<template v-else>
+				<v-button small :disabled="!canAcceptAll" data-test="accept-all" @click="inbox.openAccept()">{{ acceptButtonText(preview) }}</v-button>
+				<span class="hint">Links the files whose name or folder carries the exact short ID of one record you can edit.</span>
+			</template>
 		</div>
+
+		<IgnoredFolders
+			v-if="ig.available.value"
+			:rules="ig.rules.value"
+			:open="ig.open.value"
+			:loading="ig.loading.value"
+			:error="ig.error.value"
+			:read-only="ig.readOnly.value"
+			:removing="ig.removing.value"
+			:adding="ig.adding.value"
+			:rows="[...main.rows, ...other.rows]"
+			:teams="teams"
+			:has-own="hasOwn"
+			:add="ig.add"
+			@toggle="ig.open.value = $event"
+			@remove="ig.remove($event)"
+		/>
 
 		<!-- One status region, always in the page, so a screen reader hears each message as it arrives. -->
 		<div ref="region" class="status" role="status" aria-live="polite" tabindex="-1" data-test="status">
 			<p v-if="notice" class="banner" :class="notice.tone" data-test="notice">
 				<span>{{ notice.text }}</span>
 				<button v-if="notice.undo" type="button" class="lf-link" :disabled="inbox.undoing.value !== null" data-test="undo" @click="inbox.undo(notice.undo)">Undo</button>
+				<button v-if="notice.removeRule" type="button" class="lf-link" :disabled="ig.removing.value !== null" data-test="remove-rule" @click="ig.removeById(notice.removeRule)">Remove rule</button>
 				<button type="button" class="lf-link close" @click="inbox.dismissNotice()">Close</button>
 			</p>
 			<p v-if="error" class="banner bad">{{ error }}</p>
@@ -184,6 +252,8 @@ async function accept() {
 					:tab="tab"
 					:busy="inbox.isBusy(f.candidate_id)"
 					:show-owner="showOwner"
+					:can-ignore="canIgnore"
+					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
 					@scan="openScan(f)"
@@ -216,6 +286,8 @@ async function accept() {
 							:tab="tab"
 							:busy="inbox.isBusy(f.candidate_id)"
 							:show-owner="showOwner"
+							:can-ignore="canIgnore"
+							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
 							@scan="openScan(f)"
@@ -232,6 +304,8 @@ async function accept() {
 		<LinkDialog v-model="dialogOpen" :file="dialogFile" :busy="dialogBusy" :error="dialogError" @choose="choose" />
 
 		<AddScanDialog v-model="scanOpen" :file="scanFile" :busy="scanBusy" :error="scanError" :error-field="scanField" @submit="addScan" />
+
+		<IgnoreFolderDialog :dialog="ig.dialog.value" @confirm="confirmIgnore" @cancel="cancelIgnore" />
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>

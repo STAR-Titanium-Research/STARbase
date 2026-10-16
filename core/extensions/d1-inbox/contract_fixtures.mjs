@@ -13,8 +13,9 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError, shapeFiles,
-  shapeLink, shapePrefs, shapeQueued, shapeSemLocked, shapeSemNone, shapeSemSettings, shapeStateChange, shapeSummary, shapeUndo, unfit,
+  ERRORS, FILTER_KEYS, FILTER_VALUES, HttpError, linkedItemOut, parseFileFilters, parseIgnoredFolder, parseScanItem, shapeAcceptAll, shapeAcceptDryRun, shapeAdmin, shapeError,
+  shapeFiles, shapeIgnoredAdded, shapeIgnoredFolders, shapeIgnoredRemoved, shapeLink, shapePrefs, shapeQueued, shapeSemLocked, shapeSemNone, shapeSemSettings, shapeStateChange,
+  shapeSummary, shapeUndo, unfit,
 } from './index.js';
 
 export const FIXTURE_DIR = fileURLToPath(new URL('../../../tests/fixtures/d1-inbox/', import.meta.url));
@@ -51,7 +52,7 @@ const row = (over) => ({
   origin: 'new', state: 'new', match_strength: 'none', matches: [], suggested_collection: null, suggested_record_id: null, duplicate_of: null,
   duplicate_of_owner: null, duplicate_owner_person_id: null, duplicate_owner_team_id: null, rel_path: 'Users/ali1/file.tif', size_bytes: '2500000', source_mtime: at('2026-10-10T09:00:00.000Z'),
   first_seen_at: at('2026-10-11T09:00:00.000Z'), decided_at: null, link_kind: null, linked_collection: null, link_batch_id: null, linked_record_id: null,
-  decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, ...over,
+  decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, has_thumbnail: false, ...over,
 });
 const named = (id, token, via = 'short_id') => [{ collection: 'physical_samples', record_id: id, via, token }];
 const suggest = (id) => ({ suggested_collection: 'physical_samples', suggested_record_id: id });
@@ -59,12 +60,12 @@ const suggest = (id) => ({ suggested_collection: 'physical_samples', suggested_r
 const NEW_ORIGINAL = row({
   candidate_id: ID(1001), directus_files_id: ID(3001), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
   extracted: { kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' }, match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'),
-  ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A1.tif', size_bytes: '3145728',
+  ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A1.tif', size_bytes: '3145728', has_thumbnail: true,
 });
 const COPY = row({
   candidate_id: ID(1002), directus_files_id: ID(3002), name: '3fa9c1d2_A1.tif', kind: 'sem_image', kind_confidence: '0.95',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), duplicate_of: ID(1001), duplicate_of_owner: 'Alice A',
-  duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team',
+  duplicate_owner_person_id: P_ALICE, rel_path: 'Shared/SEM/2026/3fa9c1d2_A1.tif', owner_person_id: null, owner_team_id: TEAM, owner_name: 'SEM team', has_thumbnail: true,
 });
 // A copy whose original sits in the Inbox of someone Alice has nothing to do with (not her folder, not her teams): the server sends { kind: 'other' }
 // and not the name 'Bob B' that the row carries.
@@ -99,12 +100,12 @@ const HIDDEN_RECORD = row({
 const BACKLOG_EXACT = row({
   candidate_id: ID(1007), directus_files_id: ID(3007), name: '3fa9c1d2_old.tif', kind: 'sem_image', kind_confidence: '0.90', origin: 'backlog',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/2024/3fa9c1d2_old.tif', source_mtime: at('2024-03-02T10:00:00.000Z'),
-  first_seen_at: at('2026-10-01T08:00:00.000Z'),
+  first_seen_at: at('2026-10-01T08:00:00.000Z'), has_thumbnail: true,
 });
 const LINKED_AUTO = row({
   candidate_id: ID(1008), directus_files_id: ID(3008), name: '3fa9c1d2_A2.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A2.tif', decided_at: at('2026-10-14T16:00:00.000Z'),
-  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, decided_by_name: 'Alice A', adopted_at: null,
+  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
 });
 const LINKED_MANUAL = row({
   candidate_id: ID(1009), directus_files_id: ID(3009), name: 'S-0042_notes.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null, state: 'linked',
@@ -312,6 +313,53 @@ export function buildFixtures() {
   put('rescan_409_no_folder', failure('a person with no folder', request('POST', '/d1-inbox/rescan', { body: {} }), ERRORS.noFolder()));
   put('scan_all_202', ok('a scan of every folder queued', request('POST', '/d1-inbox/admin/scan-all', { body: {} }), { data: shapeQueued({ ...queued, request_id: ID(7002) }) }, 202));
   put('scan_all_409_already_queued', failure('one already waits', request('POST', '/d1-inbox/admin/scan-all', { body: {} }), ERRORS.alreadyQueued(ID(7002))));
+
+  // GET /files/:candidate_id/thumb | /preview: the picture itself (image/jpeg, no { data } envelope), so a fixture of the 200 and 304 has headers and no body
+  const pictureReq = (kind, id = ID(1001)) => request('GET', `/d1-inbox/files/${id}/${kind}`);
+  put('picture_headers', {
+    description: 'what GET /d1-inbox/files/:candidate_id/thumb and /preview answer for a file the caller may see and that has a picture: the JPEG bytes (not JSON) with these headers; the client sends the signed-in session and fetches a blob',
+    route: ['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview'],
+    status: 200,
+    headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache', Vary: 'Cookie, Authorization', ETag: '"<md5 of the stored bytes, quoted>"', 'Content-Length': '<bytes>', 'X-Content-Type-Options': 'nosniff' },
+    conditional: { request_header: 'If-None-Match', status: 304, body: null, repeats: ['ETag', 'Cache-Control', 'Vary'], only_after: 'the caller may see the file (a 304 is never sent to someone who may not)' },
+    has_picture_when: 'the found file has has_thumbnail true',
+  });
+  put('picture_404', failure('no picture for that id: the file is not the caller\'s to see, does not exist, is gone, has no picture, or the id is not a uuid (one answer for all, a JSON error)',
+    pictureReq('thumb'), ERRORS.noPicture()));
+  // GET, POST and DELETE /ignored-folders (spec section 15)
+  const IGNORED_PATH = '/d1-inbox/ignored-folders';
+  const RULE_PERSON = ID(9401);
+  const RULE_TEAM = ID(9402);
+  const ruleRows = [
+    { ignored_id: RULE_TEAM, owner_person_id: null, owner_team_id: TEAM, rel_folder: 'Old runs', created_at: at('2026-10-16T09:30:00.000Z'), owner_name: 'SEM team' },
+    { ignored_id: RULE_PERSON, owner_person_id: P_ALICE, owner_team_id: null, rel_folder: 'World-Ti Paper/Drafts', created_at: at('2026-10-16T08:00:00.000Z'), owner_name: 'Alice A' },
+  ];
+  const folderRefusal = (value) => { try { parseIgnoredFolder(value, 'Users/ali1'); } catch (e) { return e; } return new Error('expected a 400'); };
+  put('ignored_get', ok("the caller's own rules and their teams', each with its owner (can_remove true, meta.can_change true)", request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, true)));
+  put('ignored_get_viewer', ok('a Lab Viewer reads the rules but may remove none (can_remove false, meta.can_change false)', request('GET', IGNORED_PATH), shapeIgnoredFolders(ruleRows, false)));
+  put('ignored_get_empty', ok('nothing ignored yet (meta.can_change is still true: the caller may add rules)', request('GET', IGNORED_PATH), shapeIgnoredFolders([], true)));
+  put('ignored_get_empty_viewer', ok('a Lab Viewer with nothing ignored: no row carries can_remove, so meta.can_change false is the only sign that rules cannot be changed', request('GET', IGNORED_PATH), shapeIgnoredFolders([], false)));
+  put('ignored_post_ok', ok("a folder of the caller's own folder ignored: the rule, and how many open files below it were dismissed",
+    request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper/Drafts' } }), { data: shapeIgnoredAdded({ ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' }, null, 12) }, 201));
+  put('ignored_post_ok_team', ok('a folder of a team folder ignored by a member of the team (team_id is in the answer)',
+    request('POST', IGNORED_PATH, { body: { folder: 'Old runs', team_id: TEAM } }), { data: shapeIgnoredAdded({ ignored_id: RULE_TEAM, rel_folder: 'Old runs' }, TEAM, 0) }, 201));
+  put('ignored_post_400_folder', failure("a folder with an empty part: relative to the owner's root, no empty, . or .. part, no leading or trailing slash (extensions.field is folder)",
+    request('POST', IGNORED_PATH, { body: { folder: 'World-Ti Paper//Drafts' } }), folderRefusal('World-Ti Paper//Drafts')));
+  put('ignored_post_400_root', failure('a path that starts with the owner\'s root (Users/<alias>) is not relative to it', request('POST', IGNORED_PATH, { body: { folder: 'Users/ali1/World-Ti Paper' } }),
+    folderRefusal('Users/ali1/World-Ti Paper')));
+  put('ignored_post_403_team', failure('a team the caller is not an active member of', request('POST', IGNORED_PATH, { body: { folder: 'Old runs', team_id: TEAM_NO_FOLDER } }), ERRORS.notYourTeam()));
+  put('ignored_post_409_no_folder', failure('a person with no folder to scan has nothing to ignore in it', request('POST', IGNORED_PATH, { body: { folder: 'x' } }), ERRORS.noFolder()));
+  put('ignored_post_409_already_ignored', failure('the same folder twice for one owner, whatever the letter case', request('POST', IGNORED_PATH, { body: { folder: 'world-ti paper/drafts' } }),
+    ERRORS.alreadyIgnored('world-ti paper/drafts')));
+  put('ignored_post_409_too_many_rules', failure('200 rules per owner at most', request('POST', IGNORED_PATH, { body: { folder: 'one more' } }), ERRORS.tooManyRules()));
+  const REMOVED = { ignored_id: RULE_PERSON, rel_folder: 'World-Ti Paper/Drafts' };
+  put('ignored_delete_ok', ok('a rule removed: the cache rows of the folder are reset so the next scan lists it again, and a rescan was queued (still_ignored false: no other rule covers the folder)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: true }) }));
+  put('ignored_delete_ok_rate_limited', ok('a rule removed while the rescan limit says wait: the delete still works, rescan_queued is false', request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`),
+    { data: shapeIgnoredRemoved(REMOVED, { rescanQueued: false }) }));
+  put('ignored_delete_ok_still_ignored', ok('a rule removed that sits under another rule of the same owner (World-Ti Paper/Drafts while World-Ti Paper is ignored): still_ignored is true, the folder stays unscanned, so no cache reset and no rescan (rescan_queued false)',
+    request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), { data: shapeIgnoredRemoved(REMOVED, { stillIgnored: true }) }));
+  put('ignored_delete_404', failure("a rule that does not exist, or is not the caller's or their team's (the same answer)", request('DELETE', `${IGNORED_PATH}/${RULE_PERSON}`), ERRORS.notIgnored()));
 
   // GET and PUT /prefs
   put('prefs_get_off', ok('auto-link off (the default)', request('GET', '/d1-inbox/prefs'), { data: shapePrefs(undefined) }));

@@ -1,0 +1,14 @@
+{
+  "description": "nothing ignored yet (meta.can_change is still true: the caller may add rules)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/ignored-folders"
+  },
+  "status": 200,
+  "body": {
+    "data": [],
+    "meta": {
+      "can_change": true
+    }
+  }
+}

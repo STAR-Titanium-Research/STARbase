@@ -2,13 +2,19 @@
 // An Inbox row for an SEM image: its imaging settings as labelled values with their source, "check this" where nothing could vouch for a value,
 // "couldn't read <field>" where one failed, the time as UK time; a row with nothing read shows nothing extra; an older row keeps its one line.
 import { afterEach, describe, expect, it } from 'vitest';
-import { createApp, defineComponent, h, type App } from 'vue';
+import { createApp, defineComponent, h, ref, type App } from 'vue';
+import { setExplorerHostFactory } from '@d1/ui';
 import InboxRow from './InboxRow.vue';
-import { foundFile } from './fakeInboxServer';
+import { createFakeInbox, foundFile } from './fakeInboxServer';
 import type { FoundFile } from './inboxApi';
 
 let app: App | null = null;
 function mount(file: FoundFile): HTMLElement {
+	// the row asks the Explorer host for its api (the thumbnail, since the Inbox pictures work); these rows have no picture, so it is never called
+	const { api } = createFakeInbox({ files: [file] });
+	setExplorerHostFactory(() => ({
+		api, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true), canViewAllAccess: ref(false), user: ref({ id: 'u-me' }),
+	}));
 	app = createApp({ render: () => h(InboxRow, { file, busy: false, tab: 'new', showOwner: false }) });
 	app.component('v-button', defineComponent({ setup: (_p, { slots }) => () => h('button', slots.default?.()) }));
 	app.component('v-icon', defineComponent({ setup: () => () => h('span') }));
@@ -20,6 +26,7 @@ function mount(file: FoundFile): HTMLElement {
 afterEach(() => {
 	app?.unmount();
 	app = null;
+	setExplorerHostFactory(null);
 	document.body.innerHTML = '';
 });
 

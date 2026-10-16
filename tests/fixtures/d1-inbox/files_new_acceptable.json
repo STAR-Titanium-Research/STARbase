@@ -59,6 +59,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": true,
         "suggested_can_edit": true
       },
       {
@@ -102,6 +103,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "suggested_can_edit": false
       }
     ],
