@@ -41,8 +41,12 @@ function fixtureApi(get: string, patch?: string) {
 }
 
 let app: App | null = null;
-const upload = (name: string, id = FILE): LinkedFile => ({ id, name, kind: 'upload', unc: null, folder: null, fileUri: null });
-const lockedFile = (id = FILE): LinkedFile => ({ id, name: '', kind: 'locked', unc: null, folder: null, fileUri: null });
+const upload = (name: string, id = FILE): LinkedFile => ({ id, name, kind: 'upload', source: 'data_files', unc: null, folder: null, fileUri: null });
+const lockedFile = (id = FILE): LinkedFile => ({ id, name: '', kind: 'locked', source: 'data_files', unc: null, folder: null, fileUri: null });
+/** A row of operation_files: its id is the share link's own, not a directus_files id. */
+const shareFile = (name: string, id = 'share-link-1'): LinkedFile => ({
+	id, name, kind: 'archive', source: 'share', unc: `\\\\host\\share\\runs\\${name}`, folder: '\\\\host\\share\\runs', fileUri: null,
+});
 
 function mount(files: LinkedFile[], api: HostApi) {
 	setExplorerHostFactory(() => ({
@@ -106,6 +110,22 @@ describe('a locked file', () => {
 		expect(li.querySelector('a')).toBeNull();
 		expect(li.querySelector('[data-icon="lock"]')).not.toBeNull();
 		expect(calls).toEqual([{ method: 'GET', path: '/d1-inbox/sem-settings', params: { file: FILE }, body: undefined }]);
+	});
+});
+
+describe('a file from the share (operation_files)', () => {
+	it('asks nothing of the settings route, shows its path and copy buttons, and is never shown as locked', async () => {
+		// the answer to any question would be locked: the id is not a directus_files id
+		const { api, calls } = fixtureApi('sem_settings_locked');
+		mount([shareFile('scan-01.tif'), shareFile('plot.png', 'share-link-2')], api);
+		await settled();
+		expect(calls).toEqual([]);
+		const [li] = items();
+		expect(li.dataset.locked).toBe('false');
+		expect(li.textContent).toContain('scan-01.tif');
+		expect(li.querySelector('[data-icon="lock"]')).toBeNull();
+		expect(li.querySelectorAll('[data-icon="content_copy"], [data-icon="folder_copy"]')).toHaveLength(2);
+		expect(li.querySelector('[data-test="sem-block"]')).toBeNull();
 	});
 });
 
