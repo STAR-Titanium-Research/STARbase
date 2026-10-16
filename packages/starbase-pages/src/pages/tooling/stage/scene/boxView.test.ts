@@ -291,6 +291,18 @@ describe('BoxView', () => {
 		}
 	});
 
+	it('keeps a pick on the whole pocket floor, so a hover holds while its insert rises out of the pocket', () => {
+		const { view } = make();
+		view.sync(state(BOX));
+		const slot = view.layout.slots[4];
+		const c = view.layout.centre(slot.column, slot.row);
+		// the pocket's front corner: past the ring frame and clear of the rhombus-shaped insert
+		const corner: [number, number, number] = [c.x + view.layout.pocketW / 2 - 1.4, 0, c.z + view.layout.pocketD / 2 - 1.4];
+		expect(pickDown(view, BOX, corner)).toEqual({ kind: 'insert', insertId: 'i5' });
+		// and just beyond the pocket there is none
+		expect(pickDown(view, BOX, [c.x + view.layout.pocketW / 2 + 1.5, 0, c.z])).toBeNull();
+	});
+
 	it('picks a ghosted (depleted) insert too', () => {
 		const { view } = make();
 		view.sync(state(BOX));
