@@ -10,8 +10,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+# The folder holding the personal folders. The lab share spells it `User` (Z:\star_group1\User): __main__
+# passes INBOX_PERSON_DIR (compose sets `User`) to set_person_base; `Users` stays the spec's and the tests' default.
 PERSON_BASE = "Users"
 TEAM_BASE = "Shared"
+
+
+def set_person_base(name: str | None) -> None:
+    """Use `name` as PERSON_BASE; empty or None keeps the current one. A value with a separator or made only
+    of dots is refused, so a bad setting stops the crawler at start instead of walking the wrong folder."""
+    global PERSON_BASE
+    value = (name or "").strip()
+    if not value:
+        return
+    if "/" in value or "\\" in value or not value.strip("."):
+        raise ValueError(f"INBOX_PERSON_DIR must be one folder name, got {value!r}")
+    PERSON_BASE = value
+
 
 # Directories no scan enters, whatever their depth. Hidden ('.snapshot', '.git'), NetApp-style snapshots
 # ('~snapshot') that would expose every user's copies, and the usual file-server litter.

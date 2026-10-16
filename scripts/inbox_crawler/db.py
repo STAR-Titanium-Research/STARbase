@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from . import identity, recognise
+from . import identity, owners, recognise
 from .fs_readonly import extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
@@ -862,7 +862,7 @@ class Store:
         )
         changed = 0
         for cid, rel, strength, matches, coll, rec in rows:
-            # an owner's folder is always Users/<alias> or Shared/<folder>: look only below it
+            # an owner's folder is always <PERSON_BASE>/<alias> or Shared/<folder>: look only below it
             r = recognise.recognise(rel, lookup, below="/".join(rel.split("/")[:2]))
             if (
                 r.match_strength == strength
@@ -904,7 +904,7 @@ class Store:
         for _ in range(BAD_PATH_PAGES):
             rows = self._all(
                 "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
-                " CASE WHEN c.owner_person_id IS NOT NULL THEN 'Users' ELSE 'Shared' END, "
+                " CASE WHEN c.owner_person_id IS NOT NULL THEN %s ELSE %s END, "
                 " COALESCE(p.uni_alias, t.share_folder) "
                 "FROM file_candidates c "
                 "LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
@@ -913,7 +913,7 @@ class Store:
                 "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
                 "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
                 "ORDER BY c.adopted_at, c.candidate_id LIMIT %s",
-                (HASH_RETRY_HOURS, page),
+                (owners.PERSON_BASE, owners.TEAM_BASE, HASH_RETRY_HOURS, page),
             )
             bad = []
             for cid, fid, rel, base, folder in rows:

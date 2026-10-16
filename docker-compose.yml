@@ -300,7 +300,7 @@ services:
       QUEUE_NAME: surface-scan-worker
       ARCHIVE_MOUNT: /mnt/archive
       # archive_path in directus_files.metadata is relative to this (the root index_archive.py indexes).
-      ARCHIVE_ROOT: /mnt/archive/star_group1
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
       SURFACE_SCAN_CONCURRENCY: ${SURFACE_SCAN_CONCURRENCY:-1}
       POLL_INTERVAL_SECONDS: ${SURFACE_SCAN_POLL_SECONDS:-60}
       JOB_TIMEOUT_SECONDS: ${SURFACE_SCAN_JOB_TIMEOUT_SECONDS:-3600}
@@ -578,7 +578,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-d1}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}@postgres:5432/${POSTGRES_DB:-d1_database}?sslmode=disable
-      ARCHIVE_ROOT: /mnt/archive/star_group1
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
     volumes:
       - ./scripts:/scripts:ro
       - archive_share:/mnt/archive:ro
@@ -599,13 +599,15 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-d1}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}@postgres:5432/${POSTGRES_DB:-d1_database}?sslmode=disable
-      ARCHIVE_ROOT: /mnt/archive/star_group1
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
       D1_INBOX_URL: ${D1_INBOX_URL:-http://directus:8055}
       # Empty switches auto-link off. Must equal the D1_INBOX_CRAWLER_SECRET Directus gets.
       D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
       # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
       INBOX_OCR: ${INBOX_OCR:-}
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
+      # The folder holding the personal folders: the lab share spells it `User` (Z:\star_group1\User).
+      INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - ./scripts:/scripts:ro
@@ -636,6 +638,9 @@ volumes:
   # /mnt/archive/star_group1). Credentials live in .env (SMB_USER / SMB_PASS). The mount is
   # read-only twice over: `ro` in the options AND `:ro` on the service mount.
   # If SMB negotiation fails, adjust `vers=` (try 3.1.1 or 2.1) or add `domain=`.
+  # A DFS link (\\uosfstore...\shared\star_group1 is one) cannot be followed by Docker's CIFS client: the mount
+  # fails with "no such file or directory", or with `nodfs` the link reads "Not supported". Mount the link's
+  # target share instead and point ARCHIVE_CONTAINER_ROOT at the mount (see .env.example, SMB archive).
   archive_share:
     driver: local
     driver_opts:

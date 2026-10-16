@@ -10,6 +10,7 @@ Environment:
     INBOX_PRIVATE_SCHEMA       the schema holding the inbox tables (default d1_private; tests use another).
     STORAGE_NAME, ROOT_FOLDER  as for scripts/index_archive.py (defaults star, star_group1).
     INBOX_LOG_LEVEL            DEBUG logs every file the crawler opens (default INFO).
+    INBOX_PERSON_DIR           the top-level folder of the personal folders (default Users; the lab share's is User).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import signal
 import sys
 import threading
 
-from . import autolink, daemon, db, fs_readonly, hashing
+from . import autolink, daemon, db, fs_readonly, hashing, owners
 
 log = logging.getLogger("inbox_crawler")
 
@@ -71,6 +72,11 @@ def main(argv=None) -> int:
             "INBOX_LOG_LEVEL=%r is not a log level (use DEBUG, INFO, WARNING, ERROR); using INFO",
             raw_level,
         )
+    try:
+        owners.set_person_base(os.environ.get("INBOX_PERSON_DIR"))
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         log.error("DATABASE_URL is required")
