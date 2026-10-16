@@ -6,7 +6,7 @@ const TAGS = ['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse'
 describe('NAV_ICONS', () => {
 	it('has the chrome icons and the section icons', () => {
 		const names = [
-			'search', 'home', 'pin', 'ellipsis', 'settings', 'moon', 'sun', 'panel-left-close', 'panel-left-open', 'chevron-down',
+			'search', 'home', 'inbox', 'pin', 'ellipsis', 'settings', 'moon', 'sun', 'panel-left-close', 'panel-left-open', 'chevron-down',
 			'chevron-right', 'grip-vertical', 'x', 'external-link', 'link', 'arrow-up', 'arrow-down', 'filter',
 			'records', 'analysis', 'inventory', 'reference', 'more', 'log-out', 'monitor', 'circle-plus', 'clipboard-plus',
 		];

@@ -1111,6 +1111,28 @@ migration 141 prints about ownerless records.
   the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
   sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
+- [ ] **SCAN-UI1 — Surface scans panel and Add dialog on real data.** As a Lab Member, open a real cutting insert and
+  its edge in STARbase. Expect: a **Surface scans** panel under Details (empty at first: "No surface scan of this
+  insert."). Press **Add a surface scan**: the dialog warns that the file becomes visible to every lab member; the
+  file list shows real `.al3d` files from the library (an archive file also shows its path on the share), a file that
+  is already a scan of this item is greyed out, and Add is disabled until a file and a condition are chosen (and a
+  note when the condition is *other*). Save one scan of an edge, with a date and one of its operations: the dialog
+  closes, the row appears as *Waiting to render*, then *Rendering*, then *Ready* without a reload, and its thumbnail
+  loads (a height map, not a broken image). The insert page lists only the insert's scans; the edge page lists its
+  own and the insert's, the latter tagged *Insert*. Add the same file to the same edge again from another tab: the
+  dialog says it is already a scan of this item. Add a file that cannot be read (a renamed text file with an
+  allowed ending): the scan shows *Render failed* with the reason, and **Render again** puts it back to *Waiting to
+  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. Check light and dark and a phone
+  width. Since: surface scans, S3 (PR pending).
+- [ ] **SCAN-UI2 — The surface viewer on a real scan and a real GPU.** On a lab PC, open a rendered real `.al3d` scan
+  with **Open in 3D**. Expect: the surface draws within a second or two, with no jagged edge; dragging turns it
+  smoothly and the wheel zooms (no panning, no way to lose the surface); the **vertical exaggeration** slider
+  stretches the relief and Reset view restores the opening view; **Colour by height** switches between the ramp and
+  grey; the legend's lowest and highest heights match the instrument's own (or the file's) values in micrometres; the
+  size and pixel pitch under the view match the scan; cells the instrument did not measure show as holes (and are
+  counted under the view). Compare the shape with the Alicona software's view of the same file. The fan stays
+  quiet when the page sits idle. Turn WebGL off in the browser and reload: the view says it cannot draw and the facts
+  remain. Since: surface scans, S3 (PR pending).
 
 #### Process map card tweaks (plan `2026-10-14-process-map-4-card-tweaks.md`)
 
@@ -1245,6 +1267,40 @@ checks can be run from `/map?edit=new`.
 - [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
+
+### Surface scans on inserts and edges (migration 192, ADR-0021)
+- [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
+  share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
+  the file library. Expect: the scan goes pending, rendering, done within about a minute, and the row shows a grid of at most
+  1024 cells on the longer side, a pixel pitch and a height range that agree with the Alicona software's own numbers for that
+  file (the range will not match Sz exactly: it is the file's extremes, not a roughness value). In MinIO,
+  `mc ls local/d1-files/surface-scans/<cache_key>/` lists `grid.bin`, `meta.json` and `thumb.png`. With a session cookie,
+  `GET /d1-surface-scan/<scan_id>/grid` answers 200 with an `ETag` equal to the cache key and `Cache-Control: private, no-cache`; the
+  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a user who may not read the scan, and a request
+  without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
+  volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
+  and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
+  key, one it has not gets `p-<file id>-<size>-<mtime>`. Also check the least-privilege reader on the real MinIO: set
+  `MINIO_SURFACE_READER_PASSWORD` in `.env`, run `make bootstrap-minio` (creates the user `surface-reader` and its policy) and restart
+  Directus, which must not hold the root credentials (`docker compose exec directus env | grep MINIO` shows no `MINIO_ROOT_*`). As
+  that user (`mc alias set reader http://localhost:9000 surface-reader <password>`): `mc cat reader/d1-files/surface-scans/<cache_key>/meta.json`
+  works; a key under `surface-scans/` that does not exist answers 404 NoSuchKey, **not** 403 (this needs the `s3:ListBucket` statement
+  with the `surface-scans/*` prefix condition; the viewer's "render again" message depends on it); `mc cp` of any file into
+  `d1-files/surface-scans/`, `mc rm` of an object there, `mc ls reader/d1-files/` (no prefix), `mc cat` of an object under another prefix
+  and any access to `d1-backups` are all refused (403). With the password empty, `GET /d1-surface-scan/<id>/grid` answers 503, not a
+  crash. Since: surface scans PR (pending).
+- [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
+  surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
+  legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
+  the insert and edge pages. Also open it on a laptop with only an integrated GPU: it must still draw (slower is fine), and where
+  float textures are missing it says so instead of showing a blank canvas. Same check as **SCAN-UI2**; tick both together. Since: surface scans PR (pending).
+- [ ] **SS3 — Count the Alicona Tests whose subject is an edge (dry run, before any migration).** Nothing is migrated by this PR.
+  On the live database, in a read-only transaction (`BEGIN READ ONLY;` ... `ROLLBACK;`), run
+  `SELECT count(*) FROM test_sessions t WHERE t.test_type = 'alicona' AND (t.insert_edge_id IS NOT NULL OR EXISTS (SELECT 1 FROM
+  test_sessions_subject s WHERE s.test_sessions_id = t.session_id AND s.collection = 'insert_edges'));`
+  and the same count of those that have a linked file. Write both numbers after this item. They size the later script that
+  proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
+  surface scans PR (pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
@@ -1824,6 +1880,271 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   issue appears on the repo, and the "already reported" list loads. Since #232.
 - [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
   the **CI passed** check. A PR with a failing job cannot merge. Since #138 (CI/CD overhaul).
+
+### Inbox crawler and found files (2026-10-15, PR #310 and its follow-ups)
+
+Needs the real share (`archive_share` mount on d1-server) and real Directus data. Spec:
+[found files and the Inbox](../superpowers/specs/2026-10-15-found-files-inbox-design.md), ADR-0020.
+
+- [ ] **IF1 — The crawler cannot write to the share.** From inside the `inbox-crawler` container, try
+  `touch /mnt/archive/star_group1/Users/<your alias>/x` and `rm` on a throwaway file. Expect both to fail.
+  Record that the SMB account in `.env` is the maintainer's personal admin one and can write; follow-up:
+  create a read-only SMB account for the service and re-run this check with it.
+- [ ] **IF2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
+  `stat` its parent and grandparent through the mount. Expect the parent's mtime to change (the grandparent's
+  need not). If the parent's does not, the incremental scan misses files; report before enabling it.
+  Also compare the share's clock with the server's: the crawler lists a directory again at every scan while
+  its mtime is less than 2 seconds old or in the future, so a share clock running ahead makes every scan list
+  everything (correct, but slow: IF4 would show it).
+- [ ] **IF3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
+  there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
+  minutes (or, with *Rescan my folder*, once the scan running at the moment has finished and the daemon's next
+  30-second tick has claimed the request) expect it under *New* and the badge to read 1. A file saved in
+  the last 5 seconds before a scan is left for the next one (it may still be being written).
+- [ ] **IF4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
+  watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
+- [ ] **IF5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
+  log (put `INBOX_LOG_LEVEL=DEBUG` in `.env`, run `docker compose --profile archive up -d inbox-crawler`
+  to recreate the service with it, which logs every file it opens, then `docker compose logs inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
+  it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
+  and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
+- [ ] **IF6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
+  Expect it flagged with the reason *short ID … in the file name*; link it; open the sample page and see it.
+  Try *Accept all* on a filtered list and *Undo* the batch. Try a view-only person: Link must be refused.
+- [ ] **IF7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
+  linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link. The
+  crawler and Directus must have the same `D1_INBOX_CRAWLER_SECRET`; with it empty the crawler logs
+  "auto-link is off" and makes no call, with a wrong one it logs "auto-link refused" (never the secret). Only
+  images are auto-linked: an exact short ID on an `.al3d` surface scan or a document must stay in the Inbox. A
+  file the person cannot edit the record of is refused by d1-inbox and offered again about an hour later.
+- [ ] **IF8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
+  record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
+  photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
+  from the text tags when present; the layout is a guess until seen). Decide whether to switch OCR on: it
+  needs `INBOX_OCR=1`, the `pytesseract` package and the tesseract program in the container, none of which
+  the service installs today.
+- [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the `surface_scans`
+  migration (192) applied. Expect tag `surface_scan`; the hand-off is an add, not a link:
+  `POST /d1-inbox/link` with `{candidate_id, collection:'surface_scans', insert_id | edge_id, condition, ...}`
+  (see **IF23**). Check the pointer
+  row has `storage = 'star'` and `metadata.archive_path`, and that its `file_fingerprints` row is `done` with
+  `size_bytes` and `source_mtime` equal to the file's (the renderer trusts the hash only then). A scan is
+  never auto-linked or accepted in bulk, whatever its name says, and linking it to a sample, operation or
+  test answers 409 `SURFACE_SCAN`.
+
+- [ ] **IF10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
+  candidate waiting in a folder that changes), disconnect the share from the server (stop the CIFS mount or
+  the VPN). Expect the log to say `scan aborted`, no candidate to become `gone`, `last_scan_finished_at` not to
+  advance, the admin tab to show the error, and the next scan after the share is back to carry on without
+  re-registering anything. A first scan that was interrupted stays *Older* (backlog) when it completes. After
+  the share is back, a file deleted while it was down is found *gone* by a later scan (no decision is lost).
+  Also make one person's folder unreadable (a permission change by the file server's owner) and confirm the
+  other people's folders are still scanned and the admin tab shows the error.
+- [ ] **IF11 — Snapshot and hidden folders are not entered.** If the share exposes `.snapshot`, `~snapshot` or
+  similar directories inside personal or team folders, confirm the crawler never lists them (DEBUG log, or
+  the file server's access log) and no found file comes from them. Also confirm folders under `Users/` and
+  `Shared/` with no alias or share folder appear in the admin tab's unmatched list and are not scanned.
+- [ ] **IF12 — The indexer and the crawler agree on the pointer rows.** Run `make index-archive` after the
+  crawler has registered files in a personal folder. The crawler also registers file types the indexer's
+  `ALLOWED_EXT` does not cover (`.al3d`, unknown types); the indexer's missing-file sweep now judges only the
+  types it walks, so expect those rows NOT to be flagged `metadata.missing` (rows flagged by an older run stay
+  flagged: clear them), while an indexed file deleted from the share still is. Move a found image to another
+  folder under the same name, run `make index-archive --fingerprint` and then a crawler scan: the candidate
+  must follow the file (not turn *gone*). Found files the indexer does cover must keep one `directus_files`
+  row each (same id). Since the inbox crawler PR.
+- [ ] **IF13 — Links on the real share are refused.** Ask the file server's owner (or use a test folder) to
+  create a symbolic link and, if the file server supports them, a junction or shortcut inside a scanned
+  folder: one named `photo.tif` pointing at a `.pdf`, one pointing at a folder outside `Users/`, one pointing
+  at another person's file. Through the CIFS mount, check whether each appears as a symlink (`ls -l`,
+  `stat` inside the container) or as an ordinary file or folder (a server-side link the mount resolves
+  for us). Expect the crawler to list and open none of the symlinks (DEBUG log shows no read of them, no
+  found file). If a link shows up as an ordinary file or folder instead, record that: the crawler cannot
+  tell it from a real one, and the only guard is that the mount is read-only and limited to this share.
+- [ ] **IF14 — An alias change during a scan.** With the amended migration (its triggers clean up when
+  `people.uni_alias` or `teams.share_folder` changes), change a person's alias while a scan of their folder
+  runs (or between two scans), then give the old folder name to another person. Expect the old person's
+  found files (not linked ones) to vanish from their Inbox, the new owner to get a first scan of that folder
+  (everything *Older*, badge 0), and no found file of the folder in the old person's Inbox.
+- [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
+  `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
+  nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a document or other non-image file the crawler
+  found (a `d1_private.file_candidates` row of kind document or other, not linked, never adopted) until it is
+  linked. The exclusion keys on that candidate row, not on `directus_files.metadata.found_by`, which the
+  indexer's next run overwrites and any Lab Member can edit; a pointer row with `found_by` but no candidate
+  row is read like any other file. The indexer's own walk (`make index-archive`, with or without
+  `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
+  unchanged. Run `make index-archive --fingerprint` on a test folder with a document in it, check what was
+  read, and decide: restrict both tools to the folders the lab agreed to index, or accept it. To check the
+  exclusion: after the crawler found a document and the indexer ran over its folder, `file_fingerprints.py
+  --phase all --dry-run` must not list it, and must list it once a person has linked it. Since: found files
+  inbox, final review (S5), re-review fix (S3).
+- [ ] **IF16 — An undone auto-link stays undone (live).** See **IF40**, which covers this check as well (the crawler restart and its log).
+- [ ] **IF17 — Pausing the crawler (SQL).** There is no admin route or tab for this. On d1-server run
+  `UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused'` (psql in the `postgres` container).
+  Within about 30 seconds expect the admin tab to show the crawler as paused but still online (the heartbeat keeps going), a file
+  saved in a scanned folder to stay unfound across a scheduled scan time, and a *Rescan my folder* request to
+  stay queued. Set `desired_state = 'running'` and expect the request to be claimed within about 30 seconds and
+  the file to appear. Also try `interval_minutes` and `read_mb_per_s` the same way (a CHECK refuses 0).
+  Since: found files inbox, final review (runbook).
+- [ ] **IF18 — The heartbeat keeps beating during a long hash.** Link a large document (a few GB, or lower
+  `read_mb_per_s` to 0.5 on a 100 MB one so the read takes several minutes). While it is read once to
+  fingerprint it, expect the admin tab to keep showing the daemon *Online* with the activity `hashing <path>`
+  and `last_heartbeat_at` never more than about 30 seconds old, then a `file_fingerprints` row. Restore the
+  rate afterwards. Since: found files inbox, final review (7a).
+- [ ] **IF19 — One crawler at a time.** With the daemon running, run `make inbox-crawler-once`: expect it to
+  log that another crawler holds the lock and exit 1 without scanning; start a second daemon container the same
+  way and expect it to exit 1. Stop the daemon and expect `make inbox-crawler-once` to run. Since: found files
+  inbox, final review (7c).
+- [ ] **IF20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
+  Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
+  crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
+  Expect `linked`, and in `audit_logs` the new `sample_data_files` row names that person, not an administrator.
+  Repeat for a sample they can only view, and a Restricted one: expect `skipped NOT_EDITABLE`. A call without the
+  header (or with a wrong one, or with a secret under 32 characters configured) must be 401/403. This is the one thing the unit tests cannot prove: that the
+  accountability `d1-inbox` builds for a login (role tree and policy flags read from the database) is accepted by
+  Directus's ItemsService. Since: found files inbox, stream B.
+- [ ] **IF21 — A member cannot squat a uni alias.** As a Lab Member in Data Studio, create a People row and try to
+  set `uni alias` or `scan while Former` (the fields should not be offered; a direct API POST with them must be
+  refused 403). Apply migration 194 first and flush Redis / restart Directus (permissions are cached). Since:
+  found files inbox, stream B (migration 194).
+- [ ] **IF22 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
+  then try to link the same found file to that sample in the Inbox: expect the refusal "already linked to that
+  record. Dismiss clears it." (409 `ALREADY_ON_RECORD`) and no second row, and the Inbox badge not counting it. Since: found files inbox, stream B.
+- [ ] **IF23 — Add a surface scan from the Inbox (live).** Needs the deployed `d1-inbox`, migration 192
+  (`surface_scans`), the surface-scan worker running, and a found `.al3d` file (see IF9). As a Lab Member, add
+  it to an insert, then (a second file) to an edge, each with a condition (try the request without one: 400
+  naming `condition`; the condition is never preset). Expect: a `surface_scans` row for the file with the
+  condition you chose and `owner_person_id` set to you (the `d1-owner-default` hook, not the endpoint), the
+  viewer's render queued (`render_status` `pending`, then `rendering`, then `done` once the worker has it) and the
+  scan open in the viewer from the insert or edge page, and the candidate under **Recently linked** (`manual`)
+  naming the insert or edge. Adding the same file to the same insert again is refused 409 `ALREADY_ADDED`; a Lab
+  Viewer is refused 403. Then **Undo** the batch and expect the `surface_scans` row to be gone, the candidate back
+  in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
+  while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
+  as failed; nothing else changes). Through the STARbase form (`/inbox`, **Add a surface scan**): the dialog warns
+  that the file becomes visible to every lab member, has **no condition chosen** and keeps *Add a surface scan*
+  off until an insert or edge (searched by its code) and a condition are set; the operation list offers only the
+  operations run with the chosen edge, or any edge of the chosen insert; after the add the notice says *Added as a
+  surface scan of <code>* and **Recently linked** shows the same line with a link to the insert or edge page and
+  the batch titled *Added as a surface scan*; a second add of the same file to the same insert is refused with
+  *That file is already added as a surface scan of this insert or edge*; as a Lab Viewer the add is refused with
+  the read-only message; make the person lose delete rights on `surface_scans` (or use another member's scan) and
+  expect Undo to show *You can no longer delete that surface scan, so adding it cannot be undone.* and change
+  nothing; the dialog fits a phone-width window. Since: found files inbox, streams F1 and F2.
+- [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
+  thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
+  `/assets/` request; check the browser's network tab shows none); a flagged file reading *short ID `…` in the
+  file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
+  Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
+  past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
+  says linking reads the file once); a surface-scan row whose button reads *Add a surface scan* (enabled; the
+  dialog is checked in **IF23**) and which never offers *Link*. *Accept all* on a real list: the dialog opens on the server's dry run
+  (Confirm waits for it), names the count and the first few *file to record* pairs and what would be left, and
+  Confirm links exactly those; try it with a record you can only view (it is left, with the reason). *Rescan my
+  folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
+- [ ] **IF31 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
+  under Home (rail and expanded) with the count of *new* files only (backlog excluded), the same numbers in
+  Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once (even
+  if a poll was in flight); save a file and, without reloading, expect the badge to catch up within about three
+  minutes or when the window regains focus. On a server without `d1-inbox`, the entry and the panel are absent
+  and nothing errors; sign out and in as someone refused (a 403) and expect the entry to come back once the
+  account can read it. Since: Inbox stream D.
+- [ ] **IF32 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
+  People page: *Uni alias* and *Scan while Former* show the stored values and the note *Changing this resets
+  the Inbox for this folder; linked files stay linked.* Set an alias, save, reopen: it is kept. Try `a/b`, one
+  character and `.ab` (refused in the form), and an alias another person already has in a different case (the
+  server refuses; the form says *That alias is already used by another person* and names no one; check Directus
+  answers `RECORD_NOT_UNIQUE` with `extensions.field` naming the alias, since the page tells it by that field:
+  if it names another field or none, report it). Link a login already linked to another person and expect the
+  server's own words, not the alias message. Add a **new** person with an alias: the person is created and the
+  alias is set by a second request (the database refuses an alias on insert); check the Directus request log
+  shows a POST without it then a PATCH. On a team, set *Share folder* the same way (try `x/y`, blank, a name
+  another team has; a refusal on a **new** team must leave the dialog open with the message and a second Save
+  must not create a second team). Change an alias after that person has found files and confirm the undecided
+  and dismissed ones are gone while linked ones stay. A Lab Member sees neither field. Since: Inbox stream D.
+- [ ] **IF33 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
+  expect *Online, running*, the interval, the last scan times and the file count, and that it never flips to
+  Offline during a long scan; stop the daemon and expect *Offline* after about five minutes (the endpoint's
+  rule). A scan error appears once under *Errors*. A folder created under `Users/` or `Shared/` that no alias or
+  share folder names shows under *Folders no one owns*, and a person with no alias under *People without a uni
+  alias* (linking to the People page); give them an alias and expect them to leave the list after the next
+  scan. Press *Scan all* and expect the request to be claimed once the current scan finishes (then within about
+  30 seconds; a scheduled scan, a first one especially, can run for hours), and a second press while one
+  waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
+  administrators. Since: Inbox stream D.
+- [ ] **IF40 — An undone auto-link stays undone (also the old IF16).** With auto-link on for a test person, save an image with an
+  exact short ID of a sample they can edit into their folder and let the crawler auto-link it. Open **Recently
+  auto-linked** and **Undo** it. Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
+  forgets its in-process list of answered candidates), then run *Rescan my folder* twice (and wait for a scheduled
+  scan): expect the file to stay in the **New** list, not to be linked again, no new `sample_data_files` row and no
+  `auto-link:` offer for it in the crawler's log; a different exact-short-ID image saved afterwards is still
+  auto-linked. Then **Link** the first file by hand: that must work. Also undo a link made by hand and expect the
+  next auto-link scan to be free to link it (only an undone *auto* link is remembered, in
+  `file_candidates.auto_undone_at`). Needs the migration 193 amended in place (a database that already applied the
+  first 193 needs `ALTER TABLE d1_private.file_candidates ADD COLUMN auto_undone_at TIMESTAMPTZ`, or a roll back and
+  re-apply). Since: found files inbox, final review fixes (server); merged with IF16 (B1).
+- [ ] **IF41 — A file that vanished while linked or dismissed is marked gone after Undo or Restore.** Save an image
+  in a test folder, let the scan find it, **Dismiss** it (another file: Link it). Delete the file from the share, let
+  a scan run (it does not mark a decided file gone), then **Restore** (or **Undo**) it. Expect the next scan, or
+  *Rescan my folder*, to list that folder again and mark the file *gone* (it leaves the New list instead of
+  staying there for good). Since: found files inbox, final review fixes (server).
+- [ ] **IF50 — A restored file whose whole folder was deleted is marked gone.** Like IF41, but put the file in a
+  subfolder of a test folder (`Users/<alias>/old/deep/x.png`), let a scan find it, **Dismiss** it, then delete the
+  whole `old` folder from the share and let a scan run (the file stays dismissed). **Restore** it. Expect the next
+  scan, or *Rescan my folder*, to mark it *gone* although no folder row is left to list (the crawler stats the
+  folders of every undecided file and the folders above them). Since: found files inbox, re-review fixes (S2,
+  crawler).
+- [ ] **IF51 — A file added as a surface scan in the Alicona dialog leaves the Inbox.** Needs migration 192 and
+  a real `.al3d` the crawler found. Add that very file in the Alicona feature's own *Add surface scan* dialog (it
+  lists every star `.al3d`). Expect the next scan, or *Rescan my folder*, to delete its undecided candidate (it
+  leaves *New* and the badge) with no *already on record* refusal on the way, and a new `.al3d` in the folder to
+  appear as usual. Since: found files inbox, re-review fixes (S5, crawler).
+- [ ] **IF52 — The heartbeat has its own database connection.** While the crawler hashes a large new image or
+  scan in a folder of a person whose alias you change meanwhile (People collection, a different value), expect the
+  admin tab to keep showing the daemon *Online*, and after the scan that none of the folder's files registered
+  before the change is in the Inbox (the alias check dropped them; the heartbeat did not commit them). In
+  `pg_stat_activity` the crawler shows two sessions, the second one idle between beats. Since: found files inbox,
+  re-review fixes (S1, crawler).
+- [ ] **IF42 — Copies across inboxes.** Put the same image in two people's folders (or a person's and a team's). The
+  one found first is the original; the other shows *Copy of ...* and is not counted by the badge. As the owner of the
+  **original**, dismiss it: expect the copy in the other person's Inbox to stay and to be counted. Restore it and
+  link it instead: expect the copy to disappear. When both copies are in the same person's (or team's) Inbox,
+  dismissing the original hides the copy too. A copy of another person's file must not say whose Inbox holds the
+  original (only your own folder and your teams are named). Since: found files inbox, final review fixes (server).
+- [ ] **IF43 — The Home "older files" link and the copy wording, on real data.** With older found files in a
+  personal folder (some naming a record by short ID or code, some not, some by insert edge code only), open Home and
+  click *N older files match a record*: expect the Inbox on the *Older files* tab with *Match* set to **Exact
+  match** and only the short-ID and record-code files listed (the count on Home equals the list's total). Choose
+  *Exact short ID*, *Record code*, *Insert edge code (weaker)* and *No match* in turn: each still filters, and the
+  URL carries `strength=` (a comma list for Exact match). For a copy whose original is in another person's Inbox
+  that you have no part in, expect *Copy of a file someone else also has* and no name anywhere in the row; for a copy
+  of a file in your own folder, a team of yours, or (as an administrator) anyone's: *Copy of a file in <name>'s
+  Inbox*. Since: found files inbox, final review fixes (UI).
+- [ ] **IF44 — Team folder: Undo by another member, a race, and Accept all over 500.** With two members of one team
+  that has a share folder: member A links a file from the team folder; member B (who sees the row under *Recently
+  linked*) presses **Undo**: expect the refusal *Only the person who linked this, or an administrator, can undo it.*
+  and nothing changed (the list rows carry only the linker's name, so the button is shown to B; an administrator
+  can undo). Then A and B both open the same *New* team file and press Link: the second one expects *Someone already
+  dealt with that file.* (a file in a personal folder says *That file was already linked.*). With more than 500 exact
+  short-ID files for records you can edit, open **Accept all**: expect the confirm to say it links about 500 at a time
+  (never more than 999) and that you can run it again, the batch to link no more than 999, and a second run to take the
+  rest. Since: found files inbox, final review fixes (UI).
+- [ ] **IF45 — A surface scan file named after an edge arrives with that edge chosen.** Save an `.al3d` (or another
+  surface scan file) whose name contains an existing insert edge code (for example `H13A-#2-fC`) into a test
+  folder and let the scan find it. In the Inbox, expect the row to say it matches the edge, and **Add a surface
+  scan** to open with that edge already chosen in the picker (you still choose the condition). As a Lab Viewer, or
+  with a Restricted insert you cannot read, expect the dialog to open with nothing chosen and the row to name no
+  edge. A document or image named like an edge is not given the edge as a suggestion. Since: found files inbox,
+  re-review fixes (server, S4).
+- [ ] **IF46 — A scan added through the Alicona feature's own dialog leaves the Inbox.** Save an `.al3d` into a
+  test folder, let the scan find it, and add the same file as a surface scan in the Alicona (Surface scans) dialog
+  instead of the Inbox. Reload the Inbox and Home: expect the file to be gone from **New** and **Older** and not counted
+  in the badge (nor is it under **Recently linked**: it was never linked here). Pressing *Add a
+  surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
+  this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
+  re-review fixes (server, S5).
 
 ## Done
 

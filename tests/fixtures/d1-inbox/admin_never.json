@@ -1,0 +1,57 @@
+{
+  "description": "no state row yet: the daemon never started",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/admin"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "status": {
+        "desired_state": null,
+        "interval_minutes": null,
+        "read_mb_per_s": null,
+        "daemon": "never",
+        "last_heartbeat_at": null,
+        "daemon_started_at": null,
+        "current_activity": null,
+        "last_scan_started_at": null,
+        "last_scan_finished_at": null,
+        "files_registered": 0,
+        "error_count": 0,
+        "last_error": null
+      },
+      "errors": [
+        {
+          "at": "2026-10-15T10:00:00.000Z",
+          "message": "Users/ali1 is not readable"
+        }
+      ],
+      "unmatched_folders": [],
+      "people_without_alias": [
+        {
+          "person_id": "00000000-0000-4000-8000-000000000014",
+          "full_name": "Dave D",
+          "active": true,
+          "has_login": true
+        },
+        {
+          "person_id": "00000000-0000-4000-8000-000000000018",
+          "full_name": "Fay Former",
+          "active": false,
+          "has_login": false
+        }
+      ],
+      "queued_requests": 1,
+      "queue": {
+        "queued": 1,
+        "running": 0
+      },
+      "candidates": {
+        "new": 5,
+        "linked": 2,
+        "dismissed": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "description": "no condition: the person always chooses it, it is never defaulted",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201"
+        }
+      ]
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "Choose the condition of the insert or edge: new, worn, cleaned or other.",
+        "extensions": {
+          "field": "condition",
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

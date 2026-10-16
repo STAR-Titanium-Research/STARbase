@@ -1,0 +1,34 @@
+{
+  "description": "accept-all that linked nothing: no batch",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/accept-all",
+    "body": {
+      "filter": {
+        "tab": "new",
+        "strength": "short_id"
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": null,
+      "linked": 0,
+      "items": [],
+      "skipped": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001005",
+          "reason": "NOT_EDITABLE"
+        },
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001006",
+          "reason": "NOT_EDITABLE"
+        }
+      ],
+      "skipped_total": 2,
+      "has_more": false,
+      "next_cursor": null
+    }
+  }
+}

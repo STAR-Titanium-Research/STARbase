@@ -1,0 +1,136 @@
+{
+  "description": "what parseFileFilters makes of a list query string (the accept-all filter is read by the same function, default tab open)",
+  "cases": [
+    {
+      "query": {
+        "tab": "new"
+      },
+      "parsed": {
+        "tab": "new",
+        "kinds": null,
+        "strengths": null,
+        "folder": null,
+        "date_from": null,
+        "date_to": null,
+        "owner": null,
+        "link_kind": null,
+        "acceptable": false,
+        "limit": 50,
+        "offset": 0
+      }
+    },
+    {
+      "query": {
+        "tab": "older",
+        "owner": "me"
+      },
+      "parsed": {
+        "tab": "older",
+        "kinds": null,
+        "strengths": null,
+        "folder": null,
+        "date_from": null,
+        "date_to": null,
+        "owner": {
+          "kind": "me",
+          "id": null
+        },
+        "link_kind": null,
+        "acceptable": false,
+        "limit": 50,
+        "offset": 0
+      }
+    },
+    {
+      "query": {
+        "tab": "linked",
+        "link_kind": "auto",
+        "limit": "20"
+      },
+      "parsed": {
+        "tab": "linked",
+        "kinds": null,
+        "strengths": null,
+        "folder": null,
+        "date_from": null,
+        "date_to": null,
+        "owner": null,
+        "link_kind": "auto",
+        "acceptable": false,
+        "limit": 20,
+        "offset": 0
+      }
+    },
+    {
+      "query": {
+        "kind": "sem_image,surface_scan,image",
+        "strength": "short_id,code"
+      },
+      "parsed": {
+        "tab": "new",
+        "kinds": [
+          "sem_image",
+          "surface_scan",
+          "image"
+        ],
+        "strengths": [
+          "short_id",
+          "code"
+        ],
+        "folder": null,
+        "date_from": null,
+        "date_to": null,
+        "owner": null,
+        "link_kind": null,
+        "acceptable": false,
+        "limit": 50,
+        "offset": 0
+      }
+    },
+    {
+      "query": {
+        "folder": " SEM ",
+        "from": "2026-10-01",
+        "to": "2026-10-15",
+        "owner": "team:00000000-0000-4000-8000-000000000021",
+        "offset": "50",
+        "limit": "500"
+      },
+      "parsed": {
+        "tab": "new",
+        "kinds": null,
+        "strengths": null,
+        "folder": "SEM",
+        "date_from": "2026-10-01",
+        "date_to": "2026-10-15",
+        "owner": {
+          "kind": "team",
+          "id": "00000000-0000-4000-8000-000000000021"
+        },
+        "link_kind": null,
+        "acceptable": false,
+        "limit": 200,
+        "offset": 50
+      }
+    },
+    {
+      "query": {
+        "tab": "open",
+        "acceptable": "1"
+      },
+      "parsed": {
+        "tab": "open",
+        "kinds": null,
+        "strengths": null,
+        "folder": null,
+        "date_from": null,
+        "date_to": null,
+        "owner": null,
+        "link_kind": null,
+        "acceptable": true,
+        "limit": 50,
+        "offset": 0
+      }
+    }
+  ]
+}

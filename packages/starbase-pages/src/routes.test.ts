@@ -5,17 +5,18 @@ import ToolingPage from './pages/tooling/ToolingPage.vue';
 import IndexRoute from './pages/IndexRoute.vue';
 import ReportBugPage from './pages/ReportBugPage.vue';
 import CrawlerPage from './pages/CrawlerPage.vue';
+import InboxPage from './pages/InboxPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
 
 describe('starbaseRoutes', () => {
 	const paths = starbaseRoutes.map((r) => r.path);
 	it('has every page of the Home module', () => {
-		for (const p of ['', 'register-sample', 'people', 'teams/:id', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'map', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
+		for (const p of ['', 'register-sample', 'people', 'teams/:id', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'inbox', 'map', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
 			expect(paths).toContain(p);
 		}
 	});
 	it('has no other route', () => {
-		expect(paths).toHaveLength(17);
+		expect(paths).toHaveLength(18);
 	});
 	it('settings resolves to SettingsPage, not IndexRoute', () => {
 		const settings = starbaseRoutes.find((r) => r.path === 'settings');
@@ -30,6 +31,10 @@ describe('starbaseRoutes', () => {
 	it('crawler resolves to CrawlerPage, ahead of the catch-all', () => {
 		expect(starbaseRoutes.find((r) => r.path === 'crawler')?.component).toBe(CrawlerPage);
 		expect(paths.indexOf('crawler')).toBeLessThan(paths.indexOf(':slug'));
+	});
+	it('inbox resolves to InboxPage, ahead of the catch-all', () => {
+		expect(starbaseRoutes.find((r) => r.path === 'inbox')?.component).toBe(InboxPage);
+		expect(paths.indexOf('inbox')).toBeLessThan(paths.indexOf(':slug'));
 	});
 	it('serves tool boxes, inserts and edges from one route record, ahead of the catch-all', () => {
 		const record = starbaseRoutes.find((r) => r.path === ':kind(tool-boxes|inserts|edges)/:id');

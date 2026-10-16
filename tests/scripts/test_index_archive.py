@@ -4,7 +4,9 @@ Pure helpers run against a fake cursor; the re-pointing itself runs against a re
 Postgres when DATABASE_URL is set (it builds a throwaway schema, touching nothing else).
 """
 
+import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -275,3 +277,136 @@ def test_fingerprint_dedupe_runs_before_the_update_on_a_fake_cursor():
         i for i, s in enumerate(cur.sql) if s.startswith("UPDATE file_fingerprints")
     ]
     assert dedupe and update and dedupe[0] < update[0]
+
+
+# ---- the missing sweep judges only the file types the indexer walks -------------------------------
+# The inbox crawler registers pointer rows for files the indexer's ALLOWED_EXT does not cover (.al3d,
+# .txt, ...). The indexer never walks those, so its sweep must not call them missing.
+
+
+@pytest.fixture
+def sweep_env(tmp_path, monkeypatch):
+    psycopg2 = pytest.importorskip("psycopg2")
+    if not DSN:
+        pytest.skip("DATABASE_URL not set")
+    try:
+        admin = psycopg2.connect(DSN)
+    except psycopg2.OperationalError:
+        pytest.skip("database not reachable")
+    schema = "ia_sweep_" + uuid.uuid4().hex[:8]
+    admin.autocommit = True
+    admin.cursor().execute(f"CREATE SCHEMA {schema}")
+    monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    conn = psycopg2.connect(DSN)
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE directus_files (id uuid PRIMARY KEY, storage text NOT NULL, filename_disk text, "
+        "filename_download text, title text, type text, folder uuid, filesize bigint, metadata json, "
+        "created_on timestamptz, modified_on timestamptz, uploaded_on timestamptz)"
+    )
+    cur.execute(
+        "CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid)"
+    )
+    cur.execute(_fingerprints_ddl())
+    conn.commit()
+    root = tmp_path / "star_group1"
+    root.mkdir()
+    try:
+        yield conn, cur, root
+    finally:
+        conn.rollback()
+        conn.close()
+        admin.cursor().execute(f"DROP SCHEMA {schema} CASCADE")
+        admin.close()
+
+
+def _row(cur, rel, ext):
+    fid = str(ia.file_id(rel))
+    meta = {"archive_path": rel}
+    if ext is not None:
+        meta["extension"] = ext
+    cur.execute(
+        "INSERT INTO directus_files (id, storage, filename_download, metadata) VALUES (%s, 'star', %s, %s)",
+        (fid, rel.rsplit("/", 1)[-1], json.dumps(meta)),
+    )
+    return fid
+
+
+def _missing(cur):
+    cur.execute(
+        "SELECT filename_download FROM directus_files "
+        "WHERE (metadata::jsonb->>'missing') = 'true'"
+    )
+    # sorted in Python: ORDER BY follows the database collation, which differs between clusters
+    return sorted(r[0] for r in cur.fetchall())
+
+
+def test_the_sweep_flags_a_vanished_indexed_type_but_not_a_type_it_never_walks(
+    sweep_env, monkeypatch
+):
+    conn, cur, root = sweep_env
+    (root / "Users/x").mkdir(parents=True)
+    for name in ("scan.al3d", "notes.txt", "UPPER.AL3D"):
+        (root / "Users/x" / name).write_bytes(b"on the share, not an indexer type")
+    (root / "Users/x/kept.pdf").write_bytes(b"%PDF")
+    _row(cur, "Users/x/scan.al3d", ".al3d")  # registered by the inbox crawler
+    _row(cur, "Users/x/notes.txt", ".txt")
+    _row(
+        cur, "Users/x/UPPER.AL3D", ".al3d"
+    )  # the extension is lower-cased with its dot
+    _row(cur, "Users/x/kept.pdf", ".pdf")  # an indexed type that is still there
+    _row(cur, "Users/x/gone.mat", ".mat")  # an indexed type that vanished
+    _row(cur, "Users/x/gone.PNG", ".png")
+    _row(cur, "Users/x/legacy_gone", None)  # no recorded extension: not judged
+    conn.commit()
+    monkeypatch.setattr(sys, "argv", ["index_archive.py", "--root", str(root)])
+    assert ia.main() == 0
+    cur.execute("SELECT 1")  # a fresh view of the committed data
+    conn.commit()
+    assert _missing(cur) == sorted(["gone.PNG", "gone.mat"])
+
+
+def test_a_crawler_registered_scan_that_is_deleted_is_not_the_indexers_business(
+    sweep_env, monkeypatch
+):
+    conn, cur, root = sweep_env
+    root.joinpath("Users").mkdir()
+    _row(cur, "Users/x/vanished.al3d", ".al3d")
+    conn.commit()
+    monkeypatch.setattr(sys, "argv", ["index_archive.py", "--root", str(root)])
+    ia.main()
+    conn.commit()
+    assert (
+        _missing(cur) == []
+    )  # the crawler marks its own candidate gone; this row is left alone
+
+
+def test_the_sweep_extension_list_is_the_allowed_extensions_lower_cased_with_the_dot():
+    assert all(e == e.lower() and e.startswith(".") for e in ia.ALLOWED_EXT)
+
+
+# ---- the surface-scan worker derives file ids the way this script does -----------
+
+
+def test_surface_scan_worker_derives_file_ids_like_the_indexer():
+    """The worker renders a file only when its id is uuid5 of file:<archive_path> (a repointed
+    archive_path is refused). Its copy of the namespace is a source constant in a plugin that needs
+    SurfaceTopography, so compare the text: the namespace string and the "file:" prefix."""
+    worker = (
+        Path(__file__).resolve().parents[2]
+        / "plugins"
+        / "surface-scan-worker"
+        / "app"
+        / "lib"
+        / "archive.py"
+    )
+    text = worker.read_text()
+    m = re.search(
+        r'_ID_NAMESPACE\s*=\s*uuid\.uuid5\(\s*uuid\.NAMESPACE_DNS,\s*"([^"]+)"\s*\)',
+        text,
+    )
+    assert m, "the worker no longer defines _ID_NAMESPACE the expected way"
+    assert uuid.uuid5(uuid.NAMESPACE_DNS, m.group(1)) == ia._NS
+    assert '"file:" + archive_path' in text
+    assert ia.file_id("rig/x.al3d") == uuid.uuid5(ia._NS, "file:rig/x.al3d")

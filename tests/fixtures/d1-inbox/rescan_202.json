@@ -1,0 +1,17 @@
+{
+  "description": "a rescan queued",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/rescan",
+    "body": {}
+  },
+  "status": 202,
+  "body": {
+    "data": {
+      "queued": true,
+      "request_id": "00000000-0000-4000-8000-000000007001",
+      "status": "queued",
+      "requested_at": "2026-10-15T12:00:00.000Z"
+    }
+  }
+}

@@ -710,6 +710,43 @@ def test_readers_tables_show_a_member_their_own_rows_only_and_take_no_writes():
     assert BY_KEY[("operation_open_to_all", "read")]["permissions"] == {}
 
 
+def test_members_cannot_set_the_inbox_alias_columns_when_creating_or_updating_a_person():
+    """Migration 193 added people.uni_alias and people.scan_while_former (administrators only): the inbox crawler offers
+    Users/<uni alias> to the person who owns it. A create row with fields "*" would let any member create a person with an
+    alias of their choice (squatting a colleague's folder before an administrator assigns it), so the create row lists its
+    fields, like the update row. Migration 194 applies it to a live database."""
+    inbox_only = {"uni_alias", "scan_while_former"}
+    for action in ("create", "update"):
+        fields = BY_KEY[("people", action)]["fields"]
+        assert fields != "*", action
+        names = fields.split(",")
+        assert len(names) == len(set(names)), action
+        assert not inbox_only & set(names), action
+    create = set(BY_KEY[("people", "create")]["fields"].split(","))
+    # a person can still be created as before: every other column stays (the validation is untouched)
+    assert {
+        "full_name",
+        "email",
+        "user_id",
+        "is_operator",
+        "is_researcher",
+        "active",
+        "notes",
+    } <= create
+    assert BY_KEY[("people", "create")]["validation"] == {
+        "_or": [{"user_id": {"_null": True}}, {"user_id": {"_eq": "$CURRENT_USER"}}]
+    }
+    assert BY_KEY[("people", "read")]["fields"] == "*"
+    # the migration carries the same list as the generator (and its down puts the open list back)
+    mig = (
+        SCRIPTS.parent
+        / "db/migrations/20261015000194_people_create_no_inbox_fields.sql"
+    ).read_text()
+    up, down = mig.split("-- migrate:down")
+    assert f"fields = '{BY_KEY[('people', 'create')]['fields']}'" in up
+    assert "fields = '*'" in down
+
+
 def test_params_tables_listed_as_unfiltered_are_the_stale_ones():
     """The eleven *_params tables were folded into the operation and test rows by migration 32;
     access_rules.json keeps their stale grants only for the drift checks (see its comment)."""

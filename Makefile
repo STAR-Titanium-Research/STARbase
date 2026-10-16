@@ -37,7 +37,8 @@ KEEP          ?= 7
         bootstrap-minio backup restore prune-backups \
         worker-build worker-test worker-logs phase4-test \
         analysis-build analysis-test llm-build llm-test llm-eval \
-        migrate-legacy migrate-legacy-dry index-archive index-archive-dry
+        surface-scan-build surface-scan-test \
+        migrate-legacy migrate-legacy-dry index-archive index-archive-dry inbox-crawler inbox-crawler-once
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -103,6 +104,15 @@ bootstrap-minio: ## Create MinIO buckets after first `make up` (idempotent)
 		sh -c "mc mb --ignore-existing local/d1-files \
 			&& mc mb --ignore-existing local/d1-backups \
 			&& echo 'Buckets ready: d1-files, d1-backups'"
+	# The read-only user Directus (d1-surface-scan) uses; skipped while MINIO_SURFACE_READER_PASSWORD is empty.
+	docker run --rm \
+		--network $(COMPOSE_NETWORK) \
+		-e MC_HOST_local="http://$(MINIO_ROOT_USER):$(MINIO_ROOT_PASSWORD)@minio:9000" \
+		-e BUCKET="$(or $(MINIO_BUCKET),d1-files)" \
+		-e READER_USER="$(or $(MINIO_SURFACE_READER_USER),surface-reader)" \
+		-e READER_PASSWORD="$(MINIO_SURFACE_READER_PASSWORD)" \
+		-v "$(CURDIR)/infra/minio:/infra:ro" \
+		minio/mc:latest sh /infra/surface_reader.sh
 
 backup: ## Dump PostgreSQL and upload to MinIO (stack must be running)
 	bash infra/backup/backup.sh
@@ -137,6 +147,13 @@ analysis-test: analysis-build ## Run FFT analysis worker unit tests inside Docke
 	docker run --rm d1-analysis-worker \
 		python -m pytest tests/ -v --tb=short
 
+surface-scan-build: ## Build the surface-scan render worker Docker image
+	docker build -t d1-surface-scan-worker plugins/surface-scan-worker/
+
+surface-scan-test: surface-scan-build ## Run surface-scan render worker unit tests inside Docker
+	docker run --rm d1-surface-scan-worker \
+		python -m pytest tests/ -v --tb=short
+
 llm-build: ## Build the text-to-SQL plugin Docker image
 	docker build -t d1-llm-text-to-sql plugins/llm-text-to-sql/
 
@@ -163,6 +180,13 @@ index-archive: ## Index the SMB archive into the Directus File Library (idempote
 index-archive-dry: ## Dry-run the archive indexer (counts only, no DB writes)
 	docker compose --profile archive run --rm archive-indexer \
 		sh -c "pip install -q psycopg2-binary && python /scripts/index_archive.py --dry-run"
+
+inbox-crawler: ## Start the inbox crawler daemon (read-only; finds new files in personal and team folders for the Inbox)
+	docker compose --profile archive up -d inbox-crawler
+
+inbox-crawler-once: ## One scan of everyone with the inbox crawler, then exit (see docs/runbooks/inbox-crawler.md)
+	docker compose --profile archive run --rm inbox-crawler \
+		sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --once"
 
 reset-db: ## Drop all tables and re-apply migrations + seed (DESTRUCTIVE — dev only). Asks you to type the DB name; CONFIRM=<name> skips the prompt.
 	@echo "WARNING: this DROPS the database '$(DB_NAME)' and every table in it."

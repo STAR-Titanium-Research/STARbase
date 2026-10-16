@@ -1,0 +1,52 @@
+{
+  "description": "the keys parseFileFilters reads: a list query and accept-all.filter may carry these and nothing else, and these values",
+  "keys": [
+    "tab",
+    "kind",
+    "strength",
+    "folder",
+    "from",
+    "to",
+    "owner",
+    "link_kind",
+    "acceptable",
+    "limit",
+    "offset"
+  ],
+  "values": {
+    "tab": [
+      "new",
+      "older",
+      "linked",
+      "dismissed",
+      "open"
+    ],
+    "kind": [
+      "sem_image",
+      "surface_scan",
+      "image",
+      "document",
+      "other"
+    ],
+    "strength": [
+      "short_id",
+      "code",
+      "edge_code",
+      "none"
+    ],
+    "link_kind": [
+      "manual",
+      "bulk",
+      "auto"
+    ]
+  },
+  "owner_forms": [
+    "me",
+    "team:<uuid>",
+    "person:<uuid>"
+  ],
+  "limit": {
+    "default": 50,
+    "max": 200
+  }
+}

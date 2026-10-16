@@ -623,12 +623,16 @@ def main() -> int:
                 page_size=1000,
             )
 
-            # Candidates = star rows NOT seen this run (moved, renamed, or deleted).
+            # Candidates = star rows NOT seen this run (moved, renamed, or deleted) -- of the types this
+            # run walks. The inbox crawler also registers pointer rows for other types (.al3d, unknown
+            # types) that ALLOWED_EXT skips, so they are never "seen" here and must not be judged missing.
+            # Both writers record metadata.extension lower-cased with its dot.
             cur.execute(
                 "SELECT df.id::text, df.metadata::jsonb->>'fingerprint', df.filename_download "
                 "FROM directus_files df "
-                "WHERE df.storage=%s AND NOT EXISTS (SELECT 1 FROM _seen_ids s WHERE s.id = df.id)",
-                (storage,),
+                "WHERE df.storage=%s AND NOT EXISTS (SELECT 1 FROM _seen_ids s WHERE s.id = df.id) "
+                "AND lower(COALESCE(df.metadata::jsonb->>'extension','')) = ANY(%s)",
+                (storage, sorted(ALLOWED_EXT)),
             )
             candidates = cur.fetchall()
             n_old_by_fp: dict[str, int] = {}

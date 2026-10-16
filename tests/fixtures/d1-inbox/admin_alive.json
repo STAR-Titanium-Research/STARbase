@@ -1,0 +1,64 @@
+{
+  "description": "a daemon that heartbeated 30 s ago",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/admin"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "status": {
+        "desired_state": "running",
+        "interval_minutes": 30,
+        "read_mb_per_s": 60,
+        "daemon": "alive",
+        "last_heartbeat_at": "2026-10-15T11:59:30.000Z",
+        "daemon_started_at": "2026-10-15T08:00:00.000Z",
+        "current_activity": "idle",
+        "last_scan_started_at": "2026-10-15T11:30:00.000Z",
+        "last_scan_finished_at": "2026-10-15T11:45:00.000Z",
+        "files_registered": 42,
+        "error_count": 1,
+        "last_error": "share briefly unreachable"
+      },
+      "errors": [
+        {
+          "at": "2026-10-15T11:45:00.000Z",
+          "message": "share briefly unreachable"
+        },
+        {
+          "at": "2026-10-15T10:00:00.000Z",
+          "message": "Users/ali1 is not readable"
+        }
+      ],
+      "unmatched_folders": [
+        "Users/zz9",
+        "Shared/Old project"
+      ],
+      "people_without_alias": [
+        {
+          "person_id": "00000000-0000-4000-8000-000000000014",
+          "full_name": "Dave D",
+          "active": true,
+          "has_login": true
+        },
+        {
+          "person_id": "00000000-0000-4000-8000-000000000018",
+          "full_name": "Fay Former",
+          "active": false,
+          "has_login": false
+        }
+      ],
+      "queued_requests": 1,
+      "queue": {
+        "queued": 1,
+        "running": 0
+      },
+      "candidates": {
+        "new": 5,
+        "linked": 2,
+        "dismissed": 1
+      }
+    }
+  }
+}

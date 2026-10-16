@@ -25,8 +25,11 @@ const props = withDefaults(
 		// This row's menu is open.
 		menuOpen?: boolean;
 		dragging?: boolean;
+		// A count drawn after the label (the Inbox's new files); '' draws none. `badgeLabel` is what a screen reader hears for it.
+		badge?: string;
+		badgeLabel?: string;
 	}>(),
-	{ pinsReady: true, nested: false, plain: false, menuOpen: false, dragging: false },
+	{ pinsReady: true, nested: false, plain: false, menuOpen: false, dragging: false, badge: '', badgeLabel: '' },
 );
 
 const emit = defineEmits<{
@@ -134,6 +137,7 @@ defineExpose({
 			<NavIcon v-if="!nested" :name="item.icon" />
 			<span class="label">{{ label }}</span>
 			<span v-if="hint" class="hint">{{ hint }}</span>
+			<span v-if="badge" class="badge" data-test="nav-badge"><span aria-hidden="true">{{ badge }}</span><span class="sr">{{ badgeLabel || badge }}</span></span>
 		</AppLink>
 
 		<span class="actions">
@@ -220,6 +224,11 @@ defineExpose({
 /* A saved view's index page, in grey after its name. */
 .hint { min-width: 0; flex: 0 100 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm, 12px); color: var(--d1-side-dim); }
 .ext { display: inline-flex; color: var(--d1-side-dim); }
+/* The Inbox's count: a small pill at the row's end, in the sidebar's accent. */
+.badge {
+	flex: none; margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 99px; background: var(--d1-side-bar); color: #fff;
+	font-size: var(--fs-xs, 11px); font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
 
 .grip {
 	position: absolute;

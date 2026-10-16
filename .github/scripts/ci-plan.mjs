@@ -14,8 +14,9 @@ const WORKSPACE_ROOT = ['package.json', 'package-lock.json'];
 // Jobs that run or not as a whole, and the paths whose change makes them run.
 export const JOBS = {
   // db/ for the migrations themselves; scripts/ for configure_all.sh, the access rules and the
-  // roundtrip script; tests/ for the phase scripts; d1-access-guard ships rules the tests check.
-  migrations: ['db/', 'scripts/', 'tests/', 'core/extensions/d1-access-guard/'],
+  // roundtrip script; tests/ for the phase scripts; d1-access-guard ships rules the tests check;
+  // d1-inbox: phase1 runs the extension's own SQL (sql_check.mjs) against the migrated schema.
+  migrations: ['db/', 'scripts/', 'tests/', 'core/extensions/d1-access-guard/', 'core/extensions/d1-inbox/'],
   // tests/scripts against a migrated database, the diag goldens, and the release-notes checks
   // that read the force app's changelog.
   scripts: ['scripts/', 'tests/', 'db/', 'core/extensions/d1-access-guard/', 'apps/force-app/web/src/changelog'],
@@ -24,11 +25,12 @@ export const JOBS = {
     ...WORKSPACE_ROOT,
   ],
   // infra/caddy/: apps/starbase/web/src/csp.test.ts reads the Caddyfile (the :8090 CSP and the d1-edit COOP).
+  // d1-inbox/: its contract_fixtures.mjs writes tests/fixtures/d1-inbox/, which the client contract test replays.
   directusUi: [
     'packages/d1-ui/', 'packages/fast-plotting/', 'packages/directus-host/', 'packages/starbase-pages/', 'packages/force-plotting/',
     'apps/starbase/web/', 'infra/caddy/', 'core/extensions/d1-edit-frame/', 'core/extensions/d1-lab-dashboard/',
     'core/extensions/d1-composition-bar/', 'core/extensions/d1-campaign-ops/',
-    'core/extensions/d1-project-items/', ...WORKSPACE_ROOT,
+    'core/extensions/d1-project-items/', 'core/extensions/d1-inbox/', 'tests/fixtures/d1-inbox/', ...WORKSPACE_ROOT,
   ],
   backend: ['apps/force-app/backend/'],
 };
@@ -46,6 +48,7 @@ export const PY_SERVICES = [
 export const IMAGES = [
   { name: 'Heavy-data worker', image: 'd1-heavy-data-worker', context: 'plugins/heavy-data-worker', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Analysis worker', image: 'd1-analysis-worker', context: 'plugins/analysis-worker', test: 'python -m pytest tests/ -q --tb=short' },
+  { name: 'Surface-scan worker', image: 'd1-surface-scan-worker', context: 'plugins/surface-scan-worker', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Text-to-SQL plugin', image: 'd1-llm-text-to-sql', context: 'plugins/llm-text-to-sql', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Filter service', image: 'd1-filter-service', context: 'plugins/filter-service', test: '' },
   { name: 'Diagnostics service', image: 'd1-diag-service', context: '.', dockerfile: 'plugins/diag-service/Dockerfile', watch: ['plugins/diag-service/', 'scripts/diag/'], test: '' },

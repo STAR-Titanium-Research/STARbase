@@ -1,0 +1,19 @@
+{
+  "description": "a person who is not an administrator",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/admin"
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "Only administrators can do that.",
+        "extensions": {
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

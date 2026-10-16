@@ -1,0 +1,357 @@
+{
+  "description": "GET /d1-inbox/files?tab=new&kind=sem_image%2Csurface_scan%2Cimage%2Cdocument%2Cother&limit=50&offset=0",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "new",
+      "kind": "sem_image,surface_scan,image,document,other",
+      "limit": "50",
+      "offset": "0"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001001",
+        "directus_files_id": "00000000-0000-4000-8000-000000003001",
+        "name": "3fa9c1d2_A1.tif",
+        "mime_type": "image/tiff",
+        "kind": "sem_image",
+        "kind_confidence": 0.95,
+        "extracted": {
+          "kv": 15,
+          "magnification": 5000,
+          "scale_bar": "2 µm",
+          "instrument": "JEOL"
+        },
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/sem/3fa9c1d2_A1.tif",
+        "size_bytes": 3145728,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001002",
+        "directus_files_id": "00000000-0000-4000-8000-000000003002",
+        "name": "3fa9c1d2_A1.tif",
+        "mime_type": "image/tiff",
+        "kind": "sem_image",
+        "kind_confidence": 0.95,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": "00000000-0000-4000-8000-000000001001",
+        "duplicate_of_owner": "Alice A",
+        "rel_path": "Shared/SEM/2026/3fa9c1d2_A1.tif",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "team",
+          "id": "00000000-0000-4000-8000-000000000021",
+          "name": "SEM team"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001003",
+        "directus_files_id": "00000000-0000-4000-8000-000000003003",
+        "name": "scan_0007.nid",
+        "mime_type": null,
+        "kind": "surface_scan",
+        "kind_confidence": 0.8,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "none",
+        "matches": [],
+        "suggested_collection": null,
+        "suggested_record_id": null,
+        "suggested_label": null,
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/afm/scan_0007.nid",
+        "size_bytes": 52428800,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001014",
+        "directus_files_id": "00000000-0000-4000-8000-000000003014",
+        "name": "H13A-2_fC_new.al3d",
+        "mime_type": null,
+        "kind": "surface_scan",
+        "kind_confidence": 1,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "edge_code",
+        "matches": [
+          {
+            "collection": "insert_edges",
+            "record_id": "00000000-0000-4000-8000-000000000202",
+            "via": "edge_code",
+            "token": "H13A-#2-fC"
+          }
+        ],
+        "suggested_collection": "insert_edges",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000202",
+        "suggested_label": "H13A-#2-fC",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/alicona/H13A-2_fC_new.al3d",
+        "size_bytes": 52428800,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": false
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001004",
+        "directus_files_id": "00000000-0000-4000-8000-000000003004",
+        "name": "S-0042_notes.pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+        "kind_confidence": null,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "code",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "code",
+            "token": "S-0042"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/reports/S-0042_notes.pdf",
+        "size_bytes": 120000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001005",
+        "directus_files_id": "00000000-0000-4000-8000-000000003005",
+        "name": "abcd1234_B2.tif",
+        "mime_type": "image/tiff",
+        "kind": "image",
+        "kind_confidence": 0.9,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000105",
+            "via": "short_id",
+            "token": "abcd1234"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000105",
+        "suggested_label": "S-0050",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/abcd1234_B2.tif",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": false
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001006",
+        "directus_files_id": "00000000-0000-4000-8000-000000003006",
+        "name": "ffff0000_C3.tif",
+        "mime_type": "image/tiff",
+        "kind": "image",
+        "kind_confidence": 0.9,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [],
+        "suggested_collection": null,
+        "suggested_record_id": null,
+        "suggested_label": null,
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/ffff0000_C3.tif",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false
+      },
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001011",
+        "directus_files_id": "00000000-0000-4000-8000-000000003011",
+        "name": "3fa9c1d2_report.pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+        "kind_confidence": null,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/reports/3fa9c1d2_report.pdf",
+        "size_bytes": 88000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": true
+      }
+    ],
+    "meta": {
+      "total": 8,
+      "limit": 50,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

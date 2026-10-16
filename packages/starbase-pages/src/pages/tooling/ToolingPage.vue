@@ -15,6 +15,7 @@ import StateBadge from './StateBadge.vue';
 import BoxPanels from './BoxPanels.vue';
 import InsertPanels from './InsertPanels.vue';
 import EdgePanels from './EdgePanels.vue';
+import SurfaceScansPanel from '../surface/SurfaceScansPanel.vue';
 
 // Tooling page: a tool box, a cutting insert and an insert edge on ONE route record
 // (:kind(tool-boxes|inserts|edges)/:id), so moving from the box to an insert to an edge keeps this
@@ -103,10 +104,14 @@ const contents = computed<ContentsEntry[]>(() => {
 		];
 	}
 	if (focusKind.value === 'insert') {
-		return [{ id: 'details', title: 'Details', count: null }, { id: 'edges', title: 'Edges', count: insert.value?.edges.length ?? null }];
+		return [{ id: 'details', title: 'Details', count: null }, { id: 'scans', title: 'Surface scans', count: null }, { id: 'edges', title: 'Edges', count: insert.value?.edges.length ?? null }];
 	}
 	const loading = tests.value.loading || operations.value.loading;
-	return [{ id: 'details', title: 'Details', count: null }, { id: 'history', title: 'History', count: loading ? null : Math.min(historyRows.value, LIST_CAP) }];
+	return [
+		{ id: 'details', title: 'Details', count: null },
+		{ id: 'scans', title: 'Surface scans', count: null },
+		{ id: 'history', title: 'History', count: loading ? null : Math.min(historyRows.value, LIST_CAP) },
+	];
 });
 </script>
 
@@ -165,10 +170,12 @@ const contents = computed<ContentsEntry[]>(() => {
 					</template>
 					<template v-else-if="insert && edge">
 						<ToolingDetails :facts="details" :notes="notes" :loading="!record" :warning="warning" />
+						<SurfaceScansPanel :insert-id="insert.id" :edge-id="edge.id" :item-label="`Edge ${edgeLabel(insert, edge)}`" />
 						<EdgePanels :tests="tests" :operations="operations" />
 					</template>
 					<template v-else-if="insert">
 						<ToolingDetails :facts="details" :notes="notes" :loading="!record" />
+						<SurfaceScansPanel :insert-id="insert.id" :item-label="insertLabel(insert)" />
 						<InsertPanels :insert="insert" :counts="edgeCounts" />
 					</template>
 					<LoadState v-else :loading="!record" error="This record is not in the box's list." />
