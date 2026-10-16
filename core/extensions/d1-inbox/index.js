@@ -1746,10 +1746,13 @@ export function mount(router, context, deps = {}) {
 
   // The owner a rule of the caller's belongs to, from the request: the caller's personal folder, or the team folder of team_id (an active member only).
   // Returns { personId, teamId, root }; root is the owner's folder on the share ('Users/<alias>', 'Shared/<share folder>').
+  // The top-level folder of the personal folders on the share: the crawler's INBOX_PERSON_DIR (compose passes it to both; the lab share spells it `User`).
+  // Read per call so a test can set it; 'Users' stays the default of the crawler and the spec.
+  const personDir = () => String(process.env.INBOX_PERSON_DIR ?? '').trim() || 'Users';
   const ignoreOwnerOf = (scope, teamId) => {
     if (teamId === undefined || teamId === null) {
       if (!scope.personId || isBlank(scope.person?.uni_alias)) throw ERRORS.noFolder();
-      return { personId: scope.personId, teamId: null, root: `Users/${scope.person.uni_alias}` };
+      return { personId: scope.personId, teamId: null, root: `${personDir()}/${scope.person.uni_alias}` };
     }
     if (!isUuid(teamId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'team_id must be an id.', { field: 'team_id' });
     const team = scope.teams.find((t) => t.team_id === teamId.toLowerCase());
@@ -1761,7 +1764,7 @@ export function mount(router, context, deps = {}) {
   const ownsRule = (scope, rule) => (rule.owner_person_id ? rule.owner_person_id === scope.personId : scope.teamIds.includes(rule.owner_team_id));
   // The folder on the share a rule's owner has right now, as seen by the caller (their own alias, or a team of theirs); null when it was unset since.
   const rootOfRule = (scope, rule) => {
-    if (rule.owner_person_id) return isBlank(scope.person?.uni_alias) ? null : `Users/${scope.person.uni_alias}`;
+    if (rule.owner_person_id) return isBlank(scope.person?.uni_alias) ? null : `${personDir()}/${scope.person.uni_alias}`;
     const team = scope.teams.find((t) => t.team_id === rule.owner_team_id);
     return isBlank(team?.share_folder) ? null : `Shared/${team.share_folder}`;
   };

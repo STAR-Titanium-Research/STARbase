@@ -104,7 +104,7 @@ administrators (admin tab on `/crawler`) and are not scanned.
 | `INBOX_OCR=1` | `.env` (passed through by compose) | off. Reads the FEI/Thermo data bar of an image with no metadata (PNG, JPEG, BMP, a TIFF without tag 34682) cell by cell and, with two header labels read, claims it as a possible SEM image with the values it read. Needs `rapidocr-onnxruntime` and `numpy` in the image: the service and `make inbox-crawler-once` pip-install them (exact versions, about 380 MB, a minute or two at start) only when `INBOX_OCR` is set; without them the crawler logs one warning and reads no bars. Shown to import in a clean `python:3.12-slim`; reading real bars is still backlog **SEM7**/**SEM1**/**SEM2** on d1-server. A TIFF with FEI metadata gets all its values from the metadata without OCR, but with `INBOX_OCR=1` every FEI TIFF that has a data bar is also read by OCR (about 0.16 s each) as a cross-check: the metadata wins and a bar that disagrees is flagged `bar_mismatch` |
 | `INBOX_OCR_DEVICE` | `.env` (passed through by compose) | `cpu`; `auto` takes the GPU when onnxruntime has `CUDAExecutionProvider` (and logs the choice), `cuda` insists and falls back to the CPU with a warning. Optional: the CPU reads a bar in about 0.16 s (backlog **SEM4**) |
 | `INBOX_THUMBNAILS=0` | `.env` (passed through by compose; recreate the service after changing it) | `1`: on. `0` turns off both the pictures made at registration and the backfill of older files (see *Thumbnails*) |
-| `INBOX_PERSON_DIR` | `.env` (passed through by compose) | `User`, the lab share's folder of personal folders (the code's own default, `Users`, is the spec's spelling) |
+| `INBOX_PERSON_DIR` | `.env` (passed through by compose to the crawler and to Directus: `d1-inbox` builds a person's folder from it for *Ignore this folder*) | `User`, the lab share's folder of personal folders (the code's own default, `Users`, is the spec's spelling) |
 | `INBOX_ONLY_FOLDERS` | `.env` (passed through by compose; recreate the service after changing it) | empty: everyone with a folder; a comma-separated list of uni aliases / share folders scans only those (trial runs) |
 | `INBOX_LOG_LEVEL=DEBUG` | `.env` (passed through by compose; recreate the service after changing it) | `INFO`; DEBUG logs every file the crawler opens; a value that is not a level falls back to INFO with a warning |
 | `desired_state`, `interval_minutes`, `read_mb_per_s` | `d1_private.inbox_crawler_state`, by SQL (see below): there is no admin route or tab for them | running, 30, 60 |
@@ -439,9 +439,9 @@ After re-applying 193 and 194 and restoring those values, every owner gets a fir
 shows as *Older* (backlog): the dismissals and *Recently linked* history are gone, but files linked through the
 Inbox stay linked.
 
-## Rolling back the SEM reader (197, 196)
+## Rolling back the SEM reader (201 to 196)
 
-Order: **the crawler, then the extension, then 197, then 196, then restart.** Newer migrations come off first, so
+Order: **the crawler, then the extension, then every migration newer than 195 (201 to 196), then restart.** Newer migrations come off first, so
 this section applies before the one above (194 and 193).
 
 1. `docker compose --profile archive stop inbox-crawler`. When it starts again, run the previous commit's crawler (the
@@ -450,7 +450,10 @@ this section applies before the one above (194 and 193).
    route reads `sem_image_settings` or the owner columns while they are being dropped. With `EXTENSIONS_AUTO_RELOAD`
    Directus loads it at once; stop Directus (`docker compose stop directus`) first if the old extension must not meet the
    new schema for a moment.
-3. `make migrate-down` once (197) and check `make migrate-status`; again for 196. **Both are lossy.** 197 drops the stored
+3. `make migrate-down` takes off the **newest** migration, so run it once per migration applied since 196 and check
+   `make migrate-status` after each: 201 (the owner follow-ups: the delete messages and the active-member rule), 200 and every
+   other later one on the database (the rehearsal needed six: 201, 200, 199, 198, 197, 196; 198 loses the thumbnails, 199 the
+   owners' ignore rules: export them first), then 197, then 196. **197 and 196 are lossy.** 197 drops the stored
    imaging settings, the owners' manual corrections and the administrators' access log, and `file_candidates.classified_by`.
    196 drops every owner stamp and the readers table and restores the saved `directus_files` permission rows, so files
    that were owned are readable by every member again. Dump what cannot be recomputed first:
