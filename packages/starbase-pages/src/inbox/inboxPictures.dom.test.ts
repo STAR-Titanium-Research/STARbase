@@ -143,6 +143,52 @@ describe('the thumbnail in a row', () => {
 		expect(document.querySelector('[data-test="notice"]')).toBeNull();
 	});
 
+	it('keeps the button while its preview is open when the picture fails under a click, and hands focus to the row\'s first action when it closes', async () => {
+		await mount([withThumb('Users/ab1cd/sem/3fa9c1d2_A1.tif')], { thumbFails: true, pictureDelayMs: 120 });
+		const btn = thumbButton('3fa9c1d2_A1.tif')!;
+		show(btn);
+		await vi.waitFor(() => expect(btn.dataset.state).toBe('loading'));
+		btn.focus();
+		btn.click(); // while it still shimmers
+		await vi.waitFor(() => expect(dialog()).not.toBeNull());
+		await vi.waitFor(() => expect(btn.dataset.state).toBe('failed'));
+		// the failed thumbnail does not pull the button out from under the open preview
+		expect(thumbButton('3fa9c1d2_A1.tif')).toBe(btn);
+		expect(btn.querySelector('.shimmer')).toBeNull();
+		await vi.waitFor(() => expect(dialog()!.dataset.state).toBe('ready'));
+		key('Escape');
+		await vi.waitFor(() => expect(dialog()).toBeNull());
+		// now it is the icon again, and focus is on a button of the row, not on <body>
+		await vi.waitFor(() => expect(rowOf('3fa9c1d2_A1.tif').querySelector('button[data-test="thumb"]')).toBeNull());
+		await vi.waitFor(() => expect(document.activeElement).toBe(rowOf('3fa9c1d2_A1.tif').querySelector('.buttons button')));
+	});
+
+	it('hands focus to the first action when the thumbnail that has focus fails to load', async () => {
+		await mount([withThumb('Users/ab1cd/sem/3fa9c1d2_A1.tif')], { thumbFails: true, pictureDelayMs: 120 });
+		const btn = thumbButton('3fa9c1d2_A1.tif')!;
+		show(btn);
+		await vi.waitFor(() => expect(btn.dataset.state).toBe('loading'));
+		btn.focus();
+		expect(document.activeElement).toBe(btn);
+		await vi.waitFor(() => expect(rowOf('3fa9c1d2_A1.tif').querySelector('button[data-test="thumb"]')).toBeNull());
+		await vi.waitFor(() => expect(document.activeElement).toBe(rowOf('3fa9c1d2_A1.tif').querySelector('.buttons button')));
+	});
+
+	it('a picture request that stalls fails after 30 s: the row shows its icon and the queue slot is free for the next', async () => {
+		await mount([withThumb('Users/ab1cd/sem/3fa9c1d2_A1.tif')], { pictureHangs: true });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			show(thumbButton('3fa9c1d2_A1.tif')!);
+			await vi.advanceTimersByTimeAsync(29_000);
+			expect(thumbButton('3fa9c1d2_A1.tif')!.dataset.state).toBe('loading');
+			await vi.advanceTimersByTimeAsync(1_500);
+			await vi.waitFor(() => expect(rowOf('3fa9c1d2_A1.tif').querySelector('button[data-test="thumb"]')).toBeNull());
+			expect(rowOf('3fa9c1d2_A1.tif').querySelector('.thumb .icon')?.getAttribute('data-icon')).toBe('image');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('lets the object URLs go when the rows go', async () => {
 		vi.stubGlobal('IntersectionObserver', undefined);
 		await mount([withThumb('Users/ab1cd/sem/3fa9c1d2_A1.tif'), withThumb('Users/ab1cd/sem/9ab3c4d5_B2.tif')]);
@@ -194,8 +240,9 @@ describe('the preview dialog', () => {
 		const btn = await open({ previewDelayMs: 400 });
 		const d = dialog()!;
 		expect(d.dataset.state).toBe('loading');
-		expect(d.querySelector('[data-test="preview-loading"]')?.getAttribute('role')).toBe('status');
 		expect(d.querySelector('[data-test="preview-loading"]')?.textContent).toContain('Loading preview');
+		expect(d.querySelector('[data-test="preview-loading"]')?.getAttribute('aria-hidden')).toBe('true');
+		await vi.waitFor(() => expect(d.querySelector('[data-test="preview-status"]')?.textContent).toBe('Loading preview…'));
 		expect(d.querySelector('[data-test="preview-thumb"]')?.getAttribute('src')).toBe(btn.querySelector('img')!.getAttribute('src'));
 		expect(d.querySelector('[data-test="preview-image"]')).toBeNull();
 		expect(d.querySelector('[data-test="preview-error"]')).toBeNull();
@@ -256,6 +303,50 @@ describe('the preview dialog', () => {
 		(document.querySelector('[data-test="inbox-row"] button') as HTMLElement).focus();
 		document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
 		expect(dialog()!.contains(document.activeElement)).toBe(true);
+	});
+
+	it('Retry hands the focus to Close when it goes away, so it does not fall to the page', async () => {
+		await open({ previewFails: 1 });
+		await vi.waitFor(() => expect(dialog()!.querySelector('[data-test="preview-retry"]')).not.toBeNull());
+		const retry = dialog()!.querySelector<HTMLButtonElement>('[data-test="preview-retry"]')!;
+		retry.focus();
+		retry.click();
+		await vi.waitFor(() => expect(dialog()!.querySelector('[data-test="preview-retry"]')).toBeNull());
+		expect(document.activeElement).toBe(dialog()!.querySelector('[data-test="preview-close"]'));
+		await settled();
+		expect(document.activeElement).toBe(dialog()!.querySelector('[data-test="preview-close"]'));
+	});
+
+	it('announces loading through one live region that stays in the page, and swaps its text', async () => {
+		await open({ previewDelayMs: 150 });
+		const status = dialog()!.querySelector('[data-test="preview-status"]')!;
+		expect(status.getAttribute('role')).toBe('status');
+		expect(dialog()!.querySelectorAll('[role="status"]')).toHaveLength(1);
+		await vi.waitFor(() => expect(status.textContent).toBe('Loading preview…'));
+		await settled();
+		expect(dialog()!.querySelector('[data-test="preview-status"]')).toBe(status);
+		await vi.waitFor(() => expect(status.textContent).toBe('Preview ready.'));
+	});
+
+	it('a preview that stalls fails after 30 s with Retry, like any other failure', async () => {
+		await mount([withThumb('Users/ab1cd/sem/9ab3c4d5_B2.tif')]);
+		const btn = thumbButton('9ab3c4d5_B2.tif')!;
+		show(btn);
+		await vi.waitFor(() => expect(btn.querySelector('img')).not.toBeNull());
+		fake.hang(true);
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			btn.click();
+			await vi.waitFor(() => expect(dialog()).not.toBeNull());
+			await vi.advanceTimersByTimeAsync(29_000);
+			expect(dialog()!.dataset.state).toBe('loading');
+			await vi.advanceTimersByTimeAsync(1_500);
+			await vi.waitFor(() => expect(dialog()!.querySelector('[data-test="preview-error"]')).not.toBeNull());
+			expect(dialog()!.querySelector('[data-test="preview-retry"]')).not.toBeNull();
+			expect(dialog()!.querySelector('[data-test="preview-status"]')?.textContent).toBe('');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('a failed preview says so with Retry, keeps Tab inside across both buttons, and Retry loads it', async () => {

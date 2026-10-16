@@ -28,6 +28,21 @@ const read = computed(() => extractedText(props.file.extracted));
 
 const box = ref<HTMLElement | null>(null);
 
+// One live region that is always in the page (a region inserted together with its text is often not announced): its text is filled in after mount
+// and swapped as the picture loads. The visible spinner and text are for the eyes only. A failure is announced by the error's own role="alert".
+const announceReady = ref(false);
+const statusText = computed(() => {
+	if (!announceReady.value || state.value === 'failed') return '';
+	return state.value === 'ready' ? 'Preview ready.' : 'Loading preview…';
+});
+
+/** Retry takes the focus on Retry with it when it disappears: put it back on Close. */
+async function retryPreview(): Promise<void> {
+	retry();
+	await nextTick();
+	box.value?.querySelector<HTMLElement>('[data-test="preview-close"]')?.focus();
+}
+
 const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const focusables = (): HTMLElement[] => [...(box.value?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
 
@@ -66,6 +81,7 @@ onMounted(async () => {
 	await nextTick();
 	const target = box.value?.querySelector<HTMLElement>('[data-test="preview-close"]') ?? box.value;
 	target?.focus();
+	announceReady.value = true;
 });
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 </script>
@@ -75,14 +91,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 		<div class="d1-kit pv-backdrop" data-test="preview-backdrop" @mousedown.self.prevent="emit('close')">
 			<div ref="box" class="pv" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1" data-test="preview-dialog" :data-state="state">
 				<h2 :id="titleId" class="pv-title">{{ name }}</h2>
+				<p class="pv-sr" role="status" data-test="preview-status">{{ statusText }}</p>
 
 				<div class="pv-stage" data-test="preview-stage">
 					<img v-if="state === 'ready' && url" :src="url" :alt="`Preview of ${name}`" class="pv-img" data-test="preview-image" />
 					<template v-else>
 						<img v-if="thumbUrl" :src="thumbUrl" alt="" aria-hidden="true" class="pv-ghost" data-test="preview-thumb" />
 						<div v-else class="pv-blank" aria-hidden="true" />
-						<div v-if="state !== 'failed'" class="pv-loading" role="status" data-test="preview-loading">
-							<span class="pv-spinner" aria-hidden="true" />
+						<div v-if="state !== 'failed'" class="pv-loading" aria-hidden="true" data-test="preview-loading">
+							<span class="pv-spinner" />
 							<span>Loading preview…</span>
 						</div>
 					</template>
@@ -90,7 +107,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 
 				<div v-if="state === 'failed'" class="pv-error" role="alert" data-test="preview-error">
 					<span>The preview could not be loaded.</span>
-					<v-button small secondary data-test="preview-retry" @click="retry()">Retry</v-button>
+					<v-button small secondary data-test="preview-retry" @click="retryPreview">Retry</v-button>
 				</div>
 
 				<dl class="pv-facts">
@@ -116,6 +133,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true));
 	box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 }
 .pv:focus { outline: none; }
+.pv-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .pv-title { margin: 0; font-size: var(--fs-lg, 16px); font-weight: 650; overflow-wrap: anywhere; }
 .pv-stage {
 	position: relative; display: grid; place-items: center; min-height: 220px; border-radius: 8px; overflow: hidden;

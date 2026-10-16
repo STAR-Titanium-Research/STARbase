@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { AppLink, formatDate, recordRoute, useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import {
@@ -63,20 +63,37 @@ const withPicture = computed(() => hasThumbnail(props.file));
 const thumbButton = ref<HTMLElement | null>(null);
 const seen = useInView(thumbButton);
 const { state: thumbState, url: thumbUrl } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'thumb', () => seen.value);
-// A picture that failed to load is not mentioned: the row shows its icon, as if it had none.
-const showButton = computed(() => withPicture.value && thumbState.value !== 'failed');
 const previewOpen = ref(false);
+// A picture that failed to load is not mentioned: the row shows its icon, as if it had none. While its preview is open the button stays (focus returns
+// to it on close, and it cannot vanish under a person who clicked it while it still shimmered).
+const showButton = computed(() => withPicture.value && (thumbState.value !== 'failed' || previewOpen.value));
+const rowEl = ref<HTMLElement | null>(null);
+/** Where focus goes when the thumbnail button is gone (its picture failed): the row's first action button, if it has one. */
+function focusFallback() {
+	rowEl.value?.querySelector<HTMLElement>('.buttons button:not([disabled])')?.focus();
+}
 async function closePreview() {
 	previewOpen.value = false;
 	await nextTick();
-	thumbButton.value?.focus();
+	if (thumbButton.value) thumbButton.value.focus();
+	else focusFallback();
 }
+// A thumbnail that has focus (tabbed to while it shimmered) and then fails is removed: hand the focus on rather than let it fall to <body>.
+watch(
+	thumbState,
+	async (s) => {
+		if (s !== 'failed' || previewOpen.value || !thumbButton.value || document.activeElement !== thumbButton.value) return;
+		await nextTick();
+		if (!thumbButton.value) focusFallback();
+	},
+	{ flush: 'pre' },
+);
 
 const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.link_kind] : 'Linked'));
 </script>
 
 <template>
-	<li class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
 		<button
 			v-if="showButton"
 			ref="thumbButton"
@@ -89,6 +106,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			@click="previewOpen = true"
 		>
 			<img v-if="thumbUrl" :src="thumbUrl" alt="" draggable="false" />
+			<v-icon v-else-if="thumbState === 'failed'" :name="icon" />
 			<span v-else class="shimmer" aria-hidden="true" />
 		</button>
 		<span v-else class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>

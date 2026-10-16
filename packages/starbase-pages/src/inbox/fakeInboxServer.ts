@@ -500,5 +500,5 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		delete: (path, config) => run('delete', path, undefined, config),
 	};
 
-	return { api, files, calls, junctions, scans, rules: ignored.rules, pictureStats, setAutoLink: (v: boolean) => (autoLink = v) };
+	return { api, files, calls, junctions, scans, rules: ignored.rules, pictureStats, setAutoLink: (v: boolean) => (autoLink = v), hang: (v: boolean) => (opts.pictureHangs = v) };
 }
