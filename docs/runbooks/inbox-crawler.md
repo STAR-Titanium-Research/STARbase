@@ -158,20 +158,32 @@ are replaceable copies, never the original, and the table is outside Directus's 
 
 - **At registration** the crawler already holds the image's bytes (it has hashed and classified them), so
   the pictures cost no second read: they are made from those bytes and stored in the same transaction as the
-  candidate. Only kinds `image` and `sem_image` get any; a document is never opened for this, `.al3d` has none,
-  and neither has a picture that Pillow cannot decode (it is still a found file). The decode limits are
+  candidate. Only kinds `image` and `sem_image` get any; a document is never opened for this and `.al3d` has none.
+  An image that Pillow cannot decode is still a found file, and gets a **marker row** instead (both pictures
+  empty, `failed_reason` such as `not decoded`, keyed on the file's size and modification time), so it is not read
+  again for a picture until the file changes. The decode limits are
   classification's: TIFF, JPEG, PNG and BMP only, at most 50 million pixels, a file of at most 64 MB. A big JPEG is
-  decoded at a reduced scale. 16-bit, 32-bit and float grey is stretched to 8 bits, palette, CMYK and
-  transparent pictures become RGB, a multi-page TIFF shows its first frame, EXIF orientation is applied, and a
-  picture is never enlarged.
+  decoded at a reduced scale. 16-bit, 32-bit and float grey is stretched to 8 bits, palette and CMYK
+  pictures become RGB, transparency (RGBA, grey with alpha, a transparent palette colour) is composited on white,
+  a multi-page TIFF shows its first frame, EXIF orientation is applied, and a picture is never enlarged.
 - **Backfill.** Images registered before this existed, or whose size or modification time differ from those
   the pictures were made from, are filled in by a step at the end of a tick (only when nothing else is waiting to be
-  hashed): up to 25 images or 20 seconds per tick, undecided files first, newest first. It reads through
+  hashed): up to 25 images or 20 seconds per tick, undecided files first, newest first. It works only for
+  owners the scan would scan right now (the scan's own rule: an active person, or one with *scan while former*, with
+  a uni alias; a team with a share folder; only the `INBOX_ONLY_FOLDERS` when that is set), for files below the
+  owner's **current** folder (a candidate left under an old alias or share folder is not read) and outside the
+  owner's ignored folders. It reads through
   `fs_readonly.open_rb` like the scan does (`adopted=False`, so only allow-listed images), at the same
   `read_mb_per_s` throttle, and keeps the heartbeat beating. It makes a picture only of a file that is still the
   one the candidate describes (same size and modification time); one that vanished is skipped (the scan
-  decides what is gone). A file that cannot be decoded, or changed since, is tried once per process and not again
-  until the daemon restarts. A file whose discovery hash failed waits for that hash's hourly retry.
+  decides what is gone). A file that cannot be decoded gets a marker row, which counts as done until the file's
+  size or modification time changes. A file that vanished, is refused to the crawler or changed since is tried
+  once per process (the in-memory list is for transient problems only). A share hiccup (an I/O error on the
+  share) ends that tick's batch and marks nothing, so the next tick tries the same files again. A file whose
+  discovery hash failed waits for that hash's hourly retry.
+- **Pictures are made once.** The picture is made when the file is first seen. A file re-saved at the same path
+  keeps its old picture (and its old size, date and classification, which the scan does not update for a path it
+  already knows) until it moves, or is dismissed and re-found. There is no sweep that re-checks known files.
 - **Gone.** Marking a candidate `gone` deletes its pictures; one that comes back gets them again from the
   backfill. Dismissed and linked files keep theirs.
 - **Switch.** `INBOX_THUMBNAILS=0` (recreate the service) stops both. The pictures already made stay.
@@ -188,9 +200,12 @@ are replaceable copies, never the original, and the table is outside Directus's 
   The backlog is worked through at up to 25 images per 30-second tick, about 3,000 an hour, less when the read
   throttle or big TIFFs slow it. To save the space, set `INBOX_THUMBNAILS=0` or
   `TRUNCATE d1_private.file_thumbnails` (they are made again from the share if it is switched on).
-- **Memory.** A 50 megapixel 16-bit TIFF is decoded to about 300 MB at its peak; the service has no limit of its own
+- **Memory.** About 500 MB peak for a 50 MP 16-bit TIFF; the service has no limit of its own
   today, so give the container room for that (backlog IF54).
-- What only the real share and real SEM images can show is in the backlog: IF53 to IF56.
+- **Markers.** `SELECT failed_reason, count(*) FROM d1_private.file_thumbnails WHERE failed_reason IS NOT NULL GROUP BY 1`
+  lists the images that have no picture and why. To try them again (after a Pillow bump, say), delete those rows:
+  `DELETE FROM d1_private.file_thumbnails WHERE failed_reason IS NOT NULL`.
+- What only the real share and real SEM images can show is in the backlog: IF53 to IF58.
 
 ## Known limits
 
@@ -199,6 +214,7 @@ are replaceable copies, never the original, and the table is outside Directus's 
   service; nothing is lost (work is committed in batches, and the share is only read).
 - **A file edited in place is not noticed** (its folder's mtime does not change). A file replaced by a new one
   under the same name is. A file that was linked when first seen, and is unlinked later, is not offered.
+  Its picture is stale too: see *Pictures are made once* under Thumbnails.
 - A cross-owner move (a file moved from one person's folder to another's) shows as gone plus new.
 - A clock difference of more than a few seconds between the share and the server makes every scan list every
   folder (correct, but slow).
@@ -237,10 +253,11 @@ are replaceable copies, never the original, and the table is outside Directus's 
 
 ## Rolling back
 
-Migrations are `20261015000193_found_files_inbox` and `20261015000194_people_create_no_inbox_fields`, and
+Migrations are `20261015000193_found_files_inbox`, `20261015000194_people_create_no_inbox_fields`,
 `20261016000198_file_thumbnails` (the derived pictures: rolling it back loses nothing that cannot be made again from
-the share, but stop the crawler or set `INBOX_THUMBNAILS=0` first, or it logs the missing table every ten minutes).
-Roll back 198 first, then 194 before 193 (`make migrate-down` undoes the latest one, so run it once per migration, checking `make migrate-status`
+the share, but stop the crawler or set `INBOX_THUMBNAILS=0` first, or it logs the missing table every ten minutes) and
+`20261016000199_inbox_ignored_dirs` (rolling it back loses the owners' ignore rules: export them first).
+Roll back 198 (thumbnails) and 199 (ignored folders) first, then 194, then 193 (`make migrate-down` undoes the latest one, so run it once per migration, checking `make migrate-status`
 between). Stop the crawler first (`docker compose --profile archive stop inbox-crawler`).
 
 Rolling back 193 **drops** every uni alias and share folder (the `people` and `teams` columns), every candidate

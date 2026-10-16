@@ -2162,7 +2162,7 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   `docker compose --profile archive logs -f inbox-crawler` shows `thumbnails made for N images`), the admin tab's heartbeat does
   not go stale, and a scan request queued meanwhile is picked up within about a minute. Restart the service in the middle: it
   resumes where it left off and re-reads nothing that has a row. `docker stats` on the largest real image (a 50 megapixel 16-bit
-  TIFF decodes to roughly 300 MB): the container stays within its memory. Note how long the whole backlog takes and put it in
+  TIFF peaks at about 500 MB): the container stays within its memory. Note how long the whole backlog takes and put it in
   `docs/runbooks/inbox-crawler.md`. Since: Inbox thumbnails (stream B, crawler).
 - [ ] **IF55 — The backfill reads only images and never writes to the share.** With `INBOX_LOG_LEVEL=DEBUG` (recreate the
   service), let the backfill run on the real share: every `reading ...` line it logs is a `.tif .tiff .jpg .jpeg .png .bmp` path, never
@@ -2177,6 +2177,19 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   `SELECT pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))), count(*) FROM d1_private.file_thumbnails` with the
   runbook's estimate (about 0.3 MB per image) and correct the estimate if it is off by more than half. Since: Inbox thumbnails
   (stream B, crawler).
+- [ ] **IF57 — An image that cannot be decoded is read once, and a re-saved file keeps its old picture.** Needs migration 198 as
+  amended (NULLable pictures, `failed_reason`). Put a truncated or renamed-text `.png` and a good image in a test folder
+  and let the scan find them: expect a `file_thumbnails` row for the bad one with both pictures NULL and
+  `failed_reason = 'not decoded'`, and a normal row for the good one. Restart the crawler with `INBOX_LOG_LEVEL=DEBUG`: the bad
+  file is not opened again (no `reading ...` line for it). Then overwrite the good image in place with a different picture
+  (same name) and rescan: its picture does not change (the documented limit: made once, when first seen); move it to a new
+  name and the new path gets the new picture. Since: Inbox thumbnails review fixes (M2, Minor2; crawler).
+- [ ] **IF58 — The backfill leaves a Former person's, an old alias's and an ignored folder's files alone.** With older images
+  without pictures (switch the crawler off, delete their rows, switch it on), set a test person to Former (not *scan while
+  former*), change another test person's alias after linking one of their images, ignore a folder of a third, and run the
+  crawler with `INBOX_LOG_LEVEL=DEBUG`: no `reading ...` line for any file of those three, and with `INBOX_ONLY_FOLDERS` set to
+  one alias none for anybody else's. Undo each and expect the pictures to be made. Since: Inbox thumbnails review fixes (M1;
+  crawler).
 
 - [ ] **IF60 — Inbox thumbnails and the full view on real data (STARbase `/inbox`, and the same page inside Data Studio).**
   Needs the deployed `d1-inbox` with the thumbnails migration and a crawler that has made the pictures (new files, and the
