@@ -24,7 +24,7 @@ async function start(browser: Browser, path: string, width = 1280, opts: Paramet
 	const context = await browser.newContext({ viewport: { width, height: 900 } });
 	const page = await context.newPage();
 	const errors = watchErrors(page);
-	// No thumbnails in v1 (Directus cannot serve a pointer row): the page must never ask the asset route for a found file.
+	// Pictures come from d1-inbox as blobs (the crawler's small copies): the page must never ask Directus's asset route for a found file.
 	page.on('request', (r) => { if (r.url().startsWith(`${D1_BASE}/assets/`)) assetRequests.push(r.url()); });
 	await stubD1(context);
 	const inbox = await stubInbox(context, opts);
@@ -89,8 +89,11 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan h
 	await expect(row(page, '9ab3c4d5_B2.tif')).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
 	await expect(row(page, 'plain.tif').locator('[data-test="suggestion"]')).toHaveCount(0);
 
-	// No thumbnail: every row shows the icon of its kind, and nothing was asked of the asset route.
-	await expect(page.locator('[data-test="inbox-row"] img')).toHaveCount(0);
+	// A file the crawler stored a picture for shows it (a button); every other row shows the icon of its kind; nothing was asked of the asset route.
+	await expect(first.locator('button[data-test="thumb"]')).toHaveAccessibleName('View 3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="inbox-row"] button[data-test="thumb"] img')).toHaveCount(2);
+	await expect(row(page, 'plain.tif').locator('button[data-test="thumb"]')).toHaveCount(0);
+	await expect(row(page, 'edge1.al3d').locator('button[data-test="thumb"]')).toHaveCount(0);
 	expect(assetRequests).toEqual([]);
 
 	const scan = row(page, 'edge1.al3d');
@@ -106,6 +109,103 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan h
 	await expect(other).toContainText('Linking reads this file once to fingerprint it.');
 	await shot(page, 'inbox-new');
 	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+const thumb = (page: Page, name: string) => row(page, name).locator('button[data-test="thumb"]');
+const preview = (page: Page) => page.locator('[data-test="preview-dialog"]');
+/** The picture really decoded (a blob: URL under the production CSP can be blocked, which leaves a broken image). */
+const decoded = (img: ReturnType<Page['locator']>) => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
+
+test('a thumbnail appears in the row, a click opens the full view with its facts and the reduced-size line, and Esc closes it with focus back on the thumbnail', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { previewDelayMs: 800 });
+	const btn = thumb(page, '9ab3c4d5_B2.tif');
+	await expect(btn.locator('img')).toBeVisible();
+	await expect.poll(() => decoded(btn.locator('img'))).toBe(true);
+	await shot(page, 'inbox-thumbnails');
+	// only the two rows with a picture asked for one, and as the signed-in session (a blob request to d1-inbox, never an <img src> to it)
+	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/thumb'))).toHaveLength(2);
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog).toBeVisible();
+	await expect(dialog.getByRole('heading', { name: '9ab3c4d5_B2.tif' })).toBeVisible();
+	await expect(dialog).toContainText('Users/ab1cd/sem');
+	await expect(dialog).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
+	await expect(dialog.locator('[data-test="preview-note"]')).toHaveText('Reduced-size preview. The original stays on the share.');
+	// while the preview loads: a spinner, and the thumbnail enlarged behind it
+	await expect(dialog.locator('[data-test="preview-loading"]')).toBeVisible();
+	await expect(dialog.locator('[data-test="preview-thumb"]')).toBeVisible();
+	// the dialog is outside the page frame (teleported to <body>), so it must bring the --d1-* tokens itself: its hairline and spinner colour resolve
+	await expect(dialog).toHaveCSS('border-top-width', '1px');
+	await expect(dialog.locator('.pv-spinner')).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
+	await shot(page, 'preview-loading');
+	const image = dialog.locator('[data-test="preview-image"]');
+	await expect(image).toBeVisible();
+	await expect.poll(() => decoded(image)).toBe(true);
+	await expect(dialog.locator('[data-test="preview-loading"]')).toHaveCount(0);
+	await shot(page, 'preview-open');
+	await page.keyboard.press('Escape');
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('the full view closes on a click outside and on Close, keeps Tab inside, and a second open asks again', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox');
+	const btn = thumb(page, '3fa9c1d2_A1.tif');
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.keyboard.press('Tab');
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.keyboard.press('Shift+Tab');
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.mouse.click(5, 5);
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	await btn.click();
+	await expect(dialog).toBeVisible();
+	await dialog.getByRole('button', { name: 'Close' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	await page.context().close();
+});
+
+test('a preview that fails says so and Retry loads it; a thumbnail that fails leaves the kind icon, quietly', async ({ browser }) => {
+	const { page, inbox } = await start(browser, '/inbox', 1280, { previewFails: 1 });
+	await thumb(page, '3fa9c1d2_A1.tif').click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-error"]')).toContainText('The preview could not be loaded.');
+	await expect(dialog.locator('[data-test="preview-note"]')).toBeVisible();
+	await shot(page, 'preview-error');
+	await dialog.getByRole('button', { name: 'Retry' }).click();
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await expect(dialog.locator('[data-test="preview-error"]')).toHaveCount(0);
+	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/preview'))).toHaveLength(2);
+	await page.context().close();
+
+	const failing = await start(browser, '/inbox', 1280, { thumbFails: true });
+	await expect.poll(() => failing.inbox.pictureStats.thumbs).toBe(2);
+	await expect(failing.page.locator('[data-test="inbox-row"] button[data-test="thumb"]')).toHaveCount(0);
+	await expect(row(failing.page, '3fa9c1d2_A1.tif').locator('.thumb')).toBeVisible();
+	await expect(failing.page.locator('[role="alert"]')).toHaveCount(0);
+	await failing.page.context().close();
+});
+
+test('the full view fits a phone screen', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox', 390);
+	await thumb(page, '3fa9c1d2_A1.tif').click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	const box = (await dialog.boundingBox())!;
+	expect(box.x).toBeGreaterThanOrEqual(0);
+	expect(box.x + box.width).toBeLessThanOrEqual(390);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+	await shot(page, 'preview-phone');
+	await dialog.getByRole('button', { name: 'Close' }).click();
+	await expect(dialog).toBeHidden();
 	await page.context().close();
 });
 
