@@ -26,9 +26,9 @@ watchEffect(() => {
 </template>
 
 <style scoped>
-.sb-frame { --d1-header-offset: 72px; min-height: 100%; }
+.sb-frame { --d1-header-offset: 58px; min-height: 100%; }
 .sb-frame-head {
-	position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: 64px; padding: 6px var(--content-padding, 32px) 0;
+	position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: 50px; padding: 4px var(--content-padding, 32px) 0;
 	display: flex; flex-direction: column; justify-content: center;
 	background: var(--theme--background); border-bottom: 1px solid var(--theme--border-color-subdued);
 }
