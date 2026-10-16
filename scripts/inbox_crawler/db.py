@@ -1102,15 +1102,16 @@ class Store:
     ) -> list[tuple[str, str]]:
         """Pointer rows the SEM back-fill may read: image-typed (an extension of fs_readonly.IMAGE_EXTENSIONS),
         linked in one of the four tables migration 196 counts (the three junctions and surface_scans, the same
-        set as `already_linked`), unowned (both owner columns null) and without a `sem_image_settings` row.
+        set as `already_linked`) and without a `sem_image_settings` row. Owned or not: who may read a file's
+        settings is enforced by d1-inbox, not here, and an owned file linked in Data Studio (or before
+        `--reclassify`) has none either.
         Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
         so one run visits each row once; the caller checks the path is the file's own before it reads
         anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
         exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
         rows = self._all(
             "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
-            "WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL "
-            "  AND f.metadata::jsonb->>'archive_path' ~* %s "
+            "WHERE f.metadata::jsonb->>'archive_path' ~* %s "
             "  AND " + self._linked_in_junction("f.id") + " "
             "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
             "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "

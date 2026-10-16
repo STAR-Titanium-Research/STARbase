@@ -152,9 +152,28 @@ def test_a_surface_scan_link_counts_when_the_table_exists(world):
 # ---- what it leaves alone ---------------------------------------------------------------------
 
 
-def test_backfill_skips_owned_files(world):
+def test_backfill_saves_settings_for_owned_linked_files_too(world):
+    """I2: an owned file linked in Data Studio (or before --reclassify) has no settings row either. Who may
+    read it is enforced by d1-inbox, not by the back-fill, so it is read like an unowned one."""
     pid, _ = world.person("abc12de")
-    fid = pointer(world, "Users/abc12de/a.tif", owner=pid)
+    tid = world.team("Machining")
+    mine = pointer(world, "Users/abc12de/a.tif", owner=pid)
+    theirs = pointer(world, "Shared/Machining/b.tif")
+    world.q("UPDATE directus_files SET owner_team_id = %s WHERE id = %s", (tid, theirs))
+    world.commit()
+    stats, spy = backfill(world)
+    assert settings(world, mine) is not None and settings(world, theirs) is not None
+    assert stats.saved == 2 and sorted(spy.opens) == [
+        "Shared/Machining/b.tif",
+        "Users/abc12de/a.tif",
+    ]
+    assert settings(world, mine)[-1] == "backfill"
+
+
+def test_backfill_leaves_an_owned_unlinked_file_alone(world):
+    """The owned file nobody linked is a found file, not a linked one: still not read."""
+    pid, _ = world.person("abc12de")
+    fid = pointer(world, "Users/abc12de/a.tif", owner=pid, link=False)
     stats, spy = backfill(world)
     assert settings(world, fid) is None and spy.opens == [] and stats.examined == 0
 

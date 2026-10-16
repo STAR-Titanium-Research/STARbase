@@ -62,7 +62,7 @@ TIFF seen so far, exactly, and the PNG exports need the bar.
 | D8 | Raw reads of `directus_files` and `/assets` are filtered on the stamp. Rows with no owner stay open, as today. |
 | D9 | Only the owner sees or links the file and its settings. Others on a linked record see a **locked file**. Administrators see them read-only and are audited. Only the owner can correct a value; a correction is `manual` and never overwritten by a re-read. |
 | D10 | Linked files stay unowned (nobody loses access they have today). Found files that are not linked yet are owned: the migration stamps the ones the live crawler already registered from `file_candidates`, and the crawler stamps new ones. *Amended 2026-10-16: the interview said "only files registered after the change"; with the crawler live, stamping unlinked found files takes nothing from anyone, and leaving them open would make the privacy rule false for about 82,000 files. Confirmed by the maintainer 2026-10-16, database only: nothing is written to the share.* |
-| D11 | `python -m inbox_crawler --sem-backfill` reads already-linked images. Settings of an unowned file follow whoever can read the record. |
+| D11 | `python -m inbox_crawler --sem-backfill` reads already-linked images, owned or not (*amended in the final fix wave: an owned file linked in Data Studio has no settings row either*). Settings of an unowned file follow whoever can read the record; those of an owned file stay the owner's. |
 | D12 | An optional GPU switch for OCR, `INBOX_OCR_DEVICE=auto\|cpu\|cuda`, CPU by default. The trial ran at about 0.16 s per file on a CPU, and a TIFF with metadata needs no OCR at all, so the GPU is not needed for this corpus; it stays a cheap, low-priority option. *Amended 2026-10-16: the maintainer asked to use the GPU where possible; the measurements say it buys little; confirmed as an optional switch.* |
 | D13 | *Assumed:* a file moved between folders keeps its first owner; two copies in two folders are two files with two owners; a team-owned file is visible to members of that team; admin reads go to a small log table. |
 
@@ -264,7 +264,8 @@ contract is not changed (section 5).
   `sem_image` to `image` (its auto-link eligibility is unchanged: both kinds are on the auto-link list). It runs
   after the detector fix ships, started by the maintainer, and its counts (promoted, demoted, unchanged) are logged.
 - `--sem-backfill` in `__main__.py`: a mode beside `--daemon` and `--once`. It lists pointer rows that are
-  linked, image-typed, unowned and without a settings row, opens each through `fs_readonly.open_rb`
+  linked, image-typed (owned or not: who may read the settings is d1-inbox's rule, and a file linked in Data
+  Studio or before `--reclassify` is owned yet has none) and without a settings row, opens each through `fs_readonly.open_rb`
   (images are on the allow-list), reads it and writes `sem_image_settings`. Resumable, throttled by
   `read_mb_per_s`, an unreadable file is recorded and skipped.
 - **GPU (D12).** `INBOX_OCR_DEVICE` selects the onnxruntime provider for the recogniser: `auto` takes CUDA when

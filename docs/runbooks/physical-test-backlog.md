@@ -2243,10 +2243,10 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   (`docker compose --profile archive stop inbox-crawler`, the pass refuses to run beside it), run the pass on the real database
   (command in the runbook, `docs/runbooks/inbox-crawler.md`, "One-shot passes"; first on a copy if the settings table could not be
   dumped). Expect the log line `sem-backfill: N saved, N not an SEM image, N SEM images with no usable value, N unreadable, ...`;
-  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed,
-  linked in a junction or `surface_scans` and **unowned** (`SELECT ... FROM d1_private.sem_image_settings s JOIN directus_files f ON
-  f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL OR f.owner_team_id IS NOT NULL` returns nothing for rows with
-  `read_by = 'backfill'`); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
+  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed and
+  linked in a junction or `surface_scans`, owned or not (an owned file linked in Data Studio is back-filled too: `SELECT ... FROM
+  d1_private.sem_image_settings s JOIN directus_files f ON f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL AND
+  s.read_by = 'backfill'` lists them, and none of them is a file nobody linked); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
   metadata (`sources` = `metadata`/`derived`). Kill the run half way (`docker stop` or Ctrl-C) and run it again: expect it to finish
   the rest without re-reading the finished ones. Correct one value as its owner, run the pass again: the corrected value stays
   (that row is not listed at all, it has settings). A PNG or JPEG export with no metadata gets no row until `INBOX_OCR=1` works
@@ -2322,6 +2322,12 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   (`SELECT count(*) FROM directus_files WHERE metadata->>'archive_path' = '<old path>'` is 0); the Inbox row (same candidate, same first-seen date)
   shows the new path; `SELECT d1_private.file_readers_drift_count()` is 0; the owner can still open the file and another Lab Member still cannot.
   Repeat for a file in a team folder. Since: SEM reader final fix wave (I1).
+- [ ] **SEM13 — An owner links an SEM image in Data Studio and gets its settings after `--sem-backfill` (I2).** With **SEM3** passed, as account A
+  (with the crawler having stamped a FEI TIFF in A's folder) link the file to a sample through Data Studio's file picker, not the Inbox: the file
+  stays owned by A and has no `d1_private.sem_image_settings` row. Run `--sem-backfill` (daemon stopped, runbook "One-shot passes"): expect the log
+  `sem-backfill: 1 saved ...`, a settings row with `read_by = 'backfill'` for that file, and the record page showing the values to A (Edit control
+  present) and a lock to B (**SEM10**). A found file in A's folder that nobody linked must not be read (`INBOX_LOG_LEVEL=DEBUG`: no `reading` line for it).
+  Run it again: 0 saved, nothing re-read for the finished file. Since: SEM reader final fix wave (I2).
 
 ## Done
 

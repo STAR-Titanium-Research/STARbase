@@ -35,7 +35,8 @@ Modes (exactly one; each takes the single-crawler database lock and exits 1 when
                   stopped answering (or its Users folder, as on an unmounted share), or 25 transient reads failed in a row (nothing after that point is marked, what was
                   committed stays), or the pass failed, or the lock is held; 2 for a configuration error.
     --sem-backfill  one pass over the pointer rows that are linked (to a sample, operation, test session or
-                  surface scan), image-typed, unowned (no provenance owner) and have no imaging-settings row:
+                  surface scan), image-typed (owned or not: d1-inbox decides who may read the
+                  settings) and have no imaging-settings row:
                   each is read through the read-only share (throttled, INBOX_OCR as above), and when it is an
                   SEM image d1_private.save_sem_settings writes its settings (read_by 'backfill'; a person's
                   corrections are never overwritten, and a re-read that carries fewer values keeps the
@@ -108,7 +109,7 @@ def _parse(argv):
     mode.add_argument(
         "--sem-backfill",
         action="store_true",
-        help="save imaging settings for linked, unowned SEM images that have none, then exit",
+        help="save imaging settings for linked SEM images that have none, then exit",
     )
     ap.add_argument(
         "--force",

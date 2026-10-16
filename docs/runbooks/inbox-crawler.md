@@ -77,8 +77,9 @@ stopped, 1 also when another crawler holds the lock or the pass failed, 2 for a 
   run starts over from the first row (a re-read row looks like any other). Backlog **SEM6**.
 - **`--sem-backfill`.** Images people linked before settings were saved at link time have no imaging settings. This
   pass takes the pointer rows (`directus_files`) that are image-typed (extension `.tif .tiff .jpg .jpeg .png .bmp`),
-  linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, unowned (no
-  provenance owner: a linked file stays unowned) and without a row in `d1_private.sem_image_settings`; it reads each
+  linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, owned or
+  not (an owned file linked in Data Studio, or linked before `--reclassify`, has no settings either; who may read
+  them is d1-inbox's rule, not the back-fill's) and without a row in `d1_private.sem_image_settings`; it reads each
   one, and when it is an SEM image calls `d1_private.save_sem_settings(<file id>, extracted, 'backfill')`, the one
   function that turns `extracted` into settings. That function merges: a value the read does not carry keeps its
   stored value, and a value a person corrected (`sources.<field> = 'manual'`) is never overwritten, so a run
