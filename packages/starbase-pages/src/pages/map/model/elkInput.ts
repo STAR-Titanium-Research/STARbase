@@ -57,7 +57,12 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
       width: size.width,
       height: size.height,
       ports: [...ins.map((s) => port(s, sides.in)), ...outs.map((s) => port(s, sides.out))],
-      ...(node.type === 'container' ? { layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' } } : {}),
+      // A container's sockets are its rows, in order. A record's or junction's only have a side: their order is socketOrder's job (from where the wires go).
+      ...(node.type === 'container'
+        ? { layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' } }
+        : node.type === 'more'
+          ? {}
+          : { layoutOptions: { 'elk.portConstraints': 'FIXED_SIDE' } }),
     });
   }
 

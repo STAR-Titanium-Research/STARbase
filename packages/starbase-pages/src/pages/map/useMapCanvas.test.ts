@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick, reactive, type ShallowRef } from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { effectScope, nextTick, reactive, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
-import { mkData, mkOp, mkSample } from './model/fixtures';
+import { mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import { nodeOfSocket } from './model/sockets';
@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -60,6 +60,7 @@ vi.mock('@vue-flow/core', async (orig) => {
     },
     onNodesInitialized: () => undefined,
     onNodeDragStop: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStops.push(fn),
+    onNodeDragStart: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStarts.push(fn),
     fitView: async () => true,
     setCenter: async () => true,
   };
@@ -137,6 +138,7 @@ beforeEach(() => {
   store.layouts = 0;
   store.gate = null;
   store.dragStops.length = 0;
+  store.dragStarts.length = 0;
   store.tall.clear();
   store.elk = null;
   store.moves.length = 0;
@@ -155,26 +157,17 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
     expect(nodesOf().map((n) => n.position.y).sort((a, b) => a - b)).toEqual([0, 100, 200, 300, 400, 500]);
   });
 
-  it('a card the person dragged stays where it was dropped when another card is expanded; new cards go beside the expanded one without overlapping', async () => {
-    const { map } = await open();
-    nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 }; // dragged
-    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
-    const layouts = store.layouts;
-
-    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
-    await map.expand('op:u0');
-    await settle();
-
-    expect(store.layouts).toBe(layouts + 1);
-    expect(at('op:u3')).toEqual({ x: 900, y: 900 });
-    // The opened container keeps its place; it is taller now, so what it would cover is pushed down the column, nothing else moves.
-    expect(at('op:u0')).toEqual(before.get('op:u0'));
-    for (const [id, was] of before) {
-      expect(at(id).x, id).toBe(was.x);
-      expect(at(id).y, id).toBeGreaterThanOrEqual(was.y);
-    }
-    // The cards of its family are new: they got places, and none lies on another card.
-    expect(nodesOf().map((n) => n.id)).toEqual(expect.arrayContaining(['s:x0', 's:y0']));
+  // ELK stand-in whose cards do not touch (the default column is 100 apart: a container 200 tall would lie on the next one). It keeps its last answer.
+  const columnElk = (step = 300) => {
+    const last: Record<string, { x: number; y: number }> = {};
+    const fn = (graph: FakeGraph, shown: Set<string>) => {
+      for (const k of Object.keys(last)) delete last[k];
+      graph.nodes.filter((n) => shown.has(n.id)).forEach((n, i) => (last[n.id] = { x: 0, y: i * step }));
+      return { ...last };
+    };
+    return Object.assign(fn, { last });
+  };
+  const apartEverywhere = () => {
     const boxes = nodesOf().map((n) => ({ id: n.id, ...n.position, width: n.dimensions.width, height: n.dimensions.height }));
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {
@@ -184,11 +177,77 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
         expect(apart, `${a.id} and ${b.id} overlap`).toBe(true);
       }
     }
+  };
+
+  it('＋ lays everything out again with ELK: a dragged card stays where it was dropped, and the card pressed keeps its place, the rest follow ELK moved by the same offset', async () => {
+    const { map } = await open();
+    const elk = columnElk();
+    store.elk = elk;
+    drag('op:u3', { x: 900, y: 900 }); // dragged; it is wired to the same tool as the card that is expanded, so lining up with it would shift everything
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+    const layouts = store.layouts;
+
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+
+    expect(store.layouts).toBe(layouts + 1);
+    expect(at('op:u3')).toEqual({ x: 900, y: 900 });
+    expect(at('op:u0')).toEqual(before.get('op:u0'));
+    const shift = { x: before.get('op:u0')!.x - elk.last['op:u0'].x, y: before.get('op:u0')!.y - elk.last['op:u0'].y };
+    for (const n of nodesOf()) {
+      if (n.id === 'op:u3') continue;
+      expect(n.position, n.id).toEqual({ x: elk.last[n.id].x + shift.x, y: elk.last[n.id].y + shift.y });
+    }
+    // It really was laid out again (a card that was not dragged is not where it was), and the cards of the family are there, apart from each other.
+    expect([...before].some(([id, was]) => id !== 'op:u3' && (at(id).x !== was.x || at(id).y !== was.y))).toBe(true);
+    expect(nodesOf().map((n) => n.id)).toEqual(expect.arrayContaining(['s:x0', 's:y0']));
+    apartEverywhere();
+  });
+
+  it('a card that ELK would put on a dragged card steps clear of it', async () => {
+    const { map } = await open();
+    const elk = columnElk();
+    store.elk = elk;
+    const u0 = { ...at('op:u0') };
+    // The card is dropped where the card under u0 will be after the expand (u0 keeps its place, ELK's next place is 300 below it).
+    drag('op:u3', { x: u0.x, y: u0.y + 300 });
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    expect(at('op:u3')).toEqual({ x: u0.x, y: u0.y + 300 });
+    apartEverywhere();
+  });
+
+  it('− lays out again the same way: the card pressed keeps its place and a dragged card stays', async () => {
+    const { map } = await open();
+    const elk = columnElk();
+    store.elk = elk;
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    drag('op:u3', { x: 900, y: 900 });
+    const u0 = { ...at('op:u0') };
+    map.collapse('op:u0');
+    await settle();
+    expect(nodesOf().some((n) => n.id === 's:x0')).toBe(false);
+    expect(at('op:u3')).toEqual({ x: 900, y: 900 });
+    expect(at('op:u0')).toEqual(u0);
+    const shift = { x: u0.x - elk.last['op:u0'].x, y: u0.y - elk.last['op:u0'].y };
+    for (const n of nodesOf()) if (n.id !== 'op:u3') expect(n.position, n.id).toEqual({ x: elk.last[n.id].x + shift.x, y: elk.last[n.id].y + shift.y });
+  });
+
+  it('a Show chip does not lay out again: the cards that were placed stay where they are (only ＋ and − do)', async () => {
+    const { map } = await openChain();
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+    map.toggleKind('stock_lot');
+    await settle();
+    for (const n of nodesOf()) expect(n.position, n.id).toEqual(before.get(n.id));
   });
 
   it('two expands that land before the layout ran are both placed, the dragged card still where it was', async () => {
     const { map } = await open();
-    nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 };
+    drag('op:u3', { x: 900, y: 900 });
     vi.mocked(loadFamily).mockImplementation(async (_api, id) => familyOfX(Number(String(id).slice(1))));
     await Promise.all([map.expand('op:u0'), map.expand('op:u1')]);
     await settle();
@@ -208,7 +267,7 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
 
   it('Re-layout puts everything back, the dragged card included', async () => {
     const { map, canvas } = await open();
-    nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 };
+    drag('op:u3', { x: 900, y: 900 });
     vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
     await map.expand('op:u0');
     await settle();
@@ -232,7 +291,7 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
     const map = useProcessMap(api, route, { replace: async () => undefined });
     useMapCanvas(map);
     await settle();
-    nodesOf().find((n) => n.id === 's:a')!.position = { x: 700, y: 700 };
+    drag('s:a', { x: 700, y: 700 });
     await map.expand('s:b');
     await settle();
     expect(nodesOf().some((n) => n.id === 's:c')).toBe(true);
@@ -241,7 +300,7 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
 
   it('a new focus starts again: placed cards are forgotten and the layout runs over everything', async () => {
     const { route } = await open();
-    nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 };
+    drag('op:u3', { x: 900, y: 900 });
     vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't2', code: 'TL-2' });
     vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
     route.query = { focus: 'tools:t2' };
@@ -600,6 +659,242 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('useMapCanvas: the card pressed keeps its place when its id changes (a material card that opens its fan)', () => {
+  // The material card of a sample is `m:<sample>`; once its used-in fan is open the same record is the fan's root `f:materials:<id>`.
+  const material = { collection: 'materials', id: 'mat1', code: 'MAT-1' };
+  async function openMaterial() {
+    const data = mkData({
+      samples: ['a', 'b'].map((id, i) => mkSample(id, i === 0 ? { materialRef: material } : {})),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: ['a', 'z1', 'z2'].map((id) => mkSample(id)), total: 3 });
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    useMapCanvas(map);
+    await settle();
+    return map;
+  }
+  const columnWithGap = (graph: FakeGraph, shown: Set<string>) => Object.fromEntries(graph.nodes.filter((n) => shown.has(n.id)).map((n, i) => [n.id, { x: 0, y: i * 300 }]));
+
+  it('＋ on the material card: its fan root takes its place, nothing jumps', async () => {
+    const map = await openMaterial();
+    expect(nodesOf().some((n) => n.id === 'm:a')).toBe(true);
+    store.elk = columnWithGap;
+    const was = { ...at('m:a') };
+    await map.expand('m:a');
+    await settle();
+    expect(nodesOf().some((n) => n.id === 'm:a')).toBe(false);
+    expect(nodesOf().some((n) => n.id === 'f:materials:mat1')).toBe(true);
+    expect(at('f:materials:mat1')).toEqual(was);
+  });
+
+  it('a dragged material card stays dragged when it becomes the fan root', async () => {
+    const map = await openMaterial();
+    store.elk = columnWithGap;
+    drag('m:a', { x: 900, y: 900 });
+    await map.expand('m:a');
+    await settle();
+    expect(at('f:materials:mat1')).toEqual({ x: 900, y: 900 });
+  });
+});
+
+describe('useMapCanvas: the sockets of a card are in the order of its wires (socketOrder)', () => {
+  // A sample made from two parents (two lineage junctions into its two in-sockets). The parents' junctions are laid out by hand: the
+  // parent p1 below the sample's row and p2 above it, which is the model's order reversed (p1's wire is wired to the first socket).
+  const insOf = (id: string) => (nodesOf().find((n) => n.id === id)!.data as { ins: string[] }).ins;
+  async function openParents(dir: 'RIGHT' | 'DOWN', swap = false) {
+    const data = mkData({ samples: ['p1', 'p2', 'c'].map((id) => mkSample(id)), lineage: [mkLineage('p1', 'c', 'derived_from'), mkLineage('p2', 'c', 'derived_from')] });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:c', reach: 'all' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    useMapCanvas(map);
+    if (dir === 'DOWN') map.setDir('DOWN');
+    const parentOf = (id: string) => (map.graph.value!.nodes.find((n) => n.id === id) as { parentId?: string } | undefined)?.parentId;
+    store.elk = (graph) => {
+      const out: Record<string, { x: number; y: number }> = {};
+      for (const n of graph.nodes) {
+        // the junction of p1 (and the card p1) is "below / right", the one of p2 "above / left"
+        const lane = parentOf(n.id) === 'p1' || n.id === 's:p1' ? (swap ? 0 : 1) : parentOf(n.id) === 'p2' || n.id === 's:p2' ? (swap ? 1 : 0) : 0.5;
+        const layer = n.id === 's:c' ? 2 : n.id.startsWith('s:p') ? 0 : 1;
+        out[n.id] = dir === 'RIGHT' ? { x: layer * 400, y: lane * 400 } : { x: lane * 400, y: layer * 400 };
+      }
+      return out;
+    };
+    await settle();
+    return map;
+  }
+  /** The parent behind each in-socket of the sample c, in the order the card draws them. */
+  const parentsOnIns = (map: Awaited<ReturnType<typeof openParents>>) => {
+    const wires = map.graph.value!.wires;
+    return insOf('s:c').map((s) => {
+      const from = wires.find((w) => w.to === s)!.from;
+      const j = map.graph.value!.nodes.find((n) => n.id === nodeOfSocket(from)) as { parentId: string };
+      return j.parentId;
+    });
+  };
+
+  it('puts the wire that comes from above on the upper socket when the flow runs right (no crossing)', async () => {
+    const map = await openParents('RIGHT');
+    expect(parentsOnIns(map)).toEqual(['p2', 'p1']); // p2 is above
+  });
+
+  it('and the other way round when the parents swap places', async () => {
+    const map = await openParents('RIGHT', true);
+    expect(parentsOnIns(map)).toEqual(['p1', 'p2']);
+  });
+
+  it('puts the wire that comes from the left on the left socket when the flow runs down', async () => {
+    const map = await openParents('DOWN');
+    expect(parentsOnIns(map)).toEqual(['p2', 'p1']);
+  });
+
+  it('puts them in order again when a card is dragged to the other side', async () => {
+    const map = await openParents('RIGHT');
+    const p1 = nodesOf().find((n) => (n.data as { parentId?: string }).parentId === 'p1')!.id;
+    drag(p1, { x: 400, y: -900 }); // now p1's junction is the upper one
+    await settle();
+    expect(parentsOnIns(map)).toEqual(['p1', 'p2']);
+  });
+});
+
+describe('useMapCanvas: the cards glide to their places (useMapTween)', () => {
+  let frames: ((now: number) => void)[] = [];
+  let clock = 0;
+  const run = (ms: number) => {
+    clock += ms;
+    const now = frames;
+    frames = [];
+    now.forEach((cb) => cb(clock));
+  };
+  const opacityOf = (id: string) => ((nodesOf().find((n) => n.id === id) as unknown as { style?: { opacity?: number } }).style ?? {}).opacity;
+  const column = (graph: FakeGraph, shown: Set<string>) => Object.fromEntries(graph.nodes.filter((n) => shown.has(n.id)).map((n, i) => [n.id, { x: 0, y: i * 300 }]));
+  beforeEach(() => {
+    frames = [];
+    clock = 0;
+    vi.stubGlobal('requestAnimationFrame', (cb: (now: number) => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => undefined);
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('＋: new cards start at the card that was pressed, see-through, and end in their places in full; whenSettled waits for them', async () => {
+    const { map, canvas } = await open();
+    store.elk = column;
+    const u0 = { ...at('op:u0') };
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    // at the start: the new cards are where the card was pressed, invisible; the layout is not settled
+    expect(at('s:x0')).toEqual(u0);
+    expect(opacityOf('s:x0')).toBe(0);
+    expect(await canvas.whenSettled(20)).toBe(false);
+    run(150);
+    expect(opacityOf('s:x0')).toBeGreaterThan(0);
+    expect(opacityOf('s:x0')).toBeLessThan(1);
+    expect(at('s:x0').y).not.toBe(u0.y); // on its way (its place is above the card that was pressed)
+    expect(opacityOf('op:u0')).toBeUndefined(); // a card that was there is not faded
+    const settled = canvas.whenSettled(1000);
+    run(200);
+    expect(await settled).toBe(true);
+    expect(opacityOf('s:x0')).toBeUndefined(); // 1: the style is cleared
+    expect(at('op:u0')).toEqual(u0);
+  });
+
+  it('the first view of a family is placed at once (the canvas is hidden while it is laid out)', async () => {
+    const { canvas } = await open();
+    expect(canvas.laidOut.value).toBe(true);
+    expect(frames).toHaveLength(0);
+    expect(nodesOf().map((n) => n.position.y).sort((a, b) => a - b)).toEqual([0, 100, 200, 300, 400, 500]);
+  });
+
+  /** Where a layout of the ELK stand-in `column` puts every card after a ＋ on `pressed`, which keeps the place it had. */
+  const afterPlus = (elk: Record<string, { x: number; y: number }>, pressed: string, was: { x: number; y: number }) =>
+    Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + was.x - elk[pressed].x, y: p.y + was.y - elk[pressed].y }]));
+
+  it('a second ＋ while the cards are still moving: the card pressed ends where the first layout was sending it (the map does not drift)', async () => {
+    const { map } = await open();
+    let last: Record<string, { x: number; y: number }> = {};
+    store.elk = (graph, shown) => (last = column(graph, shown));
+    vi.mocked(loadFamily).mockImplementation(async (_api, id) => familyOfX(Number(String(id).slice(1))));
+    const u0 = { ...at('op:u0') };
+    await map.expand('op:u0');
+    await settle();
+    const target1 = afterPlus(last, 'op:u0', u0);
+    run(100); // mid-way: op:u1 is somewhere between where it was and target1
+    expect(at('op:u1')).not.toEqual(target1['op:u1']);
+    await map.expand('op:u1');
+    await settle();
+    run(100);
+    run(400);
+    expect(at('op:u1')).toEqual(target1['op:u1']);
+    expect(at('op:u0').x).toBe(target1['op:u0'].x);
+  });
+
+  it('a layout that changes nothing but arrives mid-way (a reflow) does not freeze the cards that were moving', async () => {
+    const { map, canvas } = await open();
+    let last: Record<string, { x: number; y: number }> = {};
+    store.elk = (graph, shown) => (last = column(graph, shown));
+    const u0 = { ...at('op:u0') };
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    const target = afterPlus(last, 'op:u0', u0);
+    run(100);
+    await canvas.reflow();
+    await settle();
+    run(100);
+    run(400);
+    for (const n of nodesOf()) expect(n.position, n.id).toEqual(target[n.id]);
+  });
+
+  it('when the canvas goes away the move stops: nothing more is drawn, and nothing waits for it', async () => {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const scope = effectScope();
+    const canvas = scope.run(() => useMapCanvas(map))!;
+    await settle();
+    store.elk = column;
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    run(100);
+    expect(await canvas.whenSettled(20)).toBe(false);
+    scope.stop();
+    const drawn = store.moves.length;
+    run(100);
+    run(400);
+    expect(store.moves).toHaveLength(drawn);
+    expect(await canvas.whenSettled(20)).toBe(true);
+  });
+
+  it('grabbing a card mid-way takes it out of the move: it stays where it is, the others carry on', async () => {
+    const { map } = await open();
+    store.elk = column;
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    const target3 = (() => {
+      // where op:u3 ends: its place in the new column, moved like op:u0 (which keeps its place)
+      const order = [...map.nodes.value.map((n) => n.id)];
+      return at('op:u0').y + 300 * (order.indexOf('op:u3') - order.indexOf('op:u0'));
+    })();
+    run(100);
+    const held = { ...at('op:u4') };
+    for (const fn of store.dragStarts) fn({ node: { id: 'op:u4' }, nodes: [{ id: 'op:u4' }] });
+    run(100);
+    expect(at('op:u4')).toEqual(held);
+    run(200);
+    expect(at('op:u4')).toEqual(held);
+    expect(at('op:u3').y).toBe(target3);
   });
 });
 

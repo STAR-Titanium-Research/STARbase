@@ -1084,8 +1084,8 @@ describe('the 300-card cap applies to what plus reveals (D22)', () => {
   });
 });
 
-describe('expand inside a loaded family still reveals one step and tells the layout to keep what is placed', () => {
-  it('hands the canvas a merge hint naming the card', async () => {
+describe('expand inside a loaded family still reveals one step; ＋ and − tell the layout to lay out again round what was dragged', () => {
+  it('hands the canvas a merge hint naming the card, flagged full (＋)', async () => {
     const data = mkData({
       samples: ['a', 'b', 'c'].map((id) => mkSample(id)),
       operations: [
@@ -1099,12 +1099,48 @@ describe('expand inside a loaded family still reveals one step and tells the lay
     const seen = hints(map);
     await map.expand('s:b');
     await settle();
-    expect(seen.at(-1)).toEqual({ anchor: 's:b' });
+    expect(seen.at(-1)).toEqual({ anchor: 's:b', full: true });
     expect(map.shown.value.has('s:c')).toBe(true);
     // A change that is not an expand carries no hint (the canvas lays everything out).
     map.toggleKind('stock_lot');
     await settle();
     expect(map.takeMergeHints()).toEqual([]);
+  });
+
+  it('− on the card hands the canvas a full hint naming it too', async () => {
+    const data = mkData({
+      samples: ['a', 'b', 'c'].map((id) => mkSample(id)),
+      operations: [
+        mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' }),
+        mkOp({ id: 'o2', sampleId: 'b', outputSampleId: 'c', date: '2026-09-02T09:00:00Z', methodName: 'M' }),
+      ],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    await map.expand('s:b');
+    await settle();
+    map.takeMergeHints();
+    const seen = hints(map);
+    map.collapse('s:b');
+    await settle();
+    expect(seen.at(-1)).toEqual({ anchor: 's:b', full: true });
+    expect(map.shown.value.has('s:c')).toBe(false);
+  });
+
+  it('folding the rows of a container is not a ＋/−: its hint is the reslot one, not full', async () => {
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' })],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    const seen = hints(map);
+    const container = map.nodes.value.find((n) => n.type === 'container')!;
+    map.toggleRows(container.id);
+    await settle();
+    expect(seen.at(-1)).toEqual({ reslot: container.id });
   });
 });
 

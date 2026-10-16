@@ -103,6 +103,13 @@ describe('elkInput', () => {
     expect(sides).toEqual(['WEST', 'WEST', 'WEST', 'EAST', 'EAST', 'EAST']);
   });
 
+  it('a record and a junction fix only the side of their ports (ELK may order them), a container fixes the order', () => {
+    const root = elkInput(graph(), all(graph()), sizes, 'RIGHT');
+    expect(child(root, 's:b').layoutOptions?.['elk.portConstraints']).toBe('FIXED_SIDE');
+    expect(child(root, 'j:a').layoutOptions?.['elk.portConstraints']).toBe('FIXED_SIDE');
+    expect(child(root, 'op:cut').layoutOptions?.['elk.portConstraints']).toBe('FIXED_ORDER');
+  });
+
   it('lists one port for a socket shared by several rows', () => {
     const op = container('op:g', [
       { in: 'op:g:in:0', out: 'op:g:out:0' },

@@ -5,13 +5,14 @@
 // Layout runs only on measured sizes: Vue Flow reports 0x0 until a node is mounted and measured, so a
 // layout waits for `onNodesInitialized` (and elkInput treats a non-positive size as unmeasured).
 
-import { computed, markRaw, nextTick, ref, watch } from 'vue';
-import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject } from '@vue-flow/core';
+import { computed, getCurrentScope, markRaw, nextTick, onScopeDispose, ref, watch } from 'vue';
+import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject, type Styles } from '@vue-flow/core';
 import { nodeOfSocket } from './model/sockets';
 import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
 import { reslot } from './model/reslot';
 import { shownNodes } from './model/reach';
+import { socketOrder } from './model/socketOrder';
 import type { MapNode } from './model/types';
 import ContainerNode from './nodes/ContainerNode.vue';
 import JunctionNode from './nodes/JunctionNode.vue';
@@ -24,6 +25,7 @@ import MoreNode from './nodes/MoreNode.vue';
 import type { MergeHint } from './useMapExpand';
 import type { useProcessMap } from './useProcessMap';
 import { useElkLayout } from './useElkLayout';
+import { createMapTween, type TweenFrame } from './useMapTween';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
@@ -39,8 +41,6 @@ export const MIN_ZOOM = 0.1;
  */
 export const screenPixel = (zoom: number): number => 1 / (Number.isFinite(zoom) ? Math.max(zoom, MIN_ZOOM) : MIN_ZOOM);
 
-/** Duration of the move to the laid-out positions. */
-const MOVE_MS = 200;
 /** Room round the nodes for the project frame and its label. */
 const FRAME_PAD = 28;
 const FRAME_LABEL = 30;
@@ -67,6 +67,30 @@ export function useMapCanvas(map: ProcessMap) {
   const vf = useVueFlow();
   const { layout } = useElkLayout();
 
+  // The move to the laid-out places (useMapTween): Vue Flow's own node positions, frame by frame, so the wires follow the cards.
+  const tween = createMapTween({
+    positionOf: (id) => {
+      const p = vf.findNode(id)?.position;
+      return p && { x: p.x, y: p.y };
+    },
+    apply: (frames: TweenFrame[]) => {
+      vf.applyNodeChanges(frames.map((f) => ({ id: f.id, type: 'position' as const, from: f.from, position: f.position })));
+      for (const f of frames) if (f.opacity !== undefined) setOpacity(f.id, f.opacity);
+    },
+    raf: typeof requestAnimationFrame === 'undefined' ? undefined : (cb) => requestAnimationFrame(cb),
+    cancelRaf: (h) => cancelAnimationFrame(h as number),
+    reducedMotion,
+  });
+  /** A card that is fading in is a little see-through (the node wrapper's own style); at 1 the style is cleared. */
+  function setOpacity(id: string, opacity: number): void {
+    const node = vf.findNode(id);
+    if (!node) return;
+    const style: Record<string, string | number | undefined> = { ...(typeof node.style === 'object' && node.style ? (node.style as Record<string, string>) : {}) };
+    if (opacity < 1) style.opacity = opacity;
+    else delete style.opacity;
+    node.style = style as Styles;
+  }
+
   /** False until the first layout of a freshly loaded family has run: the canvas stays invisible so nodes do not flash at 0,0. */
   const laidOut = ref(false);
   const layoutError = ref('');
@@ -74,7 +98,7 @@ export function useMapCanvas(map: ProcessMap) {
   let pending = false;
   /** Layouts (and the move to their places) in progress: the export waits for none (whenSettled). */
   let running = 0;
-  const busy = () => pending || running > 0;
+  const busy = () => pending || running > 0 || tween.active();
   const settledWaiters = new Set<() => void>();
   const notifySettled = () => [...settledWaiters].forEach((check) => check());
   /** The pending layout is an expand (new cards go beside what is placed), not a full layout; a full one wins when both are asked for. */
@@ -98,6 +122,20 @@ export function useMapCanvas(map: ProcessMap) {
     const at = id ? (vf.findNode(id)?.position ?? placed.get(id)) : null;
     return at ? { x: at.x, y: at.y } : null;
   };
+  /** Record and junction cards whose sockets were put in the order of their wires (socketOrder): kept so a rebuild does not undo it. */
+  const ordered = new Map<string, MapNode>();
+  const socketIds = (n: MapNode): string => (n.type === 'record' ? [...n.ins, '|', ...n.outs] : n.type === 'junction' ? [n.in, '|', ...n.outs.map((o) => o.socket)] : []).sort().join(',');
+  /** The card as it is drawn: the model's, with its sockets in the order last worked out (if the card still has the same sockets). */
+  const drawn = (n: MapNode): MapNode => {
+    const o = ordered.get(n.id);
+    if (!o || socketIds(o) !== socketIds(n)) return n;
+    if (n.type === 'record' && o.type === 'record') return { ...n, ins: o.ins, outs: o.outs };
+    if (n.type === 'junction' && o.type === 'junction') {
+      const row = new Map(n.outs.map((x) => [x.socket, x]));
+      return { ...n, outs: o.outs.map((x) => row.get(x.socket)!) };
+    }
+    return n;
+  };
   function elements(): { nodes: Node[]; edges: Edge[] } {
     const list = map.nodes.value;
     const byId = new Map(list.map((n) => [n.id, n]));
@@ -105,7 +143,9 @@ export function useMapCanvas(map: ProcessMap) {
       id: n.id,
       type: n.type,
       position: vf.findNode(n.id)?.position ?? atPlaced(n.id) ?? startOfMerge() ?? { x: 0, y: 0 },
-      data: n,
+      data: drawn(n),
+      // A rebuild while a card is still fading in keeps it as see-through as it was.
+      ...(tween.opacityOf(n.id) !== undefined ? { style: { opacity: tween.opacityOf(n.id) } } : {}),
       draggable: true,
       selectable: false,
       // The card's wrapper is its tab stop (spec D23) and is named for screen readers; the "+N more" stub is its own button.
@@ -163,30 +203,72 @@ export function useMapCanvas(map: ProcessMap) {
   const measuredSize = (n: GraphNode) => (n.dimensions.width > 0 && n.dimensions.height > 0 ? { width: n.dimensions.width, height: n.dimensions.height } : null);
   const allMeasured = () => vf.getNodes.value.length > 0 && vf.getNodes.value.every((n) => measuredSize(n));
 
-  /** Move the nodes of `target`, over MOVE_MS (instantly for people who asked for less motion, and for `instant` ones: new cards do not fly in). */
-  function moveTo(target: Record<string, { x: number; y: number }>, instant: ReadonlySet<string> = new Set()): Promise<void> {
-    const start = new Map(vf.getNodes.value.map((n) => [n.id, { ...n.position }]));
-    const apply = (t: number) =>
-      vf.applyNodeChanges(
-        Object.entries(target).map(([id, to]) => {
-          const from = instant.has(id) ? to : (start.get(id) ?? to);
-          return { id, type: 'position' as const, from, position: { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t } };
-        }),
-      );
-    if (reducedMotion() || typeof requestAnimationFrame === 'undefined') {
-      apply(1);
-      return Promise.resolve();
+  /** Where every drawn card is now. */
+  const currentPositions = (): Record<string, { x: number; y: number }> => Object.fromEntries(vf.getNodes.value.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
+  const median = (xs: number[]): number => {
+    if (!xs.length) return 0;
+    const s = [...xs].sort((a, b) => a - b);
+    const mid = s.length >> 1;
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  };
+
+  /**
+   * Puts the sockets of every record and junction card in the order of their wires (model/socketOrder.ts), for cards at `positions`.
+   * A card whose order changed is told to Vue Flow once (updateNodeInternals), after the DOM has the new order, so its wires meet the
+   * sockets where they are now.
+   */
+  async function reorderSockets(positions: Record<string, { x: number; y: number }>): Promise<void> {
+    const graph = map.graph.value;
+    if (!graph) return;
+    const sizes: Record<string, { width: number; height: number }> = {};
+    for (const n of vf.getNodes.value) {
+      const s = measuredSize(n);
+      if (s) sizes[n.id] = s;
     }
-    return new Promise((resolve) => {
-      const t0 = performance.now();
-      const step = (now: number) => {
-        const t = Math.min(1, (now - t0) / MOVE_MS);
-        apply(1 - (1 - t) ** 2);
-        if (t < 1) requestAnimationFrame(step);
-        else resolve();
-      };
-      requestAnimationFrame(step);
-    });
+    const byId = new Map(map.nodes.value.map((n) => [n.id, n]));
+    const changed: string[] = [];
+    for (const n of vf.getNodes.value) {
+      const data = n.data as MapNode | undefined;
+      if (!data) continue;
+      const next = socketOrder(data, graph.wires, positions, sizes, map.dir.value, byId);
+      if (next === data) continue;
+      ordered.set(n.id, next);
+      n.data = next;
+      changed.push(n.id);
+    }
+    if (!changed.length) return;
+    await nextTick();
+    vf.updateNodeInternals(changed);
+  }
+
+
+  /**
+   * ＋ or − on a card: the whole map as ELK puts it, moved so that the card pressed keeps its place (no jump across the map), and
+   * every card that was dragged stays where it was dropped (spec D18). With no such card left (a − that took it away) the cards that
+   * were already on the map keep their typical offset instead.
+   */
+  function fullAroundDragged(elk: Record<string, { x: number; y: number }>, graph: NonNullable<typeof map.graph.value>, sizes: Record<string, { width: number; height: number }>, anchors: string[]): Record<string, { x: number; y: number }> {
+    const dir = map.dir.value;
+    const here: Record<string, Box> = {};
+    for (const n of vf.getNodes.value) {
+      const was = placed.get(n.id);
+      if (was && dragged.has(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+    }
+    // Where a card is: where the last layout sent it (a card still moving is not there yet, and a layout that arrives mid-way must not
+    // take that for its place: rapid ＋ and − would drift the map); a dragged card is where it is dropped.
+    const placeOf = (id: string): { x: number; y: number } | undefined => (dragged.has(id) ? undefined : placed.get(id)) ?? vf.findNode(id)?.position;
+    let shift = { x: 0, y: 0 };
+    const anchor = anchors.find((id) => elk[id] && placeOf(id));
+    if (anchor) {
+      const now = placeOf(anchor)!;
+      shift = { x: now.x - elk[anchor].x, y: now.y - elk[anchor].y };
+    } else {
+      const kept = vf.getNodes.value.filter((n) => placed.has(n.id) && !dragged.has(n.id) && elk[n.id]);
+      shift = { x: median(kept.map((n) => placed.get(n.id)!.x - elk[n.id].x)), y: median(kept.map((n) => placed.get(n.id)!.y - elk[n.id].y)) };
+    }
+    const moved = Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + shift.x, y: p.y + shift.y }]));
+    const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
+    return placeMerged({ elk: moved, sizes, placed: here, edges: wires, dir, anchors, pinned: dragged, exact: true });
   }
 
   async function runLayout(): Promise<void> {
@@ -202,7 +284,7 @@ export function useMapCanvas(map: ProcessMap) {
   async function layoutOnce(): Promise<void> {
     const mine = ++token;
     pending = false;
-    // An expand lays out only what is new (spec §6.7); a first layout, Re-layout and a new direction lay out everything.
+    // A change of what is shown lays out only what is new (spec §6.7); a first layout, Re-layout and a new direction lay out everything.
     const merges = pendingFull || !placed.size ? null : pendingMerges;
     pendingFull = true;
     pendingMerges = [];
@@ -218,17 +300,21 @@ export function useMapCanvas(map: ProcessMap) {
       if (mine !== token) return; // a newer layout (or a new family) supersedes this one
       layoutError.value = '';
       let positions = elk;
-      const instant = new Set<string>();
-      if (merges) {
+      const anchors = (merges ?? []).flatMap((m) => (m.anchor ? [m.anchor] : []));
+      if (merges?.some((m) => m.full)) {
+        // ＋ and −: the whole map is laid out again, round the cards that were dragged.
+        positions = fullAroundDragged(elk, graph, sizes, anchors);
+      } else if (merges) {
         // Cards already placed stay where they are (a dragged one stays where it was dropped): only new cards, and cards a grown one pushed, move.
         const here: Record<string, Box> = {};
         for (const n of vf.getNodes.value) {
           const was = placed.get(n.id);
-          if (was && (dragged.has(n.id) || !merges.some((m) => m.replace?.includes(n.id)))) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+          if (was && (dragged.has(n.id) || !merges.some((m) => m.replace?.includes(n.id)))) here[n.id] = dragged.has(n.id) ? { x: n.position.x, y: n.position.y, width: was.width, height: was.height } : { ...was };
         }
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
-        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])), pinned: dragged });
-        for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
+        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
+      }
+      if (merges) {
         // A container that folded or unfolded: the cards on its sockets deal out the places they have, in the sockets' order (they glide there).
         for (const m of merges) {
           const container = m.reslot ? graph.nodes.find((n) => n.id === m.reslot) : undefined;
@@ -241,12 +327,28 @@ export function useMapCanvas(map: ProcessMap) {
           positions = { ...positions, ...reslot({ container, wires: graph.wires, boxes, dragged, dir: map.dir.value, containers: graph.nodes.filter((n): n is typeof container => n.type === 'container') }) };
         }
       }
+      // New cards (not placed before) start at the card that was expanded and fade in; the first layout of a family is not shown (the canvas is hidden), so it is just placed.
+      // A card still on its way to the place the last layout gave it keeps going there (the new tween replaces the old one: it must still name it).
+      if (merges) {
+        for (const n of vf.getNodes.value) {
+          const pending = placed.get(n.id);
+          if (!positions[n.id] && !dragged.has(n.id) && pending && (pending.x !== n.position.x || pending.y !== n.position.y)) positions = { ...positions, [n.id]: { x: pending.x, y: pending.y } };
+        }
+      }
+      const firstLayout = !placed.size;
+      const fresh = new Set(firstLayout ? [] : Object.keys(positions).filter((id) => !placed.has(id)));
+      const from = anchors.map((id) => vf.findNode(id)?.position ?? placed.get(id)).find((p) => !!p);
       for (const n of vf.getNodes.value) {
         const at = positions[n.id] ?? (merges ? n.position : undefined);
         const size = sizes[n.id];
         if (at && size) placed.set(n.id, { x: at.x, y: at.y, ...size });
       }
-      await moveTo(positions, instant);
+      // The sockets are put in the order of their wires for the places the cards are going to, before they move: the wires never cross on the way.
+      await reorderSockets({ ...currentPositions(), ...positions });
+      if (mine !== token) return;
+      await tween.start({ target: positions, fresh, origin: from ? { x: from.x, y: from.y } : null, instant: firstLayout });
+      if (mine !== token) return;
+      await reorderSockets(currentPositions()); // (a card that was dragged mid-way, or a place that was cleared, can change the order again)
       if (mine !== token) return;
       laidOut.value = true;
       if (needsFit) {
@@ -255,13 +357,19 @@ export function useMapCanvas(map: ProcessMap) {
       }
     } catch (e) {
       if (mine !== token) return;
+      tween.stop(); // nothing is left half-visible
       layoutError.value = `Could not lay out the map: ${e instanceof Error ? e.message : String(e)}`;
       laidOut.value = true; // show the nodes where they are rather than nothing
     }
   }
 
+  // Grabbing a card takes it out of the move (it follows the pointer, not the layout); letting go pins it (spec D18) and the sockets
+  // of the cards it is wired to may now be better the other way round.
+  if (getCurrentScope()) onScopeDispose(() => tween.dispose()); // (a move that outlives the canvas would draw into a store that is gone)
+  vf.onNodeDragStart((e) => tween.cancel(e.nodes.map((n) => n.id)));
   vf.onNodeDragStop((e) => {
     for (const n of e.nodes) dragged.add(n.id);
+    void reorderSockets(currentPositions());
   });
 
   /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merges`: the expands (spec §6.7) it is for, none for a full layout. */
@@ -342,19 +450,33 @@ export function useMapCanvas(map: ProcessMap) {
       needsFit = true;
       placed.clear();
       dragged.clear();
+      ordered.clear();
+      tween.stop();
       token++;
     },
   );
   // The shown set (a Show chip, Reach, a fold, an expand, "+N more") changed: rebuild and lay out what is new. Cards that
   // were already placed keep their places (spec D18); the merge hints say where the new ones go after an expand. Only a
   // new direction lays everything out again, like Re-layout.
+  /**
+   * ＋ or − on a record card can give the same record another id (a material card `m:<sample>` is the fan root `f:materials:<id>` once its
+   * fan is open, and back again on −). The card pressed must keep its place all the same: its replacement is named as the anchor and takes
+   * the old one's place (the `from` swap below), pin included.
+   */
+  function reanchored(hint: MergeHint): MergeHint {
+    if (!hint.full || !hint.anchor || map.nodes.value.some((n) => n.id === hint.anchor)) return hint;
+    const old = vf.findNode(hint.anchor)?.data as MapNode | undefined;
+    if (old?.type !== 'record') return hint;
+    const next = map.nodes.value.find((n) => n.type === 'record' && n.ref.collection === old.ref.collection && n.ref.id === old.ref.id && !vf.findNode(n.id));
+    return next ? { ...hint, anchor: next.id, from: hint.anchor } : hint;
+  }
   let lastDir = map.dir.value;
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
     const hints = map.takeMergeHints();
     if (turned) dragged.clear();
-    const merges = turned || !placed.size ? null : hints;
+    const merges = turned || !placed.size ? null : hints.map(reanchored);
     merging = merges?.find((m) => m.anchor) ?? null;
     // A collapsed container that opened may come back under another id (a batch): it takes the old one's place and size.
     for (const merge of merges ?? []) {
@@ -371,6 +493,7 @@ export function useMapCanvas(map: ProcessMap) {
       if (drawn.has(id)) continue;
       placed.delete(id);
       dragged.delete(id);
+      ordered.delete(id);
     }
     rebuild();
     merging = null;
@@ -390,6 +513,11 @@ export function useMapCanvas(map: ProcessMap) {
 
   /** Keyboard focus reached a card that is off the screen: pan to it (a browser would scroll the clipped canvas instead). */
   function reveal(id: string): void {
+    // Cards on the move are not where they will be: wait for them (the node is read when they have arrived).
+    if (tween.active()) {
+      void tween.whenIdle().then(() => reveal(id));
+      return;
+    }
     const node = vf.findNode(id);
     if (!node) return;
     const { x, y } = node.computedPosition;

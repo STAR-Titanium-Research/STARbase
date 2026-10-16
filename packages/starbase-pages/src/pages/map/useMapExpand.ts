@@ -28,6 +28,11 @@ export interface MergeHint {
    * order of the sockets (model/reslot.ts). Dragged cards stay.
    */
   reslot?: string;
+  /**
+   * ＋ or − on a card: the whole map is laid out again by ELK (every card that was not dragged goes to ELK's place) and moved so that
+   * `anchor` keeps its place. Without it a change keeps the placed cards where they are (a Show chip, Reach, "+N more").
+   */
+  full?: true;
 }
 
 /** The state of `useProcessMap` an expand reads and changes. */
@@ -153,6 +158,7 @@ export function useMapExpand(deps: ExpandDeps) {
     opened.value = rest;
     notice.value = '';
     capped.value = false;
+    hint({ anchor: id, full: true }); // like ＋: the whole map is laid out again, the card whose − it was keeps its place
     if (![...gone].some((e) => e.change)) return;
     familyLoaded = new Set([...initial.families, ...rest.flatMap((e) => e.families ?? [])]);
     for (const e of gone) if (e.fan) fanPages.delete(e.fan);
@@ -261,7 +267,7 @@ export function useMapExpand(deps: ExpandDeps) {
       const wasFan = new Set([...fanRowIds(before)].filter((id) => !fanRowIds(merged).has(id)));
       const stay = next.nodes.filter((n) => n.type === 'container' && n.group.rowIds.some((id) => wasFan.has(id))).map((n) => n.id);
       const shownBefore = revealedKeys.value;
-      publish(merged, { anchor, from: opts.from });
+      publish(merged, { anchor, from: opts.from, full: true });
       admit(anchor ? shownNodes(next, anchor, 1) : [], anchor ? [anchor, ...stay] : stay);
       keepOpened(owner, shownBefore, { change: (d) => mergeProcessData(d, family), families: family.samples.map((s) => s.id) });
     }) as Promise<void>).finally(() => void opening.delete(key));
@@ -290,7 +296,7 @@ export function useMapExpand(deps: ExpandDeps) {
       fanPages.set(fanKey, 1);
       const root = { ...ref, kind: fanKindOf(ref.collection) };
       const shownBefore = revealedKeys.value;
-      publish(withSideFan(before, root, page), { anchor });
+      publish(withSideFan(before, root, page), { anchor, full: true });
       keepOpened(ownerKeys, shownBefore, { change: (d) => withSideFan(d, root, page), fan: fanKey });
     }) as Promise<void>;
   }
@@ -364,7 +370,7 @@ export function useMapExpand(deps: ExpandDeps) {
     const owner = keysOf(id);
     const before = revealedKeys.value;
     admit(shownNodes(g, id, 1));
-    hint({ anchor: id });
+    hint({ anchor: id, full: true });
     keepOpened(owner, before);
   }
 
