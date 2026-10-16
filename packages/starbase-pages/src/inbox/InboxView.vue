@@ -72,7 +72,8 @@ async function keepPlace(f: FoundFile, work: () => Promise<Outcome>): Promise<Ou
 	await nextTick();
 	const rows = rowEls();
 	const next = rows[Math.min(Math.max(at, 0), rows.length - 1)];
-	const target = next?.querySelector<HTMLElement>('button:not([disabled]), a[href]') ?? region.value;
+	// the row's own actions first: its thumbnail button (a row with a picture) comes before them in the page but is not what a person was doing
+	const target = next?.querySelector<HTMLElement>('.buttons button:not([disabled])') ?? next?.querySelector<HTMLElement>('button:not([disabled]), a[href]') ?? region.value;
 	target?.focus();
 	return r;
 }
