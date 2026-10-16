@@ -1,0 +1,15 @@
+{
+  "description": "a rule removed while the rescan limit says wait: the delete still works, rescan_queued is false",
+  "request": {
+    "method": "DELETE",
+    "path": "/d1-inbox/ignored-folders/00000000-0000-4000-8000-000000009401"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "ignored_id": "00000000-0000-4000-8000-000000009401",
+      "folder": "World-Ti Paper/Drafts",
+      "rescan_queued": false
+    }
+  }
+}

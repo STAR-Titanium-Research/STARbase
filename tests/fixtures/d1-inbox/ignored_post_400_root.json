@@ -1,0 +1,23 @@
+{
+  "description": "a path that starts with the owner's root (Users/<alias>) is not relative to it",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "Users/ali1/World-Ti Paper"
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "Give the folder relative to your own folder, without Users/ali1/.",
+        "extensions": {
+          "field": "folder",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}
