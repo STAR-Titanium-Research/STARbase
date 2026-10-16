@@ -92,10 +92,10 @@ describe('any other collection', () => {
 	});
 
 	it('with no template, reads every column and labels by the first code or name', () => {
-		const equipment = pickerSource({ collection: 'equipment', key: 'equipment_id' });
+		const equipment = pickerSource({ collection: 'facilities', key: 'facility_id' });
 		expect(equipment.fields).toEqual(['*']);
-		expect(toOption(equipment, { equipment_id: 'e1', created_at: 'x', equipment_code: 'LATHE-1', equipment_name: 'Lathe' })?.label).toBe('LATHE-1');
-		expect(toOption(equipment, { equipment_id: 'e2', notes: 'n' })?.label).toBe('e2');
+		expect(toOption(equipment, { facility_id: 'e1', created_at: 'x', facility_code: 'LAB-1', name: 'Lab' })?.label).toBe('LAB-1');
+		expect(toOption(equipment, { facility_id: 'e2', notes: 'n' })?.label).toBe('e2');
 	});
 
 	it('a key-less definition falls back to `id`', () => {

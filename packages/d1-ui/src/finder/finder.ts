@@ -136,6 +136,8 @@ export const FINDER_SOURCES: FinderSource[] = [
 	inventory('cutting_inserts', 'insert_code', 'Cutting insert'),
 	inventory('insert_edges', 'edge_code', 'Insert edge'),
 	inventory('raw_stock_lots', 'lot_code', 'Raw stock lot'),
+	// Equipment is found by its name as well as its code (codes are slugs of the name, so people type the name).
+	{ ...inventory('equipment', 'equipment_code', 'Equipment', ['equipment_name']), match: ['equipment_code', 'equipment_name'], label: (r) => str(r.equipment_name) || str(r.equipment_code) },
 ];
 
 // Only the sources whose collection the user can read; null (the /collections call failed) leaves
