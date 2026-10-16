@@ -19,7 +19,7 @@ WITH ranked AS (
     SELECT e.edge_id,
            row_number() OVER (
                PARTITION BY e.insert_id, e.edge_identifier
-               ORDER BY e.is_used DESC, length(e.edge_code), e.edge_code, e.edge_id
+               ORDER BY e.is_used DESC, length(e.edge_code) ASC, e.edge_code ASC, e.edge_id ASC
            ) AS keep_rank
       FROM insert_edges e
 )
