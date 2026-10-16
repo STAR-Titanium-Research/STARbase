@@ -111,6 +111,8 @@ function newWorld() {
     listRows: [], listTotal: 0, acceptIds: [], acceptQueries: [], summaryRows: [],
     // failure switches
     denyDelete: false, failCreateFor: null,
+    // stream D: the pointer rows of files (owner columns), d1_private.sem_image_settings and sem_settings_access_log
+    files: new Map(), settings: new Map(), settingsLog: [], denyJunctionRead: false,
     log: [], items: [], txCount: 0, cacheCleared: 0, chain: Promise.resolve(),
   };
   return w;
@@ -128,12 +130,16 @@ for (const [key, value] of Object.entries(SQL)) {
 }
 const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 const copy = (v) => structuredClone(v);
+// the columns d1_private.sem_image_settings has for the settings, and the ranges its CHECKs hold
+const SEM_TEXT = ['detector', 'mode', 'instrument'];
+const SEM_KEYS = ['kv', 'spot', 'working_distance_mm', 'magnification', 'hfw_um', 'pixel_size_nm', 'scale_bar_um', ...SEM_TEXT, 'acquired_at'];
+const SEM_RANGES = { kv: [0.1, 30], spot: [1, 10], working_distance_mm: [0.1, 50], magnification: [5, 1000000], hfw_um: [Number.MIN_VALUE, Infinity], pixel_size_nm: [Number.MIN_VALUE, Infinity], scale_bar_um: [Number.MIN_VALUE, Infinity] };
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), settings: copy(w.settings), settingsLog: copy(w.settingsLog) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog;
 };
 
 function statement(w, sql, b, txId) {
@@ -242,6 +248,53 @@ function statement(w, sql, b, txId) {
       const rows = roles.map((r) => w.globalAccess[r]).filter(Boolean);
       return [{ admin: rows.some((r) => r.admin), app: rows.some((r) => r.app) }];
     }
+    case 'saveSemSettings': {
+      // d1_private.save_sem_settings as the migration describes it: known keys only, merge, manual fields skipped, a row only when some key mapped
+      const [fileId, json, readBy] = b;
+      const x = JSON.parse(json);
+      const mapped = SEM_KEYS.filter((k) => k in x);
+      const row = w.settings.get(fileId) ?? (mapped.length ? { directus_files_id: fileId, sources: {}, flags: {}, read_by: readBy, corrected_by: null, corrected_at: null } : null);
+      if (row) {
+        for (const k of mapped) {
+          if (row.sources[k] === 'manual') continue;
+          row[k] = k === 'magnification' || SEM_TEXT.includes(k) || k === 'acquired_at' ? x[k] : String(x[k]);
+          row.sources[k] = x.sources?.[k] ?? 'metadata';
+        }
+        row.flags = { ...row.flags, ...(x.flags ?? {}) };
+        row.read_by = readBy;
+        w.settings.set(fileId, row);
+      }
+      return [{ saved: w.settings.has(fileId) }];
+    }
+    case 'deleteUnlinkedSemSettings': {
+      const gone = [];
+      for (const id of csv(b[0])) {
+        const linked = Object.values(w.junctions).some((rows) => rows.some((j) => j.directus_files_id === id)) || w.scans.some((r) => r.directus_files_id === id);
+        if (!linked && w.settings.delete(id)) gone.push({ directus_files_id: id });
+      }
+      return gone;
+    }
+    case 'semFile': return w.files.has(b[0]) ? [copy(w.files.get(b[0]))] : [];
+    case 'semSettingsGet': return w.settings.has(b[0]) ? [copy(w.settings.get(b[0]))] : [];
+    case 'semAccessLogInsert': w.settingsLog.push({ directus_files_id: b[0], read_by_user: b[1], reason: b[2] }); return [];
+    case 'semCorrect': {
+      // d1_private.correct_sem_setting: a known field, a value of its type inside its range, and a row to correct; marks the field manual
+      const [fileId, field, json, user] = b;
+      const value = JSON.parse(json);
+      const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+      if (!SEM_KEYS.includes(field)) refuse('22023', `sem_image_settings.${field} is not a correctable field`);
+      if (SEM_TEXT.includes(field) ? typeof value !== 'string' || value.trim() === '' : field === 'acquired_at' ? Number.isNaN(Date.parse(value)) : typeof value !== 'number') refuse('22023', `${json} is not a valid value for ${field}`);
+      const range = SEM_RANGES[field];
+      if (range && !(value >= range[0] && value <= range[1])) refuse('22023', `value ${json} is out of range for ${field}`);
+      const row = w.settings.get(fileId);
+      if (!row) refuse('P0002', `no sem_image_settings row for file ${fileId}`);
+      row[field] = typeof value === 'number' && field !== 'magnification' ? String(value) : value;
+      row.sources[field] = 'manual';
+      delete row.flags[field];
+      row.corrected_by = user;
+      row.corrected_at = w.now.toISOString();
+      return [];
+    }
     case 'adminState': return [copy(w.crawlerState)];
     case 'adminPeopleWithoutAlias': return copy(w.people.filter((p) => p.active && !p.uni_alias).map((p) => ({ person_id: p.person_id, full_name: p.full_name, has_login: p.user_id !== null })));
     case 'adminFailedRequests': return copy(w.scanRequests.filter((r) => r.status === 'failed').map((r) => ({ at: r.finished_at ?? r.requested_at, error: r.error })));
@@ -317,6 +370,16 @@ function fakeServices(w) {
     async readByQuery(query) {
       // a mirror of d1-access-guard's canPass read: { _and: [ {pk: _eq|_in}, <update rule> ] }
       w.items.push({ op: 'read', collection: this.collection, query, accountability: this.options.accountability, knex: this.options.knex });
+      const junction = Object.values(LINK_TARGETS).find((t) => t.junction === this.collection);
+      if (junction) {
+        // the read of a junction as the caller (stream D): Directus's junction rule follows the record's read rule, so a row is seen when the record is
+        if (w.denyJunctionRead) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+        const record = Object.keys(LINK_TARGETS).find((c) => LINK_TARGETS[c] === junction);
+        const user = this.options.accountability.user;
+        const allowed = new Set([...(w.editable[user]?.[record] ?? []), ...(w.viewable[user]?.[record] ?? [])]);
+        return w.junctions[this.collection].filter((j) => j.directus_files_id === query.filter.directus_files_id._eq && (this.options.accountability.admin === true || allowed.has(j[junction.fk])))
+          .slice(0, query.limit ?? 100).map((j) => ({ id: j.id }));
+      }
       if (this.collection === 'surface_scans') {
         // the label read of the list: scans as the caller may read them (every member), with the insert or edge nested
         const wanted = new Set(query.filter.scan_id._in);
@@ -2205,6 +2268,186 @@ test('POST /undo: unknown or already undone batch is 404; another person\'s batc
   assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: myBatch } })).statusCode, 200);
   assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: myBatch } })).statusCode, 404, 'already undone');
   for (const body of [undefined, {}, { link_batch_id: 'x' }]) assert.equal((await call('POST /undo', { user: U.alice, body })).statusCode, 400);
+});
+
+// ---- imaging settings: saved with the link, removed with the last link (stream D, task D1) --------------------------------------------
+
+const SEM_EXTRACTED = { kv: 15, spot: 3, magnification: 5000, hfw_um: 59.7, instrument: 'Quanta', sources: { kv: 'metadata', magnification: 'derived' }, flags: { check_this: true }, ocr_confidence: { kv: 0.91 } };
+const savesOf = (w) => w.log.filter((l) => l.name === 'saveSemSettings');
+
+test('POST /link saves the settings of a sem_image: save_sem_settings(file, the candidate\'s extracted, inbox), in the link transaction, after the candidate is marked linked', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const saves = savesOf(w);
+  assert.equal(saves.length, 1);
+  assert.deepEqual(saves[0].bindings.slice(0, 1), [c.directus_files_id]);
+  assert.deepEqual(JSON.parse(saves[0].bindings[1]), SEM_EXTRACTED, 'the candidate\'s extracted, whole: the function maps the keys, not this endpoint');
+  assert.equal(saves[0].bindings[2], 'inbox');
+  assert.equal(saves[0].bindings.length, 3);
+  assert.match(SQL.saveSemSettings, /^SELECT d1_private\.save_sem_settings\(\?, \?::jsonb, \?\)/);
+  const link1 = w.log.find((l) => l.name === 'markLinked');
+  assert.equal(saves[0].tx, link1.tx, 'the same transaction as the link');
+  assert.ok(saves[0].tx !== null);
+  assert.ok(w.log.indexOf(saves[0]) > w.log.indexOf(link1), 'after the candidate is marked linked');
+  assert.equal(w.settings.get(c.directus_files_id).kv, '15');
+  assert.equal(w.settings.get(c.directus_files_id).sources.kv, 'metadata');
+});
+
+test('POST /link of a plain image, a document or a surface scan saves no settings', async () => {
+  const w = newWorld();
+  const image = add(w, cand({ kind: 'image', extracted: SEM_EXTRACTED }));
+  const doc = add(w, cand({ kind: 'document', extracted: SEM_EXTRACTED }));
+  const other = add(w, cand({ kind: 'other' }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(image), link(doc), link(other)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(savesOf(w).length, 0);
+  assert.equal(w.settings.size, 0);
+  const scan = add(w, cand({ kind: 'surface_scan', extracted: SEM_EXTRACTED, suggested_collection: null, suggested_record_id: null, matches: [], match_strength: 'none' }));
+  w.refs.cutting_inserts.add(INS1);
+  const added = await call('POST /link', { user: U.alice, body: { items: [{ candidate_id: scan.candidate_id, collection: 'surface_scans', insert_id: INS1, condition: 'worn' }] } });
+  assert.equal(added.statusCode, 200, JSON.stringify(added.body));
+  assert.equal(savesOf(w).length, 0, 'a surface scan is not an SEM image');
+});
+
+test('POST /link: a candidate whose extracted has no settings still calls the function (it decides what is a setting), a JSON string extracted is passed as it is', async () => {
+  const w = newWorld();
+  const empty = add(w, cand({ extracted: null }));
+  const text = add(w, cand({ extracted: JSON.stringify({ kv: 20 }) }));
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(empty), link(text)] } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const [a, b] = savesOf(w);
+  assert.deepEqual(JSON.parse(a.bindings[1]), {}, 'no extracted at all is an empty object, never the text "null"');
+  assert.deepEqual(JSON.parse(b.bindings[1]), { kv: 20 });
+});
+
+test('POST /link: a rollback after the settings call leaves nothing (no junction row, no settings row, the candidate still new)', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const b = add(w, cand({ extracted: SEM_EXTRACTED }));
+  let n = 0;
+  w.failCreateFor = () => { n += 1; if (n === 2) throw new Error('boom'); };
+  const { call } = setup(w);
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } });
+  assert.equal(res.statusCode, 500);
+  assert.equal(savesOf(w).length, 1, 'the first file\'s settings were saved before the second link failed');
+  assert.equal(w.settings.size, 0, 'and rolled back with it');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+  assert.equal(a.state === 'new' && b.state === 'new', true);
+});
+
+test('POST /link: a failing settings call refuses the whole link (nothing half done)', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call, errors } = setup(w);
+  const real = w.settings.set.bind(w.settings);
+  w.settings.set = () => { throw new Error('function failed'); };
+  const res = await call('POST /link', { user: U.alice, body: { items: [link(c)] } });
+  w.settings.set = real;
+  assert.equal(res.statusCode, 500);
+  assert.equal(errors.length, 1);
+  assert.equal(c.state, 'new');
+  assert.equal(w.junctions.sample_data_files.length, 0);
+});
+
+test('POST /accept-all saves the settings of every sem_image it links, in its transaction', async () => {
+  const w = newWorld();
+  const sem = add(w, candFor('physical_samples', S1, { extracted: SEM_EXTRACTED }));
+  const image = add(w, candFor('physical_samples', S1, { kind: 'image', extracted: SEM_EXTRACTED }));
+  const sem2 = add(w, candFor('test_sessions', T1, { extracted: { kv: 10 } }));
+  w.acceptIds = [sem, image, sem2].map((c) => c.candidate_id);
+  const { call } = setup(w);
+  const res = await call('POST /accept-all', { user: U.alice, body: { filter: { tab: 'new' } } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.linked, 3);
+  assert.deepEqual(savesOf(w).map((l) => l.bindings[0]).sort(), [sem.directus_files_id, sem2.directus_files_id].sort());
+  assert.ok(savesOf(w).every((l) => l.bindings[2] === 'inbox'));
+  assert.deepEqual([...w.settings.keys()].sort(), [sem.directus_files_id, sem2.directus_files_id].sort());
+});
+
+test('POST /auto-link saves the settings of the sem_image it links, as the person, in its transaction', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  w.prefs.set(U.alice, true);
+  const res = await auto(w, [c.candidate_id]);
+  assert.equal(res.body.data.results[0].status, 'linked', JSON.stringify(res.body));
+  const [save] = savesOf(w);
+  assert.equal(save.bindings[0], c.directus_files_id);
+  assert.deepEqual(JSON.parse(save.bindings[1]), SEM_EXTRACTED);
+  assert.equal(save.bindings[2], 'inbox');
+  assert.ok(w.settings.has(c.directus_files_id));
+  // a plain image through auto-link saves nothing
+  const img = add(w, cand({ kind: 'image', extracted: SEM_EXTRACTED }));
+  await auto(w, [img.candidate_id]);
+  assert.equal(savesOf(w).length, 1);
+});
+
+test('POST /undo removes the settings when no link of the file remains (and only then)', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const b = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  assert.equal(w.settings.size, 2);
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(w.settings.size, 0, 'both files have no link left');
+  const del = w.log.find((l) => l.name === 'deleteUnlinkedSemSettings');
+  assert.deepEqual(csv(del.bindings[0]).sort(), [a.directus_files_id, b.directus_files_id].sort());
+  const undoTx = w.log.find((l) => l.name === 'resetBatch').tx;
+  assert.equal(del.tx, undoTx, 'in the undo transaction');
+  assert.ok(w.log.indexOf(del) > w.log.findIndex((l) => l.name === 'setActor' && l.tx === undoTx));
+});
+
+test('POST /undo keeps the settings while another link of the file remains (a second junction row in another collection, or a surface scan)', async () => {
+  const w = newWorld();
+  const a = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const b = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const d = add(w, cand({ extracted: SEM_EXTRACTED }));
+  // a is also on an operation, b on a test, c has a surface scan row; d has only this link
+  w.junctions.operation_data_files.push({ id: ID(4911), operation_id: O1, directus_files_id: a.directus_files_id });
+  w.junctions.session_data_files.push({ id: ID(4912), session_id: T1, directus_files_id: b.directus_files_id });
+  w.scans.push({ scan_id: ID(6101), insert_id: INS1, directus_files_id: c.directus_files_id, condition: 'worn' });
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b), link(c), link(d)] } })).body.data.link_batch_id;
+  const res = await call('POST /undo', { user: U.alice, body: { link_batch_id: batch } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.data.undone, 4);
+  assert.equal(w.junctions.sample_data_files.length, 0, 'every link this batch made is gone');
+  assert.deepEqual([...w.settings.keys()].sort(), [a.directus_files_id, b.directus_files_id, c.directus_files_id].sort(), 'settings stay while a link remains, go with the last one');
+  assert.equal(w.settings.has(d.directus_files_id), false);
+});
+
+test('POST /undo of a link made without settings, and a refused undo, touch no settings', async () => {
+  const w = newWorld();
+  const img = add(w, cand({ kind: 'image' }));
+  const sem = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const batchImg = (await call('POST /link', { user: U.alice, body: { items: [link(img)] } })).body.data.link_batch_id;
+  const batchSem = (await call('POST /link', { user: U.alice, body: { items: [link(sem)] } })).body.data.link_batch_id;
+  assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: batchImg } })).statusCode, 200);
+  assert.equal(w.settings.size, 1, 'the SEM image keeps its settings while its own link stands');
+  w.denyDelete = true;
+  assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: batchSem } })).statusCode, 403);
+  assert.equal(w.settings.size, 1, 'a refused undo rolls back with everything else');
+  w.denyDelete = false;
+  assert.equal((await call('POST /undo', { user: U.alice, body: { link_batch_id: batchSem } })).statusCode, 200);
+  assert.equal(w.settings.size, 0);
+});
+
+test('the SQL: the settings are written by the function only, and undo deletes only a file with no row left in the four link tables', () => {
+  assert.match(SQL.saveSemSettings, /d1_private\.save_sem_settings/);
+  assert.doesNotMatch(SQL.saveSemSettings, /INSERT|UPDATE/i, 'the endpoint never maps extracted to columns itself');
+  const del = SQL.deleteUnlinkedSemSettings;
+  assert.match(del, /^DELETE FROM d1_private\.sem_image_settings/);
+  for (const table of ['sample_data_files', 'operation_data_files', 'session_data_files', 'surface_scans']) assert.match(del, new RegExp(`NOT EXISTS \\(SELECT 1 FROM ${table} `), table);
+  assert.match(SQL.candidatesForUpdate, /c\.extracted/, 'the link transaction reads the candidate\'s extracted');
+  assert.match(SQL.batchForUpdate, /c\.extracted/);
 });
 
 // ---- rescan ----------------------------------------------------------------------------------------------------------------
