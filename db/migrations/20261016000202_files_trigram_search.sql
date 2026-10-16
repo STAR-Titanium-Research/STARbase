@@ -20,10 +20,17 @@ SET LOCAL lock_timeout = '10s';
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE INDEX IF NOT EXISTS directus_files_filename_download_lower_trgm ON directus_files USING gin (lower(filename_download) gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS directus_files_title_lower_trgm ON directus_files USING gin (lower(title) gin_trgm_ops);
+-- title is a Directus column; the CI stub of directus_files (migration 30) only has id, filename_download and type, so the title index waits for the real table.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'directus_files' AND column_name = 'title') THEN
+        CREATE INDEX IF NOT EXISTS directus_files_title_lower_trgm ON directus_files USING gin (lower(title) gin_trgm_ops);
+        COMMENT ON INDEX directus_files_title_lower_trgm IS 'Trigram index on lower(title), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 202.';
+    END IF;
+END
+$$;
 
 COMMENT ON INDEX directus_files_filename_download_lower_trgm IS 'Trigram index on lower(filename_download), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 202.';
-COMMENT ON INDEX directus_files_title_lower_trgm IS 'Trigram index on lower(title), for the LOWER(..) LIKE that Directus builds for _icontains (the Ctrl K finder). migration 202.';
 
 ANALYZE directus_files;
 
