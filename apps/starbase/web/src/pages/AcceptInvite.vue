@@ -5,6 +5,7 @@ import BrandLogo from '../BrandLogo.vue';
 import { LINK_UNUSABLE, acceptInvite, policyChecks, tokenEmail, tokenFrom } from '../acceptInvite';
 import { useApp } from '../context';
 import { signInErrorText } from '../session';
+import { unreachableText } from '../api';
 
 // The page an invite e-mail links to (spec §1.6), outside the signed-in shell like the sign-in page: set a password, then be signed in
 // and sent Home. The token (a link Directus signed, good for 7 days, once) carries the e-mail the login was invited under.
@@ -54,8 +55,8 @@ async function submit() {
 			return;
 		}
 		await router.replace('/');
-	} catch {
-		error.value = "Can't reach the database. Check that this device is on the tailnet, then try again.";
+	} catch (e) {
+		error.value = unreachableText(e);
 	} finally {
 		busy.value = false;
 	}
