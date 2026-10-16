@@ -53,6 +53,7 @@ Record access (A1a)
   sample_readers, operation_readers, test_readers, campaign_readers, project_readers, campaign_sample_readers
                                derived: which login may read each record (kept by triggers; never edited)
   operation_open_to_all        derived: the ownerless operations every member may read
+  file_readers                 derived: which login may read each OWNED file (ADR-0022; kept by triggers; never edited)
 
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
@@ -481,6 +482,34 @@ share-relative paths of folders under `Users/` and `Shared/` that match nobody, 
 **`d1_private.inbox_prefs`**: `user_id` (PK, FK `directus_users`, cascade), `auto_link` (BOOLEAN NOT NULL, default
 false: the person's opt-in to auto-linking exact short-ID matches of SEM images and other images in their personal folder, never
 documents, never surface scans, never team folders), `updated_at`.
+### Files belong to their provenance owner: `directus_files.owner_person_id` / `owner_team_id` and `file_readers`
+
+Migration `…196` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 3 and 4). A file the inbox crawler found is visible, and linkable, only to the user whose folder it came from. `directus_files` is a Directus
+system table; the migration adds two columns to it and a readers table beside it.
+
+| Column | Type | Description |
+|---|---|---|
+| `directus_files.owner_person_id` | UUID FK `people (person_id)`, nullable, `ON DELETE RESTRICT` | The person whose personal folder (`Users/<uni alias>`) the file came from. The owner is the person, not the alias text. A person who owns files cannot be deleted: deactivate them |
+| `directus_files.owner_team_id` | UUID FK `teams (team_id)`, nullable, `ON DELETE RESTRICT` | The team whose folder (`Shared/<share folder>`) the file came from; every team member can read it |
+
+`CHECK directus_files_one_owner_check`: at most one of the two is set. Both null means the file is open, as before (linked files and the legacy archive
+stay open until the file-access stream, D10). Partial indexes `idx_directus_files_owner_person_id` and `idx_directus_files_owner_team_id`
+(`WHERE ... IS NOT NULL`). The crawler stamps a pointer row when it registers it and never overwrites a stamp. The migration back-fills the files the live crawler had
+already registered from `d1_private.file_candidates.owner_*` for every candidate whose state is not `linked`. Lab Members cannot write either column:
+the Lab Member `create` and `update` field lists of `directus_files` name every other column (as `people.uni_alias`; there is no Postgres trigger, because Directus
+uses one database role for every user). Administrators are not filtered and can change an owner.
+
+**`file_readers`** (public, hidden Directus collection, derived like the other readers tables, not audited): `reader_id` BIGINT identity PK,
+`directus_files_id` UUID FK (`ON DELETE CASCADE`), `user_id` UUID FK to `directus_users` (`ON DELETE CASCADE`), `UNIQUE (directus_files_id, user_id)`, index on
+`user_id`. One row per owned file and login that may read it: the owning person's login, or the login of every member of the owning team. A file with no owner
+has no rows. It exists because the Directus read rule cannot say "the caller is a member of the owning team" (a to-many hop inside `_some`, which Directus 11.17
+refuses); the rule is instead one legal membership test on the hidden top-level alias `directus_files.readers`: **the file has no owner, or the caller has a
+`file_readers` row**. The Lab Member and Lab Viewer read rows of `directus_files` carry that filter, and so does `/assets/<id>`. Triggers keep the table right
+(`directus_files` owner change, `team_members` join, leave or move, `people.user_id` set or removed);
+`d1_private.file_readers_drift_count()` counts the differences from `d1_private.file_readers_expected()` (0 is correct) and `d1_private.file_readers_refresh()`
+repairs them. Not granted to the LLM role.
+
 ### `surface_scans`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona

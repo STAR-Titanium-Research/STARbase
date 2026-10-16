@@ -169,6 +169,11 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('surface_scans', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('surface_scans', 'update', '{}', '{}', 'insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id,render_status,render_error', '20000002-0000-0000-0000-000000000002'),
 ('surface_scans', 'delete', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
+('directus_files', 'create', '{}', '{}', 'id,storage,filename_disk,filename_download,title,type,folder,uploaded_by,created_on,modified_by,modified_on,charset,filesize,width,height,duration,embed,description,location,tags,metadata,focal_point_x,focal_point_y,tus_id,tus_data,uploaded_on', '20000002-0000-0000-0000-000000000002'),
+('directus_files', 'read', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
+('directus_files', 'update', '{}', '{}', 'id,storage,filename_disk,filename_download,title,type,folder,uploaded_by,created_on,modified_by,modified_on,charset,filesize,width,height,duration,embed,description,location,tags,metadata,focal_point_x,focal_point_y,tus_id,tus_data,uploaded_on', '20000002-0000-0000-0000-000000000002'),
+('directus_files', 'delete', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
+('file_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('machining_params', 'create', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('machining_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('machining_params', 'update', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
@@ -270,11 +275,7 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('force_crawler_state', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('label_settings', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('teams', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('team_members', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('directus_files', 'create', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('directus_files', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('directus_files', 'update', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('directus_files', 'delete', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002');
+('team_members', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002');
 -- END GENERATED: Lab Member permissions
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -320,6 +321,8 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('label_templates', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('batches', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('surface_scans', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('directus_files', 'read', '{"_or":[{"_and":[{"owner_person_id":{"_null":true}},{"owner_team_id":{"_null":true}}]},{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('file_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('machining_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('sintering_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('heat_treatment_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
@@ -349,8 +352,7 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('force_crawler_state', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('label_settings', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
 ('teams', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
-('team_members', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
-('directus_files', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003');
+('team_members', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003');
 -- END GENERATED: Lab Viewer permissions
 
 -- ─────────────────────────────────────────────────────────────────────────────

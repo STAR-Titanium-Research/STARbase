@@ -645,9 +645,45 @@ def test_previously_granted_actions_are_kept():
     assert granted <= set(BY_KEY)
 
 
-def test_directus_files_are_untouched_and_audit_logs_are_admin_only():
-    for key in [("directus_files", "read"), ("directus_files", "create")]:
-        assert BY_KEY[key]["permissions"] == {}
+def test_directus_files_follow_their_provenance_owner_and_audit_logs_are_admin_only():
+    """ADR-0022: a file is open when it has no owner (both owner columns null) and otherwise readable only by a login on its `readers` rows
+    (the owning person's login, or the logins of the owning team's members). Create and update name their fields, leaving out the two owner
+    columns (only an administrator stamps or changes an owner); delete and the readers table's own read rule are as for any other row."""
+    owner = {"owner_person_id", "owner_team_id"}
+    assert BY_KEY[("directus_files", "read")]["permissions"] == {
+        "_or": [
+            {
+                "_and": [
+                    {"owner_person_id": {"_null": True}},
+                    {"owner_team_id": {"_null": True}},
+                ]
+            },
+            {"readers": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+        ]
+    }
+    assert BY_KEY[("directus_files", "read")]["fields"] == "*"
+    assert BY_KEY[("directus_files", "delete")]["permissions"] == {}
+    for action in ("create", "update"):
+        row = BY_KEY[("directus_files", action)]
+        listed = set(row["fields"].split(","))
+        assert row["permissions"] == {}
+        assert not listed & owner, action
+        # every column Directus 11 writes on a file is still allowed (db/schema.sql lists them)
+        assert {
+            "id", "storage", "filename_disk", "filename_download", "title", "type", "folder",
+            "uploaded_by", "modified_by", "filesize", "width", "height", "metadata", "tus_id", "tus_data",
+        } <= listed, action  # fmt: skip
+    # the legal `_some` applies the readers table's own read rule: own rows only
+    assert BY_KEY[("file_readers", "read")]["permissions"] == {
+        "user_id": {"_eq": "$CURRENT_USER"}
+    }
+    assert not [k for k in BY_KEY if k[0] == "file_readers" and k[1] != "read"]
+    # the viewer reads files under the same filter
+    viewer = {(r["collection"], r["action"]): r for r in VIEWER_ROWS}
+    assert (
+        viewer[("directus_files", "read")]["permissions"]
+        == BY_KEY[("directus_files", "read")]["permissions"]
+    )
     # Owner decision (2026-10-07): the audit log holds old and new values of every change and has
     # no owner column to filter on, so Lab Members get no grant at all.
     assert not [k for k in BY_KEY if k[0] == "audit_logs"]
@@ -1215,6 +1251,11 @@ def test_the_readers_alias_is_never_under_a_some_in_a_child_rule_and_a_some_only
             assert text.startswith('{"readers": {"_some"') or text.startswith(
                 '{"_or": [{"readers": {"_some"'
             ), collection
+            continue
+        if (collection, action) == ("directus_files", "read"):
+            # ADR-0022: the files' own top-level `readers` alias, once, as the second leaf of the owner filter
+            assert text.count('"readers": {"_some"') == 1, text
+            assert text.startswith('{"_or": [{"_and": [{"owner_person_id"'), text
             continue
         assert '"readers": {"_some"' not in text, (collection, action)
 

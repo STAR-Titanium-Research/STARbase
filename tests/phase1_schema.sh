@@ -3795,6 +3795,20 @@ LV=db/migrations/20261015000185_lab_viewer.sql
 lv_down=$(awk '/-- migrate:down/{f=1;next}f' "$LV")
 lv_up="DROP TABLE IF EXISTS _lv_rules;
 $(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LV")"
+# 20261016000196 (file provenance owner) changes the Lab Member and Lab Viewer directus_files rows, adds file_readers rows and references people, teams and
+# directus_files, so its down goes before 185's (and so before every chain that starts with 185's or 184's), and its up is replayed after 185's and after 184's
+# (only its permission rows: the chains that replay 184's have dropped teams and people, so no table or trigger of it can come back; the viewer rows only while
+# the viewer policy exists, so a chain that replays 184's without 185's gets the Lab Member rows only).
+FPO_MIG=db/migrations/20261016000196_file_provenance_owner.sql
+fpo_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FPO_MIG")
+fpo_down=$(awk '/-- migrate:down/{f=1;next}f' "$FPO_MIG")
+lv_down="$fpo_down
+$lv_down"
+lv_up="$lv_up
+$fpo_up"
+fpo_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$FPO_MIG")
+tr_up="$tr_up
+$fpo_rules_up"
 tr_down="$lv_down
 $tr_down"
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
@@ -4334,8 +4348,9 @@ DROP TABLE _lm_access_rules;
 $la_up
 $tr_up
 SELECT 'up2_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
-SELECT 'up2_unchanged:' || count(*) FROM ((SELECT to_jsonb(r) FROM up_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
-  UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM up_rows r)) x;
+-- (migration 196's file_readers read row is deleted by its down and inserted again by its up, so it has a new id: left out of this comparison)
+SELECT 'up2_unchanged:' || count(*) FROM ((SELECT to_jsonb(r) FROM up_rows r WHERE r.collection <> 'file_readers' EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' AND p.collection <> 'file_readers')
+  UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' AND p.collection <> 'file_readers' EXCEPT SELECT to_jsonb(r) FROM up_rows r WHERE r.collection <> 'file_readers')) x;
 SELECT 'up2_backup_still_old:' || count(*) FROM d1_private.lab_member_access_rules_backup b JOIN old_rows o ON o.id = b.id
  WHERE b.permissions::jsonb IS DISTINCT FROM o.permissions::jsonb;
 $tr_down
@@ -7064,11 +7079,12 @@ grep -qx 'fo_bf_again:4' <<<"$fo_out" && ok "back-fill: running it twice changes
 
 # up, down, up inside one transaction: the stamp from the back-fill, the objects gone after down, the permission rows restored exactly
 if [[ -n "$FO_MIG" && -f "$FO_MIG" ]]; then
-fo_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$FO_MIG")
-fo_down=$(awk '/-- migrate:down/{f=1;next}f' "$FO_MIG")
+fo_up="$fpo_up"
+fo_down="$fpo_down"
 fo_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
-CREATE TEMP TABLE _fo_before AS SELECT policy, action, permissions::text AS p, validation::text AS v, fields FROM directus_permissions WHERE collection IN ('directus_files', 'file_readers');
+-- what the migration saved before it changed the rows: the down must put exactly that back
+CREATE TEMP TABLE _fo_before AS SELECT policy, action, permissions::text AS p, validation::text AS v, fields FROM d1_private.directus_files_rules_backup;
 $fo_down
 SELECT 'fo_down_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name LIKE 'owner%';
 SELECT 'fo_down_objects:' || (to_regclass('public.file_readers') IS NULL) || ',' || (to_regclass('d1_private.directus_files_rules_backup') IS NULL) || ',' || (to_regprocedure('d1_private.file_readers_refresh(uuid,uuid,uuid)') IS NULL);
@@ -7110,13 +7126,13 @@ fi
 run_eq "file_readers has a COMMENT on the table and every column" \
     "SELECT (obj_description('public.file_readers'::regclass, 'pg_class') IS NOT NULL) || ',' || count(*) FILTER (WHERE col_description(a.attrelid, a.attnum) IS NULL) FROM pg_attribute a WHERE a.attrelid = 'public.file_readers'::regclass AND a.attnum > 0 AND NOT a.attisdropped" "true,0"
 run_eq "file_readers is unique per file and user, and cascades from files and users" \
-    "SELECT string_agg(conname || ':' || contype || CASE WHEN contype = 'f' THEN confdeltype::text ELSE '' END, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'public.file_readers'::regclass" \
+    "SELECT string_agg(conname || ':' || contype::text || CASE WHEN contype = 'f' THEN confdeltype::text ELSE '' END, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'public.file_readers'::regclass" \
     "file_readers_directus_files_id_fkey:fc,file_readers_directus_files_id_user_id_key:u,file_readers_pkey:p,file_readers_user_id_fkey:fc"
 run_eq "file_readers has an index on user_id (the filter's lookup)" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'file_readers' AND indexdef LIKE '%(user_id)%'" "1"
 run_eq "the readers table is hidden in Directus, with the relation to files (alias readers) and to users (no alias)" \
     "SELECT (SELECT hidden::text FROM directus_collections WHERE collection = 'file_readers') || '/' || (SELECT string_agg(many_field || '>' || one_collection || coalesce('.' || one_field, ''), ',' ORDER BY many_field) FROM directus_relations WHERE many_collection = 'file_readers') || '/' || (SELECT special::text || ':' || hidden::text FROM directus_fields WHERE collection = 'directus_files' AND field = 'readers')" \
-    "true/directus_files_id>directus_files.readers,user_id>directus_users/{o2m}:true"
+    "true/directus_files_id>directus_files.readers,user_id>directus_users/o2m:true"
 run_eq "the text-to-SQL role is not granted the readers table (migration 168 rule)" \
     "SELECT has_table_privilege('d1_llm_readonly', 'public.file_readers', 'SELECT')" "f"
 fo_out=$(fo_sql "INSERT INTO directus_files (id, owner_person_id) VALUES ('$FO_F1', '$FO_P1');
