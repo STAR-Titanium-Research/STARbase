@@ -6629,8 +6629,8 @@ run_eq "file_thumbnails columns and types match the contract" \
     "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'file_thumbnails'" \
     "candidate_id:uuid:NO,thumb:bytea:NO,preview:bytea:NO,thumb_width:integer:YES,thumb_height:integer:YES,preview_width:integer:YES,preview_height:integer:YES,source_size:bigint:NO,source_mtime:timestamp with time zone:NO,created_at:timestamp with time zone:NO"
 run_eq "the key and the foreign key have the repo's names, and the foreign key cascades from file_candidates" \
-    "SELECT string_agg(conname || ':' || contype::text || ':' || coalesce(confrelid::regclass::text, '-') || ':' || coalesce(confdeltype::text, '-'), ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f')" \
-    "file_thumbnails_candidate_id_fkey:f:d1_private.file_candidates:c,file_thumbnails_pkey:p:-:a"
+    "SELECT string_agg(conname || ':' || contype::text || ':' || coalesce(confrelid::regclass::text, '-') || ':' || coalesce(nullif(confdeltype::text, ' '), '-'), ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.file_thumbnails'::regclass AND contype IN ('p', 'f')" \
+    "file_thumbnails_candidate_id_fkey:f:d1_private.file_candidates:c,file_thumbnails_pkey:p:-:-"
 fi_out=$(fi_sql "$FT_CAND
 $FT_ROW
 SELECT 'ft_row:' || octet_length(thumb) || ':' || octet_length(preview) || ':' || source_size || ':' || (created_at IS NOT NULL) || ':' || (thumb_width IS NULL) FROM d1_private.file_thumbnails;")
