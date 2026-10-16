@@ -3826,6 +3826,7 @@ DROP TABLE IF EXISTS d1_private.process_drafts;
 DROP TABLE IF EXISTS d1_private.inbox_prefs;
 DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
 DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
+DROP TABLE IF EXISTS d1_private.inbox_ignored_dirs;
 DROP TABLE IF EXISTS d1_private.inbox_dirs;
 DROP TABLE IF EXISTS d1_private.file_candidates;
 DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard() CASCADE;
@@ -6610,6 +6611,107 @@ SQL
     grep -q 'fi_dn_triggers:0,0' <<<"$fi_out" && grep -q 'fi_up_triggers:3,3' <<<"$fi_out" && ok "down drops the three trigger functions and triggers; up brings them back" || bad "triggers did not round-trip (output: $fi_out)"
     grep -q 'fi_dn_people:1' <<<"$fi_out" && grep -q 'fi_dn_files:1' <<<"$fi_out" && ok "down keeps the people and files rows (only the new columns and tables go)" || bad "down removed people or files rows (output: $fi_out)"
     grep -q 'fi_up_tables:5' <<<"$fi_out" && grep -q 'fi_up_columns:3' <<<"$fi_out" && grep -q 'fi_up_state:1' <<<"$fi_out" && grep -q 'fi_up_alias:<null>:false' <<<"$fi_out" && ok "up again restores the five tables, the three columns and the seeded state row (alias data is not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
+
+echo "== Ignored folders: d1_private.inbox_ignored_dirs =="
+# Spec section 15 of the found files inbox design; migration 199. Each check is its own rolled-back transaction (ids as in the section above).
+IG_MIG=$(ls db/migrations/*_inbox_ignored_dirs.sql 2>/dev/null | head -1)
+[[ -n "$IG_MIG" && -f "$IG_MIG" ]] && ok "found the ignored folders migration (${IG_MIG:-none})" || bad "the ignored folders migration is missing (db/migrations/*_inbox_ignored_dirs.sql)"
+ig_sql() { # ig_sql <statements>: run them after fixture people, a team and users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One'), ('$FI_P2', 'Inbox Test Two');
+INSERT INTO teams (team_id, name) VALUES ('$FI_T1', 'Inbox Test Team');
+INSERT INTO directus_users (id) VALUES ('$FI_U1'), ('$FI_U2');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "inbox_ignored_dirs is in d1_private and nowhere in public" \
+    "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'inbox_ignored_dirs')" "1,0"
+run_eq "it is not exposed in Directus (v_schema_dictionary, directus_collections, directus_fields)" \
+    "SELECT (SELECT count(*) FROM v_schema_dictionary WHERE object_name = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'inbox_ignored_dirs') || ',' || (SELECT count(*) FROM directus_fields WHERE collection = 'inbox_ignored_dirs')" "0,0,0"
+run_eq "d1_llm_readonly cannot read it" "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.inbox_ignored_dirs', 'SELECT')" "f"
+run_eq "the columns are the contract's (ignored_id uuid PK default, two nullable owners, rel_folder NOT NULL, created_at NOT NULL default now(), created_by nullable)" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || (column_default IS NOT NULL), ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'inbox_ignored_dirs'" \
+    "created_at:timestamp with time zone:NO:true,created_by:uuid:YES:false,ignored_id:uuid:NO:true,owner_person_id:uuid:YES:false,owner_team_id:uuid:YES:false,rel_folder:text:NO:false"
+run_eq "the constraints are named {table}_{description}_{type}" \
+    "SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_ignored_dirs'::regclass" \
+    "inbox_ignored_dirs_created_by_fkey,inbox_ignored_dirs_one_owner_check,inbox_ignored_dirs_owner_person_id_fkey,inbox_ignored_dirs_owner_team_id_fkey,inbox_ignored_dirs_pkey,inbox_ignored_dirs_rel_folder_form_check,inbox_ignored_dirs_rel_folder_parts_check"
+run_eq "the foreign keys delete as inbox_dirs' do: owners CASCADE, created_by SET NULL" \
+    "SELECT string_agg(conname || '=' || confdeltype::text, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_ignored_dirs'::regclass AND contype = 'f'" \
+    "inbox_ignored_dirs_created_by_fkey=n,inbox_ignored_dirs_owner_person_id_fkey=c,inbox_ignored_dirs_owner_team_id_fkey=c"
+run_eq "inbox_ignored_dirs_owner_folder_key is unique on (coalesce(owner_person_id, owner_team_id), lower(rel_folder))" \
+    "SELECT (indexdef LIKE 'CREATE UNIQUE INDEX inbox_ignored_dirs_owner_folder_key ON d1_private.inbox_ignored_dirs USING btree (COALESCE(owner_person_id, owner_team_id), lower(rel_folder))') FROM pg_indexes WHERE schemaname = 'd1_private' AND indexname = 'inbox_ignored_dirs_owner_folder_key'" "t"
+run_eq "the owner and user foreign keys are indexed, partial on NOT NULL" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_ignored_dirs' AND ((indexname = 'idx_inbox_ignored_dirs_owner_person' AND indexdef LIKE '%(owner_person_id) WHERE (owner_person_id IS NOT NULL)') OR (indexname = 'idx_inbox_ignored_dirs_owner_team' AND indexdef LIKE '%(owner_team_id) WHERE (owner_team_id IS NOT NULL)') OR (indexname = 'idx_inbox_ignored_dirs_created_by' AND indexdef LIKE '%(created_by) WHERE (created_by IS NOT NULL)'))" \
+    "idx_inbox_ignored_dirs_created_by,idx_inbox_ignored_dirs_owner_person,idx_inbox_ignored_dirs_owner_team"
+run_eq "the table has no audit or OCC trigger (derived bookkeeping, like the other d1_private inbox tables)" \
+    "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'd1_private.inbox_ignored_dirs'::regclass AND NOT tgisinternal" "0"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder, created_by) VALUES ('$FI_P1', 'World-Ti Paper/Drafts', '$FI_U1');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Old runs');
+SELECT 'ig_rows:' || count(*) || ':' || count(ignored_id) || ':' || count(created_at) || ':' || count(created_by) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_rows:2:2:2:1' <<<"$fi_out" && ok "a person rule and a team rule insert, with a generated id and time; created_by is optional" || bad "rule inserts failed (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, owner_team_id, rel_folder) VALUES ('$FI_P1', '$FI_T1', 'x');")
+grep -q 'inbox_ignored_dirs_one_owner_check' <<<"$fi_out" && ok "a rule with both owners is rejected" || bad "a rule with two owners was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (rel_folder) VALUES ('x');")
+grep -q 'inbox_ignored_dirs_one_owner_check' <<<"$fi_out" && ok "a rule with no owner is rejected" || bad "a rule with no owner was not rejected (output: $fi_out)"
+for ig_bad in '' '/a' 'a/' '/' 'a//b' '.' '..' './a' 'a/.' 'a/./b' '../a' 'a/..' 'a/../b'; do
+    fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', '$ig_bad');")
+    grep -q 'inbox_ignored_dirs_rel_folder_\(form\|parts\)_check' <<<"$fi_out" && ok "the folder '$ig_bad' is rejected (leading or trailing slash, empty, . or .. part)" || bad "the folder '$ig_bad' was not rejected (output: $fi_out)"
+done
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'World-Ti Paper'), ('$FI_P1', 'World-Ti Paper 2'), ('$FI_P1', 'a.b/..c/d.'), ('$FI_P1', 'a/b/c');
+SELECT 'ig_ok:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_ok:4' <<<"$fi_out" && ok "ordinary folders are accepted, also with dots inside a name and a sibling that shares a prefix" || bad "valid folders were rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'World-Ti Paper');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'WORLD-ti paper');")
+grep -q 'inbox_ignored_dirs_owner_folder_key' <<<"$fi_out" && ok "the same folder twice for one owner is rejected, ignoring case" || bad "a duplicate rule was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Old runs');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'OLD RUNS');")
+grep -q 'inbox_ignored_dirs_owner_folder_key' <<<"$fi_out" && ok "the same folder twice for one team is rejected, ignoring case" || bad "a duplicate team rule was not rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'Shared'), ('$FI_P2', 'Shared');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'Shared');
+SELECT 'ig_owners:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_owners:3' <<<"$fi_out" && ok "two people and a team may each ignore a folder of the same name" || bad "the same folder for different owners was rejected (output: $fi_out)"
+fi_out=$(ig_sql "INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder, created_by) VALUES ('$FI_P1', 'a', '$FI_U1'), ('$FI_P2', 'a', '$FI_U2');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_team_id, rel_folder) VALUES ('$FI_T1', 'b');
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'ig_user:' || count(*) || ':' || count(created_by) FROM d1_private.inbox_ignored_dirs;
+DELETE FROM people WHERE person_id = '$FI_P1';
+SELECT 'ig_person:' || count(*) FROM d1_private.inbox_ignored_dirs;
+DELETE FROM teams WHERE team_id = '$FI_T1';
+SELECT 'ig_team:' || count(*) FROM d1_private.inbox_ignored_dirs;")
+grep -q 'ig_user:3:1' <<<"$fi_out" && grep -q 'ig_person:2' <<<"$fi_out" && grep -q 'ig_team:1' <<<"$fi_out" && ok "deleting a user keeps their rules (created_by becomes NULL); deleting a person or a team deletes their rules, and only theirs" || bad "foreign key actions are wrong (output: $fi_out)"
+run_eq "every column, index and the table of inbox_ignored_dirs has a comment (without: none)" \
+    "SELECT coalesce(string_agg(x, ', ' ORDER BY x), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT i.indexname FROM pg_indexes i JOIN pg_class ic ON ic.relname = i.indexname AND ic.relnamespace = to_regnamespace(i.schemaname)
+         WHERE i.schemaname = 'd1_private' AND i.tablename = 'inbox_ignored_dirs' AND coalesce(obj_description(ic.oid, 'pg_class'), '') = '') q" ""
+# Down and up again, inside one rolled-back transaction.
+if [[ -n "$IG_MIG" && -f "$IG_MIG" ]]; then
+    ig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$IG_MIG")
+    ig_down=$(awk '/-- migrate:down/{f=1;next}f' "$IG_MIG")
+    fi_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$FI_P1', 'Inbox Test One');
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('$FI_P1', 'a/b');
+$ig_down
+SELECT 'ig_dn_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_ignored_dirs';
+SELECT 'ig_dn_people:' || count(*) FROM people WHERE person_id = '$FI_P1';
+$ig_up
+SELECT 'ig_up_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'inbox_ignored_dirs';
+SELECT 'ig_up_rows:' || count(*) FROM d1_private.inbox_ignored_dirs;
+ROLLBACK;
+SQL
+)
+    grep -q 'ig_dn_table:0' <<<"$fi_out" && grep -q 'ig_dn_people:1' <<<"$fi_out" && ok "down drops the table and keeps the people" || bad "down left the table behind or removed people (output: $fi_out)"
+    grep -q 'ig_up_table:1' <<<"$fi_out" && grep -q 'ig_up_rows:0' <<<"$fi_out" && ok "up again brings back an empty table (the rules are not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
 fi
 
 echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="
