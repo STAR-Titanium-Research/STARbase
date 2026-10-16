@@ -270,6 +270,14 @@ describe('HoverCard, a material', () => {
     }
   });
 
+  it('elements with no weight are named in a caption under the bar, not drawn in it', async () => {
+    const html = await render(HoverCard, { info: minfo, composition: [...elements, { symbol: 'Si', weight_percent: null }, { symbol: 'Mn' }], target, canvas: target });
+    expect(html).toContain('d1-composition');
+    expect(text(html)).toContain('Also: Si, Mn (no wt%)');
+    const all = await render(HoverCard, { info: minfo, composition: elements, target, canvas: target });
+    expect(text(all)).not.toContain('Also:');
+  });
+
   it('a record that is not a material shows no composition, whatever it is given', async () => {
     const html = await render(HoverCard, { info: info('s:p'), composition: elements, target, canvas: target });
     expect(html).not.toContain('d1-composition');

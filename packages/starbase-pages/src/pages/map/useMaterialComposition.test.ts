@@ -40,6 +40,24 @@ describe('useMaterialComposition', () => {
     expect(api.get).toHaveBeenCalledTimes(1);
   });
 
+  it('a failed read (500, network) is not an answer: nothing is held, and the next ask reads again', async () => {
+    let fail = true;
+    const api = apiOf(async () => (fail ? Promise.reject(Object.assign(new Error('Server error'), { response: { status: 500 } })) : { data: { data: rows } }));
+    const c = useMaterialComposition(api);
+    c.load('m1');
+    await tick();
+    expect('m1' in c.compositions.value).toBe(false);
+    fail = false;
+    c.load('m1'); // hovered again
+    await tick();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(c.compositions.value.m1).toEqual(rows);
+    const net = useMaterialComposition(apiOf(async () => Promise.reject(new Error('Network Error')))); // no response at all
+    net.load('m1');
+    await tick();
+    expect('m1' in net.compositions.value).toBe(false);
+  });
+
   it('no rows is null', async () => {
     const c = useMaterialComposition(apiOf(async () => ({ data: { data: [] } })));
     c.load('m1');
