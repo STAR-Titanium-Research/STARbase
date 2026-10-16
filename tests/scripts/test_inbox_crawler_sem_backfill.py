@@ -8,8 +8,10 @@ Images are synthetic: the FEI TIFF carries the metadata text of test_inbox_crawl
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -28,10 +30,11 @@ from inbox_crawler import (  # noqa: E402
     fs_readonly,
     hashing,
     maintenance,
+    scan,
 )
 from inbox_crawler.identity import file_id  # noqa: E402
 from test_inbox_crawler_classify_fei import make_fei_tiff  # noqa: E402
-from test_inbox_crawler_reclassify import FlagSpy  # noqa: E402
+from test_inbox_crawler_reclassify import DropShare, FlagSpy  # noqa: E402
 from test_inbox_crawler_scan import png  # noqa: E402
 from test_inbox_crawler_world import world  # noqa: E402, F401
 
@@ -352,6 +355,67 @@ def test_an_unreadable_file_is_logged_and_skipped_and_the_run_goes_on(world, cap
     )
     # one attempt per run, never a loop
     assert spy.opens.count("Equipment/SEM/a_locked.tif") == 1
+
+
+def test_a_missing_or_flaky_file_is_skipped_and_picked_up_by_the_next_run(world):
+    flaky = pointer(world, "Equipment/SEM/a_flaky.tif")
+    gone = pointer(world, "Equipment/SEM/b_gone.tif")
+    good = pointer(world, "Equipment/SEM/c_fine.tif")
+    Path(world.root, "Equipment/SEM/b_gone.tif").unlink()
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    spy.fail[("open", "Equipment/SEM/a_flaky.tif")] = OSError(errno.EIO, "io error")
+    stats, _ = backfill(world, spy=spy)
+    assert stats.unreadable == 2 and stats.saved == 1 and not stats.aborted
+    assert settings(world, good) is not None
+    assert settings(world, flaky) is None and settings(world, gone) is None
+    world.write("Equipment/SEM/b_gone.tif", FEI)
+    stats2, _ = backfill(world)
+    assert stats2.saved == 2 and settings(world, flaky) is not None
+
+
+def test_a_share_that_drops_mid_run_aborts_the_backfill(world, caplog):
+    fids = [pointer(world, f"Equipment/SEM/f{n}.tif") for n in range(5)]
+    spy = DropShare(fs_readonly.Share(world.root), world.root, 3)
+    with caplog.at_level(logging.INFO):
+        stats, _ = backfill(world, spy=spy)
+    assert stats.aborted and stats.saved == 2
+    assert sum(settings(world, f) is not None for f in fids) == 2
+    assert "sem-backfill aborted" in caplog.text
+
+
+def test_a_share_that_is_not_there_at_the_start_aborts_the_backfill(world):
+    fid = pointer(world, "Equipment/SEM/a.tif")
+    shutil.rmtree(world.root)
+    stats, spy = backfill(world)
+    assert stats.aborted and spy.opens == [] and settings(world, fid) is None
+
+
+def test_consecutive_transient_failures_abort_the_backfill(world):
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    fids = []
+    for i in range(scan.MAX_CONSECUTIVE_FAILURES + 1):
+        rel = f"Equipment/SEM/e{i:02d}.tif"
+        fids.append(pointer(world, rel))
+        spy.fail[("open", rel)] = OSError(errno.EIO, "io error")
+    stats, _ = backfill(world, spy=spy)
+    assert stats.aborted and len(spy.opens) == scan.MAX_CONSECUTIVE_FAILURES
+    assert n_settings(world) == 0
+
+
+def test_the_command_exits_one_when_the_share_drops_mid_run(env, monkeypatch):
+    fids = [pointer(env, f"Equipment/SEM/f{n}.tif") for n in range(4)]
+    real = fs_readonly.Share.open_rb
+    seen = []
+
+    def dropping(self, rel, adopted=False):
+        seen.append(rel)
+        if len(seen) == 2:
+            shutil.rmtree(env.root)
+        return real(self, rel, adopted=adopted)
+
+    monkeypatch.setattr(fs_readonly.Share, "open_rb", dropping)
+    assert cli.main(["--sem-backfill", "--root", env.root]) == 1
+    assert sum(settings(env, f) is not None for f in fids) == 1
 
 
 def test_reads_go_through_the_read_rate_throttle(world):

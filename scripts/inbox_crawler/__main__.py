@@ -24,14 +24,22 @@ Modes (exactly one; each takes the single-crawler database lock and exits 1 when
                   (throttled by the state row's read_mb_per_s, with INBOX_OCR as above), promoted to
                   sem_image or demoted to image, and stamped with the version. Never touches a linked row;
                   resumable and idempotent (a second run reads nothing); an unreadable file is logged and
-                  marked, not retried. Logs the promoted, demoted and unchanged counts. Exit 0.
+                  marked, not retried. Logs the promoted, demoted and unchanged counts.
+                  Only a permanent read failure (no permission, refused by the allow-list, over 64 MB) is
+                  marked; a missing file or a transient error is skipped and stays queued for the next run.
+                  --force (only with --reclassify) ignores classified_by and re-reads every eligible row once:
+                  run `--reclassify --force` once after rapidocr is installed and INBOX_OCR=1 is set, to
+                  promote bar-only PNG/JPEG/BMP exports (without --force a second run reads nothing).
+                  Exit 0 when it ran to its end or was stopped; exit 1 when it ABORTED because the share root
+                  stopped answering or 25 reads failed in a row (nothing after that point is marked, what was
+                  committed stays), or the pass failed, or the lock is held; 2 for a configuration error.
     --sem-backfill  one pass over the pointer rows that are linked (to a sample, operation, test session or
                   surface scan), image-typed, unowned (no provenance owner) and have no imaging-settings row:
                   each is read through the read-only share (throttled, INBOX_OCR as above), and when it is an
                   SEM image d1_private.save_sem_settings writes its settings (read_by 'backfill'; a person's
                   corrections are never overwritten, and a re-read that carries fewer values keeps the
                   stored ones). Resumable, one visit per row per run; an unreadable file is logged and
-                  skipped. Logs the saved count. Exit 0.
+                  skipped. Logs the saved count. Same exit codes and the same share abort as --reclassify.
 """
 
 from __future__ import annotations
@@ -84,11 +92,19 @@ def _parse(argv):
         help="save imaging settings for linked, unowned SEM images that have none, then exit",
     )
     ap.add_argument(
+        "--force",
+        action="store_true",
+        help="with --reclassify: ignore classified_by and re-read every eligible image candidate",
+    )
+    ap.add_argument(
         "--root",
         default=os.environ.get("ARCHIVE_ROOT", "/mnt/archive/star_group1"),
         help="the star_group1 root; every path the crawler stores is relative to it",
     )
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.force and not args.reclassify:
+        ap.error("--force is only valid with --reclassify")
+    return args
 
 
 def main(argv=None) -> int:
@@ -233,18 +249,22 @@ def _run_pass(args, store: db.Store, share, stop: threading.Event) -> int:
         throttle.set_rate(hashing.mb_per_s(state["read_mb_per_s"]))
     log.info("reading %s READ-ONLY", args.root)
     try:
-        (maintenance.reclassify if args.reclassify else maintenance.sem_backfill)(
+        extra = {"force": args.force} if args.reclassify else {}
+        stats = (
+            maintenance.reclassify if args.reclassify else maintenance.sem_backfill
+        )(
             store,
             share,
             throttle=throttle,
             ocr=os.environ.get("INBOX_OCR") == "1",
             stop=stop.is_set,
+            **extra,
         )
     except Exception as exc:  # noqa: BLE001 (the class only: the text can echo the DSN)
         store.rollback()
         log.error("the pass failed: %s", type(exc).__name__)
         return 1
-    return 0
+    return 1 if stats.aborted else 0
 
 
 if __name__ == "__main__":

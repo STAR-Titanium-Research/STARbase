@@ -9,7 +9,9 @@ extracted and classified_by of undecided candidates only.
 
 from __future__ import annotations
 
+import errno
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from inbox_crawler import (  # noqa: E402
     kinds,
     maintenance,
     recognise,
+    scan,
 )
 from inbox_crawler.owners import Owner  # noqa: E402
 from test_inbox_crawler_classify_fei import make_fei_tiff  # noqa: E402
@@ -266,12 +269,134 @@ def test_unreadable_file_is_not_retried_in_a_loop(world, pid, caplog):
     assert spy2.opens == [] and stats2.examined == 0
 
 
-def test_a_file_missing_from_the_share_is_marked_not_retried(world, pid):
-    cid, rel = put(world, pid, "vanished.tif", FEI)
+def test_a_file_missing_from_a_healthy_share_is_skipped_not_marked(world, pid, caplog):
+    """A missing file is not a permanent failure (the file may have moved, the share may be flaky): the row
+    stays queued, is not offered again in this run, the run goes on, and the next run offers it again."""
+    gone, rel = put(world, pid, "vanished.tif", FEI)
+    ok, _ = put(world, pid, "fine.tif", FEI)
     Path(world.root, rel).unlink()
+    with caplog.at_level(logging.INFO):
+        stats, spy = reclassify(world)
+    assert stats.skipped == 1 and not stats.aborted
+    assert stats.promoted == 1 and row(world, ok)[3] == VERSION
+    assert row(world, gone)[3] is None  # not marked: still in the queue
+    assert spy.opens.count(rel) == 1  # not offered again within the run
+    assert rel in caplog.text
+    stats2, spy2 = reclassify(world)  # the next run offers it again
+    assert spy2.opens == [rel] and stats2.skipped == 1
+    world.write(rel, FEI)  # the file is back: now it is classified
+    stats3, _ = reclassify(world)
+    assert stats3.promoted == 1 and row(world, gone)[3] == VERSION
+
+
+def test_a_skipped_row_is_not_offered_again_in_the_same_run_whatever_the_batch(
+    world, pid
+):
+    ids = []
+    for n in range(3):
+        cid, rel = put(world, pid, f"m{n}.tif", FEI)
+        Path(world.root, rel).unlink()
+        ids.append(rel)
+    stats, spy = reclassify(world, batch=1)
+    assert stats.skipped == 3 and sorted(spy.opens) == sorted(ids)  # once each
+
+
+def test_a_transient_error_is_skipped_not_marked_and_retried_by_the_next_run(
+    world, pid
+):
+    cid, rel = put(world, pid, "flaky.tif", FEI)
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    spy.fail[("open", rel)] = OSError(errno.EIO, "input/output error")
+    stats, _ = reclassify(world, spy=spy)
+    assert stats.skipped == 1 and not stats.aborted and spy.opens == [rel]
+    assert row(world, cid)[3] is None
+    stats2, spy2 = reclassify(world)
+    assert stats2.promoted == 1 and row(world, cid)[3] == VERSION
+
+
+def test_a_file_too_large_to_read_into_memory_is_marked(world, pid, monkeypatch):
+    cid, _ = put(world, pid, "huge.tif", FEI, kind="sem_image")
+    monkeypatch.setattr(scan, "CLASSIFY_MAX_BYTES", 100)
     stats, _ = reclassify(world)
-    assert stats.unreadable == 1 and row(world, cid)[3] == VERSION
+    assert stats.too_large == 1 and stats.skipped == 0
+    kind, _, _, by, _ = row(world, cid)
+    assert (kind, by) == ("sem_image", VERSION)
     assert reclassify(world)[1].opens == []
+
+
+# ---- a share that drops: abort, mark nothing after that point --------------------------------
+
+
+class DropShare(FlagSpy):
+    """Removes the share's root when the `nth` file is about to be opened (the mount going away)."""
+
+    def __init__(self, inner, root, nth):
+        super().__init__(inner)
+        self._root, self._nth = root, nth
+
+    def open_rb(self, rel, adopted=False):
+        if len(self.opens) + 1 == self._nth:
+            shutil.rmtree(self._root)
+        return super().open_rb(rel, adopted=adopted)
+
+
+def test_a_share_that_drops_mid_run_aborts_and_marks_nothing_after_that(
+    world, pid, caplog
+):
+    ids = [put(world, pid, f"f{n}.tif", FEI)[0] for n in range(5)]
+    spy = DropShare(fs_readonly.Share(world.root), world.root, 3)
+    with caplog.at_level(logging.INFO):
+        stats, _ = reclassify(world, spy=spy)
+    assert stats.aborted and stats.promoted == 2 and stats.skipped == 0
+    assert (
+        sum(row(world, c)[3] == VERSION for c in ids) == 2
+    )  # the two read before the drop
+    assert (
+        sum(row(world, c)[3] is None for c in ids) == 3
+    )  # nothing after it was marked
+    assert "reclassify aborted" in caplog.text and "(ABORTED)" in caplog.text
+
+
+def test_a_share_that_is_not_there_at_the_start_aborts_before_reading(world, pid):
+    cid, _ = put(world, pid, "a.tif", FEI)
+    shutil.rmtree(world.root)
+    stats, spy = reclassify(world)
+    assert stats.aborted and spy.opens == [] and row(world, cid)[3] is None
+
+
+def test_consecutive_transient_failures_abort_the_run(world, pid):
+    n = scan.MAX_CONSECUTIVE_FAILURES + 1
+    ids = []
+    spy = FlagSpy(fs_readonly.Share(world.root))
+    for i in range(n):
+        cid, rel = put(world, pid, f"e{i:02d}.tif", FEI)
+        ids.append(cid)
+        spy.fail[("open", rel)] = OSError(errno.EIO, "input/output error")
+    stats, _ = reclassify(world, spy=spy)
+    assert stats.aborted
+    assert len(spy.opens) == scan.MAX_CONSECUTIVE_FAILURES  # stopped at the limit
+    assert all(row(world, c)[3] is None for c in ids)  # nothing marked
+
+
+def test_the_command_exits_one_when_the_share_drops_mid_run(
+    env, pid, monkeypatch, caplog
+):
+    ids = [put(env, pid, f"f{n}.tif", FEI)[0] for n in range(4)]
+    real = fs_readonly.Share.open_rb
+    seen = []
+
+    def dropping(self, rel, adopted=False):
+        seen.append(rel)
+        if len(seen) == 2:
+            shutil.rmtree(env.root)
+        return real(self, rel, adopted=adopted)
+
+    monkeypatch.setattr(fs_readonly.Share, "open_rb", dropping)
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--root", env.root]) == 1
+    assert sum(row(env, c)[3] == VERSION for c in ids) == 1
+    assert sum(row(env, c)[3] is None for c in ids) == 3
+    assert "aborted" in caplog.text
 
 
 def test_reclassify_only_opens_allowlisted_images(world, pid):
@@ -421,3 +546,51 @@ def test_the_command_reads_ocr_from_the_environment(env, pid, monkeypatch):
     monkeypatch.setenv("INBOX_OCR", "0")
     assert cli.main(["--reclassify", "--root", env.root]) == 0
     assert seen == [False]
+
+
+# ---- --force: ignore classified_by -----------------------------------------------------------
+
+
+def test_force_re_reads_a_row_already_at_the_current_version(world, pid):
+    cid, rel = put(world, pid, "late.tif", FEI)
+    reclassify(world)
+    assert row(world, cid)[0] == "sem_image" and row(world, cid)[3] == VERSION
+    world.write(
+        rel, BAR_ONLY
+    )  # what the file says changes (stands in for OCR becoming available)
+    stats, spy = reclassify(world)
+    assert (
+        spy.opens == [] and row(world, cid)[0] == "sem_image"
+    )  # not re-read without --force
+    stats, spy = reclassify(world, force=True)
+    assert spy.opens == [rel] and stats.demoted == 1
+    assert row(world, cid)[0] == "image"
+
+
+def test_force_visits_each_row_once_and_still_skips_linked_and_gone_rows(world, pid):
+    a, _ = put(world, pid, "a.tif", FEI)
+    put(world, pid, "l.tif", FEI, state="linked")
+    put(world, pid, "g.tif", FEI, state="gone")
+    reclassify(world)
+    stats, spy = reclassify(world, force=True, batch=1)
+    assert spy.opens == ["Users/abc12de/a.tif"] and stats.examined == 1
+
+
+def test_the_command_force_re_reads_and_a_plain_run_reads_nothing(env, pid, caplog):
+    put(env, pid, "a.tif", FEI)
+    assert cli.main(["--reclassify", "--root", env.root]) == 0
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--root", env.root]) == 0
+    assert "0 promoted, 0 demoted, 0 unchanged" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert cli.main(["--reclassify", "--force", "--root", env.root]) == 0
+    assert "0 promoted, 0 demoted, 1 unchanged" in caplog.text
+
+
+@pytest.mark.parametrize("other", ["--daemon", "--once", "--sem-backfill"])
+def test_force_is_refused_with_the_other_modes(env, other):
+    with pytest.raises(SystemExit) as e:
+        cli.main([other, "--force", "--root", env.root])
+    assert e.value.code == 2

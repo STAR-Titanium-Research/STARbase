@@ -1000,17 +1000,22 @@ class Store:
 
     # ---- re-classification (--reclassify) ---------------------------------------------------
 
-    def reclassify_batch(self, limit: int) -> list[tuple[str, str, str, str]]:
+    def reclassify_batch(
+        self, limit: int, after: str | None = None, *, force: bool = False
+    ) -> list[tuple[str, str, str, str]]:
         """Undecided image candidates (state new or dismissed, kind image or sem_image) that the current
-        classifier version has not looked at: (candidate id, files id, rel path, current kind). A linked row
-        is never offered. Each row processed leaves this list (set_classification or mark_classified writes
-        the current version), so the pass is resumable and a second run finds nothing."""
+        classifier version has not looked at: (candidate id, files id, rel path, current kind), in candidate-id
+        order, those after `after`, so a pass visits each row once even when it skips some. With `force` the
+        version is ignored and every such candidate is offered. A linked row is never offered. A row that is
+        read leaves the list (set_classification or mark_classified writes the current version), so a killed
+        run is finished by the next; a skipped row (missing, transient error) stays for the next run."""
         rows = self._all(
             "SELECT candidate_id::text, directus_files_id::text, rel_path, kind FROM file_candidates "
             "WHERE state IN ('new', 'dismissed') AND kind IN ('image', 'sem_image') "
-            "  AND classified_by IS DISTINCT FROM %s "
+            "  AND (%s OR classified_by IS DISTINCT FROM %s) "
+            "  AND (%s::uuid IS NULL OR candidate_id > %s::uuid) "
             "ORDER BY candidate_id LIMIT %s",
-            (classify_sem.CLASSIFIER_VERSION, limit),
+            (force, classify_sem.CLASSIFIER_VERSION, after, after, limit),
         )
         return [tuple(r) for r in rows]
 
