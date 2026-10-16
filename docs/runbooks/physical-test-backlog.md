@@ -2243,10 +2243,10 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   (`docker compose --profile archive stop inbox-crawler`, the pass refuses to run beside it), run the pass on the real database
   (command in the runbook, `docs/runbooks/inbox-crawler.md`, "One-shot passes"; first on a copy if the settings table could not be
   dumped). Expect the log line `sem-backfill: N saved, N not an SEM image, N SEM images with no usable value, N unreadable, ...`;
-  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed,
-  linked in a junction or `surface_scans` and **unowned** (`SELECT ... FROM d1_private.sem_image_settings s JOIN directus_files f ON
-  f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL OR f.owner_team_id IS NOT NULL` returns nothing for rows with
-  `read_by = 'backfill'`); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
+  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed and
+  linked in a junction or `surface_scans`, owned or not (an owned file linked in Data Studio is back-filled too: `SELECT ... FROM
+  d1_private.sem_image_settings s JOIN directus_files f ON f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL AND
+  s.read_by = 'backfill'` lists them, and none of them is a file nobody linked); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
   metadata (`sources` = `metadata`/`derived`). Kill the run half way (`docker stop` or Ctrl-C) and run it again: expect it to finish
   the rest without re-reading the finished ones. Correct one value as its owner, run the pass again: the corrected value stays
   (that row is not listed at all, it has settings). A PNG or JPEG export with no metadata gets no row until `INBOX_OCR=1` works
@@ -2308,6 +2308,63 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   and copy-path buttons, never the lock. As an administrator the page shows the values and no Edit control, and the access log gains a row.
   For a file with no owner (linked before migration 196) a reader of the sample sees the values with no Edit control. The same Files section on an
   operation page and a test page behaves the same. Since: STARbase imaging settings and locked files (stream F of the SEM reader plan).
+- [ ] **SEM11 — An alias handed to someone else, or corrected (C1, ADR-0022 D13).** On a copy of the database with two People, A and B, and a
+  folder `Users/<alias>` holding a few images A's crawler scan registered: change A's `uni_alias` to something else and give the old alias to B
+  (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
+  *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
+  afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
+  files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else") for one folder: expect
+  `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
+- [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
+  196 applied and a person with a login whose folder holds a registered image, move the file to another subfolder on the share and run
+  `make inbox-crawler-once` (daemon stopped). Expect the log line for the re-point and **no** `file_readers.directus_files_id: new file already linked`
+  warning; one `directus_files` row for the file, at the new path, with the same `owner_person_id` as before; no row left for the old path
+  (`SELECT count(*) FROM directus_files WHERE metadata->>'archive_path' = '<old path>'` is 0); the Inbox row (same candidate, same first-seen date)
+  shows the new path; `SELECT d1_private.file_readers_drift_count()` is 0; the owner can still open the file and another Lab Member still cannot.
+  Repeat for a file in a team folder. Since: SEM reader final fix wave (I1).
+- [ ] **SEM13 — An owner links an SEM image in Data Studio and gets its settings after `--sem-backfill` (I2).** With **SEM3** passed, as account A
+  (with the crawler having stamped a FEI TIFF in A's folder) link the file to a sample through Data Studio's file picker, not the Inbox: the file
+  stays owned by A and has no `d1_private.sem_image_settings` row. Run `--sem-backfill` (daemon stopped, runbook "One-shot passes"): expect the log
+  `sem-backfill: 1 saved ...`, a settings row with `read_by = 'backfill'` for that file, and the record page showing the values to A (Edit control
+  present) and a lock to B (**SEM10**). A found file in A's folder that nobody linked must not be read (`INBOX_LOG_LEVEL=DEBUG`: no `reading` line for it).
+  Run it again: 0 saved, nothing re-read for the finished file. Since: SEM reader final fix wave (I2).
+- [ ] **SEM14 — A record with many images (STARbase, real Directus; I3).** Open a sample (or operation or test) that has 30 or more linked image files, as
+  their owner and as another Lab Member. Expect the page usable at once (the Files list appears and scrolls while the settings fill in a few rows at
+  a time), the browser network tab showing no more than 4 `/d1-inbox/sem-settings` requests in flight at any moment, every image ending with its
+  settings (owner) or a lock (other member) and none stuck on "Reading imaging settings…". Note the load time to the last row. As an administrator
+  open the same page: expect one `sem_settings_access_log` row per owned file read, so `SELECT count(*) FROM d1_private.sem_settings_access_log
+  WHERE read_at > now() - interval '5 minutes'` equals the number of owned images on the page: record that count and decide whether the admin log
+  volume is acceptable (every admin page view of such a record writes that many rows). Since: SEM reader final fix wave (I3).
+- [ ] **SEM15 — The live upgrade and the rollback, with `EXTENSIONS_AUTO_RELOAD` on (I4).** On a restored copy of the production database and the same
+  compose file (bind-mounted `core/extensions`, `EXTENSIONS_AUTO_RELOAD=true`), follow "Upgrading to the SEM reader" in `docs/runbooks/inbox-crawler.md`
+  exactly. First, to see why the order matters, on a throwaway copy: leave Directus running, pull, and open the Inbox before migrating: expect 500s
+  from `/d1-inbox/*` (and an undo that still works, since it checks for the settings table), then roll that copy back and start again in the right
+  order. Then, in order: crawler and Directus stopped, pull, `make migrate` (time 196's back-fill and readers refresh), drift 0, Directus started once, SEM3
+  passes, STARbase built, crawler started, `--reclassify`, `--sem-backfill`. Then the rollback on the copy in the documented order (crawler, extension,
+  `down` 197, `down` 196, restart): expect the old Inbox working, files readable by every member again, and note what was lost (settings, owner stamps).
+  Record the total time and every surprise. Since: SEM reader final fix wave (I4).
+- [ ] **SEM16 — A one-shot pass started on an empty mount point.** With the real share's mount point present but the share not mounted (`umount` it, or
+  stop the SMB mount, so `ARCHIVE_ROOT` is an empty directory), start `python -m inbox_crawler --reclassify` and then `--sem-backfill` on a copy of the
+  database. Expect each to refuse at once: `aborted` in the log (the share root or the personal-folder base, `User` or `INBOX_PERSON_DIR`, does not answer),
+  exit code 1, and no row marked (`classified_by` unchanged, no `sem_image_settings` row added). Mount the share again and expect both to run to their end.
+  Since: SEM reader final fix wave.
+- [ ] **SEM17 — More than 25 deleted dismissed rows do not abort `--reclassify`.** On a copy of the database, dismiss (or find) at least 30 image candidates
+  whose files have since been deleted from the share (state `dismissed`, file gone). Run `--reclassify` with the share mounted: expect the log
+  `reclassify: ... N skipped ...` with N at least 30, no `aborted`, exit code 0, and every other eligible row still processed (a missing file is skipped, it
+  never counts toward the 25 transient errors that abort a pass). Run it again: the same rows are skipped again (they stay queued), still no abort.
+  Since: SEM reader final fix wave.
+- [ ] **SEM18 — Deactivating, and deleting, a person who owns files (`ON DELETE RESTRICT`).** In Data Studio, set a person who owns found files (an alias, a
+  login, owned rows in `directus_files`) inactive: expect it to save, the person's folder to stop being scanned (unless "scan while Former"), their owned
+  files to stay owned by them and readable by their login, and the admin tab to list nothing new as unowned. Then try to delete that person (People page, and
+  `DELETE /items/people/<id>`): expect a refusal (a foreign-key violation, `directus_files_owner_person_id_fkey`), and the person and their files unchanged. Check
+  that the message Directus shows is understandable, and write down what an administrator must do to remove such a person (re-stamp their files first, see
+  the runbook "An alias handed to someone else"). Since: SEM reader final fix wave (ADR-0022 consequences).
+- [ ] **SEM19 — Team membership: `d1-inbox` counts active members, `file_readers` counts every member with a login (M3, ADR-0022 consequences).** With a team
+  that has a share folder and a team-owned file, and a team member who is a Former (inactive) person with a login still active in Directus: as that
+  person, `GET /files/<id>` of the team's file answers 200 (the readers table holds them) while the Inbox shows them no team files, badge 0 and no team in the
+  summary (d1-inbox counts only `people.active` members). As an active member both work. Decide which rule is right (a Former member keeping read access by id is
+  probably not), and record the answer: the fix is a later migration (change `file_readers_expected` to join `people.active`, then
+  `SELECT d1_private.file_readers_refresh()`), not an edit of migration 196. Since: SEM reader final fix wave (M3).
 
 ## Done
 

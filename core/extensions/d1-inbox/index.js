@@ -224,6 +224,12 @@ const CANDIDATE_COLUMNS = 'c.candidate_id, c.directus_files_id, c.owner_person_i
   + ' c.suggested_collection, c.suggested_record_id, c.duplicate_of, c.decided_by, c.link_kind, c.linked_collection, c.linked_junction_id,'
   + ' c.link_batch_id, c.adopted_at, c.auto_undone_at, c.extracted';
 const IDS = "string_to_array(?, ',')::uuid[]";
+// A folder that changes hands (alias handed to someone else, ADR-0022 D13): the file's pointer row stays stamped to the owner it came from. A candidate
+// whose file is stamped to someone OTHER than the candidate's own owner is not the holder's to see or change: every query that loads or counts candidates
+// holds this one predicate (an unstamped file, a linked one, or one stamped to the candidate's own owner passes). Belt and braces with the crawler, which
+// no longer makes such a candidate.
+const FILE_OWNER_MATCHES = 'NOT EXISTS (SELECT 1 FROM directus_files pf WHERE pf.id = c.directus_files_id AND (pf.owner_person_id IS NOT NULL OR pf.owner_team_id IS NOT NULL)'
+  + ' AND (pf.owner_person_id IS DISTINCT FROM c.owner_person_id OR pf.owner_team_id IS DISTINCT FROM c.owner_team_id))';
 const perTarget = (build) => Object.fromEntries(Object.entries(LINK_TARGETS).map(([collection, t]) => [collection, build(t, collection)]));
 // D11, the same image in two inboxes. A copy (duplicate_of) is shown, marked, while its original is undecided, and drops out of the new, older and open
 // lists once the original is LINKED, or DISMISSED BY THE SAME OWNER (the same person or team). Another owner dismissing their file must not hide yours: a
@@ -247,7 +253,7 @@ const summarySql = (scans) => 'SELECT c.owner_person_id, c.owner_team_id, c.orig
   + " (c.suggested_record_id IS NOT NULL AND c.match_strength IN ('short_id', 'code')) AS exact, count(*)::int AS n"
   + ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_candidates o ON o.candidate_id = c.duplicate_of'
   + ` WHERE c.state = 'new' AND (c.owner_person_id = ? OR c.owner_team_id = ANY(${IDS}))`
-  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD}${scans ? ` AND ${SCAN_ADDED}` : ''}`
+  + ` AND ${NOT_A_COUNTED_COPY} AND ${NOT_ON_RECORD} AND ${FILE_OWNER_MATCHES}${scans ? ` AND ${SCAN_ADDED}` : ''}`
   + ' GROUP BY c.owner_person_id, c.owner_team_id, c.origin, exact';
 
 export const SQL = {
@@ -262,10 +268,10 @@ export const SQL = {
   // The same where the surface_scans table exists (the endpoint checks first): without the surface scan files that already have a scan.
   summaryWithScans: summarySql(true),
   // The rows of the candidates asked for, locked in id order (two requests for one file serialise on this).
-  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id FOR UPDATE`,
+  candidatesForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // The same rows without the lock: for reads that write nothing (the list's "acceptable" count, an accept-all dry run).
-  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) ORDER BY c.candidate_id`,
-  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? ORDER BY c.candidate_id FOR UPDATE`,
+  candidatesById: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.candidate_id = ANY(${IDS}) AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id`,
+  batchForUpdate: `SELECT ${CANDIDATE_COLUMNS} FROM d1_private.file_candidates c WHERE c.link_batch_id = ? AND ${FILE_OWNER_MATCHES} ORDER BY c.candidate_id FOR UPDATE`,
   // Bindings: decided_by, link_kind, collection, junction id, batch id, adopt (boolean), candidate id. Only a candidate still 'new' changes.
   markLinked:
     "UPDATE d1_private.file_candidates SET state = 'linked', decided_at = now(), decided_by = ?, link_kind = ?, linked_collection = ?,"
@@ -354,6 +360,9 @@ export const SQL = {
     + ' acquired_at, sources, flags, read_by, read_at, corrected_by, corrected_at FROM d1_private.sem_image_settings WHERE directus_files_id = ?',
   semAccessLogInsert: 'INSERT INTO d1_private.sem_settings_access_log (directus_files_id, read_by_user, reason) VALUES (?, ?, ?)',
   semCorrect: 'SELECT d1_private.correct_sem_setting(?, ?, ?::jsonb, ?)',
+  // Undo runs before migration 197 can have been applied (the extension reloads the moment the files are pulled, the migration is a separate step):
+  // is there a settings table yet? Asked by undo; only a positive answer is remembered.
+  semTableExists: "SELECT to_regclass('d1_private.sem_image_settings') IS NOT NULL AS available",
   // Undo: a file's settings go only when NO row is left in any of the four tables that link a file (a file linked twice keeps them while one link
   // stands). Binding: the file ids as one csv.
   deleteUnlinkedSemSettings: `DELETE FROM d1_private.sem_image_settings s WHERE s.directus_files_id = ANY(${IDS})${
@@ -556,7 +565,7 @@ const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers; { scans: true }: the surface_scans table exists, so
 // undecided surface scan files that already have a scan are left out). Everything a client chose is a binding.
 export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false } = {}) {
-  const where = [];
+  const where = [FILE_OWNER_MATCHES];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
   if (f.owner?.kind === 'me') { where.push('c.owner_person_id = ?'); bindings.push(mine ? scope.personId : null); }
@@ -869,6 +878,15 @@ export function mount(router, context, deps = {}) {
     const [row] = rowsOf(await db.raw(SQL.scanTableExists, []));
     scansKnown = row?.available === true;
     return scansKnown;
+  }
+
+  // Is the settings table (migration 197) there? Only a yes is remembered, so applying 197 under a running server takes effect at the next undo.
+  let semTableKnown = false;
+  async function semTableAvailable(db = database) {
+    if (semTableKnown) return true;
+    const [row] = rowsOf(await db.raw(SQL.semTableExists, []));
+    semTableKnown = row?.available === true;
+    return semTableKnown;
   }
 
   // -- who is asking -------------------------------------------------------------------------------------------------------
@@ -1331,7 +1349,8 @@ export function mount(router, context, deps = {}) {
         }
       }
       // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
-      await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
+      // (before migration 197 there is no table to delete from: an undo must still work then)
+      if (await semTableAvailable(trx)) await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
       const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
       // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
       if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);

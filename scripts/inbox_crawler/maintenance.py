@@ -22,7 +22,7 @@ that is missing while they do answer is genuinely missing: skipped, not counted 
 count, `scan.MAX_CONSECUTIVE_FAILURES` of them in a row abort the pass. Rows already committed stay committed.
 
 `sem_backfill` (spec section 7) gives the images people linked BEFORE settings were saved at link time their
-imaging settings: pointer rows that are linked, image-typed, unowned and have no `sem_image_settings` row. Each
+imaging settings: pointer rows that are linked, image-typed (owned or not) and have no `sem_image_settings` row. Each
 is read, classified, and when it is an SEM image `save_sem_settings` (migration 197, the only place `extracted`
 becomes settings, merging and never overwriting a person's correction) writes the row. A run visits each row
 once (it walks the files ids in order), a row that got settings leaves the list, so a killed run is finished by
@@ -304,7 +304,7 @@ def sem_backfill(
     stop=lambda: False,
     batch: int = BATCH,
 ) -> BackfillStats:
-    """Read each linked, unowned, image-typed pointer row that has no settings and save what the image says.
+    """Read each linked, image-typed pointer row (owned or not) that has no settings and save what the image says.
     One commit per file. The path is the row's metadata.archive_path, believed only when it is clean and the
     row's id is the indexer's uuid5 of it (any Lab Member can edit the metadata). Marks nothing (an unreadable
     row is simply listed again by the next run); the share guard is the reclassify pass's."""

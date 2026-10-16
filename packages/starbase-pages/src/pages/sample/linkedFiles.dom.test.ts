@@ -234,3 +234,34 @@ describe('files that have no settings', () => {
 		expect(items()[0].querySelector('a')).not.toBeNull();
 	});
 });
+
+describe('a record with many images (final review I3)', () => {
+	it('never has more than 4 settings requests in flight for 10 files mounted at once, and every file still gets its answer', async () => {
+		let inFlight = 0;
+		let peak = 0;
+		let asked = 0;
+		const owner = fx('sem_settings_owner');
+		const api = {
+			get: () => {
+				asked += 1;
+				inFlight += 1;
+				peak = Math.max(peak, inFlight);
+				return new Promise((resolve) =>
+					setTimeout(() => {
+						inFlight -= 1;
+						resolve({ data: owner.body });
+					}, 5),
+				);
+			},
+			patch: () => Promise.reject(new Error('unexpected')),
+			post: () => Promise.reject(new Error('unexpected')),
+			put: () => Promise.reject(new Error('unexpected')),
+			delete: () => Promise.reject(new Error('unexpected')),
+		} as unknown as HostApi;
+		mount(Array.from({ length: 10 }, (_, i) => upload(`img-${i}.tif`, `00000000-0000-4000-8000-00000000${String(4000 + i)}`)), api);
+		await vi.waitFor(() => expect(document.querySelectorAll('[data-test="sem-settings"]')).toHaveLength(10));
+		expect(asked).toBe(10);
+		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBe(4);
+	});
+});

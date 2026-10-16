@@ -77,8 +77,9 @@ stopped, 1 also when another crawler holds the lock or the pass failed, 2 for a 
   run starts over from the first row (a re-read row looks like any other). Backlog **SEM6**.
 - **`--sem-backfill`.** Images people linked before settings were saved at link time have no imaging settings. This
   pass takes the pointer rows (`directus_files`) that are image-typed (extension `.tif .tiff .jpg .jpeg .png .bmp`),
-  linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, unowned (no
-  provenance owner: a linked file stays unowned) and without a row in `d1_private.sem_image_settings`; it reads each
+  linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, owned or
+  not (an owned file linked in Data Studio, or linked before `--reclassify`, has no settings either; who may read
+  them is d1-inbox's rule, not the back-fill's) and without a row in `d1_private.sem_image_settings`; it reads each
   one, and when it is an SEM image calls `d1_private.save_sem_settings(<file id>, extracted, 'backfill')`, the one
   function that turns `extracted` into settings. That function merges: a value the read does not carry keeps its
   stored value, and a value a person corrected (`sources.<field> = 'manual'`) is never overwritten, so a run
@@ -198,7 +199,11 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   are an active member of; a person with neither fails the request with *no folder to scan*.
 - **Alias changes.** The crawler's cached rows are tied to their owner. If a person's alias or a team's share
   folder changes during a scan, that owner's unfinished work is dropped; a folder handed to someone else is a
-  first scan for them.
+  first scan for them. **The new holder does not get the old holder's files:** the old holder's undecided
+  candidates are deleted, and a file whose pointer row is stamped to another person or team gets no candidate for
+  the new holder (the log says `not registering <path>: its file is stamped to another owner`, or `N file(s)
+  stamped to another owner left out of the inbox` for a folder); `d1-inbox` hides and refuses such a candidate as
+  well. See "An alias handed to someone else" below.
 - **The indexer.** `make index-archive` and the crawler share `directus_files` pointer rows. The indexer's
   missing sweep now only judges file types it walks, so crawler-only rows (`.al3d`, other types) are left
   alone (rows flagged missing by an older run stay flagged: clear `metadata.missing` by hand if it matters).
@@ -224,6 +229,34 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   adopted. It keys on that candidate row, not on `directus_files.metadata.found_by`, which the indexer's next
   run overwrites and any Lab Member can edit. `--phase all` stays a superset of `--phase linked`.
 
+## An alias handed to someone else
+
+A `uni_alias` (or `share_folder`) moved from person A to person B, or typed wrongly and corrected, leaves the files
+under that folder stamped to A (`directus_files.owner_person_id`), because the owner is the person, never the
+folder name (ADR-0022 D13). B's Inbox does not list them and B cannot read them (migration 196's filter). That is
+the safe outcome when the folder really changed hands, but wrong when the alias was only mistyped on A, or the files
+in the folder are in fact B's. An administrator re-stamps them by SQL, as the database owner, after checking who the
+files belong to. **Describe, check, then run; this is not something the crawler does:**
+
+```sql
+-- how many files would move (the alias is the folder name, <base> is Users or INBOX_PERSON_DIR)
+SELECT count(*) FROM directus_files
+WHERE owner_person_id = '<wrong person id>' AND metadata->>'archive_path' LIKE '<base>/<alias>/%';
+-- then
+UPDATE directus_files SET owner_person_id = '<right person id>'
+WHERE owner_person_id = '<wrong person id>' AND metadata->>'archive_path' LIKE '<base>/<alias>/%';
+-- and the candidates follow the files, so the new holder's Inbox lists them; run it in the same transaction
+UPDATE d1_private.file_candidates c SET owner_person_id = '<right person id>'
+FROM directus_files f WHERE f.id = c.directus_files_id AND f.owner_person_id = '<right person id>'
+  AND c.owner_person_id = '<wrong person id>' AND c.state IN ('new', 'gone', 'dismissed');
+SELECT d1_private.file_readers_drift_count();   -- 0 afterwards: the readers table follows the owner column
+```
+
+Escape `_` and `%` in an alias with a backslash in the `LIKE` pattern. A team folder is the same with
+`owner_team_id` and `Shared/<folder>`. Candidates the old holder had already deleted are not recreated by the
+re-stamp: run `make inbox-crawler-once` (or *Rescan my folder*) afterwards, and the new holder's scan registers
+what is missing now that the files are theirs. Backlog **SEM11**.
+
 ## When something looks wrong
 
 - *Badge stays at 0 / nothing found:* the admin tab shows the heartbeat and the last scan. A person with no
@@ -243,6 +276,39 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   `tests/scripts/test_inbox_crawler_world.py`). What only the real share can show is in
   [the physical test backlog](./physical-test-backlog.md) (IF1 to IF14, IF15 onward, and the IF20 to IF23 and
   IF30 to IF33 groups that other streams own).
+
+## Upgrading to the SEM reader (migrations 196 and 197, ADR-0022)
+
+**Why the order matters.** `docker-compose.yml` sets `EXTENSIONS_AUTO_RELOAD: "true"` and bind-mounts
+`./core/extensions`, so a running Directus **hot-loads whatever the pull puts there**: the new `d1-inbox` reads
+`directus_files.owner_person_id` and `owner_team_id` (migration 196) in every list, link and summary query and the
+`d1_private.sem_image_settings` table (migration 197) in the settings routes and in link and undo of an SEM image.
+Loaded before the migrations it answers 500. Directus also reads relations and permissions at start-up and caches
+them (this compose file sets no `CACHE_*`; Redis here holds the rq queues of the workers, so **never `FLUSHALL`**
+it: restarting Directus is the flush), so the readers alias that migration 196 adds is unknown to it until it
+restarts. Nothing of this may be visible to a running Directus: it is stopped before the pull and started once,
+after the migrations. Do it in a quiet window and tell members first.
+
+1. **Back up** (`make backup`) and try the whole sequence **on a copy first**, ending with backlog **SEM3** (two
+   accounts and a locked file) and **SEM5** (the migrations on a copy of the production database).
+2. **Stop the crawler and Directus:** `docker compose --profile archive stop inbox-crawler` and
+   `docker compose stop directus`.
+3. **Pull and build:** `git pull && npm ci && npm run build:extensions`.
+4. **Migrate:** `make migrate`, then `make migrate-status` (no pending). Check
+   `SELECT d1_private.file_readers_drift_count();` is 0 (migration 196 back-fills about 82,000 owner stamps: time it).
+5. **Start Directus** (`docker compose up -d directus`: a fresh start is the permissions and relations flush) and run
+   the SEM3 checks as two Lab Members and an administrator before anyone else comes back.
+6. **Build STARbase:** `npm run build:starbase` (it shows the imaging settings and the locked file).
+7. **Restart the crawler** (`docker compose --profile archive up -d inbox-crawler`; it stamps owners from now on;
+   OCR also needs backlog **SEM7**).
+8. **Re-read the existing images:** with the daemon stopped again (see "One-shot passes"),
+   `python -m inbox_crawler --reclassify` (backlog **SEM6**), then `python -m inbox_crawler --sem-backfill`
+   (**SEM5**, **SEM13**), then start the daemon again. Backlog **SEM15** walks this sequence on a copy.
+
+Note on `INBOX_PERSON_DIR`: the lab share's folder of personal folders is `User`, not the spec's `Users`, so with the
+compose default every `Users/<alias>` in this runbook and in the backlog reads `User/<alias>` (and the stored paths in
+`metadata.archive_path` and `file_candidates.rel_path` begin with whatever the setting was when the file was registered:
+do not change it on a database that already has candidates).
 
 ## Rolling back
 
@@ -264,3 +330,25 @@ linked is lost. Export what cannot be recomputed first:
 After re-applying 193 and 194 and restoring those values, every owner gets a first scan, and everything it finds
 shows as *Older* (backlog): the dismissals and *Recently linked* history are gone, but files linked through the
 Inbox stay linked.
+
+## Rolling back the SEM reader (197, 196)
+
+Order: **the crawler, then the extension, then 197, then 196, then restart.** Newer migrations come off first, so
+this section applies before the one above (194 and 193).
+
+1. `docker compose --profile archive stop inbox-crawler`. When it starts again, run the previous commit's crawler (the
+   older one never writes owner columns or settings, and would register files unowned).
+2. Put the previous `core/extensions/d1-inbox` back (`git checkout <previous commit> -- core/extensions/d1-inbox`), so no
+   route reads `sem_image_settings` or the owner columns while they are being dropped. With `EXTENSIONS_AUTO_RELOAD`
+   Directus loads it at once; stop Directus (`docker compose stop directus`) first if the old extension must not meet the
+   new schema for a moment.
+3. `make migrate-down` once (197) and check `make migrate-status`; again for 196. **Both are lossy.** 197 drops the stored
+   imaging settings, the owners' manual corrections and the administrators' access log, and `file_candidates.classified_by`.
+   196 drops every owner stamp and the readers table and restores the saved `directus_files` permission rows, so files
+   that were owned are readable by every member again. Dump what cannot be recomputed first:
+   `d1_private.sem_image_settings`, `d1_private.sem_settings_access_log`, and
+   `SELECT id, owner_person_id, owner_team_id FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL`.
+4. `docker compose up -d directus` (a restart clears the cached relations and permissions), then the crawler.
+
+Until step 3 has run, undo in the Inbox keeps working with the settings table gone (the extension checks
+`to_regclass('d1_private.sem_image_settings')` first); link and the list do not work without the owner columns.

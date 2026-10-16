@@ -773,6 +773,15 @@ class Store:
                 ),
             )
             if not inserted:
+                if self.owned_by_other([fid], owner):
+                    # A folder that changed hands (C1): the pointer row is stamped to the person or team the
+                    # file came from. The new holder gets no candidate for it, like a linked file gets none.
+                    with self.conn.cursor() as cur:
+                        cur.execute("RELEASE SAVEPOINT register_file")
+                    log.info(
+                        "not registering %s: its file is stamped to another owner", rel
+                    )
+                    return RegisterResult(None, False)
                 # The indexer's (or an older crawler's) pointer row: it takes the owner's stamp now, unless it
                 # is linked or already stamped (see stamp_owner).
                 self.stamp_owner(fid, owner)
@@ -839,6 +848,21 @@ class Store:
             (owner.id, todo),
         )
 
+    def owned_by_other(self, files_ids: list[str], owner: Owner) -> set[str]:
+        """Which of these pointer-row ids are stamped to a person or team other than `owner` (a folder that
+        changed hands: its files stay with whoever they came from, ADR-0022 D13). An unstamped row, or one
+        stamped to this owner, is not in the answer."""
+        if not files_ids:
+            return set()
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        rows = self._all(
+            "SELECT id::text FROM directus_files WHERE id = ANY(%s::uuid[]) "
+            "AND (owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL) "
+            "AND NOT COALESCE(" + col + " = %s, false)",
+            (files_ids, owner.id),
+        )
+        return {r[0] for r in rows}
+
     def stamp_owner(self, files_id: str, owner: Owner) -> bool:
         """`stamp_owners` for one file: True when this call set the stamp."""
         return self.stamp_owners([files_id], owner) > 0
@@ -873,6 +897,16 @@ class Store:
                 cur.execute(
                     "DELETE FROM file_candidates WHERE candidate_id = %s",
                     (new.candidate_id,),
+                )
+                # A moved file keeps its FIRST owner (ADR-0022 D13): the new pointer row takes the old one's
+                # stamp (both columns together, the table's one-owner CHECK), so the readers follow it and the
+                # old row's deletion below does not leave the file unowned.
+                cur.execute(
+                    "UPDATE directus_files n SET owner_person_id = o.owner_person_id, "
+                    " owner_team_id = o.owner_team_id FROM directus_files o "
+                    "WHERE o.id = %s AND n.id = %s "
+                    "AND (o.owner_person_id IS NOT NULL OR o.owner_team_id IS NOT NULL)",
+                    (old.directus_files_id, new.directus_files_id),
                 )
                 fks = index_archive.find_file_fk_columns(cur)
                 left = index_archive.repoint_file_references(
@@ -1068,15 +1102,16 @@ class Store:
     ) -> list[tuple[str, str]]:
         """Pointer rows the SEM back-fill may read: image-typed (an extension of fs_readonly.IMAGE_EXTENSIONS),
         linked in one of the four tables migration 196 counts (the three junctions and surface_scans, the same
-        set as `already_linked`), unowned (both owner columns null) and without a `sem_image_settings` row.
+        set as `already_linked`) and without a `sem_image_settings` row. Owned or not: who may read a file's
+        settings is enforced by d1-inbox, not here, and an owned file linked in Data Studio (or before
+        `--reclassify`) has none either.
         Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
         so one run visits each row once; the caller checks the path is the file's own before it reads
         anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
         exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
         rows = self._all(
             "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
-            "WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL "
-            "  AND f.metadata::jsonb->>'archive_path' ~* %s "
+            "WHERE f.metadata::jsonb->>'archive_path' ~* %s "
             "  AND " + self._linked_in_junction("f.id") + " "
             "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
             "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "

@@ -7,6 +7,25 @@ export const ONLY_OWNER_TEXT = "Only the file's owner can correct this.";
 
 export type SemState = 'loading' | 'locked' | 'none' | 'settings' | 'error';
 
+/** The most settings requests in flight at once, across every file on the page: a record with many images mounts one item each. */
+export const MAX_CONCURRENT_LOADS = 4;
+let inFlight = 0;
+const waiting: Array<() => void> = [];
+/** A turn at the shared cap: resolves when fewer than MAX_CONCURRENT_LOADS requests are open. The caller must `release()` exactly once. */
+function acquire(): Promise<void> {
+	if (inFlight < MAX_CONCURRENT_LOADS) {
+		inFlight += 1;
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => waiting.push(resolve));
+}
+/** Hands the slot to the longest waiter (first in, first out), or frees it. */
+function release(): void {
+	const next = waiting.shift();
+	if (next) next();
+	else inFlight -= 1;
+}
+
 const readOf = (a: SemSettingsAnswer | null): SemSettingsRead | null => (a && !a.locked && a.settings ? (a as SemSettingsRead) : null);
 
 /**
@@ -40,11 +59,16 @@ export function createSemSettings(api: HostApi, fileId: () => string) {
 		error.value = '';
 		editing.value = null;
 		fieldError.value = null;
+		await acquire();
 		try {
+			// moved on (a newer load, or an unmount) while it waited its turn: no request at all
+			if (!gate.isCurrent(token)) return;
 			const a = await getSemSettings(api, id);
 			if (gate.isCurrent(token)) answer.value = a;
 		} catch (e) {
 			if (gate.isCurrent(token)) error.value = errorText(e, 'Could not load the imaging settings.');
+		} finally {
+			release();
 		}
 	}
 

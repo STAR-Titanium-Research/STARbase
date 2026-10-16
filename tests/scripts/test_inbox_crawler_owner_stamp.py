@@ -235,8 +235,168 @@ def test_alias_handed_to_someone_else_does_not_move_the_file(world):
     run(world)
     assert owner_of(world, rel) == (a, None)  # still A's file
     assert owner_of(world, "Users/aaa11/b_new.png") == (b, None)
+    # C1: B's inbox does not list A's file: the candidate of the old holder is dropped and not re-made
+    assert (
+        world.one("SELECT count(*) FROM file_candidates WHERE rel_path = %s", (rel,))[0]
+        == 0
+    )
     assert world.one(
-        "SELECT owner_person_id::text FROM file_candidates WHERE rel_path = %s", (rel,)
-    ) == (
-        b,
-    )  # B's inbox lists it (the candidate follows the folder), the file stays A's
+        "SELECT owner_person_id::text FROM file_candidates WHERE rel_path = %s",
+        ("Users/aaa11/b_new.png",),
+    ) == (b,)
+
+
+def test_handover_leaves_the_new_holders_inbox_without_the_old_ones_files(world):
+    """C1: a folder that changes hands: every scan of B leaves A's files out of B's inbox, however often
+    the folder is listed, and A's pointer rows and linked candidates are untouched."""
+    a, _ = world.person("aaa11")
+    old = "Users/aaa11/sem/old.png"
+    kept = "Users/aaa11/sem/kept.png"
+    world.write(old, png((1, 1, 1)))
+    world.write(kept, png((3, 3, 3)))
+    settle(world)
+    world.commit()
+    run(world)
+    # A linked `kept` in Data Studio's way: the candidate row is A's and stays
+    world.q(
+        "UPDATE file_candidates SET state = 'linked', link_kind = 'manual', "
+        "linked_collection = 'physical_samples', linked_junction_id = gen_random_uuid(), "
+        "link_batch_id = gen_random_uuid() WHERE directus_files_id = %s",
+        (str(file_id(kept)),),
+    )
+    world.q("UPDATE people SET uni_alias = 'gone1' WHERE person_id = %s", (a,))
+    b, _ = world.person("aaa11")
+    world.write("Users/aaa11/sem/b_new.png", png((2, 2, 2)))
+    settle(world)
+    world.commit()
+    for n in range(2):  # a second scan changes nothing either
+        os.utime(Path(world.root, "Users/aaa11/sem"), (OLD + 60 + n, OLD + 60 + n))
+        world.commit()
+        run(world)
+    rows = world.q(
+        "SELECT rel_path, owner_person_id::text, state FROM file_candidates "
+        "WHERE owner_person_id = %s ORDER BY rel_path",
+        (b,),
+    )
+    assert rows == [("Users/aaa11/sem/b_new.png", b, "new")]
+    assert owner_of(world, old) == (a, None)
+    assert owner_of(world, kept) == (a, None)
+    assert world.q(
+        "SELECT rel_path, state FROM file_candidates WHERE owner_person_id = %s", (a,)
+    ) == [(kept, "linked")]
+
+
+def test_register_file_refuses_a_candidate_for_a_file_stamped_to_someone_else(
+    world, caplog
+):
+    a, _ = world.person("aaa11")
+    b, _ = world.person("bbb22")
+    tid = world.team("Machining")
+    store = db.Store(world.conn)
+    register(store, person_owner(a, "aaa11"), "Users/aaa11/a.png")
+    world.q("DELETE FROM file_candidates")
+    for owner in (person_owner(b, "aaa11"), team_owner(tid, "aaa11")):
+        with caplog.at_level("INFO"):
+            res = register(store, owner, "Users/aaa11/a.png")
+        assert (res.candidate_id, res.created) == (None, False)
+    assert world.one("SELECT count(*) FROM file_candidates")[0] == 0
+    assert owner_of(world, "Users/aaa11/a.png") == (a, None)
+    assert "stamped to another owner" in caplog.text
+    # the same owner still gets its candidate (an unstamped or own row is fine)
+    assert register(store, person_owner(a, "aaa11"), "Users/aaa11/a.png").created
+
+
+# ---- a moved owned file keeps its owner and leaves no ghost (I1) ---------------------------------
+
+
+def readers(world, rel):
+    return world.q(
+        "SELECT user_id::text FROM file_readers WHERE directus_files_id = %s",
+        (str(file_id(rel)),),
+    )
+
+
+def drift(world):
+    return world.one(f"SELECT {world.schema}.file_readers_drift_count()")[0]
+
+
+def test_a_file_moved_inside_a_personal_folder_leaves_no_ghost_and_keeps_its_owner(
+    world, caplog
+):
+    pid, uid = world.person("abc12de", user=True)
+    old, new = "Users/abc12de/sem/a.png", "Users/abc12de/archive/a_moved.png"
+    world.write(old, png((1, 1, 1)))
+    settle(world)
+    world.commit()
+    run(world)
+    assert readers(world, old) == [(uid,)]  # the readers table is part of the world
+    os.makedirs(Path(world.root, "Users/abc12de/archive"))
+    os.rename(Path(world.root, old), Path(world.root, new))
+    world.commit()
+    with caplog.at_level("WARNING"):
+        stats, _, _ = run(world)
+    assert stats.repointed == 1
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    assert (
+        world.one(
+            "SELECT count(*) FROM directus_files WHERE id = %s", (str(file_id(old)),)
+        )[0]
+        == 0
+    )
+    assert owner_of(world, new) == (pid, None)  # the first owner, carried over
+    assert readers(world, new) == [(uid,)]
+    assert readers(world, old) == []
+    assert drift(world) == 0
+    assert world.one(
+        "SELECT rel_path, owner_person_id::text, state FROM file_candidates"
+    ) == (new, pid, "new")
+
+
+def test_a_file_moved_inside_a_team_folder_keeps_the_team_and_its_readers(world):
+    tid = world.team("Machining")
+    pid, uid = world.person("abc12de", user=True)
+    world.member(tid, pid)
+    old, new = "Shared/Machining/a.png", "Shared/Machining/old/a_moved.png"
+    os.makedirs(
+        Path(world.root, "Users")
+    )  # the share guard wants the personal-folder base
+    world.write(old, png((1, 1, 1)))
+    settle(world)
+    world.commit()
+    run(world)
+    os.makedirs(Path(world.root, "Shared/Machining/old"))
+    os.rename(Path(world.root, old), Path(world.root, new))
+    world.commit()
+    stats, _, _ = run(world)
+    assert stats.repointed == 1
+    assert owner_of(world, new) == (None, tid)
+    assert readers(world, new) == [(uid,)]
+    assert (
+        world.one(
+            "SELECT count(*) FROM directus_files WHERE id = %s", (str(file_id(old)),)
+        )[0]
+        == 0
+    )
+    assert drift(world) == 0
+
+
+def test_repoint_carries_the_first_owner_to_a_new_row_that_has_none(world):
+    pid, uid = world.person("abc12de", user=True)
+    store = db.Store(world.conn)
+    old, new = "Users/abc12de/a.png", "Users/abc12de/b/a.png"
+    o = register(store, person_owner(pid, "abc12de"), old)
+    n = register(store, person_owner(pid, "abc12de"), new)
+    world.q(
+        "UPDATE directus_files SET owner_person_id = NULL WHERE id = %s",
+        (str(file_id(new)),),
+    )
+    assert readers(world, new) == []
+    assert store.repoint_candidate(
+        db.Cand(o.candidate_id, str(file_id(old)), old, "new", "image"),
+        db.Cand(n.candidate_id, str(file_id(new)), new, "new", "image"),
+        1,
+        T0,
+    )
+    assert owner_of(world, new) == (pid, None)
+    assert readers(world, new) == [(uid,)]
+    assert drift(world) == 0
