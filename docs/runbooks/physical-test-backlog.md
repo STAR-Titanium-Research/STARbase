@@ -2222,6 +2222,17 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   in IF5) even though the folder is ignored, and its *Recently linked* row to stay; a found image under the same
   folder that has a failed hash is not retried, and an exact short-ID image there is not offered to auto-link
   (the crawler log with `INBOX_LOG_LEVEL=DEBUG` shows no open of it). Since: ignored folders (crawler, IB).
+- [ ] **IF80 — Ignoring a folder from the Inbox page, on real data (STARbase `/inbox`, and inside Data Studio).** As a Lab
+  Member with found files in a subfolder, open *New*, choose *Ignore this folder* beside a row. Expect the confirm to name
+  the folder relative to your own folder (no `Users/<alias>/`) and to say that files move to Dismissed, linked files stay
+  linked and nothing on the share changes. Confirm: expect the notice to give the real count, the files to leave *New*
+  and the badge to drop by that count, the files to be under *Dismissed* (Restore works), and the rule under *Ignored
+  folders*. A file in a team folder: the rule is the team's, and a teammate sees it listed with the team name. *Remove
+  rule* in the notice, and *Remove* in the list, both work; the next scan (or the queued rescan) lists the folder again.
+  Type an ignored folder again in another letter case, a lookalike (`Name 2`), and `Users/<alias>/Name`: expect the
+  first to be refused (already ignored), the lookalike to be accepted, and the last to say to give it relative to your own folder. As a Lab
+  Viewer: the rules are listed, *Remove* is off with the reason, and there is no *Ignore this folder* and no add field.
+  Since: ignored folders (STARbase, IC).
 
 ## Done
 
