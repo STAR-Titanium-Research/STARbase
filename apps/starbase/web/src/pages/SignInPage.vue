@@ -30,7 +30,7 @@ async function submit() {
 		await session.signIn(email.value.trim(), password.value);
 		await router.replace(next());
 	} catch (e) {
-		error.value = signInErrorText(e);
+		error.value = await signInErrorText(e);
 	} finally {
 		busy.value = false;
 	}

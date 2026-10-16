@@ -51,13 +51,13 @@ async function submit() {
 		try {
 			await session.signIn(email.value, password.value);
 		} catch (e) {
-			error.value = signInErrorText(e);
+			error.value = await signInErrorText(e);
 			setButNotSignedIn.value = true;
 			return;
 		}
 		await router.replace('/');
 	} catch (e) {
-		error.value = unreachableText(e);
+		error.value = await unreachableText(e);
 	} finally {
 		busy.value = false;
 	}

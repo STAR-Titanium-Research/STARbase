@@ -93,13 +93,13 @@ export function createSession(api: AxiosInstance, probe: () => Promise<boolean> 
 			res = await me();
 		} catch (e) {
 			if (classifyLoadError(e) === 'unreachable') {
-					restarting.value = await looksRestarting(e, probe);
-					return (state.value = 'unreachable');
-				}
+				restarting.value = await looksRestarting(e, probe);
+				return (state.value = 'unreachable');
+			}
 			// No session, or only its access token lapsed: one renewal decides.
 			const renewed = await refreshSession(api);
 			if (renewed === 'unreachable') {
-				restarting.value = false;
+				restarting.value = await probe();
 				return (state.value = 'unreachable');
 			}
 			if (renewed === 'refused') {
@@ -111,7 +111,7 @@ export function createSession(api: AxiosInstance, probe: () => Promise<boolean> 
 			} catch (again) {
 				if (classifyLoadError(again) === 'unreachable') {
 					restarting.value = await looksRestarting(again, probe);
-					return (state.value = 'unreachable');
+				return (state.value = 'unreachable');
 				}
 				markSignedOut();
 				return state.value;
@@ -183,10 +183,10 @@ export function providerLoginUrl(directusUrl: string, provider: string, appOrigi
 	return `${directusUrl.replace(/\/+$/, '')}/auth/login/${encodeURIComponent(provider)}?redirect=${encodeURIComponent(back)}`;
 }
 
-export function signInErrorText(e: unknown): string {
+export async function signInErrorText(e: unknown, probe?: () => Promise<boolean>): Promise<string> {
 	if (e instanceof Error && e.message === SESSION_NOT_KEPT) return SESSION_NOT_KEPT;
 	const err = e as AxiosError<{ errors?: { message?: string }[] }>;
-	if (!err?.response || isRestarting(e)) return unreachableText(e);
+	if (!err?.response || isRestarting(e)) return unreachableText(e, probe);
 	if (err.response.status === 401) return 'Wrong email or password.';
 	return err.response.data?.errors?.[0]?.message || 'Sign-in failed.';
 }

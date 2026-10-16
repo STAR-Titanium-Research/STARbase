@@ -46,8 +46,8 @@ export async function resetPassword(api: AxiosInstance, token: string, password:
 }
 
 /** The text for a reset request that failed (no answer, or a refused reset_url). */
-export function requestErrorText(e: unknown): string {
+export async function requestErrorText(e: unknown, probe?: () => Promise<boolean>): Promise<string> {
 	const err = e as AxiosError<{ errors?: { message?: string }[] }>;
-	if (!err?.response || isRestarting(e)) return unreachableText(e);
+	if (!err?.response || isRestarting(e)) return unreachableText(e, probe);
 	return err.response.data?.errors?.[0]?.message || 'Could not send the reset e-mail.';
 }

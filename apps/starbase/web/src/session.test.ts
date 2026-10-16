@@ -134,12 +134,12 @@ describe('providers', () => {
 });
 
 describe('error texts', () => {
-	it('sign-in failures say what to do', () => {
-		expect(signInErrorText({ response: { status: 401, data: {} } })).toBe('Wrong email or password.');
-		expect(signInErrorText({ message: 'Network Error' })).toMatch(/Can't reach the database/);
-		expect(signInErrorText({ response: { status: 503, data: {} } })).toMatch(/under maintenance/);
-		expect(signInErrorText({ response: { status: 429, data: { errors: [{ message: 'Too many requests' }] } } })).toBe('Too many requests');
-		expect(signInErrorText(new Error(SESSION_NOT_KEPT))).toBe(SESSION_NOT_KEPT);
+	it('sign-in failures say what to do', async () => {
+		expect(await signInErrorText({ response: { status: 401, data: {} } })).toBe('Wrong email or password.');
+		expect(await signInErrorText({ message: 'Network Error' }, async () => false)).toMatch(/Can't reach the database/);
+		expect(await signInErrorText({ response: { status: 503, data: {} } })).toMatch(/under maintenance/);
+		expect(await signInErrorText({ response: { status: 429, data: { errors: [{ message: 'Too many requests' }] } } })).toBe('Too many requests');
+		expect(await signInErrorText(new Error(SESSION_NOT_KEPT))).toBe(SESSION_NOT_KEPT);
 	});
 	it("an SSO return shows Directus's reason", () => {
 		expect(ssoErrorText('INVALID_CREDENTIALS')).toBe('Directus did not accept that account.');

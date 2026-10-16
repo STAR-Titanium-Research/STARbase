@@ -104,7 +104,7 @@ export const isRestarting = (e: unknown): boolean => [502, 503, 504].includes((e
 
 export const CANT_REACH_TEXT = "Can't reach the database. Check that Tailscale is connected on this device, then try again.";
 export const MAINTENANCE_TEXT = 'The database is under maintenance, probably restarting. Try again in a moment.';
-export const unreachableText = (e: unknown): string => (isRestarting(e) ? MAINTENANCE_TEXT : CANT_REACH_TEXT);
+export const unreachableText = async (e: unknown, probe?: () => Promise<boolean>): Promise<string> => ((await looksRestarting(e, probe)) ? MAINTENANCE_TEXT : CANT_REACH_TEXT);
 
 // Is STARbase's own origin (another tailnet node than d1-server) answering? Opaque is enough: a resolved
 // no-cors fetch means this device is on the tailnet and online, so a silent d1-server is down, not us offline.

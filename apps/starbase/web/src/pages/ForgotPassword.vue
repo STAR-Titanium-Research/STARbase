@@ -23,7 +23,7 @@ async function submit() {
 		await requestPasswordReset(api, email.value.trim(), window.location.origin);
 		sent.value = true;
 	} catch (e) {
-		error.value = requestErrorText(e);
+		error.value = await requestErrorText(e);
 	} finally {
 		busy.value = false;
 	}
