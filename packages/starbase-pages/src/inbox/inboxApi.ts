@@ -368,8 +368,11 @@ export function parseSemAnswer(b: unknown): SemSettingsAnswer {
 	return { locked: false, settings, sources: asRecord(r.sources) ?? {}, flags: asRecord(r.flags) ?? {}, can_edit: r.can_edit === true };
 }
 
+/** A settings read that never answers must not hold one of the page's concurrent-load slots for ever. */
+export const SEM_SETTINGS_TIMEOUT_MS = 30_000;
+
 export const getSemSettings = (api: HostApi, fileId: string): Promise<SemSettingsAnswer> =>
-	call(() => api.get(`${BASE}/sem-settings`, { params: { file: fileId } }), parseSemAnswer);
+	call(() => api.get(`${BASE}/sem-settings`, { params: { file: fileId }, timeout: SEM_SETTINGS_TIMEOUT_MS }), parseSemAnswer);
 
 /** The owner corrects one setting (`value` is a number, text or an ISO time with its offset); the answer is the settings again with the field `manual`. */
 export const correctSemSetting = (api: HostApi, fileId: string, field: string, value: number | string): Promise<SemSettingsAnswer> =>
