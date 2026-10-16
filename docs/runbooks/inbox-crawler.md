@@ -16,10 +16,59 @@ make inbox-crawler-once   # one scan of everyone, then exit
 docker compose --profile archive logs -f inbox-crawler
 ```
 
-**One crawler at a time.** At start the daemon and `--once` take a Postgres advisory lock on their own
-connection. `make inbox-crawler-once` refuses to run while the daemon holds the lock (it logs that and exits 1):
-stop the daemon first with `docker compose --profile archive stop inbox-crawler`. A second daemon exits 1 the
-same way. The lock goes with the process, so a killed daemon never leaves it behind.
+**One crawler at a time.** At start the daemon, `--once`, `--reclassify` and `--sem-backfill` take a Postgres
+advisory lock on their own connection. `make inbox-crawler-once` (or either pass) refuses to run while the daemon
+holds the lock (it logs that and exits 1): stop the daemon first with `docker compose --profile archive stop
+inbox-crawler`. A second daemon exits 1 the same way. The lock goes with the process, so a killed daemon never
+leaves it behind.
+
+## One-shot passes: `--reclassify` and `--sem-backfill`
+
+Two more modes, beside `--daemon` and `--once` (exactly one per run). The maintainer starts them by hand, with the
+daemon stopped (see the lock above), the same way `make inbox-crawler-once` runs a scan:
+
+```sh
+docker compose --profile archive stop inbox-crawler
+docker compose --profile archive run --rm inbox-crawler \
+    sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --reclassify"
+docker compose --profile archive run --rm inbox-crawler \
+    sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --sem-backfill"
+docker compose --profile archive up -d inbox-crawler
+```
+
+Both read an image only through the read-only share (`open_rb`, the allow-list applies, nothing is ever opened as
+a person's linked file), into memory, capped by `read_mb_per_s` (set when the pass starts), with `INBOX_OCR` as for
+a scan. Both commit file by file, so `SIGTERM` or a kill loses nothing: run the same command again to finish. Both
+exit 0 when they ran to their end or were stopped, 1 when another crawler holds the lock or the pass failed, 2 for
+a configuration error.
+
+- **`--reclassify`.** A detector fix changes what `kind` and `extracted` should be, but classification runs only
+  when a file is first registered. This pass re-reads the image candidates in state `new` or `dismissed` whose
+  `d1_private.file_candidates.classified_by` is not the current classifier version (`classify_sem.CLASSIFIER_VERSION`,
+  for example `sem-2`), classifies the bytes again and writes `kind`, `kind_confidence`, `extracted` and
+  `classified_by` (nothing else). A `sem_image` the new detector no longer believes becomes `image` (demoted); an
+  `image` it now recognises becomes `sem_image` (promoted); the rest are unchanged. The end of the run logs
+  `reclassify: N promoted, N demoted, N unchanged (N unreadable, N too large, N decided meanwhile)`, and each
+  promotion and demotion is logged with its path. A `linked` row is never touched, nor is a `gone` one (its file is
+  not there to read). A file that cannot be read (no permission, vanished, refused by the allow-list, or larger
+  than 64 MB) is logged as a warning and recorded as classified with the current version without changing its kind,
+  so it is not retried in a loop. A second run reads nothing. Newly scanned images get `classified_by` at
+  registration, so they are not re-read either. Backlog **SEM6**.
+- **`--sem-backfill`.** Images people linked before settings were saved at link time have no imaging settings. This
+  pass takes the pointer rows (`directus_files`) that are image-typed (extension `.tif .tiff .jpg .jpeg .png .bmp`),
+  linked in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans`, unowned (no
+  provenance owner: a linked file stays unowned) and without a row in `d1_private.sem_image_settings`; it reads each
+  one, and when it is an SEM image calls `d1_private.save_sem_settings(<file id>, extracted, 'backfill')`, the one
+  function that turns `extracted` into settings. That function merges: a value the read does not carry keeps its
+  stored value, and a value a person corrected (`sources.<field> = 'manual'`) is never overwritten, so a run
+  without `INBOX_OCR` cannot erase what an earlier run read. The path comes from `metadata.archive_path` (editable
+  by any Lab Member), so a row is read only when that path is clean and the row's id is the indexer's id for that
+  very path; any other row is logged and skipped. A run visits each row once; a row that got settings leaves the
+  list, so a killed run is finished by the next one. An unreadable file, a non-SEM image and an SEM image that gave
+  no usable value (a bar-only PNG or JPEG without OCR) write nothing and are read again by the next run, which is
+  what you want once `INBOX_OCR=1` works (backlog **SEM7**). The end of the run logs
+  `sem-backfill: N saved, N not an SEM image, N SEM images with no usable value, N unreadable, N with a path that is
+  not their own`. Backlog **SEM5**.
 
 Order of a fresh deployment: migrations (d1-server), the `d1-inbox` extension, STARbase, then the crawler.
 Set `uni_alias` on People and `share_folder` on Teams first; folders that match nobody are listed for
@@ -102,6 +151,13 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   later one has `duplicate_of` set. d1-inbox lists a copy marked *copy of* the original and hides it once its
   original is linked or dismissed (same owner) or linked (different owner); a copy is not counted in the badge.
   Documents are not hashed before they are linked, so they are never copies.
+- **The owner stamp.** A pointer row the crawler creates is written with `owner_person_id` (a file under
+  `Users/<alias>`: the person whose alias matches) or `owner_team_id` (under `Shared/<folder>`): the id of the owner
+  the scan works for, never read from the path again, so an alias handed to someone else does not move the file.
+  A pointer row that already exists (the indexer's, or one from before migration 196) with both owner columns null
+  and no link is stamped when the crawler meets it (a new candidate for it, or a known candidate in a folder the scan
+  lists). A stamp is never overwritten, not by another owner and not by the same one, and a linked file stays
+  unowned. Who may read an owned file is the Directus filter of migration 196, not the crawler.
 - **Recognition** looks for a short ID or an exact record code in the path below the owner's folder (an alias
   that looks like a short ID is not a match). Suggestions are refreshed for undecided files each scan.
 - **It never creates a link.** It never writes a link or a link bookkeeping column; the one thing it does to
