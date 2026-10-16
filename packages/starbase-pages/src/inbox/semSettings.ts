@@ -6,6 +6,8 @@
 // `check_this` when something was read and no cross-check could vouch for it). `ocr_confidence` is recorded by the crawler and never shown: it is
 // not a threshold.
 
+import { asRecord } from '@d1/ui';
+
 export type SemFieldType = 'number' | 'integer' | 'text' | 'time';
 
 export interface SemField {
@@ -20,7 +22,7 @@ export interface SemField {
 }
 
 /** Every setting in the order they are shown: the first eight are the ones a person reads first, the rest follow. */
-const FIELDS: readonly SemField[] = [
+export const FIELDS: readonly SemField[] = [
 	{ key: 'kv', label: 'kV', noun: 'kV', unit: 'kV', type: 'number' },
 	{ key: 'working_distance_mm', label: 'working distance', noun: 'working distance', unit: 'mm', type: 'number' },
 	{ key: 'magnification', label: 'magnification', noun: 'magnification', unit: '×', type: 'integer' },
@@ -35,8 +37,6 @@ const FIELDS: readonly SemField[] = [
 ];
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
-/** The settings a person can correct (all of them), in display order. */
-export const editableFields = (): readonly SemField[] => FIELDS;
 export const fieldOf = (key: string): SemField | undefined => FIELD_BY_KEY.get(key);
 
 const SOURCE_LABEL: Record<string, string> = { metadata: 'metadata', derived: 'derived', ocr: 'OCR', manual: 'manual' };
@@ -75,12 +75,10 @@ export interface SettingsView {
 	flags: Record<string, unknown>;
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-
 /** A candidate's `extracted` as a view: the object is the values, with its own `sources` and `flags` (a row from before them has neither). */
 export function extractedView(extracted: Record<string, unknown> | null | undefined): SettingsView {
-	const e = isObject(extracted) ? extracted : {};
-	return { values: e, sources: isObject(e.sources) ? e.sources : {}, flags: isObject(e.flags) ? e.flags : {} };
+	const e = asRecord(extracted) ?? {};
+	return { values: e, sources: asRecord(e.sources) ?? {}, flags: asRecord(e.flags) ?? {} };
 }
 
 // ---- formatting ----
@@ -108,6 +106,13 @@ export function ukTime(iso: string): string {
 	return `${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute} ${p.timeZoneName}`;
 }
 
+/** A magnification as "×5,000": a number is formatted, a text gets the "×" when it has none; null when there is nothing to show. */
+export function magnificationText(v: unknown): string | null {
+	if (finite(v)) return `×${v.toLocaleString(GB)}`;
+	const m = text(v);
+	return m ? (m.startsWith('×') || m.toLowerCase().startsWith('x') ? m : `×${m}`) : null;
+}
+
 /** One value as text, or null when there is nothing to show (absent, null, empty, NaN). */
 function valueText(key: string, values: Record<string, unknown>): string | null {
 	const v = values[key];
@@ -118,11 +123,8 @@ function valueText(key: string, values: Record<string, unknown>): string | null 
 		}
 		case 'working_distance_mm':
 			return finite(v) ? `${plain(v)} mm` : null;
-		case 'magnification': {
-			if (finite(v)) return `×${v.toLocaleString(GB)}`;
-			const m = text(v);
-			return m ? (m.startsWith('×') || m.toLowerCase().startsWith('x') ? m : `×${m}`) : null;
-		}
+		case 'magnification':
+			return magnificationText(v);
 		case 'spot':
 			return finite(v) ? plain(v) : null;
 		case 'scale_bar_um':
