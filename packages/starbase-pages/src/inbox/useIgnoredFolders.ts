@@ -96,8 +96,9 @@ export function createIgnoredFolders(deps: IgnoredDeps) {
 			return { ok: true };
 		} catch (e) {
 			const text = words(e, 'Could not remove that rule.');
+			// the list we hold is stale when the rule is gone: read it again first (a good read clears the error), then say why
+			if (e instanceof InboxApiError && e.status === 404) await load();
 			error.value = text;
-			if (e instanceof InboxApiError && e.status === 404) void load();
 			return { ok: false, message: text };
 		} finally {
 			removing.value = null;

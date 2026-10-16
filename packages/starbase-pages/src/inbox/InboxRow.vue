@@ -7,6 +7,7 @@ import {
 	primaryAction, sizeText, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
+import { ignoreTarget } from './ignoredFolders';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
 import PreviewDialog from './PreviewDialog.vue';
 import { useInView, usePicture } from './usePicture';
@@ -20,6 +21,8 @@ const props = defineProps<{
 	tab: 'new' | 'older' | 'linked' | 'dismissed';
 	/** Show whose Inbox it is (the person has a team folder too). */
 	showOwner: boolean;
+	/** Offer "Ignore this folder" beside the folder (the server has the route and the person may change rules). */
+	canIgnore?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'link'): void;
@@ -28,6 +31,7 @@ const emit = defineEmits<{
 	(e: 'change'): void;
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
+	(e: 'ignore'): void;
 }>();
 
 const name = computed(() => nameOf(props.file.rel_path));
@@ -38,6 +42,8 @@ const read = computed(() => extractedText(props.file.extracted));
 const copy = computed(() => duplicateText(props.file));
 const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
 const reads = computed(() => needsReadNotice(props.file.kind));
+// "Ignore this folder": only on an open file whose folder sits below its owner's root (the root itself cannot be ignored)
+const ignorable = computed(() => !!props.canIgnore && (props.tab === 'new' || props.tab === 'older') && ignoreTarget(props.file) !== null);
 
 // The icon of its kind is what a row shows when it has no picture, while none is wanted yet, and when the picture fails to load.
 const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
@@ -96,6 +102,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			</div>
 			<div class="sub">
 				<span class="folder" :title="folder">{{ folder || 'Share root' }}</span>
+				<button v-if="ignorable" type="button" class="lf-link quiet" :disabled="busy" data-test="ignore-folder" :aria-label="`Ignore the folder ${folder}`" @click="emit('ignore')">Ignore this folder</button>
 				<span v-if="meta" class="meta">{{ meta }}</span>
 				<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
 			</div>
@@ -155,6 +162,8 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 .tag.strength.weak { color: var(--d1-warn); background: color-mix(in srgb, var(--d1-warn) 14%, transparent); }
 .sub { display: flex; flex-wrap: wrap; gap: 0 12px; min-width: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .folder { min-width: 0; overflow-wrap: anywhere; }
+.quiet { font-size: var(--fs-sm, 12px); font-weight: 400; color: var(--d1-dim); white-space: nowrap; }
+.quiet:hover:not(:disabled), .quiet:focus-visible { color: var(--d1-accent, var(--theme--primary)); }
 .meta { white-space: nowrap; }
 .read { font-size: var(--fs-sm, 12px); color: var(--theme--foreground); }
 .copy { font-size: var(--fs-sm, 12px); color: var(--d1-dim); font-style: italic; }
