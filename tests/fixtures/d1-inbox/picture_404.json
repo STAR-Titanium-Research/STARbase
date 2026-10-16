@@ -1,0 +1,19 @@
+{
+  "description": "no picture for that id: the file is not the caller's to see, does not exist, is gone, has no picture, or the id is not a uuid (one answer for all, a JSON error)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files/00000000-0000-4000-8000-000000001001/thumb"
+  },
+  "status": 404,
+  "body": {
+    "errors": [
+      {
+        "message": "There is no picture for that file.",
+        "extensions": {
+          "code": "NOT_FOUND",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

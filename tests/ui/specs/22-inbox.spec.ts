@@ -7,7 +7,7 @@ import { foundFile, sampleFiles, stubInbox, type InboxStub } from '../starbase/s
 
 // The Inbox (found files: spec 2026-10-15-found-files-inbox-design.md) in STARbase, in a real browser: the sidebar entry and its badge, Home's
 // panel, the /inbox page (rows with the reason, Link and Undo, Accept all with its confirm, the surface-scan row and its Add a surface scan
-// dialog (desktop and phone width), Other files, Rescan and its 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
+// dialog (desktop and phone width), Other files, Ignore this folder and the Ignored folders section, Rescan and its 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
 // (tests/ui/starbase/stubD1.ts for the shell, stubInbox.ts for d1-inbox, the same fake the vitest page tests use), so this needs only STARbase
 // served by `vite preview` (tests/ui/README.md), no Directus and no backend.
 // Run: cd tests/ui && npx playwright test specs/22-inbox.spec.ts   (INBOX_SHOTS=<dir> also saves screenshots there)
@@ -24,7 +24,7 @@ async function start(browser: Browser, path: string, width = 1280, opts: Paramet
 	const context = await browser.newContext({ viewport: { width, height: 900 } });
 	const page = await context.newPage();
 	const errors = watchErrors(page);
-	// No thumbnails in v1 (Directus cannot serve a pointer row): the page must never ask the asset route for a found file.
+	// Pictures come from d1-inbox as blobs (the crawler's small copies): the page must never ask Directus's asset route for a found file.
 	page.on('request', (r) => { if (r.url().startsWith(`${D1_BASE}/assets/`)) assetRequests.push(r.url()); });
 	await stubD1(context);
 	const inbox = await stubInbox(context, opts);
@@ -89,8 +89,11 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan h
 	await expect(row(page, '9ab3c4d5_B2.tif')).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
 	await expect(row(page, 'plain.tif').locator('[data-test="suggestion"]')).toHaveCount(0);
 
-	// No thumbnail: every row shows the icon of its kind, and nothing was asked of the asset route.
-	await expect(page.locator('[data-test="inbox-row"] img')).toHaveCount(0);
+	// A file the crawler stored a picture for shows it (a button); every other row shows the icon of its kind; nothing was asked of the asset route.
+	await expect(first.locator('button[data-test="thumb"]')).toHaveAccessibleName('View 3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="inbox-row"] button[data-test="thumb"] img')).toHaveCount(2);
+	await expect(row(page, 'plain.tif').locator('button[data-test="thumb"]')).toHaveCount(0);
+	await expect(row(page, 'edge1.al3d').locator('button[data-test="thumb"]')).toHaveCount(0);
 	expect(assetRequests).toEqual([]);
 
 	const scan = row(page, 'edge1.al3d');
@@ -106,6 +109,124 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan h
 	await expect(other).toContainText('Linking reads this file once to fingerprint it.');
 	await shot(page, 'inbox-new');
 	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+const thumb = (page: Page, name: string) => row(page, name).locator('button[data-test="thumb"]');
+const preview = (page: Page) => page.locator('[data-test="preview-dialog"]');
+/** The picture really decoded (a blob: URL under the production CSP can be blocked, which leaves a broken image). */
+const decoded = (img: ReturnType<Page['locator']>) => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
+
+test('a thumbnail appears in the row, a click opens the full view with its facts and the reduced-size line, and Esc closes it with focus back on the thumbnail', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { previewDelayMs: 800 });
+	const btn = thumb(page, '9ab3c4d5_B2.tif');
+	await expect(btn.locator('img')).toBeVisible();
+	await expect.poll(() => decoded(btn.locator('img'))).toBe(true);
+	await shot(page, 'inbox-thumbnails');
+	// only the two rows with a picture asked for one, and as the signed-in session (a blob request to d1-inbox, never an <img src> to it)
+	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/thumb'))).toHaveLength(2);
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog).toBeVisible();
+	await expect(dialog.getByRole('heading', { name: '9ab3c4d5_B2.tif' })).toBeVisible();
+	await expect(dialog).toContainText('Users/ab1cd/sem');
+	await expect(dialog).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
+	await expect(dialog.locator('[data-test="preview-note"]')).toHaveText('Reduced-size preview. The original stays on the share.');
+	// while the preview loads: a spinner, and the thumbnail enlarged behind it
+	await expect(dialog.locator('[data-test="preview-loading"]')).toBeVisible();
+	await expect(dialog.locator('[data-test="preview-thumb"]')).toBeVisible();
+	// the dialog is outside the page frame (teleported to <body>), so it must bring the --d1-* tokens itself: its hairline and spinner colour resolve
+	await expect(dialog).toHaveCSS('border-top-width', '1px');
+	await expect(dialog.locator('.pv-spinner')).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
+	await shot(page, 'preview-loading');
+	const image = dialog.locator('[data-test="preview-image"]');
+	await expect(image).toBeVisible();
+	await expect.poll(() => decoded(image)).toBe(true);
+	await expect(dialog.locator('[data-test="preview-loading"]')).toHaveCount(0);
+	await shot(page, 'preview-open');
+	await page.keyboard.press('Escape');
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('the full view closes on a click outside and on Close, keeps Tab inside, and a second open asks again', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox');
+	const btn = thumb(page, '3fa9c1d2_A1.tif');
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.keyboard.press('Tab');
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.keyboard.press('Shift+Tab');
+	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+	await page.mouse.click(5, 5);
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	await btn.click();
+	await expect(dialog).toBeVisible();
+	await dialog.getByRole('button', { name: 'Close' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(btn).toBeFocused();
+	await page.context().close();
+});
+
+test('a preview that fails says so and Retry loads it; a thumbnail that fails leaves the kind icon, quietly', async ({ browser }) => {
+	const { page, inbox } = await start(browser, '/inbox', 1280, { previewFails: 1 });
+	await thumb(page, '3fa9c1d2_A1.tif').click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-error"]')).toContainText('The preview could not be loaded.');
+	await expect(dialog.locator('[data-test="preview-note"]')).toBeVisible();
+	await shot(page, 'preview-error');
+	await dialog.getByRole('button', { name: 'Retry' }).click();
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await expect(dialog.locator('[data-test="preview-error"]')).toHaveCount(0);
+	// Retry took itself away: focus went to Close, not to the page; the one status region stays and says so
+	await expect(dialog.locator('[data-test="preview-close"]')).toBeFocused();
+	await expect(dialog.getByRole('status')).toHaveText('Preview ready.');
+	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/preview'))).toHaveLength(2);
+	await page.context().close();
+
+	const failing = await start(browser, '/inbox', 1280, { thumbFails: true });
+	await expect.poll(() => failing.inbox.pictureStats.thumbs).toBe(2);
+	await expect(failing.page.locator('[data-test="inbox-row"] button[data-test="thumb"]')).toHaveCount(0);
+	await expect(row(failing.page, '3fa9c1d2_A1.tif').locator('.thumb')).toBeVisible();
+	await expect(failing.page.locator('[role="alert"]')).toHaveCount(0);
+	await failing.page.context().close();
+});
+
+test('a thumbnail clicked while it still shimmers and then fails stays under its preview, and focus lands on the row\'s first button when the preview closes', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox', 1280, { thumbFails: true, pictureDelayMs: 700 });
+	const first = row(page, '3fa9c1d2_A1.tif');
+	const btn = thumb(page, '3fa9c1d2_A1.tif');
+	await expect(btn).toHaveAttribute('data-state', 'loading');
+	await btn.click();
+	const dialog = preview(page);
+	await expect(dialog).toBeVisible();
+	await expect.poll(() => btn.getAttribute('data-state')).toBe('failed');
+	await expect(btn).toHaveCount(1);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(dialog).toHaveCount(0);
+	await expect(btn).toHaveCount(0);
+	await expect(first.locator('.buttons button').first()).toBeFocused();
+	await page.context().close();
+});
+
+test('the full view fits a phone screen', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox', 390);
+	await thumb(page, '3fa9c1d2_A1.tif').click();
+	const dialog = preview(page);
+	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
+	const box = (await dialog.boundingBox())!;
+	expect(box.x).toBeGreaterThanOrEqual(0);
+	expect(box.x + box.width).toBeLessThanOrEqual(390);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+	await shot(page, 'preview-phone');
+	await dialog.getByRole('button', { name: 'Close' }).click();
+	await expect(dialog).toBeHidden();
 	await page.context().close();
 });
 
@@ -211,6 +332,154 @@ test('Add a surface scan works at phone width: the dialog fits the screen and Co
 	await confirm.click();
 	await expect(dialog).toBeHidden();
 	expect(inbox.scans).toHaveLength(1);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+const ignoreBadge = (page: Page) => page.locator('aside').getByRole('link', { name: /^Inbox/ }).locator('[data-test="nav-badge"] [aria-hidden]');
+const confirmLines = [
+	'The crawler stops looking for new files in sem and below.',
+	'Files there that are still in your Inbox (2 found files shown here) move to Dismissed. You can restore them.',
+	'Files already linked stay linked and tracked. Nothing on the share is changed.',
+];
+
+test('Ignore this folder: the confirm says what happens, the files below leave New and the badge follows, Dismissed holds them, and Remove rule takes the rule off', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox');
+	await expect(ignoreBadge(page)).toHaveText('5');
+	const first = row(page, '3fa9c1d2_A1.tif');
+	await first.locator('[data-test="ignore-folder"]').click();
+	const dialog = page.getByRole('dialog');
+	await expect(dialog.locator('[data-test="ignore-title"]')).toHaveText('Stop scanning sem?');
+	await expect(dialog.locator('[data-test="ignore-line"]')).toHaveText(confirmLines);
+	await shot(page, 'ignore-confirm');
+	// Cancel changes nothing
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toHaveCount(0);
+	expect(inbox.rules).toEqual([]);
+	// and focus is back on the button that opened it (Cancel, then Esc)
+	await expect(first.locator('[data-test="ignore-folder"]')).toBeFocused();
+	await first.locator('[data-test="ignore-folder"]').click();
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(dialog).toHaveCount(0);
+	await expect(first.locator('[data-test="ignore-folder"]')).toBeFocused();
+	expect(inbox.rules).toEqual([]);
+
+	await first.locator('[data-test="ignore-folder"]').click();
+	await dialog.getByRole('button', { name: 'Stop scanning' }).click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring sem. 2 found files moved to Dismissed.');
+	await expect(page.locator('[data-test="remove-rule"]')).toHaveText('Remove rule');
+	// the row is gone: focus is on the status line that says so
+	await expect(page.locator('[data-test="status"]')).toBeFocused();
+	await expect.poll(() => names(page)).toEqual(['plain.tif', 'edge1.al3d']);
+	await expect(ignoreBadge(page)).toHaveText('3');
+	expect(inbox.rules.map((r) => r.folder)).toEqual(['sem']);
+	await expect(page.locator('[data-test="ignored-toggle"]')).toContainText('(1)');
+	await shot(page, 'ignore-notice');
+
+	// the files are in Dismissed, where Restore is
+	await page.locator('[data-test="tab-dismissed"]').click();
+	await expect.poll(() => names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif']);
+	await expect(row(page, '3fa9c1d2_A1.tif').getByRole('button', { name: 'Restore' })).toBeVisible();
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+
+	await page.locator('[data-test="remove-rule"]').click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Stopped ignoring sem. A rescan is queued');
+	expect(inbox.rules).toEqual([]);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Ignored folders: lists the rules, adds one by typing (checked first, the server\'s words for the rest) and removes one', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { ignoredRules: [{ folder: 'Archive/2024' }] });
+	const toggle = page.locator('[data-test="ignored-toggle"]');
+	await expect(toggle).toContainText('Show ignored folders (1)');
+	await toggle.click();
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['Archive/2024']);
+	// the folders of the rows on screen are the choices
+	await expect(page.locator('#ignored-choices option')).toHaveCount(3);
+	const input = page.locator('[data-test="ignored-input"]');
+	await input.fill('misc//x');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('The folder has an empty part (two slashes in a row).');
+	expect(inbox.calls.filter((c) => c.method === 'post' && c.path === '/d1-inbox/ignored-folders')).toHaveLength(0);
+	await input.fill('Users/ab1cd/misc');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('Give the folder relative to your own folder, without Users/ab1cd/.');
+	await input.fill('archive/2024');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="ignored-problem"]')).toHaveText('That folder is already ignored.');
+	await input.fill('misc');
+	await page.locator('[data-test="ignored-add"]').click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring misc. 1 found file moved to Dismissed.');
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['Archive/2024', 'misc']);
+	await expect(input).toHaveValue('');
+	await expect.poll(() => names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif', 'edge1.al3d']);
+	await shot(page, 'ignored-section');
+	await page.locator('[data-test="ignored-rule"]').filter({ hasText: 'Archive/2024' }).getByRole('button', { name: 'Remove' }).click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Stopped ignoring Archive/2024.');
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['misc']);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Remove of a rule that another rule still covers says so and does not promise a rescan', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { ignoredRules: [{ folder: 'sem' }, { folder: 'sem/runs' }] });
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['sem', 'sem/runs']);
+	await page.locator('[data-test="ignored-rule"]').filter({ hasText: 'sem/runs' }).getByRole('button', { name: 'Remove' }).click();
+	const notice = page.locator('[data-test="notice"]');
+	await expect(notice).toContainText('Rule removed. sem/runs is still ignored by another rule (sem).');
+	await expect(notice).not.toContainText(/rescan|next scan|listed again/i);
+	await expect(page.locator('[data-test="ignored-folder"]')).toHaveText(['sem']);
+	expect(inbox.rules.map((r) => r.folder)).toEqual(['sem']);
+	await shot(page, 'ignored-still-covered');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a Lab Viewer with no rules at all has no Ignore this folder and no add field either', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { viewer: true });
+	await expect.poll(() => names(page)).toContain('3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-empty"]')).toHaveText('No folders are ignored.');
+	await expect(page.locator('[data-test="ignored-readonly"]')).toHaveText('You can see these rules but not change them.');
+	await expect(page.locator('[data-test="ignored-input"]')).toHaveCount(0);
+	await expect(page.locator('[data-test="ignored-add"]')).toHaveCount(0);
+	expect(inbox.calls.some((c) => c.method === 'post')).toBe(false);
+	await shot(page, 'ignored-viewer-no-rules');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a Lab Viewer sees the rules, cannot remove them, and has no Ignore this folder', async ({ browser }) => {
+	const { page, errors } = await start(browser, '/inbox', 1280, { viewer: true, ignoredRules: [{ folder: 'Archive/2024' }] });
+	await expect.poll(() => names(page)).toContain('3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="ignore-folder"]')).toHaveCount(0);
+	await page.locator('[data-test="ignored-toggle"]').click();
+	await expect(page.locator('[data-test="ignored-remove"]')).toBeDisabled();
+	await expect(page.locator('[data-test="ignored-readonly"]')).toHaveText('You can see these rules but not change them.');
+	await expect(page.locator('[data-test="ignored-input"]')).toHaveCount(0);
+	await shot(page, 'ignored-viewer');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Ignore this folder fits a phone screen: the confirm shows all its text and Stop scanning can be reached', async ({ browser }) => {
+	const { page, errors } = await start(browser, '/inbox', 390);
+	await row(page, '3fa9c1d2_A1.tif').locator('[data-test="ignore-folder"]').click();
+	const dialog = page.getByRole('dialog');
+	await expect(dialog.locator('[data-test="ignore-line"]')).toHaveText(confirmLines);
+	const confirm = dialog.getByRole('button', { name: 'Stop scanning' });
+	await expect(confirm).toBeInViewport();
+	// the dialog opens with a short animation: wait for it to settle before measuring
+	const card = dialog.locator('.confirm');
+	await expect.poll(async () => { const b = (await card.boundingBox())!; return b.x >= 0 && b.x + b.width <= 390; }).toBe(true);
+	await shot(page, 'ignore-confirm-phone');
+	await confirm.click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Ignoring sem.');
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 	expect(errors).toEqual([]);
 	await page.context().close();
 });

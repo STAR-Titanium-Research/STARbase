@@ -50,10 +50,10 @@ export function kindLabel(kind: FileKind): string {
 }
 
 /**
- * No thumbnail in v1: a found file is a pointer row (storage 'star') whose bytes Directus cannot serve, and serving share bytes through
- * Directus is out of scope (spec section 13). Every row shows its kind's icon, and the page asks the asset route for nothing.
+ * Whether the row shows a picture of the file: only when the crawler stored one (an older server leaves the field out). Directus cannot serve a
+ * found file's own bytes (a pointer row), so the pictures are the small copies d1-inbox serves, never the file itself (spec section 14).
  */
-export const hasThumbnail = (_kind: FileKind): boolean => false;
+export const hasThumbnail = (file: Pick<FoundFile, 'has_thumbnail'>): boolean => file.has_thumbnail === true;
 
 export const KIND_FILTER_ITEMS: ReadonlyArray<{ value: string; text: string }> = [
 	{ value: 'any', text: 'Any kind' },

@@ -1,0 +1,37 @@
+{
+  "description": "the caller's own rules and their teams', each with its owner (can_remove true, meta.can_change true)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/ignored-folders"
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "ignored_id": "00000000-0000-4000-8000-000000009402",
+        "folder": "Old runs",
+        "owner": {
+          "kind": "team",
+          "id": "00000000-0000-4000-8000-000000000021",
+          "name": "SEM team"
+        },
+        "created_at": "2026-10-16T09:30:00.000Z",
+        "can_remove": true
+      },
+      {
+        "ignored_id": "00000000-0000-4000-8000-000000009401",
+        "folder": "World-Ti Paper/Drafts",
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "created_at": "2026-10-16T08:00:00.000Z",
+        "can_remove": true
+      }
+    ],
+    "meta": {
+      "can_change": true
+    }
+  }
+}

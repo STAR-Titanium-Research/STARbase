@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
 import {
-	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, PICTURE_TIMEOUT_MS, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 } from './inboxApi';
 import { createFakeInbox, exactMatch, foundFile } from './fakeInboxServer';
 
@@ -26,6 +26,84 @@ describe('parseFile', () => {
 	});
 });
 
+describe('has_thumbnail', () => {
+	it('is read as a boolean: true only when the server says true, and a server that leaves it out means no picture', () => {
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: true })!.has_thumbnail).toBe(true);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: false })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1' })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: 'yes' })!.has_thumbnail).toBe(false);
+		expect(parseFile({ candidate_id: 'c1', has_thumbnail: 1 })!.has_thumbnail).toBe(false);
+	});
+});
+
+describe('loadPicture', () => {
+	const withPictures = (over: Parameters<typeof createFakeInbox>[0] = {}) => createFakeInbox({ files: [foundFile({ has_thumbnail: true }), foundFile()], ...over });
+
+	it('fetches the thumb and the preview as blobs with the session (a GET with responseType blob) and answers an object URL', async () => {
+		const fake = withPictures();
+		const get = vi.spyOn(fake.api, 'get');
+		const create = vi.spyOn(URL, 'createObjectURL');
+		const id = fake.files[0].candidate_id;
+		const thumb = await loadPicture(fake.api, id, 'thumb');
+		const preview = await loadPicture(fake.api, id, 'preview');
+		expect(thumb).toMatch(/^blob:/);
+		expect(preview).toMatch(/^blob:/);
+		expect(thumb).not.toBe(preview);
+		expect(get.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+			[`/d1-inbox/files/${id}/thumb`, { responseType: 'blob', timeout: PICTURE_TIMEOUT_MS }],
+			[`/d1-inbox/files/${id}/preview`, { responseType: 'blob', timeout: PICTURE_TIMEOUT_MS }],
+		]);
+		expect(create).toHaveBeenCalledTimes(2);
+		expect((create.mock.calls[0][0] as Blob).type).toBe('image/png');
+		URL.revokeObjectURL(thumb);
+		URL.revokeObjectURL(preview);
+		create.mockRestore();
+	});
+
+	it('a file with no picture, or one the caller cannot see, is an InboxApiError 404 (the fake answers the same for both)', async () => {
+		const fake = withPictures();
+		await expect(loadPicture(fake.api, fake.files[1].candidate_id, 'thumb')).rejects.toMatchObject({ name: 'InboxApiError', status: 404 });
+		await expect(loadPicture(fake.api, '00000000-0000-4000-8000-00000000dead', 'preview')).rejects.toMatchObject({ status: 404 });
+	});
+
+	it('a server error carries its status and does not leak an object URL', async () => {
+		const fake = withPictures({ thumbFails: true });
+		const create = vi.spyOn(URL, 'createObjectURL');
+		await expect(loadPicture(fake.api, fake.files[0].candidate_id, 'thumb')).rejects.toMatchObject({ status: 500 });
+		expect(create).not.toHaveBeenCalled();
+		create.mockRestore();
+	});
+
+	it('a request that stalls fails after 30 s like any other (no status), so it cannot hold a queue slot for good', async () => {
+		vi.useFakeTimers();
+		try {
+			const fake = withPictures({ pictureHangs: true });
+			const create = vi.spyOn(URL, 'createObjectURL');
+			let outcome: unknown = 'pending';
+			loadPicture(fake.api, fake.files[0].candidate_id, 'preview').then((u) => (outcome = u), (e) => (outcome = e));
+			await vi.advanceTimersByTimeAsync(PICTURE_TIMEOUT_MS - 1);
+			expect(outcome).toBe('pending');
+			await vi.advanceTimersByTimeAsync(1);
+			expect(outcome).toBeInstanceOf(InboxApiError);
+			expect(outcome).toMatchObject({ message: 'The picture could not be loaded.', status: undefined });
+			expect(create).not.toHaveBeenCalled();
+			create.mockRestore();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('an answer that is not a picture (JSON, an empty body, text) is refused', async () => {
+		const answer = (data: unknown) => ({ get: vi.fn(async () => ({ data })) }) as unknown as HostApi;
+		await expect(loadPicture(answer({ data: [] }), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		await expect(loadPicture(answer(new Blob([])), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		await expect(loadPicture(answer(new Blob(['<html>'], { type: 'text/html' })), 'c1', 'thumb')).rejects.toBeInstanceOf(InboxApiError);
+		const url = await loadPicture(answer(new Uint8Array([1, 2, 3]).buffer), 'c1', 'thumb');
+		expect(url).toMatch(/^blob:/);
+		URL.revokeObjectURL(url);
+	});
+});
+
 describe('filesParams', () => {
 	it('sends only what is set', () => {
 		expect(filesParams({ tab: 'new', kind: '', folder: undefined, limit: 50, offset: 0 })).toEqual({ tab: 'new', limit: 50, offset: 0 });
@@ -40,7 +118,7 @@ describe('against the fake server (d1-inbox\'s shapes)', () => {
 		expect(s).toMatchObject({ newCount: 3, olderMatches: 0, person: { has_alias: true } });
 	});
 
-	it('loadFiles pages by tab and kind with the total; it never asks for meta.acceptable', async () => {
+	it('loadFiles pages by tab and kind with the total; meta.acceptable only comes with acceptable=1', async () => {
 		const fake = sample();
 		const pictures = await loadFiles(fake.api, { tab: 'new', kind: 'sem_image,surface_scan,image' });
 		expect(pictures.rows).toHaveLength(2);

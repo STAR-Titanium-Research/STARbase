@@ -3,8 +3,8 @@
 `world` builds, in a uniquely named schema that is dropped afterwards, the tables the crawler touches: stand-ins
 for what Directus owns (`directus_files`, `directus_folders`, `directus_users`; a migrated database only has
 one-column stubs), small stand-ins for `people`, `teams` and the three record tables, and the REAL migrations
-for `file_fingerprints` (T0e) and the inbox (193, with `d1_private.` pointed at the throwaway schema). It
-touches nothing else in the database. The "share" is a directory under tmp_path.
+for `file_fingerprints` (T0e), the inbox (193) and the thumbnails table (198), with `d1_private.` pointed at the
+throwaway schema. It touches nothing else in the database. The "share" is a directory under tmp_path.
 
 Skipped when DATABASE_URL is unset or unreachable (CI sets REQUIRE_DB_TESTS=1, which turns a skip into a
 failure, see conftest.py). A few smoke tests at the bottom check the fixture itself.
@@ -26,6 +26,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 DSN = os.environ.get("DATABASE_URL")
 FINGERPRINTS = ROOT / "db/migrations/20261010000159_file_fingerprints.sql"
 INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
+IGNORED = (
+    ROOT / "db/migrations/20261016000199_inbox_ignored_dirs.sql"
+)  # stream IA of the ignored folders plan
+THUMBNAILS = (
+    ROOT / "db/migrations/20261016000198_file_thumbnails.sql"
+)  # stream A of the thumbnails plan
 FILE_MTIME = 1_500_000_000  # the default modification time of a file the tests put on the fake share
 
 
@@ -130,6 +136,20 @@ class World:
     def commit(self):
         self.conn.commit()
 
+    def ignore(self, folder, *, person=None, team=None):
+        """Add an ignore rule (a folder relative to the owner's root) for a person or a team."""
+        self.q(
+            "INSERT INTO inbox_ignored_dirs (owner_person_id, owner_team_id, rel_folder) VALUES (%s, %s, %s)",
+            (person, team, folder),
+        )
+
+    def unignore(self, folder, *, person=None, team=None):
+        self.q(
+            "DELETE FROM inbox_ignored_dirs WHERE lower(rel_folder) = lower(%s) "
+            "AND coalesce(owner_person_id, owner_team_id) = %s",
+            (folder, person or team),
+        )
+
     def write(self, rel, content=b"x", mtime=None):
         """Put a file in the fake share (test setup only: the crawler itself never writes)."""
         p = Path(self.root, *rel.split("/"))
@@ -164,6 +184,8 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
+        cur.execute(migration_up(THUMBNAILS, schema))
+        cur.execute(migration_up(IGNORED, schema))
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:
@@ -187,6 +209,7 @@ def test_the_world_has_the_real_inbox_tables(world):
         "inbox_scan_requests",
         "inbox_crawler_state",
         "inbox_prefs",
+        "file_thumbnails",
     } <= names
     assert world.one("SELECT count(*) FROM inbox_crawler_state")[0] == 1
 

@@ -2,10 +2,19 @@
 
 For each owner (a person's `Users/<uni alias>`, a team's `Shared/<share folder>`) the walk stats every
 directory it knows from `inbox_dirs` (one cheap call) and lists only those whose modification time moved.
-New files are classified and recognised and registered as candidates; the first complete scan of an owner
+New files are classified and recognised and registered as candidates (an image's thumbnails are made from the
+bytes already in hand and stored in the same transaction, spec section 14); the first complete scan of an owner
 marks everything it finds `origin='backlog'` and then sets `baselined_at`. A file that vanished from a
 changed directory becomes `gone` (undecided candidates only), unless a new file with the same content
 turned up, which re-points the row. A share that drops mid-scan aborts the scan and marks nothing gone.
+
+Ignored folders (spec section 15): a folder that is ignored, and everything below it, is NOT SCANNED: it is
+neither listed nor statted, no file in it is opened, and, unlike an empty folder, it never makes a candidate
+`gone` (any state), nor loses its cache rows. A rule only ever makes the crawler read less, so the owner's
+rules are read when the crawler starts the owner and again before each folder it lists, before each batch of
+registrations and (at most every RULES_TTL_S) before each file it reads: a rule added while a big folder is
+walked stops the walk of it within a batch, and nothing is registered, classified or thumbnailed under a rule
+found at that moment. One small query each time, never one per file.
 
 Everything that touches the share goes through the `share` object (a `fs_readonly.Share` or a test fake).
 The database is committed after each directory, so a killed scan loses nothing and resumes where it was.
@@ -18,7 +27,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from . import classify_sem, db, hashing, kinds, owners, recognise
+from . import classify_sem, db, hashing, kinds, owners, recognise, thumbs
 from .fs_readonly import ReadRefused
 from .identity import file_id
 
@@ -39,6 +48,9 @@ COMMIT_EVERY = 50
 # A file modified this recently (or dated this far ahead: a clock a little off) may still be being written:
 # it is left for the next scan rather than registered with a partial size and hash.
 RECENT_FILE_S = 5.0
+# While files are read, the owner's rules are looked up again when the last look is older than this (a
+# big file through a slow throttle takes minutes, so the per-batch look alone can be stale).
+RULES_TTL_S = 5.0
 
 _IGNORED_NAMES = frozenset({"thumbs.db", "desktop.ini", ".ds_store"})
 _IGNORED_PREFIXES = (".", "~$")
@@ -130,6 +142,10 @@ class _TooNew(Exception):  # noqa: N818
     """A file changed a moment ago: not registered this scan, its folder is listed again next time."""
 
 
+class _Ignored(Exception):  # noqa: N818
+    """A rule now ignores the folder of the file being registered: nothing of it is read or written."""
+
+
 class OwnerUnavailable(Exception):  # noqa: N818
     """One owner's folder cannot be read while the share itself answers: record it, skip that owner."""
 
@@ -147,6 +163,7 @@ class ScanStats:
     gone: int = 0
     repointed: int = 0
     owners_scanned: int = 0
+    ignored_dirs: int = 0  # known folders passed over because a rule ignores them (not listed, not statted)
     aborted: bool = False
     interrupted: bool = False
     last_error: str | None = None
@@ -189,6 +206,7 @@ class Scanner:
         activity=lambda text: None,
         clock=time.monotonic,
         wall=time.time,
+        thumbnails: bool = True,
     ):
         self.share = share
         self.store = store
@@ -198,12 +216,17 @@ class Scanner:
         self.ocr_func = ocr_func
         self.bar_reader = bar_reader
         self.profiles = profiles
+        self.thumbnails = thumbnails  # INBOX_THUMBNAILS=0 turns it off
         self.stop = stop
         self.activity = activity
         self._clock = clock
         self._wall = wall
         self._last_activity = 0.0
         self._failures = 0  # consecutive failed reads
+        # The owner being scanned and its ignore rules as last read (see _load_rules)
+        self._owner: owners.Owner | None = None
+        self._rules = owners.IgnoreRules()
+        self._rules_at = float("-inf")
 
     # ---- the share is there ----------------------------------------------------------
 
@@ -267,6 +290,11 @@ class Scanner:
             stats.aborted = True
             stats.error(f"scan aborted, nothing marked gone: {exc}")
             log.warning("scan aborted: %s", exc)
+        finally:
+            self._owner = None
+            self._rules = owners.IgnoreRules()
+        if stats.ignored_dirs:
+            log.info("%d ignored folders were not scanned", stats.ignored_dirs)
         return stats
 
     def _scan(self, stats: ScanStats, person_id: str | None) -> None:
@@ -317,6 +345,24 @@ class Scanner:
             if stats.interrupted:
                 return
 
+    def _load_rules(self) -> None:
+        """Read the current owner's ignore rules again (one small query)."""
+        self._rules = self.store.load_ignored_for(self._owner)
+        self._rules_at = self._clock()
+
+    def _dir_ignored(self, path: str) -> bool:
+        """Is this share path a folder the current owner ignores (or one below it), by the rules as last read?
+        The owner's root never is."""
+        below = owners.below_root(self._owner.root, path)
+        return bool(below) and owners.is_ignored(below, self._rules)
+
+    def _ignored_now(self, path: str, *, force: bool = False) -> bool:
+        """Like _dir_ignored, after reading the rules again when `force` or when the last read is older than
+        RULES_TTL_S."""
+        if force or self._clock() - self._rules_at >= RULES_TTL_S:
+            self._load_rules()
+        return self._dir_ignored(path)
+
     def _exists(self, rel: str) -> bool:
         try:
             return self.share.stat(rel).is_dir
@@ -347,6 +393,9 @@ class Scanner:
             )
         dirs = store.load_dirs(owner)
         cands = store.load_candidates(owner)
+        self._owner = owner
+        self._load_rules()  # the rules as they are when this owner starts (and again as the walk goes on)
+        dir_ignored = self._dir_ignored
         origin = "new" if store.owner_baselined(owner) else "backlog"
         children: dict[str, set[str]] = {}
         for d in dirs:
@@ -381,6 +430,12 @@ class Scanner:
                 self._commit(owner)
                 return
             d, depth = stack.pop()
+            if dir_ignored(d):
+                # Not scanned: no stat, no listing, nothing below it is read, and nothing in it is judged
+                # (see the sweep below). The one place that keeps an ignored folder out of the walk, for
+                # folders from the cache and folders seen in a listing alike.
+                stats.ignored_dirs += 1
+                continue
             if depth > MAX_DEPTH:
                 stats.error(f"{d}: deeper than {MAX_DEPTH} levels, not scanned")
                 continue
@@ -419,6 +474,10 @@ class Scanner:
                     (c, depth + 1) for c in sorted(children.get(d, ()), reverse=True)
                 )
                 continue
+            if self._ignored_now(d, force=True):
+                # a rule was added since this scan started: it holds from now on, before the listing
+                stats.ignored_dirs += 1
+                continue
             listing_ok = self._list_dir(
                 owner,
                 d,
@@ -449,10 +508,26 @@ class Scanner:
                 for c in cands.values():
                     if c.state == "new" and c.rel_path.startswith(v + "/"):
                         lost[c.candidate_id] = c
+            # An ignored subtree is not scanned, which is not the same as empty: whatever sits under one
+            # keeps its state, even when a folder above it vanished.
+            lost = {
+                k: c
+                for k, c in lost.items()
+                if not dir_ignored(c.rel_path.rpartition("/")[0])
+            }
             lost_list = sorted(lost.values(), key=lambda c: c.rel_path)
             self._reconcile_moves(lost_list, fresh, stats, owner)
             stats.gone += store.mark_gone([c.candidate_id for c in lost_list])
-            store.forget_dirs_under(owner, vanished_dirs)
+            store.forget_dirs_under(
+                owner,
+                vanished_dirs,
+                keep=[
+                    d
+                    for d in dirs
+                    if dir_ignored(d)
+                    and any(d == v or d.startswith(v + "/") for v in vanished_dirs)
+                ],
+            )
             for d, mtime in deferred.items():  # same transaction as mark_gone
                 if not any(d == v or d.startswith(v + "/") for v in vanished_dirs):
                     store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
@@ -509,8 +584,10 @@ class Scanner:
         lost_before = len(gone) + len(vanished_dirs)
         wanted = {f"{d}/{n}" for n in subdirs}
         for known in sorted(children.get(d, ())):
-            if known not in wanted:
-                vanished_dirs.append(known)
+            if known not in wanted and not self._dir_ignored(known):
+                vanished_dirs.append(
+                    known
+                )  # (an ignored one is not judged: not scanned)
         present = {f"{d}/{e.name}" for e in files}
         for c in by_dir.get(d, ()):
             if c.state == "new" and c.rel_path not in present:
@@ -520,7 +597,15 @@ class Scanner:
         # A file already linked to a record is not a found file: do not register it at all.
         unknown = [f"{d}/{e.name}" for e in files if f"{d}/{e.name}" not in cands]
         linked = store.already_linked([str(file_id(r)) for r in unknown])
-        for e in files:
+        for seen, e in enumerate(files):
+            if seen and seen % COMMIT_EVERY == 0:
+                self._load_rules()  # once per batch of files: a rule found now stops the folder
+            if self._dir_ignored(d):
+                # A rule ignores this folder since the walk reached it: register, revive and read nothing more
+                # here. (The folder is left "seen, not listed": removing the rule lists it again.)
+                complete = False
+                stats.ignored_dirs += 1
+                break
             rel = f"{d}/{e.name}"
             known = cands.get(rel)
             if known is not None:
@@ -543,6 +628,10 @@ class Scanner:
                     False  # no error: the folder is simply listed again next scan
                 )
                 continue
+            except _Ignored:
+                complete = False
+                stats.ignored_dirs += 1
+                break
             except OSError as exc:
                 self._note_failure(exc)
                 stats.error(
@@ -607,6 +696,11 @@ class Scanner:
     # ---- one new file ----------------------------------------------------------------
 
     def _new_file(self, owner, rel, name, origin, stats) -> _Fresh | None:
+        folder = rel.rpartition("/")[0]
+        if self._ignored_now(
+            folder
+        ):  # a rule may have come in while earlier files were read
+            raise _Ignored(rel)
         st = self.share.stat(
             rel
         )  # one metadata call; raises OSError for the caller to count
@@ -636,6 +730,10 @@ class Scanner:
                 # register it with a hash that says "missing"; the folder is listed again next scan.
                 raise FileNotFoundError(rel)
             hashed = self._still_the_same(rel, st, hashed)
+            if self._ignored_now(
+                folder
+            ):  # hashing a big file takes a while: look again before using it
+                raise _Ignored(rel)
             if (
                 cls.kind == "image"
                 and hashed.data is not None
@@ -650,7 +748,25 @@ class Scanner:
                 )
                 if cls.reason.startswith("not decoded"):
                     log.info("%s is registered as a plain image: %s", rel, cls.reason)
+        pictures = None
+        pictures_failed = None
+        if (
+            self.thumbnails
+            and cls.kind in ("image", "sem_image")
+            and hashed is not None
+            and hashed.status == "done"
+            and hashed.data is not None
+        ):
+            # the bytes are already in memory (hashed and classified): no second read of the share
+            pictures = thumbs.make_thumbnails(hashed.data)
+            if pictures is None:
+                # a marker, so the backfill does not read this file again until it changes
+                pictures_failed = "not decoded"
         rec = recognise.recognise(rel, self.lookup, below=owner.root)
+        if self._ignored_now(
+            folder
+        ):  # last look: nothing under a rule found at this moment is registered
+            raise _Ignored(rel)
         result = self.store.register_file(
             owner=owner,
             rel=rel,
@@ -660,6 +776,8 @@ class Scanner:
             recognition=rec,
             origin=origin,
             hashed=hashed,
+            thumbs=pictures,
+            thumbs_failed=pictures_failed,
         )
         if not result.created or result.candidate_id is None:
             return None

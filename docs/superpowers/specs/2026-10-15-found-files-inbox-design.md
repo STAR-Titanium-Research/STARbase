@@ -363,8 +363,75 @@ Things only the real share/rig can confirm go into `docs/runbooks/physical-test-
 
 ## 13. Out of scope (v1)
 
-Thumbnails of found files: Directus declares no `star` storage, so its asset route cannot serve pointer rows, and serving share bytes through Directus is out of scope. v1 shows the kind's icon and the extracted metadata; the UI falls back quietly. A follow-up could have the crawler write small derived thumbnails (not the share) as separate files.
-
 OCR validation, instruments beyond JEOL, force/`.D1*` file recognition, GitHub resources, a general
 notification centre, a group-wide auto-link switch, scanning `Shared/` root files, file editing of any kind,
 serving share bytes through Directus.
+
+## 14. Thumbnails and full view (follow-up, 2026-10-16)
+
+Directus declares no `star` storage, so its asset route cannot serve pointer rows, and serving share bytes through
+Directus stays out of scope (Directus does not even mount the share). Instead the **crawler writes small derived
+pictures into the database**, and `d1-inbox` serves those. The share is still only read.
+
+- **Who and when.** Only kinds `image` and `sem_image` (decoded with the same limits as classification: formats TIFF,
+  JPEG, PNG, BMP; `MAX_PIXELS`; files up to `CLASSIFY_MAX_BYTES`). Documents, surface scans and everything else get none, and a
+  document is still never opened. At registration the crawler already holds the image bytes in memory (it hashes and
+  classifies them), so a new file costs no extra share read. Files registered before this existed are filled in by a
+  throttled backfill step that reads through `fs_readonly` like any other read.
+- **What.** A `thumb` (about 320 px on the long side, JPEG) for the row and a `preview` (about 1600 px, JPEG) for the
+  full view. The preview is a reduced copy, never the original: the dialog says so. Both are derived data, replaceable
+  from the share, and live in `d1_private.file_thumbnails` (not exposed in Directus). Rows go with their candidate
+  (`ON DELETE CASCADE`) and are removed when the file is marked gone. Switch off with `INBOX_THUMBNAILS=0`.
+- **Failures and staleness.** An image that cannot be decoded gets a marker row in the same table (both pictures NULL, a short
+  `failed_reason`), keyed on the file's size and modification time like a picture, so it is not read again until the file
+  changes. The backfill works only for owners the scan would scan now, below their current folder and outside ignored folders.
+  A picture is made once, when the file is first seen: a file re-saved at the same path keeps its old picture until it moves.
+- **Serving.** `GET /d1-inbox/files/:candidate_id/thumb` and `/preview` answer `image/jpeg` with the same visibility as
+  the list (a person's own Inbox and their teams'), `Cache-Control: private`, an ETag, and 404 when the caller cannot
+  see the file or it has none. `FoundFile` gains one additive field, `has_thumbnail: boolean`.
+- **UI.** A row with `has_thumbnail` shows the thumbnail in place of the icon, loaded lazily (visible rows only, a few
+  at a time) with a shimmer while it loads and the kind's icon if it fails. Clicking opens a dialog with the preview
+  (spinner while it loads, the thumbnail shown meanwhile, Esc/click outside closes, keyboard reachable). Pictures
+  are fetched with the signed-in session as blobs, so no unauthenticated URL exists.
+- **Not in v1.** Zoom/pan, thumbnails for linked records elsewhere in STARbase, `.al3d` renders, document previews.
+
+## 15. Ignored folders (follow-up, 2026-10-16)
+
+A person can tell the crawler to leave a folder alone ("ignore this folder when scanning"). Decisions, taken with the
+user's request as the only input; each is cheap to change:
+
+- **Scope.** A rule belongs to the owner of the folder it sits under: a person for their own folder, a team for its
+  team folder. A person manages their own rules; a team member manages the team's (the same people who may link a team file).
+  Table `d1_private.inbox_ignored_dirs(owner_person_id | owner_team_id, rel_folder, created_at, created_by)`; not exposed in Directus.
+- **Matching.** A rule is a folder path *relative to the owner's root* (`World-Ti Paper/Drafts`, not `Users/abc12de/...`),
+  matched on whole path parts, case-insensitively (the share is case-insensitive), covering the folder and everything under
+  it. No wildcards. The root itself cannot be ignored; no leading or trailing slash, no `.` or `..` parts, at most 200 rules per owner.
+- **Crawler.** An ignored subtree is neither listed nor statted (lower load on the share, which is the point). It
+  is *not scanned*, which is different from *empty*: the missing-file sweep must never mark candidates under it `gone`. A
+  rule is read when the crawler starts an owner and again before it lists a folder and before each batch of
+  registrations, so a rule added mid-scan stops the walk of its folder within a batch (it only ever makes the
+  crawler read less).
+- **Existing files.** Adding a rule dismisses the owner's open (`new`) candidates under it in the same transaction, as an
+  ordinary, restorable dismissal; linked files are untouched. Removing a rule resets the folder's cache rows
+  (`dir_mtime` and `last_listed_at` set to NULL for the folder and everything below it; the rows are kept, because the crawler
+  reaches a folder through its cached parent and keeps a "seen, not listed" row for every ignored folder) so the next
+  scan lists it again (queued as a rescan when the rate limit allows); files dismissed by the rule stay in Dismissed until
+  restored by hand. A rule that is removed while another rule of the same owner still covers its folder (removing `A/B`
+  while `A` is ignored) changes nothing for the crawler: the answer says `still_ignored: true`, the cache is not reset and no rescan is queued.
+- **Late files (review of the first cut).** The crawler loads the owner's rules once per scan, so it can register a file under a
+  folder that was ignored a moment ago, after the dismissal ran. The list, its count, the badge (summary) and accept-all (the preview,
+  the real run and its candidate re-reads) leave out an undecided (`new`) row that lies under one of *its owner's* rules, by one shared SQL
+  clause: the rule relative to the owner's root (the first two parts of the file's own path), whole path parts, case-insensitive, `left()`/`lower()` and
+  never `LIKE`, as two `NOT EXISTS` (person owner, team owner) so the partial indexes on the rules table serve it. Linked files under a rule stay
+  in the Linked tab, dismissed ones in Dismissed; `POST /ignored-folders` still dismisses what is open when the rule is added. Which of the owner's
+  open rows a new rule covers is decided in JS by the same matcher the tests share with the crawler (the database selects the owner's open rows only, so
+  a Postgres/JS difference in lowercasing cannot make them disagree).
+- **Endpoint.** `GET /d1-inbox/ignored-folders` (answers `{ data: [rule], meta: { can_change } }`: `can_change` is false for a Lab Viewer
+  and true for everyone else, whatever the number of rules, so the UI can hide the add controls even when the list is empty),
+  `POST /d1-inbox/ignored-folders { folder, team_id? }` (the folder is trimmed of leading and trailing whitespace first; answers the rule and how many
+  files were dismissed: every open row of the owner under it, which can include hidden copies and rows the list does not show),
+  `DELETE /d1-inbox/ignored-folders/:id` (answers `{ ignored_id, folder, still_ignored, rescan_queued }`; takes the owner's rule lock like POST).
+  Errors in the d1-record-access shape.
+- **UI.** A row's folder offers "Ignore this folder" (confirm says what happens: the files below move to Dismissed, nothing on the share
+  is touched); the Inbox gets an "Ignored folders" section listing the rules with Remove, and an add-by-picking field fed by the folders already known.
+- **Not in v1.** Wildcards or patterns, ignoring by file type, admin-wide rules.

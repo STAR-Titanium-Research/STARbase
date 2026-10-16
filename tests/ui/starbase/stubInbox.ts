@@ -17,10 +17,13 @@ const cors = {
 
 export type InboxStub = ReturnType<typeof createFakeInbox>;
 
-/** A small inbox: two exact short-ID images, an unflagged image, an exact surface scan (Accept all leaves it), a document and one older file that names a record. */
+/**
+ * A small inbox: two exact short-ID images (both with a picture, as the crawler stores one for an SEM image), an unflagged image, an exact surface scan
+ * (Accept all leaves it), a document and one older file that names a record.
+ */
 export const sampleFiles = () => [
-	exactMatch({ rel_path: 'Users/ab1cd/sem/3fa9c1d2_A1.tif' }, '3fa9c1d2', 'S-0042'),
-	exactMatch({ rel_path: 'Users/ab1cd/sem/9ab3c4d5_B2.tif', extracted: { kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' } }, '9ab3c4d5', 'S-0043'),
+	exactMatch({ rel_path: 'Users/ab1cd/sem/3fa9c1d2_A1.tif', has_thumbnail: true }, '3fa9c1d2', 'S-0042'),
+	exactMatch({ rel_path: 'Users/ab1cd/sem/9ab3c4d5_B2.tif', has_thumbnail: true, extracted: { kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' } }, '9ab3c4d5', 'S-0043'),
 	foundFile({ rel_path: 'Users/ab1cd/misc/plain.tif' }),
 	exactMatch({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/edge1.al3d' }, '77aa88bb', 'S-9'),
 	foundFile({ kind: 'document', rel_path: 'Users/ab1cd/notes.pdf' }),
@@ -37,8 +40,11 @@ export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions 
 		const params = Object.fromEntries(url.searchParams.entries());
 		const body = req.postData() ? req.postDataJSON() : undefined;
 		try {
-			const res = await (fake.api[method] as any)(url.pathname, ...(method === 'get' || method === 'delete' ? [{ params }] : [body]));
-			return route.fulfill({ status: 200, headers: cors, json: res.data });
+			const res = await (fake.api[method] as any)(url.pathname, ...(method === 'get' || method === 'delete' ? [{ params, responseType: 'blob' }] : [body]));
+			// a picture is the image itself, not JSON
+			if (res.data instanceof Blob) return route.fulfill({ status: 200, headers: { ...cors, 'cache-control': 'private, no-cache' }, contentType: res.data.type, body: Buffer.from(await res.data.arrayBuffer()) });
+			// adding an ignored folder answers 201, as the endpoint does
+			return route.fulfill({ status: method === 'post' && url.pathname === '/d1-inbox/ignored-folders' ? 201 : 200, headers: cors, json: res.data });
 		} catch (e: any) {
 			return route.fulfill({ status: e?.response?.status ?? 500, headers: cors, json: e?.response?.data ?? { errors: [{ message: String(e?.message ?? e) }] } });
 		}

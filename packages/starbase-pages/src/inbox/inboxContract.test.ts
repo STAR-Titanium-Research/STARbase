@@ -7,11 +7,11 @@
 // client's own idea of the server, which is how the two sides drifted once).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
-	InboxApiError, acceptAll, dismissFiles, filesParams, linkFiles, loadAdmin, loadFiles, loadPrefs, loadSummary, parseFile, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	InboxApiError, acceptAll, addIgnored, dismissFiles, filesParams, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile, removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 	type FilesQuery, type FoundFile,
 } from './inboxApi';
 import {
@@ -26,6 +26,8 @@ import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem
 import { createAutoLink, RECENT_LIMIT } from './useAutoLink';
 import { createInbox } from './useInbox';
 import { createInboxAdmin } from './useInboxAdmin';
+import { createIgnoredFolders } from './useIgnoredFolders';
+import { ignoredText, unignoredText } from './ignoredFolders';
 
 // ---- the fixtures and a client that replays them ----------------------------------------------------------------------------------
 
@@ -87,6 +89,10 @@ const BATCH = ID(901);
 
 const FILE_FIXTURES = ['files_new', 'files_new_acceptable', 'files_older', 'files_linked', 'files_dismissed', 'files_team_folder', 'files_empty'];
 
+/** The keys a parsed row has: every key the fixture row sends (`suggested_can_edit` only when the client keeps it). */
+const expectedKeys = (r: Record<string, unknown>, parsed: Record<string, unknown>): string[] =>
+	Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort();
+
 describe('GET /d1-inbox/files', () => {
 	it.each(FILE_FIXTURES)('%s: every row parses, key for key, and the page is read', async (name) => {
 		const f = fx(name);
@@ -99,7 +105,7 @@ describe('GET /d1-inbox/files', () => {
 		raw.forEach((r, i) => {
 			const parsed: any = page.rows[i];
 			// the client reads every key the server sends (a renamed key shows up as one the client never looks at) ...
-			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort());
+			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(expectedKeys(r, parsed));
 			// ... and gets the same value out of it (the owner is reshaped, the rest is as sent)
 			for (const k of Object.keys(r)) expect(parsed[k], `${r.candidate_id}.${k}`).toEqual(r[k]);
 		});
@@ -202,7 +208,7 @@ describe('GET /d1-inbox/files', () => {
 		expect(await loadFiles(only(fx('files_empty')).api, {})).toEqual({ rows: [], total: 0, acceptable: null });
 	});
 
-	it('meta.acceptable is read when the server sends it (only with acceptable=1, which the client never asks for)', async () => {
+	it('meta.acceptable is read when the server sends it (only with acceptable=1, which the list plan never sends)', async () => {
 		const page = await loadFiles(only(fx('files_new_acceptable')).api, {});
 		expect(page).toMatchObject({ total: 2, acceptable: 1 });
 		expect(fx('files_new').body.meta.acceptable).toBeNull();
@@ -932,7 +938,7 @@ describe('adding a surface scan', () => {
 		expect(ids(page1.rows)).toEqual(raw.map((r) => r.candidate_id));
 		raw.forEach((r, i) => {
 			const parsed: any = page1.rows[i];
-			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(Object.keys(r).filter((k) => k !== 'suggested_can_edit' || 'suggested_can_edit' in parsed).sort());
+			expect(Object.keys(parsed).sort(), r.candidate_id).toEqual(expectedKeys(r, parsed));
 			for (const k of Object.keys(r)) expect(parsed[k], `${r.candidate_id}.${k}`).toEqual(r[k]);
 		});
 		const [row] = page1.rows;
@@ -944,6 +950,178 @@ describe('adding a surface scan', () => {
 		expect(batch).toMatchObject({ id: ID(903), count: 1, kind: 'manual', scans: 1 });
 		expect(batchTitle(batch)).toBe('Added as a surface scan, 1 file');
 		expect(groupLinked(page1.rows).every((g) => g.batch !== null)).toBe(true);
+	});
+});
+
+// ---- GET /files/:id/thumb | /preview -------------------------------------------------------------------------------------------------------
+
+describe('GET /d1-inbox/files/:id/thumb and /preview', () => {
+	it('picture_headers: an image/jpeg answer becomes an object URL, asked for as a blob on the route the fixture names', async () => {
+		const f = side('picture_headers');
+		const calls: { path: string; config: any }[] = [];
+		const api = { get: async (path: string, config: any) => (calls.push({ path, config }), { data: new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: f.headers['Content-Type'] }) }) } as unknown as HostApi;
+		const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+		try {
+			expect(f.status).toBe(200);
+			expect(await loadPicture(api, ID(1001), 'thumb')).toBe('blob:test');
+			expect(await loadPicture(api, ID(1001), 'preview')).toBe('blob:test');
+		} finally {
+			create.mockRestore();
+		}
+		expect(calls.map((c) => c.path)).toEqual([`/d1-inbox/files/${ID(1001)}/thumb`, `/d1-inbox/files/${ID(1001)}/preview`]);
+		expect(f.route).toEqual(['GET /d1-inbox/files/:candidate_id/thumb', 'GET /d1-inbox/files/:candidate_id/preview']);
+		expect(calls.every((c) => c.config.responseType === 'blob')).toBe(true);
+	});
+
+	it('picture_404: one refusal for every cause, and the client fails quietly with the status', async () => {
+		const f = side('picture_404');
+		const api = { get: async () => { throw Object.assign(new Error('Request failed with status code 404'), { response: { status: f.status, data: new Blob([JSON.stringify(f.body)]) } }); } } as unknown as HostApi;
+		await expect(loadPicture(api, ID(1001), 'thumb')).rejects.toMatchObject({ name: 'InboxApiError', status: 404 });
+	});
+});
+
+// ---- ignored folders -----------------------------------------------------------------------------------------------------------------
+
+describe('ignored folders (GET / POST /d1-inbox/ignored-folders, DELETE /d1-inbox/ignored-folders/:id)', () => {
+	const PATH = '/d1-inbox/ignored-folders';
+	const errorOf = (f: Fixture) => f.body.errors[0];
+	const page = (routes: Record<string, Route>) => {
+		const r = replay(routes);
+		const said: any[] = [];
+		const changed = vi.fn();
+		const ig = createIgnoredFolders({ api: r.api, say: (n) => said.push(n), rows: () => [], onChanged: changed });
+		return { ...r, ig, said, changed };
+	};
+
+	it('ignored_get and ignored_get_empty: the rules with their owner and can_remove, ordered as the server sent them', async () => {
+		const f = fx('ignored_get');
+		const { api, calls } = only(f);
+		const rules = await listIgnored(api);
+		expect(calls[0]).toMatchObject({ method: f.request.method, path: PATH });
+		expect(rules).toEqual(f.body.data);
+		expect(rules.map((r) => [r.folder, r.owner.kind, r.can_remove])).toEqual([['Old runs', 'team', true], ['World-Ti Paper/Drafts', 'person', true]]);
+		expect(await listIgnored(only(fx('ignored_get_empty')).api)).toEqual([]);
+	});
+
+	it('ignored_get_viewer: a Lab Viewer reads the rules, can_remove is false, and the page is read-only', async () => {
+		const f = fx('ignored_get_viewer');
+		const { ig } = page({ [`GET ${PATH}`]: f });
+		await ig.load();
+		expect(ig.rules.value.every((r) => r.can_remove === false)).toBe(true);
+		expect(ig.rules.value).toHaveLength(f.body.data.length);
+		expect(ig.readOnly.value).toBe(true);
+		// the server's own word (meta.can_change) when the fixture has it, else the page judged by the rules
+		expect(ig.canChange.value).toBe(f.body.meta?.can_change ?? null);
+		// and a person who can remove is not read-only
+		const own = page({ [`GET ${PATH}`]: fx('ignored_get') });
+		await own.ig.load();
+		expect(own.ig.readOnly.value).toBe(false);
+	});
+
+	it('ignored_post_ok and ignored_post_ok_team: the request is { folder } or { folder, team_id }; the answer\'s dismissed is the count the notice says', async () => {
+		const own = fx('ignored_post_ok');
+		const a = only(own);
+		expect(await addIgnored(a.api, own.request.body.folder)).toEqual({ ...own.body.data });
+		expect(a.calls[0]).toMatchObject({ method: 'POST', path: PATH });
+		expect(a.calls[0].body).toEqual(own.request.body);
+		expect(own.status).toBe(201);
+		const team = fx('ignored_post_ok_team');
+		const b = only(team);
+		expect(await addIgnored(b.api, team.request.body.folder, team.request.body.team_id)).toEqual({ ...team.body.data });
+		expect(b.calls[0].body).toEqual(team.request.body);
+
+		// the page: the notice says the server's count and offers to remove the rule
+		const p = page({ [`POST ${PATH}`]: own, [`GET ${PATH}`]: fx('ignored_get') });
+		expect(await p.ig.add(own.request.body.folder, null)).toEqual({ ok: true });
+		expect(p.said.at(-1)).toEqual({ tone: 'ok', text: ignoredText('World-Ti Paper/Drafts', 12), removeRule: own.body.data.ignored_id });
+		expect(p.said.at(-1).text).toBe('Ignoring World-Ti Paper/Drafts. 12 found files moved to Dismissed.');
+		expect(p.changed).toHaveBeenCalledTimes(1);
+		const t = page({ [`POST ${PATH}`]: team, [`GET ${PATH}`]: fx('ignored_get') });
+		await t.ig.add(team.request.body.folder, team.request.body.team_id);
+		expect(t.said.at(-1).text).toBe('Ignoring Old runs. No found files moved to Dismissed.');
+	});
+
+	it('ignored_delete_ok and ignored_delete_ok_rate_limited: the request is the id in the path; rescan_queued says what the notice says', async () => {
+		for (const [name, queued] of [['ignored_delete_ok', true], ['ignored_delete_ok_rate_limited', false]] as const) {
+			const f = fx(name);
+			const { api, calls } = only(f);
+			const id = f.request.path.split('/').pop()!;
+			// still_ignored is read when the server sends it (toMatchObject: a server that does not yet is still_ignored false)
+			expect(await removeIgnored(api, id)).toMatchObject({ ...f.body.data });
+			expect(calls[0]).toMatchObject({ method: 'DELETE', path: f.request.path });
+			const p = page({ [`DELETE ${f.request.path}`]: f, [`GET ${PATH}`]: fx('ignored_get_empty') });
+			expect(await p.ig.removeById(id)).toEqual({ ok: true });
+			expect(p.said.at(-1)).toMatchObject({ tone: 'ok', text: unignoredText(f.body.data.folder, queued) });
+			expect(p.changed).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it('ignored_delete_ok_still_ignored: another rule still covers the folder, so no rescan and the notice says so', async () => {
+		const f = fx('ignored_delete_ok_still_ignored');
+		const id = f.request.path.split('/').pop()!;
+		expect(await removeIgnored(only(f).api, id)).toMatchObject({ still_ignored: true, rescan_queued: false });
+		const p = page({ [`DELETE ${f.request.path}`]: f, [`GET ${PATH}`]: fx('ignored_get_empty') });
+		expect(await p.ig.removeById(id)).toEqual({ ok: true });
+		expect(p.said.at(-1)).toMatchObject({ tone: 'ok', text: unignoredText(f.body.data.folder, false, true, null) });
+		expect(p.said.at(-1)?.text).not.toMatch(/rescan|next scan/i);
+	});
+
+	it('ignored_get_empty_viewer: a Lab Viewer with no rules is read-only too (the server says can_change false)', async () => {
+		const f = fx('ignored_get_empty_viewer');
+		const { ig } = page({ [`GET ${PATH}`]: f });
+		await ig.load();
+		expect(ig.rules.value).toEqual([]);
+		expect(f.body.meta.can_change).toBe(false);
+		expect(ig.canChange.value).toBe(false);
+		expect(ig.readOnly.value).toBe(true);
+	});
+
+	it('ignored_delete_404: the endpoint\'s words, shown next to the list, and the list is read again', async () => {
+		const f = fx('ignored_delete_404');
+		const id = f.request.path.split('/').pop()!;
+		const e: any = await removeIgnored(only(f).api, id).catch((x) => x);
+		expect(e).toBeInstanceOf(InboxApiError);
+		expect(e).toMatchObject({ status: 404, code: 'NOT_FOUND', message: errorOf(f).message });
+		const p = page({ [`DELETE ${f.request.path}`]: f, [`GET ${PATH}`]: fx('ignored_get') });
+		expect(await p.ig.removeById(id)).toEqual({ ok: false, message: errorOf(f).message });
+		expect(p.ig.error.value).toBe(errorOf(f).message);
+		await vi.waitFor(() => expect(p.calls.some((c) => c.method === 'GET' && c.path === PATH)).toBe(true));
+		expect(p.changed).not.toHaveBeenCalled();
+	});
+
+	it('the 400s name the folder field and carry the server\'s message (the form checks the first one before sending)', async () => {
+		for (const name of ['ignored_post_400_folder', 'ignored_post_400_root']) {
+			const f = fx(name);
+			const e: any = await addIgnored(only(f).api, f.request.body.folder).catch((x) => x);
+			expect(e, name).toMatchObject({ status: 400, code: 'INVALID_PAYLOAD', message: errorOf(f).message, extensions: { field: 'folder' } });
+		}
+		// "World-Ti Paper//Drafts" is refused by the form before anything is sent; the root path cannot be known to it, so the server's words come back
+		const empty = fx('ignored_post_400_folder');
+		const p1 = page({ [`POST ${PATH}`]: empty });
+		expect(await p1.ig.add(empty.request.body.folder, null)).toMatchObject({ ok: false, message: 'The folder has an empty part (two slashes in a row).' });
+		expect(p1.calls).toEqual([]);
+		const root = fx('ignored_post_400_root');
+		const p2 = page({ [`POST ${PATH}`]: root, [`GET ${PATH}`]: fx('ignored_get_empty') });
+		expect(await p2.ig.add(root.request.body.folder, null)).toEqual({ ok: false, message: errorOf(root).message });
+		expect(p2.said).toEqual([]);
+	});
+
+	it('403 for a team, 409 NO_FOLDER, 409 ALREADY_IGNORED and 409 TOO_MANY_RULES: the server\'s message is what the form shows, and nothing else changes', async () => {
+		for (const [name, code, status] of [
+			['ignored_post_403_team', 'FORBIDDEN', 403],
+			['ignored_post_409_no_folder', 'NO_FOLDER', 409],
+			['ignored_post_409_already_ignored', 'ALREADY_IGNORED', 409],
+			['ignored_post_409_too_many_rules', 'TOO_MANY_RULES', 409],
+		] as const) {
+			const f = fx(name);
+			const e: any = await addIgnored(only(f).api, f.request.body.folder, f.request.body.team_id).catch((x) => x);
+			expect(e, name).toMatchObject({ status, code, message: errorOf(f).message });
+			const p = page({ [`POST ${PATH}`]: f, [`GET ${PATH}`]: fx('ignored_get') });
+			expect(await p.ig.add(f.request.body.folder, f.request.body.team_id ?? null), name).toEqual({ ok: false, message: errorOf(f).message });
+			expect(p.said, name).toEqual([]);
+			expect(p.changed, name).not.toHaveBeenCalled();
+		}
+		expect(errorOf(fx('ignored_post_409_too_many_rules')).extensions.limit).toBe(200);
 	});
 });
 

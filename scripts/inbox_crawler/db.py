@@ -1,7 +1,7 @@
 """Everything the crawler reads from and writes to Postgres, in one place.
 
 Tables: `d1_private.file_candidates`, `inbox_dirs`, `inbox_scan_requests`, `inbox_crawler_state`,
-`inbox_prefs` (migration 193), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
+`inbox_prefs` (migration 193), `file_thumbnails` (migration 198, derived pictures), `inbox_ignored_dirs` (migration 199, read only: the owners' ignore rules), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
 `teams`, `short_ids` and the record tables it reads for recognition. The crawler never writes a junction
 row or a link (invariant 5): that is the d1-inbox extension's job.
 
@@ -36,6 +36,10 @@ HASH_RETRY_HOURS = 1
 # adopted_awaiting_hash), and how many pages of the queue one call looks through.
 BAD_PATH_ERROR = "path is not under its owner folder"
 BAD_PATH_PAGES = 50
+# The rules table is looked for again this often while it is missing (see Store._has_ignored_dirs), and a
+# page of candidates the exact Python re-check cut short is topped up at most this many times.
+IGNORED_TABLE_RECHECK = timedelta(seconds=60)
+IGNORE_RECHECK_PAGES = 5
 # The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
 # bigint; it lives on the crawler's own connection, so it goes with a killed process.
 CRAWLER_LOCK_KEY = 7_302_150_400_193
@@ -95,6 +99,16 @@ class Cand:
 
 
 @dataclass(frozen=True)
+class ThumbTarget:
+    """A candidate that needs its thumbnails made (or made again): what to read and what it looked like."""
+
+    candidate_id: str
+    rel_path: str
+    size: int
+    mtime: datetime
+
+
+@dataclass(frozen=True)
 class Copy:
     cand: Cand
     size: int
@@ -133,6 +147,9 @@ class Store:
         self._warned: set[str] = (
             set()
         )  # candidates already complained about (once per process)
+        self._thumbs_warned = False
+        # (rules table exists, when that was asked); None until asked (see _has_ignored_dirs)
+        self._ignored_table: tuple[bool, datetime] | None = None
 
     # ---- plumbing --------------------------------------------------------------------
 
@@ -466,14 +483,131 @@ class Store:
         )
         return n > 0
 
-    def forget_dirs_under(self, owner: Owner, prefixes: list[str]) -> None:
-        """Drop cache rows of directories that no longer exist (and everything below them)."""
+    def forget_dirs_under(
+        self, owner: Owner, prefixes: list[str], keep: list[str] = ()
+    ) -> None:
+        """Drop cache rows of directories that no longer exist (and everything below them), except the
+        rows of the folders in `keep` (ignored folders, which are not scanned: their cache rows stay as
+        they are) and everything below those."""
         for p in prefixes:
             self._run(
                 "DELETE FROM inbox_dirs WHERE (rel_path = %s OR left(rel_path, %s) = %s) AND "
-                + _owner_eq(owner),
-                (p, len(p) + 1, p + "/", owner.id),
+                + _owner_eq(owner)
+                + " AND NOT (rel_path = ANY(%s) OR "
+                "EXISTS (SELECT 1 FROM unnest(%s::text[]) AS k WHERE left(rel_path, length(k) + 1) = k || '/'))",
+                (p, len(p) + 1, p + "/", owner.id, list(keep), list(keep)),
             )
+
+    # ---- ignored folders (spec section 15) -------------------------------------------
+
+    def _has_ignored_dirs(self) -> bool:
+        """Does the database have the rules table (migration of the ignored-folders feature)? An older one
+        does not, and then nothing is ignored. The answer costs a round trip, so it is kept per Store: a
+        yes for good (the table is not dropped again), a no for IGNORED_TABLE_RECHECK, so a migration that
+        lands while the daemon runs is noticed without a restart."""
+        now = datetime.now(UTC)
+        known = self._ignored_table
+        if known is not None and (known[0] or now - known[1] < IGNORED_TABLE_RECHECK):
+            return known[0]
+        row = self._one("SELECT to_regclass('inbox_ignored_dirs') IS NOT NULL")
+        found = bool(row and row[0])
+        self._ignored_table = (found, now)
+        return found
+
+    def load_ignored_for(self, owner: Owner) -> owners.IgnoreRules:
+        """The owner's ignore rules, read when the crawler starts the owner and again before it lists a folder
+        and before each batch of registrations (one small query on the owner's partial index, never one per
+        file). Empty when the table does not exist."""
+        if not self._has_ignored_dirs():
+            return owners.IgnoreRules()
+        rows = self._all(
+            "SELECT rel_folder FROM inbox_ignored_dirs WHERE " + _owner_eq(owner),
+            (owner.id,),
+        )
+        return owners.ignore_rules(r[0] for r in rows)
+
+    def _not_ignored(self, alias: str) -> str:
+        """An ` AND NOT EXISTS (...) AND NOT EXISTS (...)` clause that leaves out a candidate (table alias
+        `alias`) lying under one of its owner's ignored folders: no file below an ignored folder is read for
+        any reason, and an undecided one can exist there (a rule written by hand, or one that raced a
+        registration). One NOT EXISTS per owner kind, each an equality on its own owner column (a candidate
+        has one owner, so the other is NULL and matches nothing), so the partial owner indexes are usable.
+        The owner's root is two path parts (`Users/<alias>`, `Shared/<folder>`), the rule is relative to it,
+        and the comparison is on whole parts and ignores case. Empty when the table does not exist.
+
+        A PRE-FILTER only: Postgres lower() and Python str.lower() differ for a few letters (a final sigma, a
+        dotted capital I), so this clause can keep a row Python's owners.is_ignored would drop. Every caller
+        therefore re-checks the rows it gets with `_unignored_rows`. (The other direction, dropping a row
+        Python would keep, only means reading less.)"""
+        if not self._has_ignored_dirs():
+            return ""
+        a = alias
+        prefix = (
+            f"lower(split_part({a}.rel_path, '/', 1) || '/' || split_part({a}.rel_path, '/', 2)"
+            " || '/' || ig.rel_folder)"
+        )
+        return "".join(
+            " AND NOT EXISTS (SELECT 1 FROM inbox_ignored_dirs ig "
+            f"WHERE ig.{col} = {a}.{col} "
+            f"AND left(lower({a}.rel_path), length({prefix}) + 1) = {prefix} || '/')"
+            for col in ("owner_person_id", "owner_team_id")
+        )
+
+    def _unignored_rows(self, fetch, limit: int, *, id_i, path_i, person_i, team_i):
+        """Candidate rows from `fetch(excluded_ids)` (a query that applies `_not_ignored` and leaves out the
+        candidate ids it is given), minus those Python's owners.is_ignored says are under an ignored folder:
+        the second, exact check behind the SQL pre-filter. A page the re-check cut short is topped up from
+        the next page (the rejected ids are excluded), at most IGNORE_RECHECK_PAGES times, so a row that
+        only Python rejects cannot starve the ones behind it."""
+        kept: list = []
+        excluded: list[str] = []
+        for _ in range(IGNORE_RECHECK_PAGES):
+            rows = fetch(excluded)
+            if not rows:
+                break
+            rules = self._rules_of(rows, person_i, team_i)
+            dropped = []
+            for r in rows:
+                if self._row_ignored(r[path_i], r[person_i], r[team_i], rules):
+                    dropped.append(r[id_i])
+                else:
+                    kept.append(r)
+            if not dropped or len(kept) >= limit or len(rows) < limit:
+                break
+            excluded += dropped
+        return kept[:limit]
+
+    def _rules_of(
+        self, rows, person_i, team_i
+    ) -> dict[tuple[str, str], owners.IgnoreRules]:
+        """The rules of every owner in `rows`: {(kind, id): rules}; two small queries, only for the owners
+        that appear."""
+        if not self._has_ignored_dirs():
+            return {}
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for kind, idx, col in (
+            ("person", person_i, "owner_person_id"),
+            ("team", team_i, "owner_team_id"),
+        ):
+            ids = sorted({r[idx] for r in rows if r[idx]})
+            if not ids:
+                continue
+            for oid, folder in self._all(
+                f"SELECT {col}::text, rel_folder FROM inbox_ignored_dirs WHERE {col} = ANY(%s::uuid[])",
+                (ids,),
+            ):
+                grouped.setdefault((kind, oid), []).append(folder)
+        return {k: owners.ignore_rules(v) for k, v in grouped.items()}
+
+    @staticmethod
+    def _row_ignored(rel_path: str, person_id, team_id, rules) -> bool:
+        key = ("person", person_id) if person_id else ("team", team_id)
+        owner_rules = rules.get(key)
+        if not owner_rules:
+            return False
+        root = "/".join(rel_path.split("/")[:2])
+        below = owners.below_root(root, rel_path.rpartition("/")[0])
+        return bool(below) and owners.is_ignored(below, owner_rules)
 
     def mark_baselined(self, owner: Owner) -> None:
         self._run(
@@ -628,6 +762,9 @@ class Store:
             "UPDATE file_candidates SET duplicate_of = NULL WHERE duplicate_of = ANY(%s::uuid[])",
             (candidate_ids,),
         )
+        # a file that is not on the share has no picture of it (spec section 14); one that comes back is
+        # backfilled
+        self.delete_thumbnails(candidate_ids, only_gone=True, quiet=True)
         return n
 
     def revive(self, candidate_id: str) -> None:
@@ -711,8 +848,13 @@ class Store:
         recognition: recognise.Recognition,
         origin: str,
         hashed: HashOutcome | None,
+        thumbs=None,
+        thumbs_failed: str | None = None,
     ) -> RegisterResult:
-        """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint.
+        """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint, and the
+        thumbnails (a `thumbs.Thumbs`, when the caller made them from the bytes it holds) in the same transaction.
+        When it tried and could not (`thumbs_failed`, a short reason), a marker row says so instead, so the
+        backfill does not read the file again until it changes.
 
         Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
         previous run's) are left alone, and an existing candidate for the file is left alone.
@@ -784,6 +926,14 @@ class Store:
                     ),
                 )
                 row = cur.fetchone()
+            if row is not None and thumbs is not None:
+                # same transaction; a failure (the table is not there yet) loses only the pictures, which
+                # the backfill makes later
+                self.store_thumbnails(row[0], thumbs, size, mtime, quiet=True)
+            elif row is not None and thumbs_failed is not None:
+                self.store_thumbnail_failure(
+                    row[0], thumbs_failed, size, mtime, quiet=True
+                )
             with self.conn.cursor() as cur:
                 cur.execute("RELEASE SAVEPOINT register_file")
         except Exception:
@@ -885,6 +1035,179 @@ class Store:
             changed += 1
         return changed
 
+    # ---- thumbnails (spec section 14) -------------------------------------------------
+
+    def _thumb_write(self, query: str, params, quiet: bool) -> int:
+        """Run one statement on file_thumbnails. `quiet`: inside a savepoint, and a failure (above all the
+        table not being there yet) is logged once and answered with -1 instead of failing the caller's
+        transaction."""
+        if not quiet:
+            return self._run(query, params)
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT thumbs")
+        try:
+            n = self._run(query, params)
+        except Exception as exc:  # noqa: BLE001
+            with self.conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT thumbs")
+                cur.execute("RELEASE SAVEPOINT thumbs")
+            if not self._thumbs_warned:
+                self._thumbs_warned = True
+                log.warning(
+                    "file_thumbnails could not be written (%s): is migration 198 applied?",
+                    type(exc).__name__,
+                )
+            return -1
+        with self.conn.cursor() as cur:
+            cur.execute("RELEASE SAVEPOINT thumbs")
+        return n
+
+    def store_thumbnails(
+        self,
+        candidate_id: str,
+        thumbs,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """The pictures (a `thumbs.Thumbs`) of the file as it was at `size` and `mtime`, replacing any earlier
+        pair. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, source_size, source_mtime) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = EXCLUDED.thumb, preview = EXCLUDED.preview, "
+            " thumb_width = EXCLUDED.thumb_width, thumb_height = EXCLUDED.thumb_height, "
+            " preview_width = EXCLUDED.preview_width, preview_height = EXCLUDED.preview_height, "
+            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, failed_reason = NULL, "
+            " created_at = now()",
+            (
+                candidate_id,
+                thumbs.thumb,
+                thumbs.preview,
+                thumbs.thumb_width,
+                thumbs.thumb_height,
+                thumbs.preview_width,
+                thumbs.preview_height,
+                size,
+                mtime,
+            ),
+            quiet,
+        )
+        return n > 0
+
+    def store_thumbnail_failure(
+        self,
+        candidate_id: str,
+        reason: str,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """A marker that the file, as it was at `size` and `mtime`, has no picture (it was read and could not
+        be decoded, or is too big): both pictures NULL and a short `reason`. It replaces any earlier row and
+        is DONE for `candidates_missing_thumbnails` until the file's size or modification time changes, when
+        it is tried again. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, failed_reason, source_size, source_mtime) "
+            "VALUES (%s, NULL, NULL, NULL, NULL, NULL, NULL, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = NULL, preview = NULL, thumb_width = NULL, "
+            " thumb_height = NULL, preview_width = NULL, preview_height = NULL, "
+            " failed_reason = EXCLUDED.failed_reason, source_size = EXCLUDED.source_size, "
+            " source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            (candidate_id, reason[:200], size, mtime),
+            quiet,
+        )
+        return n > 0
+
+    def scanned_owners(self) -> list[tuple[str, str, str]]:
+        """(kind, owner id, root folder lower-cased) of everyone a scan would walk right now, decided by the
+        scan's own rule (`owners.person_claims` and `team_claims`: scannable is active or scan-while-former,
+        and INBOX_ONLY_FOLDERS) over the current people and teams. The root is `Users/<alias>` or
+        `Shared/<folder>` as claimed; the share is case-insensitive, so it is compared lower-cased."""
+        out: list[tuple[str, str, str]] = []
+        for kind, base, claims in (
+            ("person", owners.PERSON_BASE, owners.person_claims(self.load_people())),
+            ("team", owners.TEAM_BASE, owners.team_claims(self.load_teams())),
+        ):
+            for owner_id, folder, _label, scannable in claims:
+                if scannable and owners.safe_folder_name(folder):
+                    out.append((kind, owner_id, f"{base}/{folder}".lower()))
+        return out
+
+    def candidates_missing_thumbnails(
+        self, limit: int, *, max_bytes: int | None = None, skip=()
+    ) -> list[ThumbTarget]:
+        """Image and SEM-image candidates a person can still see (new, dismissed, linked: not gone) that have
+        no thumbnails, or whose thumbnails were made from a file of another size or modification time than the
+        candidate's. Undecided ones first, newest first. `max_bytes` leaves out a file too big to decode and
+        `skip` the ids already tried (a file that cannot be decoded would otherwise be offered every tick). A file
+        whose discovery hash failed is left to the hash retry (an hour later), not read again from here.
+
+        Only files the scan would read right now: of an owner it scans (`scanned_owners`: an active or
+        scan-while-former person with an alias, a team with a share folder, and in INBOX_ONLY_FOLDERS when
+        that is set), below that owner's CURRENT folder (a candidate left under an old alias or share folder is
+        not read) and not below one of the owner's ignored folders. A file with a picture marker (see
+        `store_thumbnail_failure`) for its current size and modification time is done, not missing."""
+        roots = self.scanned_owners()
+        skip = list(skip)
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT c.candidate_id::text, c.rel_path, c.size_bytes, c.source_mtime, "
+                " c.owner_person_id::text, c.owner_team_id::text "
+                "FROM file_candidates c LEFT JOIN file_thumbnails t ON t.candidate_id = c.candidate_id "
+                "WHERE c.kind IN ('image', 'sem_image') AND c.state IN ('new', 'dismissed', 'linked') "
+                "  AND c.size_bytes IS NOT NULL AND c.source_mtime IS NOT NULL "
+                "  AND (%s::bigint IS NULL OR c.size_bytes <= %s::bigint) "
+                "  AND (t.candidate_id IS NULL OR t.source_size <> c.size_bytes OR t.source_mtime <> c.source_mtime) "
+                "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
+                "  AND NOT EXISTS (SELECT 1 FROM file_fingerprints f "
+                "                  WHERE f.directus_files_id = c.directus_files_id AND f.status = 'error') "
+                "  AND EXISTS (SELECT 1 FROM unnest(%s::text[], %s::text[], %s::text[]) AS o(kind, id, root) "
+                "              WHERE ((o.kind = 'person' AND c.owner_person_id::text = o.id) "
+                "                  OR (o.kind = 'team' AND c.owner_team_id::text = o.id)) "
+                "                AND left(lower(c.rel_path), length(o.root) + 1) = o.root || '/') "
+                + self._not_ignored("c")
+                + " ORDER BY (c.state = 'new') DESC, c.first_seen_at DESC, c.candidate_id LIMIT %s",
+                (
+                    max_bytes,
+                    max_bytes,
+                    skip + excluded,
+                    [r[0] for r in roots],
+                    [r[1] for r in roots],
+                    [r[2] for r in roots],
+                    limit,
+                ),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=1, person_i=4, team_i=5
+        )
+        return [ThumbTarget(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def delete_thumbnails(
+        self, candidate_ids: list[str], *, only_gone: bool = False, quiet: bool = False
+    ) -> int:
+        """Drop the pictures of these candidates (all of them, or with `only_gone` only those whose candidate
+        is in state 'gone'). Does not commit. Returns how many rows went."""
+        if not candidate_ids:
+            return 0
+        n = self._thumb_write(
+            "DELETE FROM file_thumbnails WHERE candidate_id = ANY(%s::uuid[])"
+            + (
+                " AND candidate_id IN (SELECT candidate_id FROM file_candidates WHERE state = 'gone')"
+                if only_gone
+                else ""
+            ),
+            (candidate_ids,),
+            quiet,
+        )
+        return max(n, 0)
+
     # ---- hashing queues --------------------------------------------------------------
 
     def adopted_awaiting_hash(self, limit: int = 20) -> list[tuple[str, str, str]]:
@@ -956,16 +1279,26 @@ class Store:
         )
 
     def errored_hashes(self, limit: int = 20) -> list[tuple[str, str, str]]:
-        """Images and scans whose discovery hash failed at least an hour ago and are still undecided."""
-        rows = self._all(
-            "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path "
-            "FROM file_candidates c JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
-            "WHERE c.state = 'new' AND c.kind IN ('image', 'sem_image', 'surface_scan') "
-            "  AND f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s) "
-            "ORDER BY f.hashed_at LIMIT %s",
-            (HASH_RETRY_HOURS, limit),
+        """Images and scans whose discovery hash failed at least an hour ago and are still undecided. One
+        under an ignored folder is not retried: nothing below an ignored folder is read."""
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
+                " c.owner_person_id::text, c.owner_team_id::text "
+                "FROM file_candidates c JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+                "WHERE c.state = 'new' AND c.kind IN ('image', 'sem_image', 'surface_scan') "
+                "  AND f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s) "
+                "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
+                + self._not_ignored("c")
+                + " ORDER BY f.hashed_at LIMIT %s",
+                (HASH_RETRY_HOURS, excluded, limit),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=2, person_i=3, team_i=4
         )
-        return [tuple(r) for r in rows]
+        return [tuple(r[:3]) for r in rows]
 
     # ---- auto-link ---------------------------------------------------------------------
 
@@ -975,16 +1308,24 @@ class Store:
         were not auto-linked and undone by the person (auto_undone_at)."""
         if not person_ids:
             return []
-        rows = self._all(
-            "SELECT candidate_id::text, owner_person_id::text, suggested_collection, "
-            " suggested_record_id::text, kind FROM file_candidates "
-            "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
-            "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
-            "  AND auto_undone_at IS NULL "
-            "  AND kind IN ('sem_image', 'image') "
-            "  AND owner_person_id = ANY(%s::uuid[]) "
-            "ORDER BY first_seen_at, candidate_id LIMIT %s",
-            (sorted(person_ids), limit),
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT candidate_id::text, owner_person_id::text, suggested_collection, "
+                " suggested_record_id::text, kind, rel_path, owner_team_id::text FROM file_candidates "
+                "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
+                "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
+                "  AND auto_undone_at IS NULL "
+                "  AND kind IN ('sem_image', 'image') "
+                "  AND owner_person_id = ANY(%s::uuid[]) "
+                "  AND NOT (candidate_id::text = ANY(%s::text[])) "
+                + self._not_ignored("file_candidates")
+                + " ORDER BY first_seen_at, candidate_id LIMIT %s",
+                (sorted(person_ids), excluded, limit),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=5, person_i=1, team_i=6
         )
         return [
             {

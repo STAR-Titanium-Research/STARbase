@@ -59,6 +59,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": true,
         "suggested_can_edit": true
       },
       {
@@ -102,6 +103,7 @@
           "name": "SEM team"
         },
         "adopted": false,
+        "has_thumbnail": true,
         "suggested_can_edit": true
       },
       {
@@ -137,7 +139,8 @@
           "id": "00000000-0000-4000-8000-000000000011",
           "name": "Alice A"
         },
-        "adopted": false
+        "adopted": false,
+        "has_thumbnail": false
       },
       {
         "candidate_id": "00000000-0000-4000-8000-000000001014",
@@ -180,6 +183,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "suggested_can_edit": false
       },
       {
@@ -223,6 +227,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "suggested_can_edit": true
       },
       {
@@ -266,6 +271,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "suggested_can_edit": false
       },
       {
@@ -301,7 +307,8 @@
           "id": "00000000-0000-4000-8000-000000000011",
           "name": "Alice A"
         },
-        "adopted": false
+        "adopted": false,
+        "has_thumbnail": false
       },
       {
         "candidate_id": "00000000-0000-4000-8000-000000001011",
@@ -344,6 +351,7 @@
           "name": "Alice A"
         },
         "adopted": false,
+        "has_thumbnail": false,
         "suggested_can_edit": true
       }
     ],

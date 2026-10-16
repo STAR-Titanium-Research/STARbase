@@ -142,10 +142,11 @@ describe('the Inbox page', () => {
 		expect(scan.textContent).not.toMatch(/attach|soon/i);
 	});
 
-	it('draws no thumbnail and asks for no asset: every row shows the icon of its kind', async () => {
+	it('a file without has_thumbnail draws no picture and asks for none: its row shows the icon of its kind (pictures: inboxPictures.dom.test.ts)', async () => {
 		await mount();
 		expect(document.querySelectorAll('img')).toHaveLength(0);
 		expect(rowOf('3fa9c1d2_A1.tif').querySelector('.thumb')).not.toBeNull();
+		expect(fake.pictureStats.requests).toBe(0);
 	});
 
 	it('Link on a suggested file links it, the row goes, focus moves to the next row, and Undo brings it back', async () => {
@@ -203,10 +204,17 @@ describe('the Inbox page', () => {
 		expect(fake.files[2].state).toBe('new');
 	});
 
+	it('with no file naming a record, Accept all is replaced by a note that says why, and Link to… stays', async () => {
+		await mount(defaultFiles().filter((f) => f.match_strength !== 'short_id'));
+		expect(document.querySelector('[data-test="accept-all"]')).toBeNull();
+		expect(document.querySelector('[data-test="accept-none"]')?.textContent).toContain('None of these files can be linked in bulk');
+		expect(rows().length).toBeGreaterThan(0);
+	});
+
 	it('Accept all opens on a dry run: Confirm waits for it, the dialog names the count and where files go, and Confirm links exactly those', async () => {
 		await mount();
 		const accept = document.querySelector<HTMLButtonElement>('[data-test="accept-all"]')!;
-		expect(accept.textContent?.trim()).toBe('Accept all');
+		expect(accept.textContent?.trim()).toBe('Accept all (2)');
 		click(accept);
 		await vi.waitFor(() => expect(document.querySelector('[data-test="accept-confirm"]')).not.toBeNull());
 		const body = document.querySelector('[role="dialog"]')!.textContent!;

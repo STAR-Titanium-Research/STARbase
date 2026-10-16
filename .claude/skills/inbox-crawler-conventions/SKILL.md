@@ -33,6 +33,14 @@ folder**, **team folder**, **uni alias**. The crawler is the **inbox crawler**; 
    existing file references when a file moves, via the indexer's `repoint_file_references`. Linking and
    auto-linking go through the `d1-inbox` extension.
 6. **No secrets in logs.** Never print `SMB_PASS` or `DATABASE_URL`.
+7. **Ignore rules only ever make the crawler read less (spec section 15).** Every candidate query that reads
+   the share (thumbnail backfill, hash retry, auto-link, anything new) must apply the ignore rules: the SQL
+   pre-filter `Store._not_ignored(alias)` AND the exact Python re-check (`Store._unignored_rows`, which uses
+   `owners.is_ignored`), because Postgres `lower()` and Python `str.lower()` differ (final sigma, dotted I).
+   The SQL clause may drop too much but never keep what Python drops. The scan reads an owner's rules when it
+   starts the owner, before each folder it lists, per batch and before reading a file (`Scanner._ignored_now`,
+   never one query per file), and registers, revives, classifies or thumbnails nothing under a rule found at
+   that moment. Only the adopted-hash queue of already linked files is exempt, on purpose.
 
 ## Checks to run before each commit
 
