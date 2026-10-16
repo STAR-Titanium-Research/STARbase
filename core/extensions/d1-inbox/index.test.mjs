@@ -3742,6 +3742,23 @@ test('POST /ignored-folders: a rule for the caller\'s folder; the open files bel
   assert.equal(w.log.find((l) => l.name === 'dismiss').sql, SQL.dismiss, 'the very statement of POST /dismiss');
 });
 
+test('POST /ignored-folders: a share whose personal folders are under `User` (INBOX_PERSON_DIR, as on the lab share) gets its files dismissed too; with the variable unset the root stays Users', async () => {
+  const before = process.env.INBOX_PERSON_DIR;
+  process.env.INBOX_PERSON_DIR = 'User';
+  try {
+    const w = newWorld();
+    const [inside, elsewhere] = add(w, under('User/ali1/World-Ti Paper/a.tif'), under('Users/ali1/World-Ti Paper/a.tif'));
+    const { call } = setup(w);
+    const res = await call('POST /ignored-folders', { user: U.alice, body: { folder: 'World-Ti Paper' } });
+    assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+    assert.equal(res.body.data.dismissed, 1);
+    assert.equal(inside.state, 'dismissed', 'the file under the configured personal-folder directory');
+    assert.equal(elsewhere.state, 'new', 'a path under another top-level folder is not the owner\'s folder');
+  } finally {
+    if (before === undefined) delete process.env.INBOX_PERSON_DIR; else process.env.INBOX_PERSON_DIR = before;
+  }
+});
+
 test('POST /ignored-folders: which open rows a rule covers is decided in JS by isIgnored, never by a lowercasing prefix in SQL (a character Postgres and JS lowercase differently is still covered)', async () => {
   const w = newWorld();
   // JS lowercases a dotted capital I to "i" plus a combining dot, as the rule and as the path; a Postgres prefix compare on lower() could miss the pair
