@@ -898,6 +898,16 @@ class Store:
                     "DELETE FROM file_candidates WHERE candidate_id = %s",
                     (new.candidate_id,),
                 )
+                # A moved file keeps its FIRST owner (ADR-0022 D13): the new pointer row takes the old one's
+                # stamp (both columns together, the table's one-owner CHECK), so the readers follow it and the
+                # old row's deletion below does not leave the file unowned.
+                cur.execute(
+                    "UPDATE directus_files n SET owner_person_id = o.owner_person_id, "
+                    " owner_team_id = o.owner_team_id FROM directus_files o "
+                    "WHERE o.id = %s AND n.id = %s "
+                    "AND (o.owner_person_id IS NOT NULL OR o.owner_team_id IS NOT NULL)",
+                    (old.directus_files_id, new.directus_files_id),
+                )
                 fks = index_archive.find_file_fk_columns(cur)
                 left = index_archive.repoint_file_references(
                     cur, fks, old.directus_files_id, new.directus_files_id

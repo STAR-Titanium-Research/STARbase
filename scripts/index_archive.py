@@ -157,6 +157,11 @@ _JUNCTIONS = [
 
 _PG_UNIQUE_VIOLATION = "23505"
 
+# Tables that hold a FK to directus_files but are DERIVED from it and never re-pointed: file_readers (migration 196)
+# is rebuilt by triggers from the owner columns, and its rows go with the old file (ON DELETE CASCADE). Re-pointing
+# one would hit its (file, login) unique key whenever the new file is owned too, and leave the old row behind.
+_DERIVED_FILE_TABLES = frozenset({"file_readers"})
+
 _FILE_FK_SQL = """
 SELECT c.conrelid::regclass::text,
        quote_ident(a.attname),
@@ -216,6 +221,8 @@ def repoint_file_references(
     junction_parent = dict(_JUNCTIONS)
     remaining = 0
     for table, col, ncols in fks:
+        if table.rsplit(".", 1)[-1].strip('"') in _DERIVED_FILE_TABLES:
+            continue
         if ncols == 1:
             if table == "file_fingerprints":
                 cur.execute(

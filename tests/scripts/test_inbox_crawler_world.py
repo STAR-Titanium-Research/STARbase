@@ -3,7 +3,7 @@
 `world` builds, in a uniquely named schema that is dropped afterwards, the tables the crawler touches: stand-ins
 for what Directus owns (`directus_files`, `directus_folders`, `directus_users`; a migrated database only has
 one-column stubs), small stand-ins for `people`, `teams` and the three record tables, and the REAL migrations
-for `file_fingerprints` (T0e), the inbox (193), the owner columns of 196 (section 1 only, verbatim) and the SEM
+for `file_fingerprints` (T0e), the inbox (193), the owner columns and the readers table of 196 (sections 1 and 3 to 5, verbatim) and the SEM
 settings (197: `sem_image_settings`, `file_candidates.classified_by`, `save_sem_settings`), with `d1_private.`
 pointed at the throwaway schema. It touches nothing else in the database. The "share" is a directory under tmp_path.
 
@@ -49,6 +49,17 @@ def owner_columns_up(path: Path = PROVENANCE) -> str:
     return sql.split("-- 1. The owner columns.", 1)[1].split("-- 2. The back-fill", 1)[
         0
     ]
+
+
+def readers_up(path: Path = PROVENANCE, schema: str | None = None) -> str:
+    """Sections 3 to 5 of migration 196 as written: the `file_readers` table (a FK to directus_files, which the
+    indexer's repoint routine finds like any other), the functions that keep it, the readers back-fill and the
+    triggers. Section 2 (the back-fill of found files) needs `surface_scans`, and section 6 and 7 (the Directus
+    metadata and permission rows) need tables this world does not have."""
+    sql = migration_up(path, schema)
+    return sql.split("-- 3. The readers table.", 1)[1].split(
+        "-- 6. The Directus metadata", 1
+    )[0]
 
 
 STUBS = """
@@ -177,9 +188,10 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
-        # the owner columns of 196 (its section 1, verbatim) and the whole of 197: d1_private.sem_image_settings,
+        # the owner columns and the readers table with its triggers of 196 (its sections 1 and 3 to 5, verbatim) and the whole of 197: d1_private.sem_image_settings,
         # file_candidates.classified_by and the real d1_private.save_sem_settings
         cur.execute(owner_columns_up())
+        cur.execute(readers_up(schema=schema))
         cur.execute(migration_up(SEM_SETTINGS, schema))
         conn.commit()
         yield World(conn, schema, str(root), DSN)

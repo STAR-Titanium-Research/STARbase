@@ -2315,6 +2315,13 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   afterwards listed. As B `POST /d1-inbox/link` for one of A's candidate ids (if any survive from before the fix) answers 404. A's own linked
   files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else") for one folder: expect
   `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
+- [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
+  196 applied and a person with a login whose folder holds a registered image, move the file to another subfolder on the share and run
+  `make inbox-crawler-once` (daemon stopped). Expect the log line for the re-point and **no** `file_readers.directus_files_id: new file already linked`
+  warning; one `directus_files` row for the file, at the new path, with the same `owner_person_id` as before; no row left for the old path
+  (`SELECT count(*) FROM directus_files WHERE metadata->>'archive_path' = '<old path>'` is 0); the Inbox row (same candidate, same first-seen date)
+  shows the new path; `SELECT d1_private.file_readers_drift_count()` is 0; the owner can still open the file and another Lab Member still cannot.
+  Repeat for a file in a team folder. Since: SEM reader final fix wave (I1).
 
 ## Done
 

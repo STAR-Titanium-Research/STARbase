@@ -304,3 +304,99 @@ def test_register_file_refuses_a_candidate_for_a_file_stamped_to_someone_else(
     assert "stamped to another owner" in caplog.text
     # the same owner still gets its candidate (an unstamped or own row is fine)
     assert register(store, person_owner(a, "aaa11"), "Users/aaa11/a.png").created
+
+
+# ---- a moved owned file keeps its owner and leaves no ghost (I1) ---------------------------------
+
+
+def readers(world, rel):
+    return world.q(
+        "SELECT user_id::text FROM file_readers WHERE directus_files_id = %s",
+        (str(file_id(rel)),),
+    )
+
+
+def drift(world):
+    return world.one(f"SELECT {world.schema}.file_readers_drift_count()")[0]
+
+
+def test_a_file_moved_inside_a_personal_folder_leaves_no_ghost_and_keeps_its_owner(
+    world, caplog
+):
+    pid, uid = world.person("abc12de", user=True)
+    old, new = "Users/abc12de/sem/a.png", "Users/abc12de/archive/a_moved.png"
+    world.write(old, png((1, 1, 1)))
+    settle(world)
+    world.commit()
+    run(world)
+    assert readers(world, old) == [(uid,)]  # the readers table is part of the world
+    os.makedirs(Path(world.root, "Users/abc12de/archive"))
+    os.rename(Path(world.root, old), Path(world.root, new))
+    world.commit()
+    with caplog.at_level("WARNING"):
+        stats, _, _ = run(world)
+    assert stats.repointed == 1
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    assert (
+        world.one(
+            "SELECT count(*) FROM directus_files WHERE id = %s", (str(file_id(old)),)
+        )[0]
+        == 0
+    )
+    assert owner_of(world, new) == (pid, None)  # the first owner, carried over
+    assert readers(world, new) == [(uid,)]
+    assert readers(world, old) == []
+    assert drift(world) == 0
+    assert world.one(
+        "SELECT rel_path, owner_person_id::text, state FROM file_candidates"
+    ) == (new, pid, "new")
+
+
+def test_a_file_moved_inside_a_team_folder_keeps_the_team_and_its_readers(world):
+    tid = world.team("Machining")
+    pid, uid = world.person("abc12de", user=True)
+    world.member(tid, pid)
+    old, new = "Shared/Machining/a.png", "Shared/Machining/old/a_moved.png"
+    os.makedirs(
+        Path(world.root, "Users")
+    )  # the share guard wants the personal-folder base
+    world.write(old, png((1, 1, 1)))
+    settle(world)
+    world.commit()
+    run(world)
+    os.makedirs(Path(world.root, "Shared/Machining/old"))
+    os.rename(Path(world.root, old), Path(world.root, new))
+    world.commit()
+    stats, _, _ = run(world)
+    assert stats.repointed == 1
+    assert owner_of(world, new) == (None, tid)
+    assert readers(world, new) == [(uid,)]
+    assert (
+        world.one(
+            "SELECT count(*) FROM directus_files WHERE id = %s", (str(file_id(old)),)
+        )[0]
+        == 0
+    )
+    assert drift(world) == 0
+
+
+def test_repoint_carries_the_first_owner_to_a_new_row_that_has_none(world):
+    pid, uid = world.person("abc12de", user=True)
+    store = db.Store(world.conn)
+    old, new = "Users/abc12de/a.png", "Users/abc12de/b/a.png"
+    o = register(store, person_owner(pid, "abc12de"), old)
+    n = register(store, person_owner(pid, "abc12de"), new)
+    world.q(
+        "UPDATE directus_files SET owner_person_id = NULL WHERE id = %s",
+        (str(file_id(new)),),
+    )
+    assert readers(world, new) == []
+    assert store.repoint_candidate(
+        db.Cand(o.candidate_id, str(file_id(old)), old, "new", "image"),
+        db.Cand(n.candidate_id, str(file_id(new)), new, "new", "image"),
+        1,
+        T0,
+    )
+    assert owner_of(world, new) == (pid, None)
+    assert readers(world, new) == [(uid,)]
+    assert drift(world) == 0
