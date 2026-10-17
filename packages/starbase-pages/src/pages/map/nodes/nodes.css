@@ -174,5 +174,5 @@
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 }
-.d1-process-map .node .chk.warn { background: var(--theme--warning-background, var(--d1-tile)); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
+.d1-process-map .node .chk.warn { background: color-mix(in srgb, var(--theme--background), var(--theme--warning) 12%); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
 .d1-process-map .orow.addrow { cursor: pointer; }
