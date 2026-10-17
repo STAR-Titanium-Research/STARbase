@@ -186,17 +186,31 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 		stop = finish;
 	}
 
-	/** Enter on a focused socket opens its menu, as a click does; C opens "Connect to…" (E21). */
-	function socketKey(sock: SocketRef, e: KeyboardEvent): void {
-		const connect = e.key === 'c' || e.key === 'C';
-		if ((e.key !== 'Enter' && !connect) || e.ctrlKey || e.metaKey || e.altKey || !edit.editing.value) return;
-		e.preventDefault();
-		e.stopPropagation();
-		const el = e.currentTarget as HTMLElement;
+	function openAt(sock: SocketRef, el: HTMLElement, connect: boolean): void {
 		const r = el.getBoundingClientRect();
 		const target: MenuTarget = { sock, at: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, anchor: (el.closest('.vue-flow__node') as HTMLElement | null)?.dataset.id };
 		if (connect) o.openConnect?.(target);
 		else o.openMenu(target);
+	}
+	/**
+	 * Enter on a focused socket opens its menu, as a click does; C opens "Connect to…" (E21). Space does what Enter does on a socket that
+	 * is not a <button> (a wired one: its Handle is a span with role button); on a real button Space arrives as a click (socketClick).
+	 */
+	function socketKey(sock: SocketRef, e: KeyboardEvent): void {
+		const el = e.currentTarget as HTMLElement;
+		const connect = e.key === 'c' || e.key === 'C';
+		const space = e.key === ' ' && el.tagName?.toLowerCase() !== 'button';
+		if ((e.key !== 'Enter' && !connect && !space) || e.ctrlKey || e.metaKey || e.altKey || !edit.editing.value) return;
+		e.preventDefault();
+		e.stopPropagation();
+		openAt(sock, el, connect);
+	}
+	/** A click no pointer made (Space on a button, a screen reader's activate): the menu, like Enter. A pointer's click was handled on pointerdown. */
+	function socketClick(sock: SocketRef, e: MouseEvent): void {
+		if (e.detail !== 0 || !edit.editing.value) return;
+		e.preventDefault();
+		e.stopPropagation();
+		openAt(sock, e.currentTarget as HTMLElement, false);
 	}
 
 	// ---- badges and ＋ output ---------------------------------------------------------------------------------------
@@ -220,7 +234,7 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 		edit.apply({ type: 'addOutputRow', key }, { anchor: nodeId });
 	}
 
-	const mapEdit: MapEdit = { editing: edit.editing, drop, socketDown, socketKey, badge, addRow, canAddRow };
+	const mapEdit: MapEdit = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, addRow, canAddRow };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

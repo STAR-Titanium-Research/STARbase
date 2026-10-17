@@ -60,8 +60,10 @@ export interface MapEdit {
 	drop: Ref<{ sock: string; ok: boolean } | null>;
 	/** A pointer went down on a socket: a click opens the Add menu there, a drag draws a wire. */
 	socketDown(sock: SocketRef, e: PointerEvent): void;
-	/** A key on a focused socket: Enter opens its menu. */
+	/** A key on a focused socket: Enter (or Space on one that is not a button) opens its menu, C "Connect to…". */
 	socketKey(sock: SocketRef, e: KeyboardEvent): void;
+	/** A click on a socket that no pointer made (`detail` 0: Space on a button, a screen reader's activate): opens its menu. */
+	socketClick(sock: SocketRef, e: MouseEvent): void;
 	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
 	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
 	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
@@ -225,9 +227,13 @@ export const editSocketProps = (edit: MapEdit, sock: SocketRef) => {
 	const drop = edit.drop.value;
 	return {
 		'data-sock': key,
+		// A wired socket is a Handle (a span): while editing it is a button too, and says which keys work on it.
+		role: 'button',
+		'aria-keyshortcuts': 'Enter C',
 		class: { editable: true, 'drop-ok': drop?.sock === key && drop.ok, 'drop-bad': drop?.sock === key && !drop.ok },
 		onPointerdown: (e: PointerEvent) => edit.socketDown(sock, e),
 		onKeydown: (e: KeyboardEvent) => edit.socketKey(sock, e),
+		onClick: (e: MouseEvent) => edit.socketClick(sock, e),
 	};
 };
 

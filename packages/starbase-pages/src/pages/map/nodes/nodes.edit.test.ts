@@ -42,6 +42,7 @@ function edit(over: Partial<MapEdit> = {}): MapEdit & { calls: unknown[][] } {
 		drop: ref(null),
 		socketDown: (...a) => void calls.push(['down', ...a]),
 		socketKey: (...a) => void calls.push(['key', ...a]),
+		socketClick: (...a) => void calls.push(['click', ...a]),
 		badge: () => null,
 		addRow: (id) => void calls.push(['addRow', id]),
 		canAddRow: () => false,
@@ -181,9 +182,13 @@ describe('the props of a socket in edit mode', () => {
 		const p = editSocketProps(e, { kind: 'row', id: 'draft:n3', side: 'in' });
 		expect(p['data-sock']).toBe('row|draft:n3|in');
 		expect(p.class).toEqual({ editable: true, 'drop-ok': false, 'drop-bad': false });
+		// A wired socket is a span: while editing it is a button, and says which keys work.
+		expect(p.role).toBe('button');
+		expect(p['aria-keyshortcuts']).toBe('Enter C');
 		p.onPointerdown({} as PointerEvent);
 		p.onKeydown({} as KeyboardEvent);
-		expect(e.calls.map((c) => c[0])).toEqual(['down', 'key']);
+		p.onClick({} as MouseEvent);
+		expect(e.calls.map((c) => c[0])).toEqual(['down', 'key', 'click']);
 		expect(e.calls[0][1]).toEqual({ kind: 'row', id: 'draft:n3', side: 'in' });
 	});
 

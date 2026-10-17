@@ -120,6 +120,30 @@ describe('a click on a socket', () => {
 	});
 });
 
+describe('the keyboard and assistive technology on a socket', () => {
+	const kev = (el: unknown, over: Record<string, unknown>) => ({ currentTarget: el, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...over }) as unknown as KeyboardEvent;
+
+	it('Space opens the menu on a wired socket (a span with role button), but leaves a real button to its click', async () => {
+		const { ec, opened } = await setup(twoCards());
+		const span = { ...socketEl(ROW_IN, 400, 300, 'card:2'), tagName: 'SPAN' };
+		const button = { ...socketEl(ROW_IN, 400, 300, 'card:2'), tagName: 'BUTTON' };
+		ec.mapEdit.socketKey(ROW_IN, kev(span, { key: ' ' }));
+		expect(opened).toHaveLength(1);
+		ec.mapEdit.socketKey(ROW_IN, kev(button, { key: ' ' }));
+		expect(opened).toHaveLength(1);
+	});
+
+	it('a click with no pointer behind it (detail 0: Space on a button, a screen reader) opens the menu; a pointer\'s click does not (pointerdown did)', async () => {
+		const { ec, opened } = await setup(twoCards());
+		const el = { ...socketEl(ROW_IN, 400, 300, 'card:2'), tagName: 'BUTTON' };
+		const click = (detail: number) => ({ currentTarget: el, detail, preventDefault: vi.fn(), stopPropagation: vi.fn() }) as unknown as MouseEvent;
+		ec.mapEdit.socketClick(ROW_IN, click(1));
+		expect(opened).toHaveLength(0);
+		ec.mapEdit.socketClick(ROW_IN, click(0));
+		expect(opened).toEqual([{ sock: ROW_IN, at: { x: 400, y: 300 }, anchor: 'card:2' }]);
+	});
+});
+
 describe('a drag from a socket', () => {
 	const target = socketEl(ROW_IN, 500, 260);
 
