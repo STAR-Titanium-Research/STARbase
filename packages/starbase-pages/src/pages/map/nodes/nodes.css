@@ -153,10 +153,12 @@
 	color: inherit;
 }
 .d1-process-map button.sock.free:hover { background: color-mix(in srgb, var(--sk, var(--k-sample)) 25%, var(--d1-surface)); }
-.d1-process-map .sock.drop-ok { background: var(--d1-ok); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-ok) 30%, transparent); transform: translate(-50%, -50%) scale(1.5); }
-.d1-process-map .sock.row.drop-ok { transform: translateY(-50%) scale(1.5); }
-.d1-process-map .sock.drop-bad { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
-.d1-process-map .sock.row.drop-bad { transform: translateY(-50%) scale(1.35); }
+/* The socket a dragged wire is over: green when the draft takes it, red when not. Sockets sit on the rail (translate -50% both ways); the :hover
+   forms keep the mark when the pointer is on the socket, which is where a drop is. */
+.d1-process-map .sock.drop-ok,
+.d1-process-map .sock.drop-ok:hover { background: var(--d1-ok); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-ok) 30%, transparent); transform: translate(-50%, -50%) scale(1.5); }
+.d1-process-map .sock.drop-bad,
+.d1-process-map .sock.drop-bad:hover { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
 
 /* The red badge of a card whose checks block Create: how many things. A card with only warnings (a stale version) gets an amber one. */
 .d1-process-map .chk {

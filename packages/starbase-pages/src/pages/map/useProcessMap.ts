@@ -470,7 +470,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     status,
     error,
     generation,
-    data: shownData,
+    /** What was loaded for the focus (the record the map is of): null on a blank canvas. */
+    data,
+    /** What is drawn: `data` with the draft merged in (edit mode), else `data` itself. The one place the overlay enters; the graph is built from it. */
+    overlaid: shownData,
     graph,
     shown,
     nodes,

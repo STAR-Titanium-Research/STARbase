@@ -143,7 +143,7 @@ const frameStyle = computed(() => {
 // is cleared first) starts afresh.
 const dataPreviews = useDataPreviews(host.api);
 watch(
-	() => map.data.value,
+	() => map.overlaid.value,
 	(d) => {
 		if (!d) dataPreviews.reset();
 		else dataPreviews.load(d.operations.filter((o) => !o.id.startsWith('draft:')).map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));

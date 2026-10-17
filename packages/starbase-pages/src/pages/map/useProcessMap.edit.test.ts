@@ -106,7 +106,9 @@ describe('the map with a draft on a loaded history', () => {
 		const ids = map.nodes.value.map((n) => n.id);
 		expect(ids).toEqual(expect.arrayContaining(['s:s1', 's:s2', 's:draft:n1']));
 		expect(map.nodes.value.filter((n) => n.type === 'container')).toHaveLength(2);
-		expect(map.data.value?.samples.some((s) => s.draft)).toBe(true);
+		expect(map.overlaid.value?.samples.some((s) => s.draft)).toBe(true);
+		// `data` keeps its meaning: what was loaded for the focus, without the draft.
+		expect(map.data.value?.samples.some((s) => s.draft)).toBe(false);
 	});
 
 	it('keeps the draft drawn however far the reach is from the focus', async () => {

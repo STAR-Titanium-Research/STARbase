@@ -4,6 +4,7 @@ import { Handle } from '@vue-flow/core';
 import { StatusBadge, processLabel } from '@d1/ui';
 import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode } from '../model/types';
+import { railSockets, socketOwners, SHOWN_WHEN_FOLDED, type RailSocketModel } from '../model/railSockets';
 import { isBundleSocket } from '../model/sockets';
 import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
@@ -24,8 +25,6 @@ defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
 const { direction, moreOpen } = useMapView();
 
-/** Rows drawn on their own sockets when a container is folded. */
-const SHOWN_WHEN_FOLDED = 2;
 /** More rows than this fold by default; an unfolded container with more offers "fold". */
 const FOLD_ABOVE = 3;
 
@@ -53,67 +52,39 @@ const open = useExpanded(() => props.id);
 const PITCH = 16;
 const RAIL_PAD = 8;
 
-interface RailSocket {
-	id: string;
-	fat: boolean;
-	top: string;
-	/** Edit mode: nothing is wired here, so no Handle is drawn: a button stands in, for the row `free` names. */
-	free?: string;
-}
+/** A rail socket (model/railSockets) with where it sits on the rail. */
+type RailSocket = RailSocketModel & { top: string };
 
 const hidden = computed(() => (props.data.bundled ? props.data.rows.slice(SHOWN_WHEN_FOLDED) : []));
 const canFold = computed(() => !props.data.bundled && props.data.rows.length > FOLD_ABOVE);
 
 // Edit mode (spec E8, E9): the sockets of a new container are where wires start and end. A socket with a wire is a Handle already; a
 // side with nothing wired has none drawn, so edit mode draws a free one, a button, on the rail in its place (a blank operation is
-// one row with a free input). A test takes samples in but nothing comes out of it. The rail does not say which row a socket is, so
-// the row is found from the socket id.
+// one row with a free input). Which row a socket is comes from the model (model/railSockets), not from the rail.
 const edit = useMapEdit();
 const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
-const rowRef = (recordId: string, side: EndSide): SocketRef | null =>
-	editable.value && !(props.data.kind === 'test' && side === 'out') ? { kind: 'row', id: rowRecordId(props.data, recordId, side), side } : null;
-/** The edit controls of a rail socket drawn as a Handle (null where nobody can build from it: folded bundles). */
+/** The edit controls of one row's `side`: where a wire starts or ends on the draft. */
+const rowRef = (recordId: string, side: EndSide): SocketRef => ({ kind: 'row', id: rowRecordId(props.data, recordId, side), side });
+const owners = computed(() => socketOwners(props.data));
+/** The edit controls of a rail socket drawn as a Handle (null where nobody can build from it: folded bundles, a test's output). */
 const railRef = (socket: string, side: EndSide): SocketRef | null => {
-	const row = props.data.rows.find((r) => r[side] === socket);
-	return row && !isBundleSocket(socket) ? rowRef(row.recordId, side) : null;
+	const owner = editable.value ? owners.value.get(socket) : undefined;
+	return owner && owner.side === side ? rowRef(owner.recordId, side) : null;
 };
-const freeProps = (recordId: string, side: EndSide) => {
-	const ref = rowRef(recordId, side);
-	return edit && ref ? editSocketProps(edit, ref) : {};
-};
+const freeProps = (recordId: string | null, side: EndSide) => (edit && editable.value && recordId !== null ? editSocketProps(edit, rowRef(recordId, side)) : {});
 const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
 const addRow = stopping(() => edit?.addRow(props.id));
 const addRowKey = activating(() => edit?.addRow(props.id));
 
-/** Each side's socket ids, in row order, each once; the bundle socket (if any) last. */
-function sideSockets(side: 'in' | 'out'): { id: string; fat: boolean; free?: string }[] {
-	const seen = new Set<string>();
-	const out: { id: string; fat: boolean; free?: string }[] = [];
-	const rows = props.data.bundled ? props.data.rows.slice(0, SHOWN_WHEN_FOLDED) : props.data.rows;
-	for (const r of rows) {
-		const id = r[side];
-		if (!id || isBundleSocket(id) || seen.has(id)) continue;
-		seen.add(id);
-		out.push({ id, fat: false });
-	}
-	const bundle = hidden.value.find((r) => r[side] && isBundleSocket(r[side]!))?.[side];
-	if (bundle) out.push({ id: bundle, fat: true });
-	// A row with nothing wired on this side: a free socket for it (new containers, in edit mode).
-	if (editable.value && !(props.data.kind === 'test' && side === 'out')) {
-		for (const r of rows) if (!r[side]) out.push({ id: `free:${side}:${r.recordId}`, fat: false, free: r.recordId });
-	}
-	return out;
-}
-
 // The two stacks are centred on each other, so a cut's one input sits level with the middle of its pieces
 // and rows in place (same count each side) line up straight across.
 const rail = computed(() => {
-	const ins = sideSockets('in');
-	const outs = sideSockets('out');
+	const ins = railSockets(props.data, 'in', { editable: editable.value });
+	const outs = railSockets(props.data, 'out', { editable: editable.value });
 	const tall = Math.max(ins.length, outs.length, 1);
-	const place = (list: { id: string; fat: boolean; free?: string }[]): RailSocket[] =>
+	const place = (list: RailSocketModel[]): RailSocket[] =>
 		list.map((s, i) => ({ ...s, top: `${RAIL_PAD + PITCH / 2 + ((tall - list.length) / 2 + i) * PITCH}px` }));
 	return { ins: place(ins), outs: place(outs), height: `${RAIL_PAD * 2 + tall * PITCH}px` };
 });
@@ -201,7 +172,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					class="sock rail-sock in free nodrag nopan"
 					:style="{ top: s.top }"
 					:aria-label="freeSocketLabel('in', what)"
-					v-bind="freeProps(s.free, 'in')"
+					v-bind="freeProps(s.recordId, 'in')"
 				></button>
 				<Handle
 					v-else
@@ -226,7 +197,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					class="sock rail-sock out free nodrag nopan"
 					:style="{ top: s.top }"
 					:aria-label="freeSocketLabel('out', what)"
-					v-bind="freeProps(s.free, 'out')"
+					v-bind="freeProps(s.recordId, 'out')"
 				></button>
 				<Handle
 					v-else
