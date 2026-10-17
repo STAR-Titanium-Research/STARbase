@@ -18,6 +18,24 @@ describe('the move from a row to a card', () => {
 		expect(invert(rect(0, 0, 10, 40), rect(0, 0, 220, 100)).scale).toBe(MIN_SCALE);
 	});
 
+	it('divides the distance by the canvas zoom: the card moves in the zoomed viewport\'s units (a ratio is the same in both)', () => {
+		const row = rect(100, 400, 600, 40);
+		const card = rect(800, 100, 110, 50); // on screen at zoom 0.5 (it is 220 x 100 in the viewport)
+		const half = invert(row, card, 0.5);
+		const one = invert(row, card);
+		expect(half.dx).toBeCloseTo(one.dx * 2);
+		expect(half.dy).toBeCloseTo(one.dy * 2);
+		expect(half.scale).toBe(one.scale);
+		expect(invert(row, card, 0).dx).toBe(one.dx); // a bad zoom counts as 1
+	});
+
+	it('carries the zoom into the keyframes of a card on the canvas', () => {
+		const row = rect(100, 400, 600, 40);
+		const card = rect(800, 100, 220, 100);
+		const [from] = keyframes(row, card, { reduced: false, zoom: 2 });
+		expect(from.transform).toBe(`translate(${-510 / 2}px, ${270 / 2}px) scale(1)`);
+	});
+
 	it('copes with a card that has no width yet', () => {
 		expect(invert(rect(0, 0, 100, 40), rect(0, 0, 0, 0)).scale).toBe(1);
 	});

@@ -28,24 +28,28 @@ const centre = (r: Rect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 
 
 /**
  * The transform that puts a card that is at `last` where `first` is: centres on each other, one scale for both axes (so the card is
- * not stretched into the shape of a row) that fits the card into the row's width, within MIN_SCALE and 1.
+ * not stretched into the shape of a row) that fits the card into the row's width, within MIN_SCALE and 1. `zoom` is the canvas's, for a
+ * card that is drawn inside it (a ghost is not: it is fixed on the page).
  */
-export function invert(first: Rect, last: Rect): { dx: number; dy: number; scale: number } {
+export function invert(first: Rect, last: Rect, zoom = 1): { dx: number; dy: number; scale: number } {
 	const a = centre(first);
 	const b = centre(last);
 	const raw = last.width > 0 ? first.width / last.width : 1;
-	return { dx: a.x - b.x, dy: a.y - b.y, scale: Math.min(1, Math.max(MIN_SCALE, raw)) };
+	// A card on the canvas sits inside the zoomed viewport: its transform is in the viewport's units, the rectangles are in screen
+	// pixels. The scale is a ratio, the same in both.
+	const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
+	return { dx: (a.x - b.x) / z, dy: (a.y - b.y) / z, scale: Math.min(1, Math.max(MIN_SCALE, raw)) };
 }
 
 export const transformOf = (t: { dx: number; dy: number; scale: number }): string => `translate(${round(t.dx)}px, ${round(t.dy)}px) scale(${round(t.scale)})`;
 const round = (n: number) => Math.round(n * 100) / 100;
 
 /** The keyframes of one card landing: from its row (or just transparent) to where it is. `reverse` flies it back. */
-export function keyframes(first: Rect | null, last: Rect, o: { reduced: boolean; reverse?: boolean }): Keyframe[] {
+export function keyframes(first: Rect | null, last: Rect, o: { reduced: boolean; reverse?: boolean; zoom?: number }): Keyframe[] {
 	const there: Keyframe = { transform: 'none', opacity: 1 };
 	let from: Keyframe;
 	if (o.reduced || !first) from = { transform: 'none', opacity: 0 };
-	else from = { transform: transformOf(invert(first, last)), opacity: 0.35 };
+	else from = { transform: transformOf(invert(first, last, o.zoom)), opacity: 0.35 };
 	// `transform-origin` is the card's centre: the transform above is between centres.
 	return o.reverse ? [there, from] : [from, there];
 }
@@ -73,7 +77,7 @@ export interface FlyStep {
 }
 
 /** One step per card, in the order they were picked. */
-export function planFly(cards: readonly FlyCard[], o: { reduced: boolean; reverse?: boolean }): FlyStep[] {
+export function planFly(cards: readonly FlyCard[], o: { reduced: boolean; reverse?: boolean; zoom?: number }): FlyStep[] {
 	return cards.map((c, i) => ({ id: c.id, keyframes: keyframes(c.first, c.last, o), ...timing(i, o), last: c.last }));
 }
 

@@ -43,6 +43,16 @@ export function useSamplePicking(o: { edit: EditMode; map: ProcessMap; canvas: P
 		}
 		return null;
 	}
+	/** How far the canvas is zoomed: a card's size on the screen over its size in the viewport. 1 when it cannot be told. */
+	function canvasZoom(): number {
+		for (const node of canvasEl.value?.querySelectorAll<HTMLElement>('.vue-flow__node') ?? []) {
+			const card = node.querySelector<HTMLElement>('.node') ?? node;
+			if (!card.offsetWidth) continue;
+			const z = card.getBoundingClientRect().width / card.offsetWidth;
+			return Number.isFinite(z) && z > 0 ? z : 1;
+		}
+		return 1;
+	}
 	const landed = (ids: readonly string[]): Map<string, Rect | null> => new Map(ids.map((id) => [id, cardEl(id) ? rectOf(cardEl(id)!.getBoundingClientRect()) : null]));
 	/** After the layout has put the cards where they go, and the browser has drawn them. */
 	async function afterLayout(): Promise<void> {
@@ -69,7 +79,8 @@ export function useSamplePicking(o: { edit: EditMode; map: ProcessMap; canvas: P
 	async function fly(entry: FlyEntry, reverse: boolean, from?: Map<string, Rect | null>): Promise<void> {
 		const reduced = prefersReducedMotion();
 		const places = from ?? landed(entry.ids);
-		const steps = planFly(cardsOf(entry.ids.map((id, i) => ({ id, rect: entry.rects[i] })), places), { reduced, reverse });
+		// The real cards fly inside the zoomed viewport; the ghosts of a reverse fly are fixed on the page, in screen pixels.
+		const steps = planFly(cardsOf(entry.ids.map((id, i) => ({ id, rect: entry.rects[i] })), places), { reduced, reverse, zoom: reverse ? 1 : canvasZoom() });
 		await playFly(steps, target, { reverse });
 	}
 

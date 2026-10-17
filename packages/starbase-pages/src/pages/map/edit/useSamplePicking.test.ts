@@ -9,19 +9,24 @@ import { useSamplePicking } from './useSamplePicking';
 
 interface Played {
 	id: string;
+	from?: Keyframe;
 	delay: number | undefined;
 	ghost: boolean;
 }
+
+const zoom = { value: 1 };
 
 function setup() {
 	const played: Played[] = [];
 	const elements = new Map<string, unknown>();
 	const cardFor = (id: string, ghost = false) => ({
-		animate: (_k: Keyframe[], o: KeyframeAnimationOptions) => {
-			played.push({ id, delay: o.delay as number | undefined, ghost });
+		animate: (k: Keyframe[], o: KeyframeAnimationOptions) => {
+			played.push({ id, from: k[0], delay: o.delay as number | undefined, ghost });
 			return { finished: Promise.resolve() } as unknown as Animation;
 		},
-		getBoundingClientRect: () => ({ left: 800, top: 100, width: 220, height: 100 }),
+		// The card is 220 px wide in the viewport; on the screen it is that times the zoom the test sets.
+		getBoundingClientRect: () => ({ left: 800, top: 100, width: 220 * zoom.value, height: 100 }),
+		offsetWidth: 220,
 		remove: vi.fn(),
 	});
 	for (const id of ['s1', 's2']) elements.set(`s:${id}`, cardFor(id));
@@ -46,7 +51,10 @@ function setup() {
 	return { played, canvasEl, cardFor };
 }
 
-afterEach(() => void vi.unstubAllGlobals());
+afterEach(() => {
+	vi.unstubAllGlobals();
+	zoom.value = 1;
+});
 
 async function start() {
 	const server = fakeServer();
@@ -86,6 +94,17 @@ describe('picking samples', () => {
 		await picking.picked([row('s1'), row('s2')]);
 		expect(picking.open.value).toBe(false);
 		expect(played.map((p) => [p.id, p.delay, p.ghost])).toEqual([['s1', 0, false], ['s2', 40, false]]);
+	});
+
+	it('flies the cards by the canvas zoom: a card inside a viewport at 0.5 travels twice the screen distance in its own units', async () => {
+		const at1 = await start();
+		await at1.picking.picked([row('s1')]);
+		zoom.value = 0.5;
+		const half = await start();
+		await half.picking.picked([row('s1')]);
+		const t = (k?: Keyframe) => String(k?.transform);
+		expect(t(at1.played[0].from)).toBe('translate(-755px, 270px) scale(0.5)');
+		expect(t(half.played[0].from)).toBe('translate(-1400px, 540px) scale(1)');
 	});
 
 	it('says so when some cannot be read, and adds the rest', async () => {
