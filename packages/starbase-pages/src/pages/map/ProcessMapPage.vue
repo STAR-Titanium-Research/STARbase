@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from '../../ExplorerView.vue';
-import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
+import { computed, provide, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -14,8 +14,6 @@ import type { Dir } from './model/elkInput';
 import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
-import CreateBar from './edit/CreateBar.vue';
-import EditLid from './edit/EditLid.vue';
 import EditOverlays from './edit/EditOverlays.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
@@ -24,10 +22,11 @@ import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
 import type { ChainDir } from './model/hoverFocus';
 import ExportFrame from './ExportFrame.vue';
-import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
 import MapSheet from './MapSheet.vue';
+import MapStrip from './MapStrip.vue';
+import MapTitleActions from './MapTitleActions.vue';
 import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
@@ -240,21 +239,6 @@ const tipHint = computed(() => {
 	return from ? `Ctrl/⌘+click to go to ${from.slice(5)}` : undefined;
 });
 
-const copied = ref(false);
-let copiedTimer: ReturnType<typeof setTimeout> | null = null;
-async function copyLink() {
-	try {
-		await navigator.clipboard.writeText(window.location.href);
-		copied.value = true;
-		if (copiedTimer) clearTimeout(copiedTimer);
-		copiedTimer = setTimeout(() => (copied.value = false), 2000);
-	} catch {
-		/* no clipboard (an insecure origin or a refused permission): the address bar has the link */
-	}
-}
-onBeforeUnmount(() => {
-	if (copiedTimer) clearTimeout(copiedTimer);
-});
 </script>
 
 <template>
@@ -302,10 +286,7 @@ onBeforeUnmount(() => {
 					</template>
 
 					<template #title-actions>
-						<v-button v-if="edit.editing.value" small @click="edit.done()"><v-icon name="check" small /> Done editing</v-button>
-						<v-button v-else-if="edit.canBuild.value && !edit.param.value" small secondary @click="edit.startEditing()"><v-icon name="edit" small /> Edit</v-button>
-						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
-						<ExportMenu :busy="mapExport.exporting.value" :disabled="!canvas.laidOut.value || !map.nodes.value.length || mapExport.exporting.value" @pick="mapExport.exportAs" />
+						<MapTitleActions :edit="edit" :map-export="mapExport" :can-export="canvas.laidOut.value && map.nodes.value.length > 0" />
 					</template>
 
 					<template v-if="!phone" #rail>
@@ -322,47 +303,7 @@ onBeforeUnmount(() => {
 							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
 
-						<EditLid
-							v-if="edit.editing.value"
-							:name="edit.draft.name.value"
-							:can-undo="edit.draft.canUndo.value"
-							:can-redo="edit.draft.canRedo.value"
-							:drafts="edit.drafts.value"
-							:current-id="edit.draft.draftId.value"
-							:saving="edit.draft.saving.value"
-							:save-error="edit.draft.saveError.value"
-							:notice="edit.draft.notice.value"
-							@undo="build.undo()"
-							@redo="build.redo()"
-							@rename="edit.draft.rename"
-							@add="build.addUnconnected"
-							@pick="build.pickerOpen.value = true"
-							@open="edit.openDraft"
-							@dismiss-notice="edit.draft.notice.value = ''"
-						>
-							<template #create>
-								<CreateBar :summary="edit.summary.value" :missing="edit.missing.value" :creating="create.creating.value" :error="create.error.value" :empty="create.empty.value" @create="create.create" />
-							</template>
-						</EditLid>
-						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
-						<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': edit.failed.value !== UNAVAILABLE }" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</div>
-						<div v-if="markDone.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
-							<span>{{ markDone.error.value }}</span>
-							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="markDone.error.value = ''"><v-icon name="close" x-small /></button>
-						</div>
-						<div v-if="build.problem.value || build.picking.problem.value" class="pm-banner pm-bad pm-dismissable" role="alert">
-							<span>{{ build.problem.value || build.picking.problem.value }}</span>
-							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="build.problem.value = ''; build.picking.problem.value = ''"><v-icon name="close" x-small /></button>
-						</div>
-						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
-						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
-						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
-						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
-						<div v-if="mapExport.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
-							<span>{{ mapExport.error.value }}</span>
-							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="mapExport.dismissError()"><v-icon name="close" x-small /></button>
-						</div>
-						<div v-else-if="mapExport.notice.value" class="pm-banner" role="status">{{ mapExport.notice.value }}</div>
+						<MapStrip :edit="edit" :side="side" :map="map" :canvas="canvas" :map-export="mapExport" />
 
 						<div
 							ref="canvasEl"
@@ -443,19 +384,6 @@ onBeforeUnmount(() => {
 }
 /* Nodes sit at 0,0 until the first layout has run; keep them out of sight until then. */
 .pm-canvas.pending { opacity: 0; }
-
-.pm-banner {
-	padding: 7px 14px;
-	font-size: var(--fs-sm, 12px);
-	color: var(--d1-dim, var(--theme--foreground-subdued));
-	background: var(--d1-tile, var(--theme--background-subdued));
-	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
-}
-.pm-bad { color: var(--d1-bad, var(--theme--danger)); }
-.pm-dismissable { display: flex; align-items: center; gap: 8px; }
-.pm-dismissable span { flex: 1; }
-.pm-dismiss { display: inline-flex; padding: 2px; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer; }
-.pm-dismiss:hover, .pm-dismiss:focus-visible { background: var(--d1-tile, var(--theme--background-subdued)); outline: none; }
 
 /* The project frame (spec D13): in flow coordinates inside Vue Flow's transformed pane, behind the nodes. */
 .pm-frame {
