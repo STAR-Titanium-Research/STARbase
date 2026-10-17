@@ -17,7 +17,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\auto-publish-release.ps1
 
 param(
-    [string]$Repo = 'dpremoli/D1-Database',
+    [string]$Repo = 'STAR-Titanium-Research/STARbase',
     [string]$Prefix = 'force-app-v'
 )
 $ErrorActionPreference = 'Stop'

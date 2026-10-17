@@ -1,7 +1,7 @@
 // Where the nodes go after an expand or a merge (spec §6.7): only the new cards are laid out, so that they do
 // not overlap anything; a dragged card stays where it was dropped, and the other cards on the map keep their
 // places unless a card that grew must push them. Pure: ELK's positions for the whole graph come in, final positions of the cards that
-// move go out. A full Re-layout does not come through here.
+// move go out. A full Re-layout does not come through here; + and − do, in `exact` mode (see PlaceInput.exact: a full layout round the dragged cards).
 //
 // New cards keep ELK's arrangement among themselves. A group of new cards wired to a card that is already
 // placed is shifted so that it lines up with that card; a group wired to nothing placed (the used-in fan of
@@ -39,10 +39,16 @@ export interface PlaceInput {
   anchors?: string[];
   /** Cards the person dragged: a card that grew never pushes these aside (they stay where they were dropped). */
   pinned?: ReadonlySet<string>;
+  /**
+   * A full layout round the dragged cards (+ and − on a card): `placed` holds only the dragged cards, and every other card takes
+   * ELK's place as it is. Cards are not lined up with the placed cards they are wired to (that would shift the whole layout by a
+   * dragged card's offset); the only thing done to them is stepping clear of a dragged card they would lie on.
+   */
+  exact?: boolean;
 }
 
 /** Room kept between cards the layout moves. */
-const GAP = 28;
+export const GAP = 28;
 /** A card whose size changed by less than this did not grow. */
 const GROWN = 2;
 
@@ -53,10 +59,10 @@ const median = (xs: number[]): number => {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 };
 
-const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width + GAP && b.x < a.x + a.width + GAP && a.y < b.y + b.height + GAP && b.y < a.y + a.height + GAP;
+export const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width + GAP && b.x < a.x + a.width + GAP && a.y < b.y + b.height + GAP && b.y < a.y + a.height + GAP;
 
 /** The cross axis is the one nodes of a layer stack along: y when the flow runs right, x when it runs down. */
-const cross = (dir: Dir) =>
+export const cross = (dir: Dir) =>
   dir === 'RIGHT'
     ? { start: (b: Box) => b.y, end: (b: Box) => b.y + b.height, set: (b: Box, v: number): void => void (b.y = v) }
     : { start: (b: Box) => b.x, end: (b: Box) => b.x + b.width, set: (b: Box, v: number): void => void (b.x = v) };
@@ -135,11 +141,12 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
       if (set.has(e.from) && fixed.has(e.to) && elk[e.to]) neighbours.add(e.to);
       if (set.has(e.to) && fixed.has(e.from) && elk[e.from]) neighbours.add(e.from);
     }
-    let shift: Point = global;
-    if (neighbours.size) {
+    let shift: Point = input.exact ? { x: 0, y: 0 } : global; // exact: ELK's places as they are
+    const lineUp = !input.exact;
+    if (lineUp && neighbours.size) {
       const ns = [...neighbours];
       shift = { x: median(ns.map((n) => fixed.get(n)!.x - elk[n].x)), y: median(ns.map((n) => fixed.get(n)!.y - elk[n].y)) };
-    } else if (anchorIds.length) {
+    } else if (lineUp && anchorIds.length) {
       // Nothing placed to line up with: beside the expanded card, keeping the group's own arrangement.
       const x0 = Math.min(...members.map((m) => elk[m].x));
       const y0 = Math.min(...members.map((m) => elk[m].y));

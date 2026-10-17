@@ -66,3 +66,17 @@ sample created by A shows A as owner.
 they were (migration 141 keeps them in the private schema `d1_private` until then) and the hidden
 project aliases it added are removed. Restart Directus again afterwards, for the same reasons.
 Restore the backup only if data was damaged (`backup-restore.md`).
+
+## After a Directus upgrade: `directus_files` columns
+
+The Lab Member `create` and `update` rows of `directus_files` list their fields (Directus has no "all but", ADR-0022), taken from the production snapshot in
+`db/schema.sql`. When a Directus release adds a column to `directus_files`, add it to the `directus_files` field lists in `scripts/access_rules.json`
+(`custom`), regenerate (`python3 scripts/gen_access_rules.py --write`), apply the change in a new migration, and refresh the `CREATE TABLE public.directus_files`
+block of `db/schema.sql`; until then members cannot write the new column (`tests/scripts/test_access_rules.py` fails when the snapshot and the lists differ).
+
+## After the SEM reader (migrations 196 and 197, ADR-0022)
+
+Migration 196 adds the owner columns to `directus_files` and puts a readers filter on the Lab Member and Lab Viewer file rules, so it
+needs the same stop-before-pull, migrate, restart-Directus order as migration 141: the bind-mounted `d1-inbox` extension is hot-loaded by
+the pull (`EXTENSIONS_AUTO_RELOAD`) and reads the new columns and table at once. The full sequence, with the rollback order and the
+crawler's re-read passes, is "Upgrading to the SEM reader" and "Rolling back the SEM reader" in [`inbox-crawler.md`](inbox-crawler.md).

@@ -31,8 +31,10 @@ export interface MapActions {
 	toggleMore(id: string): void;
 	/** − on a card or a record that ＋ opened: takes away what that ＋ added. */
 	collapse?(id: string): void;
-	/** "Unstack" on a stack of passes: draws each pass as its own card. */
+	/** "Unstack" on a stack of passes, or a double-click on it: draws each pass as its own card. */
 	unstack?(id: string): void;
+	/** A double-click on a pass of an unstacked stack: the whole stack stacks again. */
+	restack?(id: string): void;
 }
 
 export interface MapView {
@@ -118,12 +120,25 @@ export const activating = (fn: () => void) => (e: KeyEv) => {
 	fn();
 };
 
-/** A card (node): body click selects it, hover reports it, the ＋ button expands it (− collapses it once open). */
-export const cardHandlers = (a: MapActions, id: () => string, open: () => boolean = () => false) => ({
+/** What a double-click on a card's body does to its stack: a stack unstacks, a pass of an unstacked stack stacks again, any other card nothing. */
+export type StackDblclick = 'unstack' | 'restack' | null;
+/** What inside a card a double-click leaves alone: buttons, sockets, and the form's slots (links, inputs). */
+const DBLCLICK_IGNORES = 'button, [role="button"], .sock, .slots, a, input, select, textarea';
+
+/**
+ * A card (node): body click selects it, hover reports it, the ＋ button expands it (− collapses it once open). `stack` says what a double-click
+ * on the body does (see StackDblclick); the click that began it has already selected the card, and the canvas does not zoom on it.
+ */
+export const cardHandlers = (a: MapActions, id: () => string, open: () => boolean = () => false, stack: () => StackDblclick = () => null) => ({
 	select: () => a.select(id()),
 	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(id(), e.currentTarget as HTMLElement),
 	leave: () => a.hover(null),
 	expand: stopping(() => (open() && a.collapse ? a.collapse(id()) : a.expand(id()))),
+	dblclick: (e: { target: unknown }) => {
+		const what = stack();
+		if (!what || (e.target as Element | null)?.closest?.(DBLCLICK_IGNORES)) return;
+		a[what]?.(id());
+	},
 });
 
 /** Whether the ＋ of card or record `id` is open (it draws −). */

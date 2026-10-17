@@ -725,6 +725,43 @@ describe('buildGraph: a stack of passes', () => {
   });
 });
 
+describe('buildGraph: stackable wires', () => {
+  const pass = (id: string, day: number, over: Parameters<typeof mkOp>[0] = {}) =>
+    mkOp({ id, sampleId: 's1', outputSampleId: 's1', methodId: 'turn', methodName: 'Turning', category: 'machining', date: `2026-09-0${day}T09:00:00Z`, ...over });
+  const polish = pass('p', 4, { methodId: 'pol', methodName: 'Polishing' });
+  const tensile = mkTest({ id: 'tt', subjectSampleIds: ['s1'], date: '2026-09-09T09:00:00Z', category: 'destructive' });
+  const data = mkData({ samples: sam('s1'), operations: [pass('a', 1), pass('b', 2), pass('c', 3), polish], tests: [tensile] });
+  const groups = groupBatches(data.operations, data.tests, { probable: true, stack: true, unstacked: new Set(['a', 'b', 'c']) });
+  const stackable = (g: ProcessGraph) => g.wires.filter((w) => w.stackable).map((w) => w.id);
+
+  it('a wire from one pass of an unstacked stack to the next is stackable; the first, the last and a wire to another step are not', () => {
+    const g = buildGraph(data, groups, { slots, unstackedGroups: [['a', 'b', 'c']] });
+    expect(stackable(g)).toEqual(['op:a:out:0>op:b:in:0', 'op:b:out:0>op:c:in:0']);
+    expect(wire(g, 's:s1:out:0', 'op:a:in:0')?.stackable).toBeUndefined();
+    expect(wire(g, 'op:c:out:0', 'op:p:in:0')?.stackable).toBeUndefined(); // into the polish: another method
+    expect(wire(g, 'op:p:out:0', 'test:tt:in:0')?.stackable).toBeUndefined();
+  });
+
+  it('marks the cards of those passes as passes of an unstacked stack, and no other', () => {
+    const g = buildGraph(data, groups, { slots, unstackedGroups: [['a', 'b', 'c']] });
+    expect(['a', 'b', 'c'].map((id) => container(g, `op:${id}`).unstackedPass)).toEqual([true, true, true]);
+    expect(container(g, 'op:p').unstackedPass).toBeUndefined();
+    expect(container(g, 'test:tt').unstackedPass).toBeUndefined();
+  });
+
+  it('nothing is stackable without unstacked groups', () => {
+    const g = buildGraph(data, groups, { slots });
+    expect(stackable(g)).toEqual([]);
+    expect(container(g, 'op:a').unstackedPass).toBeUndefined();
+  });
+
+  it('two passes of a group with another step between them are not stackable', () => {
+    const between = mkData({ samples: sam('s1'), operations: [pass('a', 1), pass('b', 3)], tests: [mkTest({ id: 'mid', subjectSampleIds: ['s1'], date: '2026-09-02T09:00:00Z' })] });
+    const g = buildGraph(between, groupBatches(between.operations, between.tests, { probable: true }), { slots, unstackedGroups: [['a', 'b']] });
+    expect(stackable(g)).toEqual([]);
+  });
+});
+
 describe('buildGraph: planned work and drafts', () => {
   const planned = (p: Parameters<typeof mkOp>[0]) => mkOp({ workState: 'planned', plannedDate: '2026-11-01', date: '2026-11-01', ...p });
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, FactList, LoadState, RecordLink, Section, StatTile, edgeLabel, findInsert, freshWithHistory, insertLabel, mismatchText,
+	DataTable, FactList, LoadState, RecordLink, Section, StatTile, edgeLabel, edgeSummary, findInsert, freshWithHistory, insertLabel, mismatchText,
 	STATE_LABEL, STATE_ORDER, stateCounts, typeFacts, type SectionState, type ToolingModel,
 } from '@d1/ui';
 import StateBadge from './StateBadge.vue';
@@ -25,7 +25,8 @@ const next = computed(() => {
 	const insert = findInsert(props.model, props.nextFresh.insertId);
 	const edge = insert?.edges.find((e) => e.id === props.nextFresh!.edgeId);
 	if (!insert || !edge) return null;
-	return { insert, edge, fresh: insert.edges.filter((e) => !e.used).length };
+	const { fresh, total } = edgeSummary(insert);
+	return { insert, edge, fresh, total };
 });
 const mismatches = computed(() => freshWithHistory(props.model, props.counts.data));
 const nextWarning = computed(() => {
@@ -36,7 +37,7 @@ const nextWarning = computed(() => {
 const rows = computed(() =>
 	props.model.inserts.map((insert) => ({
 		insert,
-		fresh: insert.edges.filter((e) => !e.used).length,
+		...edgeSummary(insert),
 		suspect: mismatches.value.filter((m) => m.insert.id === insert.id).length,
 	})),
 );
@@ -54,7 +55,7 @@ const rows = computed(() =>
 			<RecordLink collection="insert_edges" :id="next.edge.id" class="edge">Edge {{ edgeLabel(next.insert, next.edge) }}</RecordLink>
 			<span class="where">
 				on <RecordLink collection="cutting_inserts" :id="next.insert.id">{{ insertLabel(next.insert) }}</RecordLink>
-				· {{ next.fresh }} of {{ next.insert.edges.length }} edges fresh
+				· {{ next.fresh }} of {{ next.total }} edges fresh
 			</span>
 			<p v-if="nextWarning" class="d1-note warn">{{ nextWarning }}</p>
 		</div>
@@ -76,7 +77,7 @@ const rows = computed(() =>
 					<td class="fit dim num">{{ r.insert.number ?? '' }}</td>
 					<td><RecordLink collection="cutting_inserts" :id="r.insert.id" class="mono">{{ r.insert.code }}</RecordLink></td>
 					<td><StateBadge :state="r.insert.state" /></td>
-					<td class="num">{{ r.fresh }} of {{ r.insert.edges.length }}</td>
+					<td class="num">{{ r.fresh }} of {{ r.total }}</td>
 					<td class="dim">
 						<span v-if="r.suspect" class="d1-note warn">{{ r.suspect }} marked fresh, but used</span>
 					</td>

@@ -1,0 +1,19 @@
+{
+  "description": "a folder of the caller's own folder ignored: the rule, and how many open files below it were dismissed",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "World-Ti Paper/Drafts"
+    }
+  },
+  "status": 201,
+  "body": {
+    "data": {
+      "ignored_id": "00000000-0000-4000-8000-000000009401",
+      "folder": "World-Ti Paper/Drafts",
+      "team_id": null,
+      "dismissed": 12
+    }
+  }
+}

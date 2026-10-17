@@ -1,0 +1,22 @@
+{
+  "description": "a filter the server refuses",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "kind": "video"
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "Unknown kind.",
+        "extensions": {
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

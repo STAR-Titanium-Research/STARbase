@@ -1,0 +1,16 @@
+{
+  "description": "auto-link turned on",
+  "request": {
+    "method": "PUT",
+    "path": "/d1-inbox/prefs",
+    "body": {
+      "auto_link": true
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "auto_link": true
+    }
+  }
+}

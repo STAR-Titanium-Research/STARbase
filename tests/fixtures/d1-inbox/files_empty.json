@@ -1,0 +1,21 @@
+{
+  "description": "GET /d1-inbox/files?tab=new&limit=50",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "new",
+      "limit": "50"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [],
+    "meta": {
+      "total": 0,
+      "limit": 50,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

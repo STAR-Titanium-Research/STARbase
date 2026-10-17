@@ -1,0 +1,1503 @@
+"""Everything the crawler reads from and writes to Postgres, in one place.
+
+Tables: `d1_private.file_candidates`, `inbox_dirs`, `inbox_scan_requests`, `inbox_crawler_state`,
+`inbox_prefs` (migration 193), `file_thumbnails` (migration 198, derived pictures), `inbox_ignored_dirs` (migration 199, read only: the owners' ignore rules), plus `directus_files`, `directus_folders`, `file_fingerprints`, `people`,
+`teams`, `short_ids` and the record tables it reads for recognition. The crawler never writes a junction
+row or a link (invariant 5): that is the d1-inbox extension's job.
+
+The connection's search_path is `<private schema>, public`, so the SQL below names tables bare. Tests point
+the private schema at a throwaway schema that carries every table.
+
+Methods do not commit unless they say so; the scan loop commits at the points that make a restart safe.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from . import classify_sem, identity, owners, recognise
+from .fs_readonly import IMAGE_EXTENSIONS, extension
+from .hashing import HashOutcome
+from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
+from .owners import Owner, clean_rel_path
+
+log = logging.getLogger("inbox_crawler.db")
+
+STATE_ID = "00000000-0000-0000-0000-000000000001"
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+# A request left 'running' longer than this belongs to a daemon that died.
+STALE_REQUEST_MINUTES = 15
+# An errored hash is tried again no sooner than this.
+HASH_RETRY_HOURS = 1
+# The fingerprint error written for a linked document whose stored path is not its own (see
+# adopted_awaiting_hash), and how many pages of the queue one call looks through.
+BAD_PATH_ERROR = "path is not under its owner folder"
+BAD_PATH_PAGES = 50
+# The rules table is looked for again this often while it is missing (see Store._has_ignored_dirs), and a
+# page of candidates the exact Python re-check cut short is topped up at most this many times.
+IGNORED_TABLE_RECHECK = timedelta(seconds=60)
+IGNORE_RECHECK_PAGES = 5
+# The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
+# bigint; it lives on the crawler's own connection, so it goes with a killed process.
+CRAWLER_LOCK_KEY = 7_302_150_400_193
+# The heartbeat's own connection gives up on a locked or slow status row after these many milliseconds: a
+# heartbeat is best effort and must never hold the scan up.
+HEARTBEAT_LOCK_TIMEOUT_MS = 2_000
+HEARTBEAT_STATEMENT_TIMEOUT_MS = 5_000
+HEARTBEAT_CONNECT_TIMEOUT_S = 5
+
+
+def connect(dsn: str, private_schema: str = "d1_private"):
+    """A connection with the private schema first on the search path. Never logs the DSN."""
+    import psycopg2
+    from psycopg2 import sql
+
+    conn = psycopg2.connect(dsn)
+    conn.autocommit = False
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SET search_path TO {}, public").format(
+                sql.Identifier(private_schema)
+            )
+        )
+    conn.commit()
+    return conn
+
+
+def _owner_eq(owner: Owner, prefix: str = "") -> str:
+    """The owner filter as one plain equality on the owner's own column (one branch per owner kind), so
+    the owner indexes are usable; the id is the single parameter. A person owner has no team and vice
+    versa (a table CHECK), so the other column needs no test."""
+    return (
+        f"{prefix}owner_person_id = %s"
+        if owner.kind == "person"
+        else f"{prefix}owner_team_id = %s"
+    )
+
+
+def to_datetime(mtime_ns: int) -> datetime:
+    """A file's modification time as an exact (microsecond) timestamp, so equal times compare equal."""
+    return _EPOCH + timedelta(microseconds=mtime_ns // 1000)
+
+
+@dataclass(frozen=True)
+class DirRow:
+    dir_mtime: datetime | None
+    last_listed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class Cand:
+    candidate_id: str
+    directus_files_id: str
+    rel_path: str
+    state: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class ThumbTarget:
+    """A candidate that needs its thumbnails made (or made again): what to read and what it looked like."""
+
+    candidate_id: str
+    rel_path: str
+    size: int
+    mtime: datetime
+
+
+@dataclass(frozen=True)
+class Copy:
+    cand: Cand
+    size: int
+    mtime: datetime | None
+
+
+@dataclass(frozen=True)
+class RegisterResult:
+    candidate_id: str | None
+    created: bool
+    duplicate_of: str | None = None
+
+
+class Store:
+    def __init__(
+        self,
+        conn,
+        *,
+        storage: str = "star",
+        root_folder_name: str = "star_group1",
+        heartbeat_dsn: str | None = None,
+        private_schema: str | None = None,
+    ):
+        self.conn = conn
+        self.storage = storage
+        self.root_folder_name = root_folder_name
+        # The heartbeat is written on a connection of its own (see heartbeat()). Without an explicit DSN it
+        # reuses the scan connection's own parameters; without a schema, that connection's search_path.
+        self._heartbeat_dsn = heartbeat_dsn
+        self._heartbeat_path = (
+            None if private_schema is None else f"{private_schema}, public"
+        )
+        self._heartbeat_conn = None
+        self._heartbeat_failing = False
+        self._folders_done: set[str] = set()
+        self._surface_scans: bool | None = (
+            None  # see _has_surface_scans; filled on first use
+        )
+        self._warned: set[str] = (
+            set()
+        )  # candidates already complained about (once per process)
+        self._thumbs_warned = False
+        # (rules table exists, when that was asked); None until asked (see _has_ignored_dirs)
+        self._ignored_table: tuple[bool, datetime] | None = None
+
+    # ---- plumbing --------------------------------------------------------------------
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def rollback(self) -> None:
+        self.conn.rollback()
+        self._folders_done.clear()  # the folder rows may have been rolled back with it
+
+    def _all(self, query: str, params=()):
+        with self.conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def _one(self, query: str, params=()):
+        with self.conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchone()
+
+    def _run(self, query: str, params=()) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.rowcount
+
+    # ---- the singleton state row -----------------------------------------------------
+
+    def load_state(self) -> dict | None:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT * FROM inbox_crawler_state WHERE id = %s", (STATE_ID,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return dict(zip([d[0] for d in cur.description], row, strict=True))
+
+    def try_crawler_lock(self) -> bool:
+        """Take the single-crawler advisory lock on this connection, without waiting. False when another
+        connection (another daemon, or a --once run) holds it. Postgres releases it when the connection
+        ends, and it is not tied to a transaction, so commits and rollbacks leave it alone."""
+        row = self._one("SELECT pg_try_advisory_lock(%s)", (CRAWLER_LOCK_KEY,))
+        self.commit()
+        return bool(row and row[0])
+
+    def daemon_started(self) -> None:
+        self._run(
+            "UPDATE inbox_crawler_state SET daemon_started_at = now(), last_heartbeat_at = now(), "
+            "current_activity = 'starting', updated_at = now() WHERE id = %s",
+            (STATE_ID,),
+        )
+        self.commit()
+
+    def heartbeat(self, activity: str | None) -> None:
+        """Best effort: a failed status write must never take the daemon down.
+
+        Written on a separate autocommit connection, never on the scan's. The scan connection holds the
+        owner's unfinished registrations in an open transaction (committed only after the owner's alias
+        check), so a heartbeat on it would commit that work unchecked, and a failed one would roll it back
+        silently. This one can neither: on any failure it only logs, and tries a new connection next time."""
+        try:
+            conn = self._heartbeat_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE inbox_crawler_state SET current_activity = %s, last_heartbeat_at = now(), "
+                    "updated_at = now() WHERE id = %s",
+                    ((activity or "")[:900] or None, STATE_ID),
+                )
+            self._heartbeat_failing = False
+        except Exception as exc:  # noqa: BLE001
+            self._drop_heartbeat_connection()
+            # Once per run of failures: a heartbeat fires every few seconds. Never the exception text, which
+            # can echo the DSN.
+            if not self._heartbeat_failing:
+                self._heartbeat_failing = True
+                log.warning(
+                    "heartbeat not written (%s); the scan is not affected",
+                    type(exc).__name__,
+                )
+
+    def _heartbeat_connection(self):
+        if self._heartbeat_conn is not None and not self._heartbeat_conn.closed:
+            return self._heartbeat_conn
+        import psycopg2
+
+        dsn = self._heartbeat_dsn
+        if not dsn:
+            info = self.conn.info
+            dsn = psycopg2.extensions.make_dsn(
+                **{**info.dsn_parameters, "password": info.password}
+            )
+        if self._heartbeat_path is None:
+            self._heartbeat_path = self._scan_search_path()
+        conn = psycopg2.connect(
+            dsn,
+            connect_timeout=HEARTBEAT_CONNECT_TIMEOUT_S,
+            options=(
+                f"-c lock_timeout={HEARTBEAT_LOCK_TIMEOUT_MS} "
+                f"-c statement_timeout={HEARTBEAT_STATEMENT_TIMEOUT_MS}"
+            ),
+        )
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT set_config('search_path', %s, false)",
+                    (self._heartbeat_path,),
+                )
+        except Exception:
+            conn.close()
+            raise
+        self._heartbeat_conn = conn
+        return conn
+
+    def _scan_search_path(self) -> str:
+        """The scan connection's search_path, read without leaving a transaction open that was not."""
+        import psycopg2
+
+        was_idle = (
+            self.conn.info.transaction_status
+            == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+        )
+        try:
+            row = self._one("SHOW search_path")
+        finally:
+            if was_idle:
+                self.conn.rollback()
+        return row[0]
+
+    def _drop_heartbeat_connection(self) -> None:
+        conn, self._heartbeat_conn = self._heartbeat_conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def close_heartbeat(self) -> None:
+        self._drop_heartbeat_connection()
+
+    def scan_started(self) -> None:
+        """A scan of everyone began (a one-person request does not move the schedule)."""
+        self._run(
+            "UPDATE inbox_crawler_state SET last_scan_started_at = now(), updated_at = now() "
+            "WHERE id = %s",
+            (STATE_ID,),
+        )
+        self.commit()
+
+    def scan_finished(
+        self,
+        *,
+        registered: int,
+        errors: int,
+        last_error: str | None,
+        unmatched: list[str] | None,
+        completed: bool,
+        full: bool = True,
+    ) -> None:
+        """Counters always; last_scan_finished_at only for a scan that ran to its end (an aborted one,
+        for example when the share dropped, leaves it where it was). last_error is replaced by a new
+        error, and cleared by a scan of everyone that ran to its end with none (so the admin tab stops
+        showing a problem that has gone); a one-person or unfinished scan leaves it alone."""
+        new_error = (last_error or None) and last_error[:900]
+        self._run(
+            "UPDATE inbox_crawler_state SET "
+            " last_scan_finished_at = CASE WHEN %s AND %s THEN now() ELSE last_scan_finished_at END,"
+            " files_registered = files_registered + %s, error_count = error_count + %s,"
+            " last_error = CASE WHEN %s::text IS NOT NULL THEN %s::text "
+            "   WHEN %s AND %s THEN NULL ELSE last_error END,"
+            " unmatched_folders = COALESCE(%s::jsonb, unmatched_folders), updated_at = now() "
+            "WHERE id = %s",
+            (
+                completed,
+                full,
+                registered,
+                errors,
+                new_error,
+                new_error,
+                completed,
+                full,
+                None if unmatched is None else json.dumps(sorted(unmatched)),
+                STATE_ID,
+            ),
+        )
+        self.commit()
+
+    # ---- scan requests ---------------------------------------------------------------
+
+    def fail_stale_requests(
+        self, older_than_minutes: int | None = STALE_REQUEST_MINUTES
+    ) -> int:
+        """Fail requests a dead daemon left 'running', so the person can ask again (one queued or running
+        request per person). With a number: those running longer than that, which every tick clears (a
+        request this daemon claimed is finished within the same tick, so none of ours is ever running at
+        its start). With None: every running request, for start-up (there is one daemon)."""
+        n = self._run(
+            "UPDATE inbox_scan_requests SET status = 'failed', finished_at = now(), "
+            "error = 'the crawler stopped while it was scanning; ask again' "
+            "WHERE status = 'running' "
+            "AND (%s::int IS NULL OR started_at < now() - make_interval(mins => %s))",
+            (older_than_minutes, older_than_minutes),
+        )
+        self.commit()
+        return n
+
+    def claim_request(self) -> dict | None:
+        """The oldest queued request, now 'running'. FOR UPDATE SKIP LOCKED: two daemons never share one."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE inbox_scan_requests SET status = 'running', started_at = now() "
+                "WHERE request_id = (SELECT request_id FROM inbox_scan_requests WHERE status = 'queued' "
+                "  ORDER BY requested_at, request_id FOR UPDATE SKIP LOCKED LIMIT 1) "
+                "RETURNING request_id::text, scope, person_id::text"
+            )
+            row = cur.fetchone()
+        self.commit()
+        if row is None:
+            return None
+        return {"request_id": row[0], "scope": row[1], "person_id": row[2]}
+
+    def finish_request(self, request_id: str, error: str | None) -> None:
+        self._run(
+            "UPDATE inbox_scan_requests SET status = %s, finished_at = now(), error = %s "
+            "WHERE request_id = %s",
+            (
+                "failed" if error else "done",
+                (error or None) and error[:500],
+                request_id,
+            ),
+        )
+        self.commit()
+
+    # ---- who owns what, and what a path may name -------------------------------------
+
+    def load_people(self) -> list[dict]:
+        rows = self._all(
+            "SELECT person_id::text, uni_alias, active, scan_while_former, user_id::text "
+            "FROM people WHERE uni_alias IS NOT NULL ORDER BY person_id"
+        )
+        return [
+            {
+                "person_id": r[0],
+                "uni_alias": r[1],
+                "active": r[2],
+                "scan_while_former": r[3],
+                "user_id": r[4],
+            }
+            for r in rows
+        ]
+
+    def load_teams(self) -> list[dict]:
+        rows = self._all(
+            "SELECT team_id::text, share_folder, name FROM teams "
+            "WHERE share_folder IS NOT NULL ORDER BY team_id"
+        )
+        return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
+
+    def load_teams_of(self, person_id: str) -> list[dict]:
+        """The teams with a share folder that this person is a member of, for a one-person scan. Only an
+        ACTIVE person (people.active): that is who the Inbox shows a team's files to, and so who can ask."""
+        rows = self._all(
+            "SELECT t.team_id::text, t.share_folder, t.name FROM teams t "
+            "JOIN team_members m ON m.team_id = t.team_id "
+            "JOIN people p ON p.person_id = m.person_id "
+            "WHERE m.person_id = %s AND p.active AND t.share_folder IS NOT NULL ORDER BY t.team_id",
+            (person_id,),
+        )
+        return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
+
+    def autolink_person_ids(self) -> set[str]:
+        """People whose login has switched auto-link on (inbox_prefs, owned by the d1-inbox extension)."""
+        rows = self._all(
+            "SELECT p.person_id::text FROM people p JOIN inbox_prefs i ON i.user_id = p.user_id "
+            "WHERE i.auto_link"
+        )
+        return {r[0] for r in rows}
+
+    def load_lookup(self) -> recognise.Lookup:
+        """Short IDs and codes of the live records. A short ID of a deleted record stays in short_ids
+        for ever, so the ID is taken from the record's own row."""
+        short_rows = self._all(
+            "SELECT short_id, 'physical_samples', sample_id::text FROM physical_samples "
+            "UNION ALL SELECT short_id, 'manufacturing_operations', operation_id::text "
+            "  FROM manufacturing_operations "
+            "UNION ALL SELECT short_id, 'test_sessions', session_id::text FROM test_sessions"
+        )
+        code_rows = self._all(
+            "SELECT sample_code, 'physical_samples', sample_id::text FROM physical_samples "
+            "UNION ALL SELECT pass_code, 'manufacturing_operations', operation_id::text "
+            "  FROM manufacturing_operations "
+            "UNION ALL SELECT test_code, 'test_sessions', session_id::text FROM test_sessions"
+        )
+        edge_rows = self._all(
+            "SELECT edge_code, 'insert_edges', edge_id::text FROM insert_edges"
+        )
+        return recognise.build_lookup(short_rows, code_rows, edge_rows)
+
+    # ---- the folder cache ------------------------------------------------------------
+
+    def load_dirs(self, owner: Owner) -> dict[str, DirRow]:
+        rows = self._all(
+            "SELECT rel_path, dir_mtime, last_listed_at FROM inbox_dirs WHERE "
+            + _owner_eq(owner),
+            (owner.id,),
+        )
+        return {r[0]: DirRow(r[1], r[2]) for r in rows}
+
+    def owner_baselined(self, owner: Owner) -> bool:
+        """True once the owner's first complete scan has ended. A missing root row (never scanned, or
+        wiped by an alias change) is 'not baselined': the next scan is a first scan. The row must be the
+        owner's own: a folder handed to someone else is not already baselined for them."""
+        row = self._one(
+            "SELECT baselined_at FROM inbox_dirs WHERE rel_path = %s AND "
+            + _owner_eq(owner),
+            (owner.root, owner.id),
+        )
+        return bool(row and row[0] is not None)
+
+    def upsert_dir(
+        self, owner: Owner, rel: str, mtime: datetime | None, listed: bool
+    ) -> bool:
+        """Cache a directory for the owner. False when the path already has a row of ANOTHER owner (a
+        folder that changed hands): that row is left alone and this directory is not cached."""
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        n = self._run(
+            "INSERT INTO inbox_dirs (rel_path, " + col + ", dir_mtime, last_listed_at) "
+            "VALUES (%s, %s, %s, CASE WHEN %s THEN now() END) "
+            "ON CONFLICT (rel_path) DO UPDATE SET dir_mtime = EXCLUDED.dir_mtime, "
+            "  last_listed_at = CASE WHEN %s THEN now() ELSE inbox_dirs.last_listed_at END "
+            "WHERE inbox_dirs." + col + " = EXCLUDED." + col,
+            (rel, owner.id, mtime, listed, listed),
+        )
+        return n > 0
+
+    def forget_dirs_under(
+        self, owner: Owner, prefixes: list[str], keep: list[str] = ()
+    ) -> None:
+        """Drop cache rows of directories that no longer exist (and everything below them), except the
+        rows of the folders in `keep` (ignored folders, which are not scanned: their cache rows stay as
+        they are) and everything below those."""
+        for p in prefixes:
+            self._run(
+                "DELETE FROM inbox_dirs WHERE (rel_path = %s OR left(rel_path, %s) = %s) AND "
+                + _owner_eq(owner)
+                + " AND NOT (rel_path = ANY(%s) OR "
+                "EXISTS (SELECT 1 FROM unnest(%s::text[]) AS k WHERE left(rel_path, length(k) + 1) = k || '/'))",
+                (p, len(p) + 1, p + "/", owner.id, list(keep), list(keep)),
+            )
+
+    # ---- ignored folders (spec section 15) -------------------------------------------
+
+    def _has_ignored_dirs(self) -> bool:
+        """Does the database have the rules table (migration of the ignored-folders feature)? An older one
+        does not, and then nothing is ignored. The answer costs a round trip, so it is kept per Store: a
+        yes for good (the table is not dropped again), a no for IGNORED_TABLE_RECHECK, so a migration that
+        lands while the daemon runs is noticed without a restart."""
+        now = datetime.now(UTC)
+        known = self._ignored_table
+        if known is not None and (known[0] or now - known[1] < IGNORED_TABLE_RECHECK):
+            return known[0]
+        row = self._one("SELECT to_regclass('inbox_ignored_dirs') IS NOT NULL")
+        found = bool(row and row[0])
+        self._ignored_table = (found, now)
+        return found
+
+    def load_ignored_for(self, owner: Owner) -> owners.IgnoreRules:
+        """The owner's ignore rules, read when the crawler starts the owner and again before it lists a folder
+        and before each batch of registrations (one small query on the owner's partial index, never one per
+        file). Empty when the table does not exist."""
+        if not self._has_ignored_dirs():
+            return owners.IgnoreRules()
+        rows = self._all(
+            "SELECT rel_folder FROM inbox_ignored_dirs WHERE " + _owner_eq(owner),
+            (owner.id,),
+        )
+        return owners.ignore_rules(r[0] for r in rows)
+
+    def _not_ignored(self, alias: str) -> str:
+        """An ` AND NOT EXISTS (...) AND NOT EXISTS (...)` clause that leaves out a candidate (table alias
+        `alias`) lying under one of its owner's ignored folders: no file below an ignored folder is read for
+        any reason, and an undecided one can exist there (a rule written by hand, or one that raced a
+        registration). One NOT EXISTS per owner kind, each an equality on its own owner column (a candidate
+        has one owner, so the other is NULL and matches nothing), so the partial owner indexes are usable.
+        The owner's root is two path parts (`Users/<alias>`, `Shared/<folder>`), the rule is relative to it,
+        and the comparison is on whole parts and ignores case. Empty when the table does not exist.
+
+        A PRE-FILTER only: Postgres lower() and Python str.lower() differ for a few letters (a final sigma, a
+        dotted capital I), so this clause can keep a row Python's owners.is_ignored would drop. Every caller
+        therefore re-checks the rows it gets with `_unignored_rows`. (The other direction, dropping a row
+        Python would keep, only means reading less.)"""
+        if not self._has_ignored_dirs():
+            return ""
+        a = alias
+        prefix = (
+            f"lower(split_part({a}.rel_path, '/', 1) || '/' || split_part({a}.rel_path, '/', 2)"
+            " || '/' || ig.rel_folder)"
+        )
+        return "".join(
+            " AND NOT EXISTS (SELECT 1 FROM inbox_ignored_dirs ig "
+            f"WHERE ig.{col} = {a}.{col} "
+            f"AND left(lower({a}.rel_path), length({prefix}) + 1) = {prefix} || '/')"
+            for col in ("owner_person_id", "owner_team_id")
+        )
+
+    def _unignored_rows(self, fetch, limit: int, *, id_i, path_i, person_i, team_i):
+        """Candidate rows from `fetch(excluded_ids)` (a query that applies `_not_ignored` and leaves out the
+        candidate ids it is given), minus those Python's owners.is_ignored says are under an ignored folder:
+        the second, exact check behind the SQL pre-filter. A page the re-check cut short is topped up from
+        the next page (the rejected ids are excluded), at most IGNORE_RECHECK_PAGES times, so a row that
+        only Python rejects cannot starve the ones behind it."""
+        kept: list = []
+        excluded: list[str] = []
+        for _ in range(IGNORE_RECHECK_PAGES):
+            rows = fetch(excluded)
+            if not rows:
+                break
+            rules = self._rules_of(rows, person_i, team_i)
+            dropped = []
+            for r in rows:
+                if self._row_ignored(r[path_i], r[person_i], r[team_i], rules):
+                    dropped.append(r[id_i])
+                else:
+                    kept.append(r)
+            if not dropped or len(kept) >= limit or len(rows) < limit:
+                break
+            excluded += dropped
+        return kept[:limit]
+
+    def _rules_of(
+        self, rows, person_i, team_i
+    ) -> dict[tuple[str, str], owners.IgnoreRules]:
+        """The rules of every owner in `rows`: {(kind, id): rules}; two small queries, only for the owners
+        that appear."""
+        if not self._has_ignored_dirs():
+            return {}
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for kind, idx, col in (
+            ("person", person_i, "owner_person_id"),
+            ("team", team_i, "owner_team_id"),
+        ):
+            ids = sorted({r[idx] for r in rows if r[idx]})
+            if not ids:
+                continue
+            for oid, folder in self._all(
+                f"SELECT {col}::text, rel_folder FROM inbox_ignored_dirs WHERE {col} = ANY(%s::uuid[])",
+                (ids,),
+            ):
+                grouped.setdefault((kind, oid), []).append(folder)
+        return {k: owners.ignore_rules(v) for k, v in grouped.items()}
+
+    @staticmethod
+    def _row_ignored(rel_path: str, person_id, team_id, rules) -> bool:
+        key = ("person", person_id) if person_id else ("team", team_id)
+        owner_rules = rules.get(key)
+        if not owner_rules:
+            return False
+        root = "/".join(rel_path.split("/")[:2])
+        below = owners.below_root(root, rel_path.rpartition("/")[0])
+        return bool(below) and owners.is_ignored(below, owner_rules)
+
+    def mark_baselined(self, owner: Owner) -> None:
+        self._run(
+            "UPDATE inbox_dirs SET baselined_at = now() WHERE rel_path = %s AND baselined_at IS NULL AND "
+            + _owner_eq(owner),
+            (owner.root, owner.id),
+        )
+
+    def owner_claim_unchanged(self, owner: Owner) -> bool:
+        """Does the owner still hold the folder the scan started with (people.uni_alias, teams.share_folder)?
+        The row is read FOR SHARE: a change to it waits for this transaction's commit, so work committed
+        after a True answer is work for an owner who still had the folder, and the trigger that cleans up
+        after a change then sees it."""
+        if owner.kind == "person":
+            row = self._one(
+                "SELECT uni_alias FROM people WHERE person_id = %s FOR SHARE",
+                (owner.id,),
+            )
+        else:
+            row = self._one(
+                "SELECT share_folder FROM teams WHERE team_id = %s FOR SHARE",
+                (owner.id,),
+            )
+        return row is not None and row[0] == owner.claim
+
+    def drop_foreign_state(self, owner: Owner) -> None:
+        """A folder that changed hands: whatever another owner left under this owner's folder (cache rows,
+        and candidates that are not linked) is stale and would hide or leak files. Linked rows stay, as
+        the migration's own cleanup leaves them."""
+        mine = _owner_eq(owner)
+        n = len(owner.root) + 1
+        under = "(rel_path = %s OR left(rel_path, %s) = %s)"
+        self._run(
+            "DELETE FROM inbox_dirs WHERE " + under + " AND NOT (" + mine + ")",
+            (owner.root, n, owner.root + "/", owner.id),
+        )
+        self._run(
+            "DELETE FROM file_candidates WHERE left(rel_path, %s) = %s AND NOT ("
+            + mine
+            + ") "
+            "AND state IN ('new', 'gone', 'dismissed')",
+            (n, owner.root + "/", owner.id),
+        )
+
+    # ---- candidates ------------------------------------------------------------------
+
+    def load_candidates(self, owner: Owner) -> dict[str, Cand]:
+        """Every candidate of the owner by relative path, in every state (the scan decides what is new,
+        what vanished and what came back from this in memory)."""
+        rows = self._all(
+            "SELECT rel_path, candidate_id::text, directus_files_id::text, state, kind "
+            "FROM file_candidates WHERE " + _owner_eq(owner),
+            (owner.id,),
+        )
+        return {r[0]: Cand(r[1], r[2], r[0], r[3], r[4]) for r in rows}
+
+    def resync_paths(self, owner: Owner) -> int:
+        """Re-read each of the owner's candidates' rel_path from its pointer row (metadata.archive_path).
+        The indexer re-points a moved file's references, the candidate included, to the pointer row at the
+        new path but cannot touch rel_path, which would then name a path that is gone.
+
+        metadata.archive_path is editable by any Lab Member, so it is only believed when it is a clean path
+        (no '..', backslash, empty or '.' part) under this owner's folder AND the pointer row's own id is
+        the indexer's uuid5 of that very path. A real move always satisfies the last rule: the indexer
+        re-points the candidate to the row of the NEW path, whose id is uuid5(new path) and whose
+        archive_path is that path. An edited archive_path names another file, so the ids disagree and the
+        candidate keeps its path (the D2 rule: only a person's own, linked files are ever read)."""
+        rows = self._all(
+            "SELECT c.candidate_id::text, c.directus_files_id::text, df.metadata::jsonb->>'archive_path' "
+            "FROM file_candidates c JOIN directus_files df ON df.id = c.directus_files_id WHERE "
+            + _owner_eq(owner, "c.")
+            + " "
+            "AND df.metadata::jsonb->>'archive_path' IS NOT NULL "
+            "AND c.rel_path <> df.metadata::jsonb->>'archive_path' "
+            "AND left(df.metadata::jsonb->>'archive_path', %s) = %s",
+            (owner.id, len(owner.root) + 1, owner.root + "/"),
+        )
+        done = 0
+        for candidate_id, files_id, archive_path in rows:
+            if not clean_rel_path(archive_path, owner.root) or (
+                str(file_id(archive_path)) != files_id
+            ):
+                log.warning(
+                    "not re-syncing candidate %s: its pointer row names a path that is not its own",
+                    candidate_id,
+                )
+                continue
+            done += self._run(
+                "UPDATE file_candidates SET rel_path = %s WHERE candidate_id = %s",
+                (archive_path, candidate_id),
+            )
+        return done
+
+    def _has_surface_scans(self) -> bool:
+        """Does the database have the surface-scan table (migration 192)? An older one does not. Asked once per
+        Store: migration 196 guarantees the table from then on, so the answer is never invalidated."""
+        if self._surface_scans is None:
+            row = self._one("SELECT to_regclass('surface_scans') IS NOT NULL")
+            self._surface_scans = bool(row and row[0])
+        return self._surface_scans
+
+    def _linked_in_junction(self, column: str) -> str:
+        """An SQL condition: the file id in `column` is linked in one of the three junctions or, when the
+        table exists, is a surface scan (the four tables migration 196 counts, the set of `already_linked`)."""
+        tables = ["sample_data_files", "operation_data_files", "session_data_files"]
+        if self._has_surface_scans():
+            tables.append("surface_scans")
+        return (
+            "("
+            + " OR ".join(
+                f"EXISTS (SELECT 1 FROM {t} j WHERE j.directus_files_id = {column})"
+                for t in tables
+            )
+            + ")"
+        )
+
+    def already_linked(self, files_ids: list[str]) -> set[str]:
+        """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
+        picker or by the d1-inbox extension), or already a surface scan (added in the Alicona feature's own
+        dialog, which offers every star .al3d, the crawler's included). Such a file is not a found file:
+        nobody needs to link it."""
+        if not files_ids:
+            return set()
+        scans = (
+            " UNION SELECT directus_files_id::text FROM surface_scans WHERE directus_files_id = ANY(%s::uuid[])"
+            if self._has_surface_scans()
+            else ""
+        )
+        rows = self._all(
+            "SELECT directus_files_id::text FROM sample_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
+            "UNION SELECT directus_files_id::text FROM operation_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
+            "UNION SELECT directus_files_id::text FROM session_data_files WHERE directus_files_id = ANY(%s::uuid[])"
+            + scans,
+            (files_ids,) * (4 if scans else 3),
+        )
+        return {r[0] for r in rows}
+
+    def drop_linked_elsewhere(self, owner: Owner) -> int:
+        """Delete the owner's UNDECIDED candidates (new or gone) whose file has meanwhile been linked in one
+        of the three junctions or added as a surface scan: the extension would refuse to link them again
+        (already on the record) and the Inbox would show them for ever. Linked and dismissed rows are never
+        touched."""
+        return self._run(
+            "DELETE FROM file_candidates c WHERE "
+            + _owner_eq(owner, "c.")
+            + " AND c.state IN ('new', 'gone') AND "
+            + self._linked_in_junction("c.directus_files_id"),
+            (owner.id,),
+        )
+
+    def mark_gone(self, candidate_ids: list[str]) -> int:
+        """Undecided candidates that vanished from the share. Decided ones (linked, dismissed) are
+        never touched. Copies of a vanished original become originals again."""
+        if not candidate_ids:
+            return 0
+        n = self._run(
+            "UPDATE file_candidates SET state = 'gone' WHERE candidate_id = ANY(%s::uuid[]) AND state = 'new'",
+            (candidate_ids,),
+        )
+        self._run(
+            "UPDATE file_candidates SET duplicate_of = NULL WHERE duplicate_of = ANY(%s::uuid[])",
+            (candidate_ids,),
+        )
+        # a file that is not on the share has no picture of it (spec section 14); one that comes back is
+        # backfilled
+        self.delete_thumbnails(candidate_ids, only_gone=True, quiet=True)
+        return n
+
+    def revive(self, candidate_id: str) -> None:
+        """A 'gone' file that is on the share again."""
+        self._run(
+            "UPDATE file_candidates SET state = 'new' WHERE candidate_id = %s AND state = 'gone'",
+            (candidate_id,),
+        )
+
+    def fingerprint_of(self, files_id: str) -> str | None:
+        row = self._one(
+            "SELECT content_sha256 FROM file_fingerprints WHERE directus_files_id = %s AND status = 'done'",
+            (files_id,),
+        )
+        return row[0] if row else None
+
+    def upsert_fingerprint(
+        self,
+        files_id: str,
+        outcome: HashOutcome,
+        size: int | None,
+        mtime: datetime | None,
+    ) -> None:
+        self._run(
+            "INSERT INTO file_fingerprints (directus_files_id, status, content_sha256, size_bytes, "
+            " source_mtime, error_message, hashed_at) VALUES (%s, %s, %s, %s, %s, %s, now()) "
+            "ON CONFLICT (directus_files_id) DO UPDATE SET status = EXCLUDED.status, "
+            " content_sha256 = EXCLUDED.content_sha256, size_bytes = EXCLUDED.size_bytes, "
+            " source_mtime = EXCLUDED.source_mtime, error_message = EXCLUDED.error_message, "
+            " hashed_at = now()",
+            (files_id, outcome.status, outcome.sha256, size, mtime, outcome.error),
+        )
+
+    def find_original(self, sha256: str, exclude_files_id: str) -> str | None:
+        """The earliest candidate whose file has this content (a copy points at it as `duplicate_of`)."""
+        row = self._one(
+            "SELECT c.candidate_id::text FROM file_candidates c "
+            "JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+            "WHERE f.status = 'done' AND f.content_sha256 = %s AND c.directus_files_id <> %s "
+            "  AND c.state <> 'gone' AND c.duplicate_of IS NULL "
+            "ORDER BY c.first_seen_at, c.candidate_id LIMIT 1",
+            (sha256, exclude_files_id),
+        )
+        return row[0] if row else None
+
+    def set_duplicate_of(self, candidate_id: str, original_id: str | None) -> None:
+        self._run(
+            "UPDATE file_candidates SET duplicate_of = %s WHERE candidate_id = %s",
+            (original_id, candidate_id),
+        )
+
+    # ---- registering a file ----------------------------------------------------------
+
+    def _ensure_folder(self, rel_dir: str) -> str:
+        fid = str(folder_id(rel_dir))
+        if rel_dir in self._folders_done:
+            return fid
+        if rel_dir == "":
+            self._run(
+                "INSERT INTO directus_folders (id, name, parent) VALUES (%s, %s, NULL) ON CONFLICT (id) DO NOTHING",
+                (fid, self.root_folder_name),
+            )
+        else:
+            head, _, name = rel_dir.rpartition("/")
+            parent = self._ensure_folder(head)
+            self._run(
+                "INSERT INTO directus_folders (id, name, parent) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (fid, name, parent),
+            )
+        self._folders_done.add(rel_dir)
+        return fid
+
+    def register_file(
+        self,
+        *,
+        owner: Owner,
+        rel: str,
+        size: int,
+        mtime: datetime,
+        classification,
+        recognition: recognise.Recognition,
+        origin: str,
+        hashed: HashOutcome | None,
+        thumbs=None,
+        thumbs_failed: str | None = None,
+    ) -> RegisterResult:
+        """The pointer row, its folder chain, the fingerprint and the candidate row, in one savepoint, and the
+        thumbnails (a `thumbs.Thumbs`, when the caller made them from the bytes it holds) in the same transaction.
+        When it tried and could not (`thumbs_failed`, a short reason), a marker row says so instead, so the
+        backfill does not read the file again until it changes.
+
+        Idempotent: `directus_files` and `directus_folders` rows that exist (the indexer's, or a
+        previous run's) are left alone (a pointer row without a stamp only gains the owner's, see
+        stamp_owner), and an existing candidate for the file is left alone.
+
+        A new pointer row is stamped with the owner of the scan (ADR-0022): the person_id or team_id of the
+        Owner, never derived from the path again.
+        """
+        fid = str(file_id(rel))
+        rel_dir, _, name = rel.rpartition("/")
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT register_file")
+        try:
+            dir_id = self._ensure_folder(rel_dir)
+            now = datetime.now(UTC)
+            meta = {
+                "archive_path": rel,
+                "source": "uosfstore/shared/star_group1",
+                # lower-cased with its dot, as the indexer writes it (its sweep keys on this)
+                "extension": "" if extension(name) == "." else extension(name),
+                "size_bytes": size,
+                "modified": mtime.isoformat(),
+                "indexed_on": now.isoformat(),
+                "found_by": "inbox_crawler",
+            }
+            inserted = self._run(
+                "INSERT INTO directus_files (id, storage, filename_disk, filename_download, title, type, "
+                " folder, filesize, metadata, created_on, modified_on, uploaded_on, "
+                " owner_person_id, owner_team_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (
+                    fid,
+                    self.storage,
+                    rel if len(rel) <= FILENAME_DISK_MAX else None,
+                    name,
+                    name.rsplit(".", 1)[0] if "." in name else name,
+                    guess_type(name),
+                    dir_id,
+                    size,
+                    json.dumps(meta),
+                    mtime,
+                    mtime,
+                    now,
+                    owner.person_id,
+                    owner.team_id,
+                ),
+            )
+            if not inserted:
+                if self.owned_by_other([fid], owner):
+                    # A folder that changed hands (C1): the pointer row is stamped to the person or team the
+                    # file came from. The new holder gets no candidate for it, like a linked file gets none.
+                    with self.conn.cursor() as cur:
+                        cur.execute("RELEASE SAVEPOINT register_file")
+                    log.info(
+                        "not registering %s: its file is stamped to another owner", rel
+                    )
+                    return RegisterResult(None, False)
+                # The indexer's (or an older crawler's) pointer row: it takes the owner's stamp now, unless it
+                # is linked or already stamped (see stamp_owner).
+                self.stamp_owner(fid, owner)
+            duplicate_of = None
+            if hashed is not None:
+                self.upsert_fingerprint(fid, hashed, size, mtime)
+                if hashed.status == "done" and hashed.sha256:
+                    duplicate_of = self.find_original(hashed.sha256, fid)
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO file_candidates (directus_files_id, owner_person_id, owner_team_id, kind, "
+                    " kind_confidence, extracted, origin, match_strength, matches, suggested_collection, "
+                    " suggested_record_id, duplicate_of, rel_path, size_bytes, source_mtime, classified_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (directus_files_id) DO NOTHING RETURNING candidate_id::text",
+                    (
+                        fid,
+                        owner.person_id,
+                        owner.team_id,
+                        classification.kind,
+                        classification.confidence,
+                        json.dumps(classification.extracted),
+                        origin,
+                        recognition.match_strength,
+                        json.dumps(recognition.matches),
+                        recognition.suggested_collection,
+                        recognition.suggested_record_id,
+                        duplicate_of,
+                        rel,
+                        size,
+                        mtime,
+                        classification.classified_by or None,
+                    ),
+                )
+                row = cur.fetchone()
+            if row is not None and thumbs is not None:
+                # same transaction; a failure (the table is not there yet) loses only the pictures, which
+                # the backfill makes later
+                self.store_thumbnails(row[0], thumbs, size, mtime, quiet=True)
+            elif row is not None and thumbs_failed is not None:
+                self.store_thumbnail_failure(
+                    row[0], thumbs_failed, size, mtime, quiet=True
+                )
+            with self.conn.cursor() as cur:
+                cur.execute("RELEASE SAVEPOINT register_file")
+        except Exception:
+            with self.conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT register_file")
+                cur.execute("RELEASE SAVEPOINT register_file")
+            self._folders_done.clear()
+            raise
+        if row is None:
+            existing = self._one(
+                "SELECT candidate_id::text FROM file_candidates WHERE directus_files_id = %s",
+                (fid,),
+            )
+            return RegisterResult(existing[0] if existing else None, False)
+        return RegisterResult(row[0], True, duplicate_of)
+
+    def stamp_owners(self, files_ids: list[str], owner: Owner) -> int:
+        """Stamp the owner on these existing pointer rows (ADR-0022) and return how many changed. A row is
+        stamped only while BOTH owner columns are null and the file is not linked (`already_linked`: a linked
+        file stays unowned, like migration 196's back-fill), so a stamp is never overwritten, not by another
+        owner and not by the same one."""
+        todo = sorted(set(files_ids) - self.already_linked(files_ids))
+        if not todo:
+            return 0
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        return self._run(
+            "UPDATE directus_files SET " + col + " = %s WHERE id = ANY(%s::uuid[]) "
+            "AND owner_person_id IS NULL AND owner_team_id IS NULL",
+            (owner.id, todo),
+        )
+
+    def owned_by_other(self, files_ids: list[str], owner: Owner) -> set[str]:
+        """Which of these pointer-row ids are stamped to a person or team other than `owner` (a folder that
+        changed hands: its files stay with whoever they came from, ADR-0022 D13). An unstamped row, or one
+        stamped to this owner, is not in the answer."""
+        if not files_ids:
+            return set()
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        rows = self._all(
+            "SELECT id::text FROM directus_files WHERE id = ANY(%s::uuid[]) "
+            "AND (owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL) "
+            "AND NOT COALESCE(" + col + " = %s, false)",
+            (files_ids, owner.id),
+        )
+        return {r[0] for r in rows}
+
+    def stamp_owner(self, files_id: str, owner: Owner) -> bool:
+        """`stamp_owners` for one file: True when this call set the stamp."""
+        return self.stamp_owners([files_id], owner) > 0
+
+    def copies_of(self, original: Cand, owner: Owner) -> list:
+        """The owner's undecided candidates recorded as copies of `original` (same content hash, found
+        while it was still there). Returns objects with .cand, .size, .mtime."""
+        rows = self._all(
+            "SELECT candidate_id::text, directus_files_id::text, rel_path, kind, size_bytes, source_mtime "
+            "FROM file_candidates WHERE duplicate_of = %s AND state = 'new' AND "
+            + _owner_eq(owner),
+            (original.candidate_id, owner.id),
+        )
+        return [
+            Copy(Cand(r[0], r[1], r[2], "new", r[3]), r[4] or 0, r[5]) for r in rows
+        ]
+
+    def repoint_candidate(
+        self, old: Cand, new: Cand, new_size: int, new_mtime: datetime
+    ) -> bool:
+        """A vanished undecided file turned up at a new path with the same content: keep the old
+        candidate (its first_seen_at, origin and state) and point it at the new file. The candidate
+        row made for the new path is dropped. Every other reference to the old pointer row (a link made
+        in Data Studio, the fingerprint) moves with it, by the indexer's own routine; the old pointer
+        row is deleted only when nothing references it any more. Returns whether it was re-pointed."""
+        index_archive = identity.index_archive
+
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT repoint")
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM file_candidates WHERE candidate_id = %s",
+                    (new.candidate_id,),
+                )
+                # A moved file keeps its FIRST owner (ADR-0022 D13): the new pointer row takes the old one's
+                # stamp (both columns together, the table's one-owner CHECK), so the readers follow it and the
+                # old row's deletion below does not leave the file unowned.
+                cur.execute(
+                    "UPDATE directus_files n SET owner_person_id = o.owner_person_id, "
+                    " owner_team_id = o.owner_team_id FROM directus_files o "
+                    "WHERE o.id = %s AND n.id = %s "
+                    "AND (o.owner_person_id IS NOT NULL OR o.owner_team_id IS NOT NULL)",
+                    (old.directus_files_id, new.directus_files_id),
+                )
+                fks = index_archive.find_file_fk_columns(cur)
+                left = index_archive.repoint_file_references(
+                    cur, fks, old.directus_files_id, new.directus_files_id
+                )
+                cur.execute(
+                    "UPDATE file_candidates SET rel_path = %s, size_bytes = %s, source_mtime = %s "
+                    "WHERE candidate_id = %s",
+                    (new.rel_path, new_size, new_mtime, old.candidate_id),
+                )
+                if left == 0:
+                    cur.execute(
+                        "DELETE FROM directus_files WHERE id = %s",
+                        (old.directus_files_id,),
+                    )
+                cur.execute("RELEASE SAVEPOINT repoint")
+        except Exception:
+            with self.conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT repoint")
+                cur.execute("RELEASE SAVEPOINT repoint")
+            raise
+        return True
+
+    def refresh_recognition(self, lookup: recognise.Lookup) -> int:
+        """Re-read the path of every undecided candidate against today's records: a record made after
+        its file arrived still gets suggested. Returns how many rows changed."""
+        rows = self._all(
+            "SELECT candidate_id::text, rel_path, match_strength, matches, suggested_collection, "
+            " suggested_record_id::text FROM file_candidates WHERE state = 'new'"
+        )
+        changed = 0
+        for cid, rel, strength, matches, coll, rec in rows:
+            # an owner's folder is always <PERSON_BASE>/<alias> or Shared/<folder>: look only below it
+            r = recognise.recognise(rel, lookup, below="/".join(rel.split("/")[:2]))
+            if (
+                r.match_strength == strength
+                and r.suggested_collection == coll
+                and r.suggested_record_id == rec
+                and r.matches == (matches or [])
+            ):
+                continue
+            self._run(
+                "UPDATE file_candidates SET match_strength = %s, matches = %s, suggested_collection = %s, "
+                " suggested_record_id = %s WHERE candidate_id = %s AND state = 'new'",
+                (
+                    r.match_strength,
+                    json.dumps(r.matches),
+                    r.suggested_collection,
+                    r.suggested_record_id,
+                    cid,
+                ),
+            )
+            changed += 1
+        return changed
+
+    # ---- thumbnails (spec section 14) -------------------------------------------------
+
+    def _thumb_write(self, query: str, params, quiet: bool) -> int:
+        """Run one statement on file_thumbnails. `quiet`: inside a savepoint, and a failure (above all the
+        table not being there yet) is logged once and answered with -1 instead of failing the caller's
+        transaction."""
+        if not quiet:
+            return self._run(query, params)
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT thumbs")
+        try:
+            n = self._run(query, params)
+        except Exception as exc:  # noqa: BLE001
+            with self.conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT thumbs")
+                cur.execute("RELEASE SAVEPOINT thumbs")
+            if not self._thumbs_warned:
+                self._thumbs_warned = True
+                log.warning(
+                    "file_thumbnails could not be written (%s): is migration 198 applied?",
+                    type(exc).__name__,
+                )
+            return -1
+        with self.conn.cursor() as cur:
+            cur.execute("RELEASE SAVEPOINT thumbs")
+        return n
+
+    def store_thumbnails(
+        self,
+        candidate_id: str,
+        thumbs,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """The pictures (a `thumbs.Thumbs`) of the file as it was at `size` and `mtime`, replacing any earlier
+        pair. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, source_size, source_mtime) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = EXCLUDED.thumb, preview = EXCLUDED.preview, "
+            " thumb_width = EXCLUDED.thumb_width, thumb_height = EXCLUDED.thumb_height, "
+            " preview_width = EXCLUDED.preview_width, preview_height = EXCLUDED.preview_height, "
+            " source_size = EXCLUDED.source_size, source_mtime = EXCLUDED.source_mtime, failed_reason = NULL, "
+            " created_at = now()",
+            (
+                candidate_id,
+                thumbs.thumb,
+                thumbs.preview,
+                thumbs.thumb_width,
+                thumbs.thumb_height,
+                thumbs.preview_width,
+                thumbs.preview_height,
+                size,
+                mtime,
+            ),
+            quiet,
+        )
+        return n > 0
+
+    def store_thumbnail_failure(
+        self,
+        candidate_id: str,
+        reason: str,
+        size: int,
+        mtime: datetime,
+        *,
+        quiet: bool = False,
+    ) -> bool:
+        """A marker that the file, as it was at `size` and `mtime`, has no picture (it was read and could not
+        be decoded, or is too big): both pictures NULL and a short `reason`. It replaces any earlier row and
+        is DONE for `candidates_missing_thumbnails` until the file's size or modification time changes, when
+        it is tried again. Does not commit. With `quiet` a failure is logged once and returns False."""
+        n = self._thumb_write(
+            "INSERT INTO file_thumbnails (candidate_id, thumb, preview, thumb_width, thumb_height, "
+            " preview_width, preview_height, failed_reason, source_size, source_mtime) "
+            "VALUES (%s, NULL, NULL, NULL, NULL, NULL, NULL, %s, %s, %s) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET thumb = NULL, preview = NULL, thumb_width = NULL, "
+            " thumb_height = NULL, preview_width = NULL, preview_height = NULL, "
+            " failed_reason = EXCLUDED.failed_reason, source_size = EXCLUDED.source_size, "
+            " source_mtime = EXCLUDED.source_mtime, created_at = now()",
+            (candidate_id, reason[:200], size, mtime),
+            quiet,
+        )
+        return n > 0
+
+    def scanned_owners(self) -> list[tuple[str, str, str]]:
+        """(kind, owner id, root folder lower-cased) of everyone a scan would walk right now, decided by the
+        scan's own rule (`owners.person_claims` and `team_claims`: scannable is active or scan-while-former,
+        and INBOX_ONLY_FOLDERS) over the current people and teams. The root is `Users/<alias>` or
+        `Shared/<folder>` as claimed; the share is case-insensitive, so it is compared lower-cased."""
+        out: list[tuple[str, str, str]] = []
+        for kind, base, claims in (
+            ("person", owners.PERSON_BASE, owners.person_claims(self.load_people())),
+            ("team", owners.TEAM_BASE, owners.team_claims(self.load_teams())),
+        ):
+            for owner_id, folder, _label, scannable in claims:
+                if scannable and owners.safe_folder_name(folder):
+                    out.append((kind, owner_id, f"{base}/{folder}".lower()))
+        return out
+
+    def candidates_missing_thumbnails(
+        self, limit: int, *, max_bytes: int | None = None, skip=()
+    ) -> list[ThumbTarget]:
+        """Image and SEM-image candidates a person can still see (new, dismissed, linked: not gone) that have
+        no thumbnails, or whose thumbnails were made from a file of another size or modification time than the
+        candidate's. Undecided ones first, newest first. `max_bytes` leaves out a file too big to decode and
+        `skip` the ids already tried (a file that cannot be decoded would otherwise be offered every tick). A file
+        whose discovery hash failed is left to the hash retry (an hour later), not read again from here.
+
+        Only files the scan would read right now: of an owner it scans (`scanned_owners`: an active or
+        scan-while-former person with an alias, a team with a share folder, and in INBOX_ONLY_FOLDERS when
+        that is set), below that owner's CURRENT folder (a candidate left under an old alias or share folder is
+        not read) and not below one of the owner's ignored folders. A file with a picture marker (see
+        `store_thumbnail_failure`) for its current size and modification time is done, not missing."""
+        roots = self.scanned_owners()
+        skip = list(skip)
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT c.candidate_id::text, c.rel_path, c.size_bytes, c.source_mtime, "
+                " c.owner_person_id::text, c.owner_team_id::text "
+                "FROM file_candidates c LEFT JOIN file_thumbnails t ON t.candidate_id = c.candidate_id "
+                "WHERE c.kind IN ('image', 'sem_image') AND c.state IN ('new', 'dismissed', 'linked') "
+                "  AND c.size_bytes IS NOT NULL AND c.source_mtime IS NOT NULL "
+                "  AND (%s::bigint IS NULL OR c.size_bytes <= %s::bigint) "
+                "  AND (t.candidate_id IS NULL OR t.source_size <> c.size_bytes OR t.source_mtime <> c.source_mtime) "
+                "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
+                "  AND NOT EXISTS (SELECT 1 FROM file_fingerprints f "
+                "                  WHERE f.directus_files_id = c.directus_files_id AND f.status = 'error') "
+                "  AND EXISTS (SELECT 1 FROM unnest(%s::text[], %s::text[], %s::text[]) AS o(kind, id, root) "
+                "              WHERE ((o.kind = 'person' AND c.owner_person_id::text = o.id) "
+                "                  OR (o.kind = 'team' AND c.owner_team_id::text = o.id)) "
+                "                AND left(lower(c.rel_path), length(o.root) + 1) = o.root || '/') "
+                + self._not_ignored("c")
+                + " ORDER BY (c.state = 'new') DESC, c.first_seen_at DESC, c.candidate_id LIMIT %s",
+                (
+                    max_bytes,
+                    max_bytes,
+                    skip + excluded,
+                    [r[0] for r in roots],
+                    [r[1] for r in roots],
+                    [r[2] for r in roots],
+                    limit,
+                ),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=1, person_i=4, team_i=5
+        )
+        return [ThumbTarget(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def delete_thumbnails(
+        self, candidate_ids: list[str], *, only_gone: bool = False, quiet: bool = False
+    ) -> int:
+        """Drop the pictures of these candidates (all of them, or with `only_gone` only those whose candidate
+        is in state 'gone'). Does not commit. Returns how many rows went."""
+        if not candidate_ids:
+            return 0
+        n = self._thumb_write(
+            "DELETE FROM file_thumbnails WHERE candidate_id = ANY(%s::uuid[])"
+            + (
+                " AND candidate_id IN (SELECT candidate_id FROM file_candidates WHERE state = 'gone')"
+                if only_gone
+                else ""
+            ),
+            (candidate_ids,),
+            quiet,
+        )
+        return max(n, 0)
+
+    # ---- hashing queues --------------------------------------------------------------
+
+    def adopted_awaiting_hash(self, limit: int = 20) -> list[tuple[str, str, str]]:
+        """Candidates a person has linked (and so agreed to be read once) that have no fingerprint yet,
+        or whose last try failed more than an hour ago: (candidate_id, directus_files_id, rel_path).
+        Only state 'linked' rows are read: an undone link stops the read.
+
+        Nothing is returned for a row whose stored path is not its own: the path must be clean, below the
+        owner's folder (spelled as the share spells it, SMB being case-insensitive) and the row's id must be
+        the indexer's uuid5 of it. Such a row is never read. It gets an 'error' fingerprint row instead
+        (BAD_PATH_ERROR), which takes it out of this queue for an hour like any failed hash, so a pile of
+        them (linked documents left under an old alias) cannot starve the rows behind it. Written here and
+        committed here: nothing else is pending on the scan connection when the daemon asks."""
+        out: list[tuple[str, str, str]] = []
+        taken: set[str] = set()
+        page = max(limit, 1) * 10
+        for _ in range(BAD_PATH_PAGES):
+            rows = self._all(
+                "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
+                " CASE WHEN c.owner_person_id IS NOT NULL THEN %s ELSE %s END, "
+                " COALESCE(p.uni_alias, t.share_folder) "
+                "FROM file_candidates c "
+                "LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+                "LEFT JOIN people p ON p.person_id = c.owner_person_id "
+                "LEFT JOIN teams t ON t.team_id = c.owner_team_id "
+                "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
+                "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
+                "ORDER BY c.adopted_at, c.candidate_id LIMIT %s",
+                (owners.PERSON_BASE, owners.TEAM_BASE, HASH_RETRY_HOURS, page),
+            )
+            bad = []
+            for cid, fid, rel, base, folder in rows:
+                if self._own_path(rel, fid, base, folder):
+                    if cid not in taken:
+                        taken.add(cid)
+                        out.append((cid, fid, rel))
+                        if len(out) >= limit:
+                            break
+                else:
+                    bad.append(fid)
+                    if cid not in self._warned:
+                        self._warned.add(cid)
+                        log.warning(
+                            "not reading candidate %s: its stored path is not its own",
+                            cid,
+                        )
+            for fid in bad:
+                self.upsert_fingerprint(
+                    fid, HashOutcome("error", error=BAD_PATH_ERROR), None, None
+                )
+            if bad:
+                self.commit()
+            # Done when enough rows are found, the queue is shorter than a page, or this page had no bad
+            # row to drop (so the next page would be the same one).
+            if len(out) >= limit or len(rows) < page or not bad:
+                break
+        return out
+
+    @staticmethod
+    def _own_path(rel: str, files_id: str, base: str, folder: str | None) -> bool:
+        if not folder or not clean_rel_path(rel):
+            return False
+        parts = rel.split("/")
+        return (
+            parts[0] == base
+            and parts[1].lower() == folder.lower()
+            and len(parts) > 2
+            and str(file_id(rel)) == files_id
+        )
+
+    def errored_hashes(self, limit: int = 20) -> list[tuple[str, str, str]]:
+        """Images and scans whose discovery hash failed at least an hour ago and are still undecided. One
+        under an ignored folder is not retried: nothing below an ignored folder is read."""
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
+                " c.owner_person_id::text, c.owner_team_id::text "
+                "FROM file_candidates c JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+                "WHERE c.state = 'new' AND c.kind IN ('image', 'sem_image', 'surface_scan') "
+                "  AND f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s) "
+                "  AND NOT (c.candidate_id::text = ANY(%s::text[])) "
+                + self._not_ignored("c")
+                + " ORDER BY f.hashed_at LIMIT %s",
+                (HASH_RETRY_HOURS, excluded, limit),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=2, person_i=3, team_i=4
+        )
+        return [tuple(r[:3]) for r in rows]
+
+    # ---- re-classification (--reclassify) ---------------------------------------------------
+
+    def reclassify_batch(
+        self, limit: int, after: str | None = None, *, force: bool = False
+    ) -> list[tuple[str, str, str]]:
+        """Undecided image candidates (state new or dismissed, kind image or sem_image) that the current
+        classifier version has not looked at: (candidate id, rel path, current kind), in candidate-id
+        order, those after `after`, so a pass visits each row once even when it skips some. With `force` the
+        version is ignored and every such candidate is offered. A linked row is never offered. A row that is
+        read leaves the list (set_classification or mark_classified writes the current version), so a killed
+        run is finished by the next; a skipped row (missing, transient error) stays for the next run."""
+        rows = self._all(
+            "SELECT candidate_id::text, rel_path, kind FROM file_candidates "
+            "WHERE state IN ('new', 'dismissed') AND kind IN ('image', 'sem_image') "
+            "  AND (%s OR classified_by IS DISTINCT FROM %s) "
+            "  AND (%s::uuid IS NULL OR candidate_id > %s::uuid) "
+            "ORDER BY candidate_id LIMIT %s",
+            (force, classify_sem.CLASSIFIER_VERSION, after, after, limit),
+        )
+        return [tuple(r) for r in rows]
+
+    def set_classification(self, candidate_id: str, classification) -> bool:
+        """Write what a re-read found: kind, kind_confidence, extracted and classified_by, nothing else, and
+        only while the row is still undecided (a link made meanwhile wins). True when a row was written."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET kind = %s, kind_confidence = %s, extracted = %s, "
+                " classified_by = %s WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (
+                    classification.kind,
+                    classification.confidence,
+                    json.dumps(classification.extracted),
+                    classification.classified_by or None,
+                    candidate_id,
+                ),
+            )
+            > 0
+        )
+
+    def mark_classified(self, candidate_id: str) -> bool:
+        """Record that the current classifier version has dealt with this candidate without changing what it
+        says (an unreadable file, or one too large to read into memory): it is not offered again."""
+        return (
+            self._run(
+                "UPDATE file_candidates SET classified_by = %s "
+                "WHERE candidate_id = %s AND state IN ('new', 'dismissed')",
+                (classify_sem.CLASSIFIER_VERSION, candidate_id),
+            )
+            > 0
+        )
+
+    # ---- the imaging-settings back-fill (--sem-backfill) -------------------------------------
+
+    def backfill_batch(
+        self, limit: int, after: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Pointer rows the SEM back-fill may read: image-typed (an extension of fs_readonly.IMAGE_EXTENSIONS),
+        linked in one of the four tables migration 196 counts (the three junctions and surface_scans, the same
+        set as `already_linked`) and without a `sem_image_settings` row. Owned or not: who may read a file's
+        settings is enforced by d1-inbox, not here, and an owned file linked in Data Studio (or before
+        `--reclassify`) has none either.
+        Returns (files id, the path in the row's metadata.archive_path) in files-id order, those after `after`,
+        so one run visits each row once; the caller checks the path is the file's own before it reads
+        anything. A row that gets settings leaves the list, so a killed run is finished by the next."""
+        exts = "|".join(e.lstrip(".") for e in IMAGE_EXTENSIONS)
+        rows = self._all(
+            "SELECT f.id::text, f.metadata::jsonb->>'archive_path' FROM directus_files f "
+            "WHERE f.metadata::jsonb->>'archive_path' ~* %s "
+            "  AND " + self._linked_in_junction("f.id") + " "
+            "  AND NOT EXISTS (SELECT 1 FROM sem_image_settings s WHERE s.directus_files_id = f.id) "
+            "  AND (%s::uuid IS NULL OR f.id > %s::uuid) "
+            "ORDER BY f.id LIMIT %s",
+            (r"\.(" + exts + ")$", after, after, limit),
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def save_sem_settings(self, files_id: str, extracted: dict, read_by: str) -> bool:
+        """The ONLY place `extracted` becomes settings is the SQL function `save_sem_settings` (migration
+        197); this calls it. It MERGES (a key `extracted` does not carry keeps its stored value, a person's
+        correction is never overwritten) and returns whether a row exists afterwards. The function is named
+        bare: the connection's search_path puts the private schema (d1_private) first."""
+        row = self._one(
+            "SELECT save_sem_settings(%s, %s::jsonb, %s)",
+            (files_id, json.dumps(extracted), read_by),
+        )
+        return bool(row and row[0])
+
+    # ---- auto-link ---------------------------------------------------------------------
+
+    def autolink_candidates(self, person_ids: set[str], limit: int = 200) -> list[dict]:
+        """Undecided new files of opted-in people that name exactly one record by an exact short ID,
+        are SEM images or other images (never surface scans or documents), are not copies and
+        were not auto-linked and undone by the person (auto_undone_at)."""
+        if not person_ids:
+            return []
+
+        def fetch(excluded):
+            return self._all(
+                "SELECT candidate_id::text, owner_person_id::text, suggested_collection, "
+                " suggested_record_id::text, kind, rel_path, owner_team_id::text FROM file_candidates "
+                "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
+                "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
+                "  AND auto_undone_at IS NULL "
+                "  AND kind IN ('sem_image', 'image') "
+                "  AND owner_person_id = ANY(%s::uuid[]) "
+                "  AND NOT (candidate_id::text = ANY(%s::text[])) "
+                + self._not_ignored("file_candidates")
+                + " ORDER BY first_seen_at, candidate_id LIMIT %s",
+                (sorted(person_ids), excluded, limit),
+            )
+
+        rows = self._unignored_rows(
+            fetch, limit, id_i=0, path_i=5, person_i=1, team_i=6
+        )
+        return [
+            {
+                "candidate_id": r[0],
+                "person_id": r[1],
+                "collection": r[2],
+                "record_id": r[3],
+                "kind": r[4],
+            }
+            for r in rows
+        ]

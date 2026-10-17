@@ -1,0 +1,29 @@
+{
+  "description": "an administrator links a file that is not theirs: administrators read other people's files, they do not change them",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101"
+        }
+      ]
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "An administrator can read other people's files but not change them.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

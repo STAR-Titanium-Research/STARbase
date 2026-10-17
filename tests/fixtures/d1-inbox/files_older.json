@@ -1,0 +1,67 @@
+{
+  "description": "GET /d1-inbox/files?tab=older&owner=me&limit=50",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "older",
+      "owner": "me",
+      "limit": "50"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001007",
+        "directus_files_id": "00000000-0000-4000-8000-000000003007",
+        "name": "3fa9c1d2_old.tif",
+        "mime_type": "image/tiff",
+        "kind": "sem_image",
+        "kind_confidence": 0.9,
+        "extracted": {},
+        "origin": "backlog",
+        "state": "new",
+        "match_strength": "short_id",
+        "matches": [
+          {
+            "collection": "physical_samples",
+            "record_id": "00000000-0000-4000-8000-000000000101",
+            "via": "short_id",
+            "token": "3fa9c1d2"
+          }
+        ],
+        "suggested_collection": "physical_samples",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000101",
+        "suggested_label": "S-0042",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/2024/3fa9c1d2_old.tif",
+        "size_bytes": 2500000,
+        "source_mtime": "2024-03-02T10:00:00.000Z",
+        "first_seen_at": "2026-10-01T08:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "has_thumbnail": true,
+        "suggested_can_edit": true
+      }
+    ],
+    "meta": {
+      "total": 1,
+      "limit": 50,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

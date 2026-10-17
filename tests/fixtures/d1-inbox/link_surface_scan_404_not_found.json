@@ -1,0 +1,32 @@
+{
+  "description": "the insert, edge or operation does not exist or the caller cannot read it (the same answer)",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn"
+        }
+      ]
+    }
+  },
+  "status": 404,
+  "body": {
+    "errors": [
+      {
+        "message": "That insert does not exist or you cannot see it.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "record_id": "00000000-0000-4000-8000-000000000201",
+          "code": "NOT_FOUND",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

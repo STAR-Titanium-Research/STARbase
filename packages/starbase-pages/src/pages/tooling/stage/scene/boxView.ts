@@ -3,7 +3,8 @@
 // current focus, hover and lifts. Imperative and outside Vue reactivity.
 
 import {
-	BufferGeometry, type CanvasTexture, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, type Intersection, type Object3D,
+	BufferGeometry, type CanvasTexture, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, type Intersection,
+	type Object3D,
 } from 'three';
 import type { EdgePlacement, ToolingEdge, ToolingFocus, ToolingModel } from '@d1/ui';
 import {
@@ -50,6 +51,7 @@ export class BoxView {
 	private readonly marks: InstancedMesh | null = null; // the reference arrow; none when no arrow fits the face
 	private readonly tips: InstancedMesh | null = null; // brazed PCD / PCBN pads, only for a tipped insert type
 	private readonly rings = new Map<string, Mesh>();
+	private readonly pocketPicks: Mesh[] = []; // an invisible floor in each pocket, so a hover holds while its insert rises
 	private readonly edges: EdgeItem[] = [];
 	private readonly selected: Mesh;
 	private readonly hovered: Mesh;
@@ -71,6 +73,7 @@ export class BoxView {
 		this.etchNumbers(own);
 
 		const ringGeo = own(buildPocketRingGeometry(this.layout));
+		const pocketFloor = own(new PlaneGeometry(this.layout.pocketW, this.layout.pocketD).rotateX(-Math.PI / 2));
 		for (const i of model.inserts) {
 			const slot = this.layout.slotOf.get(i.id);
 			if (!slot) continue;
@@ -80,6 +83,13 @@ export class BoxView {
 			ring.userData = { kind: 'insert', insertId: i.id };
 			this.rings.set(i.id, ring);
 			this.root.add(ring);
+			// An insert that rises under the pointer can leave it behind (the ring is only a frame): a hover would then end, the
+			// insert settle, and the hover begin again. A pick floor over the whole pocket keeps the hover steady.
+			const floor = new Mesh(pocketFloor, this.pickMaterial);
+			floor.position.set(c.x, this.layout.floorY + 0.04, c.z);
+			floor.userData = { kind: 'insert', insertId: i.id };
+			this.pocketPicks.push(floor);
+			this.root.add(floor);
 		}
 
 		const bodyGeo = own(buildInsertGeometry(model.geometry, model.outline));
@@ -221,7 +231,7 @@ export class BoxView {
 
 	// Meshes a click or hover can hit: the inserts, their rings and etched numbers, and the fat edge tubes of the focused insert.
 	pickables(focus: ToolingFocus): Object3D[] {
-		const list: Object3D[] = [this.solid, this.ghost, ...this.rings.values(), ...(this.etch ? [this.etch.mesh] : [])];
+		const list: Object3D[] = [this.solid, this.ghost, ...this.rings.values(), ...this.pocketPicks, ...(this.etch ? [this.etch.mesh] : [])];
 		if (focus.kind !== 'box') for (const e of this.edges) if (e.insertId === focus.insertId) list.push(e.pick);
 		return list;
 	}

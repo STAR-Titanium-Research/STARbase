@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, shouldOpenFinder, toSections } from './finderNav';
+import { bestIndex, isFinderShortcut, isModalOpen, isTypingKey, moveIndex, openHit, optionId, paneAllowed, sameHitIndex, shouldOpenFinder, toSections, widenLatch } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -144,5 +144,60 @@ describe('openHit', () => {
 		const calls: unknown[] = [];
 		openHit(hit('Pages', 'Samples'), (to) => calls.push(['navigate', to]), (r) => calls.push(['pick', r]));
 		expect(calls).toEqual([['navigate', '/x/Samples']]);
+	});
+});
+
+const h = (group: FinderHit['group'], label: string, rank = 3, more?: true): FinderHit => ({ group, label, to: `/x/${label}`, rank, ...(more ? { more } : {}) });
+
+describe('bestIndex', () => {
+	it('is the first row when it is a pass 1 hit, and -1 for no rows', () => {
+		expect(bestIndex([h('Pages', 'a', 2), h('Samples', 'b', 4)])).toBe(0);
+		expect(bestIndex([])).toBe(-1);
+	});
+
+	it('skips pass 2 hits (rank 4) while a pass 1 hit exists', () => {
+		expect(bestIndex([h('Samples', 'deep', 4), h('Samples', 'deeper', 4), h('Operations', 'code', 3)])).toBe(2);
+	});
+
+	it('is the first row when every hit is pass 2, and never a "More in" row', () => {
+		expect(bestIndex([h('Samples', 'deep', 4), h('Operations', 'deeper', 4)])).toBe(0);
+		expect(bestIndex([h('Samples', 'more', Number.POSITIVE_INFINITY, true), h('Operations', 'code', 3)])).toBe(1);
+	});
+});
+
+describe('sameHitIndex', () => {
+	it('finds the hit the user had made active in the new list', () => {
+		expect(sameHitIndex(h('Samples', 'b'), [h('Samples', 'a'), h('Samples', 'x', 1), h('Samples', 'b')])).toBe(2);
+	});
+
+	it('falls back to the best match when it is gone or there was none', () => {
+		expect(sameHitIndex(h('Samples', 'gone'), [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
+		expect(sameHitIndex(undefined, [h('Samples', 'deep', 4), h('Samples', 'code', 2)])).toBe(1);
+		expect(sameHitIndex(h('Samples', 'a'), [])).toBe(-1);
+	});
+});
+
+describe('the preview pane', () => {
+	const rec: FinderHit = { group: 'Samples', label: 'A', to: '/a', rank: 3, record: { collection: 'physical_samples', id: '1' } };
+	const page: FinderHit = { group: 'Pages', label: 'Samples', to: '/home/samples', rank: 3 };
+	const more: FinderHit = { group: 'Samples', label: 'More in Samples…', to: '/x', rank: Infinity, more: true };
+
+	it('is not allowed for a host that picks the record, below the width, or over a scan', () => {
+		expect(paneAllowed({ pickRecord: false, roomy: true, scanning: false })).toBe(true);
+		expect(paneAllowed({ pickRecord: true, roomy: true, scanning: false })).toBe(false);
+		expect(paneAllowed({ pickRecord: false, roomy: false, scanning: false })).toBe(false);
+		expect(paneAllowed({ pickRecord: false, roomy: true, scanning: true })).toBe(false);
+	});
+
+	it('widens on the first record hit, not for pages, saved views or a "More in" row', () => {
+		expect(widenLatch(false, true, false, [])).toBe(false);
+		expect(widenLatch(false, true, false, [page, more])).toBe(false);
+		expect(widenLatch(false, true, false, [page, rec])).toBe(true);
+	});
+
+	it('stays wide while the record hits are gone between two answers, and resets when the box cannot be searched or holds a scan', () => {
+		expect(widenLatch(true, true, false, [])).toBe(true);
+		expect(widenLatch(true, false, false, [])).toBe(false);
+		expect(widenLatch(true, true, true, [rec])).toBe(false);
 	});
 });

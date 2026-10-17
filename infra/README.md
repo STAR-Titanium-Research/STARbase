@@ -38,6 +38,7 @@ host, so they are git-ignored.
 cp .env.example .env        # fill in secrets (openssl rand -hex 32); compose refuses to start without them
 make up                     # bring stack up
 make bootstrap-minio        # create d1-files + d1-backups buckets (once)
+                           # and, when MINIO_SURFACE_READER_PASSWORD is set, the read-only `surface-reader` user (infra/minio/surface_reader.sh)
 make migrate && make seed   # apply schema + reference data
 ```
 

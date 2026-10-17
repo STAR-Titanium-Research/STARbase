@@ -1,0 +1,17 @@
+{
+  "description": "an allowed reader of a file with no settings saved",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/sem-settings",
+    "query": {
+      "file": "00000000-0000-4000-8000-000000003001"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "locked": false,
+      "settings": null
+    }
+  }
+}

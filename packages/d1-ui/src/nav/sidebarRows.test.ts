@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HOME_LINK, viewAsRow } from './sidebarRows';
+import { HOME_LINK, INBOX_LINK, viewAsRow } from './sidebarRows';
 import type { SidebarLink } from './sidebarModel';
 
 describe('HOME_LINK', () => {
@@ -7,6 +7,16 @@ describe('HOME_LINK', () => {
 		expect(HOME_LINK.to).toBe('/home');
 		expect(HOME_LINK.pin).toBeNull();
 		expect(HOME_LINK.newTab).toBe(false);
+	});
+});
+
+describe('INBOX_LINK', () => {
+	it('is the Inbox page with nothing to pin, written as STARbase\'s own page (no /home form)', () => {
+		expect(INBOX_LINK.to).toBe('/inbox');
+		expect(INBOX_LINK.label).toBe('Inbox');
+		expect(INBOX_LINK.icon).toBe('inbox');
+		expect(INBOX_LINK.pin).toBeNull();
+		expect(INBOX_LINK.newTab).toBe(false);
 	});
 });
 

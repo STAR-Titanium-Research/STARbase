@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AccessRecord } from './peopleApi';
 import type { PeopleRow } from './peopleQuery';
-import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, canSendReset, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const row = (status: string | null | undefined): PeopleRow => ({
 	kind: 'person',
@@ -53,6 +53,19 @@ describe('loginLine for a Lab Viewer (read-only)', () => {
 	});
 	it('even a viewer who is also an account administrator has none (the role decides)', () => {
 		for (const s of ['active', 'suspended', 'invited', undefined]) expect(loginLine(row(s), { admin: true, accounts: true, readOnly: true }).action).toBeNull();
+	});
+});
+
+describe('canSendReset', () => {
+	it('is for any administrator, on an active login only', () => {
+		for (const v of [ADMIN, LAB_ADMIN]) {
+			expect(canSendReset(row('active'), v)).toBe(true);
+			for (const s of ['invited', 'suspended', undefined]) expect(canSendReset(row(s), v), String(s)).toBe(false);
+		}
+	});
+	it('is never for a member or a Lab Viewer', () => {
+		expect(canSendReset(row('active'), MEMBER)).toBe(false);
+		expect(canSendReset(row('active'), LAB_VIEWER)).toBe(false);
 	});
 });
 

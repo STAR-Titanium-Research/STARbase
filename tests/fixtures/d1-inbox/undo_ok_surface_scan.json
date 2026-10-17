@@ -1,0 +1,17 @@
+{
+  "description": "a batch that added a surface scan undone: the scan row is deleted, the file returns to new",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/undo",
+    "body": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000903"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000903",
+      "undone": 1
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "description": "a day that is not YYYY-MM-DD",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn",
+          "scanned_on": "15/10/2026"
+        }
+      ]
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "scanned_on must be a day, YYYY-MM-DD.",
+        "extensions": {
+          "field": "scanned_on",
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

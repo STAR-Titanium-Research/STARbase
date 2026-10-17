@@ -125,8 +125,13 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
   const hiddenKinds = ref<ReadonlySet<string>>(new Set(remembered.hidden));
   const probable = ref(remembered.probable);
   const stack = ref(remembered.stack);
-  /** Operations the person took out of a stack with "Unstack"; the Stack passes chip, turned on again, stacks them again. */
-  const unstacked = ref<ReadonlySet<string>>(new Set());
+  /**
+   * The stacks the person took apart with "Unstack" (or a double-click), each as the row ids it held: a double-click on one of its passes
+   * stacks that one again; the Stack passes chip, turned on again, stacks them all again.
+   */
+  const unstackedGroups = ref<readonly (readonly string[])[]>([]);
+  /** Every operation of those stacks: they never join a stack while they are unstacked. */
+  const unstacked = computed<ReadonlySet<string>>(() => new Set(unstackedGroups.value.flat()));
   const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value, stack: stack.value });
   function toggleKind(kind: string): void {
     if (!HIDEABLE.has(kind)) return;
@@ -141,14 +146,31 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
   }
   function setStack(on: boolean): void {
     stack.value = on;
-    if (on) unstacked.value = new Set();
+    if (on) unstackedGroups.value = [];
     remember();
   }
-  /** "Unstack" on a stack of passes: each pass becomes its own card again. */
+  /** The card of the graph as it is now that holds row `rowId`. */
+  const cardOfRow = (rowId: string) => graph.value?.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(rowId))?.id;
+  /**
+   * "Unstack" on a stack of passes (the rail's button, or a double-click on the stack): each pass becomes its own card again. The map is laid
+   * out in full, like ＋, round the stack's first pass, which takes the stack's place so the others slide out from it.
+   */
   function unstack(id: string): void {
     const n = nodeById.value.get(id);
     if (n?.type !== 'container' || !n.stacked) return;
-    unstacked.value = new Set([...unstacked.value, ...n.group.rowIds]);
+    unstackedGroups.value = [...unstackedGroups.value, [...n.group.rowIds]];
+    const anchor = cardOfRow(n.group.rowIds[0]);
+    if (anchor) expansion.hint({ anchor, from: id, full: true });
+  }
+  /** A double-click on a pass of an unstacked stack: that whole stack stacks again, the stack taking the place of the pass pressed. */
+  function restack(id: string): void {
+    const n = nodeById.value.get(id);
+    if (n?.type !== 'container' || n.stacked) return;
+    const rest = unstackedGroups.value.filter((g) => !g.some((rowId) => n.group.rowIds.includes(rowId)));
+    if (rest.length === unstackedGroups.value.length) return;
+    unstackedGroups.value = rest;
+    const anchor = cardOfRow(n.group.rowIds[0]);
+    if (anchor) expansion.hint({ anchor, from: id, full: true });
   }
 
   // ---- what the page asks for ---------------------------------------------------------------------
@@ -186,7 +208,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     unfoldedKeys.value = new Set();
     moreOpenKeys.value = new Set();
     revealedKeys.value = new Set();
-    unstacked.value = new Set();
+    unstackedGroups.value = [];
     capped.value = false;
     notice.value = '';
     selectedKey.value = null;
@@ -235,7 +257,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
       { probable: probable.value, batchCodes: d.batchCodes, stack: stack.value, unstacked: unstacked.value },
     );
     const unfolded = new Set(groups.filter((g) => keysOfGroup(g).some((k) => unfoldedKeys.value.has(k))).map((g) => g.id));
-    return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded });
+    // Wires between the passes of an unstacked stack are drawn striped only while the chip would stack passes at all.
+    return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded, unstackedGroups: stack.value ? unstackedGroups.value : [] });
   }
   const graph = computed<ProcessGraph | null>(() => (shownData.value ? graphOf(shownData.value) : null));
 
@@ -369,7 +392,11 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
 
   const toggleRows = (id: string) => {
     const n = nodeById.value.get(id);
-    if (n) unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    if (!n) return;
+    unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    // The container's sockets are other sockets now (each row its own, or the bundle again), in row order: the cards on them
+    // swap places until their order follows the sockets' and no wire crosses. Dragged cards stay, and nothing further away moves.
+    expansion.hint({ reslot: id });
   };
   const toggleMore = (id: string) => {
     const n = nodeById.value.get(id);
@@ -398,19 +425,20 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
 
   // ---- the pointer, and ＋ ------------------------------------------------------------------------
   const { hovered, hover, holdHover, clearHover, tooltip, focusOfHover: hoverOnly, socketHighlight, card } = useMapHover({ graph, nodeById, nodes, info });
-  // The selected card lights up its chain: upstream, downstream or both (the card's right-click menu; both
-  // when the map opens). Hovering another card shows that card's neighbours (useMapHover); hovering a wire or
-  // socket adds its wires to the chain.
+  // A card lights up its chain: upstream, downstream or both, the way the right-click menu last said (both
+  // when the map opens). The hovered card while the pointer is on one, else the selected card, so hover and
+  // selection always agree. Hovering a wire or socket adds its wires to the selection's chain; hovering a
+  // record in an Inside tray keeps the neighbour rule (useMapHover).
   const chainDir = ref<ChainDir>('both');
   const setChainDir = (d: ChainDir) => void (chainDir.value = d);
   const chain = computed(() => (graph.value ? chainFocus(graph.value, selectedId.value, chainDir.value) : null));
   const focusOfHover = computed<HoverFocus | null>(() => {
     const h = hoverOnly.value;
+    const id = hovered.value?.id;
+    if (graph.value && id && nodeById.value.has(id)) return chainFocus(graph.value, id, chainDir.value) ?? h;
     const c = chain.value;
-    if (!c) return h;
-    if (!h || hovered.value?.id === selectedId.value) return c;
-    if (!h.dim) return { ...c, wires: new Set([...c.wires, ...h.wires]) };
-    return h;
+    if (!c || (h && h.dim)) return h ?? c;
+    return h ? { ...c, wires: new Set([...c.wires, ...h.wires]) } : c;
   });
   const expansion = useMapExpand({ api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding });
 
@@ -423,7 +451,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     revealedKeys.value = new Set();
     unfoldedKeys.value = new Set();
     moreOpenKeys.value = new Set();
-    unstacked.value = new Set();
+    unstackedGroups.value = [];
     capped.value = false;
     notice.value = '';
     clearHover();
@@ -462,6 +490,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     stack,
     setStack,
     unstack,
+    restack,
     collapse: expansion.collapse,
     expandedIds: expansion.expandedIds,
     reset,
@@ -473,7 +502,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     notice,
     expanding,
     takeMergeHints: expansion.takeMergeHints,
-    hintMerge: expansion.hintMerge,
+    hintMerge: expansion.hint,
     toggleRows,
     toggleMore,
     moreOpen,

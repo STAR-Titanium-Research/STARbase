@@ -2,7 +2,7 @@
 import { AppLink, CampaignCard, LIST_CAP, LoadState, Section, indexRoute, type SectionState } from '@d1/ui';
 import { computed } from 'vue';
 
-// The project's campaigns as cards (the kit's CampaignCard, the same one the campaigns list shows):
+// The project's campaigns as cards (the kit's CampaignCard, drawn `raised` exactly as the campaigns list draws it):
 // type, owner, status, dates, plain counts and one progress bar. The numbers are computed in
 // useProjectData from the real collections; the Campaign page has its own roll-up.
 const props = defineProps<{ campaigns: SectionState<any[]>; projectId?: string | null }>();
@@ -23,7 +23,7 @@ const capped = computed(() => props.campaigns.data.length > LIST_CAP);
 	>
 		<LoadState :loading="campaigns.loading" :error="campaigns.error">
 			<div class="grid">
-				<CampaignCard v-for="c in rows" :key="c.campaign_id" :campaign="c" :stats="c.stats" />
+				<CampaignCard v-for="c in rows" :key="c.campaign_id" :campaign="c" :stats="c.stats" raised />
 			</div>
 			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <AppLink :to="allCampaigns">{{ projectId ? "See all of this project's campaigns" : 'See the full list' }}</AppLink>.</p>
 		</LoadState>

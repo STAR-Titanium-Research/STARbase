@@ -71,7 +71,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 GITHUB_API = "https://api.github.com"
-DEFAULT_REPO = "dpremoli/D1-Database"
+DEFAULT_REPO = "STAR-Titanium-Research/STARbase"
 
 log = logging.getLogger("bug-report-relay")
 if (

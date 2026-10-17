@@ -2,6 +2,8 @@ import { createRouter, createWebHistory, type Router, type RouteRecordRaw } from
 import { starbaseRoutes } from '@d1/starbase-pages';
 import AppShell from './AppShell.vue';
 import AcceptInvite from './pages/AcceptInvite.vue';
+import ForgotPassword from './pages/ForgotPassword.vue';
+import ResetPassword from './pages/ResetPassword.vue';
 import SignInDone from './pages/SignInDone.vue';
 import SignInPage from './pages/SignInPage.vue';
 import { guardDecision, homeRedirect } from './guard';
@@ -15,6 +17,8 @@ export function buildRoutes(extraChildren: RouteRecordRaw[] = []): RouteRecordRa
 		{ path: '/signin', name: 'signin', component: SignInPage, meta: { public: true } },
 		{ path: '/signin/done', name: 'signin-done', component: SignInDone, meta: { public: true } },
 		{ path: '/accept-invite', name: 'accept-invite', component: AcceptInvite, meta: { public: true } },
+		{ path: '/forgot-password', name: 'forgot-password', component: ForgotPassword, meta: { public: true } },
+		{ path: '/reset-password', name: 'reset-password', component: ResetPassword, meta: { public: true } },
 		{ path: '/home/:rest(.*)*', redirect: (to) => homeRedirect(to.fullPath) },
 		{ path: '/', component: AppShell, children: [...extraChildren, ...starbaseRoutes] },
 	];
@@ -23,9 +27,14 @@ export function buildRoutes(extraChildren: RouteRecordRaw[] = []): RouteRecordRa
 export function createStarbaseRouter(session: Session, extraChildren: RouteRecordRaw[] = []): Router {
 	const router = createRouter({ history: createWebHistory('/'), routes: buildRoutes(extraChildren) });
 	router.beforeEach(async (to) => guardDecision(to, await session.ensure()));
-	// The page frame sets the tab title for signed-in pages; the public pages (sign-in, accept-invite) have no frame.
+	// The page frame sets the tab title for signed-in pages; the public pages (sign-in, accept-invite, password reset) have no frame.
+	const PUBLIC_TITLES: Record<string, string> = {
+		'accept-invite': 'Set your password · STARbase',
+		'forgot-password': 'Forgot password · STARbase',
+		'reset-password': 'Set a new password · STARbase',
+	};
 	router.afterEach((to) => {
-		if (to.meta.public === true && typeof document !== 'undefined') document.title = to.name === 'accept-invite' ? 'Set your password · STARbase' : 'Sign in · STARbase';
+		if (to.meta.public === true && typeof document !== 'undefined') document.title = PUBLIC_TITLES[String(to.name)] ?? 'Sign in · STARbase';
 	});
 	return router;
 }

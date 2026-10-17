@@ -28,6 +28,8 @@ export interface RecordInfo {
   code: string;
   /** The code describes the record (a probable batch, a lineage junction) rather than being a code you could type. */
   plain?: boolean;
+  /** A container of several rows (a recorded or probable batch, a stack of passes): it stands for all of them, so no one record's map is its map. */
+  batch?: true;
   title?: string;
   status?: string | null;
   facts: Fact[];
@@ -116,6 +118,7 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
     // (A recorded batch whose code was not read has none either: a dash, and the title says "Batch".)
     code: node.probable || node.stacked ? node.title : node.code || '–',
     plain: node.probable || node.stacked || undefined,
+    ...(rows.length > 1 ? { batch: true as const } : {}),
     title: node.probable ? undefined : node.stacked ? node.method : node.title,
     status: node.status,
     facts,

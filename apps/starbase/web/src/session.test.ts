@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApi } from './api';
+import { createApi, looksRestarting } from './api';
 import {
 	SESSION_NOT_KEPT, classifyLoadError, createSession, listProviders, providerLoginUrl, safeNext, signInErrorText, ssoErrorText,
 } from './session';
@@ -12,7 +12,7 @@ const ADMIN = { status: 200, data: { data: { admin_access: true } } };
 function setup(route: (key: string, cfg: any) => Reply) {
 	const api = createApi(D1);
 	const calls = fakeServer(api, route);
-	return { api, calls, session: createSession(api) };
+	return { api, calls, session: createSession(api, async () => false) };
 }
 
 describe('createSession', () => {
@@ -134,14 +134,30 @@ describe('providers', () => {
 });
 
 describe('error texts', () => {
-	it('sign-in failures say what to do', () => {
-		expect(signInErrorText({ response: { status: 401, data: {} } })).toBe('Wrong email or password.');
-		expect(signInErrorText({ message: 'Network Error' })).toMatch(/Can't reach the database/);
-		expect(signInErrorText({ response: { status: 429, data: { errors: [{ message: 'Too many requests' }] } } })).toBe('Too many requests');
-		expect(signInErrorText(new Error(SESSION_NOT_KEPT))).toBe(SESSION_NOT_KEPT);
+	it('sign-in failures say what to do', async () => {
+		expect(await signInErrorText({ response: { status: 401, data: {} } })).toBe('Wrong email or password.');
+		expect(await signInErrorText({ message: 'Network Error' }, async () => false)).toMatch(/Can't reach the database/);
+		expect(await signInErrorText({ response: { status: 503, data: {} } })).toMatch(/under maintenance/);
+		expect(await signInErrorText({ response: { status: 429, data: { errors: [{ message: 'Too many requests' }] } } })).toBe('Too many requests');
+		expect(await signInErrorText(new Error(SESSION_NOT_KEPT))).toBe(SESSION_NOT_KEPT);
 	});
 	it("an SSO return shows Directus's reason", () => {
 		expect(ssoErrorText('INVALID_CREDENTIALS')).toBe('Directus did not accept that account.');
 		expect(ssoErrorText('SOMETHING_NEW')).toBe('Directus said: SOMETHING_NEW');
+	});
+});
+
+describe('looksRestarting', () => {
+	it('treats a gateway status as a restart without probing', async () => {
+		const probe = vi.fn(async () => false);
+		expect(await looksRestarting({ response: { status: 502 } }, probe)).toBe(true);
+		expect(probe).not.toHaveBeenCalled();
+	});
+	it('a silent d1-server is a restart when STARbase itself still answers, offline when it does not', async () => {
+		expect(await looksRestarting({ message: 'Network Error' }, async () => true)).toBe(true);
+		expect(await looksRestarting({ message: 'Network Error' }, async () => false)).toBe(false);
+	});
+	it('any other answer is not a restart', async () => {
+		expect(await looksRestarting({ response: { status: 500 } }, async () => true)).toBe(false);
 	});
 });

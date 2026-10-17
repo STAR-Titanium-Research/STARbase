@@ -1,0 +1,58 @@
+{
+  "description": "GET /d1-inbox/files?tab=dismissed&limit=50",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "dismissed",
+      "limit": "50"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001010",
+        "directus_files_id": "00000000-0000-4000-8000-000000003010",
+        "name": "IMG_0001.jpg",
+        "mime_type": "image/jpeg",
+        "kind": "image",
+        "kind_confidence": 0.9,
+        "extracted": {},
+        "origin": "new",
+        "state": "dismissed",
+        "match_strength": "none",
+        "matches": [],
+        "suggested_collection": null,
+        "suggested_record_id": null,
+        "suggested_label": null,
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/IMG_0001.jpg",
+        "size_bytes": 2500000,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": "2026-10-13T09:00:00.000Z",
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": "Alice A",
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "has_thumbnail": false
+      }
+    ],
+    "meta": {
+      "total": 1,
+      "limit": 50,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

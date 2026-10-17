@@ -1,0 +1,61 @@
+{
+  "description": "GET /d1-inbox/files?tab=linked&link_kind=manual&limit=20",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/files",
+    "query": {
+      "tab": "linked",
+      "link_kind": "manual",
+      "limit": "20"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "candidate_id": "00000000-0000-4000-8000-000000001012",
+        "directus_files_id": "00000000-0000-4000-8000-000000003012",
+        "name": "H13A-2_fC_worn.al3d",
+        "mime_type": null,
+        "kind": "surface_scan",
+        "kind_confidence": 1,
+        "extracted": {},
+        "origin": "new",
+        "state": "linked",
+        "match_strength": "none",
+        "matches": [],
+        "suggested_collection": null,
+        "suggested_record_id": null,
+        "suggested_label": null,
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/alicona/H13A-2_fC_worn.al3d",
+        "size_bytes": 52428800,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": "2026-10-15T09:30:00.000Z",
+        "link_kind": "manual",
+        "link_batch_id": "00000000-0000-4000-8000-000000000903",
+        "linked_collection": "surface_scans",
+        "linked_record_id": "00000000-0000-4000-8000-000000006001",
+        "linked_label": "H13A-#2-fC (worn)",
+        "decided_by_name": "Alice A",
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "has_thumbnail": false,
+        "linked_insert_id": null,
+        "linked_edge_id": "00000000-0000-4000-8000-000000000202"
+      }
+    ],
+    "meta": {
+      "total": 1,
+      "limit": 20,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

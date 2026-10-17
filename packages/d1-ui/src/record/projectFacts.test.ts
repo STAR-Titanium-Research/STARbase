@@ -69,7 +69,7 @@ describe('projectRailFacts', () => {
 });
 
 describe('projectContents', () => {
-	const rows = { campaigns: 3, samples: 0, operations: 2, tests: null, equipment: 5 };
+	const rows = { campaigns: 3, samples: 0, operations: 2, tests: null, activity: 0, equipment: 5 };
 	it('lists the panels in page order with the ids the sections carry', () => {
 		const entries = projectContents({ hasDescription: true, ...rows });
 		expect(entries.map((e) => e.id)).toEqual([
@@ -77,6 +77,8 @@ describe('projectContents', () => {
 		]);
 		expect(entries.find((e) => e.id === 'campaigns')?.count).toBe(3);
 		expect(entries.find((e) => e.id === 'unassigned-tests')?.count).toBeNull();
+		// No activity in the window is a zero, so the rail lists it dimmed like the other empty panels.
+		expect(entries.find((e) => e.id === 'activity')?.count).toBe(0);
 	});
 
 	it('leaves out the Description panel when there is none', () => {

@@ -14,15 +14,20 @@ import NavHoverMenu from './NavHoverMenu.vue';
 import NavIcon from './NavIcon.vue';
 import { pinKey, railPins } from './sidebarModel';
 import type { SectionId } from './sidebarModel';
-import { HOME_LINK } from './sidebarRows';
+import { HOME_LINK, INBOX_LINK } from './sidebarRows';
 import { useRailMenu } from './useRailMenu';
 import { useRailTip } from './useRailTip';
 import { useSidebarData } from './useSidebarData';
+import { useExplorerHost } from '../host';
+import { badgeText, inboxLabel } from '../inbox/inboxSummary';
+import { useInboxSummary } from '../inbox/useInboxSummary';
 
 withDefaults(defineProps<{ collapsible?: boolean }>(), { collapsible: false });
 defineEmits<{ (e: 'open-finder'): void; (e: 'request-mode', mode: 'expanded' | 'rail', sectionId?: SectionId): void }>();
 
 const { sections, resolved, isCurrent, currentSection } = useSidebarData();
+const inbox = useInboxSummary(useExplorerHost());
+const inboxBadge = computed(() => badgeText(inbox.newCount.value));
 const rail = computed(() => railPins(resolved.value.shown));
 const overflowCurrent = computed(() => rail.value.overflow.some((p) => isCurrent(p.to)));
 
@@ -56,6 +61,13 @@ function closeMenu(key: string, refocus: boolean) {
 		<div class="slot" :class="{ current: isCurrent(HOME_LINK.to) }" v-on="tipEvents('Home')">
 			<AppLink class="icon" active-class="" exact-active-class="" :to="HOME_LINK.to" aria-label="Home" :aria-current="isCurrent(HOME_LINK.to) ? 'page' : undefined">
 				<NavIcon :name="HOME_LINK.icon" :size="20" />
+			</AppLink>
+		</div>
+
+		<div v-if="!inbox.absent.value" class="slot" :class="{ current: isCurrent(INBOX_LINK.to) }" v-on="tipEvents(inboxLabel(inbox.newCount.value))">
+			<AppLink class="icon" active-class="" exact-active-class="" :to="INBOX_LINK.to" :aria-label="inboxLabel(inbox.newCount.value)" :aria-current="isCurrent(INBOX_LINK.to) ? 'page' : undefined">
+				<NavIcon :name="INBOX_LINK.icon" :size="20" />
+				<span v-if="inboxBadge" class="dot" data-test="nav-badge" aria-hidden="true">{{ inboxBadge }}</span>
 			</AppLink>
 		</div>
 
@@ -164,7 +176,13 @@ function closeMenu(key: string, refocus: boolean) {
 	border: 0; border-radius: 9px; background: none; color: var(--d1-side-dim);
 	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; text-decoration: none; cursor: pointer;
 }
+.icon { position: relative; }
 .icon.pin { width: 40px; height: 36px; margin: 0 2px; }
+/* The Inbox's count on its icon: a small pill at the top right corner. */
+.dot {
+	position: absolute; top: 2px; right: 0; min-width: 16px; padding: 0 4px; border-radius: 99px; background: var(--d1-side-bar); color: #fff;
+	font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+}
 .icon:hover, .slot.open > .icon { background: var(--d1-side-hover); color: #fff; }
 .slot.current > .icon { background: var(--d1-side-current); color: #fff; }
 .icon:focus-visible { outline: 2px solid var(--d1-side-bar); outline-offset: -2px; }

@@ -1,0 +1,20 @@
+{
+  "description": "a person with no folder",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/rescan",
+    "body": {}
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "There is no folder to scan yet. Ask an administrator to set your uni alias.",
+        "extensions": {
+          "code": "NO_FOLDER",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

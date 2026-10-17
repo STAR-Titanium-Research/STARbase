@@ -5,10 +5,11 @@ import AppearanceSection from '../settings/AppearanceSection.vue';
 import PinnedSection from '../settings/PinnedSection.vue';
 import SidebarSection from '../settings/SidebarSection.vue';
 import UsageSections from '../settings/UsageSections.vue';
+import AutoLinkSection from '../inbox/AutoLinkSection.vue';
 import { useSaves } from '../settings/useSaves';
 import '../settings/settings.css';
 
-// Settings (explorer-sidebar-b2 spec, decision 9): Appearance, Sidebar, Pinned, Index pages, Frequently
+// Settings (explorer-sidebar-b2 spec, decision 9): Appearance, Sidebar, Pinned, Inbox (automatic linking), Index pages, Frequently
 // used. Each setting saves as it changes; a failed save says so beside the control, with Retry.
 const saves = useSaves();
 </script>
@@ -20,6 +21,7 @@ const saves = useSaves();
 			<AppearanceSection :saves="saves" />
 			<SidebarSection :saves="saves" />
 			<PinnedSection :saves="saves" />
+			<AutoLinkSection />
 			<UsageSections />
 		</PageShell>
 	</ExplorerView>

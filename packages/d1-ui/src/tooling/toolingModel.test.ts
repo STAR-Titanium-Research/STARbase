@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-	buildToolingModel, edgeUsageMismatch, focusParent, focusRoute, insertState, nextFreshEdge,
+	buildToolingModel, dedupeEdges, edgeNotes, edgeSummary, edgeUsageMismatch, expectedEdgeCount, focusParent, focusRoute, insertState, nextFreshEdge,
 	type EdgeRow, type InsertRow, type ToolingModel,
 } from './toolingModel';
 
@@ -192,5 +192,115 @@ describe('types', () => {
 	it('exposes the model shape the stage draws', () => {
 		const m: ToolingModel = buildToolingModel(box, cnmg, [ins(1)], fourEdges('i1'));
 		expect(Object.keys(m).sort()).toEqual(['boxCode', 'boxId', 'geometry', 'grid', 'inserts', 'outline', 'typeCode']);
+	});
+});
+
+// Legacy imports: an insert with two rows for one letter, or with one letter short.
+describe('edge rows that do not match the type', () => {
+	const model = (type: Record<string, unknown> | null, rows: EdgeRow[]) => buildToolingModel(box, type, [ins(1)], rows);
+	const only = (m: ToolingModel) => m.inserts[0];
+
+	it('reads a complete insert as 4/4, with nothing extra', () => {
+		const i = only(model(cnmg, fourEdges('i1')));
+		expect(i.expectedEdges).toBe(4);
+		expect(i.duplicateEdges).toEqual([]);
+		expect(edgeSummary(i)).toEqual({ fresh: 4, total: 4, missing: 0, duplicates: 0 });
+		expect(edgeNotes(i)).toEqual([]);
+	});
+
+	it('keeps one row per letter: the duplicate is dropped, kept on the insert, never drawn or counted', () => {
+		const rows = [...fourEdges('i1'), edge('i1', 'D', false, { edge_id: 'dup', edge_code: 'i1-fD-7152' })];
+		const i = only(model(cnmg, rows));
+		expect(i.edges.map((e) => e.letter)).toEqual(['A', 'B', 'C', 'D']);
+		expect(i.edges.find((e) => e.letter === 'D')!.id).toBe('i1-D'); // the first by code
+		expect(i.duplicateEdges).toEqual(['dup']);
+		expect(edgeSummary(i)).toEqual({ fresh: 4, total: 4, missing: 0, duplicates: 1 });
+		expect(edgeNotes(i)).toEqual(['1 duplicate edge record ignored']);
+		expect(i.state).toBe('fresh');
+	});
+
+	it('keeps the duplicate that has been used, whichever code comes first', () => {
+		const rows = [...fourEdges('i1'), edge('i1', 'D', true, { edge_id: 'dup', edge_code: 'zz' })];
+		const i = only(model(cnmg, rows));
+		expect(i.edges.find((e) => e.letter === 'D')).toMatchObject({ id: 'dup', used: true });
+		expect(i.duplicateEdges).toEqual(['i1-D']);
+		expect(i.state).toBe('partly-used');
+		expect(edgeSummary(i).fresh).toBe(3);
+	});
+
+	it('treats legacy f-prefixed letters (fA to fD) as the same letters, so fD and D are one edge', () => {
+		const rows = ['fA', 'fB', 'fC', 'fD', 'D'].map((l, k) => edge('i1', l, false, { edge_id: `e${k}`, edge_code: `c${k}` }));
+		const i = only(model(cnmg, rows));
+		expect(i.edges.map((e) => e.letter)).toEqual(['A', 'B', 'C', 'D']);
+		expect(i.duplicateEdges).toEqual(['e4']);
+		expect(i.edges.every((e) => e.placement !== null)).toBe(true); // all four still placed on the drawing
+	});
+
+	it('counts a missing edge against the type: 3/4, with a note, and the missing one is not fresh', () => {
+		const i = only(model(cnmg, fourEdges('i1').slice(0, 3)));
+		expect(i.edges).toHaveLength(3);
+		expect(edgeSummary(i)).toEqual({ fresh: 3, total: 4, missing: 1, duplicates: 0 });
+		expect(edgeNotes(i)).toEqual(['1 edge missing']);
+		const two = only(model(cnmg, fourEdges('i1').slice(0, 2)));
+		expect(edgeNotes(two)).toEqual(['2 edges missing']);
+	});
+
+	it('reads both notes for an insert that has a duplicate and a gap', () => {
+		const rows = [edge('i1', 'A'), edge('i1', 'B'), edge('i1', 'C'), edge('i1', 'C', false, { edge_id: 'x', edge_code: 'i1-fC-2' })];
+		const i = only(model(cnmg, rows));
+		expect(edgeSummary(i)).toEqual({ fresh: 3, total: 4, missing: 1, duplicates: 1 });
+		expect(edgeNotes(i)).toEqual(['1 edge missing', '1 duplicate edge record ignored']);
+	});
+
+	it('computes the state from the de-duplicated edges, and calls an insert used only when every expected edge is', () => {
+		const used = ['A', 'B', 'C', 'D'];
+		expect(only(model(cnmg, fourEdges('i1', used))).state).toBe('used');
+		// two duplicate rows must not turn a fully used insert part used
+		const withDup = [...fourEdges('i1', used), edge('i1', 'A', false, { edge_id: 'dupA', edge_code: 'i1-fA-9' })];
+		expect(only(model(cnmg, withDup)).state).toBe('used');
+		// three used edges of three recorded, one missing: not used
+		expect(only(model(cnmg, fourEdges('i1', used).slice(0, 3))).state).toBe('partly-used');
+		// nothing used stays fresh whatever is missing
+		expect(only(model(cnmg, fourEdges('i1').slice(0, 3))).state).toBe('fresh');
+	});
+
+	it('counts the recorded edges when there are more than the type has (a total never below what is there)', () => {
+		const i = only(model({ iso_designation: 'CCMT 09 T3 04' }, [edge('i1', 'A'), edge('i1', 'B'), edge('i1', 'C')]));
+		expect(i.expectedEdges).toBe(2);
+		expect(edgeSummary(i)).toEqual({ fresh: 3, total: 3, missing: 0, duplicates: 0 });
+	});
+
+	it('has no expected count for an unknown type, and counts what is recorded', () => {
+		for (const type of [null, { iso_designation: '???' }]) {
+			const i = only(model(type, fourEdges('i1').slice(0, 3)));
+			expect(i.expectedEdges).toBeNull();
+			expect(edgeSummary(i)).toEqual({ fresh: 3, total: 3, missing: 0, duplicates: 0 });
+			expect(edgeNotes(i)).toEqual([]);
+		}
+	});
+
+	it('knows the edge count of single-sided and double-sided types', () => {
+		const geo = (t: Record<string, unknown>) => buildToolingModel(box, t, [ins(1)], []).geometry;
+		expect(expectedEdgeCount(geo({ iso_designation: 'CCMT 09 T3 04' }))).toBe(2); // positive rake: one side, two corners
+		expect(expectedEdgeCount(geo({ iso_designation: 'CNMG 12 04 08-MF' }))).toBe(4); // negative: two corners, both faces
+		expect(expectedEdgeCount(geo({ iso_designation: 'CCGW 09T3 04', edge_count: 1, substrate: 'PCD' }))).toBe(1); // a one-edge tip
+		expect(expectedEdgeCount(geo({ iso_designation: 'SNMG 12 04 08' }))).toBe(8);
+		expect(expectedEdgeCount(geo({ iso_designation: '???', edge_count: 5 }))).toBeNull();
+		const one = buildToolingModel(box, { iso_designation: 'CCGW 09T3 04', edge_count: 1 }, [ins(1)], [edge('i1', 'A')]);
+		expect(edgeSummary(one.inserts[0])).toEqual({ fresh: 1, total: 1, missing: 0, duplicates: 0 });
+	});
+
+	it('does not merge edges whose letter cannot be read', () => {
+		const rows = [edge('i1', 'A'), edge('i1', '?', false, { edge_id: 'u1', edge_code: 'u1' }), edge('i1', '?', false, { edge_id: 'u2', edge_code: 'u2' })];
+		const i = only(model(cnmg, rows));
+		expect(i.duplicateEdges).toEqual([]);
+		expect(i.edges).toHaveLength(3);
+	});
+
+	it('dedupeEdges ranks used first, then code', () => {
+		const mk = (id: string, code: string, used: boolean) => ({ id, code, identifier: 'A', letter: 'A', used, notes: null, placement: null });
+		const r = dedupeEdges([mk('b', 'b', false), mk('a', 'a', false), mk('c', 'c', true)]);
+		expect(r.kept.map((e) => e.id)).toEqual(['c']);
+		expect(r.dropped.map((e) => e.id).sort()).toEqual(['a', 'b']);
 	});
 });

@@ -117,6 +117,9 @@ services:
       # Where an invitation e-mail points (d1-people-admin: <STARBASE_URL>/accept-invite). Directus refuses to invite to any other
       # address; blank when STARBASE_URL is unset (the invite endpoint then answers 503).
       USER_INVITE_URL_ALLOW_LIST: ${STARBASE_URL:+${STARBASE_URL}/accept-invite}
+      # Where a password-reset e-mail points: STARbase's /reset-password (the sign-in pages' "Forgot password?" and the People page's
+      # "Send reset email"), plus Data Studio's own reset page so its "Forgot password?" keeps working once a list is set.
+      PASSWORD_RESET_URL_ALLOW_LIST: ${STARBASE_URL:+${STARBASE_URL}/reset-password,}${DIRECTUS_PUBLIC_URL:-http://localhost:80}/admin/reset-password
       # Auto-load local extensions (the actor-identity audit hook).
       EXTENSIONS_AUTO_RELOAD: "true"
       # Thumbnails of the force figures (frm_fz PNGs, ~6,100 x 5,900 px, ~20 MB) for the Explorer's
@@ -144,6 +147,19 @@ services:
       FLOWS_ENV_ALLOW_LIST: WORKER_WEBHOOK_SECRET
       # The container runs in UTC; d1-report prints label dates in this IANA zone instead.
       D1_TIMEZONE: ${D1_TIMEZONE:-Europe/London}
+      # Shared secret the inbox crawler sends on POST /d1-inbox/auto-link (header X-Inbox-Crawler-Secret). Empty: that route refuses every call.
+      D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
+      # The folder holding the personal folders on the share (the lab share spells it `User`); the same value the inbox-crawler service gets. d1-inbox builds
+      # a person's folder path from it for "Ignore this folder" (with the default `Users` the rule dismissed nothing on the real share).
+      INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
+      # d1-surface-scan (ADR-0021) streams the rendered height grids, metadata and thumbnails of surface scans to signed-in
+      # users, so browsers never reach MinIO. It does NOT get the MinIO root credentials: `make bootstrap-minio` creates a
+      # dedicated user whose policy allows only s3:GetObject on <bucket>/surface-scans/* (and s3:ListBucket for that prefix).
+      # Password unset: the endpoint answers 503 (nothing else in Directus needs MinIO).
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_SURFACE_READER_USER: ${MINIO_SURFACE_READER_USER:-surface-reader}
+      MINIO_SURFACE_READER_PASSWORD: ${MINIO_SURFACE_READER_PASSWORD:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
     # Path A (built-in AI Chat) and any server-side extension that calls the host
     # can reach the host's Ollama here. Auto-resolved on Windows/Mac Docker
     # Desktop; the host-gateway mapping makes it work on Linux too.
@@ -156,7 +172,7 @@ services:
       # Mount the version-controlled hook extensions (read-only).
       - ./core/extensions:/directus/extensions:ro
       # The SMB archive (`archive_share`, below) is deliberately NOT mounted here: files there are
-      # linked, not served, and only the `archive-indexer` service reads it.
+      # linked, not served, and only the `archive-indexer` and `inbox-crawler` services read it.
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
              "http://127.0.0.1:8055/server/health"]
@@ -245,6 +261,65 @@ services:
         - "python"
         - "-c"
         - "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [d1net]
+
+  # Surface-scan render worker (ADR-0021, docs/runbooks/surface-scan-worker.md).
+  # Renders a topography file (.al3d and the other SurfaceTopography formats) from the SMB archive
+  # into a decimated height grid + thumbnail in MinIO (surface-scans/<cache_key>/), triggered by a
+  # Directus Flow on surface_scans plus a poll. It is the only service besides the archive indexer
+  # that reads /mnt/archive: the same `archive_share` volume, mounted `:ro`, no second mount and no
+  # credentials of its own. It never writes there, never hashes a file and never writes
+  # file_fingerprints. Opt-in in the same `archive` profile as the indexer, so a plain
+  # `docker compose up` never tries to mount the share:
+  #   docker compose --profile archive up -d surface-scan-worker
+  surface-scan-worker:
+    build:
+      context: plugins/surface-scan-worker
+      dockerfile: Dockerfile
+    profiles: ["archive"]
+    restart: unless-stopped
+    # A render holds the whole scan in memory; cap it so an out-of-memory kill takes down this
+    # container only (the poller then fails the row with "Render again").
+    mem_limit: ${SURFACE_SCAN_MEMORY_LIMIT:-2g}
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Full URL incl. password; preferred over REDIS_HOST/REDIS_PORT (kept for compatibility).
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (openssl rand -hex 32)}@redis:6379/0
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env (openssl rand -hex 32)}
+      MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
+      DIRECTUS_URL: http://directus:8055
+      WORKER_DIRECTUS_TOKEN: ${SURFACE_SCAN_DIRECTUS_TOKEN:-${WORKER_DIRECTUS_TOKEN:-}}
+      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:?Set WORKER_WEBHOOK_SECRET in .env (openssl rand -hex 32)}
+      WORKER_HTTP_PORT: "8080"
+      QUEUE_NAME: surface-scan-worker
+      ARCHIVE_MOUNT: /mnt/archive
+      # archive_path in directus_files.metadata is relative to this (the root index_archive.py indexes).
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
+      SURFACE_SCAN_CONCURRENCY: ${SURFACE_SCAN_CONCURRENCY:-1}
+      POLL_INTERVAL_SECONDS: ${SURFACE_SCAN_POLL_SECONDS:-60}
+      JOB_TIMEOUT_SECONDS: ${SURFACE_SCAN_JOB_TIMEOUT_SECONDS:-3600}
+    volumes:
+      - archive_share:/mnt/archive:ro
+    ports:
+      - "${D1_BIND_ADDR:-127.0.0.1}:${SURFACE_SCAN_HTTP_PORT:-8083}:8080"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
       interval: 15s
       timeout: 5s
       retries: 5
@@ -436,7 +511,7 @@ services:
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app-private-key.pem
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
-      GITHUB_REPO: ${GITHUB_BUG_REPORT_REPO:-dpremoli/D1-Database}
+      GITHUB_REPO: ${GITHUB_BUG_REPORT_REPO:-STAR-Titanium-Research/STARbase}
       RIG_TEST_ALLOWED_LOGINS: ${RIG_TEST_ALLOWED_LOGINS:-}
       DIRECTUS_INTERNAL_URL: ${DIRECTUS_INTERNAL_URL:-http://directus:8055}  # who a rig-test caller's D1 token belongs to
     volumes:
@@ -500,7 +575,7 @@ services:
     networks: [d1net]
 
   # One-off indexer for the SMB archive (`make index-archive`). Opt-in profile so a plain
-  # `docker compose up` never tries to mount the share. Nothing else reads /mnt/archive.
+  # `docker compose up` never tries to mount the share. Only this and the surface-scan-worker read /mnt/archive.
   archive-indexer:
     image: python:3.12-slim
     profiles: ["archive"]
@@ -509,11 +584,54 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-d1}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}@postgres:5432/${POSTGRES_DB:-d1_database}?sslmode=disable
-      ARCHIVE_ROOT: /mnt/archive/star_group1
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
     volumes:
       - ./scripts:/scripts:ro
       - archive_share:/mnt/archive:ro
     command: ["sh", "-c", "pip install -q psycopg2-binary && python /scripts/index_archive.py"]
+    networks: [d1net]
+
+  # The inbox crawler (spec 2026-10-15-found-files-inbox-design.md, ADR-0020): a daemon that watches each
+  # person's Users/<uni alias> and each team's Shared/<share folder>, registers new files and tags what they
+  # look like. READ-ONLY against the share: it mounts `archive_share` with `:ro` like the indexer, and
+  # scripts/inbox_crawler/fs_readonly.py is the only module that touches it. Opt-in profile, like the indexer;
+  # `make inbox-crawler` starts it. It links nothing itself: auto-link goes through POST /d1-inbox/auto-link.
+  inbox-crawler:
+    image: python:3.12-slim
+    profiles: ["archive"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-d1}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}@postgres:5432/${POSTGRES_DB:-d1_database}?sslmode=disable
+      ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
+      D1_INBOX_URL: ${D1_INBOX_URL:-http://directus:8055}
+      # Empty switches auto-link off. Must equal the D1_INBOX_CRAWLER_SECRET Directus gets.
+      D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
+      # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
+      INBOX_OCR: ${INBOX_OCR:-}
+      # Thumbnails for the Inbox (spec section 14): 1 (default) makes a small and a reduced picture of each image
+      # and SEM image, in the database; 0 turns that and the backfill of older files off.
+      INBOX_THUMBNAILS: ${INBOX_THUMBNAILS:-1}
+      # auto|cpu|cuda for the data-bar OCR: CPU unless asked; auto takes the GPU when onnxruntime offers one.
+      INBOX_OCR_DEVICE: ${INBOX_OCR_DEVICE:-cpu}
+      INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
+      # The folder holding the personal folders: the lab share spells it `User` (Z:\star_group1\User).
+      INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
+      # Trial runs: only these comma-separated folder names (uni aliases, share folders) are scanned. Empty: everyone.
+      INBOX_ONLY_FOLDERS: ${INBOX_ONLY_FOLDERS:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./scripts:/scripts:ro
+      - archive_share:/mnt/archive:ro
+    working_dir: /scripts
+    # Exact versions (the ones CI resolved): a bump is a reviewed change, not whatever pip finds at a restart.
+    # INBOX_OCR=1 also needs rapidocr-onnxruntime (about 380 MB), installed only when it is set so the default start stays
+    # light. The versions are the ones a clean python:3.12-slim imported (physical-test backlog SEM7); rapidocr goes in
+    # with --no-deps because its metadata asks for opencv-python (needs libGL), and the headless build stands in.
+    # `make inbox-crawler-once` has its own copy of these pip lines.
+    command: ["sh", "-c", "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && if [ -n \"$$INBOX_OCR\" ]; then pip install -q --no-deps 'rapidocr-onnxruntime==1.2.3' && pip install -q 'onnxruntime==1.31.0' 'numpy==2.5.4' 'opencv-python-headless==5.0.0.93' 'pyclipper==1.4.0' 'Shapely==2.2.0' 'PyYAML==6.0.3' 'six==1.17.0'; fi && exec python -m inbox_crawler --daemon"]
     networks: [d1net]
 
 volumes:
@@ -530,12 +648,16 @@ volumes:
   backup-raw:
 
   # Read-only mount of the university SMB archive (Z: → \\uosfstore.shef.ac.uk\shared).
-  # Used only by the `archive-indexer` service (profile `archive`, run by `make index-archive`);
-  # the workers and Directus do not mount it. The whole `shared` export is mounted; only the
+  # Used only by the `archive-indexer` and `inbox-crawler` services (profile `archive`, run by `make index-archive`
+  # and `make inbox-crawler`) and the `surface-scan-worker` (same profile, `:ro`, ADR-0021); the other workers and
+  # Directus do not mount it. The whole `shared` export is mounted; only the
   # star_group1 subtree is used (STORAGE_STAR_ROOT and the indexer point at
   # /mnt/archive/star_group1). Credentials live in .env (SMB_USER / SMB_PASS). The mount is
   # read-only twice over: `ro` in the options AND `:ro` on the service mount.
   # If SMB negotiation fails, adjust `vers=` (try 3.1.1 or 2.1) or add `domain=`.
+  # A DFS link (\\uosfstore...\shared\star_group1 is one) cannot be followed by Docker's CIFS client: the mount
+  # fails with "no such file or directory", or with `nodfs` the link reads "Not supported". Mount the link's
+  # target share instead and point ARCHIVE_CONTAINER_ROOT at the mount (see .env.example, SMB archive).
   archive_share:
     driver: local
     driver_opts:

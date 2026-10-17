@@ -59,14 +59,18 @@ export function tokenEmail(token: string): string | null {
 }
 
 /**
- * The live password policy ("upper, lower, digit, symbol"; Directus's auth_password_policy, which is not readable before sign-in) as a
- * checklist for the field. A hint only: Directus decides, and its own refusal is shown if the policy has since changed.
+ * The live password policy (Directus's auth_password_policy, which is not readable before sign-in) as a checklist for the field. It
+ * mirrors d1-server's setting, /(?=^.{8,}$)(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*()_+}{';'?>.<,])(?!.*\s).*$/: at least 8
+ * characters, one each of upper case, lower case, digit and a symbol FROM THAT LIST (a "-", "=" or "~" is not one), and no whitespace.
+ * A hint only: Directus decides, and its own refusal is shown if the policy has since changed.
  */
 export function policyChecks(password: string): { label: string; met: boolean }[] {
 	return [
+		{ label: 'at least 8 characters', met: password.length >= 8 },
 		{ label: 'an upper-case letter', met: /[A-Z]/.test(password) },
 		{ label: 'a lower-case letter', met: /[a-z]/.test(password) },
-		{ label: 'a digit', met: /[0-9]/.test(password) },
-		{ label: 'a symbol', met: /[^A-Za-z0-9]/.test(password) },
+		{ label: 'a digit', met: /\d/.test(password) },
+		{ label: "a symbol from ! @ # $ % ^ & * ( ) _ + { } ' ; ? . , < >", met: /[!@#$%^&*()_+}{';?>.<,]/.test(password) },
+		{ label: 'no spaces', met: password !== '' && !/\s/.test(password) },
 	];
 }

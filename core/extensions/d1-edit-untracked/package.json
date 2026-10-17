@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-edit-untracked",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Keeps STARbase's form-only edit page (/d1-edit/...) out of a user's remembered last page, so opening Directus never lands on it.",
+  "keywords": ["directus", "directus-extension", "directus-custom-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

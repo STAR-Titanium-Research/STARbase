@@ -1,0 +1,23 @@
+{
+  "description": "a folder with an empty part: relative to the owner's root, no empty, . or .. part, no leading or trailing slash (extensions.field is folder)",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/ignored-folders",
+    "body": {
+      "folder": "World-Ti Paper//Drafts"
+    }
+  },
+  "status": 400,
+  "body": {
+    "errors": [
+      {
+        "message": "The folder has an empty part (two slashes in a row).",
+        "extensions": {
+          "field": "folder",
+          "code": "INVALID_PAYLOAD",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

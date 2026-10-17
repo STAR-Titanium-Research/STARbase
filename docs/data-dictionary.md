@@ -53,6 +53,7 @@ Record access (A1a)
   sample_readers, operation_readers, test_readers, campaign_readers, project_readers, campaign_sample_readers
                                derived: which login may read each record (kept by triggers; never edited)
   operation_open_to_all        derived: the ownerless operations every member may read
+  file_readers                 derived: which login may read each OWNED file (ADR-0022; kept by triggers; never edited)
 
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
@@ -68,6 +69,7 @@ Tooling hierarchy (3 levels)
   tool_boxes                   grandparent: storage container
   cutting_inserts              parent: individual multi-edged insert
   insert_edges                 child: discrete cutting point
+  surface_scans                topography scans (an .al3d or any SurfaceTopography file) of one insert or one edge, with the condition it was in
 
 Core sample lifecycle
   physical_samples             central entity (dual identity: UUID + sample_code)
@@ -132,6 +134,25 @@ Private schema (not exposed)
                              unfinished build (DraftBody JSON, private to its owner, deleted when
                              created) and saved templates for new operations and tests (private,
                              role or global scope). Reached only through the d1-build endpoint.
+  d1_private.file_candidates, inbox_dirs, inbox_scan_requests, inbox_crawler_state, inbox_prefs
+                             found files and the Inbox (migration 193, ADR-0020): files the inbox
+                             crawler found in people's and teams' folders on the share, its folder
+                             cache, its scan queue, its control row and the auto-link opt-in. Reached
+                             only through the d1-inbox endpoint and the crawler; see "Found files".
+  d1_private.file_thumbnails
+                             the Inbox's thumbnails and full view (migration 198, spec section 14): two
+                             small derived JPEGs per image candidate, written by the inbox crawler and served
+                             by the d1-inbox endpoint to whoever may see the candidate; see "Found files".
+  d1_private.inbox_ignored_dirs
+                             folders the inbox crawler must not scan (migration 199, spec section 15
+                             of the Inbox design): one rule per person or team and folder. Reached
+                             only through the d1-inbox endpoint and the crawler; see "Found files".
+  d1_private.sem_image_settings, sem_settings_access_log
+                             imaging settings per SEM image (kV, spot, working distance, magnification,
+                             field width, ...) saved when a person links the image, with where each
+                             value came from, and the log of administrator reads (migration 197,
+                             ADR-0022). Written only by d1_private.save_sem_settings and
+                             correct_sem_setting; reached only through the d1-inbox endpoint.
 ```
 
 ---
@@ -401,6 +422,232 @@ metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELET
 Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);
 `file_fingerprints_data_idx` on `data_sha256`, partial (`WHERE data_sha256 IS NOT NULL`).
 `CHECK`s: both hashes are 64 lower-case hex characters; `status = 'done'` needs a `content_sha256`.
+
+---
+
+### Found files and the Inbox: `people.uni_alias`, `teams.share_folder`, `d1_private.file_candidates` and friends
+
+Migration `…193` ([spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 4,
+[ADR-0020](adr/0020-inbox-crawler-read-only-allow-listed.md)). The inbox crawler lists each person's folder
+(`Users/<uni alias>`) and each team's folder (`Shared/<share folder>`) on the lab share, registers new files and
+tags what they look like and which record they name; people link them in STARbase's Inbox. The five tables are in
+`d1_private`: not exposed by Directus (candidates are never readable through its REST API), not in
+`v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers (derived bookkeeping; the link is
+audited on its junction row). Files stay on the share.
+
+**New columns on existing tables** (set by an administrator with an UPDATE: kept out of the Lab Member `people` update field list, and a `BEFORE INSERT` trigger on `people` refuses a new row that sets `uni_alias` or `scan_while_former`, so a Lab Member cannot create a person that squats on a folder name)
+
+| Column | Type | Description |
+|---|---|---|
+| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, not starting with a dot (no `..`, no `.snapshot`). Unique ignoring case (`people_uni_alias_key`) |
+| `people.scan_while_former` | BOOLEAN NOT NULL | Default false. True: keep scanning the folder after the person is inactive |
+| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, no leading or trailing blanks, not only dots. Unique ignoring case (`teams_share_folder_key`) |
+
+**`d1_private.file_candidates`**: one row per found file, until linked, dismissed or gone. `directus_files_id` is
+unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id` (both cascade).
+
+| Column | Type | Description |
+|---|---|---|
+| `candidate_id` | UUID PK | Surrogate key |
+| `directus_files_id` | UUID NOT NULL UNIQUE FK | The `directus_files` pointer row (`storage = 'star'`) |
+| `owner_person_id`, `owner_team_id` | UUID FK | Whose folder it was found in; exactly one is set |
+| `kind` | TEXT NOT NULL | `sem_image` (possible SEM image), `surface_scan` (`.al3d`), `image`, `document`, `other`. Documents and others are never opened before a person links them |
+| `kind_confidence` | NUMERIC(4,3) | Classifier confidence, 0 to 1; NULL when none ran |
+| `extracted` | JSONB NOT NULL | JSON object of what was actually read (kV, magnification, ...); `{}` when nothing |
+| `origin` | TEXT NOT NULL | `new` (found after the owner's first complete scan) or `backlog` (found during it: "Older files") |
+| `state` | TEXT NOT NULL | `new` (default), `linked`, `dismissed`, `gone` |
+| `match_strength` | TEXT NOT NULL | Strongest way the path names a record: `short_id`, `code`, `edge_code`, `none` (default) |
+| `matches` | JSONB NOT NULL | JSON array of `{collection, record_id, via, token}` at the strongest level |
+| `suggested_collection`, `suggested_record_id` | TEXT, UUID | The single record named; both set or both NULL. NULL when two or more match |
+| `duplicate_of` | UUID FK (self) | Earlier candidate with the same content hash; `ON DELETE SET NULL` |
+| `rel_path` | TEXT NOT NULL | Path relative to the share root (`star_group1`) |
+| `size_bytes`, `source_mtime` | BIGINT, TIMESTAMPTZ | Size (>= 0) and modification time when found |
+| `first_seen_at`, `decided_at`, `decided_by` | TIMESTAMPTZ, TIMESTAMPTZ, UUID FK | First seen; when and by which Directus user (`ON DELETE SET NULL`) it was linked or dismissed |
+| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes. All four are set when `state = 'linked'` and all NULL otherwise (two CHECKs), so an undo clears all four with the state; `linked_collection` has no list, so a later link target needs no migration |
+| `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
+| `auto_undone_at` | TIMESTAMPTZ | Set when a person undoes an `auto` link of this file (an undo of a batch whose `link_kind` was `auto`; a manual or bulk undo leaves it NULL). The crawler's auto-link and `POST /d1-inbox/auto-link` then skip the file (reason `UNDONE`), so the next scan does not link it again; a person's own Link or Accept all of it is still allowed. Stays set for the life of the row |
+
+Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
+`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`, `(decided_by)`.
+
+**When an alias or share folder changes** (triggers `people_inbox_alias_changed`, `teams_inbox_folder_changed`,
+only when the value really changes, `NULL` included; the trigger condition compares `lower(old)` with `lower(new)`, because
+aliases and share folders are unique ignoring case, so a change of letter case only, `ABC` to `abc`, fires nothing and deletes
+nothing): that owner's `inbox_dirs` rows and their `file_candidates` in
+state `new`, `gone` and `dismissed` are deleted; `linked` candidates are kept. The next scan is a first scan of the
+new folder (everything is backlog).
+
+**`d1_private.inbox_dirs`**: the folder cache. `rel_path` PK; one owner (person or team, cascade); `dir_mtime`,
+`last_listed_at`; `baselined_at` is set on an owner's root row when their first complete scan ends.
+
+**`d1_private.inbox_scan_requests`**: the queue behind "Rescan my folder" and "Scan all". `scope`
+(`person` / `all`; `person_id` required exactly for `person`), `requested_by`, `requested_at`, `started_at`,
+`finished_at`, `status` (`queued` default, `running`, `done`, `failed`), `error`. Indexes `(status, requested_at)`
+and partial `(person_id, requested_at DESC)`. A partial unique index
+(`inbox_scan_requests_one_open_per_person_key`) allows at most one queued or running person-scope request per
+person, closing the race between the endpoint's rate-limit check and its insert. Partial index on `(requested_by)` for the user foreign key.
+
+**`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
+settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default
+60), changed by an administrator with an UPDATE on this table (no admin route sets them); daemon status `last_heartbeat_at`, `daemon_started_at`, `current_activity`, `last_scan_started_at`,
+`last_scan_finished_at`, `files_registered`, `error_count`, `last_error`; `unmatched_folders` (JSON array of
+share-relative paths of folders under `Users/` and `Shared/` that match nobody, rewritten each scan); `updated_at`.
+
+**`d1_private.inbox_prefs`**: `user_id` (PK, FK `directus_users`, cascade), `auto_link` (BOOLEAN NOT NULL, default
+false: the person's opt-in to auto-linking exact short-ID matches of SEM images and other images in their personal folder, never
+documents, never surface scans, never team folders), `updated_at`.
+
+**`d1_private.file_thumbnails`** (migration `…198`, [spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 14): the
+two small pictures behind the Inbox row and its full view, for candidates of kind `image` and `sem_image` only. Derived and
+replaceable from the share (a reduced copy, never the original), so no audit or OCC triggers. Like the five tables above it is in
+`d1_private`: not exposed by Directus, not in `v_schema_dictionary`, not granted to the LLM role. The crawler writes it (at registration,
+from bytes it already holds, and in a throttled backfill); the `d1-inbox` endpoint serves it (`GET /d1-inbox/files/:candidate_id/thumb`
+and `/preview`, `image/jpeg`, with the same visibility as the list) and reports `has_thumbnail` (true only when `thumb` is set) on each found file, never the bytes. A file the crawler could not decode gets a
+**marker row** (`thumb` and `preview` NULL, `failed_reason` set) so it is not read from the share again until its size or modification time changes;
+the picture routes answer a marker with the same 404 as no row.
+
+| Column | Type | Description |
+|---|---|---|
+| `candidate_id` | UUID PK, FK `file_candidates` | One row per candidate; `ON DELETE CASCADE` (the crawler also deletes the row when it marks the file gone) |
+| `thumb` | BYTEA, NULL in a marker row | JPEG, about 320 px on the long side (10 to 25 KB) |
+| `preview` | BYTEA, NULL in a marker row | JPEG, about 1600 px on the long side (150 to 400 KB) |
+| `failed_reason` | TEXT | Why no pictures could be made; NULL when they exist. CHECK `file_thumbnails_pictures_or_failure_check`: either `thumb` and `preview` are both set and this is NULL, or all of `thumb`, `preview` are NULL and this is set |
+| `thumb_width`, `thumb_height`, `preview_width`, `preview_height` | INTEGER | Pixel sizes; NULL when not recorded, greater than 0 when set |
+| `source_size`, `source_mtime` | BIGINT NOT NULL (>= 0), TIMESTAMPTZ NOT NULL | The file's size and modification time when the pictures (or the failure marker) were made; the backfill redoes a candidate whose values differ |
+| `created_at` | TIMESTAMPTZ NOT NULL | Default `now()` |
+**`d1_private.inbox_ignored_dirs`** (migration `…199`, [spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 15): the
+folders the crawler leaves alone ("ignore this folder when scanning"). Also in `d1_private`: not exposed by Directus, not in
+`v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers. Written only by `d1-inbox`
+(`GET`/`POST /ignored-folders`, `DELETE /ignored-folders/:id`), read by the crawler once per scan.
+
+| Column | Type | Description |
+|---|---|---|
+| `ignored_id` | UUID PK | Surrogate key, `gen_random_uuid()` |
+| `owner_person_id`, `owner_team_id` | UUID FK | Whose folder the rule sits under: a person (their personal folder) or a team (its team folder); exactly one is set (`inbox_ignored_dirs_one_owner_check`); both cascade, as in `inbox_dirs` |
+| `rel_folder` | TEXT NOT NULL | The folder **relative to the owner's root** (`World-Ti Paper/Drafts`, not `Users/abc12de/...`). Matched on whole path parts, ignoring case, and covers the folder and everything beneath it (`World-Ti Paper` does not cover `World-Ti Paper 2`). No leading or trailing `/`, no empty, `.` or `..` part (two CHECKs); the root itself cannot be ignored; no wildcards |
+| `created_at` | TIMESTAMPTZ NOT NULL | Default `now()` |
+| `created_by` | UUID FK | The Directus user who added the rule; `ON DELETE SET NULL` |
+
+Unique on `(coalesce(owner_person_id, owner_team_id), lower(rel_folder))` (`inbox_ignored_dirs_owner_folder_key`); partial indexes on
+each owner column and on `created_by`. At most 200 rules per owner, enforced by the endpoint. Adding a rule dismisses the owner's `new`
+candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one resets the folder's `inbox_dirs` rows (`dir_mtime` and `last_listed_at` NULL for the
+folder and everything below it; kept, not deleted) so the next scan lists it again.
+### Files belong to their provenance owner: `directus_files.owner_person_id` / `owner_team_id` and `file_readers`
+
+Migration `…196` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 3 and 4). A file the inbox crawler found is visible, and linkable, only to the user whose folder it came from. `directus_files` is a Directus
+system table; the migration adds two columns to it and a readers table beside it.
+
+| Column | Type | Description |
+|---|---|---|
+| `directus_files.owner_person_id` | UUID FK `people (person_id)`, nullable, `ON DELETE RESTRICT` | The person whose personal folder (`Users/<uni alias>`) the file came from. The owner is the person, not the alias text. A person who owns files cannot be deleted: deactivate them |
+| `directus_files.owner_team_id` | UUID FK `teams (team_id)`, nullable, `ON DELETE RESTRICT` | The team whose folder (`Shared/<share folder>`) the file came from; every team member can read it |
+
+`CHECK directus_files_one_owner_check`: at most one of the two is set. Both null means the file is open, as before (linked files and the legacy archive
+stay open until the file-access stream, D10). Partial indexes `idx_directus_files_owner_person_id` and `idx_directus_files_owner_team_id`
+(`WHERE ... IS NOT NULL`). The crawler stamps a pointer row when it registers it and never overwrites a stamp. The migration back-fills the files the live crawler had
+already registered from `d1_private.file_candidates.owner_*` for every file that is **not linked anywhere**: its candidate's state is not `linked` *and* it has no
+row in `sample_data_files`, `operation_data_files`, `session_data_files` or `surface_scans` (a file linked in Data Studio's picker or the Alicona dialog keeps a
+dismissed, new or gone candidate, so the candidate alone cannot say). Lab Members cannot write either column:
+the Lab Member `create` and `update` field lists of `directus_files` name every other column (the 26 of the `db/schema.sql` snapshot, pinned by a test) (as `people.uni_alias`; there is no Postgres trigger, because Directus
+uses one database role for every user). Administrators are not filtered and can change an owner.
+
+**`file_readers`** (public, hidden Directus collection, derived like the other readers tables, not audited): `reader_id` BIGINT identity PK,
+`directus_files_id` UUID FK (`ON DELETE CASCADE`), `user_id` UUID FK to `directus_users` (`ON DELETE CASCADE`), `UNIQUE (directus_files_id, user_id)`, index on
+`user_id`. One row per owned file and login that may read it: the owning person's login, or the login of every member of the owning team. A file with no owner
+has no rows. It exists because the Directus read rule cannot say "the caller is a member of the owning team" (a to-many hop inside `_some`, which Directus 11.17
+refuses); the rule is instead one legal membership test on the hidden top-level alias `directus_files.readers`: **the file has no owner, or the caller has a
+`file_readers` row**. The Lab Member and Lab Viewer read rows of `directus_files` carry that filter, and so does `/assets/<id>`. The Lab Member **update and delete** rows of `directus_files` carry the same test in its bare-hop form (`readers.user_id = $CURRENT_USER`, no
+`_some`), so a member cannot rewrite or delete a file they cannot read (deleting a file cascades its candidate, settings and readers). Triggers keep the table right
+(`directus_files` owner change, `team_members` join, leave or move, `people.user_id` set or removed);
+`d1_private.file_readers_drift_count()` counts the differences from `d1_private.file_readers_expected()` (0 is correct) and `d1_private.file_readers_refresh()`
+repairs them. Not granted to the LLM role.
+
+### SEM image settings: `d1_private.sem_image_settings`, `sem_settings_access_log`, `file_candidates.classified_by`
+
+Migration `…197` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)
+sections 2 and 3). The inbox crawler reads an SEM image's imaging settings (TIFF metadata, or OCR of the data bar) into
+`d1_private.file_candidates.extracted`; when a person links the image they are saved per image. Both tables are in `d1_private`: not exposed by
+Directus, not in `v_schema_dictionary`, not granted to the LLM role; reached only through the `d1-inbox` endpoint, which shows a row to the file's owner
+(an administrator read-only and logged) and a locked answer to everyone else. No audit or OCC trigger (derived bookkeeping).
+
+**`d1_private.sem_image_settings`**: one row per file, `directus_files_id` UUID PK, FK to `directus_files` (`ON DELETE CASCADE`). A column is NULL when the value
+is unknown, failed a cross-check or fell outside its range; it is never zero.
+
+| Column | Type | Description |
+|---|---|---|
+| `kv` | NUMERIC(6,2) | Accelerating voltage in kV, 0.1 to 30 (CHECK). A value is tested against its range as given, then rounded, so 0.095 is dropped, not saved as 0.10 |
+| `spot` | NUMERIC(4,1) | Spot size, 1 to 10 (CHECK) |
+| `working_distance_mm` | NUMERIC(6,2) | Working distance in mm, 0.1 to 50 (CHECK) |
+| `magnification` | INTEGER | Magnification as printed, 5 to 1,000,000 (CHECK); derived from the screen-width constant and the field width when read from metadata |
+| `hfw_um` | NUMERIC(10,2) | Horizontal field width in micrometres, greater than 0 |
+| `pixel_size_nm` | NUMERIC(12,4) | One pixel in nanometres, greater than 0 |
+| `scale_bar_um` | NUMERIC(12,3) | The length the printed scale bar stands for, in micrometres, greater than 0 |
+| `detector`, `mode`, `instrument` | TEXT | As the instrument records them, up to 200 characters (CHECK) |
+| `acquired_at` | TIMESTAMPTZ | When the image was taken; the instrument clock is UK time (`Europe/London`), stored as the instant; NULL for a local time that does not exist (the skipped spring hour) |
+| `sources` | JSONB NOT NULL, default `{}` | Per saved field: `metadata`, `derived`, `ocr` or `manual` (a person's correction, never overwritten by a re-read) |
+| `flags` | JSONB NOT NULL, default `{}` | Notes on the read: `check_this` (could not be cross-checked), a field name with a reason (`acquired_at = invalid_local_time`), a metadata/bar mismatch |
+| `read_by` | TEXT NOT NULL | Who wrote the values: `inbox` (saved when a person linked the file in the Inbox) or `backfill` (`python -m inbox_crawler --sem-backfill`). Not the classifier version: that is `file_candidates.classified_by` (for example `sem-2`). The column comment in migration 197 still says "the profile and version (for example sem-2)"; migration 197 is already on main and a comment is not worth a new migration, so this table is the reference |
+| `read_at` | TIMESTAMPTZ NOT NULL | When it was last read or saved from a read |
+| `corrected_by`, `corrected_at` | UUID, TIMESTAMPTZ | The Directus user and time of the last correction (no foreign key: the history outlives the user) |
+
+**`d1_private.save_sem_settings(file, extracted, read_by) RETURNS boolean`** is the only place `extracted` becomes columns (`SECURITY INVOKER`). It maps the
+keys above, drops a value of the wrong JSON type or outside its range (the value is range-tested as given and only then rounded to the column's scale, so 0.095 kV is dropped, not saved as 0.10; a bad value costs that field, never the link),
+keeps only the `sources` of saved fields and never a source of `manual`, and upserts. It **merges** into the row (ruling R12): only the keys present and usable in
+`extracted` are updated; a key it does not carry keeps its stored value, `sources` entry and flags, and a key that is present but unusable (out of range, null,
+the wrong type) is dropped without erasing the stored value, so a re-read with fewer fields (a back-fill without OCR) cannot erase what an earlier read found. An
+updated key takes the source the read gave it (none if it gave none) and loses the flag named after it. It **skips every field whose existing source is `manual`**
+and takes no flag named after such a field. It returns whether a row exists afterwards: `false` for an `extracted` with nothing usable on a file with no row
+(nothing is written), `true` otherwise (an existing row is left exactly as it is when nothing usable was given). The migration's down is lossy: the
+owners' manual corrections and the administrator access log are dropped with the tables. **`d1_private.correct_sem_setting(file, field, value, user) RETURNS void`** is the owner's correction: it sets one of the eleven settings from
+a JSON value (same type and range rules), marks `sources.<field> = 'manual'`, removes the flag named after the field, and records `corrected_by` and `corrected_at`;
+it refuses other columns (`read_by`, `sources`, ...), bad values, a missing user and a file with no row. The endpoint decides who may call it.
+Helpers `sem_clean_number`, `sem_clean_text` and `sem_try_timestamptz` turn a malformed value into NULL instead of an error.
+
+**`d1_private.sem_settings_access_log`**: one row per administrator read of settings that are not theirs. `id` BIGSERIAL PK, `directus_files_id` UUID NOT NULL,
+`read_by_user` UUID NOT NULL, `read_at` TIMESTAMPTZ NOT NULL (default now), `reason` TEXT NOT NULL (not blank). No foreign keys (the log outlives the file and the
+user); index on `(directus_files_id, read_at)`.
+
+**`d1_private.file_candidates.classified_by`** TEXT, nullable: the classifier profile and version that set `kind`, `kind_confidence` and `extracted` (for example
+`sem-2`); a re-classification pass skips rows already at the current version.
+
+### `surface_scans`
+
+One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona
+Test on a sample surface stays a Test. The file is a `directus_files` pointer row on the read-only archive share; the
+`surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and fills the `render_*` and
+derived columns. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO. Reference data like
+`insert_edges`: every Lab Member reads, creates, updates and deletes, every Lab Viewer reads (ADR-0011); create and update name their
+fields, so the worker-filled columns (`cache_key`, `rendered_at`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*`) cannot be written
+through the API (update also takes `render_status` and `render_error`, which Render again writes). Not granted to the Ask-DB role.
+OCC (`version`) and audit triggers as on every mutable table. Changing `directus_files_id` sets the scan back to `pending` and clears
+everything the worker derived (trigger `surface_scans_reset_render`).
+
+| Column | Type | Description |
+|---|---|---|
+| `scan_id` | UUID PK | |
+| `insert_id` | UUID | The cutting insert (`ON DELETE CASCADE`). Exactly one of `insert_id` and `edge_id` is set (`CHECK`) |
+| `edge_id` | UUID | The insert edge (`ON DELETE CASCADE`) |
+| `directus_files_id` | UUID NOT NULL | The scan file (`ON DELETE CASCADE`). `UNIQUE (insert_id, directus_files_id)` and `UNIQUE (edge_id, directus_files_id)`: a file is filed once per item |
+| `condition` | TEXT NOT NULL | `new`, `worn`, `cleaned` or `other` |
+| `condition_note` | TEXT | Free note on the condition |
+| `scanned_on` | DATE | The day it was scanned |
+| `operation_id` | UUID | The operation that wore the item (`ON DELETE SET NULL`) |
+| `notes` | TEXT | |
+| `render_status` | TEXT NOT NULL | `pending` (default), `rendering`, `done` or `failed`. The viewer is served only when `done` |
+| `render_error` | TEXT | Why the last render failed; cleared by Render again |
+| `rendered_at` | TIMESTAMPTZ | When the last render finished |
+| `cache_key` | TEXT | Names the objects under `surface-scans/<cache_key>/` (`grid.bin`, `meta.json`, `thumb.png`): `file_fingerprints.content_sha256`, else the provisional `p-<directus_files_id>-<size>-<mtime>`. Set by the worker, which never hashes a file. The endpoint's ETag |
+| `source_format` | TEXT | Name of the SurfaceTopography reader |
+| `source_width`, `source_height` | INTEGER | Pixels of the file's height map |
+| `grid_width`, `grid_height` | INTEGER | Cells of the decimated grid (at most 1024 on the longer side) |
+| `pixel_pitch_x_um`, `pixel_pitch_y_um` | NUMERIC | Cell size of the decimated grid, micrometres |
+| `z_min_um`, `z_max_um` | NUMERIC | Lowest and highest height in the grid, micrometres. The file's extremes, not a roughness value |
+| `owner`, `owner_person_id` | UUID | Legacy login (hidden) and the person who added it (filled by `d1-owner-default`) |
+| `created_at`, `updated_at`, `version` | | As on every mutable table |
+
+Indexes on `insert_id`, `edge_id`, `directus_files_id`, `render_status` (partial: only `pending` and `rendering`),
+`operation_id` and `owner_person_id` (both partial: non-null).
 
 ---
 

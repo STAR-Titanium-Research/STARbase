@@ -8,6 +8,7 @@ import MyWork from './home/MyWork.vue';
 import MyTeams from './home/MyTeams.vue';
 import WaitingForYou from './home/WaitingForYou.vue';
 import MyDrafts from './home/MyDrafts.vue';
+import InboxPanel from './home/InboxPanel.vue';
 import LabStats from './home/LabStats.vue';
 import RecentActivity from './home/RecentActivity.vue';
 import AdminPanels from './home/AdminPanels.vue';
@@ -51,6 +52,7 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<div class="home-grid">
 					<div class="home-main">
 						<WaitingForYou />
+						<InboxPanel />
 						<MyDrafts />
 						<FrequentlyUsed />
 						<LabStats />

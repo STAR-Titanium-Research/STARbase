@@ -37,6 +37,8 @@ export interface BuildGraphOpts {
   maxRows?: number;
   /** Container (group) ids the person unfolded: they keep every row on its own socket. */
   unfolded?: ReadonlySet<string>;
+  /** The row ids of each stack the person unstacked (and that stays unstacked): wires between its passes are stackable, its cards double-click to stack again. */
+  unstackedGroups?: ReadonlyArray<ReadonlyArray<string>>;
 }
 
 /** The node a used-in fan hangs from: the focus record, or a record ＋ opened a fan of. A stock lot is its `lot:` card. */
@@ -114,12 +116,15 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
 
   // ---- wires -------------------------------------------------------------------------------
   const wires = new Map<string, Wire>();
-  const addWire = (from: string, to: string, carries: string | null, flow: Wire['flow'], origin: string) => {
+  const addWire = (from: string, to: string, carries: string | null, flow: Wire['flow'], origin: string, stackable = false) => {
     if (nodeOfSocket(from) === nodeOfSocket(to)) return; // a container never feeds itself
     const id = `${from}>${to}`;
     if (wires.has(id)) return;
-    wires.set(id, { id, from, to, carries, flow, bundled: isBundleSocket(from) || isBundleSocket(to), origin });
+    wires.set(id, { id, from, to, carries, flow, bundled: isBundleSocket(from) || isBundleSocket(to), origin, ...(stackable ? { stackable: true as const } : {}) });
   };
+  /** The unstacked stack (its index in `unstackedGroups`) each row was taken out of. */
+  const unstackedOf = new Map<string, number>();
+  opts.unstackedGroups?.forEach((ids, i) => ids.forEach((id) => unstackedOf.set(id, i)));
 
   /** Wires into sample cards, in the order they were found. */
   const incoming = new Map<string, Pending[]>();
@@ -289,6 +294,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       ...(method ? { method } : {}),
       ...(when ? { when } : {}),
       ...(stacked ? { stacked: true } : {}),
+      ...(!group.batch && !group.stack && group.kind === 'operation' && group.rowIds.length === 1 && unstackedOf.has(group.rowIds[0]) ? { unstackedPass: true as const } : {}),
       status: statuses.size === 1 ? (first?.status ?? null) : undefined,
       category,
       rows: sampleRows,
@@ -305,6 +311,8 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
   interface Step extends StepKey {
     kind: 'inplace' | 'branch' | 'terminal';
     placed: Placed;
+    /** The unstacked stack this step is a pass of. */
+    unstacked?: number;
   }
   const steps = new Map<string, Step[]>();
   for (const p of planned) {
@@ -315,20 +323,25 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     const kind = p.outSample ? 'branch' : p.hasOut ? 'inplace' : 'terminal';
     for (const sample of p.inSamples) {
       const list = steps.get(sample);
-      if (list) list.push({ ...key, kind, placed });
-      else steps.set(sample, [{ ...key, kind, placed }]);
+      const step: Step = { ...key, kind, placed, unstacked: p.kind === 'operation' ? unstackedOf.get(p.rec.id) : undefined };
+      if (list) list.push(step);
+      else steps.set(sample, [step]);
     }
   }
   for (const [sample, list] of steps) {
     list.sort(compareSteps);
     let tail = `s:${sample}:out:0`;
     let tailOrigin = `s:${sample}`;
+    let before: Step | undefined;
     for (const step of list) {
-      addWire(tail, step.placed.inSocket.get(sample)!, sample, 'sample', tailOrigin);
+      // Two passes of one unstacked stack, next to each other in the chain: the wire between them is what a stack would have held.
+      const stackable = before?.kind === 'inplace' && before.unstacked !== undefined && before.unstacked === step.unstacked;
+      addWire(tail, step.placed.inSocket.get(sample)!, sample, 'sample', tailOrigin, stackable);
       if (step.kind === 'inplace' && step.placed.out) {
         tail = step.placed.out;
         tailOrigin = step.placed.nodeId;
       }
+      before = step;
     }
   }
 

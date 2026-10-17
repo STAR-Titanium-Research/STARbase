@@ -1,3 +1,4 @@
+import { DEEP_RANK } from './finder';
 import type { FinderGroup, FinderHit } from './finder';
 
 // The finder dialog's pure parts: the listbox's shape and the keyboard's movement through it,
@@ -41,6 +42,20 @@ export function moveIndex(current: number, delta: 1 | -1, count: number): number
 	if (count <= 0) return -1;
 	if (current < 0 || current >= count) return delta === 1 ? 0 : count - 1;
 	return (current + delta + count) % count;
+}
+
+// The row Enter opens before the user has moved: the first row, except that while a pass 1 hit exists the active row is one (a pass 2 hit, which ranks
+// 4, or a "More in" row never takes it from a hit that matched by code or name). -1 for an empty list.
+export function bestIndex(hits: FinderHit[]): number {
+	if (!hits.length) return -1;
+	const first = hits.findIndex((h) => !h.more && h.rank < DEEP_RANK);
+	return first >= 0 ? first : 0;
+}
+
+// Where a hit the user had made active is in a new list (answers keep arriving while it is open), or the best match when it has gone.
+export function sameHitIndex(prev: FinderHit | undefined, hits: FinderHit[]): number {
+	const at = prev ? hits.findIndex((h) => h.to === prev.to && h.label === prev.label && h.group === prev.group) : -1;
+	return at >= 0 ? at : bestIndex(hits);
 }
 
 // Whether a modal is on screen, given the host's own selector for one (how a host mounts its
@@ -91,4 +106,17 @@ export function openHit(
 ): void {
 	if (pickRecord && hit.record && pickRecord(hit.record) !== false) return;
 	navigate(hit.to);
+}
+
+// Whether the preview pane may exist at all: never for a host that takes the record itself (the Process map passes `pickRecord` and keeps its own layout),
+// never below the width that has room for it, never over a scanned label.
+export function paneAllowed(opts: { pickRecord: boolean; roomy: boolean; scanning: boolean }): boolean {
+	return !opts.pickRecord && opts.roomy && !opts.scanning;
+}
+
+// The dialog is narrow until the first record hit exists, then wide. Record hits come and go while the user types (a keystroke empties the remote groups until
+// the next answer), so "wide" is latched: once on it stays on, and goes off only when the box cannot be searched (empty, one character) or holds a scan.
+export function widenLatch(wasWide: boolean, searchable: boolean, scanning: boolean, hits: FinderHit[]): boolean {
+	if (!searchable || scanning) return false;
+	return wasWide || hits.some((h) => !!h.record && !h.more);
 }

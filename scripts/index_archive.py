@@ -157,6 +157,11 @@ _JUNCTIONS = [
 
 _PG_UNIQUE_VIOLATION = "23505"
 
+# Tables that hold a FK to directus_files but are DERIVED from it and never re-pointed: file_readers (migration 196)
+# is rebuilt by triggers from the owner columns, and its rows go with the old file (ON DELETE CASCADE). Re-pointing
+# one would hit its (file, login) unique key whenever the new file is owned too, and leave the old row behind.
+_DERIVED_FILE_TABLES = frozenset({"file_readers"})
+
 _FILE_FK_SQL = """
 SELECT c.conrelid::regclass::text,
        quote_ident(a.attname),
@@ -199,6 +204,25 @@ def is_confident_move(
     return bool(old_name) and old_name == PurePosixPath(new_rel).name
 
 
+def carry_owner_stamp(cur, old_id, new_id) -> None:
+    """A moved file keeps its first owner (ADR-0022 D13): copy the provenance owner of the old pointer row
+    onto the new one before the old row is deleted, or the move would leave an owned file readable by every
+    member. A no-op before migration 196 (no owner columns) and when the old row is unowned."""
+    cur.execute(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+        "AND table_name = 'directus_files' AND column_name IN ('owner_person_id', 'owner_team_id')"
+    )
+    if cur.fetchone()[0] < 2:
+        return
+    cur.execute(
+        "UPDATE directus_files n SET owner_person_id = o.owner_person_id, owner_team_id = o.owner_team_id "
+        "FROM directus_files o WHERE o.id = %s AND n.id = %s "
+        "AND (o.owner_person_id IS NOT NULL OR o.owner_team_id IS NOT NULL) "
+        "AND n.owner_person_id IS NULL AND n.owner_team_id IS NULL",
+        (old_id, new_id),
+    )
+
+
 def repoint_file_references(
     cur, fks: list[tuple[str, str, int]], old_id: str, new_id: str
 ) -> int:
@@ -216,6 +240,8 @@ def repoint_file_references(
     junction_parent = dict(_JUNCTIONS)
     remaining = 0
     for table, col, ncols in fks:
+        if table.rsplit(".", 1)[-1].strip('"') in _DERIVED_FILE_TABLES:
+            continue
         if ncols == 1:
             if table == "file_fingerprints":
                 cur.execute(
@@ -623,12 +649,16 @@ def main() -> int:
                 page_size=1000,
             )
 
-            # Candidates = star rows NOT seen this run (moved, renamed, or deleted).
+            # Candidates = star rows NOT seen this run (moved, renamed, or deleted) -- of the types this
+            # run walks. The inbox crawler also registers pointer rows for other types (.al3d, unknown
+            # types) that ALLOWED_EXT skips, so they are never "seen" here and must not be judged missing.
+            # Both writers record metadata.extension lower-cased with its dot.
             cur.execute(
                 "SELECT df.id::text, df.metadata::jsonb->>'fingerprint', df.filename_download "
                 "FROM directus_files df "
-                "WHERE df.storage=%s AND NOT EXISTS (SELECT 1 FROM _seen_ids s WHERE s.id = df.id)",
-                (storage,),
+                "WHERE df.storage=%s AND NOT EXISTS (SELECT 1 FROM _seen_ids s WHERE s.id = df.id) "
+                "AND lower(COALESCE(df.metadata::jsonb->>'extension','')) = ANY(%s)",
+                (storage, sorted(ALLOWED_EXT)),
             )
             candidates = cur.fetchall()
             n_old_by_fp: dict[str, int] = {}
@@ -650,6 +680,7 @@ def main() -> int:
                     new_id, _new_path = matches[0]
                     if new_id == old_id:
                         continue
+                    carry_owner_stamp(cur, old_id, new_id)
                     left = repoint_file_references(cur, fks, old_id, new_id)
                     if left == 0:
                         cur.execute("DELETE FROM directus_files WHERE id=%s", (old_id,))

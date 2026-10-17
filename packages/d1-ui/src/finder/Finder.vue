@@ -12,15 +12,21 @@
 // and a paste carries real line breaks. So the box is a one-row textarea that keeps line breaks, Enter
 // while the text is a D1 label adds a line instead of opening a hit, and once the typing stops (or on a
 // paste) the label's sample is opened, or the decoded label and the reason are shown. See useFinder.
+//
+// Preview pane: once the first record hit exists the dialog widens and a card of the active record shows on the right (FinderPreview, usePreview). It is
+// only there for the main Explorer finder (a host that passes pickRecord keeps its layout), at 720px of viewport and wider, and never over a scan. It
+// never holds the list back: the card shows its first part at once, the record is read once the active row has settled, and a failed read leaves the row openable.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
 import { useExplorerHost } from '../host';
 import { MIN_QUERY } from './finder';
+import FinderPreview from './FinderPreview.vue';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
-import { isTypingKey, moveIndex, openHit, toSections } from './finderNav';
+import { bestIndex, isTypingKey, moveIndex, openHit, paneAllowed, sameHitIndex, toSections, widenLatch } from './finderNav';
 import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
+import { usePreview } from './usePreview';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
 // `pickRecord`: a host that wants the record itself (the Process map loads it) gets it instead of the
@@ -46,12 +52,36 @@ const sections = computed(() => toSections(hits.value, uid));
 const active = ref(-1);
 const activeId = computed(() => (active.value >= 0 ? `${uid}-opt-${active.value}` : undefined));
 
+// Room for the pane: the viewport is at least this wide (the stylesheet hides the pane below it too).
+const ROOMY_QUERY = '(min-width: 720px)';
+const roomyList = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(ROOMY_QUERY) : null;
+const roomy = ref(roomyList ? roomyList.matches : true);
+const onRoomy = (e: MediaQueryListEvent) => { roomy.value = e.matches; };
+roomyList?.addEventListener?.('change', onRoomy);
+onBeforeUnmount(() => roomyList?.removeEventListener?.('change', onRoomy));
+
+const paneOn = computed(() => paneAllowed({ pickRecord: !!props.pickRecord, roomy: roomy.value, scanning: scanning.value }));
+// Wide from the first record hit on (latched: record hits vanish between keystrokes and the dialog must not bounce), narrow again when the box is emptied.
+const wide = ref(false);
+watch([hits, searchable, scanning], () => { wide.value = widenLatch(wide.value, searchable.value, scanning.value, hits.value); });
+const showPane = computed(() => paneOn.value && wide.value);
+const { state: previewState, card: previewCard } = usePreview(computed(() => hits.value[active.value]), host.api, paneOn);
+
 const input = ref<HTMLTextAreaElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const dialog = ref<HTMLElement | null>(null);
 
-// The best match is the one Enter opens; a new result list starts from it.
-watch(hits, (h) => { active.value = h.length ? 0 : -1; });
+// The best match is the one Enter opens; a new result list starts from it. Answers stream in, so the list changes while it is shown: once the
+// user has moved the active row it stays on the same hit (by its target) instead of jumping back to the best match.
+let moved = false;
+watch(query, () => { moved = false; });
+watch(hits, (h, old) => { active.value = moved ? sameHitIndex(old?.[active.value], h) : bestIndex(h); });
+
+function setActive(i: number) {
+	if (i === active.value) return;
+	active.value = i;
+	moved = true;
+}
 
 watch(activeId, async (id) => {
 	if (!id) return;
@@ -134,7 +164,7 @@ function onKeydown(e: KeyboardEvent) {
 		emit('close');
 	} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 		e.preventDefault();
-		active.value = moveIndex(active.value, e.key === 'ArrowDown' ? 1 : -1, hits.value.length);
+		setActive(moveIndex(active.value, e.key === 'ArrowDown' ? 1 : -1, hits.value.length));
 	} else if (e.key === 'Enter') {
 		// Enter that confirms an IME composition is not "open this"; Enter on a button (Scan, Open sample) is that button's.
 		if (e.isComposing || e.target !== input.value) return;
@@ -164,7 +194,7 @@ function onKeydown(e: KeyboardEvent) {
 <template>
 	<Teleport to="body">
 		<div class="d1-kit d1-finder-backdrop" @mousedown.self="emit('close')">
-			<div ref="dialog" class="d1-finder" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
+			<div ref="dialog" class="d1-finder" :class="{ wide: showPane }" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
 				<div class="bar">
 				<!-- ARIA 1.1 combobox: a textarea may not carry role=combobox, so the wrapper does and the textarea
 				     (a single-line textbox to a screen reader) is its text box. -->
@@ -201,6 +231,7 @@ function onKeydown(e: KeyboardEvent) {
 					<ScanResultCard v-else-if="scan.outcome.kind !== 'open'" :outcome="scan.outcome" @open="openTo" />
 				</div>
 
+				<div class="main">
 				<div v-show="!scanning" :id="`${uid}-list`" ref="list" class="results" role="listbox" aria-label="Results">
 					<div v-for="s in sections" :key="s.headingId" role="group" :aria-labelledby="s.headingId" class="grp">
 						<div :id="s.headingId" class="head" role="presentation">{{ s.group }}</div>
@@ -211,16 +242,19 @@ function onKeydown(e: KeyboardEvent) {
 							:key="item.id"
 							role="option"
 							class="opt"
-							:class="{ on: item.index === active }"
+							:class="{ on: item.index === active, more: item.hit.more }"
 							:aria-selected="item.index === active"
 							@mousedown.prevent
-							@mousemove="active = item.index"
+							@mousemove="setActive(item.index)"
 							@click="pick(item.hit)"
 						>
 							<span class="label">{{ item.hit.label }}</span>
 							<span v-if="item.hit.detail" class="detail">{{ item.hit.detail }}</span>
+							<span v-if="item.hit.matchedIn" class="matched">matched in {{ item.hit.matchedIn }}</span>
 						</div>
 					</div>
+				</div>
+				<FinderPreview v-if="showPane" :state="previewState" :card="previewCard" :labelledby="activeId" />
 				</div>
 
 				<p v-if="!scanning" class="hint" role="status" aria-live="polite">
@@ -249,6 +283,9 @@ function onKeydown(e: KeyboardEvent) {
 	background: var(--d1-surface); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
 	overflow: hidden;
 }
+.d1-finder.wide { width: min(900px, 100%); }
+.main { flex: 1 1 auto; min-height: 0; display: flex; }
+.wide .main { min-height: 240px; }
 .bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--d1-line); }
 .bar:focus-within { box-shadow: inset 0 -2px 0 var(--d1-accent, var(--theme--primary)); }
 /* One row that looks like an input; the textarea only exists so a pasted or scanned label keeps its line breaks. */
@@ -264,7 +301,12 @@ function onKeydown(e: KeyboardEvent) {
 	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer;
 }
 .scan:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.results { overflow-y: auto; padding: 4px 8px; }
+.results { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 4px 8px; }
+/* Below this the pane has no room: the dialog keeps its 560px look (the script does not render the pane either). */
+@media (max-width: 719px) {
+	.d1-finder.wide { width: min(560px, 100%); }
+	.d1-finder .d1-finder-preview { display: none; }
+}
 .head {
 	padding: 8px 8px 2px; font-size: var(--fs-xs, 11px); font-weight: 700;
 	letter-spacing: 0.06em; text-transform: uppercase; color: var(--d1-dim);
@@ -276,6 +318,8 @@ function onKeydown(e: KeyboardEvent) {
 .opt.on { background: var(--d1-tile); outline: 1px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
 .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+.opt.more .label { font-weight: 400; color: var(--d1-dim); }
+.matched { margin-left: auto; flex: 0 0 auto; padding-left: 10px; font-size: var(--fs-xs, 11px); font-style: italic; color: var(--d1-dim); white-space: nowrap; }
 .hint { margin: 0; padding: 8px 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .hint:empty { display: none; }
 </style>

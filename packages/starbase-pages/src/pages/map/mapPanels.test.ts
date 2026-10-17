@@ -108,6 +108,45 @@ describe('MapRail', () => {
         expect(text(await render(MapRail, railProps({ info: as(collection, id, 'X') })))).not.toContain(label);
       }
     });
+
+    describe('a batch is not a record you can map', () => {
+      const cuts = mkData({
+        samples: [mkSample('p'), ...[0, 1, 2, 3].map((i) => mkSample(`c${i}`))],
+        operations: [0, 1, 2, 3].map((i) =>
+          mkOp({ id: `cut${i}`, code: `CUT-${i}`, sampleId: 'p', outputSampleId: `c${i}`, date: DAY, methodName: 'Sectioned', category: 'machining', equipmentId: 'eq1' }),
+        ),
+      });
+      const batchInfo = (probable: boolean, extra: Partial<ProcessData> = {}): RecordInfo => {
+        const d = { ...cuts, ...extra };
+        const g = buildGraph(d, groupsOf(d, probable), { slots: () => [] });
+        const node = g.nodes.find((n): n is ContainerData => n.type === 'container')!;
+        return recordInfo(d, g, node.id)!;
+      };
+
+      it('is not offered for a probable batch (its title is no code)', async () => {
+        const batch = batchInfo(true);
+        expect(batch.code).toBe('Probable batch · Sectioned');
+        expect(text(await render(MapRail, railProps({ info: batch })))).not.toContain(label);
+      });
+
+      it('is not offered for a recorded batch either', async () => {
+        const recorded = batchInfo(false, { operations: cuts.operations.map((o) => ({ ...o, batchId: 'B1' })), batchCodes: { B1: 'B-0007' } });
+        expect(recorded.code).toBe('B-0007');
+        expect(text(await render(MapRail, railProps({ info: recorded })))).not.toContain(label);
+      });
+
+      it('is offered for a single-row container, by the operation\'s code', async () => {
+        const html = await render(MapRail, railProps({ info: info(op.id), focus: { collection: 'physical_samples', id: 'p' } }));
+        expect(text(html)).toContain(`${label}OP-1`);
+        expect(html).toContain('/map?focus=manufacturing_operations:o1');
+      });
+    });
+
+    it('the label cannot overflow the rail: it is clipped with an ellipsis and the whole text is the link\'s title', async () => {
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', 'A-very-long-machine-code-that-does-not-fit-the-rail'), focus: { collection: 'physical_samples', id: 'p' } }));
+      expect(html).toMatch(/<a[^>]*class="[^"]*pm-maplink[^"]*"[^>]*title="Process map of A-very-long-machine-code-that-does-not-fit-the-rail"/);
+      expect(html).toMatch(/<span class="pm-maplabel"[^>]*>Process map of A-very/);
+    });
   });
 
   it('Open record of a kind with no record page falls back to the Data Studio form', async () => {
@@ -205,6 +244,48 @@ describe('HoverCard', () => {
   it('has no data block for a record without data', async () => {
     const html = await render(HoverCard, { info: info(op.id), preview: { kind: 'none', plotterPath: '' }, target, canvas: target });
     expect(html).not.toContain('dthumb');
+  });
+});
+
+describe('HoverCard, a material', () => {
+  const target = { isConnected: true, getBoundingClientRect: () => ({ left: 0, top: 0, right: 10, bottom: 10, width: 10, height: 10 }) } as unknown as HTMLElement;
+  const mdata = mkData({ samples: [mkSample('p', { materialRef: { collection: 'materials', id: 'm1', code: 'AA', label: 'Ti-6Al-4V Grade 5' } })] });
+  const mgraph = buildGraph(mdata, groupsOf(mdata), { slots: () => [] });
+  const minfo = recordInfo(mdata, mgraph, 'm:p')!;
+  const elements = [{ symbol: 'Ti', weight_percent: 89.5 }, { symbol: 'Al', weight_percent: 6 }, { symbol: 'V', weight_percent: 4 }];
+
+  it('with elements: the full name, the nominal composition as a list and the composition bar', async () => {
+    for (const component of [HoverCard, MapRail]) {
+      const html = await render(component, component === HoverCard ? { info: minfo, composition: elements, target, canvas: target } : railProps({ info: minfo, connections: {}, composition: elements }));
+      expect(text(html)).toContain('Ti-6Al-4V Grade 5');
+      expect(text(html)).toMatch(/nominal/i);
+      expect(html).toContain('d1-composition');
+      expect(html).toContain('role="img"');
+      expect(text(html)).toMatch(/Ti(?:\s|&nbsp;)+89\.5 wt%/);
+      expect(text(html)).toMatch(/Al(?:\s|&nbsp;)+6\.0 wt%/);
+    }
+  });
+
+  it('without a composition (none yet, none recorded, or refused): the name only, no plot', async () => {
+    for (const composition of [undefined, null, []]) {
+      const html = await render(HoverCard, { info: minfo, composition, target, canvas: target });
+      expect(text(html)).toContain('Ti-6Al-4V Grade 5');
+      expect(html).not.toContain('d1-composition');
+      expect(text(html)).not.toMatch(/nominal/i);
+    }
+  });
+
+  it('elements with no weight are named in a caption under the bar, not drawn in it', async () => {
+    const html = await render(HoverCard, { info: minfo, composition: [...elements, { symbol: 'Si', weight_percent: null }, { symbol: 'Mn' }], target, canvas: target });
+    expect(html).toContain('d1-composition');
+    expect(text(html)).toContain('Also: Si, Mn (no wt%)');
+    const all = await render(HoverCard, { info: minfo, composition: elements, target, canvas: target });
+    expect(text(all)).not.toContain('Also:');
+  });
+
+  it('a record that is not a material shows no composition, whatever it is given', async () => {
+    const html = await render(HoverCard, { info: info('s:p'), composition: elements, target, canvas: target });
+    expect(html).not.toContain('d1-composition');
   });
 });
 

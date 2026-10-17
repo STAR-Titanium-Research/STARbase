@@ -4,7 +4,7 @@
 // changelog would push the buttons off screen, so it is flattened and trimmed here.
 
 export const RELEASE_NOTES_MAX_CHARS = 1500;
-export const RELEASES_URL = 'https://github.com/dpremoli/D1-Database/releases';
+export const RELEASES_URL = 'https://github.com/STAR-Titanium-Research/STARbase/releases';
 export const RELEASE_NOTES_TRUNCATED = `… full notes: ${RELEASES_URL}`;
 
 const NAMED_ENTITIES: Record<string, string> = {

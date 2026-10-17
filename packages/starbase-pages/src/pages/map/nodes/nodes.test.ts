@@ -30,7 +30,7 @@ const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('
 function spies(): MapActions & { calls: unknown[][] } {
 	const calls: unknown[][] = [];
 	const rec = (name: string) => (...a: unknown[]) => void calls.push([name, ...a]);
-	return { calls, select: rec('select'), expand: rec('expand'), hover: rec('hover'), toggleRows: rec('toggleRows'), toggleMore: rec('toggleMore') };
+	return { calls, select: rec('select'), expand: rec('expand'), hover: rec('hover'), toggleRows: rec('toggleRows'), toggleMore: rec('toggleMore'), unstack: rec('unstack'), restack: rec('restack') };
 }
 
 async function render(component: Component, props: Record<string, unknown>, view?: Partial<MapView>, actions = spies()): Promise<string> {
@@ -229,6 +229,15 @@ describe('RecordNode', () => {
 		expect(ids(html)).toEqual(['s:s1:in:0', 's:s1:out:0']);
 	});
 
+	it('a material card shows its name as the title, with its code on the meta line; without a name, its code', async () => {
+		const mat = (label?: string): RecordData => ({ id: 'm:s1', type: 'record', kind: 'material', ref: { collection: 'materials', id: 'm1', code: 'AA', ...(label ? { label } : {}) }, ins: [], outs: ['m:s1:out:0'] });
+		const named = await render(RecordNode, { id: 'm:s1', data: mat('Ti-6Al-4V Grade 5') });
+		expect(named).toMatch(/<div class="code"[^>]*title="Ti-6Al-4V Grade 5"[^>]*>Ti-6Al-4V Grade 5<\/div>/);
+		expect(text(named)).toContain('AA');
+		const bare = await render(RecordNode, { id: 'm:s1', data: mat() });
+		expect(bare).toMatch(/<div class="code"[^>]*>AA<\/div>/);
+	});
+
 	it('marks the selected card focal', async () => {
 		expect(await render(RecordNode, { id: sample.id, data: sample, selected: true })).toMatch(/class="[^"]*\bfocal\b/);
 		expect(await render(RecordNode, { id: sample.id, data: sample })).not.toMatch(/class="[^"]*\bfocal\b/);
@@ -262,6 +271,73 @@ describe('JunctionNode', () => {
 		expect(t).toContain('Cut from');
 		expect(t).toContain('0.25');
 		expect(ids(html)).toEqual([j.in, 'j:s:cut_from:out:0', 'j:s:cut_from:out:1']);
+	});
+
+	it('draws each output socket on the output edge of the card, in its own full-width row, with or without a fraction', async () => {
+		// The html of each output row: everything from one "out" div up to the next.
+		const rows = (html: string) => html.split(/<div[^>]*class="out[ "]/).slice(1);
+		const styleOf = (html: string, socket: string) => new RegExp(`data-id="${socket}"[^>]*style="([^"]*)"`).exec(html)?.[1] ?? '';
+		const right = await render(JunctionNode, { id: j.id, data: j });
+		// Each out is a block row (div.out) holding exactly its own socket, not an inline span.
+		expect(rows(right)).toHaveLength(2);
+		j.outs.forEach((o, i) => expect(rows(right)[i], o.socket).toContain(`data-id="${o.socket}"`));
+		// RIGHT: the right edge of the row (the card's edge), level with that row.
+		expect(styleOf(right, j.outs[0].socket)).toBe('left:100%;top:50%;');
+		expect(styleOf(right, j.outs[1].socket)).toBe('left:100%;top:50%;');
+		// Null fraction renders no text but the row (and its socket) is still there.
+		expect(right).toContain('data-pos="right"');
+		// DOWN: on the bottom edge, spread across the card like a container's.
+		const down = await render(JunctionNode, { id: j.id, data: j }, { direction: ref<'RIGHT' | 'DOWN'>('DOWN') });
+		expect(styleOf(down, j.outs[0].socket)).toBe('top:100%;left:33.33333333333333%;');
+		expect(styleOf(down, j.outs[1].socket)).toBe('top:100%;left:66.66666666666666%;');
+		expect(down).toContain('data-pos="bottom"');
+		// The input socket is unchanged: on the input edge.
+		expect(styleOf(right, j.in)).toBe('left:0;top:50%;');
+		expect(styleOf(down, j.in)).toBe('top:0;left:50%;');
+		// A single output with no fraction at all still gets the edge.
+		const one = { ...j, outs: [{ socket: 'j:s:cut_from:out:0', childId: 'a', fraction: null }] };
+		expect(styleOf(await render(JunctionNode, { id: j.id, data: one }), 'j:s:cut_from:out:0')).toBe('left:100%;top:50%;');
+	});
+
+	// Pointing down, a junction's outputs are not rows: they spread along the bottom edge and the card widens to fit them.
+	describe('pointing down', () => {
+		const many = (n: number): JunctionData => ({
+			...j,
+			outs: Array.from({ length: n }, (_, i) => ({ socket: `j:s:cut_from:out:${i}`, childId: `c${i}`, fraction: i % 2 ? 0.5 : null })),
+		});
+		const down = (d: JunctionData) => render(JunctionNode, { id: d.id, data: d }, { direction: ref<'RIGHT' | 'DOWN'>('DOWN') });
+		const cardStyle = (html: string) => /<div[^>]*class="node junction[^"]*"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? '';
+		const lefts = (html: string, n: number) =>
+			Array.from({ length: n }, (_, i) => Number(new RegExp(`data-id="j:s:cut_from:out:${i}"[^>]*style="[^"]*left:([0-9.]+)%`).exec(html)?.[1]));
+
+		it('2 outputs: the card keeps its width of 150 px, the sockets are on the bottom edge, and there are no stacked rows', async () => {
+			const html = await down(many(2));
+			expect(cardStyle(html)).toContain('width:150px');
+			expect(html).not.toContain('class="frac"'); // the per-row fraction block is a RIGHT thing
+			expect(html).toContain('class="down outs"');
+			const l = lefts(html, 2);
+			expect(l[0]).toBeCloseTo(100 / 3, 3);
+			expect(l[1]).toBeCloseTo(200 / 3, 3);
+			// a small label above the sockets that have a fraction (n <= 6)
+			expect(html.match(/class="dfrac"/g)).toHaveLength(1);
+		});
+
+		it('16 outputs: the card widens to 18 px a socket plus 24, the sockets are spread evenly, no labels, the fraction is in the socket title', async () => {
+			const html = await down(many(16));
+			expect(cardStyle(html)).toContain('width:312px');
+			const l = lefts(html, 16);
+			l.forEach((x, i) => expect(x).toBeCloseTo(((i + 1) / 17) * 100, 3));
+			expect(html).not.toContain('class="dfrac"');
+			expect(html).not.toContain('class="frac"');
+			expect(html).toContain('title="0.5"');
+		});
+
+		it('RIGHT is unchanged: rows, a fixed width, a fraction block per row', async () => {
+			const html = await render(JunctionNode, { id: j.id, data: many(16) });
+			expect(cardStyle(html)).not.toContain('width');
+			expect(html).not.toContain('class="down outs"');
+			expect(html.match(/class="frac"/g)).toHaveLength(16);
+		});
 	});
 
 	it('names the other lineage types', async () => {
@@ -337,13 +413,13 @@ describe('WireEdge', () => {
 		...over,
 	});
 
-	it('renders a bezier wire with a wide hit path, thicker when bundled', async () => {
+	it('renders a bezier wire with a wide hit path, as thick as any other when it carries a folded bundle', async () => {
 		const html = await render(WireEdge, edgeProps());
 		expect(html).toMatch(/<path class="[^"]*\bwire\b[^"]*" d="M/);
 		expect(html).toContain('class="hit"');
 		expect(wireClass(html)).not.toContain('fat');
-		const fat = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
-		expect(wireClass(fat)).toContain('fat');
+		const bundled = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
+		expect(wireClass(bundled)).not.toContain('fat'); // the bundle socket is fat; the wire into it is not
 		const stock = await render(WireEdge, edgeProps({ data: { wire: { ...wire, flow: 'stock' }, tooltip: [] } }));
 		expect(stock).toContain('flow-stock');
 	});
@@ -353,6 +429,25 @@ describe('WireEdge', () => {
 		const html = await render(WireEdge, edgeProps({ data: { wire, tooltip: lines } }));
 		expect(/data-tip="([^"]*)"/.exec(html)?.[1]).toBe('S-0412-A · Sample\nfrom OP-17\ninto OP-18');
 	});
+	it('a stackable wire is drawn twice: its colour, then a background core on top; a normal wire once', async () => {
+		const html = await render(WireEdge, edgeProps({ data: { wire: { ...wire, stackable: true }, tooltip: [] } }));
+		const paths = [...html.matchAll(/<path class="([^"]*)"/g)].map((m) => m[1]);
+		expect(paths).toHaveLength(3); // colour, core, hit
+		expect(paths[0]).toContain('wire');
+		expect(paths[0]).toContain('stackable');
+		expect(paths[1]).toBe('core');
+		expect(paths[2]).toBe('hit');
+		const d = [...html.matchAll(/<path class="([^"]*)" d="([^"]*)"/g)].filter((m) => m[1] !== 'hit').map((m) => m[2]);
+		expect(d[0]).toBe(d[1]); // the same path
+		const normal = [...(await render(WireEdge, edgeProps())).matchAll(/<path class="([^"]*)"/g)].map((m) => m[1]);
+		expect(normal).toEqual([expect.stringContaining('wire'), 'hit']);
+	});
+
+	it('the tooltip of a stackable wire says how to stack the passes again', () => {
+		expect(wireTooltip({ ...wire, stackable: true }, byId)).toEqual(['S-0412-A · Sample', 'from OP-17', 'into OP-18', 'Double-click a pass to stack again']);
+		expect(wireTooltip(wire, byId)).not.toContain('Double-click a pass to stack again');
+	});
+
 });
 
 describe('lineage junction from the model renders', () => {
@@ -647,6 +742,35 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 		expect(text(html)).toContain('3 passes');
 		expect(html).toContain('aria-label="Unstack 3 passes"');
 		expect(ids(html)).toEqual([`${c.id}:in:0`, `${c.id}:out:0`]);
+	});
+
+	it('a stacked card: double-click on its body unstacks it, with a hint on the button; a pass of an unstacked stack restacks; buttons and sockets do nothing extra', async () => {
+		const ops = ['a', 'b', 'c'].map((id, i) => turning({ id, methodId: 'turn', date: `2026-09-0${i + 1}T09:00:00Z` }));
+		const data = mkData({ samples: sam('p'), operations: ops });
+		const stacked = buildGraph(data, groupBatches(ops, [], { probable: true, stack: true }), { slots: () => [] }).nodes.find((n): n is ContainerData => n.type === 'container')!;
+		const html = await render(ContainerNode, { id: stacked.id, data: stacked });
+		expect(html).toMatch(/title="[^"]*double-click[^"]*"[^>]*>Unstack</);
+		const a = spies();
+		const body = { stopPropagation: vi.fn(), target: { closest: () => null } };
+		const inner = (sel: string) => ({ stopPropagation: vi.fn(), target: { closest: (s: string) => (s.includes(sel) ? {} : null) } });
+		const stack = cardHandlers(a, () => stacked.id, () => false, () => 'unstack');
+		stack.dblclick(body);
+		for (const sel of ['button', '.sock', '.slots']) stack.dblclick(inner(sel));
+		expect(a.calls).toEqual([['unstack', stacked.id]]);
+		const pass = cardHandlers(a, () => 'op:b', () => false, () => 'restack');
+		pass.dblclick(body);
+		pass.dblclick(inner('button'));
+		cardHandlers(a, () => 'op:z', () => false, () => null).dblclick(body); // a card that is no pass of a stack
+		cardHandlers(a, () => 'op:z').dblclick(body);
+		expect(a.calls).toEqual([['unstack', stacked.id], ['restack', 'op:b']]);
+	});
+
+	it('the card of a pass of an unstacked stack is marked, and a stack is not', async () => {
+		const ops = ['a', 'b'].map((id, i) => turning({ id, methodId: 'turn', date: `2026-09-0${i + 1}T09:00:00Z` }));
+		const data = mkData({ samples: sam('p'), operations: ops });
+		const g = buildGraph(data, groupBatches(ops, [], { probable: true, stack: true, unstacked: new Set(['a', 'b']) }), { slots: () => [], unstackedGroups: [['a', 'b']] });
+		const c = g.nodes.find((n): n is ContainerData => n.type === 'container')!;
+		expect(c.unstackedPass).toBe(true);
 	});
 
 	it('an expanded card draws − and its button collapses', async () => {

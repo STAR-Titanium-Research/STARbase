@@ -97,3 +97,29 @@ export function installSessionGuard(
 
 	return guard;
 }
+
+// A 502/503/504 means the proxy answered but d1-server behind it did not: it is restarting, so say
+// "under maintenance". No answer at all is the device's side (off the tailnet, offline): "can't reach".
+export const isRestarting = (e: unknown): boolean => [502, 503, 504].includes((e as AxiosError)?.response?.status ?? 0);
+
+export const CANT_REACH_TEXT = "Can't reach the database. Check that Tailscale is connected on this device, then try again.";
+export const MAINTENANCE_TEXT = 'The database is under maintenance, probably restarting. Try again in a moment.';
+export const unreachableText = async (e: unknown, probe?: () => Promise<boolean>): Promise<string> => ((await looksRestarting(e, probe)) ? MAINTENANCE_TEXT : CANT_REACH_TEXT);
+
+// Is STARbase's own origin (another tailnet node than d1-server) answering? Opaque is enough: a resolved
+// no-cors fetch means this device is on the tailnet and online, so a silent d1-server is down, not us offline.
+export async function ownOriginReachable(origin: string = globalThis.location?.origin ?? ''): Promise<boolean> {
+	try {
+		await fetch(`${origin}/`, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(5000) });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// Why d1-server did not answer: a 502/503/504 or (silent, but we are online) a probe that still reaches
+// STARbase means it is restarting; anything else is this device being off the tailnet or offline.
+export async function looksRestarting(e: unknown, probe: () => Promise<boolean> = ownOriginReachable): Promise<boolean> {
+	if (isRestarting(e)) return true;
+	return (e as AxiosError)?.response ? false : probe();
+}

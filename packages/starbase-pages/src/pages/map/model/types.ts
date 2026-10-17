@@ -228,6 +228,8 @@ export type ContainerNode = {
   when?: string;
   /** A stack of passes on one sample (Group.stack): drawn as a deck, with "Unstack". */
   stacked?: boolean;
+  /** A pass the person took out of a stack with Unstack (it still is one of that stack's passes): a double-click stacks them again. */
+  unstackedPass?: true;
   status?: string | null;
   category: ProcessCategory | 'test';
   rows: SampleRow[];
@@ -274,6 +276,8 @@ export interface Wire {
   flow: 'sample' | 'stock';
   bundled: boolean;
   origin: string;
+  /** Joins two passes of one unstacked stack: drawn as a striped wire, and says a double-click stacks them again. */
+  stackable?: true;
 }
 
 export interface HiddenMarker {

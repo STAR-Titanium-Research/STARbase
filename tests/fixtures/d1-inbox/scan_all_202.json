@@ -1,0 +1,17 @@
+{
+  "description": "a scan of every folder queued",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/admin/scan-all",
+    "body": {}
+  },
+  "status": 202,
+  "body": {
+    "data": {
+      "queued": true,
+      "request_id": "00000000-0000-4000-8000-000000007002",
+      "status": "queued",
+      "requested_at": "2026-10-15T12:00:00.000Z"
+    }
+  }
+}

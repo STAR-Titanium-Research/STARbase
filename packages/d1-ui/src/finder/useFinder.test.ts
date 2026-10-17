@@ -39,7 +39,8 @@ describe('useFinder', () => {
 		expect(finder.hits.value).toEqual([]);
 		sources.value = visible;
 		await vi.advanceTimersByTimeAsync(0);
-		expect(calls.sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/physical_samples']);
+		// samples and operations are asked twice: pass 1 (code, name) and pass 2 (notes, location...)
+		expect(calls.sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/manufacturing_operations', '/items/physical_samples', '/items/physical_samples']);
 		expect(finder.loading.value).toBe(false);
 		expect(finder.hits.value.map((h) => h.group)).toEqual(['Samples', 'Campaigns']);
 	});
@@ -73,7 +74,7 @@ describe('useFinder', () => {
 		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS - 1);
 		expect(calls).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
-		expect(calls.map((c) => c.path).sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/physical_samples']);
+		expect(calls.map((c) => c.path).sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/manufacturing_operations', '/items/physical_samples', '/items/physical_samples']);
 		expect(finder.loading.value).toBe(false);
 		expect(finder.hits.value.map((h) => h.group)).toEqual(['Pages', 'Samples', 'Campaigns']);
 	});
@@ -287,5 +288,157 @@ describe('useFinder hands a scanned sample to onOpen as a record too', () => {
 		finder.query.value = 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
 		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
 		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 'u1' }]]);
+	});
+});
+
+describe('useFinder asking the same query again', () => {
+	it('keeps what the query showed until the new answers replace it, instead of emptying and filling up again', async () => {
+		const gets: Array<{ path: string; answer: (rows: any[]) => void }> = [];
+		const host = { api: { get: (path: string) => new Promise((resolve) => { gets.push({ path, answer: (rows) => resolve({ data: { data: rows } }) }); }) } } as unknown as ExplorerHost;
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible));
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		for (const g of gets) g.answer(g.path === '/items/physical_samples' ? [{ sample_id: 's1', sample_code: '12-ABC' }] : []);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC']);
+		// typed on and back: asked again for the same query
+		finder.query.value = '12-';
+		finder.query.value = '12';
+		gets.length = 0;
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC']);
+		// an answer for another group arrives first: the list does not collapse
+		gets.find((g) => g.path === '/items/campaigns')!.answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC', 'CAMP-12']);
+		// once every answer is in, the list is what they say (the sample is gone)
+		for (const g of gets) g.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(false);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-12']);
+	});
+});
+
+describe('useFinder streams its answers', () => {
+	const all = new Set(['physical_samples', 'manufacturing_operations', 'campaigns', 'directus_files']);
+	// A host whose every request waits for the test to answer it.
+	function held() {
+		const pending: Array<{ path: string; params: any; answer: (rows: any[]) => void; fail: () => void }> = [];
+		const host = {
+			api: {
+				get: (path: string, cfg?: any) => new Promise((resolve, reject) => {
+					pending.push({ path, params: cfg?.params, answer: (rows) => resolve({ data: { data: rows } }), fail: () => reject(new Error('boom')) });
+				}),
+			},
+		} as unknown as ExplorerHost;
+		const finder = useFinder(host, ref(buildNav(all, [], false)), ref<Set<string> | null>(all));
+		const take = (path: string, pass: 1 | 2 = 1) => pending.filter((p) => p.path === path)[pass - 1];
+		return { finder, pending, take };
+	}
+
+	it('shows the first group to answer at once, adds the others as they come, and loads until all have settled', async () => {
+		const { finder, pending, take } = held();
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		// samples (2), operations (2), campaigns: every request is out at once (files wait for a word of 3 characters)
+		expect(pending.map((p) => p.path).sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/manufacturing_operations', '/items/physical_samples', '/items/physical_samples']);
+		take('/items/campaigns').answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.group)).toEqual(['Campaigns']);
+		expect(finder.loading.value).toBe(true);
+		take('/items/physical_samples').answer([{ sample_id: 's1', sample_code: '12-ABC' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.group)).toEqual(['Samples', 'Campaigns']);
+		expect(finder.loading.value).toBe(true);
+		for (const p of pending) if (p.path !== '/items/campaigns' && p.path !== '/items/physical_samples') p.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(true); // samples' pass 2 is still out
+		take('/items/physical_samples', 2).answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(false);
+	});
+
+	it('sends all of pass 1 before any of pass 2, and asks for files only for a word of 3 characters', async () => {
+		const { finder, pending } = held();
+		finder.query.value = 'anneal';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		expect(pending.map((p) => p.path)).toEqual(['/items/physical_samples', '/items/manufacturing_operations', '/items/campaigns', '/files', '/items/physical_samples', '/items/manufacturing_operations']);
+		expect(pending.slice(0, 4).every((p) => !String(p.params.filter).includes('legacy_notes') && !String(p.params.filter).includes('outcome_notes'))).toBe(true);
+		expect(String(pending[4].params.filter)).toContain('legacy_notes');
+	});
+
+	it("drops an answer to a query typed over, even one that arrives after the new query's own", async () => {
+		const { finder, pending } = held();
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		const old = [...pending];
+		finder.query.value = '123';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		const fresh = pending.slice(old.length);
+		fresh.find((p) => p.path === '/items/campaigns')!.answer([{ campaign_id: 'c3', campaign_code: 'CAMP-123', name: 'New' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-123']);
+		old.find((p) => p.path === '/items/campaigns')!.answer([{ campaign_id: 'c1', campaign_code: 'CAMP-12', name: 'Twelve' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		// the new query's hit is still there, the old one never was
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['CAMP-123']);
+		expect(finder.loading.value).toBe(true);
+		// the old query's answers do not end the new query's loading either
+		for (const p of old) p.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(true);
+		for (const p of pending.slice(old.length)) p.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.loading.value).toBe(false);
+	});
+
+	it('shows a pass 2 row as matched in a field, below the pass 1 rows, and not twice', async () => {
+		const { finder, pending } = held();
+		finder.query.value = 'anneal';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		const [pass1, pass2] = pending.filter((p) => p.path === '/items/physical_samples');
+		// pass 2 comes first, and carries the pass 1 row too (its code matches) besides a notes row
+		pass2.answer([
+			{ sample_id: 's2', sample_code: 'S-2', notes: 'Annealed in air' },
+			{ sample_id: 's1', sample_code: 'ANNEAL-1', notes: 'anneal' },
+		]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => [h.label, h.rank, h.matchedIn])).toEqual([['S-2', 4, 'notes']]);
+		pass1.answer([{ sample_id: 's1', sample_code: 'ANNEAL-1' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => [h.label, h.rank, h.matchedIn])).toEqual([['ANNEAL-1', 2, undefined], ['S-2', 4, 'notes']]);
+	});
+
+	it('asks for files from /files', async () => {
+		const { finder, take } = held();
+		finder.query.value = 'scan';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		const files = take('/files');
+		expect(JSON.parse(files.params.filter)).toEqual({ _or: [{ filename_download: { _icontains: 'scan' } }, { title: { _icontains: 'scan' } }] });
+		files.answer([{ id: 'f1', filename_download: 'scan.tif', type: 'image/tiff' }]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value).toEqual([expect.objectContaining({ group: 'Files', label: 'scan.tif', to: '/files/f1', rank: 2 })]);
+	});
+
+	it('loses only the pass 2 answer when its request fails (a relation the user may not read)', async () => {
+		const { finder, pending, take } = held();
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		take('/items/physical_samples', 2).fail();
+		take('/items/physical_samples').answer([{ sample_id: 's1', sample_code: '12-ABC' }]);
+		for (const p of pending) if (p.path !== '/items/physical_samples') p.answer([]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finder.hits.value.map((h) => h.label)).toEqual(['12-ABC']);
+		expect(finder.loading.value).toBe(false);
+	});
+
+	it('ends loading with no hits when there is nothing to ask', async () => {
+		const host = { api: { get: async () => ({ data: { data: [] } }) } } as unknown as ExplorerHost;
+		const none = new Set<string>();
+		const finder = useFinder(host, ref(buildNav(none, [], false)), ref<Set<string> | null>(none));
+		finder.query.value = 'qqq';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		expect(finder.loading.value).toBe(false);
+		expect(finder.hits.value).toEqual([]);
 	});
 });

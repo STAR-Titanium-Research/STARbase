@@ -52,6 +52,16 @@ _Avoid_: permalink, QR link, deep link
 
 ### Records and forms
 
+**Project**:
+A named, usually funded piece of research with a principal investigator, dates and a document number.
+It groups campaigns, and it can also hold samples, operations and tests directly, outside any campaign.
+_Avoid_: programme, research campaign
+
+**Campaign**:
+One planned set of operations or tests on a set of samples within a project: a **machining trial** or a
+**testing campaign**, with its own owner, dates and status (planned, active, complete, on hold).
+_Avoid_: project (for this), study, trial (alone)
+
 **Sample**:
 A physical piece of material the lab makes, cuts or tests. The rows Data Studio lists as items are
 Samples, except the rig kit stored with them (see Flagged ambiguities).
@@ -240,7 +250,8 @@ _Avoid_: draft (for a planned record), pending, scheduled
 
 **Attach**:
 To wire an operation that is already recorded to a sample in edit mode, making that sample its input.
-_Avoid_: import, link
+Not for files: tying a file to a record is to **link** it.
+_Avoid_: import
 
 **New from**:
 To start a new operation as a copy of an existing one (same method, machine, tool and settings) and
@@ -292,6 +303,85 @@ A cutting insert whose cutting edge is a brazed tip of a superhard material (PCD
 insert and sold one insert per box. Each tip is one insert edge.
 _Avoid_: PCD box (for the insert), diamond insert
 
+### Surface scans
+
+**Surface scan**:
+One topography file (an Alicona scan, say) of one **cutting insert** or one **insert edge**, kept with the
+**condition** the item was in and, when known, the date and the operation that wore it. It shows on the
+insert's or edge's page as a 3D view. It is not a test.
+_Avoid_: Alicona test (for a tool edge), scan test, attachment
+
+**Condition**:
+The state a **surface scan** found its insert or edge in: new, worn, cleaned or other, with a note.
+_Avoid_: status, wear state
+
+**Add a surface scan**:
+To put a topography file on an insert or edge as a **surface scan**, from the file library or from a
+**found file** in the **inbox**. Adding it makes the file visible to every lab member, as the insert and edge
+are. It is the one verb for these files; **link** is for samples, operations and tests.
+_Avoid_: attach (that is the process map's word), link (for an insert or edge)
+
+### Files on the share
+
+**Personal folder**:
+A person's own folder under `Users` on the lab's file share, named by their **uni alias**.
+_Avoid_: home folder, user folder
+
+**Uni alias**:
+The short university username that names a person's **personal folder**. It is kept on the person, and an
+administrator sets it.
+_Avoid_: username (that is the login's), user ID
+
+**Team folder**:
+A folder under `Shared` on the file share that an administrator has tied to a **team**.
+_Avoid_: shared folder (all of `Shared` is that), group folder
+
+**Found file**:
+A file spotted in a **personal folder** or **team folder** that nobody has **linked** or dismissed yet. It
+may be tagged with what it looks like (an SEM image, say) and with the record it seems to belong to.
+_Avoid_: candidate, new file, upload
+
+**Inbox**:
+The **found files** waiting for one person, or for one team, to **link** or dismiss.
+_Avoid_: queue, notifications
+
+**Backlog**:
+The **found files** that were already in a folder when the crawler first looked. They are not counted as
+new, and those that clearly belong to a record are flagged.
+_Avoid_: old files, legacy files
+
+**Link**:
+To tie a file on the share to a sample, operation or test, so it shows on that record's page. A link can
+be undone; linking never changes, moves or deletes the file.
+_Avoid_: attach (that is the process map's word), upload, import
+
+**SEM image**:
+An image recognised as coming from a scanning electron microscope, whether it is still a **found file** or
+already **linked**.
+_Avoid_: micrograph (the lab says SEM image)
+
+**Data bar**:
+The strip along the bottom edge of an **SEM image** that prints the microscope's settings and the scale bar.
+_Avoid_: footer, banner, info bar
+
+**Imaging settings**:
+What was read from an **SEM image**: accelerating voltage, working distance, magnification, spot size,
+detector, mode, scale bar, the date it was taken and the instrument. They describe one image, never a whole
+**test**.
+_Avoid_: SEM parameters (parameters are a **test**'s), metadata
+
+**Provenance owner**:
+The person whose **personal folder** a file came from, or the team whose **team folder** it came from. Only the
+**provenance owner** can see that file and its **imaging settings**, and only they can **link** it. It is fixed
+when the file is first registered and follows the person, not the **uni alias**'s spelling. Administrators can
+see such files read-only.
+_Avoid_: uploader, creator, folder owner
+
+**Locked file**:
+A file **linked** to a record someone can read, but whose **provenance owner** is somebody else. They see that
+the link exists and nothing about the file: no name, no **imaging settings**, no contents.
+_Avoid_: private file, hidden file
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
@@ -312,6 +402,13 @@ _Avoid_: PCD box (for the insert), diamond insert
   access is the highest level any path gives them.
 - Removing someone from a **team** takes its access away at once; adding someone gives access only where the
   owner **trusts future members** or approves them.
+
+- A **personal folder** belongs to one **person** (by **uni alias**) and a **team folder** to one **team**;
+  a **found file** goes to the **inbox** of the person or team whose folder it is in.
+
+- A **surface scan** belongs to exactly one **cutting insert** or one **insert edge**, and an edge's page also
+  shows its insert's scans. A **surface scan** is never a **test**: an Alicona test on the surface of a
+  **sample** stays a test.
 
 ## Flagged ambiguities
 
@@ -344,6 +441,16 @@ _Avoid_: PCD box (for the insert), diamond insert
   a new operation from an existing one. Resolved: the first is **attach**, the second **new from**.
 - "Supervisor" was asked for as the thing that shows what a draft is missing, but in the lab a supervisor
   is a person. Resolved: that list is **checks**.
+- The database described projects as "research campaigns / projects", so a project and a campaign read as
+  one thing. Resolved: a **project** is the research and its funding, and it holds **campaigns**. A
+  campaign is one planned set of operations or tests inside a project.
+- "Attach" was used both for wiring an operation to a sample on the process map and for tying a file on the
+  share to a record. Resolved: the first stays **attach**; the second is **link**, and a file nobody has
+  linked yet is a **found file**.
 - "Template" was used both for starting from an existing operation and for a saved, reusable set of
   prefilled fields. Resolved: the first is **new from**, the second a **template**; copying what is
   already on the canvas is **duplicate**.
+- A topography scan of a tool edge was filed as a test with the edge as its subject, which mixed inspecting
+  tool wear with characterising samples (SEM, EBSD, Alicona of a machined surface). Resolved: a scan of an
+  insert or edge is a **surface scan**, and an Alicona test on a sample stays a **test**. A **surface scan**
+  is **added**, while **link** stays the verb for samples, operations and tests.

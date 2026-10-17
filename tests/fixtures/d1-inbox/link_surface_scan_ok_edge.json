@@ -1,0 +1,39 @@
+{
+  "description": "a surface scan added to an edge, with the operation, the day and notes",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "edge_id": "00000000-0000-4000-8000-000000000202",
+          "condition": "cleaned",
+          "operation_id": "00000000-0000-4000-8000-000000000102",
+          "scanned_on": "2026-10-14",
+          "condition_note": "ultrasonic bath",
+          "notes": "after pass 3"
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000901",
+      "linked": 1,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "record_id": "00000000-0000-4000-8000-000000006001",
+          "junction_id": "00000000-0000-4000-8000-000000006001",
+          "insert_id": null,
+          "edge_id": "00000000-0000-4000-8000-000000000202",
+          "adopted": false
+        }
+      ]
+    }
+  }
+}

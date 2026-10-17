@@ -1,0 +1,19 @@
+{
+  "description": "an unexpected failure says nothing of its cause",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/summary"
+  },
+  "status": 500,
+  "body": {
+    "errors": [
+      {
+        "message": "Something went wrong on the server.",
+        "extensions": {
+          "code": "INTERNAL_SERVER_ERROR",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

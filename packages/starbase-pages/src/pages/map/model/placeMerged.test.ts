@@ -231,3 +231,37 @@ describe('placeMerged (random layouts)', () => {
     });
   }
 });
+
+describe('placeMerged: exact (a full layout round the cards that were dragged)', () => {
+  it('puts every card that is not placed at ELK\'s place, not lined up with the placed card it is wired to', () => {
+    const out = placeMerged({
+      elk: { a: { x: 0, y: 0 }, c: { x: 200, y: 0 } },
+      sizes: sizes('a', 'c'),
+      placed: { a: box(500, 300) }, // a dragged card
+      edges: [{ from: 'a', to: 'c' }],
+      dir: 'RIGHT',
+      pinned: new Set(['a']),
+      exact: true,
+    });
+    expect(out).toEqual({ c: { x: 200, y: 0 } });
+  });
+
+  it('still steps a card clear of a dragged card it would lie on', () => {
+    const out = placeMerged({
+      elk: { a: { x: 0, y: 0 }, c: { x: 500, y: 300 } },
+      sizes: sizes('a', 'c'),
+      placed: { a: box(500, 300) },
+      edges: [],
+      dir: 'RIGHT',
+      pinned: new Set(['a']),
+      exact: true,
+    });
+    expect(out.c.x).toBe(500);
+    expect(overlap(out.c, { x: 500, y: 300 })).toBe(false);
+  });
+
+  it('with nothing placed, every card is where ELK put it', () => {
+    const elk = { a: { x: 0, y: 0 }, b: { x: 200, y: 50 }, c: { x: 400, y: 100 } };
+    expect(placeMerged({ elk, sizes: sizes('a', 'b', 'c'), placed: {}, edges: [{ from: 'a', to: 'b' }], dir: 'RIGHT', exact: true })).toEqual(elk);
+  });
+});

@@ -223,6 +223,13 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
 `npm run build:extensions` at the repo root so the rebuilt `d1-lab-dashboard` and
 `d1-composition-bar` load, and apply migrations 138 and 139.
 
+- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** Open a project with a campaign and equipment
+  on its operations (for example macrozone cubes), in light and dark. Expect: the campaign card in **Campaigns** looks the
+  same as on the Campaigns list in Cards view (white, rounded, shadowed); each **Equipment used** tile is white too and its
+  name is a link that opens that equipment's page. On a project whose operations and tests are all undated or older than 26
+  weeks, **Activity** is a single lid with a 0 and "No operations or tests in the last 26 weeks.", and "On this page" lists
+  it dimmed with 0. With recent records it shows the chart, a count chip and a normal "On this page" row. Since: Project
+  page visual consistency (PR pending).
 - [ ] **E1 — edit drawer saves through real interfaces.** On a sample page click **Edit**. Expect:
   the drawer shows the same form as Content (sample code builder, material and project pickers,
   geometry preview, linked files), with the record's values. Change the nickname and the form's
@@ -1111,6 +1118,28 @@ migration 141 prints about ownerless records.
   the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
   sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
+- [ ] **SCAN-UI1 — Surface scans panel and Add dialog on real data.** As a Lab Member, open a real cutting insert and
+  its edge in STARbase. Expect: a **Surface scans** panel under Details (empty at first: "No surface scan of this
+  insert."). Press **Add a surface scan**: the dialog warns that the file becomes visible to every lab member; the
+  file list shows real `.al3d` files from the library (an archive file also shows its path on the share), a file that
+  is already a scan of this item is greyed out, and Add is disabled until a file and a condition are chosen (and a
+  note when the condition is *other*). Save one scan of an edge, with a date and one of its operations: the dialog
+  closes, the row appears as *Waiting to render*, then *Rendering*, then *Ready* without a reload, and its thumbnail
+  loads (a height map, not a broken image). The insert page lists only the insert's scans; the edge page lists its
+  own and the insert's, the latter tagged *Insert*. Add the same file to the same edge again from another tab: the
+  dialog says it is already a scan of this item. Add a file that cannot be read (a renamed text file with an
+  allowed ending): the scan shows *Render failed* with the reason, and **Render again** puts it back to *Waiting to
+  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. Check light and dark and a phone
+  width. Since: surface scans, S3 (PR pending).
+- [ ] **SCAN-UI2 — The surface viewer on a real scan and a real GPU.** On a lab PC, open a rendered real `.al3d` scan
+  with **Open in 3D**. Expect: the surface draws within a second or two, with no jagged edge; dragging turns it
+  smoothly and the wheel zooms (no panning, no way to lose the surface); the **vertical exaggeration** slider
+  stretches the relief and Reset view restores the opening view; **Colour by height** switches between the ramp and
+  grey; the legend's lowest and highest heights match the instrument's own (or the file's) values in micrometres; the
+  size and pixel pitch under the view match the scan; cells the instrument did not measure show as holes (and are
+  counted under the view). Compare the shape with the Alicona software's view of the same file. The fan stays
+  quiet when the page sits idle. Turn WebGL off in the browser and reload: the view says it cannot draw and the facts
+  remain. Since: surface scans, S3 (PR pending).
 
 #### Process map card tweaks (plan `2026-10-14-process-map-4-card-tweaks.md`)
 
@@ -1130,6 +1159,17 @@ migration 141 prints about ownerless records.
   map is as before. Press ＋ on a sample card, then **Reset**: the map is back as first opened, with no new request
   in the network panel. The map uses the full width of the window and its full height. Since: Process map card
   tweaks (PR pending).
+- [ ] **PM4-4 — Hover follows the chain choice; dashed outlines at any zoom.** Right-click a card, pick **Show
+  upstream**, then hover other cards: each lights only what its samples came from. Pick **Show downstream**: hovering
+  lights only what came after. Zoom all the way out and all the way in on a map with a probable batch and a project
+  frame: their dashed outlines look the same thickness on screen at every zoom. Since: chain hover and outline fix
+  (PR pending).
+
+- [ ] **PM4-5 — Wires in the PNG and PDF export of a large map.** Open `/map` on a campaign with many samples (for example
+  Campaign 10), where the export used to show wires cut along a straight horizontal or vertical line (top and left of
+  the picture's map origin, or past its right and bottom). Export ▾ → PNG and PDF. Expect: every wire is drawn from its
+  start to its end, including the fan from the campaign card. Do it once with a card selected (the unrelated cards and
+  wires dimmed): the dimmed wires show faintly, not missing. Since: process map export clips wires (PR pending).
 
 #### Process map edit mode (plan `2026-10-14-process-map-edit-mode.md`)
 
@@ -1270,6 +1310,40 @@ checks can be run from `/map?edit=new`.
 - [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
+
+### Surface scans on inserts and edges (migration 192, ADR-0021)
+- [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
+  share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
+  the file library. Expect: the scan goes pending, rendering, done within about a minute, and the row shows a grid of at most
+  1024 cells on the longer side, a pixel pitch and a height range that agree with the Alicona software's own numbers for that
+  file (the range will not match Sz exactly: it is the file's extremes, not a roughness value). In MinIO,
+  `mc ls local/d1-files/surface-scans/<cache_key>/` lists `grid.bin`, `meta.json` and `thumb.png`. With a session cookie,
+  `GET /d1-surface-scan/<scan_id>/grid` answers 200 with an `ETag` equal to the cache key and `Cache-Control: private, no-cache`; the
+  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a user who may not read the scan, and a request
+  without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
+  volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
+  and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
+  key, one it has not gets `p-<file id>-<size>-<mtime>`. Also check the least-privilege reader on the real MinIO: set
+  `MINIO_SURFACE_READER_PASSWORD` in `.env`, run `make bootstrap-minio` (creates the user `surface-reader` and its policy) and restart
+  Directus, which must not hold the root credentials (`docker compose exec directus env | grep MINIO` shows no `MINIO_ROOT_*`). As
+  that user (`mc alias set reader http://localhost:9000 surface-reader <password>`): `mc cat reader/d1-files/surface-scans/<cache_key>/meta.json`
+  works; a key under `surface-scans/` that does not exist answers 404 NoSuchKey, **not** 403 (this needs the `s3:ListBucket` statement
+  with the `surface-scans/*` prefix condition; the viewer's "render again" message depends on it); `mc cp` of any file into
+  `d1-files/surface-scans/`, `mc rm` of an object there, `mc ls reader/d1-files/` (no prefix), `mc cat` of an object under another prefix
+  and any access to `d1-backups` are all refused (403). With the password empty, `GET /d1-surface-scan/<id>/grid` answers 503, not a
+  crash. Since: surface scans PR (pending).
+- [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
+  surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
+  legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
+  the insert and edge pages. Also open it on a laptop with only an integrated GPU: it must still draw (slower is fine), and where
+  float textures are missing it says so instead of showing a blank canvas. Same check as **SCAN-UI2**; tick both together. Since: surface scans PR (pending).
+- [ ] **SS3 — Count the Alicona Tests whose subject is an edge (dry run, before any migration).** Nothing is migrated by this PR.
+  On the live database, in a read-only transaction (`BEGIN READ ONLY;` ... `ROLLBACK;`), run
+  `SELECT count(*) FROM test_sessions t WHERE t.test_type = 'alicona' AND (t.insert_edge_id IS NOT NULL OR EXISTS (SELECT 1 FROM
+  test_sessions_subject s WHERE s.test_sessions_id = t.session_id AND s.collection = 'insert_edges'));`
+  and the same count of those that have a linked file. Write both numbers after this item. They size the later script that
+  proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
+  surface scans PR (pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
@@ -1471,6 +1545,15 @@ tool; a test cut on scrap stock is fine.
   saved crop) uses D at the window midpoint, matching the radial axis of the plots. Check "—"
   with a reason on an operation with no feed or depth, and on a milling op. Since #127 (new default and per-subtype
   memory: also #128).
+
+- [ ] **#345 Operation detail Cut parameters layout.** In the Plot page's Operation detail (narrow
+  column, a real operation with a capture): Cut parameters sits at the top, above Operation record,
+  and both use the same field style; every number field shows two decimals when idle (60.00, 0.05;
+  Pulses/rev stays whole) and the full stored value, e.g. 0.055, while you edit it; the capture's fields read "Spiral feed", "Spiral Ø", "Inner Ø", "Pulses/rev",
+  "Sample rate" and nothing overflows. Edit each: its box gets the blue ring and Cut parameters'
+  Reset appears (including for Sample rate alone) and clears it. On an operation whose capture
+  surface speed or depth of cut differs from the record, that field shows full-width with a blue
+  border. From the 345 PR.
 
 ### Re-checks for the 2026-10-08 fixes (#199, #200, #212 to #216)
 Shipped in 0.1.35 (#217), so any build from 0.1.35 on will do. The issues were closed on
@@ -1850,6 +1933,648 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
   the **CI passed** check. A PR with a failing job cannot merge. Since #138 (CI/CD overhaul).
 
+### Inbox crawler and found files (2026-10-15, PR #310 and its follow-ups)
+
+Needs the real share (`archive_share` mount on d1-server) and real Directus data. Spec:
+[found files and the Inbox](../superpowers/specs/2026-10-15-found-files-inbox-design.md), ADR-0020.
+
+- [ ] **IF1 — The crawler cannot write to the share.** From inside the `inbox-crawler` container, try
+  `touch /mnt/archive/star_group1/Users/<your alias>/x` and `rm` on a throwaway file. Expect both to fail.
+  Record that the SMB account in `.env` is the maintainer's personal admin one and can write; follow-up:
+  create a read-only SMB account for the service and re-run this check with it.
+- [ ] **IF2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
+  `stat` its parent and grandparent through the mount. Expect the parent's mtime to change (the grandparent's
+  need not). If the parent's does not, the incremental scan misses files; report before enabling it.
+  Also compare the share's clock with the server's: the crawler lists a directory again at every scan while
+  its mtime is less than 2 seconds old or in the future, so a share clock running ahead makes every scan list
+  everything (correct, but slow: IF4 would show it).
+- [ ] **IF3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
+  there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
+  minutes (or, with *Rescan my folder*, once the scan running at the moment has finished and the daemon's next
+  30-second tick has claimed the request) expect it under *New* and the badge to read 1. A file saved in
+  the last 5 seconds before a scan is left for the next one (it may still be being written).
+- [ ] **IF4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
+  watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
+- [ ] **IF5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
+  log (put `INBOX_LOG_LEVEL=DEBUG` in `.env`, run `docker compose --profile archive up -d inbox-crawler`
+  to recreate the service with it, which logs every file it opens, then `docker compose logs inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
+  it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
+  and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
+- [ ] **IF6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
+  Expect it flagged with the reason *short ID … in the file name*; link it; open the sample page and see it.
+  Try *Accept all* on a filtered list and *Undo* the batch. Try a view-only person: Link must be refused.
+- [ ] **IF7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
+  linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link. The
+  crawler and Directus must have the same `D1_INBOX_CRAWLER_SECRET`; with it empty the crawler logs
+  "auto-link is off" and makes no call, with a wrong one it logs "auto-link refused" (never the secret). Only
+  images are auto-linked: an exact short ID on an `.al3d` surface scan or a document must stay in the Inbox. A
+  file the person cannot edit the record of is refused by d1-inbox and offered again about an hour later.
+- [ ] **IF8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
+  record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
+  photos). Also note which TIFF tags the real files carry (the crawler reads a JEOL name, kV and magnification
+  from the text tags when present; the layout is a guess until seen). JEOL text OCR no longer has a default
+  (pytesseract was never installed or validated): only JEOL metadata claims a JEOL image, and the FEI data-bar
+  reader (`INBOX_OCR=1`, **SEM1**, **SEM2**, **SEM4** and **SEM7** below) does not read JEOL bars.
+- [ ] **IF9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the `surface_scans`
+  migration (192) applied. Expect tag `surface_scan`; the hand-off is an add, not a link:
+  `POST /d1-inbox/link` with `{candidate_id, collection:'surface_scans', insert_id | edge_id, condition, ...}`
+  (see **IF23**). Check the pointer
+  row has `storage = 'star'` and `metadata.archive_path`, and that its `file_fingerprints` row is `done` with
+  `size_bytes` and `source_mtime` equal to the file's (the renderer trusts the hash only then). A scan is
+  never auto-linked or accepted in bulk, whatever its name says, and linking it to a sample, operation or
+  test answers 409 `SURFACE_SCAN`.
+
+- [ ] **IF10 — A share that drops mid-scan loses nothing.** While a scan of a large folder runs (or with a
+  candidate waiting in a folder that changes), disconnect the share from the server (stop the CIFS mount or
+  the VPN). Expect the log to say `scan aborted`, no candidate to become `gone`, `last_scan_finished_at` not to
+  advance, the admin tab to show the error, and the next scan after the share is back to carry on without
+  re-registering anything. A first scan that was interrupted stays *Older* (backlog) when it completes. After
+  the share is back, a file deleted while it was down is found *gone* by a later scan (no decision is lost).
+  Also make one person's folder unreadable (a permission change by the file server's owner) and confirm the
+  other people's folders are still scanned and the admin tab shows the error.
+- [ ] **IF11 — Snapshot and hidden folders are not entered.** If the share exposes `.snapshot`, `~snapshot` or
+  similar directories inside personal or team folders, confirm the crawler never lists them (DEBUG log, or
+  the file server's access log) and no found file comes from them. Also confirm folders under `Users/` and
+  `Shared/` with no alias or share folder appear in the admin tab's unmatched list and are not scanned.
+- [ ] **IF12 — The indexer and the crawler agree on the pointer rows.** Run `make index-archive` after the
+  crawler has registered files in a personal folder. The crawler also registers file types the indexer's
+  `ALLOWED_EXT` does not cover (`.al3d`, unknown types); the indexer's missing-file sweep now judges only the
+  types it walks, so expect those rows NOT to be flagged `metadata.missing` (rows flagged by an older run stay
+  flagged: clear them), while an indexed file deleted from the share still is. Move a found image to another
+  folder under the same name, run `make index-archive --fingerprint` and then a crawler scan: the candidate
+  must follow the file (not turn *gone*). Found files the indexer does cover must keep one `directus_files`
+  row each (same id). Since the inbox crawler PR.
+- [ ] **IF13 — Links on the real share are refused.** Ask the file server's owner (or use a test folder) to
+  create a symbolic link and, if the file server supports them, a junction or shortcut inside a scanned
+  folder: one named `photo.tif` pointing at a `.pdf`, one pointing at a folder outside `Users/`, one pointing
+  at another person's file. Through the CIFS mount, check whether each appears as a symlink (`ls -l`,
+  `stat` inside the container) or as an ordinary file or folder (a server-side link the mount resolves
+  for us). Expect the crawler to list and open none of the symlinks (DEBUG log shows no read of them, no
+  found file). If a link shows up as an ordinary file or folder instead, record that: the crawler cannot
+  tell it from a real one, and the only guard is that the mount is read-only and limited to this share.
+- [ ] **IF14 — An alias change during a scan.** With the amended migration (its triggers clean up when
+  `people.uni_alias` or `teams.share_folder` changes), change a person's alias while a scan of their folder
+  runs (or between two scans), then give the old folder name to another person. Expect the old person's
+  found files (not linked ones) to vanish from their Inbox, the new owner to get a first scan of that folder
+  (everything *Older*, badge 0), and no found file of the folder in the old person's Inbox.
+- [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
+  `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
+  nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a document or other non-image file the crawler
+  found (a `d1_private.file_candidates` row of kind document or other, not linked, never adopted) until it is
+  linked. The exclusion keys on that candidate row, not on `directus_files.metadata.found_by`, which the
+  indexer's next run overwrites and any Lab Member can edit; a pointer row with `found_by` but no candidate
+  row is read like any other file. The indexer's own walk (`make index-archive`, with or without
+  `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
+  unchanged. Run `make index-archive --fingerprint` on a test folder with a document in it, check what was
+  read, and decide: restrict both tools to the folders the lab agreed to index, or accept it. To check the
+  exclusion: after the crawler found a document and the indexer ran over its folder, `file_fingerprints.py
+  --phase all --dry-run` must not list it, and must list it once a person has linked it. Since: found files
+  inbox, final review (S5), re-review fix (S3).
+- [ ] **IF16 — An undone auto-link stays undone (live).** See **IF40**, which covers this check as well (the crawler restart and its log).
+- [ ] **IF17 — Pausing the crawler (SQL).** There is no admin route or tab for this. On d1-server run
+  `UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused'` (psql in the `postgres` container).
+  Within about 30 seconds expect the admin tab to show the crawler as paused but still online (the heartbeat keeps going), a file
+  saved in a scanned folder to stay unfound across a scheduled scan time, and a *Rescan my folder* request to
+  stay queued. Set `desired_state = 'running'` and expect the request to be claimed within about 30 seconds and
+  the file to appear. Also try `interval_minutes` and `read_mb_per_s` the same way (a CHECK refuses 0).
+  Since: found files inbox, final review (runbook).
+- [ ] **IF18 — The heartbeat keeps beating during a long hash.** Link a large document (a few GB, or lower
+  `read_mb_per_s` to 0.5 on a 100 MB one so the read takes several minutes). While it is read once to
+  fingerprint it, expect the admin tab to keep showing the daemon *Online* with the activity `hashing <path>`
+  and `last_heartbeat_at` never more than about 30 seconds old, then a `file_fingerprints` row. Restore the
+  rate afterwards. Since: found files inbox, final review (7a).
+- [ ] **IF19 — One crawler at a time.** With the daemon running, run `make inbox-crawler-once`: expect it to
+  log that another crawler holds the lock and exit 1 without scanning; start a second daemon container the same
+  way and expect it to exit 1. Stop the daemon and expect `make inbox-crawler-once` to run. Since: found files
+  inbox, final review (7c).
+- [ ] **IF20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
+  Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
+  crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
+  Expect `linked`, and in `audit_logs` the new `sample_data_files` row names that person, not an administrator.
+  Repeat for a sample they can only view, and a Restricted one: expect `skipped NOT_EDITABLE`. A call without the
+  header (or with a wrong one, or with a secret under 32 characters configured) must be 401/403. This is the one thing the unit tests cannot prove: that the
+  accountability `d1-inbox` builds for a login (role tree and policy flags read from the database) is accepted by
+  Directus's ItemsService. Since: found files inbox, stream B.
+- [ ] **IF21 — A member cannot squat a uni alias.** As a Lab Member in Data Studio, create a People row and try to
+  set `uni alias` or `scan while Former` (the fields should not be offered; a direct API POST with them must be
+  refused 403). Apply migration 194 first and flush Redis / restart Directus (permissions are cached). Since:
+  found files inbox, stream B (migration 194).
+- [ ] **IF22 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
+  then try to link the same found file to that sample in the Inbox: expect the refusal "already linked to that
+  record. Dismiss clears it." (409 `ALREADY_ON_RECORD`) and no second row, and the Inbox badge not counting it. Since: found files inbox, stream B.
+- [ ] **IF23 — Add a surface scan from the Inbox (live).** Needs the deployed `d1-inbox`, migration 192
+  (`surface_scans`), the surface-scan worker running, and a found `.al3d` file (see IF9). As a Lab Member, add
+  it to an insert, then (a second file) to an edge, each with a condition (try the request without one: 400
+  naming `condition`; the condition is never preset). Expect: a `surface_scans` row for the file with the
+  condition you chose and `owner_person_id` set to you (the `d1-owner-default` hook, not the endpoint), the
+  viewer's render queued (`render_status` `pending`, then `rendering`, then `done` once the worker has it) and the
+  scan open in the viewer from the insert or edge page, and the candidate under **Recently linked** (`manual`)
+  naming the insert or edge. Adding the same file to the same insert again is refused 409 `ALREADY_ADDED`; a Lab
+  Viewer is refused 403. Then **Undo** the batch and expect the `surface_scans` row to be gone, the candidate back
+  in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
+  while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
+  as failed; nothing else changes). Through the STARbase form (`/inbox`, **Add a surface scan**): the dialog warns
+  that the file becomes visible to every lab member, has **no condition chosen** and keeps *Add a surface scan*
+  off until an insert or edge (searched by its code) and a condition are set; the operation list offers only the
+  operations run with the chosen edge, or any edge of the chosen insert; after the add the notice says *Added as a
+  surface scan of <code>* and **Recently linked** shows the same line with a link to the insert or edge page and
+  the batch titled *Added as a surface scan*; a second add of the same file to the same insert is refused with
+  *That file is already added as a surface scan of this insert or edge*; as a Lab Viewer the add is refused with
+  the read-only message; make the person lose delete rights on `surface_scans` (or use another member's scan) and
+  expect Undo to show *You can no longer delete that surface scan, so adding it cannot be undone.* and change
+  nothing; the dialog fits a phone-width window. Since: found files inbox, streams F1 and F2.
+- [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
+  `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (an
+  image with a stored picture shows it instead, see **IF60**; the page never makes an `/assets/` request for a
+  found file, because archive files are pointer rows Directus cannot serve: check the browser's network tab
+  shows none); a flagged file reading *short ID `…` in the
+  file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
+  Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
+  past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
+  says linking reads the file once); a surface-scan row whose button reads *Add a surface scan* (enabled; the
+  dialog is checked in **IF23**) and which never offers *Link*. *Accept all* on a real list: the dialog opens on the server's dry run
+  (Confirm waits for it), names the count and the first few *file to record* pairs and what would be left, and
+  Confirm links exactly those; try it with a record you can only view (it is left, with the reason). *Rescan my
+  folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
+- [ ] **IF31 — Inbox badge and Home panel.** As a person with new found files, expect the **Inbox** entry
+  under Home (rail and expanded) with the count of *new* files only (backlog excluded), the same numbers in
+  Home's Inbox panel, and the page reachable from both. Link a file and expect the badge to drop at once (even
+  if a poll was in flight); save a file and, without reloading, expect the badge to catch up within about three
+  minutes or when the window regains focus. On a server without `d1-inbox`, the entry and the panel are absent
+  and nothing errors; sign out and in as someone refused (a 403) and expect the entry to come back once the
+  account can read it. Since: Inbox stream D.
+- [ ] **IF32 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
+  People page: *Uni alias* and *Scan while Former* show the stored values and the note *Changing this resets
+  the Inbox for this folder; linked files stay linked.* Set an alias, save, reopen: it is kept. Try `a/b`, one
+  character and `.ab` (refused in the form), and an alias another person already has in a different case (the
+  server refuses; the form says *That alias is already used by another person* and names no one; check Directus
+  answers `RECORD_NOT_UNIQUE` with `extensions.field` naming the alias, since the page tells it by that field:
+  if it names another field or none, report it). Link a login already linked to another person and expect the
+  server's own words, not the alias message. Add a **new** person with an alias: the person is created and the
+  alias is set by a second request (the database refuses an alias on insert); check the Directus request log
+  shows a POST without it then a PATCH. On a team, set *Share folder* the same way (try `x/y`, blank, a name
+  another team has; a refusal on a **new** team must leave the dialog open with the message and a second Save
+  must not create a second team). Change an alias after that person has found files and confirm the undecided
+  and dismissed ones are gone while linked ones stay. A Lab Member sees neither field. Since: Inbox stream D.
+- [ ] **IF33 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
+  expect *Online, running*, the interval, the last scan times and the file count, and that it never flips to
+  Offline during a long scan; stop the daemon and expect *Offline* after about five minutes (the endpoint's
+  rule). A scan error appears once under *Errors*. A folder created under `Users/` or `Shared/` that no alias or
+  share folder names shows under *Folders no one owns*, and a person with no alias under *People without a uni
+  alias* (linking to the People page); give them an alias and expect them to leave the list after the next
+  scan. Press *Scan all* and expect the request to be claimed once the current scan finishes (then within about
+  30 seconds; a scheduled scan, a first one especially, can run for hours), and a second press while one
+  waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
+  administrators. Since: Inbox stream D.
+- [ ] **IF40 — An undone auto-link stays undone (also the old IF16).** With auto-link on for a test person, save an image with an
+  exact short ID of a sample they can edit into their folder and let the crawler auto-link it. Open **Recently
+  auto-linked** and **Undo** it. Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
+  forgets its in-process list of answered candidates), then run *Rescan my folder* twice (and wait for a scheduled
+  scan): expect the file to stay in the **New** list, not to be linked again, no new `sample_data_files` row and no
+  `auto-link:` offer for it in the crawler's log; a different exact-short-ID image saved afterwards is still
+  auto-linked. Then **Link** the first file by hand: that must work. Also undo a link made by hand and expect the
+  next auto-link scan to be free to link it (only an undone *auto* link is remembered, in
+  `file_candidates.auto_undone_at`). Needs the migration 193 amended in place (a database that already applied the
+  first 193 needs `ALTER TABLE d1_private.file_candidates ADD COLUMN auto_undone_at TIMESTAMPTZ`, or a roll back and
+  re-apply). Since: found files inbox, final review fixes (server); merged with IF16 (B1).
+- [ ] **IF41 — A file that vanished while linked or dismissed is marked gone after Undo or Restore.** Save an image
+  in a test folder, let the scan find it, **Dismiss** it (another file: Link it). Delete the file from the share, let
+  a scan run (it does not mark a decided file gone), then **Restore** (or **Undo**) it. Expect the next scan, or
+  *Rescan my folder*, to list that folder again and mark the file *gone* (it leaves the New list instead of
+  staying there for good). Since: found files inbox, final review fixes (server).
+- [ ] **IF50 — A restored file whose whole folder was deleted is marked gone.** Like IF41, but put the file in a
+  subfolder of a test folder (`Users/<alias>/old/deep/x.png`), let a scan find it, **Dismiss** it, then delete the
+  whole `old` folder from the share and let a scan run (the file stays dismissed). **Restore** it. Expect the next
+  scan, or *Rescan my folder*, to mark it *gone* although no folder row is left to list (the crawler stats the
+  folders of every undecided file and the folders above them). Since: found files inbox, re-review fixes (S2,
+  crawler).
+- [ ] **IF51 — A file added as a surface scan in the Alicona dialog leaves the Inbox.** Needs migration 192 and
+  a real `.al3d` the crawler found. Add that very file in the Alicona feature's own *Add surface scan* dialog (it
+  lists every star `.al3d`). Expect the next scan, or *Rescan my folder*, to delete its undecided candidate (it
+  leaves *New* and the badge) with no *already on record* refusal on the way, and a new `.al3d` in the folder to
+  appear as usual. Since: found files inbox, re-review fixes (S5, crawler).
+- [ ] **IF52 — The heartbeat has its own database connection.** While the crawler hashes a large new image or
+  scan in a folder of a person whose alias you change meanwhile (People collection, a different value), expect the
+  admin tab to keep showing the daemon *Online*, and after the scan that none of the folder's files registered
+  before the change is in the Inbox (the alias check dropped them; the heartbeat did not commit them). In
+  `pg_stat_activity` the crawler shows two sessions, the second one idle between beats. Since: found files inbox,
+  re-review fixes (S1, crawler).
+- [ ] **IF42 — Copies across inboxes.** Put the same image in two people's folders (or a person's and a team's). The
+  one found first is the original; the other shows *Copy of ...* and is not counted by the badge. As the owner of the
+  **original**, dismiss it: expect the copy in the other person's Inbox to stay and to be counted. Restore it and
+  link it instead: expect the copy to disappear. When both copies are in the same person's (or team's) Inbox,
+  dismissing the original hides the copy too. A copy of another person's file must not say whose Inbox holds the
+  original (only your own folder and your teams are named). Since: found files inbox, final review fixes (server).
+- [ ] **IF43 — The Home "older files" link and the copy wording, on real data.** With older found files in a
+  personal folder (some naming a record by short ID or code, some not, some by insert edge code only), open Home and
+  click *N older files match a record*: expect the Inbox on the *Older files* tab with *Match* set to **Exact
+  match** and only the short-ID and record-code files listed (the count on Home equals the list's total). Choose
+  *Exact short ID*, *Record code*, *Insert edge code (weaker)* and *No match* in turn: each still filters, and the
+  URL carries `strength=` (a comma list for Exact match). For a copy whose original is in another person's Inbox
+  that you have no part in, expect *Copy of a file someone else also has* and no name anywhere in the row; for a copy
+  of a file in your own folder, a team of yours, or (as an administrator) anyone's: *Copy of a file in <name>'s
+  Inbox*. Since: found files inbox, final review fixes (UI).
+- [ ] **IF44 — Team folder: Undo by another member, a race, and Accept all over 500.** With two members of one team
+  that has a share folder: member A links a file from the team folder; member B (who sees the row under *Recently
+  linked*) presses **Undo**: expect the refusal *Only the person who linked this, or an administrator, can undo it.*
+  and nothing changed (the list rows carry only the linker's name, so the button is shown to B; an administrator
+  can undo). Then A and B both open the same *New* team file and press Link: the second one expects *Someone already
+  dealt with that file.* (a file in a personal folder says *That file was already linked.*). With more than 500 exact
+  short-ID files for records you can edit, open **Accept all**: expect the confirm to say it links about 500 at a time
+  (never more than 999) and that you can run it again, the batch to link no more than 999, and a second run to take the
+  rest. Since: found files inbox, final review fixes (UI).
+- [ ] **IF45 — A surface scan file named after an edge arrives with that edge chosen.** Save an `.al3d` (or another
+  surface scan file) whose name contains an existing insert edge code (for example `H13A-#2-fC`) into a test
+  folder and let the scan find it. In the Inbox, expect the row to say it matches the edge, and **Add a surface
+  scan** to open with that edge already chosen in the picker (you still choose the condition). As a Lab Viewer, or
+  with a Restricted insert you cannot read, expect the dialog to open with nothing chosen and the row to name no
+  edge. A document or image named like an edge is not given the edge as a suggestion. Since: found files inbox,
+  re-review fixes (server, S4).
+- [ ] **IF46 — A scan added through the Alicona feature's own dialog leaves the Inbox.** Save an `.al3d` into a
+  test folder, let the scan find it, and add the same file as a surface scan in the Alicona (Surface scans) dialog
+  instead of the Inbox. Reload the Inbox and Home: expect the file to be gone from **New** and **Older** and not counted
+  in the badge (nor is it under **Recently linked**: it was never linked here). Pressing *Add a
+  surface scan* on a stale row from before the reload must answer *That file is already added as a surface scan of
+  this insert or edge.* A surface scan file nobody has added stays listed and counted. Since: found files inbox,
+  re-review fixes (server, S5).
+- [ ] **IF53 — Thumbnails of real SEM images look right.** Needs migration 198 and the crawler on the new code
+  (`INBOX_THUMBNAILS` unset or `1`). Save a real JEOL 16-bit TIFF, a JEOL 8-bit TIFF, a JPEG and a PNG into a test folder
+  and let the scan find them. Then, as the database owner,
+  `SELECT c.rel_path, octet_length(t.thumb), octet_length(t.preview), t.thumb_width, t.thumb_height, t.preview_width, t.preview_height
+  FROM d1_private.file_thumbnails t JOIN d1_private.file_candidates c USING (candidate_id)`: expect a row each, the thumbnail
+  about 320 px on its long side and 10 to 25 KB, the preview about 1600 px (or the original size if smaller) and 150 to 400 KB.
+  In the Inbox (stream C) or by saving `thumb` and `preview` out of the row: the 16-bit TIFF is a recognisable grey picture
+  (stretched, not black), the data bar and its scale bar are readable in the preview, and a rotated JPEG (camera or phone photo)
+  is upright. A multi-page TIFF shows its first frame. A PDF and an `.al3d` get no row. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF54 — The thumbnail backfill on the real share is throttled and bounded.** On the deployment, with older found files
+  that have no picture (everything registered before migration 198), start the crawler and watch
+  `SELECT count(*) FROM d1_private.file_thumbnails` over a few minutes: it grows by at most 25 per 30 second tick (and a tick
+  hands back after 20 seconds), reads stay at or below `read_mb_per_s` (check the share's or the container's network rate while
+  `docker compose --profile archive logs -f inbox-crawler` shows `thumbnails made for N images`), the admin tab's heartbeat does
+  not go stale, and a scan request queued meanwhile is picked up within about a minute. Restart the service in the middle: it
+  resumes where it left off and re-reads nothing that has a row. `docker stats` on the largest real image (a 50 megapixel 16-bit
+  TIFF peaks at about 500 MB): the container stays within its memory. Note how long the whole backlog takes and put it in
+  `docs/runbooks/inbox-crawler.md`. Since: Inbox thumbnails (stream B, crawler).
+- [ ] **IF55 — The backfill reads only images and never writes to the share.** With `INBOX_LOG_LEVEL=DEBUG` (recreate the
+  service), let the backfill run on the real share: every `reading ...` line it logs is a `.tif .tiff .jpg .jpeg .png .bmp` path, never
+  a document, `.mat`, camera raw or `.al3d`, and a person's linked documents are not re-read for pictures. Compare the
+  modification times of a few folders and files before and after (and the SMB server's audit log if there is one): nothing
+  was created, changed or deleted. Since: Inbox thumbnails (stream B, crawler); read-only invariant of ADR-0020.
+- [ ] **IF56 — A file that goes gone loses its picture, and `INBOX_THUMBNAILS=0` stops it all.** Delete one undecided image
+  with pictures from the real share and run *Rescan my folder*: it becomes gone and its `file_thumbnails` row is deleted; put
+  it back and the next idle ticks make the picture again. Set `INBOX_THUMBNAILS=0` in `.env`, recreate the service
+  (`docker compose --profile archive up -d --force-recreate inbox-crawler`), save a new image: it is registered with no row, and
+  the row count does not grow while older images are still missing pictures. Back to `1` and it resumes. Finally compare
+  `SELECT pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))), count(*) FROM d1_private.file_thumbnails` with the
+  runbook's estimate (about 0.3 MB per image) and correct the estimate if it is off by more than half. Since: Inbox thumbnails
+  (stream B, crawler).
+- [ ] **IF57 — An image that cannot be decoded is read once, and a re-saved file keeps its old picture.** Needs migration 198 as
+  amended (NULLable pictures, `failed_reason`). Put a truncated or renamed-text `.png` and a good image in a test folder
+  and let the scan find them: expect a `file_thumbnails` row for the bad one with both pictures NULL and
+  `failed_reason = 'not decoded'`, and a normal row for the good one. Restart the crawler with `INBOX_LOG_LEVEL=DEBUG`: the bad
+  file is not opened again (no `reading ...` line for it). Then overwrite the good image in place with a different picture
+  (same name) and rescan: its picture does not change (the documented limit: made once, when first seen); move it to a new
+  name and the new path gets the new picture. Since: Inbox thumbnails review fixes (M2, Minor2; crawler).
+- [ ] **IF58 — The backfill leaves a Former person's, an old alias's and an ignored folder's files alone.** With older images
+  without pictures (switch the crawler off, delete their rows, switch it on), set a test person to Former (not *scan while
+  former*), change another test person's alias after linking one of their images, ignore a folder of a third, and run the
+  crawler with `INBOX_LOG_LEVEL=DEBUG`: no `reading ...` line for any file of those three, and with `INBOX_ONLY_FOLDERS` set to
+  one alias none for anybody else's. Undo each and expect the pictures to be made. Since: Inbox thumbnails review fixes (M1;
+  crawler).
+
+- [ ] **IF60 — Inbox thumbnails and the full view on real data (STARbase `/inbox`, and the same page inside Data Studio).**
+  Needs the deployed `d1-inbox` with the thumbnails migration and a crawler that has made the pictures (new files, and the
+  backfill for older ones). Save a few real SEM images (TIFF, JPEG) into a test folder and let the scan find them. Expect:
+  each image row shows a small picture in place of the icon, a shimmer for a moment first; rows far down a long list
+  load their pictures only when you scroll to them (network tab: `/d1-inbox/files/<id>/thumb`, at most four in flight, none
+  for rows not yet reached; each answers `image/jpeg` as a blob with the session cookie and none is an `<img src>` to the
+  endpoint); a document, an `.al3d` and an image the crawler could not decode keep the icon. Click a picture (or Tab to it
+  and press Enter): the dialog opens with the blurred thumbnail and a spinner, then the preview (`/preview`), shows the
+  file name, folder and the kV, magnification and scale bar the row shows, and the line *Reduced-size preview. The
+  original stays on the share.* Esc, a click outside and **Close** each close it, and focus is back on the picture; Tab
+  stays inside the dialog. Open the same file in **both** hosts (STARbase and Data Studio's Home) and expect the same
+  result. Switch the browser to *reduce motion*: the shimmer and the spinner stand still. Stop the `d1-inbox` route (or
+  reload with the network blocked) after the list has loaded and expect the rows to show their icons without an error, and
+  the dialog to show *The preview could not be loaded.* with **Retry**. Since: Inbox thumbnails (stream C).
+- [ ] **IF61 — A person only sees pictures of files they can see.** With two people (or a person and a team) whose
+  folders hold images with pictures, copy the `thumb` URL of one person's file from the network tab and request it as the
+  other person (their session): expect 404, not the picture; and as a signed-out browser, expect no picture (the
+  endpoint needs the session). Since: Inbox thumbnails (stream C: the client side of the server's visibility rule).
+- [ ] **IF62 — Pictures inside Data Studio: look-ahead, stalled loads and focus.** On the Inbox page inside Data Studio
+  (Home's Inbox, where the page scrolls in `#main-content`) with a long list of image rows: scroll slowly and expect the
+  pictures a screen or so ahead to be loaded before the row arrives (network tab: `/thumb` requests start for rows just
+  below the visible area, none for rows far down). Throttle the network to *Offline* after the list has loaded, scroll to a
+  row and click its picture while it still shimmers: the preview opens, and after Esc focus is on the row's first button,
+  not on the page. Block a `/preview` request without answering (DevTools request blocking does not stall; use a proxy
+  or throttle to a very slow profile): after 30 seconds the dialog shows *The preview could not be loaded.* with **Retry**,
+  and Retry puts focus on **Close**. A screen reader (NVDA or Narrator) announces *Loading preview…* when the dialog opens
+  and *Preview ready.* when it is in. Since: Inbox thumbnails UI review fixes.
+
+- [ ] **IF70 — An ignored folder is never listed, statted or opened on the real share.** Needs a test person with a
+  folder tree on the lab share that has a subfolder with files (and a sibling named like it plus a suffix, for
+  example `World-Ti Paper` and `World-Ti Paper 2`). Add the rule `World-Ti Paper` for that person (the Inbox's
+  *Ignore this folder*, or `INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) ...` as the
+  database owner), then run `make inbox-crawler-once` (or *Rescan my folder*) while watching the file server's
+  access log, or the crawler container with `strace -f -e trace=openat,getdents64,newfstatat -p <pid>`. Expect no
+  open, listing or stat of any path under `World-Ti Paper`, the lookalike `World-Ti Paper 2` scanned as before, and
+  the log line `N ignored folders were not scanned`. Time the scan against the same scan without the rule (like IF4):
+  it is not slower and is faster on a big ignored tree. Also try the rule spelled in another case
+  (`world-ti paper`): the real share is case-insensitive, so it must cover the folder the same. Since: ignored
+  folders (crawler, IB).
+- [ ] **IF71 — Not scanned is not gone, and removing a rule lists the folder again (real share).** With the rule from
+  IF70 in place and a file of that person's under the ignored folder that is still *New* (add the rule by SQL, not
+  the endpoint, so it is not dismissed), delete that whole folder on the share (or rename it) and scan: expect the
+  file to stay *New* in the Inbox (not *gone*, not removed) and the folder's `inbox_dirs` rows to stay. Disconnect
+  the share mid-scan as in IF10 with the rule in place: nothing is marked gone, as before. Then remove the rule and
+  scan: expect the folder to be listed again, the vanished file to become *gone* now, and a folder that was only
+  ignored (not deleted) to bring its files back in as *New* (files the rule had dismissed stay in *Dismissed*
+  until restored by hand). Add and remove a rule while a long scan runs: expect each change to show from the next
+  scan, not mid-scan. Since: ignored folders (crawler, IB).
+- [ ] **IF72 — A linked file under an ignored folder is still tracked.** Link a document (say a PDF) from a folder, then
+  ignore that folder for the person. Expect the document to be hashed once (a `file_fingerprints` row appears, as
+  in IF5) even though the folder is ignored, and its *Recently linked* row to stay; a found image under the same
+  folder that has a failed hash is not retried, and an exact short-ID image there is not offered to auto-link
+  (the crawler log with `INBOX_LOG_LEVEL=DEBUG` shows no open of it). Since: ignored folders (crawler, IB).
+- [ ] **IF80 — Ignoring a folder from the Inbox page, on real data (STARbase `/inbox`, and inside Data Studio).** As a Lab
+  Member with found files in a subfolder, open *New*, choose *Ignore this folder* beside a row. Expect the confirm to name
+  the folder relative to your own folder (no `Users/<alias>/`) and to say that files move to Dismissed, linked files stay
+  linked and nothing on the share changes. Confirm: expect the notice to give the real count, the files to leave *New*
+  and the badge to drop by that count, the files to be under *Dismissed* (Restore works), and the rule under *Ignored
+  folders*. A file in a team folder: the rule is the team's, and a teammate sees it listed with the team name. *Remove
+  rule* in the notice, and *Remove* in the list, both work; the next scan (or the queued rescan) lists the folder again.
+  Type an ignored folder again in another letter case, a lookalike (`Name 2`), and `Users/<alias>/Name`: expect the
+  first to be refused (already ignored), the lookalike to be accepted, and the last to say to give it relative to your own folder. As a Lab
+  Viewer: the rules are listed, *Remove* is off with the reason, and there is no *Ignore this folder* and no add field.
+  Since: ignored folders (STARbase, IC).
+
+### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
+
+Needs the real share, real FEI/Thermo images and the crawler host. Spec:
+[SEM data-bar reader](../superpowers/specs/2026-10-16-sem-data-bar-reader-design.md) (section 2, tiers 1 and 2).
+Cloud sessions and CI have no real bars and no Docker daemon: the unit tests prove the geometry, the parsing, the
+ranges and the cross-checks on synthetic bars with a scripted recogniser, **not** that the real font reads. Never
+commit a research image while doing these; look at them on d1-server only.
+
+- [ ] **SEM1 — FEI TIFFs through the real crawler.** On d1-server, point a trial run at a folder with real FEI
+  TIFFs (`INBOX_ONLY_FOLDERS=<folder>`, `make inbox-crawler-once`): at least 20 images, among them one 2048-px
+  image (119-px bar), one acquired in British summer time and one in winter, one whose bar prints `40×`, and, as
+  controls, a thermal-camera JPEG, a `Microscope x20` optical TIFF and an EDS map with a legend bar. Expect each
+  FEI TIFF to be `kind = 'sem_image'` with `kind_confidence` 0.95 (0.9 where no bar is found), `extracted` holding
+  `kv`, `spot`, `working_distance_mm`, `magnification`, `hfw_um`, `detector`, `mode`, `acquired_at` (ISO 8601 with
+  offset, equal to the instrument's London clock: `+01:00` in summer, `+00:00` in winter), `sources` all
+  `metadata` except `magnification` = `derived`, and `flags` empty or naming only a field the file really lacks;
+  the controls stay `image` ("data-bar-like strip, no SEM evidence" or the optical-microscope reason). Check with
+  `SELECT rel_path, kind, kind_confidence, extracted FROM d1_private.file_candidates WHERE ...`. Re-run with
+  `INBOX_OCR=1` once **SEM7** passes: every field the bar prints must agree with the metadata, and any
+  `flags.<field> = 'bar_mismatch'` is a finding to look at (the bar or the metadata is wrong), not noise. Stream E
+  adds: every registered row's `directus_files.owner_person_id` (a personal folder) or `owner_team_id` (a team folder)
+  must be the person or team whose folder holds the file (`SELECT f.owner_person_id, f.owner_team_id, p.uni_alias FROM
+  directus_files f LEFT JOIN people p ON p.person_id = f.owner_person_id WHERE f.id IN (SELECT directus_files_id FROM
+  d1_private.file_candidates WHERE ...)`), a file already linked in Data Studio before the scan stays unowned, and a second
+  scan changes no stamp. Since: sem-reader plan, stream B (the stamp check: stream E).
+- [ ] **SEM2 — Real PNG, BMP and JPEG exports against their TIFFs' metadata.** Needs `INBOX_OCR=1` and **SEM7**
+  done. Run the crawler over SEM-named folders that hold exports, including contrast-edited `*_contrasted.PNG`
+  files (white dividers about 207 instead of 255) and at least one JPEG. For every export that has a same-name
+  TIFF with metadata, compare `kv`, `working_distance_mm`, `spot`, `mode` and `magnification` with the TIFF's.
+  Expect `kind = 'sem_image'`, confidence 0.8, `sources` all `ocr`, and every value that is present equal to the
+  TIFF's (the trial read 37 of 37 exports cleanly; one JPEG whose bar says 10 kV has a TIFF namesake that says
+  20 kV, which is a different capture, not a misread). **A wrong value is a blocker; an absent one is fine** and
+  must carry a flag (`hfw_mismatch`, `length_mismatch`, `out_of_range`, `not_a_number`). Expect
+  `flags.check_this = true` on a bar-only export (nothing but the scale bar can vouch for it) and none when the
+  scale-bar length confirmed the magnification. Charts, 256x200 EDS thumbnails and phone photos in the same
+  folders must stay `image`. Record the time per file (the trial: about 0.16 s on a CPU) and the count of exports
+  with no value for some field. Since: sem-reader plan, stream B.
+- [ ] **SEM4 — (optional) `INBOX_OCR_DEVICE=auto` on the crawler host.** Only if the GPU is wanted: the CPU is
+  fast enough for this corpus. On the host with the RTX 5080 (Docker GPU passthrough set up, `onnxruntime-gpu`
+  installed in the crawler image in place of `onnxruntime`, a build that supports Blackwell), set
+  `INBOX_OCR=1` and `INBOX_OCR_DEVICE=auto` and recreate the service. Expect the log line `data-bar OCR: RapidOCR
+  recogniser on CUDAExecutionProvider (INBOX_OCR_DEVICE=auto)`; with no GPU or a provider that fails to load,
+  expect `data-bar OCR stays on the CPU (auto): ...` and the same values as on the CPU. The GPU switch rebuilds
+  RapidOCR's recogniser session by hand (RapidOCR 1.2.3 ignores its own `rec_use_cuda` option), so confirm the
+  `CUDAExecutionProvider` line is true and the values equal the CPU run's. `cuda` with no GPU must warn and fall
+  back, never stop the crawler. Since: sem-reader plan, stream B.
+- [ ] **SEM7 — The crawler image installs and imports rapidocr and `zoneinfo`.** The plan's packaging step could
+  not be run in the cloud session (no Docker daemon), so the pip lines of `docker-compose.yml` (service
+  `inbox-crawler`) and the `Makefile` (`inbox-crawler-once`) do **not** install rapidocr yet, and `INBOX_OCR=1` logs
+  one warning and reads no bars. On a machine with Docker: find a pip line that works in `python:3.12-slim`, which
+  installs `--no-deps rapidocr-onnxruntime==1.2.3`, then its dependencies (`onnxruntime`, `numpy`, `pyclipper`,
+  `Shapely`, `PyYAML`, `six`, `Pillow`) with `opencv-python-headless` in place of the non-headless
+  `opencv-python` (which needs libGL), every version exact from a passing install. Prove it in a clean image:
+  `docker run --rm python:3.12-slim sh -c "<the pip line> && python -c 'import zoneinfo, rapidocr_onnxruntime;
+  zoneinfo.ZoneInfo(\"Europe/London\"); rapidocr_onnxruntime.RapidOCR(); print(\"ok\")'"`. Expect `ok` (the models
+  ship in the wheel; nothing is downloaded at run time; the install is about 380 MB). Then put the same
+  pip line in the `inbox-crawler` command of `docker-compose.yml` and in the `Makefile`'s `inbox-crawler-once` target (the two places that install it), run SEM1 and SEM2, and tick this. Also
+  confirm the image has timezone data (`zoneinfo.ZoneInfo("Europe/London")` is built when the crawler imports
+  `sem_meta`, with or without OCR). Since: sem-reader plan, stream B.
+
+### SEM data-bar reader and provenance-owned files (2026-10-16, ADR-0022; migrations 196 and 197)
+
+Needs the real Directus and database on d1-server (restart Directus after the migrations, it caches permissions and relations), the real share
+and two non-administrator accounts that are each other's colleagues (a Lab Member each; one also in a team with a third person). Spec:
+[SEM data-bar reader](../superpowers/specs/2026-10-16-sem-data-bar-reader-design.md) sections 3 and 4. Only the database half is in this PR; the
+crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams and add their own items.
+
+- [ ] **SEM3 — Two accounts and a locked file (the owner filter on the real Directus).** First, the filter itself: after
+  `make migrate` and a Directus restart, sign in as a Lab Member and open any page that lists files or shows an image (a sample photo, the
+  Force App's file picker). Expect no *400* and no *"_some can only be used with top level relational alias field"* in the Directus log: Directus
+  must accept the new hidden alias `directus_files.readers` over the readers table `file_readers` (it could not be tried before the
+  migration was written; if it refuses, the filter must change, do not widen it). Then, with account A's personal folder holding a found
+  image the crawler has registered: as A, `GET /files/<id>` and `/assets/<id>` answer 200; as B (another Lab Member) the same id answers
+  403/404, and so does a Lab Viewer; as an administrator it answers 200 (administrators are not filtered). For a team folder, a member of
+  the team reads it and a non-member does not; add the non-member to the team and expect access at once, remove them and expect it gone.
+  A file already linked to a record before migration 196 (no owner) stays readable by every member. As A, upload a new image through Data Studio
+  and the Force App: expect no 403 (the Lab Member create field list names every `directus_files` column), and expect that a Lab Member
+  cannot set the owner (`PATCH /files/<id>` with `owner_person_id` answers 403). Then link A's file to a sample that B can read and open
+  that sample as B: expect a link B cannot open. Then, as B, try to change or remove A's file: `PATCH /files/<id>` with a new `title` and `DELETE /files/<id>` must be refused (403), and A's file
+  must be unchanged and still there; as A the same calls succeed on a throwaway owned file, and any member can still `PATCH` and `DELETE` an
+  unowned file they can read. Finally an administrator reads A's file's settings and the log gains a row (that half needs
+  the `d1-inbox` stream). Since: provenance owner (database, migration 196).
+- [ ] **SEM5 — Migrations 196 and 197 and the back-fill on the real database (database half).** On a copy of the production database, apply
+  both (`dbmate up`) and check: `SELECT count(*) FROM directus_files WHERE owner_person_id IS NOT NULL OR owner_team_id IS NOT NULL` equals
+  the number of `d1_private.file_candidates` rows whose state is not `linked` **and** whose file has no row in `sample_data_files`,
+  `operation_data_files`, `session_data_files` or `surface_scans` (not linked anywhere; about 82,000 when this was written, a few fewer
+  than the candidates that are not `linked`), no file with such a row was stamped (a dismissed candidate whose file was linked in Data Studio is
+  the case to look for), and `SELECT d1_private.file_readers_drift_count()` is 0. Time the apply (the back-fill and the readers refresh scan every file
+  once). Read an SEM image's `extracted` from `file_candidates` and run `SELECT d1_private.save_sem_settings(<file id>, extracted,
+  'sem-2')` for a few real rows: expect the columns to equal the printed bar and a second call to change nothing; then
+  `correct_sem_setting` one value and run the save again: expect the corrected value to stay. `dbmate down` twice and `up` twice must
+  also work on the real data. Down is lossy: it drops the stamps, the settings, the owners' manual corrections and the administrator
+  access log, so dump `d1_private.sem_image_settings` and `d1_private.sem_settings_access_log` first if the copy holds any. Since: provenance owner and SEM settings (database,
+  migrations 196 and 197). **Crawler half (`--sem-backfill`, sem-reader plan stream E):** with the daemon stopped
+  (`docker compose --profile archive stop inbox-crawler`, the pass refuses to run beside it), run the pass on the real database
+  (command in the runbook, `docs/runbooks/inbox-crawler.md`, "One-shot passes"; first on a copy if the settings table could not be
+  dumped). Expect the log line `sem-backfill: N saved, N not an SEM image, N SEM images with no usable value, N unreadable, ...`;
+  `SELECT count(*) FROM d1_private.sem_image_settings` equals N saved (plus any rows that existed); every saved file is image-typed and
+  linked in a junction or `surface_scans`, owned or not (an owned file linked in Data Studio is back-filled too: `SELECT ... FROM
+  d1_private.sem_image_settings s JOIN directus_files f ON f.id = s.directus_files_id WHERE f.owner_person_id IS NOT NULL AND
+  s.read_by = 'backfill'` lists them, and none of them is a file nobody linked); a metadata-bearing FEI TIFF has `kv`, `spot`, `working_distance_mm`, `magnification` and `acquired_at` equal to its
+  metadata (`sources` = `metadata`/`derived`). Kill the run half way (`docker stop` or Ctrl-C) and run it again: expect it to finish
+  the rest without re-reading the finished ones. Correct one value as its owner, run the pass again: the corrected value stays
+  (that row is not listed at all, it has settings). A PNG or JPEG export with no metadata gets no row until `INBOX_OCR=1` works
+  (**SEM7**): expect it counted under "no usable value" and filled by a second run with OCR on. Record the time per file
+  and the count of unreadable files. Since: SEM reader plan, stream E.
+- [ ] **SEM6 — `--reclassify` on the real database.** With the detector fix deployed and the daemon stopped, run
+  `python -m inbox_crawler --reclassify` (runbook, "One-shot passes"). First note `SELECT kind, count(*) FROM
+  d1_private.file_candidates GROUP BY kind` and `SELECT count(*) FROM d1_private.file_candidates WHERE state IN ('new','dismissed')
+  AND kind IN ('image','sem_image') AND classified_by IS DISTINCT FROM 'sem-2'` (the queue). Expect the log line
+  `reclassify: N promoted, N demoted, N unchanged (...)`, with N promoted + N demoted + N unchanged + N unreadable + N too large
+  + N skipped equal to that queue (less rows linked meanwhile), and the queue count equal to N skipped afterwards (a skipped file is
+  missing or failed transiently: it is not marked, the next run offers it again). Then check the real files: the maintainer's six FEI
+  TIFFs and their PNG exports are `kind = 'sem_image'` (the PNG exports only once `INBOX_OCR=1` works, **SEM7**; before that
+  expect the TIFFs and "unchanged" for the PNGs, and once SEM7 is done and `INBOX_OCR=1` is set, run `--reclassify --force` once:
+  a plain second run finds an empty queue and will NOT promote them, `--force` re-reads every eligible row), thermal-camera JPEGs, "Microscope x20" optical TIFFs and EDS maps with a legend bar are
+  back to (or stay) `image`, and the previous false `sem_image` rows (about 1,586 were tagged by the first detector) now
+  show as demoted. A `linked` candidate's kind must be exactly what it was (`SELECT ... WHERE state = 'linked'` compared with a copy taken
+  before). Run it a second time: expect `0 promoted, 0 demoted, 0 unchanged` (a skipped row may be read again) and no other file opened
+  (watch `INBOX_LOG_LEVEL=DEBUG` for `reading ...` lines). Kill a first run half way and run it again: it must finish the rest.
+  Look at any `not re-classifying ...` warning: a permission error or an allow-list refusal is marked and not retried by the next
+  run; a file that vanished or a transient error is skipped and offered again. Unmount or block the share part-way through a run
+  (on a copy of the database): expect `reclassify aborted` in the log, exit code 1, and no row marked after that point
+  (`classified_by` of the rest still not `sem-2`); run again with the share back and expect it to finish. Run
+  `--reclassify --force` once and expect every eligible row to be read (the counts are the whole of `new` and `dismissed` image
+  candidates) and a linked row untouched. Record the time and the
+  promoted, demoted and unchanged counts. Since: SEM reader plan, stream E.
+- [ ] **SEM8 — The `d1-inbox` imaging settings routes on the real Directus (two accounts and an administrator).** With **SEM3** passed, and an SEM
+  image (a FEI TIFF) in account A's personal folder that the crawler has registered and stamped: as A, link it to a sample A can edit, then call
+  `GET /d1-inbox/sem-settings?file=<directus_files id>` (browser address bar while signed in, or the Data Studio network tab). Expect
+  `locked: false`, the printed settings, `sources`, and `can_edit: true`. As B (another Lab Member who can read that sample) the same call must answer
+  `{"data":{"locked":true}}` with HTTP 200 and nothing else. As an administrator who is not A it answers the values with `can_edit: false` and
+  `SELECT * FROM d1_private.sem_settings_access_log ORDER BY id DESC LIMIT 3` gains exactly one row with `reason = 'admin_read'` per call (and none
+  for A's own reads). As A, `PATCH /d1-inbox/sem-settings/<id>` with `{"field":"kv","value":20}` answers 200 with `sources.kv = "manual"`; the same
+  PATCH as B and as the administrator answers 403, and `{"field":"read_by","value":"x"}` as A answers 400. For a file with no owner (one linked
+  before migration 196) linked to a sample B can read, B's GET answers the values (this is the first live check that the junction read as the caller
+  follows the record's read rule) and a Lab Member who cannot read the sample gets `locked: true`. Then, as the administrator, try
+  `POST /d1-inbox/link`, `/dismiss` and `/undo` on a file of A's: each must answer 403 *"An administrator can read other people's files but not
+  change them"* and change nothing, while the Inbox list and the badge still show the administrator the rows they could see before. Last, link
+  one image to a second record in Data Studio as well and undo the Inbox link: `d1_private.sem_image_settings` must still hold the file's row. Delete
+  the Data Studio link, link the file in the Inbox again and undo that: the row must be gone.
+  Since: `d1-inbox` imaging settings routes (stream D of the SEM reader plan).
+- [ ] **SEM9 — Imaging settings in the Inbox row, from real crawler output (STARbase).** After **SEM1**, open the Inbox as the owner of a folder
+  holding a real FEI TIFF, a real PNG export and a JEOL image. Expect for each FEI row a list of labelled values in this order: kV, working distance,
+  magnification, spot, detector, mode, scale bar, taken (then field width, pixel size, instrument), each with a source label (`metadata`, `derived`,
+  `OCR`); the scale bar as "500 µm", "3 mm" or "200 nm" to match the bar printed on the image; the time as UK time with `GMT` or `BST` that equals
+  the instrument's clock (check one image taken in summer and one in winter); no OCR confidence anywhere. A PNG export read by OCR with nothing to
+  cross-check shows "check this" on the values the bar alone gave; a field the reader refused shows "couldn't read <field>" with the reason. A row
+  stored before the new crawler (no `sources`) and the JEOL row keep the one-line summary. Since: STARbase imaging settings (stream F of the SEM reader plan).
+- [ ] **SEM10 — Imaging settings and locked files on a record page, on the real Directus (STARbase, three accounts).** With **SEM8** passed and an SEM
+  image linked from account A's folder to a sample B can read: open the sample's page as A. Expect the Files section to list the image with its
+  settings and an Edit control on every field (also those with no value, "not set"); change kV to 20: the field then reads `manual`, and a value
+  out of range (kV 99, magnification 5000.5) shows the server's message beside the field and keeps the box open; a time typed as UK local time is
+  saved with the right offset (check a summer and a winter time). As B the same page shows a lock and "A file from another person's folder" and
+  nothing else (no name, no values, no download or copy-path button, no owner; the page source and network tab hold no filename), and B's Directus
+  read of `/items/physical_samples/<id>?fields=data_files.id,data_files.directus_files_id.id` returns, for that file, a row with its own `id` present and
+  `directus_files_id` **null** (not an object and not the bare file id; the page relies on that null to know the file is locked without asking, as `hiddenLinks.ts`
+  documents for row filters); look at the page too: the lock row is shown for it and the Files count includes it (a count one short means the null row was dropped).
+  The same Files section on an operation page also lists legacy share paths (`operation_files`, administrators): a `.tif` there must still show its name
+  and copy-path buttons, never the lock. As an administrator the page shows the values and no Edit control, and the access log gains a row.
+  For a file with no owner (linked before migration 196) a reader of the sample sees the values with no Edit control. The same Files section on an
+  operation page and a test page behaves the same. Since: STARbase imaging settings and locked files (stream F of the SEM reader plan).
+- [ ] **SEM11 — An alias handed to someone else, or corrected (C1, ADR-0022 D13).** On a copy of the database with two People, A and B, and a
+  folder `Users/<alias>` holding a few images A's crawler scan registered: change A's `uni_alias` to something else and give the old alias to B
+  (the case "alias corrected"). Run `make inbox-crawler-once` (daemon stopped) and open the Inbox as B: expect none of A's old files (also not in
+  *Older files*, *Recently linked* or the badge), the log line `N file(s) stamped to another owner left out of the inbox`, and a file B adds
+  afterwards listed. The scan **deletes A's undecided and dismissed candidates** under that folder (`drop_foreign_state`: the candidate table is unique on the file, so B's scan could not register
+  the same files otherwise; A's linked ones stay), so none of A's candidate ids survive it: to try `POST /d1-inbox/link` with one, take its id before the scan and expect 404 (not found) after. A's own linked
+  files stay linked and A's pointer rows keep A. Then run the re-stamp from the runbook ("An alias handed to someone else", including the `inbox_dirs` reset, without which the rescan skips the unchanged folder) for one folder: expect
+  `file_readers_drift_count()` 0, the files in B's Inbox after the next scan and readable by B, not by A. Since: SEM reader final fix wave (C1).
+- [ ] **SEM12 — A file moved inside a personal folder after migration 196 (I1: no ghost pointer row, owner kept).** On a copy of the database with
+  196 applied and a person with a login whose folder holds a registered image, move the file to another subfolder on the share and run
+  `make inbox-crawler-once` (daemon stopped). Expect the log line for the re-point and **no** `file_readers.directus_files_id: new file already linked`
+  warning; one `directus_files` row for the file, at the new path, with the same `owner_person_id` as before; no row left for the old path
+  (`SELECT count(*) FROM directus_files WHERE metadata->>'archive_path' = '<old path>'` is 0); the Inbox row (same candidate, same first-seen date)
+  shows the new path; `SELECT d1_private.file_readers_drift_count()` is 0; the owner can still open the file and another Lab Member still cannot.
+  Repeat for a file in a team folder. Since: SEM reader final fix wave (I1).
+- [ ] **SEM13 — An owner links an SEM image in Data Studio and gets its settings after `--sem-backfill` (I2).** With **SEM3** passed, as account A
+  (with the crawler having stamped a FEI TIFF in A's folder) link the file to a sample through Data Studio's file picker, not the Inbox: the file
+  stays owned by A and has no `d1_private.sem_image_settings` row. Run `--sem-backfill` (daemon stopped, runbook "One-shot passes"): expect the log
+  `sem-backfill: 1 saved ...`, a settings row with `read_by = 'backfill'` for that file, and the record page showing the values to A (Edit control
+  present) and a lock to B (**SEM10**). A found file in A's folder that nobody linked must not be read (`INBOX_LOG_LEVEL=DEBUG`: no `reading` line for it).
+  Run it again: 0 saved, nothing re-read for the finished file. Since: SEM reader final fix wave (I2).
+- [ ] **SEM14 — A record with many images (STARbase, real Directus; I3).** Open a sample (or operation or test) that has 30 or more linked image files, as
+  their owner and as another Lab Member. Expect the page usable at once (the Files list appears and scrolls while the settings fill in a few rows at
+  a time), the browser network tab showing no more than 4 `/d1-inbox/sem-settings` requests in flight at any moment, every image ending with its
+  settings (owner) or a lock (other member) and none stuck on "Reading imaging settings…". Note the load time to the last row. As an administrator
+  open the same page: expect one `sem_settings_access_log` row per owned file read, so `SELECT count(*) FROM d1_private.sem_settings_access_log
+  WHERE read_at > now() - interval '5 minutes'` equals the number of owned images on the page: record that count and decide whether the admin log
+  volume is acceptable (every admin page view of such a record writes that many rows). Since: SEM reader final fix wave (I3).
+- [ ] **SEM15 — The live upgrade and the rollback, with `EXTENSIONS_AUTO_RELOAD` on (I4).** On a restored copy of the production database and the same
+  compose file (bind-mounted `core/extensions`, `EXTENSIONS_AUTO_RELOAD=true`), follow "Upgrading to the SEM reader" in `docs/runbooks/inbox-crawler.md`
+  exactly. First, to see why the order matters, on a throwaway copy: leave Directus running, pull, and open the Inbox before migrating: expect 500s
+  from `/d1-inbox/*` (and an undo that still works, since it checks for the settings table), then roll that copy back and start again in the right
+  order. Then, in order: crawler and Directus stopped, pull, `make migrate` (time 196's back-fill and readers refresh), drift 0, Directus started once, SEM3
+  passes, STARbase built, crawler started, `--reclassify`, `--sem-backfill`. Then the rollback on the copy in the documented order (crawler, extension,
+  `down` 197, `down` 196, restart): expect the old Inbox working, files readable by every member again, and note what was lost (settings, owner stamps).
+  Record the total time and every surprise. Since: SEM reader final fix wave (I4).
+- [ ] **SEM16 — A one-shot pass started on an empty mount point.** With the real share's mount point present but the share not mounted (`umount` it, or
+  stop the SMB mount, so `ARCHIVE_ROOT` is an empty directory), start `python -m inbox_crawler --reclassify` and then `--sem-backfill` on a copy of the
+  database. Expect each to refuse at once: `aborted` in the log (the share root or the personal-folder base, `User` or `INBOX_PERSON_DIR`, does not answer),
+  exit code 1, and no row marked (`classified_by` unchanged, no `sem_image_settings` row added). Mount the share again and expect both to run to their end.
+  Since: SEM reader final fix wave.
+- [ ] **SEM17 — More than 25 deleted dismissed rows do not abort `--reclassify`.** On a copy of the database, dismiss (or find) at least 30 image candidates
+  whose files have since been deleted from the share (state `dismissed`, file gone). Run `--reclassify` with the share mounted: expect the log
+  `reclassify: ... N skipped ...` with N at least 30, no `aborted`, exit code 0, and every other eligible row still processed (a missing file is skipped, it
+  never counts toward the 25 transient errors that abort a pass). Run it again: the same rows are skipped again (they stay queued), still no abort.
+  Since: SEM reader final fix wave.
+- [ ] **SEM18 — Deactivating, and deleting, a person who owns files (`ON DELETE RESTRICT`).** In Data Studio, set a person who owns found files (an alias, a
+  login, owned rows in `directus_files`) inactive: expect it to save, the person's folder to stop being scanned (unless "scan while Former"), their owned
+  files to stay owned by them and readable by their login, and the admin tab to list nothing new as unowned. Then try to delete that person (People page, and
+  `DELETE /items/people/<id>`): expect a refusal, and the person and their files unchanged. Since migration 201 the message names the person and the count ("X cannot
+  be deleted: they own N found file(s) on the share. Set them inactive instead, or re-stamp their files first ..."; Directus still answers HTTP 500 with a `delete from "people" ... -` prefix; before 201 it showed
+  only the raw `directus_files_owner_person_id_fkey` error). The same for a team that owns files. An administrator removes such a person by re-stamping their files first (the runbook "An alias handed to
+  someone else"). Since: SEM reader final fix wave (ADR-0022 consequences); message: migration 201.
+- [ ] **SEM19 — Team membership: `d1-inbox` counts active members, `file_readers` counts every member with a login (M3, ADR-0022 consequences).** With a team
+  that has a share folder and a team-owned file, and a team member who is a Former (inactive) person with a login still active in Directus: as that
+  person, `GET /files/<id>` of the team's file must answer 403 and the Inbox shows them no team files, badge 0 and no team in the summary (d1-inbox counts only
+  `people.active` members). As an active member both work; setting the person active again gives `GET /files/<id>` 200 at once and inactive 403 again, with
+  `file_readers_drift_count()` 0 (migration 201 made a team owner count active members only, and `people.active` refreshes the readers; before it the Former member got 200). A **person** owner who is inactive
+  still reads their own files. Since: SEM reader final fix wave (M3); migration 201.
+
+- [ ] **SEM20 — The indexer's own move keeps the owner (re-review finding).** On a copy of the database with 196 applied, take an owned image registered by the crawler, move it on the share out of `Users/<alias>` into a project folder, and run `make index-archive` (full run). Expect one `directus_files` row for the file at the new path with the same `owner_person_id` as before (not NULL), no row for the old path, and `file_readers_drift_count()` 0; a member who is not the owner cannot read it. Since: SEM reader final fix wave (`index_archive.carry_owner_stamp`, ADR-0022 D13).
+- [ ] **SEM21 — A folder that changed hands, with thumbnails and ignored folders (merge of the SEM reader and PR #338).** With **SEM11** set up (the alias now B's; **the scan deletes A's unlinked candidates**, so after B's scan stamp one of B's registered candidates and its file to A by hand
+  to stand in for "A's old candidates kept") and the crawler having stored thumbnails for some of them:
+  as B, `GET /d1-inbox/files/<one of A's candidate ids>/thumb` and `/preview` answer 404 NOT_FOUND with no ETag or caching headers, while B's own images
+  still show their thumbnails. Then, as B, *Ignore this folder* on a folder that holds both B's own open files and A's old ones: expect the notice's
+  count to include B's files only, B's files in Dismissed, and A's old candidates untouched (still `state = 'new'`, `decided_by` NULL). As A (or an
+  administrator) nothing of A's changed. Accept all as B for that filter links none of A's files. Since: merge of origin/main (ignored folders, PR #338)
+  into the SEM reader branch.
+
 ## Done
 
 (Move ticked items here with their date and result.)
+
+### SEM reader: rehearsal on a copy of the live database (2026-10-16, d1-server)
+
+Run on a throwaway stack (`sem-copy-*` containers: a `pg_dump` restore of the live database at migration 195, a Directus on
+port 18061 with this branch's extensions, the crawler container with the real share mounted read-only, STARbase from `vite`
+on 5191 pointed at the copy). The live stack was only read (the dump). Not ticked above because each item was run on a
+**few folders** (about 60 trial images, not the whole corpus) and on a copy, not live. Test accounts were created on the copy only.
+
+| Item | Result |
+|---|---|
+| SEM7 | The pip lines import in a clean `python:3.12-slim` (PR #343). Reading real bars needed two fixes (below). |
+| SEM1 | `mtp23cab` (1,653 images, no OCR): 840 FEI TIFFs promoted, 50 earlier false `sem_image` rows demoted, every TIFF `kind_confidence` 0.95, all 8 fields present, `sources` all `metadata` (magnification `derived`), BST/GMT offsets all equal to London's (487 BST, 353 GMT, 0 wrong), no flags, owner stamps all the folder's person. With OCR on 57 more images in three `mtp23jjk` folders: **54 had `scale_bar_um: length_mismatch`** (bug 1). After the fix: 0 flags. Not covered: the 2,048-px image, a `40×` bar, the thermal/EDS controls by name. |
+| SEM2 | 8 contrast-edited PNG exports and 2 TIFFs without metadata: every value equal to the TIFF namesake's (wd to the bar's 1 decimal), `sources` `ocr`, confidence 0.8, no `check_this` once the bar length confirms. One wrong value found: mode read `None.` from a bar that prints `None` (bug 2). No JPEG or BMP namesake pairs tried. About 0.4 s per registered image on CPU with OCR (57 images in 23 s, folder listing included). |
+| SEM3 | Owner filter accepted by Directus (no `_some` error). A 200; B and a Lab Viewer 403; admin 200; unowned uploads stay open to every member; `PATCH owner_person_id` 403; B cannot patch or delete A's file (403); team folder: member reads, non-member 403, added 200, removed 403; sample link: B and the Viewer get `directus_files_id: null` with the row id present, A gets the file. Observed: deleting a file whose storage is `star` answers 500 after the row is gone (no `star` location is declared, so it is not new). |
+| SEM5 | Database half: migrations 196-199 apply in **3.1 s** on 82,519 candidates / 255,346 files; stamped 82,519 = candidates not linked and not in a junction; no junction-linked file stamped; `file_readers_drift_count()` 0; four `down`s then `up` again also 0. Crawler half: `--sem-backfill` without OCR 4 saved / 5 not an SEM image (a bar-only image is not recognised as SEM without OCR, so it is counted there and not under "no usable value"); with OCR 3 more; again 0 saved. Settings values equal the metadata. Not run: the `save_sem_settings` correction check by SQL, kill half way. |
+| SEM6 | On a queue cut to 90 rows: 8 promoted, 60 demoted (thermal JPEGs, "Microscope x5/x20" TIFFs, EDS spectra, charts, a TEM), 22 unchanged, 0 skipped; a second run 0/0/0 and no file opened. Not run: `--force` over the whole corpus, kill half way, share pulled mid-run. |
+| SEM8 | A GET `can_edit` true; B and a Lab Viewer `{locked:true}`; admin values with `can_edit` false, one `admin_read` row per call, none for A; A PATCH `kv` 20 → `sources.kv = manual`; B and admin PATCH 403; `read_by` 400; kV 99 400. Admin link/dismiss/undo 403 with the documented message. An unowned linked file: B reads the values, no edit. Inbox link then undo drops the settings row; Data Studio link, then Inbox link, then undo keeps it. **Finding:** magnification 5000.5 is accepted and saved as 5001 (SEM10 expects a refusal; decide if non-integers should be refused). |
+| SEM9 | FEI row: labelled values in the specified order with `metadata`/`derived`/`OCR` labels, "15 Apr 2026, 19:31 BST", winter rows `GMT`, no confidence shown; PNG export row all `OCR`, no "check this" (the bar confirmed). Not seen: a "check this" row, a "couldn't read" row, a JEOL row. |
+| SEM10 | As the owner: values, an Edit control on every field, "not set" for empty ones. As B: 37 locks "A file from another person's folder", the count 38 includes them. Not tried: typing a UK summer/winter time, the admin page view. |
+| SEM11 | First half: after handing the alias to B and a scan: B's Inbox lists none of A's files, the log says `N file(s) stamped to another owner left out of the inbox`, B's link of A's candidate 404, A's file stays A's, B 403 on it. The scan also deleted A's old candidates for that folder (`drop_foreign_state`), so "A's old candidates kept for the test" needed a hand stamp. Re-stamp half (runbook SQL for one folder, 18 files, then a scan): the 14 unlinked files registered for B, B's Inbox lists 14 and A's 0, B reads (200), A 403, drift 0. |
+| SEM12 | On a new person with a folder under a fake share root (a copy of one real TIFF): moved to another subfolder, the scan logs `re-pointed ... to ...`, the candidate keeps its id and first-seen date, one pointer row at the new path with the same owner, none at the old one, drift 0, the owner reads (200), another member 403, no `already linked` warning. The same for a team folder (owner team kept). |
+| SEM15 | On a second restore of the production dump (migration 195): the new extension on the old schema answers **500** on `/d1-inbox/summary`, `/files` and `/sem-settings`. The documented order (Directus stopped, `migrate`, start): 196-201 apply in 3 s in all (196 itself 2.2 s; 82,519 stamped, drift 0), the Inbox routes 200, a Lab Member gets 403 on an owned file. Rollback (previous `d1-inbox` put back, then `down`): **six** `down`s are needed, not two (201, 200, 199, 198, 197, 196: each `migrate-down` takes the newest one); afterwards the old Inbox answers 200, the owner columns and the settings table are gone and the same member reads the file again (200). The runbook said "197, then 196" (fixed). Not rehearsed: `make` (not on the host), STARbase build, the daemon's start order. |
+| SEM20 | On a scratch database (schema of the copy) with a fake share: an owned file registered by the crawler, `index_archive.py --fingerprint` before and after moving it out of the personal folder to `projects/p1/`: `1 moved (links re-pointed)`, one row at the new path with the same owner, none at the old path, only the owner's login in `file_readers`, drift 0. |
+| SEM14 | 38 linked images, 37 owned: 38 `sem-settings` requests in 289 ms with **at most 4 in flight**. Admin view logged 8 rows: only images that have a settings row are logged, not every owned image on the page. |
+| SEM16 | Both `--reclassify` and `--sem-backfill` on an empty root: `aborted`, exit 1, nothing marked. |
+| SEM17 | 35 dismissed rows with missing files: `35 skipped`, exit 0, no abort, the same 35 skipped again. |
+| SEM18 | Deactivate saves; the owner still reads their file; `DELETE /items/people/<id>` answers **500 with the raw SQL** ("violates foreign key constraint directus_files_owner_person_id_fkey"). Understandable to a developer, not to a Directus admin. |
+| SEM19 | Confirmed: a Former member with an active login reads the team's file by id (200) while the Inbox shows them no team and 0 files. Decision for the maintainer. |
+| SEM21 | B gets 404 for thumb and preview of A-stamped candidates, the same answer as for an unknown id (no way to tell them apart); the 404 carries Express's weak ETag of its own JSON body, not a picture's. Ignore-folder half: **found a bug**: *Ignore this folder* dismissed 0 of B's 11 open files because `d1-inbox` built the folder as `Users/<alias>` while the share's is `User/<alias>` (the crawler's `INBOX_PERSON_DIR`); with the variable passed to Directus (compose) it dismisses all 11 and leaves A's 3 stamped candidates `new` with no `decided_by`. |
+| Not run | SEM4 (GPU), SEM13 as written (its `--sem-backfill` effect was seen under SEM5). |
+
+Bugs found by this run (both fixed in PR #348): (1) the FEI scale bar is drawn through its own label, so `scale_bar_length_px` measured
+one half (89 px of 260) and the length check failed on nearly every real image, losing the exports' magnification; (2) the recogniser's
+trailing full stop on a text cell (`None.`). Later findings, fixed in PR #350 (merged with them): former team members, the delete message,
+whole-number magnification. Found in the last part: `d1-inbox` hard-coded `Users/<alias>` for *Ignore this folder* (fix: `INBOX_PERSON_DIR`
+passed to Directus, default `User` in compose; redeploying needs the compose change and a Directus recreate).

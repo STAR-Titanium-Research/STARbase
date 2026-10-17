@@ -464,7 +464,7 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('the selection lights its chain (both ways by default); hovering another card shows its neighbours; a wire adds to the chain', async () => {
+  it('the selection lights its chain (both ways by default); hovering a card lights its chain the same way; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
@@ -473,12 +473,17 @@ describe('useProcessMap', () => {
     const chain = map.focusOfHover.value!;
     expect(chain).toEqual(chainFocus(map.graph.value!, 's:s1', 'both'));
     map.hover('s:s2', {} as HTMLElement);
-    expect(map.focusOfHover.value).not.toEqual(chain);
-    expect(map.focusOfHover.value).toMatchObject({ dim: true });
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'both'));
     map.hover(null);
     expect(map.focusOfHover.value).toEqual(chain);
     map.setChainDir('up');
     expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s1', 'up'));
+    // The choice holds for hovering too: another card lights only what came before it.
+    map.hover('s:s2', {} as HTMLElement);
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'up'));
+    map.setChainDir('down');
+    expect(map.focusOfHover.value).toEqual(chainFocus(map.graph.value!, 's:s2', 'down'));
+    map.hover(null);
     const wire = map.graph.value!.wires[0].id;
     map.hover(wire, {} as HTMLElement);
     expect(map.focusOfHover.value!.wires.has(wire)).toBe(true);
@@ -1079,8 +1084,8 @@ describe('the 300-card cap applies to what plus reveals (D22)', () => {
   });
 });
 
-describe('expand inside a loaded family still reveals one step and tells the layout to keep what is placed', () => {
-  it('hands the canvas a merge hint naming the card', async () => {
+describe('expand inside a loaded family still reveals one step; ＋ and − tell the layout to lay out again round what was dragged', () => {
+  it('hands the canvas a merge hint naming the card, flagged full (＋)', async () => {
     const data = mkData({
       samples: ['a', 'b', 'c'].map((id) => mkSample(id)),
       operations: [
@@ -1094,12 +1099,48 @@ describe('expand inside a loaded family still reveals one step and tells the lay
     const seen = hints(map);
     await map.expand('s:b');
     await settle();
-    expect(seen.at(-1)).toEqual({ anchor: 's:b' });
+    expect(seen.at(-1)).toEqual({ anchor: 's:b', full: true });
     expect(map.shown.value.has('s:c')).toBe(true);
     // A change that is not an expand carries no hint (the canvas lays everything out).
     map.toggleKind('stock_lot');
     await settle();
     expect(map.takeMergeHints()).toEqual([]);
+  });
+
+  it('− on the card hands the canvas a full hint naming it too', async () => {
+    const data = mkData({
+      samples: ['a', 'b', 'c'].map((id) => mkSample(id)),
+      operations: [
+        mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' }),
+        mkOp({ id: 'o2', sampleId: 'b', outputSampleId: 'c', date: '2026-09-02T09:00:00Z', methodName: 'M' }),
+      ],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    await map.expand('s:b');
+    await settle();
+    map.takeMergeHints();
+    const seen = hints(map);
+    map.collapse('s:b');
+    await settle();
+    expect(seen.at(-1)).toEqual({ anchor: 's:b', full: true });
+    expect(map.shown.value.has('s:c')).toBe(false);
+  });
+
+  it('folding the rows of a container is not a ＋/−: its hint is the reslot one, not full', async () => {
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' })],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    const seen = hints(map);
+    const container = map.nodes.value.find((n) => n.type === 'container')!;
+    map.toggleRows(container.id);
+    await settle();
+    expect(seen.at(-1)).toEqual({ reslot: container.id });
   });
 });
 
@@ -1595,6 +1636,73 @@ describe('＋ becomes −, and Reset (card tweaks)', () => {
     map.setStack(false);
     map.setStack(true);
     expect(containersOf(map).map((c) => c.id)).toEqual(['stack:a,b,c']);
+  });
+
+  describe('double-click: unstack and restack', () => {
+    const turning = (id: string, sample: string, day: number) =>
+      mkOp({ id, sampleId: sample, outputSampleId: sample, methodId: 'turn', methodName: 'Turning', date: `2026-09-0${day}T09:00:00Z` });
+    const stackedPair = () => {
+      family.mockResolvedValue(mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [turning('a', 's1', 1), turning('b', 's1', 2), turning('c', 's1', 3), turning('d', 's2', 1), turning('e', 's2', 2)] }));
+      return setup({ focus: 'physical_samples:s1' });
+    };
+    const stackable = (map: ReturnType<typeof useProcessMap>) => map.graph.value!.wires.filter((w) => w.stackable).map((w) => w.id);
+
+    it('restack on any pass of an unstacked stack stacks that whole stack again, laid out in full round it', async () => {
+      const { map } = stackedPair();
+      await settle();
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['stack:a,b,c', 'stack:d,e']);
+      const seen = hints(map);
+      map.unstack('stack:a,b,c');
+      await nextTick();
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['op:a', 'op:b', 'op:c', 'stack:d,e']);
+      map.restack('op:b');
+      await nextTick();
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['stack:a,b,c', 'stack:d,e']);
+      // The card double-clicked keeps its place: the first pass takes the stack's place going apart, the stack the pass's going together.
+      expect(seen).toEqual([
+        { anchor: 'op:a', from: 'stack:a,b,c', full: true },
+        { anchor: 'stack:a,b,c', from: 'op:b', full: true },
+      ]);
+    });
+
+    it('two unstacked stacks are two groups: restacking one leaves the other unstacked', async () => {
+      const { map } = stackedPair();
+      await settle();
+      map.unstack('stack:a,b,c');
+      map.unstack('stack:d,e');
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['op:a', 'op:b', 'op:c', 'op:d', 'op:e']);
+      map.restack('op:e');
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['op:a', 'op:b', 'op:c', 'stack:d,e']);
+      map.restack('op:a');
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['stack:a,b,c', 'stack:d,e']);
+    });
+
+    it('restack on a card that is no pass of an unstacked stack does nothing', async () => {
+      const { map } = stackedPair();
+      await settle();
+      const seen = hints(map);
+      map.restack('stack:d,e');
+      map.restack('s:s1');
+      map.restack('op:nope');
+      await nextTick();
+      expect(containersOf(map).map((c) => c.id).sort()).toEqual(['stack:a,b,c', 'stack:d,e']);
+      expect(seen).toEqual([]);
+    });
+
+    it('the wires between the passes of an unstacked stack are stackable; the chip off, or a new stack, has none', async () => {
+      const { map } = stackedPair();
+      await settle();
+      expect(stackable(map)).toEqual([]);
+      map.unstack('stack:a,b,c');
+      expect(stackable(map)).toEqual(['op:a:out:0>op:b:in:0', 'op:b:out:0>op:c:in:0']);
+      map.setStack(false);
+      expect(stackable(map)).toEqual([]);
+      map.setStack(true); // the chip turned on again stacks everything again
+      expect(stackable(map)).toEqual([]);
+      map.unstack('stack:a,b,c');
+      map.restack('op:c');
+      expect(stackable(map)).toEqual([]);
+    });
   });
 
   describe('the hover card of a container', () => {

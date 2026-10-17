@@ -1,4 +1,5 @@
 import type { BrowserContext, Request } from '@playwright/test';
+import { handleScanRoute, stubScans, type StubScans } from './stubScans';
 import { D1_BASE, STAR_BASE, pointAtD1 } from './target';
 
 // A stand-in for d1-server for the specs that need no real data (spec 16): a signed-in admin, the
@@ -28,6 +29,9 @@ export interface StubState {
 	failPin: boolean;
 	// The saved views GET /presets lists (none by default, so the sidebar shows no views).
 	bookmarks: StubBookmark[];
+	// Surface scans (stubScans.ts): a tool box with two inserts and three edges, the scans of the first insert and edge, the file library, and the
+	// d1-surface-scan endpoint serving a made-up grid. Its `rows`, `created`, `renders` and `endpoint` are what a spec asserts on.
+	scans: StubScans;
 }
 
 export interface StubBookmark {
@@ -52,7 +56,7 @@ const COLLECTIONS = [
 ];
 
 export async function stubD1(context: BrowserContext): Promise<StubState> {
-	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false, usedPages: [], failPin: false, bookmarks: [] };
+	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false, usedPages: [], failPin: false, bookmarks: [], scans: stubScans() };
 	await pointAtD1(context);
 	const cors = {
 		'access-control-allow-origin': STAR_BASE,
@@ -113,6 +117,7 @@ export async function stubD1(context: BrowserContext): Promise<StubState> {
 		if (path === '/presets' && method === 'GET') {
 			return json({ data: state.bookmarks.map((b) => ({ ...b, user: null, role: null, filter: null, search: null, layout_query: null })) });
 		}
+		if (await handleScanRoute({ route, req, url, path, method, cors, json, scans: state.scans })) return;
 		const sample = /^\/items\/physical_samples(?:\/([^/]+))?$/.exec(path);
 		if (sample && method === 'GET') {
 			if (sample[1]) return sample[1] === STUB_SAMPLE.sample_id ? json({ data: STUB_SAMPLE }) : json({ errors: [{ extensions: { code: 'FORBIDDEN' } }] }, 403);
