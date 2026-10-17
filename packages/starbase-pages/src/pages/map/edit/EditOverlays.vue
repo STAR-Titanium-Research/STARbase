@@ -1,17 +1,38 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue';
 import AddMenu from './AddMenu.vue';
 import ConnectTo from './ConnectTo.vue';
 import CreateToast from './CreateToast.vue';
 import DuplicatePrompt from './DuplicatePrompt.vue';
 import MarkDoneDialog from './MarkDoneDialog.vue';
 import SamplePicker from './SamplePicker.vue';
+import { focusCanvas } from './focusCanvas';
 import type { EditMode } from './useEditMode';
 import type { EditSide } from './useEditSide';
 
 // What edit mode opens over the page: the Add menu, Connect to…, the duplicate prompt, the sample picker, the Mark done dialog and
 // the toast after Create. They sit beside the page layout, not in it: RecordLayout is a size container, which would make `position:
 // fixed` relative to it. Mark done and the toast belong to view mode and phones too; the others only while a draft can be changed.
-defineProps<{ edit: EditMode; side: EditSide }>();
+//
+// The page mounts this outside its loading / error / ready chain: after Create the map reads the new sample's history, and the toast
+// (and Mark done) must live through that, not be built again with focus lost (E19).
+const props = defineProps<{ edit: EditMode; side: EditSide; canvasEl: HTMLElement | null }>();
+
+const toastEl = ref<HTMLElement | null>(null);
+// The Create button is gone once the records are made: focus goes to the toast (its link, else Dismiss), where the next step is.
+watch(
+	() => props.side.create.toast.value,
+	async (t) => {
+		if (!t) return;
+		await nextTick();
+		toastEl.value?.querySelector<HTMLElement>('a, button')?.focus();
+	},
+);
+function closeToast(): void {
+	const hadFocus = !!toastEl.value && toastEl.value.contains(document.activeElement);
+	props.side.create.closeToast();
+	if (hadFocus) focusCanvas(props.canvasEl);
+}
 </script>
 
 <template>
@@ -41,8 +62,8 @@ defineProps<{ edit: EditMode; side: EditSide }>();
 		@confirm="side.markDone.confirm"
 		@cancel="side.markDone.cancel"
 	/>
-	<div class="pm-toast d1-kit d1-process-map">
-		<CreateToast :show="!!side.create.toast.value" :sample-ids="side.create.toast.value?.sampleIds ?? []" :count="side.create.toast.value?.count ?? 0" @close="side.create.closeToast" />
+	<div ref="toastEl" class="pm-toast d1-kit d1-process-map">
+		<CreateToast :show="!!side.create.toast.value" :sample-ids="side.create.toast.value?.sampleIds ?? []" :count="side.create.toast.value?.count ?? 0" @close="closeToast" />
 	</div>
 </template>
 

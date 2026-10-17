@@ -412,10 +412,10 @@ onBeforeUnmount(() => {
 				<MapSheet v-if="phone" :title="map.selectedInfo.value?.code ?? 'Nothing selected'">
 					<MapRail v-bind="railProps" v-on="railEvents" />
 				</MapSheet>
-				<!-- Beside the layout, not in it (see EditOverlays). -->
-				<EditOverlays :edit="edit" :side="side" />
 			</template>
 		</PageShell>
+		<!-- Beside the layout, and outside the loading / ready chain (see EditOverlays): the toast after Create must survive the map reading again. -->
+		<EditOverlays :edit="edit" :side="side" :canvas-el="canvasEl" />
 		<Finder v-if="finderOpen" :pick-record="map.pickRecord" @close="finderOpen = false" />
 	</ExplorerView>
 </template>
