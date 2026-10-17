@@ -62,8 +62,8 @@ export interface MapEdit {
 	socketDown(sock: SocketRef, e: PointerEvent): void;
 	/** A key on a focused socket: Enter opens its menu. */
 	socketKey(sock: SocketRef, e: KeyboardEvent): void;
-	/** The checks that block Create on this card (a red badge), null when none. */
-	badge(node: MapNode): { count: number; text: string } | null;
+	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
+	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
 	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
 	addRow(nodeId: string): void;
 	canAddRow(node: MapNode): boolean;

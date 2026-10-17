@@ -158,18 +158,19 @@
 .d1-process-map .sock.drop-bad { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
 .d1-process-map .sock.row.drop-bad { transform: translateY(-50%) scale(1.35); }
 
-/* The red badge of a card whose checks block Create: how many things. */
+/* The red badge of a card whose checks block Create: how many things. A card with only warnings (a stale version) gets an amber one. */
 .d1-process-map .chk {
 	flex: none;
 	min-width: 20px;
 	padding: 0 6px;
 	border-radius: 99px;
 	background: var(--theme--danger);
-	color: #fff;
+	color: var(--theme--foreground-inverted, var(--d1-surface));
 	font-size: var(--fs-xs, 11px);
 	font-weight: 700;
 	line-height: 20px;
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 }
+.d1-process-map .chk.warn { background: var(--theme--warning-background, var(--d1-tile)); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
 .d1-process-map .orow.addrow { cursor: pointer; }

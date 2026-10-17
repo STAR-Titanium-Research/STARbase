@@ -256,16 +256,25 @@ describe('badges and ＋ output', () => {
 	it('count what blocks Create on a card, with the words', async () => {
 		const { ec } = await setup(twoCards());
 		const op = container('draft:n3');
-		expect(ec.mapEdit.badge(op)).toMatchObject({ count: 1 });
+		expect(ec.mapEdit.badge(op)).toMatchObject({ count: 1, level: 'block' });
 		expect(ec.mapEdit.badge(op)!.text).toMatch(/needs a sample/);
 		expect(ec.mapEdit.badge(container('recorded'))).toBeNull();
 	});
 
-	it('say nothing on a card with nothing blocking', async () => {
+	it('show an amber badge, not a red one, on a card with only warnings (an operation with no machine yet)', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' } }, { type: 'wire', from: { key: 'n1' }, to: { key: 'n2' } }]);
+		const { ec } = await setup(body);
+		const badge = ec.mapEdit.badge(container('draft:n3'));
+		expect(badge).toMatchObject({ level: 'warn' });
+		expect(badge!.count).toBeGreaterThan(0);
+		expect(badge!.text).toMatch(/No machine yet/);
+	});
+
+	it('show only a warning on a card that is not blocking (a sample whose record changed since it was added)', async () => {
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }]);
 		const { ec } = await setup(body);
 		const card = { id: 's:s1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's1', code: 'PS-001' }, ins: [], outs: [] } as MapNode;
-		expect(ec.mapEdit.badge(card)).toBeNull();
+		expect(ec.mapEdit.badge(card)).toMatchObject({ level: 'warn', text: expect.stringMatching(/Changed since you added it/) });
 	});
 
 	it('offer ＋ output on a new operation that is not a stack, and add the row', async () => {

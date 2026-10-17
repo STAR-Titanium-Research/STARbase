@@ -101,7 +101,7 @@ describe('a sample card in edit mode', () => {
 
 	it('wears the red badge with the number of things that block Create', async () => {
 		const [s] = samples(run([{ type: 'addSample' }]));
-		const html = await render(RecordNode, { id: s.id, data: s }, edit({ badge: () => ({ count: 2, text: 'Choose the material. Choose the method.' }) }));
+		const html = await render(RecordNode, { id: s.id, data: s }, edit({ badge: () => ({ count: 2, text: 'Choose the material. Choose the method.', level: 'block' as const }) }));
 		expect(html).toMatch(/class="chk"[^>]*aria-label="Choose the material\. Choose the method\."[^>]*>2</);
 	});
 });
@@ -152,9 +152,15 @@ describe('a container in edit mode', () => {
 		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ canAddRow: () => false }))).not.toContain('addrow');
 	});
 
+	it('wears an amber badge when there are only warnings', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 1, text: 'No machine yet.', level: 'warn' as const }) }));
+		expect(html).toMatch(/class="(?:chk warn|warn chk)"[^>]*aria-label="No machine yet\."[^>]*>1</);
+	});
+
 	it('wears the red badge', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
-		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 3, text: 'Choose the method of this operation.' }) }));
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 3, text: 'Choose the method of this operation.', level: 'block' as const }) }));
 		expect(html).toMatch(/class="chk"[^>]*>3</);
 	});
 

@@ -12,7 +12,7 @@ import type { MapEdit } from '../nodes/actions';
 import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
-import { blocking } from './checks';
+import { blocking, warnings } from './checks';
 import type { MenuTarget } from './menuTarget';
 import { decodeSocket, draftKeysOfNode, encodeSocket, nearestSocket, newOperationOf, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
 import type { EditMode } from './useEditMode';
@@ -201,11 +201,15 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 
 	// ---- badges and ＋ output ---------------------------------------------------------------------------------------
 	const blockers = computed(() => blocking(edit.checks.value));
-	function badge(node: MapNode): { count: number; text: string } | null {
+	const warned = computed(() => warnings(edit.checks.value));
+	/** What a card says about its checks: the things that block Create (red), else the warnings (amber); nothing when it has none. */
+	function badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null {
 		const keys = draftKeysOfNode(edit.body.value, node);
 		if (!keys.length) return null;
 		const mine = blockers.value.filter((c) => keys.includes(c.key));
-		return mine.length ? { count: mine.length, text: mine.map((c) => c.text).join(' ') } : null;
+		if (mine.length) return { count: mine.length, text: mine.map((c) => c.text).join(' '), level: 'block' };
+		const soft = warned.value.filter((c) => keys.includes(c.key));
+		return soft.length ? { count: soft.length, text: soft.map((c) => c.text).join(' '), level: 'warn' } : null;
 	}
 	const canAddRow = (node: MapNode): boolean => node.type === 'container' && node.kind === 'operation' && !node.stacked && !!newOperationOf(edit.body.value, draftKeysOfNode(edit.body.value, node)[0] ?? null);
 	function addRow(nodeId: string): void {

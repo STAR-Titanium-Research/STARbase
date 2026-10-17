@@ -71,7 +71,7 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 			<div class="ntop">
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
-				<span v-if="badge" class="chk" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
+				<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 				<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
 			<div class="code" :title="name">{{ name }}</div>
