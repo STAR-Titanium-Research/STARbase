@@ -2,7 +2,7 @@
 // date and who did it. It is an action, not a draft change, so it works in view mode and on phones too; it needs d1-build to be there.
 // The server's refusal (the required fields of a done record) comes back as Checks and is shown in the dialog.
 
-import { computed, ref } from 'vue';
+import { computed, ref, shallowRef } from 'vue';
 import type { Check } from '@d1/ui';
 import type { ContainerNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
@@ -32,12 +32,17 @@ export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
 	const checks = ref<Check[]>([]);
 	const error = ref('');
 
-	const target = computed(() => markTargetOf(map.graph.value?.nodes.find((n) => n.id === map.selectedId.value)));
+	/** The card the rail is on now. */
+	const selectedTarget = computed(() => markTargetOf(map.graph.value?.nodes.find((n) => n.id === map.selectedId.value)));
+	/** The card the dialog was opened for: what is selected may change while it is open (a click on another card), what is marked must not. */
+	const opened = shallowRef<MarkTarget | null>(null);
+	const target = computed(() => (open.value && opened.value ? opened.value : selectedTarget.value));
 	/** The button shows for a planned card, when d1-build is there to do it. */
-	const canMarkDone = computed(() => !!target.value && edit.available.value);
+	const canMarkDone = computed(() => !!selectedTarget.value && edit.available.value);
 
 	function show(): void {
 		if (!canMarkDone.value) return;
+		opened.value = selectedTarget.value;
 		checks.value = [];
 		error.value = '';
 		open.value = true;

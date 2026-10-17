@@ -44,7 +44,7 @@ describe('which card can be marked done', () => {
 	});
 });
 
-async function setup(selected: MapNode | undefined, available = true) {
+async function setup(selected: MapNode | undefined, available = true, extra: MapNode[] = []) {
 	const server = fakeServer();
 	if (!available) server.s.listStatus = 404;
 	const route = reactive({ path: '/map', query: {} as Record<string, unknown> });
@@ -52,8 +52,9 @@ async function setup(selected: MapNode | undefined, available = true) {
 	await settle();
 	await nextTick();
 	const reload = vi.fn();
-	const map = { graph: { value: { nodes: selected ? [selected] : [] } }, selectedId: { value: selected?.id ?? null }, reload } as never;
-	return { ...server, md: useMarkDone({ edit, map }), reload };
+	const selectedId = ref<string | null>(selected?.id ?? null);
+	const map = { graph: { value: { nodes: [...(selected ? [selected] : []), ...extra] } }, selectedId, reload } as never;
+	return { ...server, md: useMarkDone({ edit, map }), reload, selectedId };
 }
 
 describe('Mark done', () => {
@@ -76,6 +77,17 @@ describe('Mark done', () => {
 		expect(md.open.value).toBe(false);
 		expect(reload).toHaveBeenCalled();
 		expect(md.busy.value).toBe(false);
+	});
+
+	it('marks the card the dialog was opened for, even if another card is selected while it is open (E6)', async () => {
+		const other = container({ id: 'op:o2', code: 'MC-2', group: { id: 'op:o2', kind: 'operation', rowIds: ['o2'], batch: null } });
+		const { md, s, selectedId } = await setup(container(), true, [other]);
+		md.show();
+		selectedId.value = 'op:o2';
+		expect(md.target.value?.ids).toEqual(['o1']);
+		await md.confirm({ date: '2026-10-15', personId: null });
+		expect(s.bodies).toEqual([{ collection: 'manufacturing_operations', ids: ['o1'], date: '2026-10-15' }]);
+		expect(md.target.value?.ids).toEqual(['o2']); // closed: the rail's card again
 	});
 
 	it('leaves out the person when none was chosen (the server takes the caller\'s own)', async () => {
