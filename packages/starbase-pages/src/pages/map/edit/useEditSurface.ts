@@ -3,13 +3,14 @@
 // draft item (remove, duplicate, ×N), and the pointer they open at. The page binds what this returns; the rules live in the modules
 // it is made of.
 
-import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
+import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
 import type { DraftItem } from '@d1/ui';
 import type { useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { collectionOf, recordKey } from './checks';
 import { writableValues } from './catalog';
 import { connectTargets, type ConnectEntry, type ConnectNames } from './connectModel';
+import { focusCanvas } from './focusCanvas';
 import { sampleLabel } from './menuModel';
 import { draftKeysOfNode } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
@@ -24,7 +25,7 @@ import { useSamplePicking } from './useSamplePicking';
 type Canvas = ReturnType<typeof useMapCanvas>;
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
-export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null> }) {
+export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; /** Something else the page has open over the map (the Mark done dialog, the Finder): the keys leave it alone. */ blockedBy?: () => boolean }) {
 	const { edit, canvasEl } = o;
 
 	/** The sample picker over the canvas (E7) and the fly-in of what it picks. */
@@ -112,6 +113,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		const item = selectedItem();
 		if (!item) return false;
 		edit.apply({ type: 'remove', key: item.key });
+		// The card that had focus is gone: the keyboard stays on the map.
+		void nextTick().then(() => focusCanvas(canvasEl.value));
 		return true;
 	}
 	/** Duplicate: `n` copies of the selected item (a record that exists is copied from what was read of it: that is "new from"). */
@@ -142,7 +145,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 
 	/** Shift+A, the lid's Add and a right click on empty canvas: the menu with nothing to connect to. */
 	const addUnconnected = (at: { x: number; y: number } = pointerOnCanvas()) => menu.open({ sock: null, at });
-	const blocked = computed(() => !!menu.target.value || !!connecting.value || !!duplicating.value || pickerOpen.value);
+	const blocked = computed(() => !!menu.target.value || !!connecting.value || !!duplicating.value || pickerOpen.value || !!o.blockedBy?.());
 	useEditKeys({
 		editing: () => edit.editing.value,
 		blocked: () => blocked.value,

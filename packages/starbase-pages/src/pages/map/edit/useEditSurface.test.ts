@@ -12,7 +12,7 @@ import { useEditSurface } from './useEditSurface';
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 const card = (id: string): RecordNode => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [] });
 
-async function setup(body: DraftBody, selectedId: string | null) {
+async function setup(body: DraftBody, selectedId: string | null, over: { canvasEl?: HTMLElement | null; blockedBy?: () => boolean } = {}) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -24,7 +24,8 @@ async function setup(body: DraftBody, selectedId: string | null) {
 		edit,
 		map: { graph: { value: { nodes: [] } }, nodes: ref([]), clearHover() {} } as never,
 		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
-		canvasEl: ref(null),
+		canvasEl: ref(over.canvasEl ?? null),
+		blockedBy: over.blockedBy,
 	});
 	return { edit, surface, select: (id: string | null) => void (selected = id ? card(id) : undefined) };
 }
@@ -40,6 +41,16 @@ describe('Delete', () => {
 		expect(edit.body.value.items).toHaveLength(2);
 	});
 
+	it('puts keyboard focus back on the map: the card that had it is gone', async () => {
+		const focus = vi.fn();
+		const canvasEl = { querySelectorAll: () => [], hasAttribute: () => true, setAttribute: () => undefined, focus } as unknown as HTMLElement;
+		const { surface } = await setup(run([{ type: 'addSample' }]), 'draft:n1', { canvasEl });
+		surface.removeSelected();
+		await nextTick();
+		await nextTick();
+		expect(focus).toHaveBeenCalled();
+	});
+
 	it('does nothing when nothing in the draft is selected (a card of the loaded history is not)', async () => {
 		const { edit, surface } = await setup(run([{ type: 'addSample' }]), 'old-sample');
 		expect(surface.removeSelected()).toBe(false);
@@ -50,6 +61,16 @@ describe('Delete', () => {
 		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
 		expect(surface.removeSelected()).toBe(true);
 		expect(edit.body.value.items).toEqual([]);
+	});
+});
+
+describe('what keeps the edit keys quiet', () => {
+	it('is anything else the page has open over the map (the Mark done dialog, the Finder)', async () => {
+		const other = ref(false);
+		const { surface } = await setup(run([]), null, { blockedBy: () => other.value });
+		expect(surface.blocked.value).toBe(false);
+		other.value = true;
+		expect(surface.blocked.value).toBe(true);
 	});
 });
 

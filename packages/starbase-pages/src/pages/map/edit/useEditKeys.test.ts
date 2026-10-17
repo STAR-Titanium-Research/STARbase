@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isTyping, keyDecision, useEditKeys, type EditKeysOptions } from './useEditKeys';
+import { inOverlay, isTyping, keyDecision, useEditKeys, type EditKeysOptions } from './useEditKeys';
 
 const free = { typing: false, blocked: false };
 const d = (e: Parameters<typeof keyDecision>[0]) => keyDecision(e, free);
@@ -48,6 +48,33 @@ describe('edit keys: what each means', () => {
 			expect(keyDecision(e, { typing: true, blocked: false })).toBeNull();
 			expect(keyDecision(e, { typing: false, blocked: true })).toBeNull();
 		}
+	});
+});
+
+describe('keys that are not the canvas\'s', () => {
+	const keys = [{ key: 'A', shiftKey: true }, { key: 'Delete' }, { key: 'z', ctrlKey: true }];
+	it('are ignored inside a dialog, listbox or menu, and when something already handled them', () => {
+		for (const e of keys) {
+			expect(keyDecision(e, { typing: false, blocked: false, inOverlay: true })).toBeNull();
+			expect(keyDecision({ ...e, defaultPrevented: true }, free)).toBeNull();
+		}
+	});
+
+	it('finds the overlay a key was pressed in, and not the canvas', () => {
+		const inside = (hit: boolean) => ({ closest: (sel: string) => (hit && sel.includes('[role="dialog"]') && sel.includes('[role="listbox"]') && sel.includes('[role="menu"]') ? {} : null) });
+		expect(inOverlay(inside(true))).toBe(true);
+		expect(inOverlay(inside(false))).toBe(false);
+		expect(inOverlay({})).toBe(false);
+		expect(inOverlay(null)).toBe(false);
+	});
+
+	it('are left alone by the handler when pressed inside one', () => {
+		const calls: string[] = [];
+		const { onKeydown } = useEditKeys({ editing: () => true, blocked: () => false, pointer: () => ({ x: 0, y: 0 }), add: () => void calls.push('add'), undo: () => undefined, redo: () => undefined, remove: () => (calls.push('remove'), true), duplicate: () => true, duplicateMany: () => true });
+		const e = { key: 'Delete', target: { tagName: 'LI', closest: () => ({}) }, preventDefault: vi.fn() } as unknown as KeyboardEvent;
+		onKeydown(e);
+		expect(calls).toEqual([]);
+		expect(e.preventDefault).not.toHaveBeenCalled();
 	});
 });
 

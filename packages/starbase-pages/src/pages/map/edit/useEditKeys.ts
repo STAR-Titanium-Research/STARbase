@@ -7,7 +7,8 @@
 //   Ctrl/⌘+Z                       undo; Ctrl/⌘+Shift+Z (or Ctrl+Y) redo
 //
 // (Enter on a focused socket opens its menu and C on one opens "Connect to…": those are the socket's own keys, useEditCanvas.)
-// Keys are ignored while the person types in a field, while a menu or the sample picker is open, and with a modifier they do not name.
+// Keys are ignored while the person types in a field, while a menu, dialog or the sample picker is open (or the key is pressed inside
+// one: the rail's pickers are listboxes), when something already handled the key, and with a modifier they do not name.
 // A key that has nothing to act on (Delete with nothing selected) is left to the browser.
 
 import { getCurrentInstance, onBeforeUnmount, onMounted } from 'vue';
@@ -20,17 +21,21 @@ export interface KeyEvent {
 	metaKey?: boolean;
 	altKey?: boolean;
 	shiftKey?: boolean;
+	/** Something (a menu, a field) already used the key. */
+	defaultPrevented?: boolean;
 }
 
 export interface KeyState {
 	/** A text field (or a select, or something editable) has focus: it takes the key. */
 	typing: boolean;
-	/** A menu, dialog or the sample picker is open: they have their own keys. */
+	/** A menu, dialog, the Finder or the sample picker is open: they have their own keys. */
 	blocked: boolean;
+	/** The key was pressed inside a dialog, listbox or menu (the rail's own pickers among them): it is theirs. */
+	inOverlay?: boolean;
 }
 
 export function keyDecision(e: KeyEvent, s: KeyState): EditKeyAction | null {
-	if (s.typing || s.blocked || e.altKey) return null;
+	if (s.typing || s.blocked || s.inOverlay || e.defaultPrevented || e.altKey) return null;
 	const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 	if (e.ctrlKey || e.metaKey) {
 		if (key === 'z') return e.shiftKey ? { do: 'redo' } : { do: 'undo' };
@@ -54,6 +59,12 @@ export function isTyping(target: unknown): boolean {
 	return tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable === true;
 }
 
+/** True when `target` is inside something that has its own keys: a dialog, a listbox or a menu. */
+export function inOverlay(target: unknown): boolean {
+	const el = target as { closest?: (selector: string) => unknown } | null;
+	return typeof el?.closest === 'function' && !!el.closest('[role="dialog"], [role="listbox"], [role="menu"]');
+}
+
 export interface EditKeysOptions {
 	/** Keys are live only while a draft can be changed. */
 	editing: () => boolean;
@@ -73,7 +84,7 @@ export interface EditKeysOptions {
 export function useEditKeys(o: EditKeysOptions) {
 	function onKeydown(e: KeyboardEvent): void {
 		if (!o.editing()) return;
-		const d = keyDecision(e, { typing: isTyping(e.target), blocked: o.blocked() });
+		const d = keyDecision(e, { typing: isTyping(e.target), blocked: o.blocked(), inOverlay: inOverlay(e.target) });
 		if (!d) return;
 		let handled = true;
 		switch (d.do) {

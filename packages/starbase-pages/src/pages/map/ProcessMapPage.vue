@@ -67,7 +67,7 @@ const canvas = useMapCanvas(map, canvasEditOf(edit));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
 /** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */
-const side = useEditSide({ host, edit, map, canvas, canvasEl });
+const side = useEditSide({ host, edit, map, canvas, canvasEl, finderOpen: () => finderOpen.value });
 const { build, create, markDone } = side;
 const pointerKind = createPointerKind();
 
