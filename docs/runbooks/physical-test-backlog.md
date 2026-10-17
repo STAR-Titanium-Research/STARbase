@@ -1241,6 +1241,18 @@ migration 141 prints about ownerless records.
   cut: **Mark done** is in the rail, asks the date and who, marks all 4 rows in one request and the map reloads with
   solid cards. Open `/map?edit=new` on a server where `d1-build` is not deployed: the panel says "Building processes
   isn't available on this server yet." and the map still works. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-5 — Edit mode in a real browser: typing, zoom, focus, lost connection.** On a real sample's map in edit
+  mode: (a) type a long value into a field of a new operation's rail form: the map does not re-lay out or flicker while
+  you type (cards keep their places), and a value that makes the card taller (a long note shown in the card) makes room
+  once you pause. (b) Zoom the map out to about 50 % and use **Pick samples**: the cards still fly in from their rows (not
+  from far off). (c) Create, with a screen reader or just Tab: focus lands on the toast (its labels link), the toast stays
+  while the map reloads, and Dismiss puts focus back on a card. (d) Delete a draft card with the keyboard: focus stays on
+  the map. (e) With the Mark done dialog or the Finder (Ctrl+K) open, Delete, Shift+A and Ctrl+Z do nothing to the draft.
+  (f) Turn the network off (DevTools offline) after a change, press **Done editing**: you stay in edit mode and the page
+  says "Your last changes are not kept yet"; turn it on and **Done editing** again leaves, with the change kept (see it in
+  My drafts). Press Space on a free socket button and on a wired socket: the menu opens each time. A card with only a
+  warning (no machine yet) wears an amber badge, a card with a blocking check a red one. Since: Process map edit mode,
+  stream D1 review fixes (PR pending).
 
 #### Process map edit mode, server side (migrations 189 and 190, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
 
