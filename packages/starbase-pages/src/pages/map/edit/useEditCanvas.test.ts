@@ -252,6 +252,11 @@ describe('a wire from a sample of the loaded history', () => {
 		expect(item?.existing).toEqual({ id: 's1', version: 4 });
 		expect(edit.body.value.projectId).toBe('proj1');
 		expect(edit.body.value.wires).toEqual([{ from: { key: item!.key }, to: { key: 'n2', row: 0 } }]);
+		// The sample, its project and the wire are one undo step: one Ctrl+Z takes them all back.
+		edit.undo();
+		expect(edit.body.value.items.map((i) => i.key)).toEqual(['n1', 'n2']);
+		expect(edit.body.value.wires).toEqual([]);
+		expect(edit.body.value.projectId).toBeNull();
 	});
 
 	it('says so when the sample cannot be read, and changes nothing', async () => {

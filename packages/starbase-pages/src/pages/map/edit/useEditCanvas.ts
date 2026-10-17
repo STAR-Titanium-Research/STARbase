@@ -74,8 +74,11 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 	// ---- cards of the draft ---------------------------------------------------------------------------
 	const nodeById = (id: string | undefined): MapNode | undefined => (id ? map.graph.value?.nodes.find((n) => n.id === id) : undefined);
 
-	/** A sample of the loaded history becomes an item of the draft (with the version it was read at), so a wire can start from it. */
-	async function ensureSample(recordId: string): Promise<boolean> {
+	/**
+	 * A sample of the loaded history becomes an item of the draft (with the version it was read at), so a wire can start from it.
+	 * `merge`: it joins the step before it in the undo history (a second sample, or the wire that needed it) instead of being its own.
+	 */
+	async function ensureSample(recordId: string, opts: { merge?: boolean } = {}): Promise<boolean> {
 		if (sampleItemOf(edit.body.value, recordId)) return true;
 		let read;
 		try {
@@ -91,17 +94,23 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 		edit.apply([
 			{ type: 'addExistingSamples', samples: [{ id: recordId, version: read.version }] },
 			...(!edit.body.value.projectId && read.sample.projectId ? [{ type: 'setProject' as const, projectId: read.sample.projectId }] : []),
-		]);
+		], { merge: opts.merge });
 		return !!sampleItemOf(edit.body.value, recordId);
 	}
 
-	/** Makes the wire a verdict stands for: adds the samples it needs to the draft first. */
+	/** Makes the wire a verdict stands for: adds the samples it needs to the draft first; the samples and the wire are one undo step. */
 	async function connect(v: DropVerdict, anchor?: string): Promise<boolean> {
-		for (const s of [v.from, v.to]) if (s?.kind === 'sample' && !(await ensureSample(s.id))) return false;
+		let folded = false;
+		for (const s of [v.from, v.to]) {
+			if (s?.kind !== 'sample') continue;
+			const had = !!sampleItemOf(edit.body.value, s.id);
+			if (!(await ensureSample(s.id, { merge: folded }))) return false;
+			if (!had) folded = true;
+		}
 		const wire = wireOf(edit.body.value, v);
 		if (!wire) return false;
 		const before = edit.body.value;
-		edit.apply({ type: 'wire', ...wire }, { anchor });
+		edit.apply({ type: 'wire', ...wire }, { anchor, merge: folded });
 		return edit.body.value !== before;
 	}
 

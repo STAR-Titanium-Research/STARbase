@@ -223,13 +223,14 @@ export function useEditMode(o: EditModeOptions) {
 
 	/** Keys typed in one field of one item within this long are one undo step. */
 	const TYPING_MS = 1500;
-	let typing: { key: DraftKey; at: number } | null = null;
-	/** The form's change of an item's values: successive changes to the same item are folded into one step while the person types. */
+	let typing: { key: DraftKey; fields: string; at: number } | null = null;
+	/** The form's change of an item's values: successive changes to the same field of the same item are folded into one step while the person types. */
 	function setValues(key: DraftKey, values: Record<string, unknown>): void {
 		const now = Date.now();
-		const merge = !!typing && typing.key === key && now - typing.at < TYPING_MS;
+		const fields = Object.keys(values).sort().join(',');
+		const merge = !!typing && typing.key === key && typing.fields === fields && now - typing.at < TYPING_MS;
 		apply({ type: 'setValues', key, values }, { merge });
-		typing = { key, at: now };
+		typing = { key, fields, at: now };
 	}
 	function undo(): void {
 		if (!editing.value) return;

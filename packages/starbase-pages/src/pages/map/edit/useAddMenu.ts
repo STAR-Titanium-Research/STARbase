@@ -15,7 +15,7 @@ export function useAddMenu(o: {
 	edit: EditMode;
 	canvas: Pick<Canvas, 'toFlow'>;
 	canvasEl: Ref<HTMLElement | null>;
-	ensureSample: (recordId: string) => Promise<boolean>;
+	ensureSample: (recordId: string, opts?: { merge?: boolean }) => Promise<boolean>;
 	/** The sample picker over the canvas. */
 	pickSamples: () => void;
 	/** "Connect to…" for the socket the menu was opened on. */
@@ -50,10 +50,17 @@ export function useAddMenu(o: {
 		if (choice.kind === 'pickSamples') return o.pickSamples();
 		if (choice.kind === 'connectTo') return void o.connect(t);
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
-		if (t.sock?.kind === 'sample' && !sampleItemOf(o.edit.body.value, t.sock.id) && !(await o.ensureSample(t.sock.id))) return;
+		// The samples it adds and the choice made on them are one undo step.
+		let folded = false;
+		if (t.sock?.kind === 'sample' && !sampleItemOf(o.edit.body.value, t.sock.id)) {
+			if (!(await o.ensureSample(t.sock.id))) return;
+			folded = true;
+		}
 		let resolved = choice;
 		if (choice.kind === 'record') {
-			if (!(await o.ensureSample(choice.id))) return;
+			const had = !!sampleItemOf(o.edit.body.value, choice.id);
+			if (!(await o.ensureSample(choice.id, { merge: folded }))) return;
+			if (!had) folded = true;
 			const key = sampleItemOf(o.edit.body.value, choice.id)?.key;
 			if (!key) return;
 			resolved = { kind: 'wireSample', key };
@@ -61,7 +68,7 @@ export function useAddMenu(o: {
 		const body = o.edit.body.value;
 		const f = menuFor(body, t.sock);
 		const actions = actionsFor({ body, end: t.sock ? resolveEnd(body, t.sock) : null, side: f.side, card: f.card, at: t.flow }, resolved);
-		if (actions.length) o.edit.apply(actions, { anchor: t.anchor });
+		if (actions.length) o.edit.apply(actions, { anchor: t.anchor, merge: folded });
 	}
 
 	return { target, open, close, choose };

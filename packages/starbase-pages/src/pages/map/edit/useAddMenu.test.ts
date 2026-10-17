@@ -85,6 +85,19 @@ describe('the Add menu\'s state', () => {
 		const sample = edit.body.value.items.find((i) => i.kind === 'sample');
 		expect(sample?.existing).toEqual({ id: 's1', version: 4 });
 		expect(edit.body.value.wires).toEqual([{ from: { key: sample!.key }, to: { key: 'n1', row: 0 } }]);
+		// The sample and its wire are one undo step.
+		edit.undo();
+		expect(edit.body.value.items.map((i) => i.kind)).toEqual(['operation']);
+		expect(edit.body.value.wires).toEqual([]);
+	});
+
+	it('a menu choice on a sample of the loaded history is one undo step with the sample it adds', async () => {
+		const { menu, edit } = await setup();
+		menu.open({ sock: { kind: 'sample', id: 's1', side: 'out' }, at: { x: 300, y: 200 }, anchor: 'card' });
+		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
+		expect(edit.body.value.items.map((i) => i.kind).sort()).toEqual(['operation', 'sample']);
+		edit.undo();
+		expect(edit.body.value.items).toHaveLength(0);
 	});
 
 	it('a choice made after the menu closed does nothing', async () => {

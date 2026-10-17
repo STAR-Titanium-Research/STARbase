@@ -318,6 +318,23 @@ describe('useEditMode: typing in a form', () => {
 	});
 });
 
+describe('useEditMode: typing in two fields of one item', () => {
+	it('is one undo step per field, as useDraft documents', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'disc' });
+		edit.setValues('n1', { notes: 'a' });
+		edit.setValues('n1', { notes: 'ab' });
+		edit.undo(); // the notes
+		expect(edit.body.value.items[0].values.notes).toBeUndefined();
+		expect(edit.body.value.items[0].values.form).toBe('disc');
+		edit.undo(); // the form
+		expect(edit.body.value.items[0].values.form).toBeUndefined();
+	});
+});
+
 describe('useEditMode: the draft on the map', () => {
 	it('merges the draft into the loaded data, and keeps its cards drawn', async () => {
 		const { edit } = setup({ edit: 'new' });
