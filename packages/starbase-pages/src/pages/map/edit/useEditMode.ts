@@ -251,14 +251,28 @@ export function useEditMode(o: EditModeOptions) {
 		(on) => on && void catalog.ensure(),
 		{ immediate: true },
 	);
+	const unreadable = new Set<string>();
+	watch(
+		() => draft.draftId.value,
+		() => {
+			unreadable.clear();
+			catalog.forgetFailed();
+		},
+	);
 	// The existing records of the draft (its samples with their cards, the rest with their versions) and the materials its codes are made of.
 	watch(
 		() => draft.body.value.items,
 		(items) => {
 			if (!drafted.value) return;
 			const want = catalog.existingIds(items);
-			const unknown = want.physical_samples.filter((id) => !catalog.samples.has(id));
-			if (unknown.length) void catalog.loadSamples(unknown).catch(() => undefined);
+			const unknown = want.physical_samples.filter((id) => !catalog.samples.has(id) && !unreadable.has(id));
+			// A sample that could not be read is not asked for again on every change of the draft (opening another draft tries again).
+			if (unknown.length) {
+				void catalog
+					.loadSamples(unknown)
+					.then((read) => unknown.forEach((id) => read.has(id) || unreadable.add(id)))
+					.catch(() => unknown.forEach((id) => unreadable.add(id)));
+			}
 			void catalog.loadRecords({ ...want, physical_samples: [] });
 			void catalog.ensureMaterials(items.map((i) => i.values.material_id).filter((v): v is string => typeof v === 'string'));
 		},

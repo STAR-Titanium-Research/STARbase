@@ -77,12 +77,18 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 		return pages.flatMap((p) => (p.data?.data ?? []) as Row[]);
 	}
 
+	/** Records being read, and records whose read failed: neither is asked for again on every change of the draft (`forgetFailed` allows a retry). */
+	const readingRecords = new Set<string>();
+	const failedRecords = new Set<string>();
+	const forgetFailed = (): void => failedRecords.clear();
+
 	/** Reads the existing records of a draft (version and fields): what its checks and its stale warnings are made of. */
 	async function loadRecords(want: Record<CheckCollection, string[]>): Promise<void> {
 		await Promise.all(
 			COLLECTIONS.map(async (c) => {
-				const ids = want[c].filter((id) => !records.has(recordKey(c, id)));
+				const ids = want[c].filter((id) => ![records.has(recordKey(c, id)), readingRecords.has(recordKey(c, id)), failedRecords.has(recordKey(c, id))].some(Boolean));
 				if (!ids.length) return;
+				for (const id of ids) readingRecords.add(recordKey(c, id));
 				try {
 					const rows = await readRows(c, ids, ['*']);
 					const seen = new Set<string>();
@@ -95,15 +101,36 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 					for (const id of ids) if (!seen.has(id)) records.set(recordKey(c, id), null);
 				} catch {
 					/* unknown: the server's check tells */
+					for (const id of ids) failedRecords.add(recordKey(c, id));
+				} finally {
+					for (const id of ids) readingRecords.delete(recordKey(c, id));
 				}
 			}),
 		);
 	}
 
+	type SampleRead = Map<string, { sample: SampleRec; version: number; values: Row }>;
+	/** Samples being read, by id, with the read that has them: a second ask for one waits for that read instead of making its own. */
+	const readingSamples = new Map<string, Promise<SampleRead>>();
+
 	/** Reads picked samples: their card data (for the map) and their version (for the draft). Returns what was read, by id. */
-	async function loadSamples(ids: string[]): Promise<Map<string, { sample: SampleRec; version: number; values: Row }>> {
-		const out = new Map<string, { sample: SampleRec; version: number; values: Row }>();
+	async function loadSamples(ids: string[]): Promise<SampleRead> {
+		const out: SampleRead = new Map();
 		if (!ids.length) return out;
+		const fresh = [...new Set(ids)].filter((id) => !readingSamples.has(id));
+		if (fresh.length) {
+			const read = readSamples(fresh);
+			const done = () => void fresh.forEach((id) => readingSamples.delete(id));
+			read.then(done, done);
+			for (const id of fresh) readingSamples.set(id, read);
+		}
+		for (const read of new Set(ids.map((id) => readingSamples.get(id)).filter((r): r is Promise<SampleRead> => !!r))) {
+			for (const [id, got] of await read) if (ids.includes(id)) out.set(id, got);
+		}
+		return out;
+	}
+	async function readSamples(ids: string[]): Promise<SampleRead> {
+		const out: SampleRead = new Map();
 		// The card's fields (with the material and project expanded) and the whole record: the form edits the record, the card draws it.
 		const rows = await readRows('physical_samples', ids, ['*', ...SAMPLE_FIELDS, 'version']);
 		for (const row of rows) {
@@ -163,7 +190,7 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 
 	return {
 		methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
-		ensure, loadRecords, loadSamples, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
+		ensure, loadRecords, loadSamples, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};
 }

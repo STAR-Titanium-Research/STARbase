@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref, type Ref } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import type { MapNode } from '../model/types';
-import { emptyBody } from './draft';
+import { apply, emptyBody } from './draft';
 import { fakeServer, httpError } from './fakeBuildServer';
 import { NOT_KEPT, PHONE_NEW, UNAVAILABLE, isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
 
@@ -332,6 +332,25 @@ describe('useEditMode: typing in two fields of one item', () => {
 		expect(edit.body.value.items[0].values.form).toBe('disc');
 		edit.undo(); // the form
 		expect(edit.body.value.items[0].values.form).toBeUndefined();
+	});
+});
+
+describe('useEditMode: reading what the draft holds', () => {
+	it('does not ask again for a sample that could not be read, on every change of the draft', async () => {
+		const server = fakeServer();
+		const body = [{ type: 'addExistingSamples' as const, samples: [{ id: 'nope', version: 1 }] }].reduce((b, a) => apply(b, a), emptyBody());
+		server.s.seed('d', body);
+		const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace: vi.fn() }, isPhone: ref(false), focus: () => null });
+		await flush();
+		const asks = () => server.s.calls.filter((c) => c === 'GET /items/physical_samples').length;
+		const first = asks();
+		expect(first).toBe(1);
+		for (let i = 0; i < 3; i++) {
+			edit.apply({ type: 'addSample' });
+			await flush();
+		}
+		expect(asks()).toBe(first);
 	});
 });
 
