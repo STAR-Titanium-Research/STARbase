@@ -17,6 +17,8 @@ const uid = useId();
 const query = ref('');
 const active = ref(0);
 const shown = computed(() => filterConnect(props.entries, query.value));
+/** What the list has to say instead of entries (and what the status region announces); empty while there are some. */
+const message = computed(() => (!props.entries.length ? 'Nothing on the canvas can be connected to this socket.' : !shown.value.length ? 'Nothing fits what you typed.' : ''));
 watch(shown, () => void (active.value = 0));
 const optionId = (i: number) => `${uid}-opt-${i}`;
 
@@ -89,9 +91,9 @@ onBeforeUnmount(() => {
 					<span class="lab">{{ e.label }}</span>
 					<span class="det">{{ e.detail }}</span>
 				</button>
-				<p v-if="!entries.length" class="none" role="status">Nothing on the canvas can be connected to this socket.</p>
-				<p v-else-if="!shown.length" class="none" role="status">Nothing fits what you typed.</p>
 			</div>
+			<!-- One status region, always mounted: a live region that appears together with its text is often not announced. -->
+			<p class="none" :class="{ empty: !message }" role="status" aria-live="polite" aria-atomic="true">{{ message }}</p>
 		</div>
 	</div>
 </template>
@@ -125,4 +127,5 @@ onBeforeUnmount(() => {
 .lab { font-weight: 600; }
 .det { margin-left: auto; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .none { margin: 0; padding: 10px 8px; color: var(--d1-dim); }
+.none.empty { padding: 0; }
 </style>

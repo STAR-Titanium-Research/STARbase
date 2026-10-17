@@ -63,6 +63,14 @@ const all = computed<MenuEntry[]>(() => {
 });
 // The search of the database is the server's: its rows are not filtered again by the same words.
 const entries = computed(() => (mode.value === 'records' ? all.value : filterEntries(all.value, query.value)));
+/** What the list has to say instead of entries (and what the status region announces); empty while there are some. */
+const message = computed(() => {
+	if (mode.value === 'records' && query.value.trim().length < 2) return 'Type at least two letters of the code.';
+	if (mode.value === 'records' && searching.value) return 'Searching…';
+	if (searchFailed.value) return 'The search failed. Try again.';
+	if (!entries.value.length) return mode.value === 'root' ? 'Nothing fits what you typed.' : mode.value === 'canvas' ? 'No samples on the canvas.' : 'No samples found.';
+	return '';
+});
 watch(entries, (list) => void (active.value = firstChoosable(list)), { immediate: true });
 
 /** The entries with a header before each new section. */
@@ -181,11 +189,9 @@ onBeforeUnmount(() => {
 						<span v-if="r.e.disabled" class="why">{{ r.e.disabled }}</span>
 					</button>
 				</template>
-				<p v-if="mode === 'records' && query.trim().length < 2" class="none">Type at least two letters of the code.</p>
-				<p v-else-if="mode === 'records' && searching" class="none" role="status">Searching…</p>
-				<p v-else-if="searchFailed" class="none bad" role="alert">The search failed. Try again.</p>
-				<p v-else-if="!entries.length" class="none" role="status">{{ mode === 'root' ? 'Nothing fits what you typed.' : mode === 'canvas' ? 'No samples on the canvas.' : 'No samples found.' }}</p>
 			</div>
+			<!-- One status region, always mounted: a live region that appears together with its text is often not announced. -->
+			<p class="none" :class="{ bad: searchFailed && !searching, empty: !message }" role="status" aria-live="polite" aria-atomic="true">{{ message }}</p>
 		</div>
 	</div>
 </template>
@@ -229,4 +235,5 @@ onBeforeUnmount(() => {
 .why { flex-basis: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .none { margin: 0; padding: 10px 8px; color: var(--d1-dim); }
 .none.bad { color: var(--d1-bad); }
+.none.empty { padding: 0; }
 </style>

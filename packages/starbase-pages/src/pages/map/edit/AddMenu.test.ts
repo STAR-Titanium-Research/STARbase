@@ -33,6 +33,12 @@ describe('AddMenu', () => {
 		expect(t).not.toContain('Pick samples');
 	});
 
+	it('has one status region, always mounted: empty while there are entries', async () => {
+		const html = await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } });
+		expect(html).toMatch(/<p class="(?:none empty|empty none)" role="status" aria-live="polite" aria-atomic="true"[^>]*><\/p>/);
+		expect(html).not.toContain('role="alert"');
+	});
+
 	it('marks the first entry as the one Enter takes', async () => {
 		const html = await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } });
 		expect(html).toMatch(/id="[^"]*-opt-0"[^>]*aria-selected="true"/);

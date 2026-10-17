@@ -33,6 +33,22 @@ describe('ConnectTo', () => {
 	});
 });
 
+describe('one status region, always mounted', () => {
+	const region = /<p class="[^"]*" role="status" aria-live="polite" aria-atomic="true"[^>]*>([^<]*)<\/p>/;
+	it('ConnectTo: empty while there are entries, the message when there are none', async () => {
+		const entries = [{ id: 'e1', label: 'Turning', detail: '', sock: { kind: 'row' as const, id: 'draft:n3', side: 'in' as const } }];
+		const withEntries = await render(ConnectTo, { entries, from: 'PS-001', at: { x: 0, y: 0 } });
+		expect(withEntries.match(region)?.[1]).toBe('');
+		const none = await render(ConnectTo, { entries: [], from: 'PS-001', at: { x: 0, y: 0 } });
+		expect(none.match(region)?.[1]).toMatch(/Nothing on the canvas/);
+	});
+
+	it('DuplicatePrompt: there, and empty while the number is good', async () => {
+		const html = await render(DuplicatePrompt, { what: 'this sample' });
+		expect(html).toMatch(/<p class="bad" role="status" aria-live="polite" aria-atomic="true"[^>]*><\/p>/);
+	});
+});
+
 describe('DuplicatePrompt', () => {
 	it('asks how many, starting at 2, with Cancel and Duplicate', async () => {
 		const html = await render(DuplicatePrompt, { what: 'this sample' });

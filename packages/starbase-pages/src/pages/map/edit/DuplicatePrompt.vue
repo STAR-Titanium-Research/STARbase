@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { enterConfirms } from './dialogKeys';
 
 // "Duplicate ×N" (spec E10): a small prompt for how many copies. Enter makes them, Esc leaves it. Between 1 and 99, as the reducer allows.
 defineProps<{ /** What is being copied, for the title. */ what: string }>();
@@ -21,7 +22,7 @@ function onKey(e: KeyboardEvent) {
 		e.preventDefault();
 		e.stopPropagation();
 		emit('close');
-	} else if (e.key === 'Enter') {
+	} else if (e.key === 'Enter' && enterConfirms(e.target)) {
 		e.preventDefault();
 		ok();
 	}
@@ -44,7 +45,8 @@ onBeforeUnmount(() => {
 				<span class="x" aria-hidden="true">×</span>
 				<input id="pm-dup-n" ref="input" v-model="text" type="number" min="1" max="99" step="1" inputmode="numeric" :aria-invalid="parsed() === null" />
 			</div>
-			<p v-if="parsed() === null" class="bad" role="alert">A whole number from 1 to 99.</p>
+			<!-- Always mounted, so a screen reader announces the text when it appears. -->
+			<p class="bad" role="status" aria-live="polite" aria-atomic="true">{{ parsed() === null ? 'A whole number from 1 to 99.' : '' }}</p>
 			<div class="btns">
 				<v-button small secondary @click="emit('close')">Cancel</v-button>
 				<v-button small :disabled="parsed() === null" @click="ok">Duplicate</v-button>
