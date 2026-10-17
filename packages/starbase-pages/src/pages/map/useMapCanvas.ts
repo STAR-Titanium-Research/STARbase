@@ -12,6 +12,7 @@ import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
 import { reslot } from './model/reslot';
 import { shownNodes } from './model/reach';
+import { structureKey } from './model/structureKey';
 import { socketOrder } from './model/socketOrder';
 import type { MapNode } from './model/types';
 import ContainerNode from './nodes/ContainerNode.vue';
@@ -65,6 +66,8 @@ export function miniMapColor(node: { data?: MapNode }): string {
 
 /** What edit mode asks of the canvas (spec §7.2): where the draft says its cards are, and being told when one is moved. */
 export interface CanvasEdit {
+  /** The draft is on the map: a change that only alters what cards say is patched in place, with no new layout unless a card changed size. */
+  active?(): boolean;
   /** Where the draft keeps a card (flow coordinates), when the person placed it; layout leaves such cards there. */
   positionOf(node: MapNode): { x: number; y: number } | undefined;
   /** A card was dragged and dropped. */
@@ -202,6 +205,49 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
       if (e.class !== cls) e.class = cls;
     }
   }
+
+  /**
+   * Edit mode, a change that left the cards, sockets and wires as they were (a value typed into the form): the cards' data is replaced
+   * where it is. Vue Flow keeps its nodes, so nothing is measured again and ELK does not run, unless a card changed size (settleSizes).
+   */
+  function patchInPlace(): void {
+    const { nodes, edges } = elements();
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    for (const n of vf.getNodes.value) {
+      const next = byId.get(n.id);
+      if (!next) continue;
+      n.data = next.data;
+      n.ariaLabel = next.ariaLabel;
+    }
+    const wires = new Map(edges.map((e) => [e.id, e]));
+    for (const e of vf.getEdges.value) {
+      const next = wires.get(e.id);
+      if (next) e.data = next.data;
+    }
+  }
+  /** Typing makes a burst of patches: the sizes are looked at once, when it pauses. */
+  const SIZE_CHECK_MS = 150;
+  let sizeTimer: ReturnType<typeof setTimeout> | null = null;
+  function settleSizes(): void {
+    if (sizeTimer) clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => void checkSizes(), SIZE_CHECK_MS);
+  }
+  async function checkSizes(): Promise<void> {
+    sizeTimer = null;
+    if (busy()) return settleSizes(); // a layout is on its way: look again when it is done
+    const ids = vf.getNodes.value.map((n) => n.id);
+    if (!ids.length) return;
+    await nextTick();
+    vf.updateNodeInternals(ids);
+    await nextTick();
+    const changed = vf.getNodes.value.some((n) => {
+      const size = measuredSize(n);
+      const was = placed.get(n.id);
+      return !!size && !!was && (Math.abs(size.width - was.width) > 1 || Math.abs(size.height - was.height) > 1);
+    });
+    if (changed) await reflow();
+  }
+  if (getCurrentScope()) onScopeDispose(() => sizeTimer && clearTimeout(sizeTimer));
 
   function rebuild(): void {
     const { nodes, edges } = elements();
@@ -513,10 +559,19 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     return next ? { ...hint, anchor: next.id, from: hint.anchor } : hint;
   }
   let lastDir = map.dir.value;
+  let lastShape = '';
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
     const hints = map.takeMergeHints();
+    const shape = edit?.active?.() ? structureKey(map.nodes.value, map.graph.value?.wires ?? []) : '';
+    const same = !!shape && shape === lastShape;
+    lastShape = shape;
+    if (same && !turned && placed.size && vf.getNodes.value.length === map.nodes.value.length) {
+      patchInPlace();
+      settleSizes();
+      return;
+    }
     if (turned) dragged.clear();
     const merges = turned || !placed.size ? null : hints.map(reanchored);
     merging = merges?.find((m) => m.anchor) ?? null;

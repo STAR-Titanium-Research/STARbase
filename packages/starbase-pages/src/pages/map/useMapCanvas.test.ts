@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { effectScope, nextTick, reactive, type ShallowRef } from 'vue';
+import { effectScope, nextTick, reactive, ref, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
@@ -968,5 +968,60 @@ describe('useMapCanvas: edit mode', () => {
     await open();
     dropOn('op:u1', { x: 1, y: 2 });
     expect(at('op:u1')).toBeDefined();
+  });
+});
+
+describe('useMapCanvas: edit mode does not lay out again for what a card says', () => {
+  const code = ref('OP-1');
+  const overlay = {
+    active: () => true,
+    blank: () => false,
+    keep: () => false,
+    merge: (d: ProcessData | null) => ({ ...d!, operations: d!.operations.map((o) => ({ ...o, code: code.value })) }),
+  };
+  let scope = effectScope();
+  afterEach(() => scope.stop());
+  async function openOverlay() {
+    scope = effectScope();
+    code.value = 'OP-1';
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const { map, canvas } = scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      return { map, canvas: useMapCanvas(map, { active: () => true, positionOf: () => undefined, moved: () => undefined, relaid: () => undefined }) };
+    })!;
+    await settle();
+    return { map, canvas };
+  }
+  const container = () => nodesOf().find((n) => (n.data as { type?: string }).type === 'container')!;
+
+  it('patches the card in place: the same nodes, the new words, no layout', async () => {
+    await openOverlay();
+    const before = container();
+    const layouts = store.layouts;
+    code.value = 'OP-1x';
+    await settle();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(container()).toBe(before);
+    expect((container().data as ContainerData).code).toBe('OP-1x');
+    expect(store.layouts).toBe(layouts);
+  });
+
+  it('lays out again, once, when the card changed size, after the typing pauses', async () => {
+    await openOverlay();
+    const layouts = store.layouts;
+    store.tall.set(container().id, 320);
+    for (let i = 0; i < 5; i++) {
+      code.value = `OP-${i}`;
+      await settle();
+    }
+    expect(store.layouts).toBe(layouts); // typing: nothing yet
+    await new Promise((r) => setTimeout(r, 300));
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
   });
 });

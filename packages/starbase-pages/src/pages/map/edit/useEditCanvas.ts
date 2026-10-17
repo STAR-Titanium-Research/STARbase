@@ -28,6 +28,7 @@ export const CLICK_SLOP = 4;
 export function canvasEditOf(edit: EditMode): CanvasEdit {
 	const keyOf = (n: MapNode): DraftKey | undefined => draftKeysOfNode(edit.body.value, n)[0];
 	return {
+		active: () => edit.drafted.value,
 		positionOf: (n) => (edit.editing.value ? (edit.body.value.positions[keyOf(n) ?? ''] ?? undefined) : undefined),
 		moved: (n, at) => {
 			const key = keyOf(n);
