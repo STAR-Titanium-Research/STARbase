@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -53,7 +53,8 @@ vi.mock('@vue-flow/core', async (orig) => {
       }
     },
     // A node that is not collapsed is as tall as its rows: the test's stand-in for measuring.
-    updateNodeInternals: () => {
+    updateNodeInternals: (ids?: string[]) => {
+      store.internals.push(ids);
       for (const n of nodes.value) {
         const d = n.data as { type?: string; collapsed?: boolean } | undefined;
         n.dimensions = { width: 310, height: store.tall.get(n.id) ?? (d?.type === 'container' && !d.collapsed ? 200 : 40) };
@@ -149,6 +150,7 @@ beforeEach(() => {
   store.elk = null;
   store.moves.length = 0;
   store.selects.length = 0;
+  store.internals.length = 0;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -982,6 +984,38 @@ describe('useMapCanvas: the selected card is the page\'s, never Vue Flow\'s', ()
     await settle();
     expect(map.selectedId.value).toBe('op:u1');
     expect(store.selects.filter((c) => c.selected)).toEqual([]);
+  });
+});
+
+describe('useMapCanvas: a selection moves sockets, so Vue Flow measures them again (R5)', () => {
+  // In edit mode the selected card draws its free socket and the others on that side move along the edge; Vue Flow only knows where a socket is
+  // when it is told, so a wire kept its old end (found in a real browser: the wires of a selected operation hung 8 px off its sockets).
+  const hooks: CanvasEdit = { active: () => true, positionOf: () => undefined, moved: () => undefined, relaid: () => undefined };
+  const measured = () => store.internals.flatMap((ids) => ids ?? ['(all)']);
+  it('selecting a card, and the card it leaves, are measured again; the others are not', async () => {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    useMapCanvas(map, hooks);
+    await settle();
+    store.internals.length = 0;
+    map.select('op:u1');
+    await settle();
+    expect(measured()).toContain('op:u1');
+    store.internals.length = 0;
+    map.select('op:u2');
+    await settle();
+    expect(measured()).toEqual(expect.arrayContaining(['op:u1', 'op:u2']));
+    expect(measured()).not.toContain('op:u3');
+  });
+
+  it('is not needed outside edit mode: no socket moves when a card is selected', async () => {
+    const { map } = await open();
+    store.internals.length = 0;
+    map.select('op:u1');
+    await settle();
+    expect(measured()).toEqual([]);
   });
 });
 

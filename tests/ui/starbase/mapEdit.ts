@@ -277,6 +277,50 @@ export async function duplicateMany(page: Page, n: number): Promise<void> {
 	await expect(dialog).toBeHidden();
 }
 
+/**
+ * Where each wire's drawn ends are, relative to the centre of the socket's Handle they join (in the map's own units, so a zoom does not change them; by "<wire id> <socket id>").
+ * Vue Flow ends a wire at the edge of the Handle, so the offsets are small and constant while the wire follows its socket: the same
+ * numbers before and after a change mean the wire is still on its socket, a different number means the socket moved and the wire did not.
+ */
+export async function wireEndOffsets(page: Page): Promise<Record<string, { dx: number; dy: number } | 'no socket'>> {
+	return canvasOf(page).evaluate((root) => {
+		const out: Record<string, { dx: number; dy: number } | 'no socket'> = {};
+		for (const g of root.querySelectorAll('.vue-flow__edge')) {
+			const id = g.getAttribute('data-id') ?? '';
+			const [from, to] = id.split('>');
+			const path = g.querySelector('path.wire') as SVGPathElement | null;
+			const ctm = path?.getScreenCTM();
+			if (!path || !ctm) continue;
+			const end = (len: number) => {
+				const p = path.getPointAtLength(len);
+				return new DOMPoint(p.x, p.y).matrixTransform(ctm);
+			};
+			for (const [socket, at] of [[from, end(0)], [to, end(path.getTotalLength())]] as const) {
+				const el = root.querySelector(`[data-handleid="${CSS.escape(socket)}"]`);
+				if (!el) {
+					out[`${id} ${socket}`] = 'no socket';
+					continue;
+				}
+				const r = el.getBoundingClientRect();
+				out[`${id} ${socket}`] = { dx: Math.round(((at.x - (r.left + r.width / 2)) / ctm.a) * 10) / 10, dy: Math.round(((at.y - (r.top + r.height / 2)) / ctm.a) * 10) / 10 };
+			}
+		}
+		return out;
+	});
+}
+/** The wire ends that are further from where they were (`rest`, from `wireEndOffsets` earlier) than `tolerance` map units: wires that did not follow their socket. */
+export async function driftedWires(page: Page, rest: Awaited<ReturnType<typeof wireEndOffsets>>, tolerance = 1.5): Promise<string[]> {
+	const now = await wireEndOffsets(page);
+	const out: string[] = [];
+	for (const [key, was] of Object.entries(rest)) {
+		const is = now[key];
+		if (was === 'no socket' || is === 'no socket' || !is) continue;
+		const d = Math.hypot(is.dx - was.dx, is.dy - was.dy);
+		if (d > tolerance) out.push(`${key}: ${Math.round(d)}px from where it met its socket at rest`);
+	}
+	return out;
+}
+
 /** A click on an empty spot of the canvas: lets go of the selection. */
 export async function clickEmpty(page: Page): Promise<void> {
 	const at = await emptySpot(page);

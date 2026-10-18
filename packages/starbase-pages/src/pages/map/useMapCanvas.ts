@@ -625,8 +625,21 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     rebuild();
     merging = null;
     if (map.nodes.value.length) void scheduleLayout(merges);
+    // A new wire or a removed one adds a socket to a card or takes one away: where the sockets are is measured again once the layout is done.
+    if (edit?.active?.()) settleSizes();
   });
   watch(() => map.focusOfHover.value, applyFocus);
+  // Edit mode: the selected card draws its free socket and the others on that side shift along the edge (and the card it leaves takes
+  // its spare away), but Vue Flow only knows where a socket is when it is told: measure the two cards once the DOM has them.
+  watch(
+    () => map.selectedId.value,
+    async (now, was) => {
+      if (!edit?.active?.()) return;
+      const ids = [now, was].filter((id): id is string => !!id && !!vf.findNode(id));
+      if (ids.length) await remeasure(...ids);
+      settleSizes(); // and every card once the dust has settled (a change of wires moves sockets as well)
+    },
+  );
   watch(
     () => map.centreRequest.value,
     (req) => {

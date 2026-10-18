@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, dragCard, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, distinctRecords, makePlanned, makeTechSituation, relativeLayout, secondMember, savedDraft, selectCard, startEditingMapOf, wireBetween,
+	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, dragCard, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, driftedWires, wireEndOffsets, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, distinctRecords, makePlanned, makeTechSituation, relativeLayout, secondMember, savedDraft, selectCard, startEditingMapOf, viewportSettled, wireBetween,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -348,6 +348,27 @@ test.describe('as a Lab Member', () => {
 		const order = (l: Record<string, { x: number; y: number }>) => Object.entries(l).sort((p, q) => p[1].x - q[1].x).map(([id]) => id);
 		expect(order(after.layout), 'the same left-to-right order').toEqual(order(before.layout));
 		expect(await overlaps(page), 'and no two cards overlap').toEqual([]);
+	});
+
+	test('selecting and deselecting cards leaves every wire on its socket: the sockets that move are told to the wires (R5)', async ({ page }) => {
+		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		await savedDraft(page, member, (b) => b.wires.length === 2, 'built');
+		await fit(page);
+		await settledOverlaps(page);
+		const sample = card(page, 'New sample, Sample');
+		const operation = card(page, 'CNC Turning, Operation');
+		const material = card(page, 'AA, Material');
+		const rest = await wireEndOffsets(page);
+		expect(Object.keys(rest).length, 'the wires and their sockets are found').toBeGreaterThanOrEqual(6);
+		expect(Object.values(rest).filter((o) => o === 'no socket'), 'every wire end has its socket').toEqual([]);
+		// Left to right, a wire leaves and enters at the height of its socket: at rest, with nothing selected out of the way, every end meets it.
+		for (const [end, o] of Object.entries(rest)) if (o !== 'no socket') expect(Math.abs(o.dy), `${end} meets its socket at rest`).toBeLessThan(1.5);
+		// Each selection puts a free socket on a side and takes the last one's away, so the others sit differently along the edge.
+		for (const [what, target] of [['the operation', operation], ['the new sample', sample], ['the material', material], ['the operation again', operation], ['the first sample', card(page, 'LOCAL-RAW-1, Sample')]] as const) {
+			await selectCard(page, target);
+			await viewportSettled(page);
+			await expect.poll(async () => driftedWires(page, rest), { message: `every wire is on its socket with ${what} selected`, intervals: [100, 200, 300] }).toEqual([]);
+		}
 	});
 
 	test('connecting to the free output socket of an operation adds a piece: a second row, the same input (R5)', async ({ page }) => {
