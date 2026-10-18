@@ -58,6 +58,8 @@ function fakeWorld() {
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
     people: [], // { person_id, user_id, is_researcher }
+    noBuild: new Set(), // users whose policies grant no create on manufacturing_operations (a Lab Viewer)
+    permissionAsks: [], // the bindings of every "may this caller build" question
     templates: [], roles: [ROLE_A, ROLE_B, ID(83)],
   };
 }
@@ -209,6 +211,9 @@ function fakeDatabase(world) {
         return { rows: [] };
       case SQL.roleExists:
         return { rows: world.roles.filter((r) => r === b[0]).map((id) => ({ id })) };
+      case SQL.mayCreateOperations:
+        world.permissionAsks.push(b);
+        return { rows: [{ allowed: !world.noBuild.has(b[1]) }] };
       case SQL.personExists:
         return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
       case SQL.personOfUser:
@@ -411,6 +416,68 @@ test('summarise: a sample already on the map is not made again; edits and remova
     ],
   };
   assert.equal(summarise(body), '1 operation, 1 sample, 2 changes to existing records, 1 removal');
+});
+
+// ---- who may build (R11) ---------------------------------------------------------------------------------------------
+
+const FORBIDDEN_BUILD = 'Your account may not build processes.';
+
+test('R11: every route but mark-done answers 403 FORBIDDEN to an account that may not create operations', async () => {
+  const env = setup();
+  const viewer = ID(5);
+  env.world.noBuild.add(viewer);
+  const some = ID(99);
+  const routes = [
+    ['GET', '/drafts'], ['POST', '/drafts', { body: { body: emptyBody() } }], ['GET', '/drafts/:id', { params: { id: some } }],
+    ['PATCH', '/drafts/:id', { params: { id: some }, body: { name: 'x', version: 1 } }], ['DELETE', '/drafts/:id', { params: { id: some } }],
+    ['POST', '/drafts/:id/check', { params: { id: some } }], ['POST', '/drafts/:id/create', { params: { id: some } }],
+    ['POST', '/mark-planned', { body: { collection: 'manufacturing_operations', id: some } }],
+    ['GET', '/templates'], ['GET', '/templates/:id', { params: { id: some } }], ['POST', '/templates', { body: cutTemplate() }],
+    ['PATCH', '/templates/:id', { params: { id: some }, body: { name: 'x', version: 1 } }], ['DELETE', '/templates/:id', { params: { id: some } }],
+  ];
+  for (const [method, path, opts = {}] of routes) {
+    const res = await env.call(method, path, { user: viewer, ...opts });
+    assert.equal(res.statusCode, 403, `${method} ${path}`);
+    assert.deepEqual(res.body, { errors: [{ message: FORBIDDEN_BUILD, extensions: { code: 'FORBIDDEN', source: 'd1-build' } }] }, `${method} ${path}`);
+  }
+  assert.deepEqual(env.world.drafts, [], 'nothing was written');
+  assert.equal(env.world.ops.length, 0);
+});
+
+test('R11: mark-done is not gated by the build right (whoever may edit the operation may mark it done)', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.noBuild.add(ALICE);
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(env.world.permissionAsks, [], 'the build right is not even asked about');
+});
+
+test('R11: the question is "may create manufacturing_operations" for the caller and their roles; administrators and the 401 skip it', async () => {
+  const env = setup();
+  const ok = await env.call('GET', '/drafts', { roles: [ROLE_A, ROLE_B] });
+  assert.equal(ok.statusCode, 200);
+  assert.deepEqual(env.world.permissionAsks, [[`${ROLE_A},${ROLE_B}`, ALICE]]);
+  assert.match(SQL.mayCreateOperations, /manufacturing_operations/);
+  assert.match(SQL.mayCreateOperations, /'create'/);
+  // an administrator is never asked, even if the question would say no
+  env.world.noBuild.add(BOB);
+  const admin = await env.call('GET', '/drafts', { user: BOB, admin: true });
+  assert.equal(admin.statusCode, 200);
+  assert.equal(env.world.permissionAsks.length, 1);
+  // no user: 401, before the permission question
+  assert.equal((await env.call('GET', '/drafts', { user: null })).statusCode, 401);
+  assert.equal(env.world.permissionAsks.length, 1);
+});
+
+test('R11: a database failure while asking is a 500, never an open door', async () => {
+  const env = setup();
+  const { world } = env;
+  const real = world.noBuild;
+  world.noBuild = { has() { throw new Error('db down'); } };
+  const res = await env.call('GET', '/drafts');
+  assert.equal(res.statusCode, 500);
+  world.noBuild = real;
 });
 
 // ---- the router and its drafts ---------------------------------------------------------------------------------------

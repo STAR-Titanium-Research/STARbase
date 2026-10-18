@@ -31,7 +31,9 @@
 //   CheckCode (CHECK_CODES) is a stable reason to branch on: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION (reserved:
 //   no check says it yet, a refused write is WRITE_FAILED), REQUIRED, STRUCTURE, OTHER.
 //
-// Every route needs a signed-in user (401 otherwise). Errors have the Directus shape
+// Every route needs a signed-in user (401 otherwise). Every route EXCEPT mark-done also needs the right to create manufacturing_operations
+// (R11, ADR-0018 amendment): an account without it (a Lab Viewer) gets 403 { errors: [{ extensions: { code: 'FORBIDDEN' } }] } from all of
+// them, the drafts list included, which is how STARbase knows to hide edit mode. Errors have the Directus shape
 // { errors: [{ message, extensions: { code, source: 'd1-build', ... } }] }.
 //
 // How it runs (the d1-record-access and d1-people-admin pattern):
@@ -349,6 +351,17 @@ export const SQL = {
     + ' version = version + 1, updated_at = now() WHERE template_id = ? AND version = ?'
     + ' RETURNING template_id, user_id, scope, role_id, name, collection, values, version, updated_at',
   deleteTemplate: 'DELETE FROM d1_private.process_templates WHERE template_id = ?',
+  // R11: may this caller create manufacturing_operations? Directus's own rule, read from its tables: a policy of the caller (their
+  // own, their role's or a parent role's, or the public one) that is an admin policy or has a create permission row on the
+  // collection. Bindings: the caller's role ids as one comma-separated text (empty: none), the caller.
+  mayCreateOperations:
+    'WITH RECURSIVE tree AS (SELECT id, parent, 0 AS depth FROM directus_roles'
+    + " WHERE id = ANY(string_to_array(?, ',')::uuid[])"
+    + ' UNION ALL SELECT r.id, r.parent, t.depth + 1 FROM directus_roles r JOIN tree t ON r.id = t.parent WHERE t.depth < 20)'
+    + ' SELECT EXISTS (SELECT 1 FROM directus_access a JOIN directus_policies p ON p.id = a.policy'
+    + ' WHERE (a."user" = ? OR a.role IN (SELECT id FROM tree) OR (a."user" IS NULL AND a.role IS NULL))'
+    + ' AND (p.admin_access OR EXISTS (SELECT 1 FROM directus_permissions x WHERE x.policy = p.id'
+    + " AND x.collection = 'manufacturing_operations' AND x.action = 'create'))) AS allowed",
   // Mark done: is this person there, and which person is the caller (a researcher's row first, as d1-owner-default does).
   personExists: 'SELECT person_id FROM people WHERE person_id = ?',
   personOfUser: 'SELECT person_id FROM people WHERE user_id = ? ORDER BY is_researcher DESC, person_id LIMIT 1',
@@ -921,10 +934,20 @@ export function mount(router, context, clock = () => new Date()) {
     });
   };
   // Routes: need a signed-in user, hand the handler the request, turn every failure into a Directus-shaped answer.
-  const route = (fn) => async (req, res) => {
+  // R11: building (drafts, checks, Create, templates, Mark planned) needs the right to create operations, so an account that only
+  // reads (a Lab Viewer) is told so up front and STARbase hides edit mode, instead of drafting and failing at Create.
+  // Mark done is the exception: whoever may edit the operation may mark it done (the access rules decide, not this).
+  // Administrators are not asked. A failed question is a failure (500), never a yes.
+  async function mayBuild(acc) {
+    if (acc.admin === true) return true;
+    const [row] = rowsOf(await database.raw(SQL.mayCreateOperations, [rolesOf(acc).join(','), String(acc.user)]));
+    return row?.allowed === true;
+  }
+  const route = (fn, { build = true } = {}) => async (req, res) => {
     try {
       const acc = req.accountability;
       if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
+      if (build && !(await mayBuild(acc))) throw new HttpError(403, 'FORBIDDEN', 'Your account may not build processes.');
       await fn({ req, res, acc });
     } catch (err) {
       sendError(res, err);
@@ -1394,7 +1417,7 @@ export function mount(router, context, clock = () => new Date()) {
     });
     await clearDataCache(req);
     res.json({ data: answer(ids, 'done', single) });
-  }));
+  }, { build: false }));
 
   // Back to planned: one transaction for the whole container. The access guard (owner or admin) is the rule, run by ItemsService
   // for each record; the output samples go back to planned unless something done hangs off them.
