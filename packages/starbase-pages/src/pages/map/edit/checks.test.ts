@@ -187,6 +187,36 @@ describe('done records', () => {
 		expect(texts(blocking(checks(b, ctx)))).toEqual(['block:session_date:Fill in Date: a done test needs it.']);
 	});
 
+	it('never asks for a reserved field or current_status: the server fills them and refuses a draft that sets one', () => {
+		const live: CheckCtx = {
+			...ctx,
+			fields: {
+				...defs,
+				physical_samples: [
+					{ field: 'current_status', required: true, label: 'Status' },
+					{ field: 'short_id', required: true },
+					{ field: 'code_sort', required: true },
+					{ field: 'restricted', required: true },
+					{ field: 'created_by', required: true },
+					{ field: 'version', required: true },
+					{ field: 'location', required: false },
+				],
+				manufacturing_operations: [{ field: 'work_state', required: true }, { field: 'batch_id', required: true }, { field: 'done_at', required: true }, { field: 'method_id', required: true }],
+				test_sessions: [{ field: 'insert_edge_id', required: true }, { field: 'subject', required: true }, { field: 'test_type', required: true }],
+			},
+		};
+		// A free sample (nothing makes it) can be created.
+		const free = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }]);
+		expect(blocking(checks(free, live))).toEqual([]);
+		const done = apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
+		expect(blocking(checks(done, live)).filter((c) => c.key === 'n4')).toEqual([]);
+		const op = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(blocking(checks(op, live)).map((c) => c.field)).not.toEqual(expect.arrayContaining(['work_state']));
+		const test = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(blocking(checks(test, live)).map((c) => c.field)).not.toContain('insert_edge_id');
+		expect(blocking(checks(test, live)).map((c) => c.field)).not.toContain('subject');
+	});
+
 	it('a free sample, and one made by a done operation, is an active record with its own required fields', () => {
 		const withForm: CheckCtx = { ...ctx, fields: { ...defs, physical_samples: [{ field: 'location', required: true, label: 'Location' }] } };
 		const b = apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
