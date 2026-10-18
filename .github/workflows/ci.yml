@@ -87,6 +87,9 @@ jobs:
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
         run: node --test core/extensions/*/index*.test.mjs
+      - name: Deploy script and agent tests
+        if: ${{ !cancelled() }}
+        run: node --test scripts/deploy/*.test.mjs infra/deploy-agent/*.test.mjs
       - name: "STARbase compose wiring (parse-only)"
         if: ${{ !cancelled() }}
         run: node --test tests/starbase_compose.test.mjs
@@ -341,6 +344,7 @@ jobs:
           npm run typecheck -w directus-extension-d1-edit-frame
           npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops
+          npm run typecheck -w directus-extension-d1-deploy
       - name: Build the Directus extensions that use @d1/ui
         run: npm run build:extensions
       - name: "STARbase app: unit tests + typecheck + build"
