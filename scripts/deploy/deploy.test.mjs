@@ -52,6 +52,7 @@ function world(s = {}) {
 		if (k === 'git rev-parse --short=8 HEAD') return ok(calls.some((c) => c.args.join(' ') === 'merge --no-edit origin/main') && !s.mergeCode ? 'bbbbbbbb\n' : 'aaaaaaaa\n');
 		if (k === 'git rev-parse --short=8 origin/main') return ok('bbbbbbbb\n');
 		if (k.startsWith('git log --format=')) return ok(s.upToDate ? '' : `${'1'.repeat(40)}\tfeat: one\n${'2'.repeat(40)}\tfix: two\n`);
+		if (k.startsWith('git status --porcelain -z --untracked-files=no -- package-lock.json')) return ok(s.lockDirtyAfterInstall ? ` M package-lock.json${NUL}` : '');
 		if (k.startsWith('git status --porcelain')) return ok((s.dirty ?? []).map((f) => ` M ${f}${NUL}`).join(''));
 		if (k.startsWith('git diff --name-only -z --diff-filter=AM')) return ok(changed.filter((f) => f.startsWith('db/migrations/')).map((f) => f + NUL).join(''));
 		if (k === 'git diff --name-only -z HEAD...origin/main') return ok(changed.map((f) => f + NUL).join(''));
@@ -441,4 +442,13 @@ test('parseArgs reads repeated and multi-value --ack', () => {
 	assert.deepEqual(parseArgs(['run', '--ack', 'a', 'b', '--json', '--ack=c']).ack, ['a', 'b', 'c']);
 	assert.equal(parseArgs(['run', '--json']).json, true);
 	assert.deepEqual(parseArgs(['check']).ack, []);
+});
+
+test('run: package-lock.json that npm install rewrote is restored; one that was already dirty is kept', async () => {
+	const a = world({ changed: ['package.json'], lockDirtyAfterInstall: true });
+	await runDeploy(a.ctx, {});
+	assert.ok(a.keys().includes('git checkout -- package-lock.json'));
+	const b = world({ changed: ['package.json'], lockDirtyAfterInstall: true, dirty: ['package-lock.json'] });
+	await runDeploy(b.ctx, {});
+	assert.ok(!b.keys().includes('git checkout -- package-lock.json'));
 });

@@ -344,6 +344,7 @@ jobs:
           npm run typecheck -w directus-extension-d1-edit-frame
           npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops
+          npm run typecheck -w directus-extension-d1-deploy
       - name: Build the Directus extensions that use @d1/ui
         run: npm run build:extensions
       - name: "STARbase app: unit tests + typecheck + build"

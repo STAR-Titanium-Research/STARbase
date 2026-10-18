@@ -301,6 +301,16 @@ export async function runDeploy(ctx, opts = {}) {
 			await step('install', async () => {
 				const r = await ctx.exec('npm', ['install', '--no-audit', '--no-fund'], { cwd: repoDir, onData: ctx.onData });
 				if (r.code !== 0) throw new StepError(`npm install failed (exit ${r.code}).`);
+				// npm install rewrites package-lock.json on this host (a different resolution than CI's). Left
+				// dirty, it would block the next deploy as an overlap, so put it back unless it was already
+				// dirty before this run (an edit of the maintainer's, which must stay).
+				if (!check.dirty.includes('package-lock.json')) {
+					const lock = await git(ctx, ['status', '--porcelain', '-z', '--untracked-files=no', '--', 'package-lock.json']);
+					if (lock.stdout.trim()) {
+						await git(ctx, ['checkout', '--', 'package-lock.json']);
+						ctx.out('Restored package-lock.json (npm install rewrote it locally).\n');
+					}
+				}
 			});
 		} else skip('install', 'package files unchanged');
 
