@@ -1,0 +1,194 @@
+// node --test scripts/deploy/*.test.mjs
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { test } from 'node:test';
+import {
+	buildServicesFromConfig,
+	formatRunId,
+	migrateUpSection,
+	missingEnvKeys,
+	overlap,
+	parseBackupName,
+	parseComposePs,
+	parseEnv,
+	parseMergeTree,
+	parsePending,
+	parsePorcelainZ,
+	planSteps,
+	rewriteDbUrl,
+	runIdToDate,
+	scanDestructive,
+	serviceProblems,
+	stripSql,
+} from './lib.mjs';
+
+test('planSteps maps changed paths to steps in execution order', () => {
+	assert.deepEqual(planSteps(['docs/x.md', 'README.md']), []);
+	assert.deepEqual(planSteps(['db/migrations/202610180900_x.sql']), ['migrate']);
+	assert.deepEqual(planSteps(['package-lock.json']), ['install']);
+	assert.deepEqual(planSteps(['apps/other/package.json']), ['install']);
+	assert.deepEqual(planSteps(['apps/force-app/web/package.json']), ['install', 'build:web', 'recreate:proxy']);
+	assert.deepEqual(planSteps(['core/extensions/foo/index.js']), ['build:extensions', 'recreate:directus']);
+	assert.deepEqual(planSteps(['apps/starbase/src/a.vue']), ['build:starbase', 'recreate:proxy']);
+	assert.deepEqual(planSteps(['packages/force-plotting/src/a.ts']), ['build:web', 'recreate:proxy']);
+	// packages/d1-ui feeds both the extensions and STARbase
+	assert.deepEqual(planSteps(['packages/d1-ui/a.vue']), ['build:extensions', 'build:starbase', 'recreate:directus', 'recreate:proxy']);
+	assert.deepEqual(planSteps(['docker-compose.yml']), ['compose-up']);
+	assert.deepEqual(planSteps(['scripts/inbox_crawler/crawl.py']), ['recreate:inbox-crawler']);
+	assert.deepEqual(planSteps(['.env.example']), []);
+	assert.deepEqual(
+		planSteps(['core/extensions/a/index.js', 'db/migrations/1.sql', 'package.json', 'apps/starbase/x.js', 'docker-compose.yml']),
+		['migrate', 'install', 'build:extensions', 'build:starbase', 'compose-up', 'recreate:directus', 'recreate:proxy'],
+	);
+	// a path merely starting with the same letters is not under the directory
+	assert.deepEqual(planSteps(['apps/starbase-old/x.js']), []);
+});
+
+test('planSteps adds recreate:<service> for build services whose directory changed', () => {
+	const svcs = [
+		{ service: 'heavy-data-worker', dir: 'plugins/heavy-data-worker/', profiles: [] },
+		{ service: 'diag', dir: 'plugins/diag-service/', profiles: [] },
+	];
+	assert.deepEqual(planSteps(['plugins/heavy-data-worker/app.py'], svcs), ['recreate:heavy-data-worker']);
+	assert.deepEqual(planSteps(['plugins/diag-service/Dockerfile', 'plugins/heavy-data-worker/x'], svcs), ['recreate:heavy-data-worker', 'recreate:diag']);
+	assert.deepEqual(planSteps(['plugins/other/x'], svcs), []);
+});
+
+test('buildServicesFromConfig: context directory, or the Dockerfile directory when the context is the repo root', () => {
+	const root = path.resolve('/repo');
+	const cfg = {
+		services: {
+			directus: { image: 'x' },
+			a: { build: { context: path.join(root, 'plugins', 'a'), dockerfile: 'Dockerfile' } },
+			diag: { build: { context: root, dockerfile: 'plugins/diag-service/Dockerfile' } },
+			gated: { build: { context: path.join(root, 'plugins', 'g') }, profiles: ['archive'] },
+			rel: { build: 'apps/rel' },
+		},
+	};
+	assert.deepEqual(buildServicesFromConfig(cfg, root), [
+		{ service: 'a', dir: 'plugins/a/', profiles: [] },
+		{ service: 'diag', dir: 'plugins/diag-service/', profiles: [] },
+		{ service: 'gated', dir: 'plugins/g/', profiles: ['archive'] },
+		{ service: 'rel', dir: 'apps/rel/', profiles: [] },
+	]);
+});
+
+test('overlap is the dirty files the update also changes', () => {
+	assert.deepEqual(overlap(['a', 'b', 'c'], ['b', 'c', 'd']), ['b', 'c']);
+	assert.deepEqual(overlap([], ['x']), []);
+	assert.deepEqual(overlap(['a'], []), []);
+});
+
+test('parsePorcelainZ reads paths, renames and spaces', () => {
+	const out = ' M docker-compose.yml\0M  a b/c.txt\0R  new.txt\0old.txt\0';
+	assert.deepEqual(parsePorcelainZ(out), ['docker-compose.yml', 'a b/c.txt', 'new.txt', 'old.txt']);
+	assert.deepEqual(parsePorcelainZ(''), []);
+});
+
+test('parseMergeTree: clean, conflicted, and unknown (old git)', () => {
+	assert.deepEqual(parseMergeTree({ code: 0, stdout: 'abc123\n' }), []);
+	assert.deepEqual(
+		parseMergeTree({ code: 1, stdout: 'abc123\nfoo/a.js\nb.txt\n\nAuto-merging foo/a.js\nCONFLICT (content): Merge conflict in foo/a.js\n' }),
+		['foo/a.js', 'b.txt'],
+	);
+	assert.equal(parseMergeTree({ code: 129, stdout: '' }), null);
+});
+
+test('parseEnv / missingEnvKeys / rewriteDbUrl / parsePending / parseBackupName', () => {
+	assert.deepEqual(parseEnv('A=1\n# B=2\nC="x y"\r\nexport D=\'q\'\n\nbad line\n'), { A: '1', C: 'x y', D: 'q' });
+	assert.deepEqual(missingEnvKeys('A=1\n# B=2\nC=3\nD=4\n', 'A=9\nD=\n'), ['C']);
+	assert.equal(rewriteDbUrl('postgres://d1:pw@localhost:5432/d1_database?sslmode=disable'), 'postgres://d1:pw@postgres:5432/d1_database?sslmode=disable');
+	assert.equal(rewriteDbUrl('postgres://d1:pw@127.0.0.1:5433/db'), 'postgres://d1:pw@postgres:5432/db');
+	assert.equal(rewriteDbUrl('postgres://d1:pw@postgres:5432/db'), 'postgres://d1:pw@postgres:5432/db');
+	assert.equal(parsePending('[X] a.sql\n[ ] b.sql\n\nApplied: 1\nPending: 1\n'), 1);
+	assert.equal(parsePending('[X] a.sql\n\nApplied: 1\nPending: 0\n'), 0);
+	assert.equal(parsePending('[ ] a.sql\n[ ] b.sql\n'), 2);
+	assert.equal(parseBackupName('  Local copy : ./backups/d1_20261018_1200.sql.gz\n  Roles : x'), 'd1_20261018_1200.sql.gz');
+	assert.equal(parseBackupName('nothing'), null);
+});
+
+test('parseComposePs reads NDJSON and arrays', () => {
+	assert.deepEqual(parseComposePs('{"Service":"a"}\n{"Service":"b"}\n').map((r) => r.Service), ['a', 'b']);
+	assert.deepEqual(parseComposePs('[{"Service":"a"}]').map((r) => r.Service), ['a']);
+	assert.deepEqual(parseComposePs(''), []);
+});
+
+test('run ids round-trip', () => {
+	const d = new Date(Date.UTC(2026, 9, 18, 9, 5, 7));
+	assert.equal(formatRunId(d), '20261018T090507Z');
+	assert.equal(runIdToDate('20261018T090507Z').getTime(), d.getTime());
+	assert.equal(runIdToDate('nope'), null);
+});
+
+test('migrateUpSection takes only the up section', () => {
+	const sql = '-- migrate:up\nCREATE TABLE a();\n-- migrate:down\nDROP TABLE a;\n';
+	assert.match(migrateUpSection(sql), /CREATE TABLE a/);
+	assert.doesNotMatch(migrateUpSection(sql), /DROP/);
+	assert.match(migrateUpSection('-- migrate:up transaction:false\nSELECT 1;'), /SELECT 1/);
+});
+
+test('stripSql removes comments and blanks literals', () => {
+	assert.doesNotMatch(stripSql('SELECT 1; -- DROP TABLE x\nSELECT 2;'), /DROP/);
+	assert.doesNotMatch(stripSql('/* DROP TABLE x */ SELECT 1; /* a /* nested DELETE FROM y */ still */ SELECT 2;'), /DROP|DELETE|still/);
+	assert.doesNotMatch(stripSql("COMMENT ON TABLE t IS 'we DROP TABLE nothing';"), /DROP/);
+	// a '--' inside a string is not a comment: what follows on the line is still code
+	assert.match(stripSql("SELECT '--'; DROP TABLE x;"), /DROP TABLE x/);
+	assert.match(stripSql("SELECT 'it''s -- fine'; DELETE FROM y;"), /DELETE FROM y/);
+});
+
+test('scanDestructive finds each destructive kind in the up section', () => {
+	const up = (body) => `-- migrate:up\n${body}\n-- migrate:down\nSELECT 1;\n`;
+	assert.deepEqual(scanDestructive(up('CREATE TABLE a(id int); ALTER TABLE a ADD COLUMN b int;')), []);
+	assert.deepEqual(scanDestructive(up('DROP TABLE a;')), ['DROP TABLE']);
+	assert.deepEqual(scanDestructive(up('drop table if exists a;')), ['DROP TABLE']);
+	assert.deepEqual(scanDestructive(up('ALTER TABLE a DROP COLUMN b;')), ['DROP COLUMN']);
+	assert.deepEqual(scanDestructive(up('DROP SCHEMA s CASCADE; DROP TYPE t; DROP FUNCTION f(); DROP VIEW v; DROP INDEX i;')), [
+		'DROP SCHEMA',
+		'DROP TYPE',
+		'DROP FUNCTION',
+		'DROP VIEW',
+		'DROP INDEX',
+	]);
+	assert.deepEqual(scanDestructive(up('DROP MATERIALIZED VIEW v;')), ['DROP VIEW']);
+	assert.deepEqual(scanDestructive(up('TRUNCATE a;')), ['TRUNCATE']);
+	assert.deepEqual(scanDestructive(up('DELETE FROM a WHERE x;')), ['DELETE FROM']);
+	assert.deepEqual(scanDestructive(up('UPDATE a\n  SET x = 1;')), ['UPDATE … SET']);
+	assert.deepEqual(scanDestructive(up('ALTER TABLE a DROP CONSTRAINT c;')), ['ALTER … DROP']);
+	assert.deepEqual(scanDestructive(up('ALTER TABLE a ALTER COLUMN b DROP NOT NULL;')), ['ALTER … DROP']);
+});
+
+test('scanDestructive ignores the down section, comments and text in strings', () => {
+	const sql = [
+		'-- migrate:up',
+		'-- DROP TABLE nothing (explains why)',
+		'/* DELETE FROM x; TRUNCATE y; */',
+		"COMMENT ON COLUMN a.b IS 'UPDATE c SET d, DROP TABLE e';",
+		'CREATE TABLE ok(id int);',
+		'-- migrate:down',
+		'DROP TABLE ok;',
+		'DELETE FROM ok;',
+	].join('\n');
+	assert.deepEqual(scanDestructive(sql), []);
+});
+
+test('scanDestructive: a foreign key ON UPDATE action is not an UPDATE statement', () => {
+	const sql = '-- migrate:up\nALTER TABLE a ADD FOREIGN KEY (b) REFERENCES c(id) ON UPDATE SET NULL ON DELETE SET NULL;\n';
+	assert.deepEqual(scanDestructive(sql), []);
+});
+
+test('scanDestructive does not let a quoted "--" hide a later statement', () => {
+	assert.deepEqual(scanDestructive("-- migrate:up\nSELECT '--'; DROP TABLE x;\n"), ['DROP TABLE']);
+});
+
+test('serviceProblems', () => {
+	const rows = [
+		{ Service: 'directus', State: 'running', Health: 'healthy' },
+		{ Service: 'proxy', State: 'running', Health: '' },
+		{ Service: 'worker', State: 'running', Health: 'starting' },
+		{ Service: 'init', State: 'exited', ExitCode: 0 },
+		{ Service: 'bad', State: 'restarting' },
+	];
+	assert.deepEqual(serviceProblems(rows, ['directus', 'proxy']), []);
+	assert.deepEqual(serviceProblems(rows, ['worker', 'missing']), ['worker: running (starting)', 'missing: not running']);
+	assert.deepEqual(serviceProblems(rows, ['directus'], true), ['worker: running (starting)', 'bad: restarting']);
+});
