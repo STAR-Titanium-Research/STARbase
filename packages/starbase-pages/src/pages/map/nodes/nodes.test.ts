@@ -239,7 +239,7 @@ describe('RecordNode', () => {
 	});
 
 	it('marks the selected card focal', async () => {
-		expect(await render(RecordNode, { id: sample.id, data: sample, selected: true })).toMatch(/class="[^"]*\bfocal\b/);
+		expect(await render(RecordNode, { id: sample.id, data: sample }, { selectedId: ref(sample.id) })).toMatch(/class="[^"]*\bfocal\b/);
 		expect(await render(RecordNode, { id: sample.id, data: sample })).not.toMatch(/class="[^"]*\bfocal\b/);
 	});
 

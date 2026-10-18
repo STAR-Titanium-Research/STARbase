@@ -98,7 +98,7 @@ const labelSocket = computed(() => socketLabeller(map.graph.value?.wires ?? [], 
 const view: MapView = {
 	direction: map.dir,
 	moreOpen: map.moreOpen,
-	selectedRef: map.selectedRefKey,
+	selectedRef: map.selectedRefKey, selectedId: map.selectedId,
 	hiddenSides: map.hiddenSides,
 	socketLabel: (socket, side) => labelSocket.value(socket, side),
 	expanded: map.expandedIds,

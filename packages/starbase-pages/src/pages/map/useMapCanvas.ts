@@ -191,12 +191,6 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     return { nodes, edges };
   }
 
-  /** The selected card is Vue Flow's `selected` (the components draw it focal); selection itself is the page's, not Vue Flow's. */
-  function syncSelection(): void {
-    const id = map.selectedId.value;
-    vf.applyNodeChanges(vf.getNodes.value.map((n) => ({ id: n.id, type: 'select' as const, selected: n.id === id })));
-  }
-
   /**
    * While a card or slot is hovered the nodes and wires that are not next to it dim, and its own wires
    * are highlighted (spec §6.3); hovering a wire or a socket only highlights wires. Classes on Vue Flow's
@@ -261,7 +255,6 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     const { nodes, edges } = elements();
     vf.setNodes(nodes);
     vf.setEdges(edges);
-    syncSelection();
     applyFocus();
   }
 
@@ -696,7 +689,6 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     merging = null;
     if (map.nodes.value.length) void scheduleLayout(merges);
   });
-  watch(() => map.selectedId.value, syncSelection);
   watch(() => map.focusOfHover.value, applyFocus);
   watch(
     () => map.centreRequest.value,

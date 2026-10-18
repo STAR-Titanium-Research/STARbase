@@ -41,6 +41,8 @@ export interface MapView {
 	direction: Ref<Dir>;
 	moreOpen: Ref<ReadonlySet<string>>;
 	selectedRef: Ref<string | null>;
+	/** The id of the card selected in the rail. Selection is the page's, never Vue Flow's: Vue Flow drags every card it holds as selected along with the one grabbed. */
+	selectedId?: Ref<string | null>;
 	hiddenSides?: Ref<ReadonlyMap<string, ReadonlySet<'in' | 'out'>>>;
 	/** What a socket connects, for its aria-label (spec D23): "Input: S-0412-A · Sample". The page builds it from the wires. */
 	socketLabel?: (socket: string, side: 'in' | 'out') => string;
@@ -93,6 +95,12 @@ export const useMapActions = (): MapActions => inject(MAP_ACTIONS, NOOP);
 
 export function useMapView(): MapView {
 	return inject(MAP_VIEW, () => ({ direction: ref<Dir>('RIGHT'), moreOpen: ref<ReadonlySet<string>>(new Set()), selectedRef: ref<string | null>(null) }), true);
+}
+
+/** Is card `id` the one selected (focal, wearing its free sockets and its lock)? */
+export function useSelected(id: () => string): ComputedRef<boolean> {
+	const view = useMapView();
+	return computed(() => view.selectedId?.value === id());
 }
 
 /** The sides of node `id` that have records the person may not read. */

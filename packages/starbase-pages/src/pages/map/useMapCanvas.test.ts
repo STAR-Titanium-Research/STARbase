@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -44,8 +44,9 @@ vi.mock('@vue-flow/core', async (orig) => {
       });
     },
     setEdges: (list: { id: string }[]) => void (edges.value = list),
-    applyNodeChanges: (changes: { id: string; type: string; from?: { x: number; y: number }; position?: { x: number; y: number } }[]) => {
+    applyNodeChanges: (changes: { id: string; type: string; selected?: boolean; from?: { x: number; y: number }; position?: { x: number; y: number } }[]) => {
       for (const c of changes) {
+        if (c.type === 'select') store.selects.push({ id: c.id, selected: !!c.selected });
         if (c.type === 'position' && c.position && c.from) store.moves.push({ id: c.id, from: c.from, position: c.position });
         const n = nodes.value.find((x) => x.id === c.id);
         if (n && c.type === 'position' && c.position) n.position = { ...c.position };
@@ -147,6 +148,7 @@ beforeEach(() => {
   store.tall.clear();
   store.elk = null;
   store.moves.length = 0;
+  store.selects.length = 0;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -968,6 +970,18 @@ describe('useMapCanvas: edit mode', () => {
     await open();
     dropOn('op:u1', { x: 1, y: 2 });
     expect(at('op:u1')).toBeDefined();
+  });
+});
+
+describe('useMapCanvas: the selected card is the page\'s, never Vue Flow\'s', () => {
+  // Vue Flow drags EVERY card it holds as selected along with the one the pointer grabs, so a card marked selected there moves whenever any
+  // other card is dragged (found in a real browser: the recorded focus card flew across the map with a new card the person dragged).
+  it('selecting a card tells Vue Flow of no selected card', async () => {
+    const { map } = await open();
+    map.select('op:u1');
+    await settle();
+    expect(map.selectedId.value).toBe('op:u1');
+    expect(store.selects.filter((c) => c.selected)).toEqual([]);
   });
 });
 

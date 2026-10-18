@@ -392,8 +392,8 @@ test.describe('as a Lab Member', () => {
 		const focus = card(page, 'LOCAL-BAR-1, Sample');
 		const loose = card(page, 'New sample, Sample');
 		const [focusWas, looseWas] = [await flowPos(focus), await flowPos(loose)];
-		await dragCard(page, loose, { x: 0, y: -150 });
-		await expect.poll(async () => (await flowPos(loose)).y, { message: 'the dragged card moved up' }).toBeLessThan(looseWas.y - 40);
+		await dragCard(page, loose, { x: 0, y: 150 });
+		await expect.poll(async () => (await flowPos(loose)).y, { message: 'the dragged card moved down' }).toBeGreaterThan(looseWas.y + 40);
 		expect(await flowPos(focus), 'the recorded, selected card did not move with it').toEqual(focusWas);
 		// Select another card, then drag the first again: the one selected does not follow.
 		const material = card(page, 'AA, Material');

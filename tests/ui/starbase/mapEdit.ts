@@ -120,9 +120,9 @@ export async function reach(page: Page, l: Locator): Promise<void> {
 export async function selectCard(page: Page, c: Locator): Promise<void> {
 	await reach(page, c);
 	await c.locator('.code, .oname .n').first().click();
-	// Selected: the lid's Remove is on (edit mode), or the card wears the selected class (view mode has no lid).
+	// Selected: the lid's Remove is on (edit mode), or the card is drawn focal (view mode has no lid).
 	if (await page.getByRole('toolbar', { name: 'Edit mode' }).count()) await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeEnabled();
-	else await expect(c).toHaveClass(/\bselected\b/);
+	else await expect(c.locator(".node.focal")).toHaveCount(1);
 }
 
 // ---- starting and building a draft -----------------------------------------------------------------------------------------

@@ -66,7 +66,7 @@ async function render(component: Component, props: Record<string, unknown>, e?: 
 	const app = createSSRApp(component, props);
 	app.component('v-icon', VIcon);
 	app.provide(MAP_ACTIONS, noop);
-	app.provide(MAP_VIEW, { direction: ref<'RIGHT' | 'DOWN'>('RIGHT'), moreOpen: ref(new Set<string>()), selectedRef: ref(null) });
+	app.provide(MAP_VIEW, { direction: ref<'RIGHT' | 'DOWN'>('RIGHT'), moreOpen: ref(new Set<string>()), selectedRef: ref(null), selectedId: ref(props.selected ? (props.id as string) : null) });
 	if (e) app.provide(MAP_EDIT, e);
 	return renderToString(app);
 }

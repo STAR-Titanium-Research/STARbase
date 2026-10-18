@@ -4,17 +4,18 @@ import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { SocketRef } from '../edit/socketRefs';
 import type { RecordNode } from '../model/types';
-import { cardHandlers, editSocketProps, freeSocketLabel, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
+import { cardHandlers, editSocketProps, freeSocketLabel, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import HiddenPill from './HiddenPill.vue';
 import { KINDS, kindVar, slotText, statusKindOf } from './kinds';
 
 // A record as a card (spec §6.2): kind pill, status badge, ＋, code and one meta line. Sockets are
 // Handles on the edges; a click on the body selects it, the ＋ button expands it and, once open, is − to collapse it.
-const props = defineProps<{ id: string; data: RecordNode; selected?: boolean }>();
+const props = defineProps<{ id: string; data: RecordNode }>();
 defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
 const { direction } = useMapView();
+const selected = useSelected(() => props.id);
 
 const style = computed(() => KINDS[props.data.kind]);
 // Stock flows (lots, powder batches, material) wire in the material colour, samples in the sample colour.
@@ -34,18 +35,18 @@ const isSample = computed(() => props.data.kind === 'sample');
 const outRef = computed<SocketRef | null>(() => (isSample.value ? { kind: 'sample', id: props.data.ref.id, side: 'out' } : null));
 const inRef = computed<SocketRef | null>(() => (isSample.value && props.data.draft ? { kind: 'sample', id: props.data.ref.id, side: 'in' } : null));
 // Sockets are derived (R5): one per wire, and one free one on a side while the card is selected or has nothing wired there. Nothing is kept.
-const freeIn = computed(() => !!edit?.editing.value && !!inRef.value && (!!props.selected || props.data.ins.length === 0));
+const freeIn = computed(() => !!edit?.editing.value && !!inRef.value && (selected.value || props.data.ins.length === 0));
 const editSample = computed(() => !!edit?.editing.value && !!outRef.value);
 /** A sample's outputs share the one socket (a fan), so it has a socket to draw only when a wire leaves it; the free one stands in otherwise. */
 const wiredOut = computed(() => (edit && editSample.value ? [...edit.wiredSockets(props.data)].filter((id) => props.data.outs.includes(id)).length : 0));
 const outHandles = computed(() => (editSample.value && wiredOut.value === 0 ? [] : props.data.outs));
-const freeOut = computed(() => editSample.value && (!!props.selected || wiredOut.value === 0));
+const freeOut = computed(() => editSample.value && (selected.value || wiredOut.value === 0));
 const nIn = computed(() => props.data.ins.length + (freeIn.value ? 1 : 0));
 const nOut = computed(() => outHandles.value.length + (freeOut.value ? 1 : 0));
 const freeOutProps = computed(() => (edit && outRef.value ? editSocketProps(edit, outRef.value) : {}));
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
-const lock = computed(() => (props.selected && edit?.editing.value ? edit.lockOf(props.data) : null));
+const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, inRef.value) : {}));
 </script>
 
