@@ -25,7 +25,7 @@ import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from
  * `D1_SHOW_KNOWN_FAILURES=1` turns the marks off, so each one shows its real assertion error: run that to check a mark still fails
  * for the reason it names, or to see what a slice has fixed.
  */
-const known = (reason: string): void => test.fail(process.env.D1_SHOW_KNOWN_FAILURES !== '1', reason);
+const known = (reason: string, fixed = false): void => test.fail(!fixed && process.env.D1_SHOW_KNOWN_FAILURES !== '1', reason);
 
 type Ref = { collection: string; id: string };
 interface Seeds {
@@ -254,37 +254,57 @@ test.describe('as a Lab Member', () => {
 
 test.describe('as a Lab Viewer', () => {
 	const draftBody = { v: 1, items: [], wires: [], positions: {}, projectId: null, campaignId: null };
+	// R11's server half (slice 1a, `d1-build` answers 403 to an account that may not create operations) is a separate change from this
+	// harness. Without it GET /d1-build/drafts answers 200 to a Lab Viewer and POST /d1-build/drafts 201, and the viewer is let all the way
+	// to Create, where Directus refuses the write with 403 WRITE_FAILED ("You are not allowed to write that record."). Probed once here,
+	// so the suite is green on a checkout with or without it: the two server tests below are a known failure (and say so) until it lands.
+	let serverRefusesViewers = false;
+	test.beforeAll(async () => {
+		if (!stackAvailable()) return;
+		serverRefusesViewers =(await viewer.get(`${D1}/d1-build/drafts`)).status() === 403;
+	});
 
 	test('d1-build refuses an account that may not create operations, with a 403 (R11)', async () => {
-		// R11: `d1-build` answers 403 to a Lab Viewer. Today GET /d1-build/drafts answers 200 and POST /d1-build/drafts answers 201: the
-		// viewer is let all the way to Create, where Directus refuses the write (the next test records that).
-		known('R11: d1-build still answers 200/201 to a Lab Viewer');
+		known(serverRefusesViewers ? '' : 'R11 server half (slice 1a): d1-build still answers 200/201 to a Lab Viewer', serverRefusesViewers);
 		const list = await viewer.get(`${D1}/d1-build/drafts`);
 		expect(list.status(), 'GET /d1-build/drafts as a Lab Viewer').toBe(403);
+		expect((await list.json()).errors[0].extensions.code).toBe('FORBIDDEN');
 		const post = await viewer.post(`${D1}/d1-build/drafts`, { data: { body: draftBody } });
 		expect(post.status(), 'POST /d1-build/drafts as a Lab Viewer').toBe(403);
 	});
 
+	test('the page tells a Lab Viewer who opens edit mode that they may not build, and nothing is written (R11)', async ({ page }) => {
+		known(serverRefusesViewers ? '' : 'R11 server half (slice 1a): without the 403 the page builds a draft for a Lab Viewer', serverRefusesViewers);
+		const count = async () => (await listRecords<{ count: { operation_id: string } }>(admin, 'manufacturing_operations', 'aggregate[count]=operation_id'))[0].count.operation_id;
+		const before = await count();
+		await signIn(page, 'viewer');
+		await page.goto(`${STAR}/map?edit=new`, { waitUntil: 'domcontentloaded' });
+		await expect(page.getByText('Your account may not build processes.')).toBeVisible();
+		await expect(page).not.toHaveURL(DRAFT_URL);
+		expect(await count(), 'nothing was written').toBe(before);
+	});
+
 	test('the page hides edit mode for an account that may not build (R11)', async ({ page }) => {
-		// R11: "the page hides edit mode for it" (`useMyDrafts` hides it on the 403). Today the sidebar still offers "Build a process".
-		known('R11: STARbase still offers Build a process to a Lab Viewer');
+		// R11: "the page hides edit mode for it" (`useMyDrafts` hides it on the 403). Today the page only says so after the click: the
+		// sidebar still offers "Build a process" to a Lab Viewer.
+		known('R11 page half: STARbase still offers Build a process to a Lab Viewer');
 		await signIn(page, 'viewer');
 		await page.goto(`${STAR}/map`, { waitUntil: 'domcontentloaded' });
 		await expect(page.getByRole('link', { name: 'Process map' }).first()).toBeVisible();
 		await expect(page.getByRole('link', { name: 'Build a process' })).toHaveCount(0);
 	});
 
-	test('today a Lab Viewer\'s Create reaches d1-build and Directus refuses the write; nothing is written (R11, current state)', async ({ page }) => {
-		const before = await listRecords<{ count: { operation_id: string } }>(admin, 'manufacturing_operations', 'aggregate[count]=operation_id');
+	test('without the server half, a Lab Viewer\'s Create reaches d1-build and Directus refuses the write; nothing is written (current state)', async ({ page }) => {
+		test.skip(serverRefusesViewers, 'slice 1a is in: d1-build refuses the viewer before Create (the tests above)');
+		const count = async () => (await listRecords<{ count: { operation_id: string } }>(admin, 'manufacturing_operations', 'aggregate[count]=operation_id'))[0].count.operation_id;
+		const before = await count();
 		await signIn(page, 'viewer');
 		await buildTurningWithNewSample(page);
 		const { status, body } = await pressCreate(page);
-		// A 403 from d1-build, but only at the WRITE (the draft, the checks and the button all let the viewer through):
 		expect(status).toBe(403);
 		expect(body.errors?.[0]?.extensions.code).toBe('WRITE_FAILED');
 		await expect(page.locator('.pm-create .err')).toHaveText('You are not allowed to write that record.');
 		expect(Object.keys(body.data?.created ?? {})).toHaveLength(0);
-		const after = await listRecords<{ count: { operation_id: string } }>(admin, 'manufacturing_operations', 'aggregate[count]=operation_id');
-		expect(after[0].count.operation_id, 'the refused Create wrote nothing').toBe(before[0].count.operation_id);
+		expect(await count(), 'the refused Create wrote nothing').toBe(before);
 	});
 });

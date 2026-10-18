@@ -47,14 +47,14 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 2.2 minutes, 8 tests
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 2 minutes, 9 tests
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
 
 What it asserts: as the Lab Member, pick a seeded sample, add a CNC Turning operation from its socket menu, wire a new output sample,
 press Create, then read the operation and the sample back through Directus's REST API (method, input sample, `work_state` planned, the
-output sample's status planned, owner set). Each bug of the audit (spec §3 items 1 to 4) and of R11 (a Lab Viewer is let into edit mode)
+output sample's status planned, owner set). Each bug of the audit (spec §3 items 1 to 4) and of R11 (the server half, slice 1a, is probed: the two viewer tests are known failures only until it lands; the page half, a sidebar link a Lab Viewer should not see, is a known failure)
 that reproduces today is a `test.fail()` that names its item; the slice that fixes it removes the mark. Records the tests Create are deleted
 again afterwards, so the suite can be re-run. The config passes `/opt/pw-browsers/chromium` to Playwright when it exists (the cloud
 container's one Chromium; never `playwright install` there).
