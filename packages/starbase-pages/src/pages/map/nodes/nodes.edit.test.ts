@@ -61,6 +61,16 @@ async function render(component: Component, props: Record<string, unknown>, e?: 
 const socks = (html: string) => [...html.matchAll(/data-sock="([^"]*)"/g)].map((m) => m[1]);
 const freeButtons = (html: string) => [...html.matchAll(/<button[^>]*class="[^"]*\bsock\b[^"]*\bfree\b[^"]*"[^>]*>/g)].map((m) => m[0]);
 
+describe('a draft card is not a record yet', () => {
+	it('has no ＋ (Expand): its id is not a record', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const [s] = samples(body);
+		const [c] = containers(body);
+		expect(await render(RecordNode, { id: s.id, data: s }, edit())).not.toContain('class="xbtn');
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit())).not.toContain('class="xbtn');
+	});
+});
+
 describe('a sample card in edit mode', () => {
 	it('has an output to build from, and a free input when a new sample has nothing making it', async () => {
 		const [s] = samples(run([{ type: 'addSample' }]));

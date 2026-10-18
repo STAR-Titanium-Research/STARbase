@@ -170,6 +170,16 @@ describe('MapRail', () => {
     expect(text(html)).not.toContain('Centre');
   });
 
+  it('a draft card is not a record: no Open record, no Process map of it, no Expand (Centre stays)', async () => {
+    const base = info('s:p');
+    const draft: RecordInfo = { ...base, ref: { ...base.ref, id: 'draft:n1' } };
+    const html = await render(MapRail, railProps({ info: draft, focus: { collection: 'physical_samples', id: 'other' } }));
+    expect(text(html)).not.toContain('Open record');
+    expect(text(html)).not.toContain('Process map of');
+    expect(text(html)).not.toContain('Expand');
+    expect(text(html)).toContain('Centre');
+  });
+
   it('marks the Connections rows a hovered socket touches', async () => {
     const html = await render(MapRail, railProps({ highlight: new Set([op.id]) }));
     expect(buttonTag(html, 'OP-1 Cut')).toContain('class="hi conn"');

@@ -8,7 +8,7 @@ import EditRailItem from './edit/EditRailItem.vue';
 import MaterialComposition from './MaterialComposition.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
-import { openPath, type RecordInfo } from './model/recordInfo';
+import { isDraftRef, openPath, type RecordInfo } from './model/recordInfo';
 import { focusPlan, kindOf } from './model/collections';
 import { KINDS, kindVar, statusKindOf } from './nodes/kinds';
 import { CARD_CAP, type Reach } from './model/reach';
@@ -56,6 +56,8 @@ const emit = defineEmits<{
 }>();
 
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
+/** A card of an edit-mode draft: not a record yet, so nothing to expand (Open record and the map of it are hidden by their own rules). */
+const isDraft = computed(() => !!props.info && isDraftRef(props.info.ref));
 /** Where Open record goes: the record's page, the Force dashboard for Force data, the file library for a file; none, no button. */
 const openTo = computed(() => (props.info ? openPath(props.info) : null));
 /**
@@ -64,7 +66,7 @@ const openTo = computed(() => (props.info ? openPath(props.info) : null));
  */
 const mapTo = computed(() => {
 	const ref = props.info?.ref;
-	if (!ref || props.info?.batch || !focusPlan(ref.collection)) return null;
+	if (!ref || isDraftRef(ref) || props.info?.batch || !focusPlan(ref.collection)) return null;
 	if (props.focus && props.focus.collection === ref.collection && props.focus.id === ref.id) return null;
 	return mapPath(ref.collection, ref.id);
 });
@@ -134,7 +136,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			<template #actions>
 				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
 				<AppLink v-if="mapTo" :to="mapTo" class="pm-maplink" :title="mapLabel"><v-icon name="account_tree" small left /><span class="pm-maplabel">{{ mapLabel }}</span></AppLink>
-				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
+				<v-button v-if="onMap && !isDraft" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 				<v-button v-if="canMarkDone" small @click="emit('markDone')"><v-icon name="done" small left />Mark done</v-button>
 			</template>
