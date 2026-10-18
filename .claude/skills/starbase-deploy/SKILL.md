@@ -30,13 +30,25 @@ Run every step there, unless a step says to use the temporary worktree.
 
 ## 1. See what main brings
 
+Start with the checker. It fetches (nothing else), lists the new commits, maps the changed paths to the steps below, scans new
+migrations for destructive statements and reports blockers (uncommitted edits in files main also changes, merge conflicts):
+
+```bash
+node scripts/deploy/deploy.mjs check
+```
+
+`node scripts/deploy/deploy.mjs run` does the whole safe subset itself and is what the Deploy button in Data Studio runs
+(`docs/runbooks/deploy-button.md`). It stops, changing nothing beyond a backup, wherever a judgement call is needed: a blocker, or
+a destructive migration without an acknowledgement (`--ack <file>`). Those cases are this skill's job, so work through the steps
+below by hand. To see the raw lists instead:
+
 ```bash
 git fetch -q origin
 git log --oneline HEAD..origin/main
 git diff --name-only HEAD...origin/main
 ```
 
-If nothing is new, say so and stop. Otherwise work out the steps from the changed paths:
+If nothing is new, say so and stop. Otherwise work out the steps from the changed paths (the checker's `steps` list comes from this table):
 
 | Changed path | Then |
 |---|---|

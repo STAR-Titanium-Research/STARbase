@@ -87,6 +87,9 @@ jobs:
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
         run: node --test core/extensions/*/index*.test.mjs
+      - name: Deploy script and agent tests
+        if: ${{ !cancelled() }}
+        run: node --test scripts/deploy/*.test.mjs infra/deploy-agent/*.test.mjs
       - name: "STARbase compose wiring (parse-only)"
         if: ${{ !cancelled() }}
         run: node --test tests/starbase_compose.test.mjs
