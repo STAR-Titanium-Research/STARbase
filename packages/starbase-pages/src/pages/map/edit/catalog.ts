@@ -5,6 +5,7 @@
 import { isReserved, toFormFields, type DraftKind, type FieldDef as DirectusField } from '@d1/ui';
 import type { ProcessCategory } from '../model/types';
 import type { CheckCollection, FieldDef, LoadedRecord } from './checks';
+import { OWNER_FIELDS } from './draft';
 
 export const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
 
@@ -88,14 +89,15 @@ const isColumn = (d: DirectusField): boolean => {
 
 /**
  * The part of an existing record's row that a new draft item may carry (a duplicate, "new from"): real columns only, none the server
- * refuses in a draft (`RESERVED_FIELDS`: the keys, the work state, short_id, code_sort, restricted...), no alias arrays, no relation
+ * refuses in a draft (`RESERVED_FIELDS`: the keys, the work state, short_id, code_sort, restricted...), not the owner (a copy is the
+ * copier's, `OWNER_FIELDS`), no alias arrays, no relation
  * read as an object. `defs` are the collection's field definitions; without them only plain values are kept.
  */
 export function writableValues(kind: DraftKind, record: Record<string, unknown>, defs: readonly DirectusField[] = []): Record<string, unknown> {
 	const columns = defs.length ? new Set(defs.filter(isColumn).map((d) => d.field)) : null;
 	const out: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(record)) {
-		if (v === undefined || isReserved(kind, k)) continue;
+		if (v === undefined || isReserved(kind, k) || OWNER_FIELDS.includes(k)) continue;
 		if (columns ? !columns.has(k) : v !== null && typeof v === 'object') continue;
 		out[k] = v;
 	}

@@ -293,8 +293,12 @@ export const canWire = (body: DraftBody, from: WireEnd, to: WireEnd): boolean =>
 
 // ---- values ------------------------------------------------------------------------------------
 
-/** What "new from" leaves behind: when it happened, which sample, notes, codes and the record's own bookkeeping. */
+/** Ownership is the copier's: d1-owner-default sets it at Create, and a copy of a team-owned record that carried the team would be refused. */
+export const OWNER_FIELDS: readonly string[] = ['owner_person_id', 'owner_team_id'];
+
+/** What "new from" leaves behind: when it happened, which sample, notes, codes, who owns it and the record's own bookkeeping. */
 const NEW_FROM_DROPS = new Set([
+	...OWNER_FIELDS,
 	'operation_id', 'session_id', 'sample_id', 'output_sample_id', 'operation_date', 'session_date', 'planned_date', 'manufactured_date',
 	'done_at', 'done_by_person_id', 'work_state', 'notes', 'sample_code', 'pass_code', 'test_code', 'operation_sequence', 'batch_id',
 	'source_run_uid', 'current_status', 'date_created', 'date_updated', 'user_created', 'user_updated', 'created_at', 'updated_at',

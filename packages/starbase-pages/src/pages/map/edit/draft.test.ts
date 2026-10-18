@@ -121,6 +121,7 @@ describe('addContainer', () => {
 			notes: 'n', pass_code: 'P1', work_state: 'done', batch_id: 'b',
 		};
 		expect(newFromValues(record)).toEqual({ method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2 });
+		expect(newFromValues({ ...record, owner_person_id: 'p', owner_team_id: 't1' })).toEqual({ method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2 });
 		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'newFrom', values: record } }]);
 		expect(b.items[0].values).toEqual({ method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2 });
 	});

@@ -106,6 +106,14 @@ describe('Duplicate', () => {
 		expect(Object.keys(copy.values).sort()).toEqual(['form', 'material_id']);
 	});
 
+	it('a copy of a team-owned sample is the copier\'s: the owner fields are not carried (Create would refuse them)', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
+		await settle();
+		edit.catalog.records.set('physical_samples:s1', { version: 4, values: { sample_id: 's1', form: 'disc', owner_person_id: 'p1', owner_team_id: 't1' } });
+		surface.duplicateSelected(1);
+		expect(edit.body.value.items[1].values).toEqual({ form: 'disc' });
+	});
+
 	it('says so when the record of an existing item is not read yet, and copies nothing', async () => {
 		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
 		edit.catalog.records.clear();
