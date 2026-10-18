@@ -430,8 +430,9 @@ starbase_start() {
   if alive starbase && starbase_healthy; then return 0; fi
   install_repo_deps
   say "starting STARbase (vite dev server) on $STAR_URL, pointed at $DX_URL"
-  ( cd "$REPO/apps/starbase/web" \
-    && VITE_DIRECTUS_URL="$DX_URL" nohup "$REPO/node_modules/.bin/vite" --host 127.0.0.1 --port "$STAR_PORT" --strictPort >"$LOGS/starbase.log" 2>&1 &
+  # One simple command is backgrounded (an `a && b &` list would background a subshell that keeps the caller's pipe open).
+  ( cd "$REPO/apps/starbase/web"
+    VITE_DIRECTUS_URL="$DX_URL" nohup "$REPO/node_modules/.bin/vite" --host 127.0.0.1 --port "$STAR_PORT" --strictPort >"$LOGS/starbase.log" 2>&1 </dev/null &
     echo $! > "$RUN/starbase.pid" )
   wait_for 90 "STARbase ($LOGS/starbase.log)" starbase_healthy
 }
