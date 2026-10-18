@@ -2552,11 +2552,14 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   into the SEM reader branch.
 
 - [ ] **DEPLOY1 — Install the deploy agent and reach it from Directus (deploy button).** On d1-server follow `docs/runbooks/deploy-button.md` "Install":
-  set `DEPLOY_AGENT_TOKEN` in `.env`, run `infra\deploy-agent\install.ps1`, recreate Directus. Expect: the task **D1 Deploy Agent** exists (current user, at logon and
-  at startup, restart every minute, no time limit); `curl http://127.0.0.1:8212/health` answers `{"ok":true}`; the agent does NOT answer on the machine's LAN or Tailscale
+  set `DEPLOY_AGENT_TOKEN` in `.env`, run `infra\deploy-agent\install.ps1`, recreate Directus. Expect: the task **D1 Deploy Agent** exists (current user, logon type S4U so it runs
+  with nobody logged on, at startup and at logon, restart every minute, no time limit); `curl http://127.0.0.1:8212/health` answers `{"ok":true}`; the agent does NOT answer on the machine's LAN or Tailscale
   address (it binds 127.0.0.1); with the token removed from `.env` the task fails to start and logs "Refusing to start"; from inside the Directus container
   `curl http://host.docker.internal:8212/health` answers (Docker Desktop must forward to a service on the host's loopback; if it does not, the agent has to bind another
-  address and the runbook changes). A request without `X-Deploy-Token`, or with a wrong one, answers 401. Since: deploy button, stream A (PR: the deploy-agent branch).
+  address and the runbook changes). A request without `X-Deploy-Token`, or with a wrong one, answers 401.
+  **Unattended reboot:** reboot d1-server and do NOT log on. After a few minutes `curl http://127.0.0.1:8212/health` answers (the agent started by itself), Docker Desktop is running,
+  and a Check from the Deploy page succeeds (git fetch works with nobody logged on). If the fetch fails there (an S4U task cannot read the Windows credential manager), reinstall with
+  `-StorePassword` and repeat. Since: deploy button, stream A (PR: the deploy-agent branch).
 - [ ] **DEPLOY2 — Check for updates on a real update.** With origin/main ahead of the live branch: `node scripts/deploy/deploy.mjs check` (and `POST /check` through the agent)
   lists the same commits as `git log --oneline HEAD..origin/main`, `changedCount` equals `git diff --name-only HEAD...origin/main | wc -l`, `steps` match the table in the
   `starbase-deploy` skill for those paths, every new migration is listed and a destructive one is flagged, and `dirty`/`overlap` match `git status --short --untracked-files=no`.
@@ -2577,7 +2580,7 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   `.claude/worktrees/deploy-main` is gone afterwards. With no pending migration (migration file already applied): no backup is taken. Since: deploy button, stream A.
 - [ ] **DEPLOY6 — The agent replaces itself, and survives being killed mid-run.** (a) Deploy a commit that changes `infra/deploy-agent/agent.mjs`: after the run is recorded the agent exits
   with code 75 and `run-agent.ps1` (the task's wrapper) starts the new code within seconds; the log shows two `listening` lines. Also stop the agent with a wrong
-  token (exit 1) and see whether Task Scheduler's restart-every-minute really restarts it (it may only fire for tasks that fail to launch; if not, the wrapper needs to loop on every exit). (b) Start a deploy, then stop the task (or the machine) mid-run: after the agent starts again the run shows `interrupted`, the lock is gone,
+  token (exit 1): the wrapper restarts it after 2 s, 4 s, ... up to 60 s (the log shows each wait). (b) Start a deploy, then stop the task (or the machine) mid-run: after the agent starts again the run shows `interrupted`, the lock is gone,
   and a new deploy can start. (c) With the task stopped, the Deploy page says the agent is unreachable and offers the fix hint. Since: deploy button, stream A.
 - [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
   `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.

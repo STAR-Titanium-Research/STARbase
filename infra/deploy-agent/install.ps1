@@ -3,22 +3,29 @@
   Registers the "D1 Deploy Agent" Scheduled Task on d1-server (the host-side half of the Data Studio Deploy button).
 
 .DESCRIPTION
-  The task runs `node infra/deploy-agent/agent.mjs` as the CURRENT user (not "whether or not logged on"), at logon and
-  at startup, restarts it every minute if it fails (the agent exits 75 after a deploy that replaced its own file),
-  and has no time limit. The agent listens on 127.0.0.1:8212 only and refuses to start without DEPLOY_AGENT_TOKEN.
+  The task runs `infra/deploy-agent/run-agent.ps1` (which loops `node agent.mjs` with a backoff) as the CURRENT user,
+  at startup and at logon, so it also comes up after an unattended reboot with nobody logged on. It restarts on failure
+  every minute and has no time limit. The agent listens on 127.0.0.1:8212 only and refuses to start without DEPLOY_AGENT_TOKEN.
+
+  Logon type: by default S4U ("run whether the user is logged on or not", no password stored). An S4U task cannot read
+  that user's saved credentials (Windows Credential Manager, DPAPI), so a `git fetch` over HTTPS that relies on the
+  credential manager may fail when nobody is logged on. If the first unattended run cannot fetch, reinstall with
+  -StorePassword: Task Scheduler then keeps the Windows password and the task runs with the full profile.
 
   Run it from an ordinary PowerShell on d1-server. Registering a task with a startup trigger may need an elevated
   PowerShell; if it says access is denied, reopen PowerShell as Administrator (the task still runs as you).
 
   Usage:
-    powershell -ExecutionPolicy Bypass -File infra\deploy-agent\install.ps1            # register (and start)
-    powershell -ExecutionPolicy Bypass -File infra\deploy-agent\install.ps1 -Uninstall # remove the task
+    powershell -ExecutionPolicy Bypass -File infra\deploy-agent\install.ps1                  # register (and start)
+    powershell -ExecutionPolicy Bypass -File infra\deploy-agent\install.ps1 -StorePassword   # run with the stored Windows password
+    powershell -ExecutionPolicy Bypass -File infra\deploy-agent\install.ps1 -Uninstall       # remove the task
 #>
 [CmdletBinding()]
 param(
   [string]$RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
   [string]$NodePath,
   [switch]$NoStart,
+  [switch]$StorePassword,
   [switch]$Uninstall
 )
 
@@ -57,16 +64,31 @@ $triggers = @(
   (New-ScheduledTaskTrigger -AtLogOn -User $user),
   (New-ScheduledTaskTrigger -AtStartup)
 )
-$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
   -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
   -StartWhenAvailable -MultipleInstances IgnoreNew
+$description = 'Runs scripts/deploy/deploy.mjs for the Data Studio Deploy page. Listens on 127.0.0.1:8212.'
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings `
-  -Description 'Runs scripts/deploy/deploy.mjs for the Data Studio Deploy page. Listens on 127.0.0.1:8212.' -Force | Out-Null
-Write-Host "Registered the scheduled task '$TaskName' for $user."
+if ($StorePassword) {
+  # Full profile (credential manager works), runs whether or not anyone is logged on; Task Scheduler keeps the password.
+  $cred = Get-Credential -UserName $user -Message 'Windows password for the D1 Deploy Agent task (kept by Task Scheduler)'
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings `
+    -User $cred.UserName -Password $cred.GetNetworkCredential().Password -RunLevel Limited -Description $description -Force | Out-Null
+  Write-Host "Registered the scheduled task '$TaskName' for $user (stored password, runs whether or not logged on)."
+} else {
+  # S4U: runs whether or not logged on, no password stored; no access to the user's saved network credentials.
+  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings `
+    -Description $description -Force | Out-Null
+  Write-Host "Registered the scheduled task '$TaskName' for $user (S4U, runs whether or not logged on)."
+}
+Write-Host ''
+Write-Host 'After the FIRST unattended reboot (nobody logs on), verify:'
+Write-Host '  - curl http://127.0.0.1:8212/health answers (the agent came up by itself);'
+Write-Host '  - Docker Desktop is running (the deploy needs `docker compose`; set Docker Desktop to start at sign-in/boot);'
+Write-Host '  - the Deploy page can run Check (git fetch works with nobody logged on). If it cannot fetch, reinstall with -StorePassword.'
 
 # The token step: the agent and the Directus container read the SAME value from .env.
 $envFile = Join-Path $RepoDir '.env'
