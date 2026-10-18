@@ -4,7 +4,7 @@ import type { DraftBody } from '@d1/ui';
 import type { MapNode } from '../model/types';
 import { apply, emptyBody } from './draft';
 import { fakeServer, httpError } from './fakeBuildServer';
-import { NOT_KEPT, PHONE_NEW, UNAVAILABLE, isEmptyBody, useEditMode, type EditModeOptions } from './useEditMode';
+import { FORBIDDEN, NOT_KEPT, PHONE_NEW, UNAVAILABLE, isEmptyBody, isNotice, useEditMode, type EditModeOptions } from './useEditMode';
 
 const flush = async () => {
 	for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -58,6 +58,25 @@ describe('useEditMode: is it there', () => {
 		expect(edit.drafted.value).toBe(false);
 		expect(route.query.edit).toBeUndefined();
 		expect(edit.failed.value).toBe(UNAVAILABLE);
+	});
+
+	it('an account that may not build (the probe is 403): no toggle, an `edit` in the address is dropped, and a plain notice instead of an error', async () => {
+		const server = fakeServer();
+		server.s.listStatus = 403;
+		const route = reactive({ path: '/map', query: { edit: 'new' } as Record<string, unknown> });
+		const replace = vi.fn(async (to: { query: Record<string, string> }) => void (route.query = to.query));
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace }, isPhone: ref(false), focus: () => null });
+		await flush();
+		expect(edit.available.value).toBe(false);
+		expect(edit.canBuild.value).toBe(false);
+		expect(edit.drafted.value).toBe(false);
+		expect(edit.pending.value).toBe(false);
+		expect(route.query.edit).toBeUndefined();
+		expect(edit.failed.value).toBe(FORBIDDEN);
+		expect(edit.failed.value).toBe('Your account may not build processes.');
+		expect(isNotice(edit.failed.value)).toBe(true);
+		expect(isNotice(UNAVAILABLE)).toBe(true);
+		expect(isNotice('Could not reach the server.')).toBe(false);
 	});
 
 	it('does not offer building on a phone (E20)', async () => {

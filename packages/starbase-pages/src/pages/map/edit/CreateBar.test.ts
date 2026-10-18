@@ -47,6 +47,13 @@ describe('CreateBar', () => {
 		expect(html).toContain(`id="${id}"`);
 	});
 
+	it('shows the server words when Create is refused for a missing researcher record, and the button can be pressed again', async () => {
+		const html = await render({ ...base, error: "Your account isn't linked to a researcher record. Ask an admin." });
+		expect(text(html)).toContain('Ask an admin.');
+		expect(html).toContain('role="alert"');
+		expect(button(html)).not.toContain('disabled');
+	});
+
 	it('has no error line without an error', async () => {
 		expect(await render({ ...base, error: null })).not.toContain('role="alert"');
 		expect(await render(base)).not.toContain('role="alert"');

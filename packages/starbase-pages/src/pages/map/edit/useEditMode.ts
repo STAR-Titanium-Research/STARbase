@@ -41,6 +41,12 @@ const first = (v: unknown): string | undefined => (Array.isArray(v) ? first(v[0]
 /** What the map panel says when the address asks for edit mode and this server has no d1-build (the view-only map keeps working). */
 export const UNAVAILABLE = "Building processes isn't available on this server yet.";
 
+/** What the page says when the server refuses the account (403: it may not create operations): a plain notice, not an error. */
+export const FORBIDDEN = 'Your account may not build processes.';
+
+/** The two plain notices (this server cannot build, this account may not): said as a status, not as an error. */
+export const isNotice = (text: string): boolean => text === UNAVAILABLE || text === FORBIDDEN;
+
 /** What the page says when a draft's last changes are not on the server yet (so leaving would lose them). */
 export const NOT_KEPT = 'Your last changes are not kept yet. Fix the connection and try again, or keep editing.';
 /** What the page says when `edit=new` is opened on a phone. */
@@ -118,7 +124,7 @@ export function useEditMode(o: EditModeOptions) {
 		if (!draft.probed.value) return;
 		if (!draft.available.value) {
 			// A server without d1-build (404) is a plain notice; a probe that failed any other way says why (the Edit toggle asks again).
-			failed.value = draft.probeError.value || UNAVAILABLE;
+			failed.value = draft.probeError.value || (draft.forbidden.value ? FORBIDDEN : UNAVAILABLE);
 			writeQuery({ edit: null });
 			return;
 		}
@@ -170,7 +176,7 @@ export function useEditMode(o: EditModeOptions) {
 		if (!canBuild.value || param.value) return;
 		// The probe failed earlier (not a 404): ask again before giving up on building.
 		if (!available.value && !(await draft.probe())) {
-			failed.value = draft.probeError.value || UNAVAILABLE;
+			failed.value = draft.probeError.value || (draft.forbidden.value ? FORBIDDEN : UNAVAILABLE);
 			return;
 		}
 		failed.value = '';

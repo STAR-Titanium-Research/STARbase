@@ -16,7 +16,7 @@ import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './
 import { socketLabeller } from './nodes/a11y';
 import EditOverlays from './edit/EditOverlays.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
-import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
+import { isNotice, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSide } from './edit/useEditSide';
 import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
@@ -256,7 +256,7 @@ const tipHint = computed(() => {
 			<Section v-else-if="map.status.value === 'empty'" title="Process map" class="d1-process-map">
 				<div class="pm-empty">
 					<h2>Pick a record to map</h2>
-					<p v-if="edit.failed.value" class="pm-note" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</p>
+					<p v-if="edit.failed.value" class="pm-note" :role="isNotice(edit.failed.value) ? 'status' : 'alert'">{{ edit.failed.value }}</p>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
 					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">

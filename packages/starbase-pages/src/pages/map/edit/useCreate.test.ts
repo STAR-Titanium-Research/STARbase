@@ -120,6 +120,19 @@ describe('Create', () => {
 		expect(create.toast.value).not.toBeNull();
 	});
 
+	it('a caller with no researcher row is told why, and the draft is kept (nothing created, no toast, edit mode stays open)', async () => {
+		const { create, s, route, edit } = await setup();
+		const message = "Your account isn't linked to a researcher record. Ask an admin.";
+		s.createAnswer = Object.assign(new Error('HTTP 422'), { response: { status: 422, data: { errors: [{ message, extensions: { code: 'NO_RESEARCHER' } }] } } });
+		await create.create();
+		expect(create.error.value).toBe(message);
+		expect(create.showMissing.value).toBe(false);
+		expect(create.toast.value).toBeNull();
+		expect(route.query.edit).toBe('d');
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(edit.draft.draftId.value).toBe('d');
+	});
+
 	it('knows an empty draft', async () => {
 		const { create, edit } = await setup();
 		expect(create.empty.value).toBe(false);
