@@ -35,6 +35,16 @@ field's `required` flag on API saves, so whatever writes must check it.
 4. **Edits to existing records carry their version** and are refused on a mismatch (the OCC convention of
    `useEditSession`).
 
+## Amendments
+
+- **2026-10-18 — who may build.** `d1-build` answers 403 to an account that may not create operations (Lab Viewer),
+  and STARbase hides edit mode for it, instead of letting every signed-in account draft and then fail at Create.
+- **2026-10-18 — no ownerless records.** Create is refused, with a message naming the cause, when the caller has no
+  researcher People row to own the new records.
+- **2026-10-18 — inherited fields on the server.** `d1-build` fills `test_category` on new tests and `material_id`
+  on new operations itself, as the `d1-test-category` and `d1-material-inherit` form interfaces do; the generated
+  form does not run those interfaces.
+
 ## Alternatives considered
 
 - **Keep Data Studio's framed form for every field** (the interview's option a). Rejected by the maintainer:
