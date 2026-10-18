@@ -83,7 +83,7 @@ export function useEditRemoval(o: { edit: EditMode; map: ProcessMap; canvasEl: R
 				out.push({ type: 'addExistingSamples', samples: [{ id: t.id, version: read.version }] });
 			} else {
 				const collection = COLLECTION[t.kind];
-				await edit.catalog.loadRecords({ physical_samples: [], manufacturing_operations: [], test_sessions: [], [collection]: [t.id] });
+				await edit.catalog.loadRecords({ physical_samples: [], manufacturing_operations: [], test_sessions: [], [collection]: [t.id] }, { retry: true });
 				const version = edit.catalog.records.get(recordKey(collection, t.id))?.version;
 				if (version === undefined) return null;
 				out.push({ type: 'addExisting', kind: t.kind, record: { id: t.id, version }, workState: 'planned' });
