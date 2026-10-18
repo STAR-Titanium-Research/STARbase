@@ -69,7 +69,12 @@ export function doneHangsOff(graph: ProcessGraph, node: MapNode): boolean {
 			if (!to || seen.has(to.id)) continue;
 			seen.add(to.id);
 			if (to.type === 'container' && !settled(to)) return true;
-			if (to.type === 'record' && to.kind === 'sample' && !settled(to) && !to.removing) continue;
+			// A sample made from this one by lineage alone (a junction between them) stays, done or not, and d1-build refuses the removal: a
+			// done one is locked here. (A done sample straight after an operation is the one a pass in place works on: not a child.)
+			if (to.type === 'record' && to.kind === 'sample' && !settled(to) && !to.removing) {
+				if (nodes.get(id)?.type === 'junction') return true;
+				continue;
+			}
 			queue.push(to.id);
 		}
 	}
@@ -92,7 +97,22 @@ function removeRecordVerdict(body: DraftBody, graph: ProcessGraph, node: RecordN
 	if (item && !ctx.inHistory(node.ref.id)) return { ok: true, keys: [item.key], existing: [] };
 	if (!node.planned) return refuse(DONE_LOCK, true);
 	if (doneHangsOff(graph, node)) return refuse(DONE_HANGS, true);
-	return { ok: true, keys: [], existing: [{ kind: 'sample', id: node.ref.id }] };
+	// The planned operation that makes it goes too: d1-build refuses a sample with a planned maker still hanging off it.
+	return { ok: true, keys: [], existing: [{ kind: 'sample', id: node.ref.id }, ...makersOf(graph, node)] };
+}
+
+/** The recorded planned operations (their rows) whose output is this sample: they are deleted with it. */
+function makersOf(graph: ProcessGraph, sample: RecordNode): ExistingTarget[] {
+	const nodes = byId(graph);
+	const out: ExistingTarget[] = [];
+	for (const w of graph.wires) {
+		if (nodeOfSocket(w.to) !== sample.id) continue;
+		const maker = nodes.get(nodeOfSocket(w.from));
+		if (maker?.type !== 'container' || maker.kind !== 'operation' || !maker.planned) continue;
+		const row = maker.rows.find((r) => r.out === w.from);
+		if (row && !row.recordId.startsWith('draft:') && !out.some((t) => t.id === row.recordId)) out.push({ kind: 'operation', id: row.recordId });
+	}
+	return out;
 }
 
 function removeContainerVerdict(body: DraftBody, graph: ProcessGraph, node: ContainerNode): RemoveVerdict {

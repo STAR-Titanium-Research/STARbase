@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftBody } from '@d1/ui';
 import { buildGraph } from '../model/buildGraph';
 import { groupBatches } from '../model/groupBatches';
-import { mkData, mkOp, mkSample, mkTest } from '../model/fixtures';
+import { mkData, mkLineage, mkOp, mkSample, mkTest } from '../model/fixtures';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, RecordNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { undo, redo, createHistory, push } from './history';
@@ -70,18 +70,60 @@ describe('removing a card', () => {
 		expect(removeVerdict(after, graphOf(history(), after), box(graphOf(history(), after), 'op:o2'), inHistory([]))).toEqual({ ok: false, reason: ALREADY_GOING, locked: false });
 	});
 
-	it('a planned sample with a planned test on it can be deleted (what hangs off it is planned: the server says to remove that too)', () => {
+	it('a planned sample goes with the planned operation that makes it (d1-build refuses the sample alone: the maker hangs off it)', () => {
 		const g = graphOf(history(), emptyBody());
-		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'sample', id: 's3' }] });
+		// s3 is made by the planned o2 (and has a planned test on it, which the server says to remove too).
+		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 's3' }, { kind: 'operation', id: 'o2' }],
+		});
 	});
 
-	it('a planned sample with only planned work after it can be deleted', () => {
+	it('a planned sample with only planned work after it can be deleted, with its maker; a planned test alone is just the test', () => {
 		const data = mkData({ samples: [mkSample('s1'), mkSample('s3', { status: 'planned' })], operations: [mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', workState: 'planned' })] });
 		const g = graphOf(data, emptyBody());
-		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'sample', id: 's3' }] });
+		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 's3' }, { kind: 'operation', id: 'o2' }],
+		});
 		const t = mkData({ samples: [mkSample('s1')], tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], workState: 'planned' })] });
 		const gt = graphOf(t, emptyBody());
 		expect(removeVerdict(emptyBody(), gt, box(gt, 'test:t1'), inHistory([]))).toEqual({ ok: true, keys: [], existing: [{ kind: 'test', id: 't1' }] });
+	});
+
+	it('only the piece of a batch that makes the sample goes with it, not the rows that make others', () => {
+		const data = mkData({
+			samples: [mkSample('s1'), mkSample('p1', { status: 'planned' }), mkSample('p2', { status: 'planned' })],
+			operations: [
+				mkOp({ id: 'b1', sampleId: 's1', outputSampleId: 'p1', workState: 'planned', batchId: 'B', methodName: 'Cut' }),
+				mkOp({ id: 'b2', sampleId: 's1', outputSampleId: 'p2', workState: 'planned', batchId: 'B', methodName: 'Cut' }),
+			],
+		});
+		const g = graphOf(data, emptyBody());
+		expect(removeVerdict(emptyBody(), g, sample(g, 'p2'), inHistory(['p1', 'p2']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 'p2' }, { kind: 'operation', id: 'b2' }],
+		});
+	});
+
+	it('a planned sample a DONE sample was made from (lineage with no operation) is locked: the server refuses it whatever the state of the child', () => {
+		const data = mkData({
+			samples: [mkSample('p', { status: 'planned' }), mkSample('c', { status: 'active' })],
+			lineage: [mkLineage('p', 'c')],
+		});
+		const g = graphOf(data, emptyBody());
+		expect(doneHangsOff(g, sample(g, 'p'))).toBe(true);
+		expect(removeVerdict(emptyBody(), g, sample(g, 'p'), inHistory(['p']))).toEqual({ ok: false, reason: DONE_HANGS, locked: true });
+	});
+
+	it('a planned pass in place on a done sample is not locked by the sample it works on', () => {
+		const data = mkData({ samples: [mkSample('s1', { status: 'active' })], operations: [mkOp({ id: 'o9', sampleId: 's1', outputSampleId: 's1', workState: 'planned', methodName: 'Polish' })] });
+		const g = graphOf(data, emptyBody());
+		expect(doneHangsOff(g, box(g, 'op:o9'))).toBe(false);
+		expect(removeVerdict(emptyBody(), g, box(g, 'op:o9'), inHistory([]))).toEqual({ ok: true, keys: [], existing: [{ kind: 'operation', id: 'o9' }] });
 	});
 
 	it('a planned record something done hangs off is locked', () => {

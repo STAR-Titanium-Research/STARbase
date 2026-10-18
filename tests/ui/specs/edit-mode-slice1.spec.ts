@@ -696,6 +696,22 @@ test.describe('as a Lab Member', () => {
 		expect(t.sample_id, 'the test is on the picked sample').toBe(rawId);
 	});
 
+	test('Delete on the planned OUTPUT sample takes the operation that makes it too, and Create is not refused for the one hanging off the other (R4)', async ({ page }) => {
+		const { operationId, sampleId } = await makePlanned(member, admin, 'LOCAL-RAW-2', noteMade);
+		await startEditingMapOf(page, 'manufacturing_operations', operationId);
+		const operation = cards(page).and(page.locator(`[data-id="op:${operationId}"]`));
+		const output = cards(page).and(page.locator(`[data-id="s:${sampleId}"]`));
+		await expect(output).toBeVisible();
+		await selectCard(page, output);
+		await page.keyboard.press('Delete');
+		await expect(page.locator('.vue-flow__node .node.removing')).toHaveCount(2);
+		await expect(operation.locator('.node.removing')).toHaveCount(1);
+		const answer = await pressCreate(page, noteMade);
+		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+		expect(await existing(admin, 'manufacturing_operations', 'operation_id', operationId), 'the maker is deleted with the sample').toBe(false);
+		expect(await existing(admin, 'physical_samples', 'sample_id', sampleId)).toBe(false);
+	});
+
 	test('a done operation, a done sample and the wire between them cannot be removed: a lock, the reason, and nothing is sent (R4, ADR-0019 §6)', async ({ page }) => {
 		const bar1 = await sampleIdOf(admin, 'LOCAL-BAR-1');
 		const bar2 = await sampleIdOf(admin, 'LOCAL-BAR-2');
