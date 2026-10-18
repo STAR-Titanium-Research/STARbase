@@ -214,3 +214,35 @@ export async function emptySpot(page: Page): Promise<{ x: number; y: number }> {
 	}
 	throw new Error('no empty spot on the canvas');
 }
+
+// ---- records made through the API --------------------------------------------------------------------------------------------
+
+/**
+ * A planned operation (CNC Turning) on the seeded sample `inputCode` with a planned output sample, made through Directus's REST API
+ * as `api`'s account. `note` is told of each record, for the clean-up. `root` reads the seed (an admin).
+ */
+export async function makePlanned(api: APIRequestContext, root: APIRequestContext, inputCode: string, note: (r: Ref) => void): Promise<{ operationId: string; sampleId: string; code: string; inputId: string }> {
+	const [input] = await listRecords<{ sample_id: string; material_id: string; project_id: string }>(root, 'physical_samples', `filter[sample_code][_eq]=${inputCode}&fields=sample_id,material_id,project_id`);
+	const [method] = await listRecords<{ method_id: string }>(root, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+	const code = `LOCAL-PLN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+	const sample = await api.post(`${D1}/items/physical_samples`, { data: { sample_code: code, current_status: 'planned', material_id: input.material_id, form: 'cylinder', project_id: input.project_id } });
+	expect(sample.ok(), `planned sample: ${await sample.text()}`).toBeTruthy();
+	const sampleId = (await sample.json()).data.sample_id as string;
+	note({ collection: 'physical_samples', id: sampleId });
+	const op = await api.post(`${D1}/items/manufacturing_operations`, {
+		data: { sample_id: input.sample_id, output_sample_id: sampleId, method_id: method.method_id, work_state: 'planned', process_category: 'machining' },
+	});
+	expect(op.ok(), `planned operation: ${await op.text()}`).toBeTruthy();
+	const operationId = (await op.json()).data.operation_id as string;
+	note({ collection: 'manufacturing_operations', id: operationId });
+	return { operationId, sampleId, code, inputId: input.sample_id };
+}
+
+/** Opens the Process map of a record and chooses Edit (the draft is made from what the map shows). Returns the draft's id. */
+export async function startEditingMapOf(page: Page, collection: string, id: string): Promise<string> {
+	await page.goto(`${STAR}/map?focus=${collection}:${id}`, { waitUntil: 'domcontentloaded' });
+	await page.getByRole('button', { name: 'Edit', exact: true }).click();
+	await page.waitForURL(DRAFT_URL);
+	await expect(page.getByRole('toolbar', { name: 'Edit mode' })).toBeVisible();
+	return draftIdOf(page);
+}
