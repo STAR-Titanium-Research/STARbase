@@ -376,8 +376,10 @@ export function planSteps(changed, buildServices = []) {
 // ---- verify ----------------------------------------------------------------------------------
 
 /**
- * Judge `docker compose ps -a --format json` rows. `touched` services must be running and healthy (or have no
- * healthcheck). With `all` true every other service is judged too, except one-shot jobs that exited 0.
+ * Judge `docker compose ps -a --format json` rows. `touched` services (the ones the deploy recreated) must be running
+ * and healthy (or have no healthcheck). With `all` true the other services are judged leniently: only one that is
+ * restarting, or running but not healthy, counts. Stopped or exited containers are ignored there (ollama, profile
+ * services and one-shot jobs are often down on purpose), so a healthy stack never fails the check.
  * Returns human-readable problems; an empty list means everything is up.
  */
 export function serviceProblems(rows, touched, all = false) {
@@ -392,8 +394,8 @@ export function serviceProblems(rows, touched, all = false) {
 	if (all) {
 		for (const [name, r] of byService) {
 			if (touched.includes(name)) continue;
-			if (r.State === 'exited' && Number(r.ExitCode) === 0) continue;
-			if (!healthy(r)) problems.push(`${name}: ${r.State}${r.Health ? ` (${r.Health})` : ''}`);
+			const unhealthy = r.State === 'restarting' || (r.State === 'running' && r.Health && r.Health !== 'healthy');
+			if (unhealthy) problems.push(`${name}: ${r.State}${r.Health ? ` (${r.Health})` : ''}`);
 		}
 	}
 	return problems;

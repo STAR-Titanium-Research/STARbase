@@ -47,8 +47,11 @@ if (-not $NodePath) {
 $version = & $NodePath --version
 if ($version -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) { Write-Warning "Node $version found; the agent is written for Node 24." }
 
-# The path contains spaces: quote it as a single argument.
-$action = New-ScheduledTaskAction -Execute $NodePath -Argument ('"{0}"' -f $agent) -WorkingDirectory $RepoDir
+# The task runs run-agent.ps1, which starts node and starts it again at once when the agent exits 75 (it replaced its own file).
+# The paths contain spaces: each is one quoted argument.
+$runner = Join-Path $RepoDir 'infra\deploy-agent\run-agent.ps1'
+$psArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -RepoDir "{1}" -NodePath "{2}"' -f $runner, $RepoDir, $NodePath
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $psArgs -WorkingDirectory $RepoDir
 $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $triggers = @(
   (New-ScheduledTaskTrigger -AtLogOn -User $user),

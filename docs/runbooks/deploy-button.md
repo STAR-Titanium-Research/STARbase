@@ -21,7 +21,7 @@ recreates Directus itself. Directus never gets `docker.sock`.
   pending), `git merge --no-edit origin/main`, `npm install` (only when a `package.json` or the lockfile changed), the builds the
   changed paths need, `docker compose up -d` plus the recreates, a health check (up to 180 s), and a note listing `.env.example` keys
   missing from `.env`. Never `npm ci`, `git stash`, `redis-cli FLUSHALL`, `git push`, or another session's containers.
-- One run at a time (`logs/deploy/.lock`). Logs and results are kept for the last 20 runs under `logs/deploy/<id>/`
+- One run at a time (`logs/deploy/.lock`, taken by the agent: a `deploy.mjs run` started by hand does not take it, so do not start one while the button is running). Logs and results are kept for the last 20 runs under `logs/deploy/<id>/`
   (`run.log`, `result.json`); `<id>` is `YYYYMMDDTHHMMSSZ` in UTC.
 
 ## What it refuses (and what to do)
@@ -101,7 +101,8 @@ curl -s -H "X-Deploy-Token: $TOKEN" http://127.0.0.1:8212/state
 - **`npm install` fails on `node_modules`**: a vite dev server from another session holds it. Stop that server and deploy again.
 - **Verify timed out**: a service is not healthy after 180 s. `docker compose ps`, `docker compose logs --since 5m <service>`.
 - **The agent restarted by itself after a deploy**: if the deploy changed `infra/deploy-agent/agent.mjs`, the agent exits with
-  code 75 once the run is recorded and the Scheduled Task starts the new code within a minute.
+  code 75 once the run is recorded and the task's wrapper (`run-agent.ps1`) starts the new code at once. Any other exit (a missing
+  token exits 1) is left to the Scheduled Task's restart-every-minute.
 - **The page is stale after a deploy**: reload it to load the new extensions (Directus restarts when extensions changed; the page
   keeps polling through the restart).
 

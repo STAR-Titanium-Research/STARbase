@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
 	buildServicesFromConfig,
 	formatRunId,
+	makeExec,
 	migrateUpSection,
 	missingEnvKeys,
 	overlap,
@@ -187,8 +188,43 @@ test('serviceProblems', () => {
 		{ Service: 'worker', State: 'running', Health: 'starting' },
 		{ Service: 'init', State: 'exited', ExitCode: 0 },
 		{ Service: 'bad', State: 'restarting' },
+		// stopped on purpose or failed one-shots: never a deploy failure
+		{ Service: 'ollama', State: 'exited', ExitCode: 137 },
+		{ Service: 'archive-indexer', State: 'exited', ExitCode: 1 },
+		{ Service: 'created-one', State: 'created' },
 	];
 	assert.deepEqual(serviceProblems(rows, ['directus', 'proxy']), []);
 	assert.deepEqual(serviceProblems(rows, ['worker', 'missing']), ['worker: running (starting)', 'missing: not running']);
 	assert.deepEqual(serviceProblems(rows, ['directus'], true), ['worker: running (starting)', 'bad: restarting']);
+});
+
+// ---- the real process runner (spawns node itself only; never git, docker or npm) --------------
+
+test('makeExec runs a command without a shell: arguments with spaces stay single arguments', async () => {
+	const exec = makeExec();
+	const chunks = [];
+	const r = await exec(process.execPath, ['-e', 'console.log(JSON.stringify(process.argv.slice(1)))', 'a b c', '--x=1 2', '$HOME; echo hi'], { onData: (c) => chunks.push(c) });
+	assert.equal(r.code, 0);
+	assert.deepEqual(JSON.parse(r.stdout), ['a b c', '--x=1 2', '$HOME; echo hi']);
+	assert.equal(chunks.join(''), r.stdout);
+});
+
+test('makeExec reports exit codes, stderr, a missing program and timeouts without rejecting', async () => {
+	const exec = makeExec();
+	const bad = await exec(process.execPath, ['-e', 'console.error("boom"); process.exit(3)']);
+	assert.equal(bad.code, 3);
+	assert.match(bad.stderr, /boom/);
+
+	const missing = await exec('definitely-not-a-program-xyz', []);
+	assert.equal(missing.code, -1);
+
+	const slow = await exec(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { timeoutMs: 300 });
+	assert.equal(slow.code, -2);
+	assert.match(slow.stderr, /timed out/);
+});
+
+test('makeExec passes env and cwd', async () => {
+	const exec = makeExec();
+	const r = await exec(process.execPath, ['-e', 'console.log(process.env.DEPLOY_T + "|" + process.cwd())'], { env: { ...process.env, DEPLOY_T: 'x y' }, cwd: path.resolve('.') });
+	assert.equal(r.stdout.trim(), `x y|${path.resolve('.')}`);
 });

@@ -2576,8 +2576,8 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   `backup.sh` run first through `DEPLOY_BASH` with the dump name in `result.json`'s `backup`, `up` applying the migration, then the merge; the temporary worktree
   `.claude/worktrees/deploy-main` is gone afterwards. With no pending migration (migration file already applied): no backup is taken. Since: deploy button, stream A.
 - [ ] **DEPLOY6 — The agent replaces itself, and survives being killed mid-run.** (a) Deploy a commit that changes `infra/deploy-agent/agent.mjs`: after the run is recorded the agent exits
-  with code 75 and the Scheduled Task restarts it within about a minute (Task Scheduler's restart-on-failure should treat a non-zero exit as a failure: confirm it does; if not,
-  `install.ps1` needs a wrapper loop). (b) Start a deploy, then stop the task (or the machine) mid-run: after the agent starts again the run shows `interrupted`, the lock is gone,
+  with code 75 and `run-agent.ps1` (the task's wrapper) starts the new code within seconds; the log shows two `listening` lines. Also stop the agent with a wrong
+  token (exit 1) and see whether Task Scheduler's restart-every-minute really restarts it (it may only fire for tasks that fail to launch; if not, the wrapper needs to loop on every exit). (b) Start a deploy, then stop the task (or the machine) mid-run: after the agent starts again the run shows `interrupted`, the lock is gone,
   and a new deploy can start. (c) With the task stopped, the Deploy page says the agent is unreachable and offers the fix hint. Since: deploy button, stream A.
 - [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
   `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.

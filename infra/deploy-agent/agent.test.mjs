@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { createAgent, parseDotEnv, tokensEqual } from './agent.mjs';
+import { createAgent, makeRunner, parseDotEnv, tokensEqual } from './agent.mjs';
 
 const TOKEN = 'test-token-123';
 const cleanups = [];
@@ -452,4 +452,43 @@ test('run ids never collide within the same second', async () => {
 	const b = await call('POST', '/deploy', { body: {} });
 	assert.equal(a.json.id, '20261018T120000Z');
 	assert.equal(b.json.id, '20261018T120001Z');
+});
+
+// ---- the real runner against a stub deploy.mjs (spawns node itself only) -----------------------
+
+test('makeRunner.spawnDeploy: detached child, output appended to the log, result file with spaces in the path, ack as single args', async () => {
+	const repoDir = mkdtempSync(path.join(tmpdir(), 'deploy agent real '));
+	cleanups.push(() => rmSync(repoDir, { recursive: true, force: true }));
+	mkdirSync(path.join(repoDir, 'scripts', 'deploy'), { recursive: true });
+	writeFileSync(
+		path.join(repoDir, 'scripts', 'deploy', 'deploy.mjs'),
+		[
+			"import { writeFileSync } from 'node:fs';",
+			'const args = process.argv.slice(2);',
+			"console.log('##STEP preflight');",
+			"const rf = args.find((a) => a.startsWith('--result-file=')).slice(14);",
+			"writeFileSync(rf, JSON.stringify({ args, cwd: process.cwd() }));",
+			'if (args[0] === "check") console.log(JSON.stringify({ upToDate: true }));',
+		].join('\n'),
+	);
+	const runner = makeRunner(repoDir);
+	const runDir = path.join(repoDir, 'logs', 'deploy', '20261018T120000Z');
+	mkdirSync(runDir, { recursive: true });
+	const logPath = path.join(runDir, 'run.log');
+	const resultFile = path.join(runDir, 'result.json');
+	const { pid, exited } = runner.spawnDeploy({ id: '20261018T120000Z', ack: ['db/migrations/a b.sql', '--json'], actor: 'u1', logPath, resultFile });
+	assert.ok(Number.isInteger(pid));
+	assert.equal(await exited, 0);
+	assert.match(readFileSync(logPath, 'utf8'), /##STEP preflight/);
+	const seen = JSON.parse(readFileSync(resultFile, 'utf8'));
+	assert.deepEqual(seen.args.slice(0, 4), ['run', '--json', '--id=20261018T120000Z', '--actor=u1']);
+	assert.ok(seen.args.includes('--ack=db/migrations/a b.sql'));
+	assert.ok(seen.args.includes('--ack=--json'));
+	assert.equal(path.resolve(seen.cwd), path.resolve(repoDir));
+	assert.equal(runner.isAlive(pid), false);
+	assert.equal(runner.isAlive(process.pid), true);
+
+	// check goes through the same script, with a timeout
+	const chk = await runner.check();
+	assert.equal(chk.code, 1); // the stub's check run has no --result-file, so it throws: a failing check is reported, not hidden
 });
