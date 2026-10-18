@@ -111,9 +111,10 @@ describe('toGraph', () => {
 		expect(toGraph(null, done, ctx).samples.find((s) => s.id === 'draft:n4')?.status).toBeNull();
 	});
 
-	it('a pass appended in place to a stack of passes joins the stack, drawn through buildGraph', () => {
+	it('a pass appended in place to a stack of passes of the same work state joins the stack, drawn through buildGraph', () => {
+		// Planned recorded passes: a planned draft pass stacks with them (a done stack and a planned pass stay apart, groupBatches).
 		const pass = (id: string, day: number) =>
-			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z` });
+			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, workState: 'planned' });
 		const loaded = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2)] });
 		const body = run([
 			{ type: 'addPass', sample: { id: 's1', version: 4 }, values: { method_id: 'turn', equipment_id: 'lathe', operation_date: '2026-09-09', notes: 'drop me' }, workState: 'planned' },
@@ -124,9 +125,19 @@ describe('toGraph', () => {
 		const g = draw(data);
 		const stack = container(g, 'stack:a,b,draft:n3');
 		expect(stack).toMatchObject({ stacked: true, title: '3 passes' });
-		// The recorded passes are done, the new one is planned and a draft: the stack is neither.
-		expect(stack.planned).toBeUndefined();
+		// Recorded passes and a draft one: a mixed stack is neither flag as a whole.
+		expect(stack.draft).toBeUndefined();
 		expect(g.nodes.filter((n) => n.type === 'container')).toHaveLength(1);
+	});
+
+	it('a planned pass appended to done passes is a container of its own', () => {
+		const pass = (id: string, day: number) =>
+			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z` });
+		const loaded = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2)] });
+		const body = run([{ type: 'addPass', sample: { id: 's1', version: 4 }, values: { method_id: 'turn', equipment_id: 'lathe' }, workState: 'planned' }]);
+		const g = draw(toGraph(loaded, body, ctx));
+		expect(container(g, 'stack:a,b').planned).toBeUndefined();
+		expect(container(g, 'op:draft:n3')).toMatchObject({ draft: true, planned: true });
 	});
 
 	it('duplicate x N of an in-place pass makes a stack of N + 1 once drawn', () => {
@@ -181,7 +192,7 @@ describe('toGraph', () => {
 	});
 
 	it('an undated draft pass goes after the undated recorded passes on its sample', () => {
-		const recorded = mkOp({ id: 'rec', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: null, sequence: null });
+		const recorded = mkOp({ id: 'rec', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: null, sequence: null, workState: 'planned' });
 		const body = run([{ type: 'addPass', sample: { id: 's1', version: 1 }, values: { method_id: 'turn', equipment_id: 'lathe' } }]);
 		const data = toGraph(mkData({ samples: [mkSample('s1')], operations: [recorded] }), body, ctx);
 		const g = draw(data);

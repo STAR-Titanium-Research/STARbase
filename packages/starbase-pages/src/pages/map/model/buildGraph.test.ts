@@ -794,22 +794,31 @@ describe('buildGraph: planned work and drafts', () => {
     expect(container(build(data), 'test:t').planned).toBe(true);
   });
 
-  it('a draft pass in place joins the stack of passes the recorded ones make, and draft samples carry the draft flag', () => {
+  it('a draft pass in place joins a stack of draft passes, not the recorded done ones (planned and done stay apart), and draft samples carry the draft flag', () => {
     const pass = (id: string, day: number, p: Parameters<typeof mkOp>[0] = {}) =>
       mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, ...p });
-    // Two recorded passes, and a third drawn from the draft: planned, no date of its own, no batch, no output.
+    // Two recorded passes, and two drawn from the draft: planned, no date of its own, no batch, no output.
     const data = mkData({
       samples: [mkSample('s1'), mkSample('d1', { draft: true })],
-      operations: [pass('a', 1), pass('b', 2), pass('c', 3, { date: null, workState: 'planned', draft: true })],
+      operations: [pass('a', 1), pass('b', 2), pass('c', 3, { date: null, workState: 'planned', draft: true }), pass('d', 4, { date: null, workState: 'planned', draft: true })],
     });
     const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
-    const stack = container(g, 'stack:a,b,c');
-    expect(stack).toMatchObject({ stacked: true, title: '3 passes' });
-    // Mixed recorded and draft: neither flag on the stack as a whole.
-    expect(stack.planned).toBeUndefined();
-    expect(stack.draft).toBeUndefined();
+    expect(container(g, 'stack:a,b')).toMatchObject({ stacked: true, title: '2 passes' });
+    expect(container(g, 'stack:a,b').planned).toBeUndefined();
+    const planned = container(g, 'stack:c,d');
+    expect(planned).toMatchObject({ stacked: true, planned: true, draft: true });
     expect(record(g, 's:d1').draft).toBe(true);
     expect(record(g, 's:s1').draft).toBeUndefined();
+  });
+
+  it('a planned recorded pass beside done passes is a container of its own, planned, so Mark done is offered', () => {
+    const pass = (id: string, day: number, p: Parameters<typeof mkOp>[0] = {}) =>
+      mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, ...p });
+    const data = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2), pass('c', 3, { workState: 'planned' })] });
+    const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
+    expect(container(g, 'stack:a,b').planned).toBeUndefined();
+    expect(container(g, 'op:c')).toMatchObject({ planned: true });
+    expect(container(g, 'op:c').stacked).toBeFalsy();
   });
 
   it('a container of draft rows only is a draft container', () => {
