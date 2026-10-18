@@ -1,7 +1,7 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, makePlanned, relativeLayout, savedDraft, selectCard, startEditingMapOf, wireBetween,
+	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, dragCard, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, distinctRecords, makePlanned, makeTechSituation, relativeLayout, secondMember, savedDraft, selectCard, startEditingMapOf, wireBetween,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -22,13 +22,20 @@ import {
 
 let admin: APIRequestContext;
 let member: APIRequestContext;
+/** The Lab Member's People row. */
+let memberPerson: string;
 const made: Ref[] = [];
 const noteMade = (r: Ref): void => void (made.some((m) => m.id === r.id) || made.push(r));
+/** Users a test made (a second Lab Member), removed afterwards with their People rows. */
+const users: { userId: string; personId: string | null }[] = [];
+const noteUser = (u: { userId: string; personId: string | null }): void => void users.push(u);
 
 test.beforeAll(async ({ playwright }) => {
 	test.skip(!stackAvailable(), 'the local stack is not up: run `bash scripts/dev/local-stack.sh up`');
 	admin = await apiAs(playwright, 'admin');
 	member = await apiAs(playwright, 'member');
+	const me = await (await member.get(`${D1}/users/me?fields=id`)).json();
+	memberPerson = (await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`))[0].person_id;
 });
 
 async function deleteDrafts(api: APIRequestContext): Promise<void> {
@@ -42,11 +49,17 @@ test.afterEach(async () => {
 	await deleteDrafts(member);
 	for (const collection of ['manufacturing_operations', 'test_sessions', 'physical_samples']) {
 		for (const ref of made.filter((m) => m.collection === collection)) {
+			// A done operation or test cannot be deleted: send it back to planned first (an admin may), then delete it.
+			if (collection !== 'physical_samples') await admin.post(`${D1}/d1-build/mark-planned`, { data: { collection, ids: [ref.id] } });
 			const r = await admin.delete(`${D1}/items/${collection}/${ref.id}`);
 			if (!r.ok() && r.status() !== 404) console.warn(`clean-up: DELETE ${collection}/${ref.id} answered ${r.status()}: ${await r.text()}`);
 		}
 	}
 	made.length = 0;
+	for (const u of users.splice(0)) {
+		await admin.delete(`${D1}/users/${u.userId}`);
+		if (u.personId) await admin.delete(`${D1}/items/people/${u.personId}`);
+	}
 });
 
 test.describe('as a Lab Member', () => {
@@ -343,13 +356,13 @@ test.describe('as a Lab Member', () => {
 		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 		await settledOverlaps(page);
 		await fit(page);
-		const mover = card(page, 'New sample, Sample').first();
-		const id = (await mover.getAttribute('data-id'))!;
+		// By its id: the order of the cards in the page changes as they are dragged.
+		const id = (await card(page, 'New sample, Sample').first().getAttribute('data-id'))!;
+		const mover = canvasOf(page).locator(`.vue-flow__node[data-id="${id}"]`);
 		const key = id.replace(/^s:draft:/, '');
 		const was = await flowPos(mover);
-		const spot = await boxOf(mover);
 		// Drag it down and to the left, well away from where it was put.
-		await dragBetween(page, { x: spot.x + 40, y: spot.y + 12 }, { x: spot.x - 60, y: spot.y + 160 });
+		await dragCard(page, mover, { x: -60, y: 150 });
 		await expect.poll(async () => (await flowPos(mover)).y, { message: 'the card moved with the pointer' }).toBeGreaterThan(was.y + 20);
 		const dragged = await flowPos(mover);
 		const saved = await savedDraft(page, member, (b) => !!b.positions[key] && Math.abs(b.positions[key].y - dragged.y) < 1, 'the dragged position saved');
@@ -364,7 +377,7 @@ test.describe('as a Lab Member', () => {
 		await page.reload();
 		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 		await settledOverlaps(page);
-		const after = await flowPos(card(page, `New sample, Sample`).and(page.locator(`[data-id="${id}"]`)));
+		const after = await flowPos(mover);
 		expect(after.x, 'x after the reload').toBeCloseTo(dragged.x, 0);
 		expect(after.y, 'y after the reload').toBeCloseTo(dragged.y, 0);
 	});
@@ -379,16 +392,14 @@ test.describe('as a Lab Member', () => {
 		const focus = card(page, 'LOCAL-BAR-1, Sample');
 		const loose = card(page, 'New sample, Sample');
 		const [focusWas, looseWas] = [await flowPos(focus), await flowPos(loose)];
-		const b = await boxOf(loose);
-		await dragBetween(page, { x: b.x + 40, y: b.y + 12 }, { x: b.x + 40, y: b.y - 150 });
+		await dragCard(page, loose, { x: 0, y: -150 });
 		await expect.poll(async () => (await flowPos(loose)).y, { message: 'the dragged card moved up' }).toBeLessThan(looseWas.y - 40);
 		expect(await flowPos(focus), 'the recorded, selected card did not move with it').toEqual(focusWas);
 		// Select another card, then drag the first again: the one selected does not follow.
 		const material = card(page, 'AA, Material');
 		const [materialWas, looseNow] = [await flowPos(material), await flowPos(loose)];
 		await selectCard(page, material);
-		const b2 = await boxOf(loose);
-		await dragBetween(page, { x: b2.x + 40, y: b2.y + 12 }, { x: b2.x + 140, y: b2.y + 12 });
+		await dragCard(page, loose, { x: 100, y: 0 });
 		await expect.poll(async () => (await flowPos(loose)).x, { message: 'the dragged card moved right' }).toBeGreaterThan(looseNow.x + 40);
 		expect(await flowPos(material), 'the selected material did not follow the drag').toEqual(materialWas);
 		expect(await flowPos(focus)).toEqual(focusWas);
@@ -412,9 +423,9 @@ test.describe('as a Lab Member', () => {
 		await fit(page);
 		// A mess: drag the two loose samples on top of the operation the draft added.
 		const target = await boxOf(card(page, /, Operation$/).and(page.locator('[data-id^="op:draft:"]')));
-		for (const loose of [card(page, 'New sample, Sample').nth(0), card(page, 'New sample, Sample').nth(1)]) {
-			const b = await boxOf(loose);
-			await dragBetween(page, { x: b.x + 40, y: b.y + 12 }, { x: target.x + 60, y: target.y + 16 });
+		const looseIds = await card(page, 'New sample, Sample').evaluateAll((els) => els.map((e) => e.getAttribute('data-id')!));
+		for (const loose of looseIds.map((lid) => canvasOf(page).locator(`.vue-flow__node[data-id="${lid}"]`))) {
+			await dragCard(page, loose, null, { x: target.x + 60, y: target.y + 16 });
 		}
 		const messy = await flowPositions(page);
 		const draftIds = Object.keys(messy).filter((id) => id.includes('draft:'));
@@ -434,6 +445,123 @@ test.describe('as a Lab Member', () => {
 		await expect.poll(async () => JSON.stringify(await flowPositions(page)), { message: 'undo restored the positions' }).toBe(JSON.stringify(messy));
 		const undone = await savedDraft(page, member, (b) => JSON.stringify(b.positions) === JSON.stringify(savedBefore.positions), 'undo saved the old positions');
 		expect(undone.items, 'undo took back Tidy and nothing else').toHaveLength(savedBefore.items.length);
+	});
+
+	// ---- 6. Mark done and Back to planned (R10, plain fix 13) -----------------------------------------------------------------------
+	const markDoneButton = (page: Page) => page.getByRole('button', { name: 'Mark done', exact: true });
+	/** Selects the operation's card in view mode and runs the Mark done dialog as a person would (the default date and person). */
+	async function markDoneInBrowser(page: Page, operationId: string): Promise<void> {
+		await page.goto(`${STAR}/map?focus=manufacturing_operations:${operationId}`, { waitUntil: 'domcontentloaded' });
+		const operation = cards(page).and(page.locator(`[data-id="op:${operationId}"]`));
+		await expect(operation).toBeVisible();
+		await selectCard(page, operation);
+		await markDoneButton(page).click();
+		const dialog = page.getByRole('dialog', { name: /Mark/ });
+		await expect(dialog).toBeVisible();
+		const answered = page.waitForResponse((r) => r.url().endsWith('/d1-build/mark-done') && r.request().method() === 'POST');
+		await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
+		expect((await answered).status()).toBe(200);
+		await expect(dialog).toBeHidden();
+	}
+
+	test('Mark done by the owner of the operation: done, done_at and done_by_person_id are set, and the planned output sample is active (R10)', async ({ page }) => {
+		const { operationId, sampleId } = await makePlanned(member, admin, 'LOCAL-RAW-2', noteMade);
+		// What the output sample's form needs before it can be made active (the server asks for it, with system rights).
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		expect((await member.patch(`${D1}/items/physical_samples/${sampleId}`, { data: { primary_method_id: method.method_id } })).ok()).toBeTruthy();
+		await markDoneInBrowser(page, operationId);
+		const op = await readRecord<{ work_state: string; done_at: string | null; done_by_person_id: string | null; operation_date: string | null }>(
+			member, 'manufacturing_operations', operationId, 'work_state,done_at,done_by_person_id,operation_date',
+		);
+		expect(op.work_state).toBe('done');
+		expect(op.done_at, 'done_at is set').toBeTruthy();
+		expect(op.done_by_person_id, 'marked done by the member').toBe(memberPerson);
+		expect(op.operation_date, 'the date it was done').toBeTruthy();
+		expect((await readRecord<{ current_status: string }>(member, 'physical_samples', sampleId, 'current_status')).current_status, 'the planned output turned active').toBe('active');
+		// The map shows it: the sample card says Active now.
+		await expect(page.getByRole('group', { name: /^LOCAL-PLN-.*, Sample$/ }).getByText('Active')).toBeVisible();
+	});
+
+	test('Mark done when the member may edit the operation but not its output sample: the status flip uses system rights (R10)', async ({ page }) => {
+		const made2 = await makeTechSituation(admin, member, noteMade);
+		// The situation is real: the member may write the operation, and the sample is refused to them.
+		expect((await member.patch(`${D1}/items/physical_samples/${made2.sampleId}`, { data: { notes: 'x' } })).status(), 'the member may not edit the output sample').toBe(403);
+		expect((await member.patch(`${D1}/items/manufacturing_operations/${made2.operationId}`, { data: { outcome_notes: 'x' } })).ok(), 'but may edit the operation').toBeTruthy();
+		await markDoneInBrowser(page, made2.operationId);
+		const op = await readRecord<{ work_state: string; done_by_person_id: string }>(member, 'manufacturing_operations', made2.operationId, 'work_state,done_by_person_id');
+		expect(op).toEqual({ work_state: 'done', done_by_person_id: memberPerson });
+		expect((await listRecords<{ current_status: string }>(admin, 'physical_samples', `filter[sample_id][_eq]=${made2.sampleId}&fields=current_status`))[0].current_status).toBe('active');
+		// Nothing else about the sample changed: the flip touches current_status only.
+		const sample = (await listRecords<{ notes: string | null; owner_person_id: string }>(admin, 'physical_samples', `filter[sample_id][_eq]=${made2.sampleId}&fields=notes,owner_person_id`))[0];
+		expect(sample.notes).toBeNull();
+		expect(sample.owner_person_id, 'still the admin person\'s').toBe(made2.ownerPersonId);
+	});
+
+	test('Back to planned by the owner: the operation and its output go back to planned (plain fix 13)', async ({ page }) => {
+		const { operationId, sampleId } = await makePlanned(member, admin, 'LOCAL-RAW-2', noteMade);
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		await member.patch(`${D1}/items/physical_samples/${sampleId}`, { data: { primary_method_id: method.method_id } });
+		await markDoneInBrowser(page, operationId);
+		await expect(page.getByRole('button', { name: 'Back to planned', exact: true })).toBeVisible();
+		const answered = page.waitForResponse((r) => r.url().endsWith('/d1-build/mark-planned') && r.request().method() === 'POST');
+		await page.getByRole('button', { name: 'Back to planned', exact: true }).click();
+		expect((await answered).status()).toBe(200);
+		const op = await readRecord<{ work_state: string; done_at: string | null; done_by_person_id: string | null }>(member, 'manufacturing_operations', operationId, 'work_state,done_at,done_by_person_id');
+		expect(op).toEqual({ work_state: 'planned', done_at: null, done_by_person_id: null });
+		expect((await readRecord<{ current_status: string }>(member, 'physical_samples', sampleId, 'current_status')).current_status).toBe('planned');
+		await expect(markDoneButton(page)).toBeVisible();
+	});
+
+	test('Back to planned is refused to a Lab Member who does not own the operation, and nothing changes (plain fix 13)', async ({ playwright }) => {
+		const { operationId, sampleId } = await makePlanned(member, admin, 'LOCAL-RAW-2', noteMade);
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		await member.patch(`${D1}/items/physical_samples/${sampleId}`, { data: { primary_method_id: method.method_id } });
+		expect((await member.post(`${D1}/d1-build/mark-done`, { data: { collection: 'manufacturing_operations', ids: [operationId] } })).ok()).toBeTruthy();
+		// A second Lab Member who may EDIT the operation (the owner shares it with them) without owning it.
+		const other = await secondMember(playwright, admin, noteUser);
+		const shared = await member.post(`${D1}/d1-record-access/manufacturing_operations/${operationId}/entries`, { data: { person_id: other.personId, role: 'edit' } });
+		expect(shared.ok(), await shared.text()).toBeTruthy();
+		expect((await other.api.patch(`${D1}/items/manufacturing_operations/${operationId}`, { data: { outcome_notes: 'edited by the second member' } })).ok(), 'the second member may edit it').toBeTruthy();
+		const refused = await other.api.post(`${D1}/d1-build/mark-planned`, { data: { collection: 'manufacturing_operations', ids: [operationId] } });
+		expect(refused.status(), await refused.text()).toBe(403);
+		expect((await readRecord<{ work_state: string }>(member, 'manufacturing_operations', operationId, 'work_state')).work_state, 'still done').toBe('done');
+		expect((await readRecord<{ current_status: string }>(member, 'physical_samples', sampleId, 'current_status')).current_status, 'its output is still active').toBe('active');
+	});
+
+	test('Back to planned by an operation owner who cannot edit the output sample (the technician above) is not refused (design gap, see the report)', async () => {
+		// R10 lets the technician Mark done with system rights, but /mark-planned writes the output sample with the caller's own rights, so the
+		// same person gets a 403 on the way back and the operation stays done. Not in R10's wording ("Mark done by whoever may edit the
+		// operation"; Back to planned "owner rules unchanged"): a design question, so this is a known failure, not a fix.
+		test.fail(true, 'design gap: /mark-planned flips the output sample with the caller\'s rights, not system rights');
+		const made2 = await makeTechSituation(admin, member, noteMade);
+		expect((await member.post(`${D1}/d1-build/mark-done`, { data: { collection: 'manufacturing_operations', ids: [made2.operationId] } })).ok()).toBeTruthy();
+		const back = await member.post(`${D1}/d1-build/mark-planned`, { data: { collection: 'manufacturing_operations', ids: [made2.operationId] } });
+		expect(back.status(), await back.text()).toBe(200);
+	});
+
+	// ---- d1-build writes test_category and the inherited material (plain fix 7, slice 1a) ------------------------------------------
+	test('a Create with a new test and a new operation: test_category is filled and the operation inherits its sample\'s material, read back through REST (spec section 3, item 7)', async ({ page }) => {
+		const rawId = await sampleIdOf(admin, 'LOCAL-RAW-1');
+		const rawMaterial = (await readRecord<{ material_id: string }>(member, 'physical_samples', rawId, 'material_id')).material_id;
+		expect(rawMaterial, 'the seed sample has a material').toBeTruthy();
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${rawId}|out`).first(), /CNC Turning/);
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${rawId}|out`).first(), /Tensile/i);
+		await expect(createButton(page)).toHaveText('Create 1 operation, 1 test');
+		await expect(createButton(page)).toBeEnabled();
+		const { status, body } = await pressCreate(page, noteMade);
+		expect(status, JSON.stringify(body)).toBe(200);
+		const records = distinctRecords(body.data!.created);
+		const operation = records.find((r) => r.collection === 'manufacturing_operations')!;
+		const test_ = records.find((r) => r.collection === 'test_sessions')!;
+		const op = await readRecord<{ material_id: string | null; sample_id: string; work_state: string }>(member, 'manufacturing_operations', operation.id, 'material_id,sample_id,work_state');
+		expect(op.material_id, 'the operation inherited its input sample\'s material').toBe(rawMaterial);
+		const t = await readRecord<{ test_category: string | null; test_type: string; work_state: string; sample_id: string }>(member, 'test_sessions', test_.id, 'test_category,test_type,work_state,sample_id');
+		expect(t.test_type).toBe('tensile');
+		expect(t.test_category, 'test_category is filled (not null)').toBeTruthy();
+		expect(t.work_state).toBe('planned');
+		expect(t.sample_id, 'the test is on the picked sample').toBe(rawId);
 	});
 
 	test('a done operation, a done sample and the wire between them cannot be removed: a lock, the reason, and nothing is sent (R4, ADR-0019 §6)', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Locator, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
 import { D1, STAR, listRecords } from './localStack';
 
 // What a person does on the process map's edit mode (`/map?edit=...`), as helpers for the specs that run against the LOCAL STACK
@@ -120,7 +120,9 @@ export async function reach(page: Page, l: Locator): Promise<void> {
 export async function selectCard(page: Page, c: Locator): Promise<void> {
 	await reach(page, c);
 	await c.locator('.code, .oname .n').first().click();
-	await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeEnabled();
+	// Selected: the lid's Remove is on (edit mode), or the card wears the selected class (view mode has no lid).
+	if (await page.getByRole('toolbar', { name: 'Edit mode' }).count()) await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeEnabled();
+	else await expect(c).toHaveClass(/\bselected\b/);
 }
 
 // ---- starting and building a draft -----------------------------------------------------------------------------------------
@@ -198,6 +200,19 @@ export async function dragBetween(page: Page, from: { x: number; y: number }, to
 	await page.mouse.down();
 	await page.mouse.move(to.x, to.y, { steps });
 	await page.mouse.up();
+}
+/**
+ * Drags a card by its title by `by` screen pixels (or onto `to`). Checks first that the title really is what is under the pointer, so a
+ * card covered by another says so instead of the other one being dragged.
+ */
+export async function dragCard(page: Page, c: Locator, by: { x: number; y: number } | null, to?: { x: number; y: number }): Promise<void> {
+	await reach(page, c);
+	const id = await c.getAttribute('data-id');
+	const handle = await boxOf(c.locator('.ntop, .ohead').first());
+	const from = { x: handle.x + Math.min(40, handle.width / 3), y: handle.y + handle.height / 2 };
+	const under = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.vue-flow__node')?.getAttribute('data-id') ?? null, from);
+	expect(under, `the card ${id} is what is under the pointer at ${from.x},${from.y}`).toBe(id);
+	await dragBetween(page, from, to ?? { x: from.x + by!.x, y: from.y + by!.y });
 }
 export async function dragFrom(page: Page, source: Locator, to: { x: number; y: number }): Promise<void> {
 	await dragBetween(page, centreOf(await boxOf(source)), to);
@@ -295,6 +310,58 @@ export async function makePlanned(api: APIRequestContext, root: APIRequestContex
 	const operationId = (await op.json()).data.operation_id as string;
 	note({ collection: 'manufacturing_operations', id: operationId });
 	return { operationId, sampleId, code, inputId: input.sample_id };
+}
+
+/**
+ * A planned operation the Lab Member OWNS (so may edit) whose planned output sample belongs to the Lab Admin's person: the member may
+ * read that sample but not write it (the access rules' sample.editors). Made by the admin through the REST API. The output sample has a
+ * manufacturing method, which making it active asks for.
+ */
+export async function makeTechSituation(admin: APIRequestContext, member: APIRequestContext, note: (r: Ref) => void): Promise<{ operationId: string; sampleId: string; ownerPersonId: string }> {
+	const personOf = async (api: APIRequestContext): Promise<string> => {
+		const me = await (await api.get(`${D1}/users/me?fields=id`)).json();
+		return (await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`))[0].person_id;
+	};
+	const [memberPerson, adminPerson] = [await personOf(member), await personOf(admin)];
+	const [input] = await listRecords<{ sample_id: string; material_id: string; project_id: string }>(admin, 'physical_samples', 'filter[sample_code][_eq]=LOCAL-RAW-2&fields=sample_id,material_id,project_id');
+	const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+	const code = `LOCAL-TECH-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+	const sample = await admin.post(`${D1}/items/physical_samples`, {
+		data: { sample_code: code, current_status: 'planned', material_id: input.material_id, form: 'cylinder', project_id: input.project_id, owner_person_id: adminPerson, primary_method_id: method.method_id },
+	});
+	expect(sample.ok(), `output sample: ${await sample.text()}`).toBeTruthy();
+	const sampleId = JSON.parse(await sample.text()).data.sample_id as string;
+	note({ collection: 'physical_samples', id: sampleId });
+	const op = await admin.post(`${D1}/items/manufacturing_operations`, {
+		data: { sample_id: input.sample_id, output_sample_id: sampleId, method_id: method.method_id, work_state: 'planned', process_category: 'machining', owner_person_id: memberPerson },
+	});
+	expect(op.ok(), `operation: ${await op.text()}`).toBeTruthy();
+	const operationId = JSON.parse(await op.text()).data.operation_id as string;
+	note({ collection: 'manufacturing_operations', id: operationId });
+	return { operationId, sampleId, ownerPersonId: adminPerson };
+}
+
+const ROLE_MEMBER = '10000001-0000-0000-0000-000000000002';
+/** A second Lab Member (made by the admin, signed in through the API): someone who owns none of the seed's records. */
+export async function secondMember(
+	playwright: PlaywrightWorkerArgs['playwright'],
+	admin: APIRequestContext,
+	note: (u: { userId: string; personId: string | null }) => void,
+): Promise<{ api: APIRequestContext; personId: string }> {
+	const suffix = Math.random().toString(36).slice(2, 8);
+	const email = `local-member-2-${suffix}@example.com`;
+	const password = `Mb2-${Math.random().toString(36).slice(2)}-Zq9!`;
+	const made = await admin.post(`${D1}/users`, { data: { email, password, role: ROLE_MEMBER, first_name: 'Second', last_name: 'Member', status: 'active' } });
+	expect(made.ok(), `second member: ${await made.text()}`).toBeTruthy();
+	const userId = JSON.parse(await made.text()).data.id as string;
+	const [person] = await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${userId}&fields=person_id`);
+	note({ userId, personId: person?.person_id ?? null });
+	const anon = await playwright.request.newContext();
+	const login = await anon.post(`${D1}/auth/login`, { data: { email, password, mode: 'json' } });
+	expect(login.ok(), 'second member login').toBeTruthy();
+	const token = (await login.json()).data.access_token as string;
+	await anon.dispose();
+	return { api: await playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${token}` } }), personId: person.person_id };
 }
 
 /** Opens the Process map of a record and chooses Edit (the draft is made from what the map shows). Returns the draft's id. */
