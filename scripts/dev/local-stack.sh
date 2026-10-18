@@ -15,7 +15,10 @@
 #   bash scripts/dev/local-stack.sh down     # stop STARbase, Directus and Postgres (data kept); `down --purge` also deletes the data
 #
 # Then run the browser suite (tests/ui/README.md, "Process map edit mode against the local stack"):
-#   cd tests/ui && npx playwright test specs/edit-mode.spec.ts
+#   cd tests/ui && npx playwright test -c playwright.local-stack.config.ts
+# Timing (4 cores, warm npm cache, node_modules already in the repo): from nothing at all `up` took 81 s (Directus install and dbmate
+# download included); a fresh database once Directus is installed about 20 s; `down` then `up` with the data kept about 8 s; the suite
+# about 2.2 minutes. A first-ever `npm ci` in the repo and a cold npm cache add a few minutes.
 #
 # PREREQUISITES
 #   * Linux with the Postgres 16 server binaries in /usr/lib/postgresql/16/bin (override PGBIN) and the postgresql-16-pgvector package.
@@ -26,7 +29,7 @@
 #     the proxy in the cloud container. Nothing else is downloaded.
 #
 # WHERE THINGS LIVE (D1_STACK_DIR, default /tmp/d1-local-stack; outside the repo, nothing here is committed)
-#   pg/           the Postgres data directory and socket        bin/dbmate     the dbmate binary (v2.23.0, as docs/ci-cd.md)
+#   pg/           the Postgres data directory and socket        bin/dbmate     the dbmate binary (v2.23.0, the one the db-migration skill names)
 #   directus/     `npm i directus@11.x` (its own node_modules, NOT the repo's)     uploads/   Directus's local file storage
 #   stack.env     secrets generated on first `up`               credentials.txt   the test logins (format of tests/ui/starbase/target.ts)
 #   logs/         one log per process                            run/           pid files
@@ -41,31 +44,36 @@
 #   The same environment variables where they matter to a browser run: DB_*, KEY/SECRET, PUBLIC_URL, CORS_* (STARbase's origin, with
 #   credentials), CORS_EXPOSED_HEADERS, the frame-ancestors CSP, SESSION_COOKIE_SECURE=false, STARBASE_URL, the invite/reset allow-lists,
 #   STORAGE_LOCATIONS=local, the ASSETS_TRANSFORM_* limits, D1_TIMEZONE, FLOWS_ENV_ALLOW_LIST, WORKER_WEBHOOK_SECRET. The database user
-#   is d1, a SUPERUSER as in the postgres image, so d1_private (created by migration 168/190 as d1) is owned by the user Directus uses.
+#   is d1, a SUPERUSER as in the postgres image, and the migrations run as d1 too, so d1_private (drafts, templates) is owned by the user
+#   Directus connects as. The database is UTF8 with the C.utf8 locale (migration ...116 needs an ICU collation, which SQL_ASCII refuses).
 #   EXTENSIONS_PATH is a copy of core/extensions that keeps only what runs server-side (see "Extensions" below).
 #
-# ORDER OF EVENTS (the same as production, where Directus exists long before the newest migrations)
+# ORDER OF EVENTS (the order live lived: Directus first, the configure scripts early, the newest migrations last)
 #   1. initdb + start Postgres, create role d1 and database d1_database.
 #   2. `directus bootstrap` on the empty database: the real directus_* tables (with their foreign keys) and one bootstrap admin
 #      (token in stack.env). Migration 20260624000030_directus_stubs.sql is CREATE TABLE IF NOT EXISTS, so it then does nothing.
-#   3. dbmate up: every migration in db/migrations.
-#   4. db/seeds/001_reference_data.sql (materials, manufacturing methods, equipment), as `make seed`.
-#   5. scripts/configure_users_and_policies.sql up to its "5. Users" section: the Lab Admin / Lab Member / Lab Viewer roles and policies,
-#      and the generated permission rows (scripts/access_rules.json via gen_access_rules.py). Section 5 is the maintainers' own 15 real
+#   3. The three roles, policies and bindings (sections 0-3 of scripts/configure_users_and_policies.sql): live has had them since July and
+#      real Directus's foreign key directus_permissions.policy refuses the permission rows migration ...066 and later insert without them.
+#   4. dbmate up for the early migrations (every one up to D1_STACK_CONFIGURE_AFTER, default 20260629000051), then the configure_*.sql
+#      files in scripts/configure_all.sh's order (the labels, required flags, groups and relations of Directus's field metadata, which
+#      the draft forms and d1-build's REQUIRED checks read), then dbmate up for everything else. Running those scripts after all the
+#      migrations instead wipes the `subject` alias of test_sessions and 60-odd other field rows (configure_all.sh's own warning), and
+#      the map's test queries then answer 403.
+#   5. db/seeds/001_reference_data.sql (materials, manufacturing methods, equipment), as `make seed`.
+#   6. scripts/configure_users_and_policies.sql up to its "5. Users" section: the roles and policies again and the generated permission
+#      rows of Lab Member and Lab Viewer (scripts/access_rules.json via gen_access_rules.py). Section 5 is the maintainers' own 15 real
 #      accounts and is NOT applied here.
-#   6. Start Directus, create the three test logins through its API (so passwords are hashed by Directus and the d1-person-link hook
+#   7. Start Directus, create the three test logins through its API (so passwords are hashed by Directus and the d1-person-link hook
 #      makes their People rows), then apply scripts/dev/local-stack.seed.sql (a small sample family).
-#   7. Start STARbase's vite dev server.
+#   8. Start STARbase's vite dev server.
+#   Two things differ from live on purpose: the foreign key directus_collections.group is dropped (see relax_directus_fks), and the
+#   metadata is that of "configure at migration 51, the rest on top", not of live's hand-repaired history.
 #
 # WHAT WAS NOT RUN, AND WHY
-#   * scripts/configure_all.sh: its own header forbids it on a database that has migrations applied (it deletes the directus_fields rows
-#     that later migrations added). Only the users-and-policies file is applied, which is what gives the roles and permissions of live.
-#     Consequence: the form-layout / interface metadata the configure_*.sql files create is absent. That metadata is Data Studio's; the
-#     edit-mode endpoints (d1-build and the item APIs) do not read it. Directus's own field metadata for our tables is whatever the
-#     migrations insert (relations, aliases and the readers aliases, which the permission filters need, are inserted by migrations).
+#   * scripts/configure_all.sh itself: it `docker exec`s into containers and restarts Directus. Its SQL files are applied as above instead.
 #   * Redis, MinIO and the worker/plugin containers: not started. Directus uses its in-memory cache (CACHE_ENABLED unset, as on live) and
-#     local file storage. d1-surface-scan (MinIO) answers 503 as on a live without its reader password; nothing in edit mode uses
-#     heavy-data, FFT or the crawler workers. No LLM plugin (d1-ask-endpoint will not reach LLM_PLUGIN_URL; edit mode does not call it).
+#     local file storage. d1-surface-scan has no MinIO to read from; nothing in edit mode uses heavy-data, FFT or the crawler workers.
+#     No LLM plugin (d1-ask-endpoint cannot reach LLM_PLUGIN_URL; edit mode does not call it).
 #   * The Directus Data Studio (the /admin app) is off (SERVE_APP=false) and the interface/module extensions (d1-edit-frame, d1-lab-dashboard,
 #     ... they are built with `npm run build:extensions`) are not loaded. Only hooks and endpoints are.
 #   * Postgres runs with fsync off (throwaway data, much faster migrations). Not a durability claim.
@@ -74,7 +82,7 @@
 # EXTENSIONS
 #   Every extension of core/extensions whose package.json `directus:extension` is a `hook` or `endpoint` with an existing entry file is
 #   copied to $D1_STACK_DIR/extensions (sources only), keeping the sibling layout because some import ../d1-record-access/index.js. The copy
-#   is refreshed on every `up` and `down`/`up` is how an edit to an extension is picked up (EXTENSIONS_AUTO_RELOAD is off). Endpoint
+#   is made whenever Directus is (re)started, so `down` then `up` is how an edit to an extension is picked up (EXTENSIONS_AUTO_RELOAD is off). Endpoint
 #   bundles that need `npm run build:extensions` first (d1-report has dist/ only after a build) are skipped when their entry is missing.
 #
 # Idempotent: every step checks its state first. `up` on a running stack only re-applies what is missing and re-seeds.
@@ -134,9 +142,9 @@ check_tools() {
   command -v curl >/dev/null || die "curl is not on PATH"
   [[ $EUID -ne 0 ]] || id postgres >/dev/null 2>&1 || die "running as root needs a 'postgres' OS user (the postgresql-16 package creates it)"
   # extension files: a missing pgvector is the one failure worth naming before the migrations hit it
+  local share; share="$("$PGBIN/pg_config" --sharedir 2>/dev/null || echo /usr/share/postgresql/16)"
   for ext in vector pg_trgm uuid-ossp; do
-    [[ -f "$(dirname "$PGBIN")/../../share/postgresql/16/extension/$ext.control" || -f "/usr/share/postgresql/16/extension/$ext.control" ]] \
-      || die "Postgres extension $ext is not installed (postgresql-16-pgvector for vector)"
+    [[ -f "$share/extension/$ext.control" ]] || die "Postgres extension $ext is not installed in $share/extension (postgresql-16-pgvector for vector)"
   done
 }
 

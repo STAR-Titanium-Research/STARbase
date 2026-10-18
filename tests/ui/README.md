@@ -45,9 +45,9 @@ The script's header says what it disables (Redis, MinIO, workers, Data Studio) a
 redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), instead of the fake build server of the unit tests.
 
 ```bash
-bash scripts/dev/local-stack.sh up        # about 20 s when Directus is already installed; the first time adds the npm install (a few minutes)
+bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 2.5 minutes, 8 tests
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 2.2 minutes, 8 tests
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
