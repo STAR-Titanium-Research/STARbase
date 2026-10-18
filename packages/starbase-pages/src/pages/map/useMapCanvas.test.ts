@@ -1179,6 +1179,31 @@ describe('useMapCanvas: edit mode places new cards clear of the others (R6)', ()
     expect(calls).toEqual([]);
   });
 
+  it('two cards with the very same place of the draft\'s in a first layout are a collision, not a choice: the second steps aside and the draft keeps its new place', async () => {
+    // (Two cards added within a moment of each other to a blank canvas both arrive before the first layout has run, and the Add menu gave
+    // both the place it was opened at: found in a real browser, where two samples lay on each other for good.)
+    stored.set('s:a', { x: 40, y: 40 });
+    stored.set('s:b', { x: 40, y: 40 });
+    scope = effectScope();
+    calls.length = 0;
+    extra.value = false;
+    ownedIds = [];
+    vi.mocked(loadFamily).mockResolvedValue(
+      mkData({ samples: ['a', 'b'].map((id) => mkSample(id)), operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })] }),
+    );
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      useMapCanvas(map, hooks);
+    });
+    await settle();
+    expect(at('s:a')).toEqual({ x: 40, y: 40 });
+    expect(apart(box('s:a'), box('s:b'))).toBe(true);
+    const moved = at('s:b');
+    expect(calls).toEqual([`settled s:b@${moved.x},${moved.y}`]);
+    expect(stored.get('s:b')).toEqual(moved);
+  });
+
   it('Tidy moves only the draft\'s own cards, tells the draft once, and leaves every other card where it is', async () => {
     const { canvas } = await openIt(true);
     ownedIds = ['s:new1'];

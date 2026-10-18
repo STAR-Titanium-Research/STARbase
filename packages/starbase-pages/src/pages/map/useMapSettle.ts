@@ -103,8 +103,20 @@ export function useMapSettle(ctx: SettleCtx) {
 			boxes[n.id] = { x: at.x, y: at.y, ...size };
 			nodeOf.set(n.id, n);
 		}
+		// In a first layout the cards the draft has a place for stay there, whatever lies on them: but two with the very same place are a
+		// collision, not a choice (nobody drags a card to the exact spot of another), so all but one of them are laid out like new ones.
+		const taken = new Set<string>();
+		const collided = new Set<string>();
+		if (firstLayout) {
+			for (const id of Object.keys(boxes).sort()) {
+				if (!stored.has(id)) continue;
+				const place = `${Math.round(boxes[id].x)},${Math.round(boxes[id].y)}`;
+				if (taken.has(place)) collided.add(id);
+				else taken.add(place);
+			}
+		}
 		const movable = Object.keys(boxes)
-			.filter((id) => !dragged.has(id) && !(stored.has(id) && ctx.seen.has(id)) && (firstLayout ? !stored.has(id) : !placed.has(id)))
+			.filter((id) => !dragged.has(id) && !(stored.has(id) && ctx.seen.has(id)) && (firstLayout ? !stored.has(id) || collided.has(id) : !placed.has(id)))
 			.sort((a, b) => boxes[a].x - boxes[b].x || boxes[a].y - boxes[b].y || (a < b ? -1 : 1));
 		if (!movable.length) return positions;
 		// The card each one is wired to and that is staying: the slot is beside it (the one it comes from first).
@@ -120,8 +132,9 @@ export function useMapSettle(ctx: SettleCtx) {
 		const ids = Object.keys(moved);
 		if (!ids.length) return positions;
 		const next = { ...positions, ...moved };
-		// A card the draft keeps a place for, moved off it: the draft keeps the new place (the step that added the card).
-		if (!firstLayout && edit?.settled) {
+		// A card the draft keeps a place for, moved off it: the draft keeps the new place (the step that added the card). (In a first layout
+		// the only such cards are the collided ones.)
+		if (edit?.settled) {
 			const kept = ids.filter((id) => stored.has(id) && nodeOf.get(id));
 			if (kept.length) edit.settled(kept.map((id) => ({ node: nodeOf.get(id)!.data as MapNode, at: moved[id] })));
 		}
