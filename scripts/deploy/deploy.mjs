@@ -3,7 +3,7 @@
 // docs/superpowers/specs/2026-10-18-deploy-button-design.md and docs/runbooks/deploy-button.md).
 //
 //   node scripts/deploy/deploy.mjs check [--json]
-//   node scripts/deploy/deploy.mjs run [--json] [--ack <file> ...] [--id <run id>] [--actor <who>] [--result-file <path>]
+//   node scripts/deploy/deploy.mjs run [--json] [--ack <file> ...] [--id <run id>] [--actor <who>] [--result-file <path>] [--lock-held]
 //
 // `check` changes nothing (it only fetches). `run` stops, without touching anything beyond a backup, whenever a
 // judgement call is needed. Never: git stash, redis-cli FLUSHALL, npm ci, git push, other sessions' containers.
@@ -13,8 +13,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	buildServicesFromConfig,
+	acquireRunLock,
 	formatRunId,
+	isPidAlive,
 	makeExec,
+	makeLockFs,
 	missingEnvKeys,
 	overlap,
 	parseBackupName,
@@ -25,11 +28,13 @@ import {
 	parsePendingFiles,
 	parsePorcelainZ,
 	planSteps,
+	releaseRunLock,
 	rewriteDbUrl,
 	runningServices,
 	scanDestructive,
 	serviceProblems,
 	splitNul,
+	startHeartbeat,
 } from './lib.mjs';
 
 const DBMATE_IMAGE = 'ghcr.io/amacneil/dbmate:2';
@@ -492,10 +497,11 @@ export async function runDeploy(ctx, opts = {}) {
 // ---- CLI -------------------------------------------------------------------------------------
 
 export function parseArgs(argv) {
-	const out = { cmd: argv[0], json: false, ack: [], id: undefined, actor: undefined, resultFile: undefined };
+	const out = { cmd: argv[0], json: false, lockHeld: false, ack: [], id: undefined, actor: undefined, resultFile: undefined };
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--json') out.json = true;
+		else if (a === '--lock-held') out.lockHeld = true;
 		else if (a.startsWith('--ack=')) out.ack.push(a.slice(6));
 		else if (a === '--ack') {
 			while (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) out.ack.push(argv[++i]);
@@ -518,7 +524,7 @@ export async function main(argv, deps = {}) {
 	let args;
 	try {
 		args = parseArgs(argv);
-		if (!['check', 'run'].includes(args.cmd)) throw new Error('usage: deploy.mjs check|run [--json] [--ack <file>...] [--id <id>] [--actor <who>] [--result-file <path>]');
+		if (!['check', 'run'].includes(args.cmd)) throw new Error('usage: deploy.mjs check|run [--json] [--ack <file>...] [--lock-held] [--id <id>] [--actor <who>] [--result-file <path>]');
 	} catch (e) {
 		stderr(`${e.message}\n`);
 		return 2;
@@ -546,7 +552,34 @@ export async function main(argv, deps = {}) {
 		}
 	}
 
-	const result = await runDeploy(ctx, { id: args.id, actor: args.actor, ack: args.ack });
+	// One run at a time. The agent takes the lock itself and says so with --lock-held; a run started by hand takes it here.
+	const id = args.id ?? formatRunId(new Date(ctx.now()));
+	const lockfs = deps.lockfs ?? makeLockFs(path.join(repoDir, 'logs', 'deploy', '.lock'));
+	const isAlive = deps.isAlive ?? isPidAlive;
+	if (!args.lockHeld) {
+		const got = acquireRunLock(
+			lockfs,
+			{ id, pid: deps.pid ?? process.pid, startedAt: iso(ctx.now()), actor: args.actor ?? null, source: 'cli' },
+			{ isAlive, nowMs: ctx.now(), ownRunIds: new Set() },
+		);
+		if (!got.ok) {
+			const h = got.holder;
+			stderr(
+				h
+					? `Another deploy is running (run ${h.id}, pid ${h.pid}, started ${h.startedAt}). Not starting; wait for it, or see docs/runbooks/deploy-button.md.\n`
+					: 'Could not take logs/deploy/.lock. Not starting.\n',
+			);
+			return 3;
+		}
+	}
+	const stopHeartbeat = startHeartbeat(lockfs, id, deps.heartbeatMs);
+	let result;
+	try {
+		result = await runDeploy(ctx, { id, actor: args.actor, ack: args.ack });
+	} finally {
+		stopHeartbeat();
+		if (!args.lockHeld) releaseRunLock(lockfs, id);
+	}
 	if (args.resultFile) fsx.writeText(args.resultFile, `${JSON.stringify(result, null, 2)}\n`);
 	if (args.json) stdout(`##RESULT ${JSON.stringify(result)}\n`);
 	else stdout(`${result.ok ? 'OK' : `FAILED at ${result.failedStep}`}: ${result.message}\n`);

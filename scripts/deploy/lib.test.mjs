@@ -1,11 +1,17 @@
 // node --test scripts/deploy/*.test.mjs
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
+	LOCK_FRESH_MS,
+	acquireRunLock,
 	buildServicesFromConfig,
 	formatRunId,
+	lockIsLive,
 	makeExec,
+	makeLockFs,
 	migrateUpSection,
 	missingEnvKeys,
 	overlap,
@@ -17,10 +23,12 @@ import {
 	parsePendingFiles,
 	parsePorcelainZ,
 	planSteps,
+	releaseRunLock,
 	rewriteDbUrl,
 	runIdToDate,
 	scanDestructive,
 	serviceProblems,
+	startHeartbeat,
 	stripSql,
 } from './lib.mjs';
 
@@ -239,4 +247,73 @@ test('parseMergeTree understands the -z (NUL separated) form', () => {
 	const NUL = '\u0000';
 	assert.deepEqual(parseMergeTree({ code: 1, stdout: `oid${NUL}a b/c.js${NUL}d.txt${NUL}${NUL}Auto-merging a b/c.js${NUL}` }), ['a b/c.js', 'd.txt']);
 	assert.deepEqual(parseMergeTree({ code: 0, stdout: `oid${NUL}` }), []);
+});
+
+// ---- run lock ----------------------------------------------------------------------------------
+
+const tmpLock = () => path.join(mkdtempSync(path.join(tmpdir(), 'lock test ')), 'logs', 'deploy', '.lock');
+
+test('lockIsLive needs a live process AND a recently refreshed file', () => {
+	const now = 1_000_000_000;
+	const alive = () => true;
+	const lock = { id: 'r1', pid: 500 };
+	assert.equal(lockIsLive(lock, now - 1000, { isAlive: alive, nowMs: now }), true);
+	assert.equal(lockIsLive(lock, now - 1000, { isAlive: () => false, nowMs: now }), false, 'process gone');
+	assert.equal(lockIsLive(lock, now - LOCK_FRESH_MS - 1, { isAlive: alive, nowMs: now }), false, 'pid reused: nobody refreshes the file');
+	assert.equal(lockIsLive(null, now, { isAlive: alive, nowMs: now }), false);
+	assert.equal(lockIsLive({ id: 'r1' }, now, { isAlive: alive, nowMs: now }), false, 'no pid');
+	// our own pid: only for runs this process started
+	assert.equal(lockIsLive({ id: 'r1', pid: 9 }, now, { isAlive: alive, nowMs: now, ownPid: 9, ownRunIds: new Set() }), false);
+	assert.equal(lockIsLive({ id: 'r1', pid: 9 }, now, { isAlive: alive, nowMs: now, ownPid: 9, ownRunIds: new Set(['r1']) }), true);
+});
+
+test('acquireRunLock: exclusive create, live holder refused, stale lock replaced (real files)', () => {
+	const lockfs = makeLockFs(tmpLock());
+	assert.deepEqual(acquireRunLock(lockfs, { id: 'a', pid: 111 }), { ok: true });
+	assert.equal(lockfs.read().lock.id, 'a');
+
+	const refused = acquireRunLock(lockfs, { id: 'b', pid: 222 }, { isAlive: (p) => p === 111 });
+	assert.equal(refused.ok, false);
+	assert.equal(refused.holder.id, 'a');
+	assert.equal(lockfs.read().lock.id, 'a', 'untouched');
+
+	const stale = [];
+	const took = acquireRunLock(lockfs, { id: 'c', pid: 333 }, { isAlive: () => false, onStale: (l) => stale.push(l.id) });
+	assert.deepEqual(took, { ok: true });
+	assert.deepEqual(stale, ['a']);
+	assert.equal(lockfs.read().lock.id, 'c');
+});
+
+test('acquireRunLock treats a damaged lock file as stale', () => {
+	const p = tmpLock();
+	const lockfs = makeLockFs(p);
+	mkdirSync(path.dirname(p), { recursive: true });
+	writeFileSync(p, '{not json');
+	assert.deepEqual(acquireRunLock(lockfs, { id: 'x', pid: 1 }, { isAlive: () => true }), { ok: true });
+});
+
+test('a lock last refreshed long ago is stale even though its pid is "alive" (pid reuse)', () => {
+	const p = tmpLock();
+	const lockfs = makeLockFs(p);
+	acquireRunLock(lockfs, { id: 'old', pid: 111 });
+	const old = new Date(Date.now() - 2 * LOCK_FRESH_MS);
+	utimesSync(p, old, old);
+	assert.deepEqual(acquireRunLock(lockfs, { id: 'new', pid: 222 }, { isAlive: () => true }), { ok: true });
+	assert.equal(lockfs.read().lock.id, 'new');
+});
+
+test('releaseRunLock removes only its own lock; startHeartbeat refreshes it', async () => {
+	const p = tmpLock();
+	const lockfs = makeLockFs(p);
+	acquireRunLock(lockfs, { id: 'mine', pid: 1 });
+	releaseRunLock(lockfs, 'someone-else');
+	assert.ok(lockfs.read());
+	const old = new Date(Date.now() - 10 * 60_000);
+	utimesSync(p, old, old);
+	const stop = startHeartbeat(lockfs, 'mine', 10);
+	await new Promise((r) => setTimeout(r, 60));
+	stop();
+	assert.ok(Date.now() - lockfs.read().mtimeMs < 60_000);
+	releaseRunLock(lockfs, 'mine');
+	assert.equal(lockfs.read(), null);
 });

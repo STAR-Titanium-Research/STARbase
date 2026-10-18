@@ -442,6 +442,7 @@ test('main: check --json prints one JSON document; run --json writes the result 
 		now: w2.ctx.now,
 		sleep: w2.ctx.sleep,
 		stdout: (s) => (out += s),
+		lockfs: memLockFs(),
 		stderr: () => {},
 	});
 	assert.equal(code, 0);
@@ -451,7 +452,7 @@ test('main: check --json prints one JSON document; run --json writes the result 
 
 test('main: a failed run exits 1; a bad command exits 2', async () => {
 	const w = world({ changed: ['docker-compose.yml'], dirty: ['docker-compose.yml'] });
-	const base = { exec: w.ctx.exec, repoDir: REPO, env: {}, fsx: w.ctx.fsx, now: w.ctx.now, sleep: w.ctx.sleep, stdout: () => {}, stderr: () => {} };
+	const base = { exec: w.ctx.exec, repoDir: REPO, env: {}, lockfs: memLockFs(), fsx: w.ctx.fsx, now: w.ctx.now, sleep: w.ctx.sleep, stdout: () => {}, stderr: () => {} };
 	assert.equal(await main(['run'], base), 1);
 	assert.equal(await main(['frobnicate'], base), 2);
 	assert.equal(await main(['run', '--nope'], base), 2);
@@ -639,4 +640,112 @@ test('a command that times out fails its step with "timed out"', async () => {
 	const r2 = await runDeploy(w2.ctx, {});
 	assert.equal(r2.failedStep, 'preflight');
 	assert.match(r2.message, /git fetch failed: timed out/);
+});
+
+// ---- the run lock for a run started by hand ----------------------------------------------------
+
+/** An in-memory lock file with the makeLockFs interface. */
+function memLockFs(initial = null, mtimeMs = Date.now()) {
+	let cur = initial ? { text: JSON.stringify(initial), mtimeMs } : null;
+	return {
+		get current() {
+			return cur;
+		},
+		createExclusive(text) {
+			if (cur) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+			cur = { text, mtimeMs: Date.now() };
+		},
+		read() {
+			if (!cur) return null;
+			let lock = null;
+			try {
+				lock = JSON.parse(cur.text);
+			} catch {
+				/* damaged */
+			}
+			return { lock, mtimeMs: cur.mtimeMs };
+		},
+		write(text) {
+			cur = { text, mtimeMs: Date.now() };
+		},
+		remove() {
+			cur = null;
+		},
+		touch() {
+			if (cur) cur.mtimeMs = Date.now();
+		},
+	};
+}
+
+function runDeps(w, extra = {}) {
+	const out = [];
+	const err = [];
+	return {
+		out,
+		err,
+		deps: { exec: w.ctx.exec, repoDir: REPO, env: {}, fsx: w.ctx.fsx, now: () => Date.now(), sleep: w.ctx.sleep, stdout: (s) => out.push(s), stderr: (s) => err.push(s), ...extra },
+	};
+}
+
+test('a hand-run takes the lock, holds it for the run and releases it after', async () => {
+	const w = world({ changed: ['docs/x.md'] });
+	const lockfs = memLockFs();
+	let during = null;
+	const inner = w.ctx.exec;
+	w.ctx.exec = async (cmd, args, opts) => {
+		if (args[0] === 'merge' && args[1] === '--no-edit') during = lockfs.read();
+		return inner(cmd, args, opts);
+	};
+	const { deps } = runDeps(w, { lockfs, pid: 4242 });
+	const code = await main(['run', '--id', '20261018T130000Z', '--actor', 'me'], deps);
+	assert.equal(code, 0);
+	assert.equal(during.lock.id, '20261018T130000Z');
+	assert.equal(during.lock.pid, 4242);
+	assert.equal(during.lock.actor, 'me');
+	assert.equal(lockfs.current, null);
+});
+
+test('a hand-run refuses while another run is live, and touches nothing', async () => {
+	const w = world({ changed: ['docs/x.md'] });
+	const holder = { id: '20261018T120000Z', pid: 7777, startedAt: '2026-10-18T12:00:00.000Z', actor: 'button' };
+	const lockfs = memLockFs(holder);
+	const { deps, err } = runDeps(w, { lockfs, isAlive: (pid) => pid === 7777 });
+	const code = await main(['run'], deps);
+	assert.equal(code, 3);
+	assert.match(err.join(''), /Another deploy is running \(run 20261018T120000Z, pid 7777/);
+	assert.equal(w.calls.length, 0);
+	assert.deepEqual(JSON.parse(lockfs.current.text), holder);
+});
+
+test('a hand-run takes over a stale lock: dead process, or not refreshed (pid reuse)', async () => {
+	const holder = { id: '20261018T110000Z', pid: 7777, startedAt: 'x', actor: null };
+	// process gone
+	let w = world({ changed: ['docs/x.md'] });
+	let lockfs = memLockFs(holder);
+	assert.equal(await main(['run'], runDeps(w, { lockfs, isAlive: () => false }).deps), 0);
+	// the pid exists (reused by something else) but the lock was last refreshed an hour ago
+	w = world({ changed: ['docs/x.md'] });
+	lockfs = memLockFs(holder, Date.now() - 60 * 60_000);
+	assert.equal(await main(['run'], runDeps(w, { lockfs, isAlive: () => true }).deps), 0);
+});
+
+test('--lock-held: the agent owns the lock, the run neither takes nor releases it, and keeps it fresh', async () => {
+	const w = world({ changed: ['docs/x.md'] });
+	const mine = { id: '20261018T140000Z', pid: process.pid, startedAt: 'x', actor: 'u' };
+	const lockfs = memLockFs(mine, Date.now() - 10 * 60_000);
+	const { deps } = runDeps(w, { lockfs, heartbeatMs: 5 });
+	const inner = w.ctx.exec;
+	deps.exec = async (cmd, args, opts) => {
+		await new Promise((r) => setTimeout(r, 40)); // give the heartbeat time to fire
+		return inner(cmd, args, opts);
+	};
+	const code = await main(['run', '--lock-held', '--id', '20261018T140000Z'], deps);
+	assert.equal(code, 0);
+	assert.deepEqual(JSON.parse(lockfs.current.text), mine, 'lock left in place for its owner');
+	assert.ok(Date.now() - lockfs.current.mtimeMs < 60_000, 'heartbeat refreshed the lock');
+});
+
+test('parseArgs knows --lock-held', () => {
+	assert.equal(parseArgs(['run', '--lock-held']).lockHeld, true);
+	assert.equal(parseArgs(['run']).lockHeld, false);
 });

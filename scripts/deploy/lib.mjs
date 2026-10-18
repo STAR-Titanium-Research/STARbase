@@ -1,6 +1,7 @@
 // Pure helpers and the real process runner for the deploy script (scripts/deploy/deploy.mjs).
 // Node 24, node: builtins only. Everything here is deterministic except makeExec().
 import { spawn } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 // ---- process runner ---------------------------------------------------------------------------
@@ -411,4 +412,118 @@ export function serviceProblems(rows, touched, all = false) {
 /** Services that are currently running, from `docker compose ps` rows. */
 export function runningServices(rows) {
 	return new Set(rows.filter((r) => r.State === 'running').map((r) => r.Service ?? r.Name));
+}
+
+// ---- run lock (logs/deploy/.lock) --------------------------------------------------------------
+// One run at a time. The lock file holds {id, pid, startedAt, actor, source?}. A process id alone cannot say whether a
+// lock is live: after a crash or a reboot the number can be given to an unrelated process. So a lock is live only if its
+// process exists AND the file was refreshed recently: the running deploy touches the file every LOCK_HEARTBEAT_MS.
+// (infra/deploy-agent/agent.mjs is standalone and keeps its own copy of this rule; both are tested.)
+
+export const LOCK_FRESH_MS = 3 * 60_000;
+export const LOCK_HEARTBEAT_MS = 20_000;
+
+export function isPidAlive(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return e.code === 'EPERM';
+	}
+}
+
+/**
+ * Is this lock held by a run that is still going? `mtimeMs` is the lock file's modification time.
+ * `ownRunIds` are runs started by this very process (a lock naming our own pid is live only for those).
+ */
+export function lockIsLive(lock, mtimeMs, { isAlive = isPidAlive, nowMs = Date.now(), ownPid = process.pid, ownRunIds = new Set() } = {}) {
+	if (!lock || !Number.isInteger(lock.pid)) return false;
+	if (nowMs - mtimeMs > LOCK_FRESH_MS) return false;
+	if (lock.pid === ownPid) return ownRunIds.has(lock.id);
+	return isAlive(lock.pid);
+}
+
+/** The real lock file. `read()` is null when there is none; a damaged file reads as `{lock: null, mtimeMs}`. */
+export function makeLockFs(lockPath) {
+	return {
+		createExclusive(text) {
+			mkdirSync(path.dirname(lockPath), { recursive: true });
+			const fd = openSync(lockPath, 'wx');
+			try {
+				writeFileSync(fd, text);
+			} finally {
+				closeSync(fd);
+			}
+		},
+		read() {
+			try {
+				const mtimeMs = statSync(lockPath).mtimeMs;
+				let lock = null;
+				try {
+					lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+				} catch {
+					/* damaged: treated as stale */
+				}
+				return { lock, mtimeMs };
+			} catch {
+				return null;
+			}
+		},
+		write(text) {
+			writeFileSync(lockPath, text);
+		},
+		remove() {
+			try {
+				unlinkSync(lockPath);
+			} catch {
+				/* already gone */
+			}
+		},
+		touch() {
+			const now = new Date();
+			utimesSync(lockPath, now, now);
+		},
+	};
+}
+
+/**
+ * Take the lock. Returns {ok:true} or {ok:false, holder} when a live run holds it. A stale lock (dead process, or not
+ * refreshed for LOCK_FRESH_MS) is removed first; `onStale(lock)` lets the caller record what it left behind.
+ */
+export function acquireRunLock(lockfs, info, { isAlive = isPidAlive, nowMs = Date.now(), ownRunIds, onStale } = {}) {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			lockfs.createExclusive(JSON.stringify(info));
+			return { ok: true };
+		} catch (e) {
+			if (e.code !== 'EEXIST') throw e;
+		}
+		const cur = lockfs.read();
+		if (cur && lockIsLive(cur.lock, cur.mtimeMs, { isAlive, nowMs, ownRunIds })) return { ok: false, holder: cur.lock };
+		if (cur?.lock) onStale?.(cur.lock);
+		lockfs.remove();
+	}
+	return { ok: false, holder: null };
+}
+
+/** Release the lock if it is still ours (the id matches). */
+export function releaseRunLock(lockfs, id) {
+	const cur = lockfs.read();
+	if (cur?.lock && cur.lock.id !== id) return;
+	lockfs.remove();
+}
+
+/** Refresh the lock file's time every `everyMs` while the run lives. Returns stop(). */
+export function startHeartbeat(lockfs, id, everyMs = LOCK_HEARTBEAT_MS) {
+	const t = setInterval(() => {
+		try {
+			const cur = lockfs.read();
+			if (cur?.lock?.id === id) lockfs.touch();
+		} catch {
+			/* a missed beat is covered by the 3 minute margin */
+		}
+	}, everyMs);
+	t.unref?.();
+	return () => clearInterval(t);
 }
