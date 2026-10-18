@@ -500,10 +500,11 @@ test.describe('as a Lab Member', () => {
 		const [a, b] = ids.map((id) => canvasOf(page).locator(`.vue-flow__node[data-id="${id}"]`));
 		// Drag A to just beside B: the gap between them is smaller than the layout's own (28), so a layout would move it.
 		const [boxA, boxB] = [await boxOf(a), await boxOf(b)];
-		const grab = await boxOf(a.locator('.ntop'));
-		const wanted = { x: boxB.x + boxB.width + 8 + (grab.x - boxA.x) + 40, y: boxB.y + (grab.y - boxA.y) + grab.height / 2 };
-		await dragCard(page, a, null, wanted);
-		await expect.poll(async () => Math.round((await boxOf(a)).x - (boxB.x + boxB.width)), { message: 'A sits 8 px right of B' }).toBeLessThan(14);
+		// By the distance that puts A's left edge 8 px right of B's right edge: a drag moves a card exactly as far as the pointer.
+		await dragCard(page, a, { x: boxB.x + boxB.width + 8 - boxA.x, y: boxB.y - boxA.y });
+		const gap = async () => Math.round((await boxOf(a)).x - (boxB.x + boxB.width));
+		await expect.poll(gap, { message: 'A sits just right of B (the gap in px)' }).toBeGreaterThanOrEqual(0);
+		expect(await gap(), 'closer than the layout leaves cards (28)').toBeLessThan(28);
 		const dragged = await flowPos(a);
 		await savedDraft(page, member, (d) => Object.keys(d.positions).length >= 1, 'the dragged place saved');
 

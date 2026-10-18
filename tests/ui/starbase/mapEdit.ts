@@ -198,6 +198,9 @@ export const centreOf = (b: Box): { x: number; y: number } => ({ x: b.x + b.widt
 export async function dragBetween(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, steps = 12): Promise<void> {
 	await page.mouse.move(from.x, from.y);
 	await page.mouse.down();
+	// A small first move starts the drag (Vue Flow measures a card's travel from the move that starts it): the long one after it is then
+	// what the card travels, give or take these 2 px, and not "all but the first step".
+	await page.mouse.move(from.x + Math.sign(to.x - from.x || 1) * 2, from.y + Math.sign(to.y - from.y || 1) * 2);
 	await page.mouse.move(to.x, to.y, { steps });
 	await page.mouse.up();
 }
