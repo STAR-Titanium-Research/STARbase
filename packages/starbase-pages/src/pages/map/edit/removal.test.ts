@@ -8,7 +8,7 @@ import { apply, emptyBody, type DraftAction } from './draft';
 import { undo, redo, createHistory, push } from './history';
 import {
 	ALREADY_GOING, DONE_HANGS, DONE_LOCK, DONE_WIRE, NOT_REMOVABLE, SAVED_WIRE,
-	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireEnd, unwireVerdict,
+	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireVerdict,
 } from './removal';
 import { toGraph } from './toGraph';
 
@@ -182,22 +182,6 @@ describe('removing a wire', () => {
 		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
 	});
 
-	it('the wire into an input socket goes (a wire end dragged off its socket), for a sample made by an operation too', () => {
-		const body = built();
-		expect(unwireEnd(body, { key: 'n2', row: 0 })).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }], rows: [] });
-		expect(unwireEnd(body, { key: 'n4' })).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }], rows: [] });
-		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
-		expect(unwireEnd(emptyBody(), { key: 'zz' })).toMatchObject({ ok: false });
-	});
-
-	it('the way back into a sample an operation works on in place is not a wire to drag off', () => {
-		const body = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: {} }]);
-		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
-		const v = unwireEnd(body, { key: 'n2', row: 0 });
-		expect(v.ok).toBe(true);
-		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
-	});
-
 	it('a wire from a done sample to a planned operation is the planned record\'s, not done wiring', () => {
 		const g = graphOf(history(), emptyBody());
 		const w = g.wires.find((x) => x.to.startsWith('op:o2'))!;
@@ -326,10 +310,16 @@ describe('a wire taken off a piece of a cut', () => {
 			{ type: 'addSample', from: { key: 'n2', row: 0 } },
 			{ type: 'addSample', from: { key: 'n2', row: 1 } },
 		]);
+	/** What taking off the drawn wire that ends on a socket (the card's id as a prefix: `s:draft:n6:in`) does. */
+	const into = (body: DraftBody, socket: string) => {
+		const g = graphOf(null, body);
+		const wire = g.wires.find((w) => w.to.startsWith(socket));
+		return wire ? unwireVerdict(body, g, wire.id) : ({ ok: false, reason: 'no such wire', locked: false } as const);
+	};
 
 	it('takes the piece with it: a socket nothing leaves is not kept', () => {
 		const body = cut();
-		const v = unwireEnd(body, { key: 'n6' });
+		const v = into(body, 's:draft:n6:in');
 		expect(v).toMatchObject({ ok: true, rows: [{ key: 'n2', row: 1 }] });
 		if (!v.ok) return;
 		const after = unwireActions(v).reduce((b, a) => apply(b, a), body);
@@ -347,13 +337,52 @@ describe('a wire taken off a piece of a cut', () => {
 
 	it('never takes the last piece, and an operation of one piece keeps its row', () => {
 		const body = cut();
-		const both = unwireEnd(unwireActions(unwireEnd(body, { key: 'n6' }) as never).reduce((b, a) => apply(b, a), body), { key: 'n5' });
-		expect(both).toMatchObject({ ok: true, rows: [] });
+		const first = into(body, 's:draft:n6:in');
+		const afterFirst = unwireActions(first as never).reduce((b, a) => apply(b, a), body);
+		expect(into(afterFirst, 's:draft:n5:in')).toMatchObject({ ok: true, rows: [] });
 		const single = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
-		expect(unwireEnd(single, { key: 'n4' })).toMatchObject({ ok: true, rows: [] });
+		expect(into(single, 's:draft:n4:in')).toMatchObject({ ok: true, rows: [] });
 	});
 
 	it('an input wire taken off does not take the piece: it still has its output', () => {
-		expect(unwireEnd(cut(), { key: 'n2', row: 1 })).toMatchObject({ ok: true, rows: [] });
+		expect(into(cut(), 'batch:draft:n2:in')).toMatchObject({ ok: true, rows: [] });
+	});
+
+	/** n1 feeds row 0 of the operation; n2 is a second sample of its own, the input of row 1 (one more sample in a batch); each row makes a sample. */
+	const batch = () =>
+		run([
+			{ type: 'addSample' },
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addOutputRow', key: 'n3', share: false },
+			{ type: 'wire', from: { key: 'n2' }, to: { key: 'n3', row: 1 } },
+			{ type: 'addSample', from: { key: 'n3', row: 0 } },
+			{ type: 'addSample', from: { key: 'n3', row: 1 } },
+		]);
+
+	it('a row that has an input sample of its own is kept when its output goes: it carries on as an operation on that sample (finding 5)', () => {
+		const body = batch();
+		expect(body.wires).toContainEqual({ from: { key: 'n2' }, to: { key: 'n3', row: 1 } });
+		const v = into(body, 's:draft:n7:in');
+		expect(v).toMatchObject({ ok: true, rows: [] });
+		if (!v.ok) return;
+		const after = unwireActions(v).reduce((b, a) => apply(b, a), body);
+		expect((after.items.find((i) => i.key === 'n3') as { rows: unknown[] }).rows).toHaveLength(2);
+		expect(after.wires, 'its own input sample is still wired to it').toContainEqual({ from: { key: 'n2' }, to: { key: 'n3', row: 1 } });
+	});
+
+	it('taking away the sample a piece of a cut made takes the piece too; the row of a batch with an input of its own stays (finding 9)', () => {
+		const c = cut();
+		const g = graphOf(null, c);
+		const v = removeVerdict(c, g, sample(g, 'draft:n6'), inHistory([]));
+		expect(v).toEqual({ ok: true, keys: ['n6'], existing: [] });
+		const acts = removeActions(c, v as never);
+		expect(acts).toEqual([{ type: 'remove', key: 'n6' }, { type: 'removeRow', key: 'n2', row: 1 }]);
+		const after = acts.reduce((b, a) => apply(b, a), c);
+		expect((after.items.find((i) => i.key === 'n2') as { rows: unknown[] }).rows).toHaveLength(1);
+		const b = batch();
+		const gb = graphOf(null, b);
+		const vb = removeVerdict(b, gb, sample(gb, 'draft:n7'), inHistory([]));
+		expect(removeActions(b, vb as never)).toEqual([{ type: 'remove', key: 'n7' }]);
 	});
 });

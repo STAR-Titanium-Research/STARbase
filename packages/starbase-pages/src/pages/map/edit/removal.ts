@@ -120,14 +120,19 @@ function removeContainerVerdict(body: DraftBody, graph: ProcessGraph, node: Cont
 	return { ok: true, keys: [], existing: recorded.map((id) => ({ kind: node.kind, id })) };
 }
 
-/** The actions that carry a verdict out, once every record it deletes is an item of the body (the page adds them first). */
+/**
+ * The actions that carry a verdict out, once every record it deletes is an item of the body (the page adds them first). Taking a new sample
+ * away also takes the pieces of a cut that only it came out of (a socket nothing leaves is not kept: see `spareRows`).
+ */
 export function removeActions(body: DraftBody, v: Extract<RemoveVerdict, { ok: true }>): DraftAction[] {
 	const out: DraftAction[] = v.keys.filter((k) => !!itemOf(body, k)).map((key) => ({ type: 'remove' as const, key }));
 	for (const t of v.existing) {
 		const item = body.items.find((i) => i.kind === t.kind && i.existing?.id === t.id);
 		if (item && !item.remove) out.push({ type: 'remove', key: item.key, deleteRecord: true });
 	}
-	return out;
+	const gone = new Set(out.flatMap((a) => (a.type === 'remove' ? [a.key] : [])));
+	const wires = body.wires.filter((w) => gone.has(w.from.key) || gone.has(w.to.key));
+	return [...out, ...spareRows(body, wires, gone).map((r) => ({ type: 'removeRow' as const, key: r.key, row: r.row }))];
 }
 
 // ---- wires ---------------------------------------------------------------------------------------
@@ -162,16 +167,6 @@ function withBackEdges(body: DraftBody, hits: DraftBody['wires']): { from: WireE
 	return out;
 }
 
-/** The draft's wires into one input (a socket dragged off its wire): they go, with the way back. `ok: false` when there is none. */
-export function unwireEnd(body: DraftBody, end: WireEnd): UnwireVerdict {
-	const into = body.wires.filter((w) => w.to.key === end.key && (itemOf(body, end.key)?.kind === 'operation' ? (w.to.row ?? 0) === (end.row ?? 0) : true));
-	// A wire back to the sample an operation took in is not a wire the person drew into the sample.
-	const real = into.filter((w) => !(itemOf(body, w.from.key)?.kind === 'operation' && itemOf(body, w.to.key)?.kind === 'sample' && inputSampleOf(body, { key: w.from.key, row: w.from.row ?? 0 }) === w.to.key));
-	if (!real.length) return { ok: false, reason: 'Nothing is wired to that socket.', locked: false };
-	const wires = withBackEdges(body, real);
-	return { ok: true, wires, rows: spareRows(body, wires) };
-}
-
 export type UnwireVerdict =
 	| {
 			ok: true;
@@ -181,17 +176,25 @@ export type UnwireVerdict =
 	  }
 	| { ok: false; reason: string; locked: boolean };
 
-/** The output rows left with no wire once `gone` are off: more than one row, so a row is a piece that nothing comes out of any more. */
-function spareRows(body: DraftBody, gone: { from: WireEnd; to: WireEnd }[]): { key: DraftKey; row: number }[] {
+/**
+ * The output rows left with no wire once `gone` are off: more than one row, so a row is a piece that nothing comes out of any more. Only a
+ * piece that shares its input sample with another row (a cut) goes; a row that has an input sample of its own (one more sample in a batch)
+ * stays, as an operation on that sample that makes nothing new. `removed`: items that go altogether (their rows are not looked at).
+ */
+function spareRows(body: DraftBody, gone: { from: WireEnd; to: WireEnd }[], removed: ReadonlySet<DraftKey> = new Set()): { key: DraftKey; row: number }[] {
 	const same = (a: WireEnd, b: WireEnd) => a.key === b.key && (a.row ?? 0) === (b.row ?? 0);
 	const candidates: { key: DraftKey; row: number }[] = [];
 	for (const w of gone) {
 		const op = itemOf(body, w.from.key);
-		if (op?.kind !== 'operation' || op.existing || op.rows.length < 2) continue;
+		if (op?.kind !== 'operation' || op.existing || op.rows.length < 2 || removed.has(op.key)) continue;
 		const row = w.from.row ?? 0;
 		if (itemOf(body, w.to.key)?.kind !== 'sample' || candidates.some((c) => c.key === op.key && c.row === row)) continue;
 		const left = body.wires.some((x) => same(x.from, { key: op.key, row }) && !gone.some((g) => same(g.from, x.from) && same(g.to, x.to)));
-		if (!left) candidates.push({ key: op.key, row });
+		if (left) continue;
+		// Its input: shared with another row (a cut piece, which has nothing else to be), or none at all.
+		const input = wireInto(body, op.key, row)?.from.key;
+		const shared = !input || op.rows.some((_, r) => r !== row && wireInto(body, op.key, r)?.from.key === input);
+		if (shared) candidates.push({ key: op.key, row });
 	}
 	// One operation never loses every row: when they would all go, the first of them stays.
 	const out: { key: DraftKey; row: number }[] = [];
