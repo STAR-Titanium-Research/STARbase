@@ -4,7 +4,7 @@
 // A click on a socket (a pointer that did not move) opens the Add menu there. A drag draws a wire preview that follows the pointer
 // and marks the socket it is over green when the draft takes the wire and red when it does not (with the reducer's reason as a
 // tooltip); dropped on a socket that fits it makes the wire, dropped on empty canvas it opens the Add menu at that point, and
-// anywhere else it does nothing. No gesture needs dragging: Enter on a focused socket opens its menu too, and C its "Connect to…" (E21).
+// anywhere else it does nothing. (A wire's end dragged off an input that has one and dropped on empty canvas takes the wire off.) No gesture needs dragging: Enter on a focused socket opens its menu too, and C its "Connect to…" (E21).
 
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import type { DraftKey } from '@d1/ui';
@@ -54,7 +54,19 @@ export interface WirePreview {
 	reason: string | null;
 }
 
-export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; openMenu: (t: MenuTarget) => void; openConnect?: (t: MenuTarget) => void }) {
+/** What the card components read from edit mode that useEditRemoval adds (wire selection, locks): the surface joins the two. */
+export type MapEditRemoval = 'selectedWire' | 'selectWire' | 'lockOf' | 'wireLock';
+
+export function useEditCanvas(o: {
+	edit: EditMode;
+	map: ProcessMap;
+	canvas: Canvas;
+	canvasEl: Ref<HTMLElement | null>;
+	openMenu: (t: MenuTarget) => void;
+	openConnect?: (t: MenuTarget) => void;
+	/** A wire end dragged off its socket and dropped on empty canvas: takes the wire (true) instead of opening the menu. */
+	dropWire?: (sock: SocketRef) => boolean;
+}) {
 	const { edit, map, canvas, canvasEl } = o;
 
 	const drop = ref<{ sock: string; ok: boolean } | null>(null);
@@ -180,7 +192,11 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 			}
 			if (v?.ok) void connect(v, anchor);
 			else if (v) say(v.reason ?? 'That does not fit.', relative(ev.clientX, ev.clientY));
-			else if (onEmptyCanvas(ev.clientX, ev.clientY)) o.openMenu({ sock, at: { x: ev.clientX, y: ev.clientY }, flow: canvas.toFlow(ev.clientX, ev.clientY), anchor });
+			else if (onEmptyCanvas(ev.clientX, ev.clientY)) {
+				// An input that has a wire, dragged off and let go on empty canvas, takes the wire off (R4); a free one opens the menu.
+				if (o.dropWire?.(sock)) return;
+				o.openMenu({ sock, at: { x: ev.clientX, y: ev.clientY }, flow: canvas.toFlow(ev.clientX, ev.clientY), anchor });
+			}
 		};
 		const onCancel = () => finish();
 		const onKey = (ev: KeyboardEvent) => {
@@ -243,7 +259,7 @@ export function useEditCanvas(o: { edit: EditMode; map: ProcessMap; canvas: Canv
 		edit.apply({ type: 'addOutputRow', key }, { anchor: nodeId });
 	}
 
-	const mapEdit: MapEdit = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, addRow, canAddRow };
+	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, addRow, canAddRow };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

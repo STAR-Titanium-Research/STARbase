@@ -2,7 +2,8 @@
 // browser; the composable puts one keydown on the window while a draft can be changed and calls what the page gives it.
 //
 //   Shift+A                        the Add menu, unconnected, at the pointer
-//   Delete, Backspace              remove the selected draft item
+//   Delete, Backspace              remove the selected card or wire
+//   Ctrl/⌘+Delete (or Backspace)   dissolve the selected container: its input is wired straight to its output
 //   Shift+D, Ctrl/⌘+D              duplicate it; Shift+Ctrl/⌘+D asks how many copies
 //   Ctrl/⌘+Z                       undo; Ctrl/⌘+Shift+Z (or Ctrl+Y) redo
 //
@@ -13,7 +14,7 @@
 
 import { getCurrentInstance, onBeforeUnmount, onMounted } from 'vue';
 
-export type EditKeyAction = { do: 'add' } | { do: 'undo' } | { do: 'redo' } | { do: 'remove' } | { do: 'duplicate' } | { do: 'duplicateMany' };
+export type EditKeyAction = { do: 'add' } | { do: 'undo' } | { do: 'redo' } | { do: 'remove' } | { do: 'dissolve' } | { do: 'duplicate' } | { do: 'duplicateMany' };
 
 export interface KeyEvent {
 	key: string;
@@ -41,6 +42,7 @@ export function keyDecision(e: KeyEvent, s: KeyState): EditKeyAction | null {
 		if (key === 'z') return e.shiftKey ? { do: 'redo' } : { do: 'undo' };
 		if (key === 'y' && !e.shiftKey) return { do: 'redo' };
 		if (key === 'd') return e.shiftKey ? { do: 'duplicateMany' } : { do: 'duplicate' };
+		if ((key === 'Delete' || key === 'Backspace') && !e.shiftKey) return { do: 'dissolve' };
 		return null;
 	}
 	if (e.shiftKey) {
@@ -77,6 +79,7 @@ export interface EditKeysOptions {
 	redo: () => void;
 	/** Each returns whether there was something to act on (the selected draft item); the key is the browser's when not. */
 	remove: () => boolean;
+	dissolve: () => boolean;
 	duplicate: () => boolean;
 	duplicateMany: () => boolean;
 }
@@ -99,6 +102,9 @@ export function useEditKeys(o: EditKeysOptions) {
 				break;
 			case 'remove':
 				handled = o.remove();
+				break;
+			case 'dissolve':
+				handled = o.dissolve();
 				break;
 			case 'duplicate':
 				handled = o.duplicate();

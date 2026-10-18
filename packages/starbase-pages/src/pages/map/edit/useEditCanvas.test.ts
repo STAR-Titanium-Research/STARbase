@@ -42,7 +42,7 @@ function setupDom(sockets: ReturnType<typeof socketEl>[], over: { empty?: boolea
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
-async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}) {
+async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef) => boolean) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -55,7 +55,7 @@ async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [
 	const map = { graph: reactive({ value: { nodes } }), clearHover: vi.fn() } as never;
 	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 10, y: y - 20 }), remeasure: async () => undefined } as never;
 	const connecting: MenuTarget[] = [];
-	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t) });
+	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t), dropWire });
 	return { edit, ec, opened, connecting, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
 }
 
@@ -199,6 +199,24 @@ describe('a drag from a socket', () => {
 		fire('pointermove', { clientX: 650, clientY: 420 });
 		fire('pointerup', { clientX: 650, clientY: 420 });
 		expect(opened).toEqual([{ sock: SAMPLE_OUT, at: { x: 650, y: 420 }, flow: { x: 640, y: 400 }, anchor: 'card:1' }]);
+	});
+
+	it('an input dragged off its wire and dropped on empty canvas takes the wire instead of opening the menu (R4)', async () => {
+		const taken: SocketRef[] = [];
+		const { ec, opened } = await setup(twoCards(), [target], {}, (s) => (taken.push(s), true));
+		down(ROW_IN, { x: 300, y: 200 }, ec);
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(taken).toEqual([ROW_IN]);
+		expect(opened).toHaveLength(0);
+	});
+
+	it('a socket with no wire to take opens the menu as before', async () => {
+		const { ec, opened } = await setup(twoCards(), [target], {}, () => false);
+		down(ROW_IN, { x: 300, y: 200 }, ec);
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(opened).toHaveLength(1);
 	});
 
 	it('does nothing when it is dropped on a card that is not a socket', async () => {

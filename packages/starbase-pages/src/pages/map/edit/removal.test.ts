@@ -8,7 +8,7 @@ import { apply, emptyBody, type DraftAction } from './draft';
 import { undo, redo, createHistory, push } from './history';
 import {
 	ALREADY_GOING, DONE_HANGS, DONE_LOCK, DONE_WIRE, NOT_REMOVABLE, SAVED_WIRE,
-	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireVerdict,
+	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireEnd, unwireVerdict,
 } from './removal';
 import { toGraph } from './toGraph';
 
@@ -162,6 +162,22 @@ describe('removing a wire', () => {
 		const g = graphOf(null, body);
 		const into = g.wires.find((w) => w.to.includes('draft:n3'))!;
 		const v = unwireVerdict(body, g, into.id);
+		expect(v.ok).toBe(true);
+		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
+	});
+
+	it('the wire into an input socket goes (a wire end dragged off its socket), for a sample made by an operation too', () => {
+		const body = built();
+		expect(unwireEnd(body, { key: 'n2', row: 0 })).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }] });
+		expect(unwireEnd(body, { key: 'n4' })).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }] });
+		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
+		expect(unwireEnd(emptyBody(), { key: 'zz' })).toMatchObject({ ok: false });
+	});
+
+	it('the way back into a sample an operation works on in place is not a wire to drag off', () => {
+		const body = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: {} }]);
+		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
+		const v = unwireEnd(body, { key: 'n2', row: 0 });
 		expect(v.ok).toBe(true);
 		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
 	});

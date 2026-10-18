@@ -35,13 +35,15 @@ const outRef = computed<SocketRef | null>(() => (isSample.value ? { kind: 'sampl
 const inRef = computed<SocketRef | null>(() => (isSample.value && props.data.draft ? { kind: 'sample', id: props.data.ref.id, side: 'in' } : null));
 const freeIn = computed(() => !!edit?.editing.value && !!inRef.value && props.data.ins.length === 0);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+/** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
+const lock = computed(() => (props.selected && edit?.editing.value ? edit.lockOf(props.data) : null));
 const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, inRef.value) : {}));
 </script>
 
 <template>
 	<div
 		class="node rec"
-		:class="{ planned: data.planned, draft: data.draft, focal: selected }"
+		:class="{ planned: data.planned, draft: data.draft, removing: data.removing, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': flow }"
 		@click="card.select"
 		@mouseenter="card.enter"
@@ -71,12 +73,14 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 			<div class="ntop">
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
+				<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 				<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 				<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
 			<div class="code" :title="name">{{ name }}</div>
 			<div v-if="data.kind === 'sample' && data.ref.label" class="nick" :title="data.ref.label">{{ data.ref.label }}</div>
 			<div v-if="meta" class="meta">{{ meta }}</div>
+			<div v-if="lock" class="why" role="note">{{ lock }}</div>
 		</div>
 		<Handle
 			v-for="(s, i) in data.outs"

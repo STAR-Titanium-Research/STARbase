@@ -146,6 +146,27 @@ function nodeOfEnd(body: DraftBody, graph: ProcessGraph, end: WireEnd): string |
 	return undefined;
 }
 
+/** Wires as they are taken off, with the way back to the sample of an operation that worked in place on it: without the way in it is not "on" it. */
+function withBackEdges(body: DraftBody, hits: DraftBody['wires']): { from: WireEnd; to: WireEnd }[] {
+	const out = hits.map((w) => ({ from: { ...w.from }, to: { ...w.to } }));
+	for (const w of hits) {
+		for (const back of body.wires) {
+			if (back.from.key === w.to.key && (back.from.row ?? 0) === (w.to.row ?? 0) && back.to.key === w.from.key && !out.some((o) => o.from.key === back.from.key && o.to.key === back.to.key)) {
+				out.push({ from: { ...back.from }, to: { ...back.to } });
+			}
+		}
+	}
+	return out;
+}
+
+/** The draft's wires into one input (a socket dragged off its wire): they go, with the way back. `ok: false` when there is none. */
+export function unwireEnd(body: DraftBody, end: WireEnd): UnwireVerdict {
+	const into = body.wires.filter((w) => w.to.key === end.key && (itemOf(body, end.key)?.kind === 'operation' ? (w.to.row ?? 0) === (end.row ?? 0) : true));
+	// A wire back to the sample an operation took in is not a wire the person drew into the sample.
+	const real = into.filter((w) => !(itemOf(body, w.from.key)?.kind === 'operation' && itemOf(body, w.to.key)?.kind === 'sample' && inputSampleOf(body, { key: w.from.key, row: w.from.row ?? 0 }) === w.to.key));
+	return real.length ? { ok: true, wires: withBackEdges(body, real) } : { ok: false, reason: 'Nothing is wired to that socket.', locked: false };
+}
+
 export type UnwireVerdict = { ok: true; wires: { from: WireEnd; to: WireEnd }[] } | { ok: false; reason: string; locked: boolean };
 
 /**
@@ -159,18 +180,7 @@ export function unwireVerdict(body: DraftBody, graph: ProcessGraph, wireId: stri
 	const from = nodeOfSocket(wire.from);
 	const to = nodeOfSocket(wire.to);
 	const hits = body.wires.filter((w) => nodeOfEnd(body, graph, w.from) === from && nodeOfEnd(body, graph, w.to) === to);
-	if (hits.length) {
-		const out = hits.map((w) => ({ from: { ...w.from }, to: { ...w.to } }));
-		// An operation that took a sample in and gave it back (in place) stops being "on" it once the way in is gone.
-		for (const w of hits) {
-			for (const back of body.wires) {
-				if (back.from.key === w.to.key && (back.from.row ?? 0) === (w.to.row ?? 0) && back.to.key === w.from.key && !out.some((o) => o.from.key === back.from.key && o.to.key === back.to.key)) {
-					out.push({ from: { ...back.from }, to: { ...back.to } });
-				}
-			}
-		}
-		return { ok: true, wires: out };
-	}
+	if (hits.length) return { ok: true, wires: withBackEdges(body, hits) };
 	const nodes = byId(graph);
 	const ends = [nodes.get(from), nodes.get(to)].filter((n): n is MapNode => !!n);
 	// Done wiring is a wire between records that are done; a wire with a planned end is that planned record's (remove it instead).

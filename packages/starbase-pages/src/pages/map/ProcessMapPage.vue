@@ -212,7 +212,7 @@ const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind 
 // Not on touch: a long press there is the hover card (useLongPress).
 const chainMenu = ref<{ x: number; y: number } | null>(null);
 const MENU_W = 200;
-const MENU_H = 150;
+const MENU_H = 240;
 function onContextMenu(e: MouseEvent) {
 	input.onContextMenu(e);
 	if (pointerKind.touch || !canvasEl.value) return;
@@ -227,6 +227,15 @@ function onContextMenu(e: MouseEvent) {
 function pickChain(d: ChainDir) {
 	map.setChainDir(d);
 	chainMenu.value = null;
+}
+/** Remove and Dissolve from the card's menu (edit mode): the card was selected when the menu opened. */
+function menuRemove() {
+	chainMenu.value = null;
+	build.removeSelected();
+}
+function menuDissolve() {
+	chainMenu.value = null;
+	build.dissolveSelected();
 }
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
@@ -319,6 +328,7 @@ const tipHint = computed(() => {
 							@pointerup.capture="input.onPointerEnd"
 							@pointercancel.capture="input.onPointerEnd"
 							@click.capture="input.onClickCapture"
+							@click="build.onCanvasClick"
 							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
 						>
 							<VueFlow
@@ -346,7 +356,18 @@ const tipHint = computed(() => {
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
-							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
+							<ChainMenu
+								v-if="chainMenu"
+								:x="chainMenu.x"
+								:y="chainMenu.y"
+								:dir="map.chainDir.value"
+								:can-remove="edit.editing.value"
+								:can-dissolve="edit.editing.value && build.canDissolve.value"
+								@pick="pickChain"
+								@remove="menuRemove"
+								@dissolve="menuDissolve"
+								@close="chainMenu = null"
+							/>
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>

@@ -74,6 +74,8 @@ const railRef = (socket: string, side: EndSide): SocketRef | null => {
 const freeProps = (recordId: string | null, side: EndSide) => (edit && editable.value && recordId !== null ? editSocketProps(edit, rowRef(recordId, side)) : {});
 const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+/** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
+const lock = computed(() => (props.selected && edit?.editing.value ? edit.lockOf(props.data) : null));
 const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
 const addRow = stopping(() => edit?.addRow(props.id));
 const addRowKey = activating(() => edit?.addRow(props.id));
@@ -130,7 +132,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 <template>
 	<div
 		class="node op"
-		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, stacked: data.stacked, planned: data.planned, draft: data.draft, focal: selected }"
+		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, stacked: data.stacked, planned: data.planned, draft: data.draft, removing: data.removing, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': 'var(--k-sample)' }"
 		@click="card.select"
 		@dblclick="card.dblclick"
@@ -153,6 +155,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
+			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
@@ -162,6 +165,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 			</div>
 			<span v-if="data.when || (data.collapsed && data.meta)" class="d">{{ data.when ?? data.meta }}</span>
+			<span v-if="lock" class="why" role="note">{{ lock }}</span>
 		</div>
 
 		<div v-if="data.rows.length && !data.collapsed" class="rail" :style="{ minHeight: rail.height }">

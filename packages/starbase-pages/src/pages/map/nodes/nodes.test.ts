@@ -524,6 +524,25 @@ describe('event handlers', () => {
 		expect(order).toEqual(['stop', 'run']);
 	});
 
+	it('a wire in edit mode: a plain click selects the wire (Delete takes it); Ctrl or ⌘+click still goes to its origin', () => {
+		const a = spies();
+		const picked: string[] = [];
+		const editing = ref(true);
+		const w = wireHandlers(a, () => ({ id: 'a:out:0>b:in:0', origin: 'a' }), { editing, selectWire: (id) => void picked.push(id) });
+		const plain = ev();
+		w.click(plain);
+		expect(picked).toEqual(['a:out:0>b:in:0']);
+		expect(plain.stopPropagation).toHaveBeenCalled();
+		expect(a.calls).toEqual([]);
+		w.click(ev({ ctrlKey: true }));
+		expect(a.calls).toEqual([['select', 'a', { centre: true }]]);
+		expect(picked).toHaveLength(1);
+		// Not while the draft cannot be changed.
+		editing.value = false;
+		w.click(ev());
+		expect(picked).toHaveLength(1);
+	});
+
 	it('a wire: Ctrl or ⌘+click selects and centres the origin, a plain click does nothing, hover reports the wire', () => {
 		const a = spies();
 		const w = wireHandlers(a, () => ({ id: 'a:out:0>b:in:0', origin: 'a' }));

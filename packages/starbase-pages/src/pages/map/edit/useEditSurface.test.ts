@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { nextTick, reactive, ref } from 'vue';
+import { computed, nextTick, reactive, ref } from 'vue';
 import type { DraftBody } from '@d1/ui';
-import type { MapNode, RecordNode } from '../model/types';
+import { buildGraph } from '../model/buildGraph';
+import { groupBatches } from '../model/groupBatches';
+import { mkData, mkOp, mkSample } from '../model/fixtures';
+import type { MapNode, ProcessData, RecordNode } from '../model/types';
+import { toGraph } from './toGraph';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
 import { useEditMode } from './useEditMode';
@@ -12,7 +16,7 @@ import { useEditSurface } from './useEditSurface';
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 const card = (id: string): RecordNode => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [] });
 
-async function setup(body: DraftBody, selectedId: string | null, over: { canvasEl?: HTMLElement | null; blockedBy?: () => boolean } = {}) {
+async function setup(body: DraftBody, selectedId: string | null, over: { canvasEl?: HTMLElement | null; blockedBy?: () => boolean; loaded?: ProcessData } = {}) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -20,14 +24,20 @@ async function setup(body: DraftBody, selectedId: string | null, over: { canvasE
 	const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace: vi.fn() }, isPhone: ref(false), focus: () => null, selected: () => selected });
 	await settle();
 	await nextTick();
+	// The map as the page has it: the loaded data, and the graph it draws with the draft merged in.
+	const pick = ref<string | null>(selectedId ? `s:${selectedId}` : null);
+	const graph = computed(() => {
+		const d = toGraph(over.loaded ?? null, edit.body.value);
+		return buildGraph(d, groupBatches(d.operations, d.tests, { probable: false, stack: true }), { slots: () => [] });
+	});
 	const surface = useEditSurface({
 		edit,
-		map: { graph: { value: { nodes: [] } }, nodes: ref([]), clearHover() {} } as never,
+		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
 		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
 		canvasEl: ref(over.canvasEl ?? null),
 		blockedBy: over.blockedBy,
 	});
-	return { edit, surface, select: (id: string | null) => void (selected = id ? card(id) : undefined) };
+	return { edit, surface, server, graph, pickNode: (id: string | null) => void (pick.value = id), select: (id: string | null) => void ((selected = id ? card(id) : undefined), (pick.value = id ? `s:${id}` : null)) };
 }
 
 describe('Delete', () => {
@@ -61,6 +71,145 @@ describe('Delete', () => {
 		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
 		expect(surface.removeSelected()).toBe(true);
 		expect(edit.body.value.items).toEqual([]);
+	});
+});
+
+describe('Delete on the canvas (R4)', () => {
+	const loaded = (): ProcessData =>
+		mkData({
+			samples: [mkSample('s1', { status: 'active' }), mkSample('s2', { status: 'active' }), mkSample('s3', { status: 'planned' })],
+			operations: [
+				mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', methodName: 'Cut', date: '2026-09-01T09:00:00Z' }),
+				mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', methodName: 'Cut', workState: 'planned' }),
+			],
+		});
+
+	it('a done record is not removed: the reason is said and the draft is as it was', async () => {
+		const { edit, surface, pickNode } = await setup(emptyBody(), null, { loaded: loaded() });
+		pickNode('s:s1');
+		const before = edit.body.value;
+		expect(surface.removeSelected()).toBe(true);
+		await settle();
+		expect(edit.body.value).toBe(before);
+		expect(surface.problem.value).toBe("Done records can't be removed from the map");
+		pickNode('op:o1');
+		surface.problem.value = '';
+		surface.removeSelected();
+		expect(surface.problem.value).toBe("Done records can't be removed from the map");
+	});
+
+	it('a planned record that exists is read, added to the draft and marked for deletion, as one undoable step', async () => {
+		const { edit, surface, server, pickNode } = await setup(emptyBody(), null, { loaded: loaded() });
+		server.s.rows = { manufacturing_operations: [{ operation_id: 'o2', version: 5, work_state: 'planned' }] };
+		pickNode('op:o2');
+		expect(surface.removeSelected()).toBe(true);
+		await settle();
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(edit.body.value.items[0]).toMatchObject({ kind: 'operation', existing: { id: 'o2', version: 5 }, remove: true });
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+		edit.redo();
+		expect(edit.body.value.items[0]).toMatchObject({ remove: true });
+	});
+
+	it('a planned record that cannot be read is not deleted, and the person is told', async () => {
+		const { edit, surface, pickNode } = await setup(emptyBody(), null, { loaded: loaded() });
+		pickNode('op:o2');
+		surface.removeSelected();
+		await settle();
+		expect(edit.body.value.items).toEqual([]);
+		expect(surface.problem.value).toMatch(/could not be read/);
+	});
+
+	it('Delete takes the selected wire when one is picked, and not the card that is selected too', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const { edit, surface, graph, pickNode } = await setup(body, null);
+		pickNode('s:draft:n1');
+		const wire = graph.value.wires[0];
+		surface.mapEdit.selectWire(wire.id);
+		expect(surface.mapEdit.selectedWire.value).toBe(wire.id);
+		expect(surface.removeSelected()).toBe(true);
+		expect(edit.body.value.wires).toEqual([]);
+		expect(edit.body.value.items).toHaveLength(2);
+		expect(surface.mapEdit.selectedWire.value).toBeNull();
+		edit.undo();
+		expect(edit.body.value.wires).toHaveLength(1);
+	});
+
+	it('picking another card drops the wire selection', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const { surface, graph, pickNode } = await setup(body, null);
+		surface.mapEdit.selectWire(graph.value.wires[0].id);
+		pickNode('s:draft:n1');
+		await nextTick();
+		expect(surface.mapEdit.selectedWire.value).toBeNull();
+	});
+
+	it('a click on the empty canvas, or Escape, lets go of the wire; a click on a card or a wire does not', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const { surface, graph } = await setup(body, null);
+		const id = graph.value.wires[0].id;
+		const click = (closest: string | null) => ({ target: { closest: () => (closest ? {} : null) } }) as unknown as MouseEvent;
+		surface.mapEdit.selectWire(id);
+		surface.onCanvasClick(click('.vue-flow__node'));
+		expect(surface.mapEdit.selectedWire.value).toBe(id);
+		surface.onCanvasClick(click(null));
+		expect(surface.mapEdit.selectedWire.value).toBeNull();
+		surface.mapEdit.selectWire(id);
+		surface.mapEdit.selectWire(id); // a second click on the wire lets go of it
+		expect(surface.mapEdit.selectedWire.value).toBeNull();
+	});
+
+	it('a wire end dragged off its input and dropped on empty canvas takes the draft\'s wire, as one step; an output or a free input has none to take', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const { edit, surface } = await setup(body, null);
+		expect(surface.dropWireAt({ kind: 'sample', id: 'draft:n1', side: 'out' })).toBe(false);
+		expect(surface.dropWireAt({ kind: 'sample', id: 'draft:n1', side: 'in' })).toBe(false);
+		expect(surface.dropWireAt({ kind: 'row', id: 'draft:n3', side: 'in' })).toBe(true);
+		expect(edit.body.value.wires).toEqual([]);
+		expect(surface.dropWireAt({ kind: 'row', id: 'draft:n3', side: 'in' })).toBe(false);
+		edit.undo();
+		expect(edit.body.value.wires).toHaveLength(1);
+	});
+
+	it('the locks the cards wear: a done record says why, a card of the draft has none', async () => {
+		const body = run([{ type: 'addSample' }]);
+		const { surface, graph } = await setup(body, null, { loaded: loaded() });
+		const node = (id: string) => graph.value.nodes.find((n) => n.id === id)!;
+		expect(surface.mapEdit.lockOf(node('s:s1'))).toBe("Done records can't be removed from the map");
+		expect(surface.mapEdit.lockOf(node('op:o2'))).toBeNull();
+		expect(surface.mapEdit.lockOf(node('s:draft:n1'))).toBeNull();
+		const done = graph.value.wires.find((w) => w.to.startsWith('s:s2'))!;
+		expect(surface.mapEdit.wireLock(done.id)).toBe("Done records' wires can't be removed from the map");
+	});
+
+	it('Dissolve joins the input to the output and is one undoable step', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'cut' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'pol' }, from: { key: 'n4' } },
+		]);
+		const { edit, surface, pickNode } = await setup(body, null);
+		pickNode('op:draft:n3');
+		expect(surface.canDissolve.value).toBe(true);
+		expect(surface.dissolveSelected()).toBe(true);
+		expect(edit.body.value.items.map((i) => i.key)).toEqual(['n1', 'n5']);
+		expect(edit.body.value.wires).toEqual([{ from: { key: 'n1' }, to: { key: 'n5', row: 0 } }]);
+		edit.undo();
+		expect(edit.body.value.items.map((i) => i.key)).toEqual(['n1', 'n2', 'n4', 'n5']);
+	});
+
+	it('Dissolve of something it cannot dissolve says why and changes nothing', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 2, from: { key: 'n1' } }]);
+		const { edit, surface, graph, pickNode } = await setup(body, null);
+		pickNode(graph.value.nodes.find((n) => n.type === 'container')!.id);
+		const before = edit.body.value;
+		expect(surface.dissolveSelected()).toBe(true);
+		expect(edit.body.value).toBe(before);
+		expect(surface.problem.value).toMatch(/2 outputs/);
+		pickNode(null);
+		expect(surface.dissolveSelected()).toBe(false);
 	});
 });
 

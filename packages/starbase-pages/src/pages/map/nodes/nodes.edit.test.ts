@@ -11,6 +11,7 @@ import type { ContainerNode as ContainerData, MapNode, RecordNode as RecordData 
 import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, editSocketProps, type MapActions, type MapEdit } from './actions';
 import ContainerNode from './ContainerNode.vue';
 import RecordNode from './RecordNode.vue';
+import WireEdge from './WireEdge.vue';
 
 // Edit mode in the cards: free sockets are buttons, sockets that can be built from carry what the page needs to find them, a new
 // operation offers ＋ output, and a card whose checks block Create wears the number. View mode draws none of it.
@@ -46,6 +47,10 @@ function edit(over: Partial<MapEdit> = {}): MapEdit & { calls: unknown[][] } {
 		badge: () => null,
 		addRow: (id) => void calls.push(['addRow', id]),
 		canAddRow: () => false,
+		selectedWire: ref(null),
+		selectWire: (id) => void calls.push(['selectWire', id]),
+		lockOf: () => null,
+		wireLock: () => null,
 		...over,
 	};
 }
@@ -217,5 +222,63 @@ describe('the cards of a draft', () => {
 		const [c] = containers(body);
 		expect(draftKeysOfNode(body, c)).toEqual(['n2']);
 		expect(newOperationOf(body, 'n2')).not.toBeNull();
+	});
+});
+
+describe('a planned record the draft deletes', () => {
+	const sample: RecordData = { id: 's:s3', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's3', code: 'S-3' }, status: 'planned', ins: [], outs: ['s:s3:out:0'], planned: true, removing: true };
+	const op: ContainerData = {
+		id: 'op:o2', type: 'container', kind: 'operation', group: { id: 'op:o2', kind: 'operation', rowIds: ['o2'], batch: null }, title: 'Cut', code: 'OP-2', category: 'machining',
+		rows: [], slots: [], settings: [], bundled: false, probable: false, planned: true, removing: true,
+	};
+
+	it('is struck through by its class, whatever the card is', async () => {
+		expect(await render(RecordNode, { id: sample.id, data: sample }, edit())).toMatch(/class="[^"]*\bremoving\b/);
+		expect(await render(ContainerNode, { id: op.id, data: op }, edit())).toMatch(/class="[^"]*\bremoving\b/);
+		expect(await render(RecordNode, { id: sample.id, data: { ...sample, removing: undefined } }, edit())).not.toMatch(/\bremoving\b/);
+	});
+});
+
+describe('the lock on a done record', () => {
+	const reason = "Done records can't be removed from the map";
+	const done: RecordData = { id: 's:s1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's1', code: 'S-1' }, status: 'active', ins: [], outs: ['s:s1:out:0'] };
+	const cut: ContainerData = {
+		id: 'op:o1', type: 'container', kind: 'operation', group: { id: 'op:o1', kind: 'operation', rowIds: ['o1'], batch: null }, title: 'Cut', code: 'OP-1', category: 'machining',
+		rows: [], slots: [], settings: [], bundled: false, probable: false,
+	};
+
+	it('is worn by the selected card, with the reason as text and as its label', async () => {
+		for (const [component, data] of [[RecordNode, done], [ContainerNode, cut]] as const) {
+			const html = await render(component, { id: data.id, data, selected: true }, edit({ lockOf: () => reason }));
+			expect(html).toContain('class="lock"');
+			expect(html).toContain(`aria-label="${reason.replace(/'/g, '&#39;')}"`);
+			expect(html.replace(/<[^>]+>/g, ' ')).toContain("Done records can't be removed from the map".replace(/'/g, '&#39;'));
+		}
+	});
+
+	it('is not worn by a card that is not selected, nor outside edit mode, nor by one that can go', async () => {
+		expect(await render(RecordNode, { id: done.id, data: done, selected: false }, edit({ lockOf: () => reason }))).not.toContain('class="lock"');
+		expect(await render(RecordNode, { id: done.id, data: done, selected: true })).not.toContain('class="lock"');
+		expect(await render(RecordNode, { id: done.id, data: done, selected: true }, edit({ lockOf: () => null }))).not.toContain('class="lock"');
+		expect(await render(RecordNode, { id: done.id, data: done, selected: true }, edit({ editing: ref(false), lockOf: () => reason }))).not.toContain('class="lock"');
+	});
+});
+
+describe('a wire in edit mode', () => {
+	const wire = { id: 'a:out:0>b:in:0', from: 'a:out:0', to: 'b:in:0', carries: null, flow: 'sample' as const, bundled: false, origin: 'a' };
+	const props = { id: wire.id, source: 'a', target: 'b', sourceX: 0, sourceY: 0, targetX: 100, targetY: 40, sourcePosition: 'right', targetPosition: 'left', data: { wire, tooltip: [] } };
+
+	it('the selected wire is marked, and a wire of done records wears a padlock with the reason', async () => {
+		const reason = "Done records' wires can't be removed from the map";
+		const html = await render(WireEdge, props, edit({ selectedWire: ref(wire.id), wireLock: () => reason }));
+		expect(html).toMatch(/class="d1-wire sel"/);
+		expect(html).toContain('class="lock"');
+		expect(html).toMatch(/<title[^>]*>Done records&#39; wires can&#39;t be removed from the map<\/title>/);
+	});
+
+	it('another wire, or no edit mode, is drawn as it was', async () => {
+		expect(await render(WireEdge, props, edit({ selectedWire: ref('other'), wireLock: () => 'x' }))).not.toContain('sel');
+		expect(await render(WireEdge, props)).not.toContain('class="lock"');
+		expect(await render(WireEdge, props, edit({ editing: ref(false), selectedWire: ref(wire.id) }))).not.toMatch(/\bsel\b/);
 	});
 });

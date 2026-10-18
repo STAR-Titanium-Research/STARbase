@@ -443,7 +443,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       projectId: s.projectId,
       ...(s.status === 'planned' ? { planned: true as const } : {}),
       ...('draft' in s && s.draft ? { draft: true as const } : {}),
-      ...(s.removing ? { removing: true as const } : {}),
+      ...('removing' in s && s.removing ? { removing: true as const } : {}),
     };
   });
 

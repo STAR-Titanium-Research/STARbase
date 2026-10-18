@@ -19,12 +19,18 @@ const props = defineProps<{
 	saveError?: string;
 	/** Said once: "This draft changed in another tab; reloaded." */
 	notice?: string;
+	/** A card or a wire is selected: Remove is on (a done record says why it cannot go). */
+	canRemove?: boolean;
+	/** A container is selected: Dissolve is on. */
+	canDissolve?: boolean;
 }>();
 const emit = defineEmits<{
 	undo: [];
 	redo: [];
 	add: [at: { x: number; y: number }];
 	pick: [];
+	remove: [];
+	dissolve: [];
 	rename: [name: string];
 	open: [id: string];
 	dismissNotice: [];
@@ -88,6 +94,10 @@ const when = (iso: string): string => {
 		</span>
 		<v-button small secondary title="Add a container or a sample (Shift+A)" @click="add"><v-icon name="add" small left />Add<kbd>Shift+A</kbd></v-button>
 		<v-button small secondary @click="emit('pick')"><v-icon name="playlist_add" small left />Pick samples</v-button>
+		<span class="grp">
+			<button type="button" class="ib" :disabled="!canRemove" title="Remove the selected card or wire (Delete)" aria-label="Remove" @click="emit('remove')"><v-icon name="delete" small /></button>
+			<button type="button" class="ib" :disabled="!canDissolve" title="Dissolve: remove the selected container and wire its input to its output (Ctrl/⌘+Delete)" aria-label="Dissolve" @click="emit('dissolve')"><v-icon name="call_merge" small /></button>
+		</span>
 		<label class="nm">
 			<span class="sr">Draft name</span>
 			<input v-model="text" type="text" class="name" maxlength="120" aria-label="Draft name" @keydown.enter.prevent="commitName" @keydown.esc="text = name" @blur="commitName()" />

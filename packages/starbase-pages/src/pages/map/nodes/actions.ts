@@ -69,6 +69,13 @@ export interface MapEdit {
 	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
 	addRow(nodeId: string): void;
 	canAddRow(node: MapNode): boolean;
+	/** The wire the person selected to remove (a click on it), or null. */
+	selectedWire: Ref<string | null>;
+	selectWire(id: string): void;
+	/** Why the card cannot be removed (a done record: "Done records can't be removed from the map"), or null when it can. The selected card wears a lock. */
+	lockOf(node: MapNode): string | null;
+	/** The same for a wire (done wiring). */
+	wireLock(id: string): string | null;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
@@ -157,12 +164,20 @@ export const recordHandlers = (a: MapActions, r: () => Key) => ({
 	key: activating(() => a.select(refKey(r()))),
 });
 
-/** A wire's hit path: hover reports the wire; Ctrl/⌘+click selects and centres its origin. */
-export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: string }) => ({
+/**
+ * A wire's hit path: hover reports the wire; Ctrl/⌘+click selects and centres its origin; while a draft can be changed a plain click
+ * selects the wire itself, so Delete takes it (R4).
+ */
+export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: string }, edit?: Pick<MapEdit, 'editing' | 'selectWire'> | null) => ({
 	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(wire().id, e.currentTarget as HTMLElement),
 	leave: () => a.hover(null),
 	click: (e: Ev) => {
-		if (!(e.ctrlKey || e.metaKey)) return;
+		if (!(e.ctrlKey || e.metaKey)) {
+			if (!edit?.editing.value) return;
+			e.stopPropagation();
+			edit.selectWire(wire().id);
+			return;
+		}
 		e.stopPropagation();
 		a.select(wire().origin, { centre: true });
 	},

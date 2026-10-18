@@ -26,6 +26,17 @@ describe('EditLid', () => {
 		expect(html).toContain('My drafts');
 	});
 
+	it('has Remove and Dissolve, off until something is selected', async () => {
+		const off = await render(base);
+		expect(off).toMatch(/<button[^>]*disabled[^>]*aria-label="Remove"|<button[^>]*aria-label="Remove"[^>]*disabled/);
+		expect(off).toMatch(/<button[^>]*disabled[^>]*aria-label="Dissolve"|<button[^>]*aria-label="Dissolve"[^>]*disabled/);
+		const on = await render({ ...base, canRemove: true, canDissolve: true });
+		expect(on).not.toMatch(/<button[^>]*aria-label="Remove"[^>]*disabled/);
+		expect(on).not.toMatch(/<button[^>]*aria-label="Dissolve"[^>]*disabled/);
+		expect(on).toContain('Delete');
+		expect(on).toContain('Ctrl/⌘+Delete');
+	});
+
 	it('disables undo with nothing to undo and redo with nothing to redo', async () => {
 		const html = await render(base);
 		expect(html).toMatch(/<button[^>]*disabled[^>]*aria-label="Undo"|<button[^>]*aria-label="Undo"[^>]*disabled/);
