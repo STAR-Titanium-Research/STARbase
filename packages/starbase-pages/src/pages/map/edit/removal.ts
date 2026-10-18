@@ -97,7 +97,7 @@ function removeRecordVerdict(body: DraftBody, graph: ProcessGraph, node: RecordN
 
 function removeContainerVerdict(body: DraftBody, graph: ProcessGraph, node: ContainerNode): RemoveVerdict {
 	const keys: DraftKey[] = [];
-	const existing: ExistingTarget[] = [];
+	const recorded: string[] = [];
 	for (const rowId of node.group.rowIds) {
 		const hit = rowItemOf(body, rowId);
 		if (rowId.startsWith('draft:')) {
@@ -109,12 +109,15 @@ function removeContainerVerdict(body: DraftBody, graph: ProcessGraph, node: Cont
 			if (!keys.includes(hit.item.key)) keys.push(hit.item.key);
 			continue;
 		}
-		if (!node.planned) return refuse(DONE_LOCK, true);
-		existing.push({ kind: node.kind, id: rowId });
+		recorded.push(rowId);
 	}
-	if (!keys.length && !existing.length) return refuse(NOT_REMOVABLE);
-	if (existing.length && doneHangsOff(graph, node)) return refuse(DONE_HANGS, true);
-	return { ok: true, keys, existing };
+	// A card that holds passes of the draft among recorded ones (a stack, a batch): the first Delete takes only the draft's own; the recorded
+	// ones are deleted by a second Delete on the card that is left (a person who meant to delete a saved record says so by pressing it again).
+	if (keys.length) return { ok: true, keys, existing: [] };
+	if (!recorded.length) return refuse(NOT_REMOVABLE);
+	if (!node.planned) return refuse(DONE_LOCK, true);
+	if (doneHangsOff(graph, node)) return refuse(DONE_HANGS, true);
+	return { ok: true, keys: [], existing: recorded.map((id) => ({ kind: node.kind, id })) };
 }
 
 /** The actions that carry a verdict out, once every record it deletes is an item of the body (the page adds them first). */

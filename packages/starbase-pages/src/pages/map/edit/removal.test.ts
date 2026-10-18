@@ -114,7 +114,7 @@ describe('removing a card', () => {
 		expect(removeVerdict(body, g, box(g, 'op:fast'), inHistory(['s1', 'made']))).toEqual({ ok: true, keys: ['n2'], existing: [] });
 	});
 
-	it('a stack made of a recorded planned pass and a draft pass removes both: the draft one vanishes, the record is deleted at Create', () => {
+	it('a stack made of a recorded planned pass and a draft pass: the first Delete takes the draft pass only, a second takes the recorded one (deleted at Create)', () => {
 		const data = mkData({
 			samples: [mkSample('s1')],
 			operations: [mkOp({ id: 'a', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', workState: 'planned', date: '2026-09-01T09:00:00Z' })],
@@ -123,7 +123,23 @@ describe('removing a card', () => {
 		const g = graphOf(data, body);
 		const stack = g.nodes.find((n): n is ContainerNode => n.type === 'container' && !!n.stacked);
 		expect(stack).toBeDefined();
-		expect(removeVerdict(body, g, stack, inHistory(['s1']))).toEqual({ ok: true, keys: ['n2'], existing: [{ kind: 'operation', id: 'a' }] });
+		const first = removeVerdict(body, g, stack, inHistory(['s1']));
+		expect(first).toEqual({ ok: true, keys: ['n2'], existing: [] });
+		// What is left is the recorded pass alone, which the next Delete deletes.
+		const after = removeActions(body, first as never).reduce((b, a) => apply(b, a), body);
+		const g2 = graphOf(data, after);
+		expect(removeVerdict(after, g2, box(g2, 'op:a'), inHistory(['s1']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'operation', id: 'a' }] });
+	});
+
+	it('a stack of a draft pass and DONE recorded passes: the draft pass goes, nothing done is touched', () => {
+		const data = mkData({
+			samples: [mkSample('s1')],
+			operations: [mkOp({ id: 'a', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: '2026-09-01T09:00:00Z' })],
+		});
+		const body = run([{ type: 'addPass', sample: { id: 's1', version: 1 }, values: { method_id: 'turn', equipment_id: 'lathe' }, workState: 'planned' }]);
+		const g = graphOf(data, body);
+		const stack = g.nodes.find((n): n is ContainerNode => n.type === 'container' && !!n.stacked);
+		if (stack) expect(removeVerdict(body, g, stack, inHistory(['s1']))).toEqual({ ok: true, keys: ['n2'], existing: [] });
 	});
 
 	it('cards that are not samples, operations or tests are not removable, and nothing selected is nothing', () => {
