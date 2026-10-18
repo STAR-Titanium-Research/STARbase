@@ -19,6 +19,7 @@ import {
 	makeExec,
 	makeLockFs,
 	missingEnvKeys,
+	OPTIONAL_SERVICES,
 	overlap,
 	parseBackupName,
 	parseComposePs,
@@ -414,11 +415,11 @@ export async function runDeploy(ctx, opts = {}) {
 				// A plain `up -d` touches every service whose definition changed, so only when the compose file itself changed.
 				if (wants('compose-up')) await must0(['up', '-d'], 'docker compose up -d');
 				if (wants('recreate:directus')) {
-					await must0(['up', '-d', '--force-recreate', 'directus'], 'recreate directus');
+					await must0(['up', '-d', '--no-deps', '--force-recreate', 'directus'], 'recreate directus');
 					touched.push('directus');
 				}
 				if (wants('recreate:proxy')) {
-					await must0(['up', '-d', '--force-recreate', 'proxy'], 'recreate proxy');
+					await must0(['up', '-d', '--no-deps', '--force-recreate', 'proxy'], 'recreate proxy');
 					touched.push('proxy');
 				}
 				// Build services and profile-gated services: read from the merged compose file (a service may be new).
@@ -429,17 +430,19 @@ export async function runDeploy(ctx, opts = {}) {
 				const psRows = parseComposePs((await compose(ctx, ['--profile', '*', 'ps', '--format', 'json'], { onData: undefined })).stdout);
 				const running = runningServices(psRows);
 				for (const svc of others) {
-					if (svc === 'inbox-crawler') {
+					const optionalProfile = OPTIONAL_SERVICES[svc];
+					if (optionalProfile) {
+						// Opt-in (profile) services: recreated only if already running, never started by a deploy.
 						if (running.has(svc)) {
-							await must0(['--profile', 'archive', 'up', '-d', '--force-recreate', svc], `recreate ${svc}`);
+							await must0(['--profile', optionalProfile, 'up', '-d', '--no-deps', '--force-recreate', svc], `recreate ${svc}`);
 							touched.push(svc);
-						} else ctx.out('inbox-crawler is not running; left stopped.\n');
+						} else ctx.out(`${svc} is not running; left stopped.\n`);
 						continue;
 					}
 					const b = services.find((s) => s.service === svc);
 					const prof = (b?.profiles ?? []).flatMap((p) => ['--profile', p]);
 					if (!b?.profiles?.length || running.has(svc)) {
-						await must0([...prof, 'up', '-d', '--build', svc], `rebuild ${svc}`);
+						await must0([...prof, 'up', '-d', '--no-deps', '--build', svc], `rebuild ${svc}`);
 						touched.push(svc);
 					} else {
 						await must0([...prof, 'build', svc], `build ${svc}`);

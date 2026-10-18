@@ -1,11 +1,14 @@
 // node --test scripts/deploy/*.test.mjs
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
+	EXTRA_BUILD_WATCH,
 	LOCK_FRESH_MS,
+	OPTIONAL_SERVICES,
 	acquireRunLock,
 	buildServicesFromConfig,
 	formatRunId,
@@ -76,10 +79,10 @@ test('buildServicesFromConfig: context directory, or the Dockerfile directory wh
 		},
 	};
 	assert.deepEqual(buildServicesFromConfig(cfg, root), [
-		{ service: 'a', dir: 'plugins/a/', profiles: [] },
-		{ service: 'diag', dir: 'plugins/diag-service/', profiles: [] },
-		{ service: 'gated', dir: 'plugins/g/', profiles: ['archive'] },
-		{ service: 'rel', dir: 'apps/rel/', profiles: [] },
+		{ service: 'a', dir: 'plugins/a/', extra: [], profiles: [] },
+		{ service: 'diag', dir: 'plugins/diag-service/', extra: [], profiles: [] },
+		{ service: 'gated', dir: 'plugins/g/', extra: [], profiles: ['archive'] },
+		{ service: 'rel', dir: 'apps/rel/', extra: [], profiles: [] },
 	]);
 });
 
@@ -316,4 +319,34 @@ test('releaseRunLock removes only its own lock; startHeartbeat refreshes it', as
 	assert.ok(Date.now() - lockfs.read().mtimeMs < 60_000);
 	releaseRunLock(lockfs, 'mine');
 	assert.equal(lockfs.read(), null);
+});
+
+// ---- restart mapping gaps ----------------------------------------------------------------------
+
+test('diag-service (context .) also rebuilds when scripts/diag/ changes', () => {
+	const root = path.resolve('/repo');
+	const cfg = { services: { 'diag-service': { build: { context: root, dockerfile: 'plugins/diag-service/Dockerfile' } } } };
+	const svcs = buildServicesFromConfig(cfg, root);
+	assert.deepEqual(svcs, [{ service: 'diag-service', dir: 'plugins/diag-service/', extra: ['scripts/diag/'], profiles: [] }]);
+	assert.deepEqual(planSteps(['scripts/diag/probe.py'], svcs), ['recreate:diag-service']);
+	assert.deepEqual(planSteps(['plugins/diag-service/app/main.py'], svcs), ['recreate:diag-service']);
+	assert.deepEqual(planSteps(['scripts/other/x.py'], svcs), []);
+});
+
+test("EXTRA_BUILD_WATCH covers every COPY source of diag-service's real Dockerfile", () => {
+	const repo = fileURLToPath(new URL('../..', import.meta.url));
+	const text = readFileSync(path.join(repo, 'plugins', 'diag-service', 'Dockerfile'), 'utf8');
+	const sources = [...text.matchAll(/^COPY\s+(?:--\S+\s+)*(\S+)\s+\S+\s*$/gm)].map((m) => m[1]);
+	assert.ok(sources.length >= 3, 'found the COPY lines');
+	const watched = ['plugins/diag-service/', ...EXTRA_BUILD_WATCH['diag-service']];
+	for (const src of sources) {
+		assert.ok(watched.some((d) => src.startsWith(d)), `${src} is not covered by the watch list`);
+	}
+});
+
+test('infra/caddy/ recreates the proxy; infra/tailscale/ recreates the starbase device', () => {
+	assert.deepEqual(planSteps(['infra/caddy/Caddyfile']), ['recreate:proxy']);
+	assert.deepEqual(planSteps(['infra/tailscale/starbase-serve.json']), ['recreate:starbase']);
+	assert.deepEqual(planSteps(['apps/starbase/x.js', 'infra/caddy/Caddyfile']), ['build:starbase', 'recreate:proxy']);
+	assert.deepEqual(OPTIONAL_SERVICES, { 'inbox-crawler': 'archive', starbase: 'starbase' });
 });

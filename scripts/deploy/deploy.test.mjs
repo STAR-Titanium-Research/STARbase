@@ -226,9 +226,9 @@ test('run: full deploy with migrations runs the steps in order and never npm ci'
 	];
 	assert.ok(order.every((i) => i > -1), JSON.stringify(order));
 	assert.deepEqual([...order].sort((a, b) => a - b), order);
-	assert.ok(keys.includes('docker compose up -d --force-recreate directus'));
-	assert.ok(keys.includes('docker compose up -d --force-recreate proxy'));
-	assert.ok(keys.includes('docker compose up -d --build heavy-data-worker'));
+	assert.ok(keys.includes('docker compose up -d --no-deps --force-recreate directus'));
+	assert.ok(keys.includes('docker compose up -d --no-deps --force-recreate proxy'));
+	assert.ok(keys.includes('docker compose up -d --no-deps --build heavy-data-worker'));
 	assert.ok(keys.findLastIndex((k) => k.startsWith('git worktree remove --force .claude/worktrees/deploy-main')) > order[4]);
 
 	for (const k of keys) {
@@ -386,7 +386,7 @@ test('run: a profile-gated build service that is not running is rebuilt but not 
 	assert.equal(r.ok, true, r.message);
 	const keys = w.keys();
 	assert.ok(keys.includes('docker compose --profile archive build surface-scan-worker'));
-	assert.ok(!keys.some((k) => k.includes('up -d --build surface-scan-worker')));
+	assert.ok(!keys.some((k) => k.includes('up -d --no-deps --build surface-scan-worker')));
 });
 
 test('run: inbox-crawler is recreated only when it is already running', async () => {
@@ -396,7 +396,7 @@ test('run: inbox-crawler is recreated only when it is already running', async ()
 	});
 	let r = await runDeploy(w.ctx, {});
 	assert.equal(r.ok, true, r.message);
-	assert.ok(w.keys().includes('docker compose --profile archive up -d --force-recreate inbox-crawler'));
+	assert.ok(w.keys().includes('docker compose --profile archive up -d --no-deps --force-recreate inbox-crawler'));
 
 	w = world({ changed: ['scripts/inbox_crawler/x.py'], psRows: [] });
 	r = await runDeploy(w.ctx, {});
@@ -594,7 +594,7 @@ test('run: no plain `up -d` unless docker-compose.yml changed', async () => {
 	const r = await runDeploy(w.ctx, {});
 	assert.equal(r.ok, true, r.message);
 	assert.ok(!w.keys().includes('docker compose up -d'));
-	assert.ok(w.keys().includes('docker compose up -d --force-recreate directus'));
+	assert.ok(w.keys().includes('docker compose up -d --no-deps --force-recreate directus'));
 });
 
 // ---- timeouts and no prompts -------------------------------------------------------------------
@@ -748,4 +748,29 @@ test('--lock-held: the agent owns the lock, the run neither takes nor releases i
 test('parseArgs knows --lock-held', () => {
 	assert.equal(parseArgs(['run', '--lock-held']).lockHeld, true);
 	assert.equal(parseArgs(['run']).lockHeld, false);
+});
+
+// ---- restart mapping gaps (caddy, tailscale device) and --no-deps ------------------------------
+
+test('run: a Caddyfile change recreates the proxy; the dependencies are never recreated (--no-deps)', async () => {
+	const w = world({ changed: ['infra/caddy/Caddyfile'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.ok(w.keys().includes('docker compose up -d --no-deps --force-recreate proxy'));
+	for (const c of w.calls) {
+		if (c.args.includes('--force-recreate')) assert.ok(c.args.includes('--no-deps'), c.args.join(' '));
+	}
+});
+
+test('run: the starbase tailnet device is recreated only when it is already running', async () => {
+	let w = world({ changed: ['infra/tailscale/starbase-serve.json'], psRows: [{ Service: 'starbase', State: 'running', Health: '' }] });
+	let r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.ok(w.keys().includes('docker compose --profile starbase up -d --no-deps --force-recreate starbase'));
+
+	w = world({ changed: ['infra/tailscale/starbase-serve.json'], psRows: [] });
+	r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.ok(!w.keys().some((k) => k.includes('force-recreate starbase')));
+	assert.match(w.out.join(''), /starbase is not running; left stopped/);
 });

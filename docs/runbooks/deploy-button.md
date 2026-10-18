@@ -20,7 +20,10 @@ recreates Directus itself. Directus never gets `docker.sock`.
 - **Deploy** runs, in order: preflight (which resolves `origin/main` to one commit and uses that commit for everything after), a
   temporary worktree of it, migrate (backup first, only when migrations are pending), `git merge --no-edit <that commit>`,
   `npm install` (only when a `package.json` or the lockfile changed), the builds the changed paths need, the restarts (a plain
-  `docker compose up -d` only when `docker-compose.yml` changed, otherwise just the services that need it), a health check (up to
+  `docker compose up -d` only when `docker-compose.yml` changed, otherwise just the services that need it: Directus for extensions,
+  the proxy for the built apps and `infra/caddy/`, rebuilt services such as diag-service (also for `scripts/diag/`). Every recreate
+  uses `--no-deps`, so Postgres and friends are never recreated with it. Opt-in services (inbox-crawler, the `starbase` tailnet
+  device for `infra/tailscale/`) are recreated only if they are already running), a health check (up to
   180 s), and a note listing `.env.example` keys missing from `.env`. Right before the migration and the merge it checks that the
   live checkout is still on the same branch and commit as at preflight. Never `npm ci`, `git stash`, `redis-cli FLUSHALL`,
   `git push`, or another session's containers.

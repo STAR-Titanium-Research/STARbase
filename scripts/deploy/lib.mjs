@@ -329,6 +329,16 @@ const under = (p, prefix) => p.startsWith(prefix);
 export const isPackageFile = (p) => p === 'package-lock.json' || /(^|\/)package\.json$/.test(p);
 
 /**
+ * Directories outside a service's build context or Dockerfile directory that its image is built from. diag-service builds
+ * with context `.` and `COPY scripts/diag/ ./diag/`, so a change there must rebuild it (mirrors the watch lists in
+ * .github/scripts/ci-plan.mjs; a test checks it against the service's Dockerfile COPY lines).
+ */
+export const EXTRA_BUILD_WATCH = { 'diag-service': ['scripts/diag/'] };
+
+/** Profile-gated services that a deploy recreates only if they are already running (it never starts them). */
+export const OPTIONAL_SERVICES = { 'inbox-crawler': 'archive', starbase: 'starbase' };
+
+/**
  * Compose services with a `build:`, from `docker compose --profile "*" config --format json`:
  * [{service, dir, profiles}] where `dir` is the repo-relative directory (posix, trailing slash) whose changes
  * force a rebuild: the build context, or, when the context is the repo root, the Dockerfile's directory.
@@ -347,7 +357,7 @@ export function buildServicesFromConfig(config, repoRoot) {
 			if (rel === '.') rel = '';
 		}
 		const posix = rel.split(path.sep).join('/').replace(/^\.\//, '');
-		out.push({ service, dir: posix === '' ? '' : posix.replace(/\/?$/, '/'), profiles: def.profiles ?? [] });
+		out.push({ service, dir: posix === '' ? '' : posix.replace(/\/?$/, '/'), extra: EXTRA_BUILD_WATCH[service] ?? [], profiles: def.profiles ?? [] });
 	}
 	return out;
 }
@@ -356,7 +366,7 @@ export function buildServicesFromConfig(config, repoRoot) {
  * The deploy steps a set of changed paths needs, in execution order. Mirrors the table in
  * .claude/skills/starbase-deploy/SKILL.md.
  * Step names: migrate, install, build:extensions, build:starbase, build:web, compose-up,
- * recreate:directus, recreate:proxy, recreate:<build service>, recreate:inbox-crawler.
+ * recreate:directus, recreate:proxy, recreate:<build service>, recreate:inbox-crawler, recreate:starbase.
  */
 export function planSteps(changed, buildServices = []) {
 	const has = (fn) => changed.some(fn);
@@ -373,11 +383,14 @@ export function planSteps(changed, buildServices = []) {
 
 	if (changed.includes('docker-compose.yml')) steps.push('compose-up');
 	if (extensions) steps.push('recreate:directus');
-	if (starbase || web) steps.push('recreate:proxy');
+	// The proxy serves the built apps and mounts infra/caddy/Caddyfile.
+	if (starbase || web || has((p) => under(p, 'infra/caddy/'))) steps.push('recreate:proxy');
 	for (const b of buildServices) {
-		if (changed.some((p) => b.dir === '' || under(p, b.dir))) steps.push(`recreate:${b.service}`);
+		if (changed.some((p) => b.dir === '' || under(p, b.dir) || (b.extra ?? []).some((d) => under(p, d)))) steps.push(`recreate:${b.service}`);
 	}
 	if (has((p) => under(p, 'scripts/inbox_crawler/')) && !steps.includes('recreate:inbox-crawler')) steps.push('recreate:inbox-crawler');
+	// STARbase's tailnet device mounts infra/tailscale/ (its serve config).
+	if (has((p) => under(p, 'infra/tailscale/'))) steps.push('recreate:starbase');
 	return steps;
 }
 
