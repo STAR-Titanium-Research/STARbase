@@ -46,7 +46,7 @@ export function useEditRemoval(o: { edit: EditMode; map: ProcessMap; canvasEl: R
 		onBeforeUnmount(() => window.removeEventListener('keydown', onEscape));
 	}
 
-	const ctx = (): RemovalCtx => ({ inHistory: (id) => !!map.data.value?.samples.some((s) => s.id === id) });
+	const ctx = (): RemovalCtx => ({ inHistory: map.inHistory });
 	const selectedNode = (): MapNode | undefined => {
 		const id = map.selectedId.value;
 		return id ? map.graph.value?.nodes.find((n) => n.id === id) : undefined;

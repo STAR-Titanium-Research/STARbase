@@ -62,7 +62,7 @@ const edit = useEditMode({
 	hint: (h) => map.hintMerge(h),
 });
 const map = useProcessMap(host.api, route, router, edit.overlay);
-const canvas = useMapCanvas(map, canvasEditOf(edit));
+const canvas = useMapCanvas(map, canvasEditOf(edit, map.inHistory));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
 /** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */

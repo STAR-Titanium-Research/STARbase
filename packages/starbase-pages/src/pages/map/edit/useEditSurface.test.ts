@@ -32,7 +32,7 @@ async function setup(body: DraftBody, selectedId: string | null, over: { canvasE
 	});
 	const surface = useEditSurface({
 		edit,
-		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
+		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, inHistory: (id: string) => !!over.loaded?.samples.some((s) => s.id === id), nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
 		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
 		canvasEl: ref(over.canvasEl ?? null),
 		blockedBy: over.blockedBy,

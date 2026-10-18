@@ -617,6 +617,8 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
       notifySettled();
     }
   }
+  /** Something on the canvas is the draft's own: Tidy has something to lay out. */
+  const canTidy = computed(() => !!edit?.owned && map.nodes.value.some((n) => edit.owned!(n)));
   /** A card changed size (a fold, "+N more from the form"): lay out again, but every card stays where it is; room is made round the one that grew. */
   async function reflow(): Promise<void> {
     await scheduleLayout([]);
@@ -747,5 +749,5 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
   const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy, canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
 }

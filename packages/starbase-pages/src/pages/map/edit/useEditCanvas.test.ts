@@ -402,8 +402,9 @@ describe('where the draft keeps its cards', () => {
 
 	it('says which cards are the draft\'s own for Tidy: new items, and samples picked from the index, nothing of the loaded history', async () => {
 		const { edit } = await setup(run([{ type: 'addSample' }, { type: 'addExistingSamples', samples: [{ id: 'picked', version: 1 }, { id: 'old', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
-		edit.catalog.samples.set('picked', { id: 'picked', code: 'P', nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
-		const hooks = canvasEditOf(edit);
+		// Both are in the catalog (a sample is read when the draft first builds from it), but only 'old' is part of what the map loaded.
+		for (const id of ['picked', 'old']) edit.catalog.samples.set(id, { id, code: id, nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
+		const hooks = canvasEditOf(edit, (id) => id === 'old');
 		const rec = (id: string, extra: Record<string, unknown> = {}) => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [], ...extra }) as MapNode;
 		expect(hooks.owned?.(rec('draft:n1', { draft: true }))).toBe(true);
 		expect(hooks.owned?.(rec('picked'))).toBe(true);

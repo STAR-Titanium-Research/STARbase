@@ -1149,6 +1149,15 @@ describe('useMapCanvas: edit mode places new cards clear of the others (R6)', ()
     for (const id of Object.keys(before)) expect(apart(box('s:new1'), box(id)), id).toBe(true);
   });
 
+  it('canTidy is on only while the canvas holds something of the draft\'s own', async () => {
+    const withDraft = await openIt(true);
+    ownedIds = ['s:new1'];
+    expect(withDraft.canvas.canTidy.value).toBe(true);
+    const without = await openIt();
+    ownedIds = [];
+    expect(without.canvas.canTidy.value).toBe(false);
+  });
+
   it('Tidy with nothing of the draft\'s on the canvas does nothing at all', async () => {
     const { canvas } = await openIt();
     const layouts = store.layouts;

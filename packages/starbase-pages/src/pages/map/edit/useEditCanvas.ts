@@ -30,7 +30,7 @@ type Canvas = ReturnType<typeof useMapCanvas>;
 export const CLICK_SLOP = 4;
 
 /** What the canvas asks of the draft: where its cards are, and being told when one is moved or the layout was redone. */
-export function canvasEditOf(edit: EditMode): CanvasEdit {
+export function canvasEditOf(edit: EditMode, inHistory: (sampleId: string) => boolean = () => false): CanvasEdit {
 	const keyOf = (n: MapNode): DraftKey | undefined => draftKeysOfNode(edit.body.value, n)[0];
 	return {
 		active: () => edit.drafted.value,
@@ -39,7 +39,7 @@ export function canvasEditOf(edit: EditMode): CanvasEdit {
 			const key = keyOf(n);
 			if (key) edit.apply({ type: 'move', key, x: at.x, y: at.y });
 		},
-		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
+		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && !inHistory(n.ref.id) && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
 		settled: (cards) => {
 			const moves = cards.flatMap(({ node, at }) => {
 				const key = keyOf(node);

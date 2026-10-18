@@ -31,7 +31,7 @@ defineProps<{
 		:notice="edit.draft.notice.value"
 		:can-remove="side.build.canRemove.value"
 		:can-dissolve="side.build.canDissolve.value"
-		:can-tidy="edit.body.value.items.length > 0"
+		:can-tidy="canvas.canTidy.value"
 		@undo="side.build.undo()"
 		@redo="side.build.redo()"
 		@rename="edit.draft.rename"
