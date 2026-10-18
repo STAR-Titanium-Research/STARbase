@@ -93,12 +93,23 @@ describe('derived sockets (R5): a socket per wire and one free one per side', ()
 		expect(picked[1]).toMatchObject({ free: true, add: true, recordId: 'draft:n3', row: 1 });
 	});
 
-	it('has at most one free socket on a side, for the first row with no wire, however many have none', () => {
+	it('a new operation of several rows gives every row with no wire its own free socket, selected or not: each is a piece that will be made (slice 1b review, finding 9)', () => {
 		const node = con(['a', 'b', 'c'].map((r, i) => ({ recordId: r, in: 'op:o1:in:0', out: `op:o1:out:${i}` })), { draft: true });
 		const wired = new Set(['op:o1:in:0', 'op:o1:out:1']);
-		const outs = railSockets(node, 'out', { ...editing, wired, selected: true });
-		expect(ids(outs)).toEqual(['op:o1:out:1', 'free:out:a']);
-		expect(outs.filter((s) => s.free)).toHaveLength(1);
+		for (const selected of [false, true]) {
+			const outs = railSockets(node, 'out', { ...editing, wired, selected });
+			expect(ids(outs)).toEqual(['op:o1:out:1', 'free:out:a', 'free:out:c']);
+			expect(outs.filter((s) => s.free).map((s) => s.recordId)).toEqual(['a', 'c']);
+		}
+	});
+
+	it('a row alone, or a card that is not a new operation (a deck, a recorded one), has at most the one free socket, for the first row with no wire', () => {
+		const rows = ['a', 'b'].map((r, i) => ({ recordId: r, in: 'op:o1:in:0', out: `op:o1:out:${i}` }));
+		const wired = new Set(['op:o1:in:0']);
+		expect(ids(railSockets(con(rows, { draft: true, stacked: true }), 'out', { ...editing, wired, selected: true }))).toEqual(['free:out:a']);
+		expect(ids(railSockets(con(rows), 'out', { ...editing, wired, selected: true }))).toEqual(['free:out:a']); // (a recorded operation has no edit sockets on the card at all: ContainerNode draws them for drafts only)
+		const one = con([{ recordId: 'a', in: 'op:o1:in:0', out: 'op:o1:out:0' }], { draft: true });
+		expect(ids(railSockets(one, 'out', { ...editing, wired, selected: false }))).toEqual(['free:out:a']); // nothing wired on that side
 	});
 
 	it('never adds a free socket that is not editable, to a deck of passes, to a recorded operation, or to a test output', () => {

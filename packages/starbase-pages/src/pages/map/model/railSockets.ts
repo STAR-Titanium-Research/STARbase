@@ -5,7 +5,7 @@
 // A socket id is drawn once (a cut's shared input once); the folded rows' bundle sockets come last, fat. A row with nothing wired on a
 // side has no socket id. Sockets are derived (R5, nothing about them is kept in the draft): in edit mode a side shows a socket for each
 // wire and ONE free one, a button, while the card is selected or has nothing wired on that side. The free one stands for the first row
-// with no wire there; when every row has one, for a row the connection adds (an output piece, or one more sample in a batch). A test
+// with no wire there (a new operation of several rows gives every row with no wire its own, always: each is a piece); when every row has one, for a row the connection adds (an output piece, or one more sample in a batch). A test
 // takes samples in but nothing comes out of it.
 
 import type { ContainerNode } from './types';
@@ -70,9 +70,16 @@ export function railSockets(node: ContainerNode, side: RailSide, o: { editable?:
 	});
 	const bundle = hidden.find((r) => r[side] && isBundleSocket(r[side]!))?.[side];
 	if (bundle) out.push({ id: bundle, fat: true, recordId: null, row: -1, free: false });
-	if (o.editable && wirable(node, side) && (o.selected || out.length === 0)) {
-		const free = freeSocket(node, side, shown, lacks);
-		if (free) out.push(free);
+	if (o.editable && wirable(node, side)) {
+		const lacking = shown.map((r, row) => ({ r, row })).filter(({ r }) => lacks(r));
+		if (lacking.length && growable(node) && shown.length > 1) {
+			// A new operation of several rows: a row nothing is wired to on this side is a piece that will be made, so each has its own free
+			// socket (selected or not). Hiding some would leave the card saying "Makes 3 samples" over two sockets.
+			for (const { r, row } of lacking) out.push({ id: `free:${side}:${r.recordId}`, fat: false, recordId: r.recordId, row, free: true });
+		} else if (o.selected || out.length === 0) {
+			const free = freeSocket(node, side, shown, lacks);
+			if (free) out.push(free);
+		}
 	}
 	return out;
 }
