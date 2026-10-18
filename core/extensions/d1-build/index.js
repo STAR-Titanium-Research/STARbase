@@ -50,6 +50,10 @@
 //   * Testable without Directus: mount(router, { database, services, getSchema, logger, env }, clock) takes everything it uses,
 //     and the pure parts are exported (validateDraftBody, summarise, orderOperations, buildPlan, computeChecks ...).
 //
+// Inherited fields (ADR-0018 amendment): a draft runs none of the form interfaces, so Create fills in what they would: a new test's
+// test_category (from its test_type, TEST_CATEGORY, the d1-test-category table) and a new operation's material_id (from the sample it
+// works on, d1-material-inherit). A value the card carries is never overridden.
+//
 // Naming of keys: a DraftKey names an item (a sample, an operation, a test). An operation's `rows` (one per output piece) have
 // their own keys; `created` holds one entry per created record: a sample or test under its item key, an operation under each of
 // its row keys (and under its item key too, for its first row, unless a row key is the same).
@@ -70,6 +74,22 @@ export const ALIAS_ALLOWED = { physical_samples: [], manufacturing_operations: [
 export const MAX_RECORDS = 500;
 export const WORK_STATES = ['planned', 'done'];
 export const KINDS = ['sample', 'operation', 'test'];
+
+// What a test's category is, from its type: a COPY of the d1-test-category form interface's own table (TYPE_TO_CAT in
+// core/extensions/d1-test-category/src/TestCategory.vue). The generated form there fills the category in as you pick the type;
+// a draft never runs that interface, so Create does it (ADR-0018 amendment). The test file reads the interface's table and fails
+// when the two differ, so change both together. A type that is not listed is 'other'; no type, no category.
+export const TEST_CATEGORY = {
+  optical_microscopy: 'nde', sem: 'nde', tem: 'nde', xrd: 'nde',
+  alicona: 'nde', clemx: 'nde', dct: 'nde', ct_scan: 'nde',
+  tensile: 'destructive', hardness: 'destructive', charpy: 'destructive',
+  compression: 'destructive', tribology: 'destructive',
+  fatigue: 'dynamic', creep: 'dynamic', dma: 'dynamic',
+};
+export const testCategoryOf = (testType) => {
+  if (isBlank(testType)) return null;
+  return Object.hasOwn(TEST_CATEGORY, testType) ? TEST_CATEGORY[testType] : 'other';
+};
 
 // What each kind of item makes.
 export const KIND_COLLECTION = { sample: 'physical_samples', operation: 'manufacturing_operations', test: 'test_sessions' };
@@ -696,6 +716,10 @@ export function buildPlan(body, ctx = {}) {
     return out;
   };
 
+  // What a new operation inherits from the sample it works on, as the d1-material-inherit form interface does: the material. The
+  // generated form runs no interface, so Create fills it in unless the card has its own (ADR-0018 amendment).
+  for (const r of records) if (r.mode === 'new' && r.input) r.material = sampleValues(r.input).material_id ?? undefined;
+
   const samples = [];
   for (const item of [...items].sort((a, b) => keyOrder(a.key, b.key))) {
     if (item.kind !== 'sample' || !isNew(item) || !live(item) || byKey.get(item.key) !== item) continue;
@@ -724,15 +748,23 @@ export function buildPlan(body, ctx = {}) {
     if (stateOf(item) === 'done' && subjectRefs.some(plannedSample)) block(item.key, SAMPLE_PLANNED);
     if (isBlank(item.values.test_type)) block(item.key, 'Choose a test type.', 'test_type');
     if (!subjectRefs.length) block(item.key, 'Wire a sample into this test.', 'subject');
-    tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs });
+    tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs, category: testCategoryOf(item.values.test_type) });
   }
 
   // -- required for done, and the warnings ----------------------------------------------------------------------------------
+  // The card's values and what Create fills in from them (a test's category, an operation's material), so a field the server
+  // inherits itself is not asked for.
+  const withInherited = (item) => {
+    if (item.kind === 'test') return { test_category: testCategoryOf(item.values.test_type), ...item.values };
+    if (item.kind === 'operation') return { material_id: records.find((r) => r.itemKey === item.key && r.material)?.material, ...item.values };
+    return item.values;
+  };
   const needDone = (kind, collection, item) => {
     if (stateOf(item) !== 'done') return;
+    const values = withInherited(item);
     for (const { field, label } of required[collection] ?? []) {
       if (RESERVED_FIELDS[kind].includes(field) || blockedFields.has(`${item.key}|${field}`)) continue;
-      if (isBlank(item.values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
+      if (isBlank(values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
     }
   };
   for (const item of items) {
@@ -1584,6 +1616,7 @@ export function mount(router, context, clock = () => new Date()) {
         if (r.input) data.sample_id = refId(r.input);
         if (r.output) data.output_sample_id = refId(r.output);
         if (r.batchKey) data.batch_id = batchId.get(r.batchKey);
+        if (isBlank(r.values.material_id) && !isBlank(r.material)) data.material_id = r.material;
         const pid = project(r.values);
         if (pid !== undefined) data.project_id = pid;
         const cid = campaign(r.values);
@@ -1599,6 +1632,7 @@ export function mount(router, context, clock = () => new Date()) {
           work_state: t.workState,
           subject: { create: t.subjects.map((ref) => ({ collection: 'physical_samples', item: refId(ref) })) },
         };
+        if (isBlank(t.values.test_category) && t.category) data.test_category = t.category;
         const pid = project(t.values);
         if (pid !== undefined) data.project_id = pid;
         const cid = campaign(t.values);

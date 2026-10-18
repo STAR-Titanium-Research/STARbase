@@ -1,10 +1,11 @@
 // Run with: node --test core/extensions/d1-build/index.test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, cleanValues, dayOf, describeFailure, editValues, parseRequired, projectItem, realColumns, rolesOf, summarise, summariseProjected, templateVisibleTo, validateDraftBody, validateName,
+  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, TEST_CATEGORY, testCategoryOf, cleanValues, dayOf, describeFailure, editValues, parseRequired, projectItem, realColumns, rolesOf, summarise, summariseProjected, templateVisibleTo, validateDraftBody, validateName,
   validateTemplateValues,
 } from './index.js';
 
@@ -26,9 +27,9 @@ const SCHEMA = {
   collections: {
     physical_samples: { fields: fieldsOf(['sample_id', 'sample_code', 'material_id', 'form', 'primary_method_id', 'project_id', 'current_status', 'notes', 'version', 'mass_grams'], 'co_owners') },
     manufacturing_operations: {
-      fields: fieldsOf(['operation_id', 'method_id', 'equipment_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'outcome_notes', 'campaign_id', 'project_id', 'pass_code'], 'additional_operators'),
+      fields: fieldsOf(['operation_id', 'method_id', 'equipment_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'outcome_notes', 'campaign_id', 'project_id', 'pass_code', 'material_id'], 'additional_operators'),
     },
-    test_sessions: { fields: fieldsOf(['session_id', 'test_type', 'session_date', 'planned_date', 'equipment_id', 'campaign_id', 'project_id', 'notes'], 'additional_operators') },
+    test_sessions: { fields: fieldsOf(['session_id', 'test_type', 'test_category', 'session_date', 'planned_date', 'equipment_id', 'campaign_id', 'project_id', 'notes'], 'additional_operators') },
   },
 };
 
@@ -1314,6 +1315,89 @@ test('create (R11b): a researcher is found by the same rule as d1-owner-default 
   assert.match(SQL.personOfUser, /is_researcher = true/);
 });
 
+// ---- inherited fields (spec section 3 item 7, ADR-0018 amendment) -------------------------------------------------------
+
+test('testCategoryOf is the d1-test-category interface\'s own table: same types, same categories, anything else is other', () => {
+  const vue = readFileSync(new URL('../d1-test-category/src/TestCategory.vue', import.meta.url), 'utf8');
+  const literal = /const TYPE_TO_CAT[^=]*=\s*(\{[\s\S]*?\});/.exec(vue)?.[1];
+  assert.ok(literal, 'the interface still has its TYPE_TO_CAT table');
+  const theirs = Function(`return (${literal})`)();
+  assert.deepEqual(TEST_CATEGORY, theirs, 'keep the two tables in step');
+  for (const [type, category] of Object.entries(theirs)) assert.equal(testCategoryOf(type), category);
+  assert.equal(testCategoryOf('some_new_type'), 'other');
+  assert.equal(testCategoryOf('constructor'), 'other', 'a prototype name is not a type');
+  assert.equal(testCategoryOf(''), null);
+  assert.equal(testCategoryOf(undefined), null);
+});
+
+test('buildPlan: a new test carries its category from the type; one the draft sets itself is kept', () => {
+  const base = (values) => draft([sample('s0', { existing: { id: ID(10), version: 1 } }), test_('t1', { values }), test_('t2', { values: { test_type: 'tensile', test_category: 'other' } })], [wire(w('s0'), w('t1')), wire(w('s0'), w('t2'))]);
+  const { plan } = buildPlan(base({ test_type: 'hardness' }), { existing: known(sampleRow(10)) });
+  assert.deepEqual(plan.tests.map((t) => [t.key, t.category]), [['t1', 'destructive'], ['t2', 'destructive']]);
+  assert.deepEqual(plan.tests.map((t) => t.values.test_category), [undefined, 'other'], 'the draft\'s own value stays in the values; Create prefers it');
+  assert.equal(buildPlan(base({ test_type: 'sem' }), { existing: known(sampleRow(10)) }).plan.tests[0].category, 'nde');
+  assert.equal(buildPlan(base({}), { existing: known(sampleRow(10)) }).plan.tests[0].category, null, 'no type, no category (and a block)');
+});
+
+test('buildPlan: a new operation inherits its input sample\'s material, down a chain; a sample with none gives none', () => {
+  const chain = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1'), sample('n1', { values: code('{seq}-X') }), mop('o2'), sample('n2', { values: code('{seq}-Y') }),
+      sample('s1', { existing: { id: ID(11), version: 1 } }), mop('o3'),
+      mop('o4', { material_id: ID(99) }),
+    ],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1')), wire(w('n1'), w('o2')), wire(w('o2', 0), w('n2')), wire(w('s1'), w('o3')), wire(w('s0'), w('o4'))],
+  );
+  const { plan } = buildPlan(chain, { existing: known(sampleRow(10), sampleRow(11, { material_id: null })) });
+  const material = Object.fromEntries(plan.operations.map((r) => [r.itemKey, r.material]));
+  assert.deepEqual(material, { o1: MATERIAL, o2: MATERIAL, o3: undefined, o4: MATERIAL }, 'o4 would inherit too; Create keeps the value its card has');
+  assert.equal(plan.operations.find((r) => r.itemKey === 'o4').values.material_id, ID(99));
+});
+
+test('create: the new test gets test_category and the new operation gets material_id; what the draft supplies is never overridden', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('o1'), sample('n1', { values: code('{seq}-X') }),
+      mop('o2', { material_id: ID(99) }), sample('n2', { values: code('{seq}-Y') }),
+      test_('t1', { values: { test_type: 'tensile' } }),
+      test_('t2', { values: { test_type: 'hardness', test_category: 'other' } }),
+      test_('t3', { values: { test_type: 'a_brand_new_type' } }),
+    ],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1')), wire(w('s0'), w('o2')), wire(w('o2', 0), w('n2')), wire(w('s0'), w('t1')), wire(w('s0'), w('t2')), wire(w('s0'), w('t3'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const made = (collection) => env.world.ops.filter((o) => o.op === 'create' && o.collection === collection);
+  assert.deepEqual(made('manufacturing_operations').map((o) => o.data.material_id), [MATERIAL, ID(99)]);
+  assert.deepEqual(made('test_sessions').map((o) => o.data.test_category), ['destructive', 'other', 'other']);
+});
+
+test('create: an operation on a sample whose material is unknown writes no material_id at all', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10, { material_id: null })]);
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1')], [wire(w('s0'), w('o1'))]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal('material_id' in env.world.ops[0].data, false);
+});
+
+test('buildPlan: a done record is not asked for a required field the server inherits itself', () => {
+  const required = parseRequired([
+    { collection: 'test_sessions', field: 'test_category', translations: null },
+    { collection: 'manufacturing_operations', field: 'material_id', translations: null },
+  ]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', {}, { workState: 'done' }), test_('t1', { workState: 'done', values: { test_type: 'sem' } })],
+    [wire(w('s0'), w('o1')), wire(w('s0'), w('t1'))],
+  );
+  const asked = (existing) => buildPlan(body, { existing, required }).checks.filter((c) => c.code === 'REQUIRED').map((c) => `${c.key}:${c.field}`);
+  assert.deepEqual(asked(known(sampleRow(10))), []);
+  assert.deepEqual(asked(known(sampleRow(10, { material_id: null }))), ['o1:material_id'], 'a sample with no material cannot fill it');
+});
+
 test('create: tests are written with their samples as subjects, a planned test without a session date', async () => {
   const env = setup();
   seed(env.world, 'physical_samples', [sampleRow(10)]);
@@ -1331,11 +1415,11 @@ test('create: tests are written with their samples as subjects, a planned test w
   const [, , t1, t2] = env.world.ops;
   const n1 = env.world.ops[0].id;
   assert.deepEqual(t1.data, {
-    test_type: 'hardness', work_state: 'planned',
+    test_type: 'hardness', test_category: 'destructive', work_state: 'planned',
     subject: { create: [{ collection: 'physical_samples', item: n1 }, { collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(t2.data, {
-    test_type: 'tensile', session_date: '2026-10-21', work_state: 'done',
+    test_type: 'tensile', test_category: 'destructive', session_date: '2026-10-21', work_state: 'done',
     subject: { create: [{ collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(res.body.data.created.t1, { collection: 'test_sessions', id: t1.id, code: 'T-3' });
