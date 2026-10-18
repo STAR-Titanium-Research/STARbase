@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } fro
 import type { DraftBody } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { canvasSampleEntries, filterEntries, firstChoosable, menuFor, moveActive, placeMenu, rootEntries, sampleLabel, type MenuChoice, type MenuEntry, type TemplateEntry } from './menuModel';
+import { grown } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
 
 // The Add menu (spec E8): a search box and a list at a point of the canvas, filtered by what fits where it was opened (menuModel.ts).
@@ -24,6 +25,8 @@ const emit = defineEmits<{ choose: [choice: MenuChoice]; close: [] }>();
 
 const uid = useId();
 const purpose = computed(() => menuFor(props.body, props.target.sock));
+/** The draft the entries are asked about: with the row a free socket stands for, when it stands for one. */
+const view = computed(() => (props.target.sock?.add ? (grown(props.body, props.target.sock)?.body ?? props.body) : props.body));
 const query = ref('');
 /** 'root': the sections; 'canvas': samples on the canvas; 'records': a search of the database. */
 const mode = ref<'root' | 'canvas' | 'records'>('root');
@@ -58,8 +61,8 @@ watch([query, mode], () => {
 
 const all = computed<MenuEntry[]>(() => {
 	if (mode.value === 'records') return found.value;
-	if (mode.value === 'canvas') return canvasSampleEntries(props.body, purpose.value.end, (key) => sampleLabel(props.body, key, props.codeOf ?? (() => undefined)));
-	return rootEntries(props.body, purpose.value, { methods: props.methods, testTypes: props.testTypes, templates: props.templates });
+	if (mode.value === 'canvas') return canvasSampleEntries(view.value, purpose.value.end, (key) => sampleLabel(props.body, key, props.codeOf ?? (() => undefined)));
+	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes, templates: props.templates });
 });
 // The search of the database is the server's: its rows are not filtered again by the same words.
 const entries = computed(() => (mode.value === 'records' ? all.value : filterEntries(all.value, query.value)));

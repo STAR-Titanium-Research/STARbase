@@ -129,6 +129,20 @@ describe('useDraft: is d1-build there', () => {
 		expect(draft.probeError.value).toBe('');
 	});
 
+	it('is not available when the list is 403 (an account that may not build), with no error text and a flag for the page', async () => {
+		const { s, draft } = make();
+		s.listStatus = 403;
+		expect(await draft.probe()).toBe(false);
+		expect(draft.available.value).toBe(false);
+		expect(draft.probed.value).toBe(true);
+		expect(draft.probeError.value).toBe('');
+		expect(draft.forbidden.value).toBe(true);
+		// A later answer from a server that lets the account in clears it.
+		s.listStatus = 200;
+		expect(await draft.probe()).toBe(true);
+		expect(draft.forbidden.value).toBe(false);
+	});
+
 	it('is not available when the server fails, and keeps the reason', async () => {
 		const { s, draft } = make();
 		s.listStatus = 500;

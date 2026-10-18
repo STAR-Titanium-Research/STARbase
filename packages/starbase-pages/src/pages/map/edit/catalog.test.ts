@@ -94,6 +94,7 @@ describe('what a copy of an existing record may carry', () => {
 	it('drops what each kind reserves (an operation\'s sample and work state, a test\'s subject)', () => {
 		const op = { operation_id: 'o', sample_id: 's', output_sample_id: 't', work_state: 'planned', batch_id: 'b', method_id: 'm', short_id: 'x', feed: 1 };
 		expect(writableValues('operation', op)).toEqual({ method_id: 'm', feed: 1 });
+		expect(writableValues('sample', { form: 'disc', owner_person_id: 'p', owner_team_id: 't' })).toEqual({ form: 'disc' });
 		expect(writableValues('test', { session_id: 's', subject: [1], work_state: 'done', test_type: 'tensile' })).toEqual({ test_type: 'tensile' });
 	});
 

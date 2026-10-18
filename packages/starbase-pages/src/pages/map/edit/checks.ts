@@ -9,7 +9,7 @@
 //
 // Pure, no Vue: `ctx` carries the field definitions and the existing records as they were last read.
 
-import type { Check, DraftBody, DraftItem, DraftKey, DraftOperation, DraftSample } from '@d1/ui';
+import { isReserved, type Check, type DraftBody, type DraftItem, type DraftKey, type DraftOperation, type DraftSample } from '@d1/ui';
 import { inputSampleOf, itemOf, outputSampleOf, subjectsOf, wiresOutOf } from './draft';
 import { inheritedValues, makerOf, sampleCodeFor, type InheritCtx } from './inherit';
 
@@ -83,6 +83,8 @@ function missingRequired(item: DraftItem, body: DraftBody, ctx: CheckCtx, values
 	const out: Check[] = [];
 	for (const d of defs) {
 		if (!d.required || d.hidden || d.readonly || BY_THE_DRAFT.has(d.field)) continue;
+		// What the server fills and refuses in a draft (reserved fields, `current_status`): asking for it would block a Create that is fine.
+		if (isReserved(item.kind, d.field) || d.field === 'current_status') continue;
 		if (d.field === 'project_id' && body.projectId) continue;
 		if (d.field === 'campaign_id' && body.campaignId) continue;
 		// A record that exists is only asked again for what this draft changes.

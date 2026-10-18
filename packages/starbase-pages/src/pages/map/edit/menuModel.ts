@@ -14,7 +14,7 @@ import type { ProcessCategory } from '../model/types';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { CATEGORIES } from './catalog';
 import { inputSampleOf, itemOf, nextKey, wireProblem, type DraftAction, type Pos, type WireEnd } from './draft';
-import { resolveEnd, type SocketRef } from './socketRefs';
+import { grown, resolveEnd, type SocketRef } from './socketRefs';
 
 /** A saved template of an operation or a test (stream E): what the menu needs of it. */
 export interface TemplateEntry {
@@ -65,6 +65,11 @@ export interface MenuFor {
 /** The menu's purpose for a socket (null socket: the unconnected menu). A sample the draft does not hold yet counts as a sample card. */
 export function menuFor(body: DraftBody, sock: SocketRef | null): MenuFor {
 	if (!sock) return { side: null, card: null, end: null };
+	// A free socket that stands for a new row is read as the draft would be with the row.
+	if (sock.add) {
+		const g = grown(body, sock);
+		if (g) body = g.body;
+	}
 	if (sock.kind === 'sample') return { side: sock.side, card: 'sample', end: resolveEnd(body, sock) };
 	const end = resolveEnd(body, sock);
 	const item = end ? itemOf(body, end.key) : undefined;

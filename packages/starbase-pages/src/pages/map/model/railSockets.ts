@@ -3,8 +3,10 @@
 // the sample cards say which sample is which), but edit mode needs it: a click or a drop on a socket must reach the draft row it is.
 //
 // A socket id is drawn once (a cut's shared input once); the folded rows' bundle sockets come last, fat. A row with nothing wired on a
-// side has no socket id, so in edit mode it gets a "free" one: a button on the rail that stands for the row. A test takes samples in
-// but nothing comes out of it.
+// side has no socket id. Sockets are derived (R5, nothing about them is kept in the draft): in edit mode a side shows a socket for each
+// wire and ONE free one, a button, while the card is selected or has nothing wired on that side. The free one stands for the first row
+// with no wire there; when every row has one, for a row the connection adds (an output piece, or one more sample in a batch). A test
+// takes samples in but nothing comes out of it.
 
 import type { ContainerNode } from './types';
 import { isBundleSocket } from './sockets';
@@ -25,29 +27,52 @@ export interface RailSocketModel {
 	row: number;
 	/** Nothing is wired here: edit mode draws a button instead of a Handle. */
 	free: boolean;
+	/** A free socket for a row that does not exist yet: connecting to it adds the row (`recordId` is the last row's). */
+	add?: true;
 }
 
 /** Whether this container's `side` can take a wire in edit mode at all (a test has no output). */
 const wirable = (node: ContainerNode, side: RailSide): boolean => !(node.kind === 'test' && side === 'out');
 
-/** One side's sockets, in row order, each id once; the bundle socket (if any) after them, then the free ones (edit mode only). */
-export function railSockets(node: ContainerNode, side: RailSide, o: { editable?: boolean } = {}): RailSocketModel[] {
+/** A container whose rows can grow by a connection: a new operation (a draft of its own), one row per record, not a deck of passes. */
+const growable = (node: ContainerNode): boolean => node.kind === 'operation' && !!node.draft && !node.stacked && !node.collapsed;
+
+/** The one free socket of a side, or null when there is nothing a connection there could mean. */
+function freeSocket(node: ContainerNode, side: RailSide, shown: ContainerNode['rows'], lacks: (r: ContainerNode['rows'][number]) => boolean): RailSocketModel | null {
+	const row = shown.findIndex(lacks);
+	if (row >= 0) return { id: `free:${side}:${shown[row].recordId}`, fat: false, recordId: shown[row].recordId, row, free: true };
+	const last = shown[shown.length - 1];
+	if (!last) return null;
+	// Every row has a wire here. A test takes any number of samples in; a new operation takes another row; nothing else grows.
+	if (node.kind === 'test') return side === 'in' ? { id: `free:in:${shown[0].recordId}`, fat: false, recordId: shown[0].recordId, row: 0, free: true } : null;
+	if (growable(node)) return { id: `free:${side}:+`, fat: false, recordId: last.recordId, row: shown.length, free: true, add: true };
+	return null;
+}
+
+/**
+ * One side's sockets, in row order, each id once; the bundle socket (if any) after them, then (edit mode only) the free one: shown
+ * while the card is `selected`, or when nothing is wired on that side. `wired` is the sockets that have a wire (the graph's): the others
+ * are spare, and edit mode does not draw them as sockets. Left out, every socket the model has counts as wired.
+ */
+export function railSockets(node: ContainerNode, side: RailSide, o: { editable?: boolean; selected?: boolean; wired?: ReadonlySet<string> } = {}): RailSocketModel[] {
 	const seen = new Set<string>();
 	const out: RailSocketModel[] = [];
 	const shown = node.bundled ? node.rows.slice(0, SHOWN_WHEN_FOLDED) : node.rows;
 	const hidden = node.bundled ? node.rows.slice(SHOWN_WHEN_FOLDED) : [];
+	// In edit mode a socket nobody has wired is spare: it is not drawn as a socket of its own, the side's one free socket stands for it.
+	const spare = (id: string): boolean => !!o.editable && !!o.wired && !isBundleSocket(id) && !o.wired.has(id);
+	const lacks = (r: ContainerNode['rows'][number]): boolean => !r[side] || spare(r[side]!);
 	shown.forEach((r, row) => {
 		const id = r[side];
-		if (!id || isBundleSocket(id) || seen.has(id)) return;
+		if (!id || isBundleSocket(id) || seen.has(id) || spare(id)) return;
 		seen.add(id);
 		out.push({ id, fat: false, recordId: r.recordId, row, free: false });
 	});
 	const bundle = hidden.find((r) => r[side] && isBundleSocket(r[side]!))?.[side];
 	if (bundle) out.push({ id: bundle, fat: true, recordId: null, row: -1, free: false });
-	if (o.editable && wirable(node, side)) {
-		shown.forEach((r, row) => {
-			if (!r[side]) out.push({ id: `free:${side}:${r.recordId}`, fat: false, recordId: r.recordId, row, free: true });
-		});
+	if (o.editable && wirable(node, side) && (o.selected || out.length === 0)) {
+		const free = freeSocket(node, side, shown, lacks);
+		if (free) out.push(free);
 	}
 	return out;
 }

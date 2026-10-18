@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref } from 'vue';
 import type { ContainerNode, MapNode } from '../model/types';
 import { fakeServer, httpError, settle } from './fakeBuildServer';
-import { markTargetOf, useMarkDone } from './useMarkDone';
+import { markTargetOf, plannedTargetOf, useMarkDone } from './useMarkDone';
 import { useEditMode } from './useEditMode';
 
 const container = (over: Partial<ContainerNode> = {}): ContainerNode => ({
@@ -134,5 +134,62 @@ describe('Mark done', () => {
 		md.show();
 		await Promise.all([md.confirm({ date: '2026-10-15', personId: null }), md.confirm({ date: '2026-10-15', personId: null })]);
 		expect(s.bodies).toHaveLength(1);
+	});
+});
+
+describe('which card can be set back to planned', () => {
+	const done = (over: Partial<ContainerNode> = {}) => container({ planned: undefined, ...over });
+	it('a done container of records, by its code', () => {
+		expect(plannedTargetOf(done())).toEqual({ collection: 'manufacturing_operations', ids: ['o1'], title: 'Set operation MC-1 back to planned' });
+	});
+	it('a done test goes to test_sessions, a stack or batch as a whole', () => {
+		expect(plannedTargetOf(done({ kind: 'test', group: { id: 't', kind: 'test', rowIds: ['t1'], batch: null }, code: 'T-1' }))).toMatchObject({ collection: 'test_sessions', ids: ['t1'] });
+		const stack = done({ stacked: true, title: '3 passes', group: { id: 's', kind: 'operation', rowIds: ['a', 'b', 'c'], batch: null, stack: true } });
+		expect(plannedTargetOf(stack)).toMatchObject({ ids: ['a', 'b', 'c'], title: 'Set operation 3 passes back to planned' });
+	});
+	it('not what is planned already, a draft, partly a draft, header only, or not a container', () => {
+		expect(plannedTargetOf(container())).toBeNull();
+		expect(plannedTargetOf(done({ draft: true }))).toBeNull();
+		expect(plannedTargetOf(done({ group: { id: 'x', kind: 'operation', rowIds: ['o1', 'draft:n3'], batch: null } }))).toBeNull();
+		expect(plannedTargetOf(done({ collapsed: true }))).toBeNull();
+		expect(plannedTargetOf({ type: 'record' })).toBeNull();
+		expect(plannedTargetOf(undefined)).toBeNull();
+	});
+});
+
+describe('Back to planned', () => {
+	const doneCard = () => container({ planned: undefined });
+
+	it('is on offer for a done card when d1-build is there, and not for a planned one', async () => {
+		expect((await setup(doneCard())).md.canMarkPlanned.value).toBe(true);
+		expect((await setup(container())).md.canMarkPlanned.value).toBe(false);
+		expect((await setup(doneCard(), false)).md.canMarkPlanned.value).toBe(false);
+		expect((await setup(undefined)).md.canMarkPlanned.value).toBe(false);
+	});
+
+	it('sets every row back at once and reads the map again', async () => {
+		const { md, s, reload } = await setup(doneCard());
+		await md.markPlanned();
+		expect(s.bodies).toEqual([{ collection: 'manufacturing_operations', ids: ['o1'] }]);
+		expect(reload).toHaveBeenCalled();
+		expect(md.error.value).toBe('');
+		expect(md.settingBack.value).toBe(false);
+	});
+
+	it('the server refusing (not the owner) is said, and the map is left as it was', async () => {
+		const { md, s, reload } = await setup(doneCard());
+		s.plannedAnswer = Object.assign(new Error('HTTP 403'), { response: { status: 403, data: { errors: [{ message: 'Only the owner can set a done record back to planned.' }] } } });
+		await md.markPlanned();
+		expect(md.error.value).toBe('Only the owner can set a done record back to planned.');
+		expect(reload).not.toHaveBeenCalled();
+	});
+
+	it('is not asked twice while it runs, and does nothing for a planned card', async () => {
+		const { md, s } = await setup(doneCard());
+		await Promise.all([md.markPlanned(), md.markPlanned()]);
+		expect(s.bodies).toHaveLength(1);
+		const planned = await setup(container());
+		await planned.md.markPlanned();
+		expect(planned.s.bodies).toEqual([]);
 	});
 });

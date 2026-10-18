@@ -1,10 +1,11 @@
 // What the page puts on the canvas for edit mode, assembled: the socket interactions (useEditCanvas), the Add menu (useAddMenu),
 // "Connect to…", the sample picker and its fly-in (useSamplePicking), the keyboard (useEditKeys) with what its keys do to the selected
-// draft item (remove, duplicate, ×N), and the pointer they open at. The page binds what this returns; the rules live in the modules
+// card or wire (remove and dissolve in useEditRemoval; duplicate, ×N here), and the pointer they open at. The page binds what this returns; the rules live in the modules
 // it is made of.
 
 import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
 import type { DraftItem } from '@d1/ui';
+import type { MapEdit } from '../nodes/actions';
 import type { useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { collectionOf, recordKey } from './checks';
@@ -20,6 +21,7 @@ import { useAddMenu } from './useAddMenu';
 import { useEditCanvas } from './useEditCanvas';
 import type { EditMode } from './useEditMode';
 import { useEditKeys } from './useEditKeys';
+import { useEditRemoval } from './useEditRemoval';
 import { useSamplePicking } from './useSamplePicking';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
@@ -48,8 +50,11 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	}
 
 	// ---- the pieces ------------------------------------------------------------------------------------------
-	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void } = { menu: () => undefined, connect: () => undefined };
-	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t) });
+	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef) => boolean } = { menu: () => undefined, connect: () => undefined, dropWire: () => false };
+	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s) => late.dropWire(s) });
+	// Remove, Dissolve and wire removal (R4); what it has to say goes where the canvas says its own problems.
+	const removal = useEditRemoval({ edit, map: o.map, canvasEl, say: (text) => void (build.problem.value = text) });
+	late.dropWire = removal.dropWireAt;
 	const menu = useAddMenu({
 		edit,
 		canvas: o.canvas,
@@ -108,15 +113,6 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	const selectedItem = (): DraftItem | null => edit.selectedItem.value;
 	const WORD = { sample: 'sample', operation: 'operation', test: 'test' } as const;
 
-	/** Delete: takes the selected item off the canvas (a record that exists stays a record: only the draft forgets it). */
-	function removeSelected(): boolean {
-		const item = selectedItem();
-		if (!item) return false;
-		edit.apply({ type: 'remove', key: item.key });
-		// The card that had focus is gone: the keyboard stays on the map.
-		void nextTick().then(() => focusCanvas(canvasEl.value));
-		return true;
-	}
 	/** Duplicate: `n` copies of the selected item (a record that exists is copied from what was read of it: that is "new from"). */
 	function duplicateSelected(n = 1): boolean {
 		const item = selectedItem();
@@ -128,7 +124,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 			build.problem.value = 'That record is still being read, so it cannot be copied yet. Try again in a moment.';
 			return true;
 		}
-		edit.apply({ type: 'duplicate', key: item.key, n, record });
+		// The copies are laid out beside the card they were copied from.
+		edit.apply({ type: 'duplicate', key: item.key, n, record }, { anchor: o.map.selectedId.value ?? undefined });
 		return true;
 	}
 	/** Shift+Ctrl+D: asks how many. */
@@ -153,7 +150,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		add: addUnconnected,
 		undo: () => picking.undo(),
 		redo: () => picking.redo(),
-		remove: removeSelected,
+		remove: removal.removeSelected,
+		dissolve: removal.dissolveSelected,
 		duplicate: () => duplicateSelected(1),
 		duplicateMany: askDuplicate,
 	});
@@ -170,6 +168,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 
 	return {
 		...build,
+		/** What the cards read: the canvas's, and the wire selection and locks of removal. */
+		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock } as MapEdit,
 		menu,
 		picking,
 		pickerOpen,
@@ -186,7 +186,13 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		selectKey,
 		duplicating,
 		confirmDuplicate,
-		removeSelected,
+		removeSelected: removal.removeSelected,
+		dissolveSelected: removal.dissolveSelected,
+		selectedWire: removal.selectedWire,
+		canRemove: removal.canRemove,
+		onCanvasClick: removal.onCanvasClick,
+		dropWireAt: removal.dropWireAt,
+		canDissolve: removal.canDissolve,
 		duplicateSelected,
 	};
 }

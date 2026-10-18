@@ -10,6 +10,7 @@ import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject,
 import { nodeOfSocket } from './model/sockets';
 import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
+import { settleNodes, tidyPositions } from './model/placeNode';
 import { reslot } from './model/reslot';
 import { shownNodes } from './model/reach';
 import { structureKey } from './model/structureKey';
@@ -74,6 +75,13 @@ export interface CanvasEdit {
   moved(node: MapNode, at: { x: number; y: number }): void;
   /** Re-layout put every card where ELK wants it: the draft keeps those places (one change for all of them). */
   relaid(cards: { node: MapNode; at: { x: number; y: number } }[]): void;
+  /** The card is the draft's own (a new item, or a sample the draft picked from the index): Tidy moves it, and nothing else. */
+  owned?(node: MapNode): boolean;
+  /**
+   * Cards the draft had a place for that were moved to clear another card (R6): the draft keeps the new places, folded into the step that
+   * added them (so undoing the add takes the place away with it).
+   */
+  settled?(cards: { node: MapNode; at: { x: number; y: number } }[]): void;
 }
 
 export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
@@ -339,6 +347,53 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     }
   }
 
+  /**
+   * Where the cards go once the ones that would lie on another have stepped aside (model/placeNode.ts). `stored`: the cards the draft keeps a
+   * place for. In a first layout (a draft being opened) the cards with a stored place are where the person put them, whatever lies there;
+   * later, a card that is new and has a stored place (dropped from a menu or picker) is moved too, and the draft keeps its new place.
+   */
+  function settleFresh(
+    graph: NonNullable<typeof map.graph.value>,
+    positions: Record<string, { x: number; y: number }>,
+    sizes: Record<string, { width: number; height: number }>,
+    stored: ReadonlySet<string>,
+    firstLayout: boolean,
+    merges: MergeHint[] | null,
+  ): Record<string, { x: number; y: number }> {
+    const boxes: Record<string, Box> = {};
+    const nodeOf = new Map<string, GraphNode>();
+    for (const n of vf.getNodes.value) {
+      const size = sizes[n.id];
+      if (!size) continue;
+      const at = positions[n.id] ?? atPlaced(n.id) ?? n.position;
+      boxes[n.id] = { x: at.x, y: at.y, ...size };
+      nodeOf.set(n.id, n);
+    }
+    const movable = Object.keys(boxes)
+      .filter((id) => !dragged.has(id) && (firstLayout ? !stored.has(id) : !placed.has(id)))
+      .sort((a, b) => boxes[a].x - boxes[b].x || boxes[a].y - boxes[b].y || (a < b ? -1 : 1));
+    if (!movable.length) return positions;
+    // The card each one is wired to and that is staying: the slot is beside it (the one it comes from first).
+    const isMovable = new Set(movable);
+    const anchors: Record<string, Box | undefined> = {};
+    for (const id of movable) {
+      const into = graph.wires.find((w) => nodeOfSocket(w.to) === id && boxes[nodeOfSocket(w.from)] && !isMovable.has(nodeOfSocket(w.from)));
+      const out = graph.wires.find((w) => nodeOfSocket(w.from) === id && boxes[nodeOfSocket(w.to)] && !isMovable.has(nodeOfSocket(w.to)));
+      const other = into ? nodeOfSocket(into.from) : out ? nodeOfSocket(out.to) : (merges ?? []).map((m) => m.anchor).find((a) => !!a && !!boxes[a] && !isMovable.has(a));
+      anchors[id] = other ? boxes[other] : undefined;
+    }
+    const moved = settleNodes({ boxes, movable, anchors, dir: map.dir.value });
+    const ids = Object.keys(moved);
+    if (!ids.length) return positions;
+    const next = { ...positions, ...moved };
+    // A card the draft keeps a place for, moved off it: the draft keeps the new place (the step that added the card).
+    if (!firstLayout && edit?.settled) {
+      const kept = ids.filter((id) => stored.has(id) && nodeOf.get(id));
+      if (kept.length) edit.settled(kept.map((id) => ({ node: nodeOf.get(id)!.data as MapNode, at: moved[id] })));
+    }
+    return next;
+  }
+
   async function layoutOnce(): Promise<void> {
     const mine = ++token;
     pending = false;
@@ -376,9 +431,10 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
       }
       // Cards the person placed (dragged, or dropped from the Add menu) stay where the draft says, whatever ELK would do.
+      const stored = new Set<string>();
       if (edit && !relaying) {
         positions = { ...positions };
-        const own = new Set<string>();
+        const own = stored;
         const shifts: { id: string; dx: number; dy: number }[] = [];
         for (const n of vf.getNodes.value) {
           const at = edit.positionOf(n.data as MapNode);
@@ -396,6 +452,10 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
           if (shift && sources.has(src) && !own.has(src) && positions[src]) positions[src] = { x: positions[src].x + shift.dx, y: positions[src].y + shift.dy };
         }
       }
+      // R6: nothing new lies on another card. A card that has no place of the draft's and is new here (or, in a first layout, that has no place
+      // of the draft's at all) steps to the nearest free slot beside what it is wired to if it would lie on another; the others stay exactly where
+      // they are. A place the draft had kept for a new card that is moved off is kept as the new one.
+      if (edit && !relaying) positions = settleFresh(graph, positions, sizes, stored, !placed.size, merges);
       if (merges) {
         // A container that folded or unfolded: the cards on its sockets deal out the places they have, in the sockets' order (they glide there).
         for (const m of merges) {
@@ -523,6 +583,46 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     free = true;
     dragged.clear();
     await scheduleLayout();
+  }
+  /**
+   * Tidy (R6): the draft's own cards go where ELK would put them, lined up with the cards that are not the draft's, which do not move;
+   * none ends on another. The draft keeps the places as ONE undoable step.
+   */
+  async function tidy(): Promise<void> {
+    const graph = map.graph.value;
+    if (!edit?.owned || !graph || !allMeasured() || busy()) return;
+    const sizes: Record<string, { width: number; height: number }> = {};
+    for (const n of vf.getNodes.value) {
+      const s = measuredSize(n);
+      if (s) sizes[n.id] = s;
+    }
+    const nodes = vf.getNodes.value.filter((n) => sizes[n.id]);
+    running++;
+    try {
+      const elk = await layout(graph, new Set(nodes.map((n) => n.id)), sizes, map.dir.value);
+      const owned: Record<string, { x: number; y: number }> = {};
+      const fixed: Record<string, Box> = {};
+      for (const n of nodes) {
+        if (edit.owned(n.data as MapNode)) owned[n.id] = { x: n.position.x, y: n.position.y };
+        else fixed[n.id] = { x: n.position.x, y: n.position.y, ...sizes[n.id] };
+      }
+      const target = tidyPositions({ elk, sizes, fixed, owned, dir: map.dir.value });
+      const ids = Object.keys(target);
+      if (!ids.length) return;
+      for (const id of ids) {
+        placed.set(id, { ...target[id], ...sizes[id] });
+        dragged.delete(id);
+      }
+      await tween.start({ target, fresh: new Set(), origin: null, instant: false });
+      await reorderSockets(currentPositions());
+      edit.relaid(ids.map((id) => ({ node: vf.findNode(id)!.data as MapNode, at: target[id] })));
+    } catch (e) {
+      tween.stop();
+      layoutError.value = `Could not tidy the map: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      running--;
+      notifySettled();
+    }
   }
   /** A card changed size (a fold, "+N more from the form"): lay out again, but every card stays where it is; room is made round the one that grew. */
   async function reflow(): Promise<void> {
@@ -655,5 +755,5 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
   const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
 }

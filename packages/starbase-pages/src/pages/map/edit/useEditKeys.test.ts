@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { inOverlay, isTyping, keyDecision, useEditKeys, type EditKeysOptions } from './useEditKeys';
 
 const free = { typing: false, blocked: false };
-const d = (e: Parameters<typeof keyDecision>[0]) => keyDecision(e, free);
+const d = (e: Parameters<typeof keyDecision>[0], state: Partial<Parameters<typeof keyDecision>[1]> = {}) => keyDecision(e, { ...free, ...state });
 
 describe('edit keys: what each means', () => {
 	it('Shift+A adds', () => {
@@ -11,11 +11,25 @@ describe('edit keys: what each means', () => {
 		expect(d({ key: 'a' })).toBeNull();
 	});
 
+	it('X removes too, as in a node editor, but not with Shift or Ctrl', () => {
+		expect(d({ key: 'x' })).toEqual({ do: 'remove' });
+		expect(d({ key: 'X', shiftKey: true })).toBeNull();
+		expect(d({ key: 'x', ctrlKey: true })).toBeNull();
+		expect(d({ key: 'x' }, { typing: true })).toBeNull();
+	});
+
 	it('Delete and Backspace remove', () => {
 		expect(d({ key: 'Delete' })).toEqual({ do: 'remove' });
 		expect(d({ key: 'Backspace' })).toEqual({ do: 'remove' });
 		expect(d({ key: 'Delete', shiftKey: true })).toBeNull();
-		expect(d({ key: 'Delete', ctrlKey: true })).toBeNull();
+	});
+
+	it('Ctrl/⌘+Delete (or Backspace) dissolves, and Shift+Ctrl+Delete does nothing', () => {
+		expect(d({ key: 'Delete', ctrlKey: true })).toEqual({ do: 'dissolve' });
+		expect(d({ key: 'Delete', metaKey: true })).toEqual({ do: 'dissolve' });
+		expect(d({ key: 'Backspace', ctrlKey: true })).toEqual({ do: 'dissolve' });
+		expect(d({ key: 'Delete', ctrlKey: true, shiftKey: true })).toBeNull();
+		expect(d({ key: 'Delete', ctrlKey: true }, { typing: true })).toBeNull();
 	});
 
 	it('Shift+D and Ctrl/⌘+D duplicate; with both, ask how many', () => {
@@ -70,7 +84,7 @@ describe('keys that are not the canvas\'s', () => {
 
 	it('are left alone by the handler when pressed inside one', () => {
 		const calls: string[] = [];
-		const { onKeydown } = useEditKeys({ editing: () => true, blocked: () => false, pointer: () => ({ x: 0, y: 0 }), add: () => void calls.push('add'), undo: () => undefined, redo: () => undefined, remove: () => (calls.push('remove'), true), duplicate: () => true, duplicateMany: () => true });
+		const { onKeydown } = useEditKeys({ editing: () => true, blocked: () => false, pointer: () => ({ x: 0, y: 0 }), add: () => void calls.push('add'), undo: () => undefined, redo: () => undefined, remove: () => (calls.push('remove'), true), dissolve: () => (calls.push('dissolve'), true), duplicate: () => true, duplicateMany: () => true });
 		const e = { key: 'Delete', target: { tagName: 'LI', closest: () => ({}) }, preventDefault: vi.fn() } as unknown as KeyboardEvent;
 		onKeydown(e);
 		expect(calls).toEqual([]);
@@ -98,6 +112,7 @@ describe('the keydown handler', () => {
 			undo: () => void calls.push('undo'),
 			redo: () => void calls.push('redo'),
 			remove: () => (calls.push('remove'), true),
+			dissolve: () => (calls.push('dissolve'), true),
 			duplicate: () => (calls.push('duplicate'), true),
 			duplicateMany: () => (calls.push('many'), true),
 			...over,
@@ -108,14 +123,14 @@ describe('the keydown handler', () => {
 
 	it('calls what the page gave it and swallows the key', () => {
 		const { calls, onKeydown } = make();
-		const events = [key({}), key({ key: 'z', shiftKey: false, ctrlKey: true }), key({ key: 'Z', ctrlKey: true }), key({ key: 'Delete', shiftKey: false }), key({ key: 'D' }), key({ key: 'd', shiftKey: true, ctrlKey: true })];
+		const events = [key({}), key({ key: 'z', shiftKey: false, ctrlKey: true }), key({ key: 'Z', ctrlKey: true }), key({ key: 'Delete', shiftKey: false }), key({ key: 'Delete', shiftKey: false, ctrlKey: true }), key({ key: 'D' }), key({ key: 'd', shiftKey: true, ctrlKey: true })];
 		events.forEach(onKeydown);
-		expect(calls).toEqual(['add 5,6', 'undo', 'redo', 'remove', 'duplicate', 'many']);
+		expect(calls).toEqual(['add 5,6', 'undo', 'redo', 'remove', 'dissolve', 'duplicate', 'many']);
 		for (const e of events) expect(e.preventDefault).toHaveBeenCalled();
 	});
 
 	it('leaves the key to the browser when there was nothing to act on', () => {
-		const { onKeydown } = make({ remove: () => false, duplicate: () => false, duplicateMany: () => false });
+		const { onKeydown } = make({ remove: () => false, dissolve: () => false, duplicate: () => false, duplicateMany: () => false });
 		for (const e of [key({ key: 'Backspace', shiftKey: false }), key({ key: 'd', shiftKey: false, ctrlKey: true }), key({ key: 'D', ctrlKey: true })]) {
 			onKeydown(e);
 			expect(e.preventDefault).not.toHaveBeenCalled();

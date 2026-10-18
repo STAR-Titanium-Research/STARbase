@@ -45,6 +45,9 @@ function bucket<T>(rows: T[], keyOf: (row: T) => string | null): T[][] {
 
 const keyOf = (...parts: (string | null)[]) => JSON.stringify(parts);
 
+/** Planned and done work never share a container: Mark done (and Back to planned) act on a whole container, so a planned pass beside done ones must be its own. */
+const stateOf = (o: { workState?: 'planned' }): string => (o.workState === 'planned' ? 'planned' : 'done');
+
 export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesOpts): Group[] {
   const code = (batchId: string) => opts.batchCodes?.[batchId] ?? null;
 
@@ -101,7 +104,7 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
     // Same input sample (any category): a cut into pieces. Each row must make its own piece: passes that leave
     // the sample where it is (turning, polishing, in place) are a sequence, never a batch.
     for (const list of bucket(candidates, (o) =>
-      o.sampleId && o.outputSampleId && o.outputSampleId !== o.sampleId ? keyOf(o.sampleId, o.methodId, o.equipmentId, utcDay(o.date)) : null,
+      o.sampleId && o.outputSampleId && o.outputSampleId !== o.sampleId ? keyOf(o.sampleId, o.methodId, o.equipmentId, utcDay(o.date), stateOf(o)) : null,
     )) {
       probable(list);
     }
@@ -112,7 +115,7 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
     const sampleOf = (o: OpRow) => o.sampleId ?? o.outputSampleId ?? o.id;
     const rest = candidates.filter((o) => !claimed.has(o.id));
     for (const list of bucket(rest, (o) =>
-      TOGETHER.has(o.category) ? keyOf(o.methodId, o.equipmentId, utcDay(o.date), o.recipeKey) : null,
+      TOGETHER.has(o.category) ? keyOf(o.methodId, o.equipmentId, utcDay(o.date), o.recipeKey, stateOf(o)) : null,
     )) {
       if (new Set(list.map(sampleOf)).size >= 2) probable(list);
     }
@@ -121,6 +124,7 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
   // 3. Stacks: a sample turned, faced or polished pass after pass. Only passes next to each other in the sample's
   // chain (buildGraph's order: date, sequence, id) stack, so the chain through the stack stays a straight line: any
   // other step on the sample in between (a cut, a test, a batch, another method or machine) ends the stack.
+  // Planned and done passes do not stack together (see stateOf): a planned pass after done ones is a container of its own.
   // A source_run_uid does not matter here (machining passes imported with force data carry one): a FAST press run
   // has one too, but it makes a new sample, so the in-place condition already keeps it out of a stack.
   if (opts.stack) {
@@ -146,7 +150,7 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
       };
       for (const { op } of list) {
         const last = run[run.length - 1];
-        if (op && last && (op.methodId !== last.methodId || op.equipmentId !== last.equipmentId)) close();
+        if (op && last && (op.methodId !== last.methodId || op.equipmentId !== last.equipmentId || stateOf(op) !== stateOf(last))) close();
         if (op) run.push(op);
         else close();
       }

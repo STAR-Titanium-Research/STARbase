@@ -121,6 +121,21 @@ describe('the map with a draft on a loaded history', () => {
 		expect([...map.shown.value].filter((id) => id.includes('draft'))).toHaveLength(2);
 	});
 
+	it('Expand (＋) on a draft card does nothing: its id is not a record, so no family is read for it', async () => {
+		family.mockResolvedValue(loaded());
+		const o = overlayOf(run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]));
+		const { map } = setup({ focus: 'physical_samples:s1' }, o.overlay);
+		await settle();
+		const before = map.nodes.value.length;
+		for (const id of ['s:draft:n1', ...map.nodes.value.filter((n) => n.type === 'container').map((n) => n.id).filter((id) => id.includes('draft'))]) {
+			await map.expand(id);
+		}
+		await settle();
+		expect(family).toHaveBeenCalledTimes(1);
+		expect(map.nodes.value.length).toBe(before);
+		expect(map.notice.value).toBe('');
+	});
+
 	it('redraws when the draft changes, and the loaded data is not touched', async () => {
 		family.mockResolvedValue(loaded());
 		const o = overlayOf(emptyBody());

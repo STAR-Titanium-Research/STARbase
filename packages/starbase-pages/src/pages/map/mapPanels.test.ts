@@ -75,6 +75,12 @@ describe('MapRail', () => {
     expect(text(await render(MapRail, railProps({ canMarkDone: true })))).toContain('Mark done');
   });
 
+  it('offers Back to planned only for a done card, and asks for it', async () => {
+    expect(text(await render(MapRail, railProps()))).not.toContain('Back to planned');
+    const html = await render(MapRail, railProps({ canMarkPlanned: true }));
+    expect(text(html)).toContain('Back to planned');
+  });
+
   it('draws the sample drawing for a sample, and none for a record with no form', async () => {
     expect(await render(MapRail, railProps())).toContain('d1-geometry');
     expect(await render(MapRail, railProps({ info: info(op.id) }))).not.toContain('d1-geometry');
@@ -168,6 +174,16 @@ describe('MapRail', () => {
     const html = await render(MapRail, railProps({ onMap: false }));
     expect(text(html)).not.toContain('Expand');
     expect(text(html)).not.toContain('Centre');
+  });
+
+  it('a draft card is not a record: no Open record, no Process map of it, no Expand (Centre stays)', async () => {
+    const base = info('s:p');
+    const draft: RecordInfo = { ...base, ref: { ...base.ref, id: 'draft:n1' } };
+    const html = await render(MapRail, railProps({ info: draft, focus: { collection: 'physical_samples', id: 'other' } }));
+    expect(text(html)).not.toContain('Open record');
+    expect(text(html)).not.toContain('Process map of');
+    expect(text(html)).not.toContain('Expand');
+    expect(text(html)).toContain('Centre');
   });
 
   it('marks the Connections rows a hovered socket touches', async () => {

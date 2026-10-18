@@ -51,6 +51,23 @@ describe('Create', () => {
 		expect(none.create.toast.value?.count).toBe(1);
 	});
 
+	it('counts distinct created records, not the keys the server files them under (an operation is under its row key and its item key)', async () => {
+		const { create, s } = await setup();
+		const op = { collection: 'manufacturing_operations', id: 'op1', code: null };
+		s.createAnswer = {
+			data: {
+				created: {
+					n1: { collection: 'physical_samples', id: 'new1', code: null },
+					n2: op,
+					n3: op,
+				},
+				sampleIds: ['new1'],
+			},
+		};
+		await create.create();
+		expect(create.toast.value?.count).toBe(2);
+	});
+
 	it('the toast goes away when it is closed', async () => {
 		const { create } = await setup();
 		await create.create();
@@ -103,10 +120,32 @@ describe('Create', () => {
 		expect(create.toast.value).not.toBeNull();
 	});
 
+	it('a caller with no researcher row is told why, and the draft is kept (nothing created, no toast, edit mode stays open)', async () => {
+		const { create, s, route, edit } = await setup();
+		const message = "Your account isn't linked to a researcher record. Ask an admin.";
+		s.createAnswer = Object.assign(new Error('HTTP 422'), { response: { status: 422, data: { errors: [{ message, extensions: { code: 'NO_RESEARCHER' } }] } } });
+		await create.create();
+		expect(create.error.value).toBe(message);
+		expect(create.showMissing.value).toBe(false);
+		expect(create.toast.value).toBeNull();
+		expect(route.query.edit).toBe('d');
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(edit.draft.draftId.value).toBe('d');
+	});
+
 	it('knows an empty draft', async () => {
 		const { create, edit } = await setup();
 		expect(create.empty.value).toBe(false);
 		edit.apply({ type: 'remove', key: 'n1' });
 		expect(create.empty.value).toBe(true);
+	});
+
+	it('a draft of only picked existing samples would make nothing', async () => {
+		const { create, edit } = await setup();
+		edit.apply([{ type: 'remove', key: 'n1' }, { type: 'addExistingSamples', samples: [{ id: 's9', version: 1 }] }]);
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(create.empty.value).toBe(true);
+		edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n2' } });
+		expect(create.empty.value).toBe(false);
 	});
 });
