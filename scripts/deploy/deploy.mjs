@@ -36,6 +36,17 @@ const DBMATE_IMAGE = 'ghcr.io/amacneil/dbmate:2';
 const WORKTREE_REL = '.claude/worktrees/deploy-main';
 const VERIFY_TIMEOUT_MS = 180_000;
 const VERIFY_POLL_MS = 3_000;
+/** Per-command time limits (ms). A command that hangs is killed (whole process tree) and the step fails with "timed out". */
+export const T = {
+	fetch: 120_000,
+	git: 30_000,
+	checkout: 300_000, // git worktree add / git merge write the whole tree
+	compose: 300_000,
+	install: 900_000,
+	build: 900_000,
+	dbmate: 600_000,
+	backup: 900_000,
+};
 
 class StepError extends Error {}
 
@@ -60,16 +71,25 @@ export function makeFsx() {
 	};
 }
 
+/** git never prompts for credentials (a prompt would hang a run nobody is watching). */
 function git(ctx, args, o = {}) {
-	return ctx.exec('git', args, { cwd: ctx.repoDir, ...o });
+	return ctx.exec('git', args, {
+		cwd: ctx.repoDir,
+		timeoutMs: T.git,
+		...o,
+		env: { ...ctx.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+	});
 }
 
 function compose(ctx, args, o = {}) {
-	return ctx.exec('docker', ['compose', ...args], { cwd: ctx.repoDir, onData: ctx.onData, ...o });
+	return ctx.exec('docker', ['compose', ...args], { cwd: ctx.repoDir, onData: ctx.onData, timeoutMs: T.compose, ...o });
 }
 
+/** "exit 3" or "timed out" (the runner reports a killed command as code -2). */
+const why = (r) => (r.code === -2 ? 'timed out' : `exit ${r.code}`);
+
 function must(r, what) {
-	if (r.code !== 0) throw new Error(`${what} failed: ${(r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n').slice(-3).join(' | ')}`);
+	if (r.code !== 0) throw new Error(`${what} failed: ${r.code === -2 ? 'timed out' : (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n').slice(-3).join(' | ')}`);
 	return r.stdout;
 }
 
@@ -86,7 +106,7 @@ async function readBuildServices(ctx) {
 
 /** `check`: what would a deploy do, and does anything stand in its way. Only runs `git fetch`. */
 export async function computeCheck(ctx) {
-	must(await git(ctx, ['fetch', '-q', 'origin']), 'git fetch');
+	must(await git(ctx, ['fetch', '-q', 'origin'], { timeoutMs: T.fetch }), 'git fetch');
 	const branch = must(await git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD']), 'git rev-parse HEAD').trim();
 	const headSha = must(await git(ctx, ['rev-parse', 'HEAD']), 'git rev-parse HEAD').trim();
 	// The target is resolved ONCE. Everything after this (diffs, scans, the worktree, the merge) uses this sha, so a
@@ -279,7 +299,7 @@ export async function runDeploy(ctx, opts = {}) {
 			await step('worktree', async () => {
 				await git(ctx, ['worktree', 'remove', '--force', WORKTREE_REL]); // a stale one; failure is fine
 				await git(ctx, ['worktree', 'prune']);
-				must(await git(ctx, ['worktree', 'add', '-q', '--detach', WORKTREE_REL, check.targetSha], { onData: ctx.onData }), 'git worktree add');
+				must(await git(ctx, ['worktree', 'add', '-q', '--detach', WORKTREE_REL, check.targetSha], { onData: ctx.onData, timeoutMs: T.checkout }), 'git worktree add');
 				worktree = true;
 			});
 			await step('migrate', async () => {
@@ -289,9 +309,9 @@ export async function runDeploy(ctx, opts = {}) {
 				const network = setting('DEPLOY_DOCKER_NETWORK', 'd1-database_d1net');
 				const dbDir = path.join(repoDir, ...WORKTREE_REL.split('/'), 'db');
 				const env = { ...ctx.env, DATABASE_URL: rewriteDbUrl(dbUrl) };
-				const dbmate = (tail) => ctx.exec('docker', dbmateArgs(ctx, dbDir, network, tail), { cwd: repoDir, env, onData: ctx.onData });
+				const dbmate = (tail) => ctx.exec('docker', dbmateArgs(ctx, dbDir, network, tail), { cwd: repoDir, env, onData: ctx.onData, timeoutMs: T.dbmate });
 				const status = await dbmate(['status']);
-				if (status.code !== 0) throw new StepError(`dbmate status failed: ${(status.stderr || status.stdout).trim().split('\n').slice(-2).join(' | ')}`);
+				if (status.code !== 0) throw new StepError(`dbmate status failed: ${status.code === -2 ? 'timed out' : (status.stderr || status.stdout).trim().split('\n').slice(-2).join(' | ')}`);
 				const pending = parsePending(status.stdout);
 				if (pending === 0) {
 					ctx.out('No pending migrations, no backup taken.\n');
@@ -312,12 +332,12 @@ export async function runDeploy(ctx, opts = {}) {
 				}
 				ctx.out(`${pending} pending migration(s). Backing up first.\n`);
 				const bash = setting('DEPLOY_BASH', 'C:\\Program Files\\Git\\bin\\bash.exe');
-				const b = await ctx.exec(bash, ['infra/backup/backup.sh'], { cwd: repoDir, onData: ctx.onData });
-				if (b.code !== 0) throw new StepError(`Backup failed (exit ${b.code}); no migration was applied.`);
+				const b = await ctx.exec(bash, ['infra/backup/backup.sh'], { cwd: repoDir, onData: ctx.onData, timeoutMs: T.backup });
+				if (b.code !== 0) throw new StepError(`Backup failed (${why(b)}); no migration was applied.`);
 				result.backup = parseBackupName(b.stdout) ?? 'unknown';
 				const up = await dbmate(['--no-dump-schema', 'up']);
 				if (up.code !== 0) {
-					throw new StepError(`dbmate up failed (exit ${up.code}). The backup is ${result.backup}; check the database before retrying.`);
+					throw new StepError(`dbmate up failed (${why(up)}). The backup is ${result.backup}; check the database before retrying.`);
 				}
 				migrated = true;
 			});
@@ -330,7 +350,7 @@ export async function runDeploy(ctx, opts = {}) {
 		await step('merge', async () => {
 			await assertCheckoutUnmoved();
 			// Merge the sha the preflight looked at, not whatever origin/main is by now.
-			const m = await git(ctx, ['merge', '--no-edit', '-m', `Deploy: merge origin/main (${check.target})`, check.targetSha], { onData: ctx.onData });
+			const m = await git(ctx, ['merge', '--no-edit', '-m', `Deploy: merge origin/main (${check.target})`, check.targetSha], { onData: ctx.onData, timeoutMs: T.checkout });
 			if (m.code !== 0) {
 				const conflicted = splitNul((await git(ctx, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=U'])).stdout);
 				const abort = await git(ctx, ['merge', '--abort']);
@@ -348,8 +368,8 @@ export async function runDeploy(ctx, opts = {}) {
 		// ---- install (never npm ci: a vite dev server from another session can lock node_modules)
 		if (has('install')) {
 			await step('install', async () => {
-				const r = await ctx.exec('npm', ['install', '--no-audit', '--no-fund'], { cwd: repoDir, onData: ctx.onData });
-				if (r.code !== 0) throw new StepError(`npm install failed (exit ${r.code}).`);
+				const r = await ctx.exec('npm', ['install', '--no-audit', '--no-fund'], { cwd: repoDir, onData: ctx.onData, timeoutMs: T.install });
+				if (r.code !== 0) throw new StepError(`npm install failed (${why(r)}).`);
 				// npm install rewrites package-lock.json on this host (a different resolution than CI's). Left
 				// dirty, it would block the next deploy as an overlap, so put it back unless it was already
 				// dirty before this run (an edit of the maintainer's, which must stay).
@@ -370,8 +390,8 @@ export async function runDeploy(ctx, opts = {}) {
 				for (const b of builds) {
 					const script = b; // build:extensions, build:starbase, build:web are root npm scripts
 					ctx.out(`npm run ${script}\n`);
-					const r = await ctx.exec('npm', ['run', script], { cwd: repoDir, onData: ctx.onData });
-					if (r.code !== 0) throw new StepError(`npm run ${script} failed (exit ${r.code}).`);
+					const r = await ctx.exec('npm', ['run', script], { cwd: repoDir, onData: ctx.onData, timeoutMs: T.build });
+					if (r.code !== 0) throw new StepError(`npm run ${script} failed (${why(r)}).`);
 				}
 			});
 		} else skip('build', 'nothing to build');
@@ -384,7 +404,7 @@ export async function runDeploy(ctx, opts = {}) {
 			await step('restart', async () => {
 				const must0 = async (args, what) => {
 					const r = await compose(ctx, args);
-					if (r.code !== 0) throw new StepError(`${what} failed (exit ${r.code}).`);
+					if (r.code !== 0) throw new StepError(`${what} failed (${why(r)}).`);
 				};
 				// A plain `up -d` touches every service whose definition changed, so only when the compose file itself changed.
 				if (wants('compose-up')) await must0(['up', '-d'], 'docker compose up -d');

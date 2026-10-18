@@ -595,3 +595,48 @@ test('run: no plain `up -d` unless docker-compose.yml changed', async () => {
 	assert.ok(!w.keys().includes('docker compose up -d'));
 	assert.ok(w.keys().includes('docker compose up -d --force-recreate directus'));
 });
+
+// ---- timeouts and no prompts -------------------------------------------------------------------
+
+test('every command has a time limit, and git never prompts', async () => {
+	const w = world({
+		changed: [MIGRATION_FILE, 'package.json', 'core/extensions/a/index.js', 'apps/starbase/x.js', 'plugins/heavy-data-worker/app.py'],
+		processEnv: { PATH: '/bin' },
+	});
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.ok(w.calls.length > 20);
+	for (const c of w.calls) {
+		assert.ok(Number.isInteger(c.opts.timeoutMs) && c.opts.timeoutMs > 0, `no timeout: ${c.cmd} ${c.args.join(' ')}`);
+		if (c.cmd === 'git') {
+			assert.equal(c.opts.env.GIT_TERMINAL_PROMPT, '0', c.args.join(' '));
+			assert.equal(c.opts.env.GCM_INTERACTIVE, 'never', c.args.join(' '));
+			assert.equal(c.opts.env.PATH, '/bin');
+		}
+	}
+	const limit = (prefix) => w.seen(prefix)[0].opts.timeoutMs;
+	assert.equal(limit('git fetch'), 120_000);
+	assert.equal(limit('git rev-parse'), 30_000);
+	assert.equal(limit('docker compose up'), 300_000);
+	assert.equal(limit('docker compose --profile * ps'), 300_000);
+	assert.equal(limit('npm install'), 900_000);
+	assert.equal(limit('npm run'), 900_000);
+	assert.equal(limit('docker run'), 600_000);
+	assert.equal(w.calls.find((c) => /bash/.test(c.cmd)).opts.timeoutMs, 900_000);
+});
+
+test('a command that times out fails its step with "timed out"', async () => {
+	const w = world({ changed: ['core/extensions/a/index.js'] });
+	const inner = w.ctx.exec;
+	w.ctx.exec = async (cmd, args, opts) => (cmd === 'npm' ? { code: -2, stdout: '', stderr: 'timed out after 900000 ms' } : inner(cmd, args, opts));
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'build');
+	assert.match(r.message, /npm run build:extensions failed \(timed out\)/);
+
+	const w2 = world({});
+	const inner2 = w2.ctx.exec;
+	w2.ctx.exec = async (cmd, args, opts) => (args[0] === 'fetch' ? { code: -2, stdout: '', stderr: 'timed out' } : inner2(cmd, args, opts));
+	const r2 = await runDeploy(w2.ctx, {});
+	assert.equal(r2.failedStep, 'preflight');
+	assert.match(r2.message, /git fetch failed: timed out/);
+});
