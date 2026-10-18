@@ -1323,6 +1323,55 @@ checks can be run from `/map?edit=new`.
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
 
+#### Process map edit mode redesign, slice 1 canvas (`pm-redesign/1b-canvas`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The canvas rules (removal, derived sockets, placement) are unit-tested against fake servers and a fake canvas. What needs a real
+browser and the real stack (Postgres, Directus, the repo's extensions, STARbase) is pointer work, measured sizes and the server's
+own answers. Run these on the slice-0 stack.
+
+- [ ] **PM6-1 — Delete, X, Backspace take a new card or a wire.** In `/map?edit=new` add a sample and an operation, wire them.
+  Select the operation, press Delete: it goes with its wire. Undo brings both back. Click the wire (it turns dashed), press X: only
+  the wire goes. Expect the keys to do nothing while typing in a form field, and the Remove button in the lid to do the same as
+  Delete. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-2 — A planned record that exists is struck through and deleted at Create.** Open a map with a planned operation (and
+  its planned output sample), choose Edit, select the operation, press Delete. Expect the card struck through with a "Will be
+  deleted" pill (the planned sample too), the Create button saying "delete 1 planned record", and Undo bringing the card back.
+  Create it: the operation and its planned output are gone after the map reloads. With something planned still hanging off the
+  output Create answers with the server's check on the card; with something done hanging off it the card shows the lock at once.
+  Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-3 — A done record cannot be removed.** Select a done sample or a done operation on an edit map and press Delete, X,
+  Backspace or Remove. Expect a lock on the card, the line "Done records can't be removed from the map" under the lid, and nothing
+  changed. Click a wire between two done records and press Delete: "Done records' wires can't be removed from the map", the
+  wire wears a padlock. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-4 — Drag a wire end off its input.** Drag from a wired input socket onto empty canvas and let go: the wire goes and
+  the menu does not open; Undo puts it back. Drag from a free input onto empty canvas: the Add menu opens as before. Drop a wire
+  end on another card that does not fit: nothing changes and the reason shows. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-5 — Dissolve.** Build sample A, a cut (one row), sample B, a polish on B. Select the cut and press Ctrl/⌘+Delete (or use
+  Dissolve in the lid or the card's right-click menu). Expect the cut and B gone and A wired straight into the polish; Undo
+  restores all three. On a cut with three pieces, a test, or a card with no input sample, Dissolve says why and changes nothing.
+  Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-6 — Sockets are derived.** A new sample shows one free socket on each side and nothing else. Wire it to an operation:
+  the sample keeps its wired socket and shows no free output until you select it. Select the operation: a free output appears
+  beside nothing else; connect it to a new sample, select the operation again and drag a second wire to its free output: it
+  gets a second piece (a second row), sharing the input sample. Take the wire off the second piece's sample: the piece goes with
+  it. Reload the draft: the canvas shows the same sockets (nothing about them was saved). Cards must not change size when
+  selected. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-7 — New cards never land on others.** Add, duplicate (Shift+D, and ×4), pick samples and attach cards on a crowded
+  history map. Expect no two cards to overlap after any of them, the new ones beside what they came from, and undo and redo to
+  leave no overlap either. Drag a card on top of another on purpose, add something, reload the draft: the dragged card is still
+  where you left it. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-8 — Tidy.** Make a mess of the draft's own cards (drag them over each other), press Tidy in the lid. Expect only the
+  draft's cards to glide to ELK's arrangement beside the history, the history cards not to move, nothing to overlap, and Undo to
+  put every card back in one step. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-9 — Plain fixes against live data.** (a) Create a draft of one operation and two outputs: the toast says "Created 3
+  records", not 5. (b) Open the history of a sample, choose Edit: a card's Open record, Process map of it, Expand and the plus on
+  the card are missing for a draft card and present for a recorded one. (c) A draft of only picked samples: Create is disabled and
+  says what to add. (d) A free new sample (no operation) with material and method can be created on live (`current_status` is
+  required there and is not asked for). (e) A planned pass after done passes of one sample is its own card and its Mark done
+  works. (f) Duplicate a team-owned sample and create the copy: it is created, owned by you. (g) On a done operation you own,
+  the rail's Back to planned works; as someone else it shows the server's refusal. (h) Sign in as a Lab Viewer: no Edit toggle,
+  no My drafts, and `/map?edit=new` says "Your account may not build processes." Since: edit-mode redesign slice 1 (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
