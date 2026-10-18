@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	buildTurningWithNewSample, card, cards, canvasOf, chooseFromSocketMenu, clickWire, createButton, dragFrom, draftIdOf, emptySpot, pressCreate, readDraft, sampleIdOf, fit, makePlanned, savedDraft, selectCard, startEditingMapOf, wireBetween,
+	buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, createButton, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, makePlanned, relativeLayout, savedDraft, selectCard, startEditingMapOf, wireBetween,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -222,6 +222,89 @@ test.describe('as a Lab Member', () => {
 		await expect(cut).toBeVisible();
 		await expect(page.locator('.vue-flow__node').and(page.getByRole('group', { name: 'New sample, Sample' }))).toHaveCount(3);
 		expect(await readDraft(member, draftIdOf(page)), 'nothing was changed').toEqual(before);
+	});
+
+	// ---- 4. derived sockets (R5) -----------------------------------------------------------------------------------------------------
+	test('the free socket is on the selected card, spares go when the selection leaves, a card keeps its size, and a reload draws the same canvas (R5)', async ({ page }) => {
+		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		const operation = card(page, 'CNC Turning, Operation');
+		const sample = card(page, 'New sample, Sample');
+		await savedDraft(page, member, (b) => b.items.length === 3 && b.wires.length === 2, 'built');
+		await fit(page);
+		const free = (c: Locator) => c.locator('.sock.free');
+		const sockets = (c: Locator) => c.locator('[data-sock]');
+		const frames = async (...cs: Locator[]) => Promise.all(cs.map((c) => boxOf(c)));
+
+		// A card that has no free sockets of its own (the material) is selected: the operation and the sample show their wired sockets only.
+		const material = card(page, 'AA, Material');
+		await selectCard(page, material);
+		await expect(free(operation)).toHaveCount(0);
+		// (The new sample has nothing leaving it, so its one free output is always there: a side with nothing wired shows its free socket.)
+		await expect(free(sample)).toHaveCount(1);
+		await expect(free(sample)).toHaveAttribute('data-sock', /^sample\|draft:.*\|out$/);
+		const rest = await frames(operation, sample);
+		const restSockets = await sockets(operation).count();
+
+		// Selected: the operation has a free output (a new piece) and a free input; the sample a free output (what happens to it next).
+		await selectCard(page, operation);
+		await expect(free(operation).first()).toBeVisible();
+		await expect(canvasOf(page).locator('.free[data-sock$="|out|add"]')).toHaveCount(1);
+		expect(await sockets(operation).count(), 'one more socket: the free one').toBeGreaterThan(restSockets);
+		expect(await frames(operation, sample), 'selecting a card does not move or resize it or its neighbour').toEqual(rest);
+
+		// The selection moves to the sample: the operation's spare sockets are gone, the sample has its free output.
+		await selectCard(page, sample);
+		await expect(free(operation)).toHaveCount(0);
+		await expect(canvasOf(page).locator('.free[data-sock^="sample|draft:"][data-sock$="|out"]')).toHaveCount(1);
+		expect(await sockets(operation).count()).toBe(restSockets);
+		expect(await frames(operation, sample)).toEqual(rest);
+
+		// The selection leaves for a card with no free sockets: only wired sockets again.
+		await selectCard(page, material);
+		await expect(free(operation)).toHaveCount(0);
+
+		// Nothing about sockets is stored: the draft reloads to the same canvas (same cards, the same sockets, the same arrangement).
+		const shape = async () => ({
+			cards: await cards(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-id')).sort()),
+			sockets: await canvasOf(page).locator('[data-sock]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-sock')}${e.classList.contains('free') ? ' free' : ''}`).sort()),
+			layout: await relativeLayout(page),
+		});
+		const before = await shape();
+		await savedDraft(page, member, (b) => b.items.length === 3, 'saved before the reload');
+		await page.reload();
+		await expect(cards(page)).toHaveCount(before.cards.length);
+		await fit(page);
+		const after = await shape();
+		expect(after.cards, 'the same cards').toEqual(before.cards);
+		expect(after.sockets, 'the same sockets, none of them stored').toEqual(before.sockets);
+		// (Only dragged cards have a stored position: the others are laid out again on load, so the arrangement is checked by its order, not pixels.)
+		const order = (l: Record<string, { x: number; y: number }>) => Object.entries(l).sort((p, q) => p[1].x - q[1].x).map(([id]) => id);
+		expect(order(after.layout), 'the same left-to-right order').toEqual(order(before.layout));
+		expect(await overlaps(page), 'and no two cards overlap').toEqual([]);
+	});
+
+	test('connecting to the free output socket of an operation adds a piece: a second row, the same input (R5)', async ({ page }) => {
+		const { sampleId } = await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		const cut = card(page, /, Operation$/);
+		// A loose new sample (from the lid's Add), the second piece's output.
+		await page.getByRole('button', { name: /^Add\b/ }).first().click();
+		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
+		await expect(page.locator('.pm-addmenu')).toBeHidden();
+		await savedDraft(page, member, (b) => b.items.length === 4, 'the loose sample');
+		await fit(page);
+		await selectCard(page, cut);
+		const freeOut = canvasOf(page).locator('.free[data-sock$="|out|add"]');
+		await expect(freeOut).toHaveCount(1);
+		// Draw the wire from the operation's free output to the loose sample's free input.
+		const loose = canvasOf(page).locator('.free[data-sock^="sample|draft:"][data-sock$="|in"]');
+		await expect(loose).toHaveCount(1);
+		await dragBetween(page, centreOf(await boxOf(freeOut)), centreOf(await boxOf(loose)));
+		const body = await savedDraft(page, member, (b) => b.items.find((i) => i.kind === 'operation')?.rows?.length === 2, 'a second piece');
+		const op = body.items.find((i) => i.kind === 'operation')!;
+		const input = body.items.find((i) => i.existing?.id === sampleId)!;
+		expect(body.wires.filter((w) => w.to.key === op.key).map((w) => `${w.from.key}->${w.to.key}:${w.to.row ?? 0}`).sort(), 'the one input sample feeds every piece').toEqual([`${input.key}->${op.key}:0`, `${input.key}->${op.key}:1`]);
+		expect(body.wires.filter((w) => w.from.key === op.key).map((w) => w.from.row).sort(), 'one wire out of each piece').toEqual([0, 1]);
+		await expect(createButton(page)).toHaveText('Create 2 operations, 2 samples');
 	});
 
 	test('a done operation, a done sample and the wire between them cannot be removed: a lock, the reason, and nothing is sent (R4, ADR-0019 §6)', async ({ page }) => {

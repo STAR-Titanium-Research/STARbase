@@ -215,6 +215,18 @@ export async function emptySpot(page: Page): Promise<{ x: number; y: number }> {
 	throw new Error('no empty spot on the canvas');
 }
 
+/** A click on an empty spot of the canvas: lets go of the selection. */
+export async function clickEmpty(page: Page): Promise<void> {
+	const at = await emptySpot(page);
+	await page.mouse.click(at.x, at.y);
+}
+/** Where every card is, as an offset from the card with the lowest id: the arrangement, whatever the viewport does. */
+export async function relativeLayout(page: Page): Promise<Record<string, { x: number; y: number }>> {
+	const all = [...(await cardBoxes(page))].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+	const [, first] = all[0];
+	return Object.fromEntries(all.map(([id, b]) => [id, { x: b.x - first.x, y: b.y - first.y }]));
+}
+
 // ---- records made through the API --------------------------------------------------------------------------------------------
 
 /**
