@@ -30,6 +30,8 @@ export const RUN_ID_RE = /^\d{8}T\d{6}Z$/;
 export const KEEP_RUNS = 20;
 export const EXIT_SELF_CHANGED = 75;
 const CHECK_TIMEOUT_MS = 90_000;
+export const DEFAULT_RUN_TIMEOUT_MS = 60 * 60_000; // a run longer than this is killed (DEPLOY_RUN_TIMEOUT_MIN)
+export const LOCK_FRESH_MS = 3 * 60_000; // a lock nobody has refreshed for this long is stale even if its pid exists
 const MAX_BODY = 64 * 1024;
 const MAX_CHUNK = 256 * 1024;
 
@@ -132,7 +134,7 @@ export function runCommand(cmd, args, { cwd, timeoutMs, env } = {}) {
 	});
 }
 
-/** The real runner. Tests pass a fake with the same four methods. */
+/** The real runner. Tests pass a fake with the same methods. */
 export function makeRunner(repoDir) {
 	const deployScript = path.join(repoDir, 'scripts', 'deploy', 'deploy.mjs');
 	return {
@@ -142,7 +144,7 @@ export function makeRunner(repoDir) {
 		spawnDeploy: ({ id, ack, actor, logPath, resultFile }) => {
 			const fd = openSync(logPath, 'a');
 			try {
-				const args = [deployScript, 'run', '--json', `--id=${id}`, `--actor=${actor}`, `--result-file=${resultFile}`, ...ack.map((a) => `--ack=${a}`)];
+				const args = [deployScript, 'run', '--json', `--id=${id}`, `--actor=${actor}`, `--result-file=${resultFile}`, '--lock-held', ...ack.map((a) => `--ack=${a}`)];
 				const child = spawn(process.execPath, args, { cwd: repoDir, detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
 				const exited = new Promise((resolve) => {
 					child.on('error', () => resolve(-1));
@@ -155,6 +157,21 @@ export function makeRunner(repoDir) {
 			}
 		},
 		isAlive: isPidAlive,
+		/** Kill a run's whole process tree (deploy.mjs and the git, npm and docker commands under it). */
+		killTree: (pid) => {
+			try {
+				if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+				else {
+					try {
+						process.kill(-pid, 'SIGKILL'); // the run is a process group leader (spawned detached)
+					} catch {
+						process.kill(pid, 'SIGKILL');
+					}
+				}
+			} catch {
+				/* already gone */
+			}
+		},
 	};
 }
 
@@ -193,20 +210,45 @@ export function createAgent(opts) {
 	const lockPath = path.join(runsDir, '.lock');
 	const runDir = (id) => path.join(runsDir, id);
 	const timers = new Set();
+	const ownRunIds = new Set(); // runs this process started and has not seen finish
+	const timedOut = new Set(); // runs killed for exceeding the run limit
+	const runTimers = new Map(); // run id -> its timeout timer
+	const runTimeoutMs = opts.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
 	let checking = false;
 
 	// ---- lock ---------------------------------------------------------------------------------
-	function readLock() {
+	/** {lock, mtimeMs} or null when there is no lock file; a damaged file gives lock: null. */
+	function readLockFile() {
 		try {
-			return JSON.parse(readFileSync(lockPath, 'utf8'));
+			const mtimeMs = statSync(lockPath).mtimeMs;
+			let lock = null;
+			try {
+				lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+			} catch {
+				/* damaged: stale */
+			}
+			return { lock, mtimeMs };
 		} catch {
 			return null;
 		}
 	}
-	function lockIsLive(lock) {
-		return !!lock && Number.isInteger(lock.pid) && (lock.pid === process.pid || runner.isAlive(lock.pid));
+	const readLock = () => readLockFile()?.lock ?? null;
+	// A lock is live only if its process exists AND the file was refreshed recently (the running deploy touches it
+	// every 20 s): a bare pid can be handed to an unrelated process after a crash or reboot. Same rule as
+	// scripts/deploy/lib.mjs lockIsLive (this file stays standalone, so it keeps its own copy).
+	function lockIsLive(entry) {
+		const lock = entry?.lock;
+		if (!lock || !Number.isInteger(lock.pid)) return false;
+		if (Date.now() - entry.mtimeMs > LOCK_FRESH_MS) return false;
+		if (lock.pid === process.pid) return ownRunIds.has(lock.id); // only a run this very process started (before its child exists)
+		return runner.isAlive(lock.pid);
 	}
-	/** Create the lock file exclusively; remove one whose process is gone. Returns false when a run is active. */
+	/** The live lock, or null. */
+	function liveLock() {
+		const entry = readLockFile();
+		return lockIsLive(entry) ? entry.lock : null;
+	}
+	/** Create the lock file exclusively; remove one that is stale. Returns false when a run is active. */
 	function acquireLock(info) {
 		mkdirSync(runsDir, { recursive: true });
 		for (let attempt = 0; attempt < 2; attempt++) {
@@ -220,9 +262,10 @@ export function createAgent(opts) {
 				return true;
 			} catch (e) {
 				if (e.code !== 'EEXIST') throw e;
-				const lock = readLock();
-				if (lockIsLive(lock)) return false;
-				// Stale: its process no longer exists. Record the run it left behind, then take over.
+				const entry = readLockFile();
+				if (lockIsLive(entry)) return false;
+				const lock = entry?.lock;
+				// Stale: its process is gone, or nobody has refreshed it. Record the run it left behind, then take over.
 				if (lock?.id) markInterrupted(lock.id, lock.actor ?? null, lock.startedAt);
 				try {
 					unlinkSync(lockPath);
@@ -315,10 +358,32 @@ export function createAgent(opts) {
 
 	// ---- running a deploy ---------------------------------------------------------------------
 	function finishRun(id, exitCode, lockInfo) {
-		if (!readResult(id)) {
-			const why = exitCode == null ? 'the process ended' : `deploy.mjs exited with code ${exitCode}`;
-			writeResult(id, failureResult(id, lockInfo?.actor, lockInfo?.startedAt, 'crashed', `${why} without recording a result. See the log.`));
+		clearTimeout(runTimers.get(id));
+		runTimers.delete(id);
+		ownRunIds.delete(id);
+		if (!existsSync(runDir(id))) {
+			// A run started by hand (`deploy.mjs run` takes the same lock): nothing of ours to record.
+			releaseLock(id);
+			return;
 		}
+		if (!readResult(id)) {
+			if (timedOut.has(id)) {
+				writeResult(
+					id,
+					failureResult(
+						id,
+						lockInfo?.actor,
+						lockInfo?.startedAt,
+						'timeout',
+						`The run took longer than ${Math.round(runTimeoutMs / 60_000)} minutes and was killed. Check git status (a half-done merge: git merge --abort), docker compose ps and, if a migration ran, the database before running it again.`,
+					),
+				);
+			} else {
+				const why = exitCode == null ? 'the process ended' : `deploy.mjs exited with code ${exitCode}`;
+				writeResult(id, failureResult(id, lockInfo?.actor, lockInfo?.startedAt, 'crashed', `${why} without recording a result. See the log.`));
+			}
+		}
+		timedOut.delete(id);
 		releaseLock(id);
 		prune(null);
 		if (hashSelf() !== startHash) {
@@ -337,6 +402,19 @@ export function createAgent(opts) {
 		t.unref?.();
 		timers.add(t);
 	}
+	/** Kill the run's whole process tree when it has been going longer than the run limit. */
+	function armTimeout(id, pid, startedMs) {
+		if (!runTimeoutMs) return;
+		const delay = Math.max(0, startedMs + runTimeoutMs - Date.now());
+		const t = setTimeout(() => {
+			runTimers.delete(id);
+			if (!runner.isAlive(pid)) return;
+			timedOut.add(id);
+			runner.killTree(pid);
+		}, delay);
+		t.unref?.();
+		runTimers.set(id, t);
+	}
 	function freshId() {
 		let d = new Date(now());
 		while (existsSync(runDir(formatRunId(d)))) d = new Date(d.getTime() + 1000);
@@ -347,7 +425,11 @@ export function createAgent(opts) {
 		if (checking) return null;
 		const id = freshId();
 		const info = { id, pid: process.pid, startedAt: new Date(now()).toISOString(), actor };
-		if (!acquireLock(info)) return null;
+		ownRunIds.add(id);
+		if (!acquireLock(info)) {
+			ownRunIds.delete(id);
+			return null;
+		}
 		mkdirSync(runDir(id), { recursive: true });
 		const logPath = path.join(runDir(id), 'run.log');
 		writeFileSync(logPath, '');
@@ -355,24 +437,29 @@ export function createAgent(opts) {
 			const { pid, exited } = runner.spawnDeploy({ id, ack, actor, logPath, resultFile: path.join(runDir(id), 'result.json') });
 			info.pid = pid;
 			writeFileSync(lockPath, JSON.stringify(info));
+			armTimeout(id, pid, Date.parse(info.startedAt));
 			exited.then((code) => finishRun(id, code, info)).catch((e) => console.error(`deploy-agent: finishing run ${id} failed: ${e.message}`));
 		} catch (e) {
 			writeResult(id, failureResult(id, actor, info.startedAt, 'spawn', `Could not start deploy.mjs: ${e.message}`));
+			ownRunIds.delete(id);
 			releaseLock(id);
 		}
 		return { id };
 	}
 	/** On start: finish what a previous agent left behind. */
 	function recover() {
-		const lock = readLock();
+		const entry = readLockFile();
+		const lock = entry?.lock;
 		let adopted = null;
-		if (lock) {
-			if (lockIsLive(lock) && lock.pid !== process.pid) {
+		if (entry) {
+			if (lock && lockIsLive(entry) && lock.pid !== process.pid) {
 				adopted = lock.id;
 				watchPid(lock.id, lock.pid, lock);
+				if (lock.source !== 'cli') armTimeout(lock.id, lock.pid, Date.parse(lock.startedAt) || Date.now());
 			} else {
-				if (lock.id) markInterrupted(lock.id, lock.actor ?? null, lock.startedAt);
-				releaseLock(lock.id);
+				// stale (process gone, not refreshed, or a damaged file)
+				if (lock?.id) markInterrupted(lock.id, lock.actor ?? null, lock.startedAt);
+				releaseLock(lock?.id);
 			}
 		}
 		for (const id of listRunIds()) {
@@ -434,8 +521,8 @@ export function createAgent(opts) {
 		if (!tokensEqual(String(req.headers['x-deploy-token'] ?? ''), token)) return err(res, 401, 'unauthorized', 'Missing or wrong X-Deploy-Token.');
 
 		if (route === '/state' && method === 'GET') {
-			const lock = readLock();
-			const running = lockIsLive(lock);
+			const lock = liveLock();
+			const running = !!lock;
 			const ids = listRunIds();
 			let last = null;
 			for (const id of ids) {
@@ -454,7 +541,7 @@ export function createAgent(opts) {
 		}
 
 		if (route === '/check' && method === 'POST') {
-			if (checking || lockIsLive(readLock())) return err(res, 409, 'busy', 'A check or a deploy is already running.');
+			if (checking || liveLock()) return err(res, 409, 'busy', 'A check or a deploy is already running.');
 			checking = true;
 			try {
 				const r = await runner.check();
@@ -523,7 +610,9 @@ export function createAgent(opts) {
 					} finally {
 						closeSync(fd);
 					}
-					const used = len === size - offset ? len : trimIncompleteUtf8(buf);
+					// Never cut a multi-byte character, not even at the end of a log that is still being written. Only a finished run's last bytes are taken as they are.
+					const complete = len === size - offset && result !== null;
+					const used = complete ? len : trimIncompleteUtf8(buf);
 					log = buf.subarray(0, used).toString('utf8');
 					nextOffset = offset + used;
 				}
@@ -585,7 +674,8 @@ export async function main(env = process.env) {
 		return 1;
 	}
 	const port = Number(get('DEPLOY_AGENT_PORT') || 8212);
-	const agent = createAgent({ repoDir, token, port });
+	const runMin = Number(get('DEPLOY_RUN_TIMEOUT_MIN') || 60);
+	const agent = createAgent({ repoDir, token, port, runTimeoutMs: Number.isFinite(runMin) && runMin > 0 ? runMin * 60_000 : DEFAULT_RUN_TIMEOUT_MS });
 	const bound = await agent.start(port);
 	console.log(`deploy-agent: listening on http://127.0.0.1:${bound}, repo ${repoDir}`);
 	return null;

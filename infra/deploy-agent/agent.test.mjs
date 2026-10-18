@@ -1,7 +1,7 @@
 // node --test infra/deploy-agent/*.test.mjs
 // The agent on an ephemeral port with a fake runner: no test starts git, node or docker.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
@@ -57,6 +57,12 @@ function fakeRunner() {
 			return { pid, exited: d.promise };
 		},
 		isAlive: (pid) => alive.has(pid),
+		killTree: (pid) => {
+			r.killed.push(pid);
+			r.runs.find((x) => x.pid === pid)?.finish(137, null);
+			alive.delete(pid);
+		},
+		killed: [],
 	};
 	return r;
 }
@@ -360,7 +366,7 @@ test('a run still alive after an agent restart is adopted and finished when its 
 	const repoDir = mkdtempSync(path.join(tmpdir(), 'deploy-agent-'));
 	const runsDir = path.join(repoDir, 'logs', 'deploy');
 	mkdirSync(path.join(runsDir, '20260102T030405Z'), { recursive: true });
-	writeFileSync(path.join(runsDir, '.lock'), JSON.stringify({ id: '20260102T030405Z', pid: 555, startedAt: '2026-01-02T03:04:05.000Z', actor: 'me' }));
+	writeFileSync(path.join(runsDir, '.lock'), JSON.stringify({ id: '20260102T030405Z', pid: 555, startedAt: new Date().toISOString(), actor: 'me' }));
 	const runner = fakeRunner();
 	runner.alive.add(555);
 	const agent = createAgent({ repoDir, token: TOKEN, runner, exit: () => {}, hashSelf: () => 'x' });
@@ -484,6 +490,7 @@ test('makeRunner.spawnDeploy: detached child, output appended to the log, result
 	assert.deepEqual(seen.args.slice(0, 4), ['run', '--json', '--id=20261018T120000Z', '--actor=u1']);
 	assert.ok(seen.args.includes('--ack=db/migrations/a b.sql'));
 	assert.ok(seen.args.includes('--ack=--json'));
+	assert.ok(seen.args.includes('--lock-held'), 'the agent holds the lock');
 	assert.equal(path.resolve(seen.cwd), path.resolve(repoDir));
 	assert.equal(runner.isAlive(pid), false);
 	assert.equal(runner.isAlive(process.pid), true);
@@ -491,4 +498,124 @@ test('makeRunner.spawnDeploy: detached child, output appended to the log, result
 	// check goes through the same script, with a timeout
 	const chk = await runner.check();
 	assert.equal(chk.code, 1); // the stub's check run has no --result-file, so it throws: a failing check is reported, not hidden
+});
+
+// ---- run limit, pid reuse, hand-started runs, partial characters -------------------------------
+
+async function bootRecovered(lock, setup = () => {}, opts = {}) {
+	const repoDir = mkdtempSync(path.join(tmpdir(), 'deploy-agent-'));
+	const runsDir = path.join(repoDir, 'logs', 'deploy');
+	mkdirSync(path.join(runsDir, lock.id), { recursive: true });
+	writeFileSync(path.join(runsDir, '.lock'), JSON.stringify(lock));
+	const runner = fakeRunner();
+	setup(runner);
+	const agent = createAgent({ repoDir, token: TOKEN, runner, exit: () => {}, hashSelf: () => 'x', ...opts });
+	await agent.start(0);
+	cleanups.push(async () => {
+		await agent.close();
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+	return { runner, runsDir, repoDir };
+}
+
+test('a run that exceeds the run limit has its process tree killed and is recorded as timeout', async () => {
+	const { call, runner } = await boot({ opts: { runTimeoutMs: 80 } });
+	const { json } = await call('POST', '/deploy', { body: {}, headers: { 'x-deploy-actor': 'u1' } });
+	await until(() => runner.killed.length === 1, 3000);
+	assert.deepEqual(runner.killed, [runner.runs[0].pid]);
+	await settle(100);
+	const r = await call('GET', `/runs/${json.id}`);
+	assert.equal(r.json.done, true);
+	assert.equal(r.json.result.ok, false);
+	assert.equal(r.json.result.failedStep, 'timeout');
+	assert.equal(r.json.result.actor, 'u1');
+	assert.match(r.json.result.message, /killed/);
+	assert.equal((await call('GET', '/state')).json.running, false);
+});
+
+test('a run that finishes in time is never killed', async () => {
+	const { call, runner } = await boot({ opts: { runTimeoutMs: 150 } });
+	await call('POST', '/deploy', { body: {} });
+	runner.runs[0].finish(0);
+	await settle(300);
+	assert.deepEqual(runner.killed, []);
+});
+
+test('an adopted run older than the run limit is killed too', async () => {
+	const lock = { id: '20260102T030405Z', pid: 556, startedAt: '2026-01-02T03:04:05.000Z', actor: 'me' };
+	const { runner, runsDir } = await bootRecovered(
+		lock,
+		(r) => {
+			r.alive.add(556);
+			r.killTree = (pid) => {
+				r.killed.push(pid);
+				r.alive.delete(pid);
+			};
+		},
+		{ runTimeoutMs: 60_000 },
+	);
+	await until(() => existsSync(path.join(runsDir, lock.id, 'result.json')), 4000);
+	assert.deepEqual(runner.killed, [556]);
+	assert.equal(JSON.parse(readFileSync(path.join(runsDir, lock.id, 'result.json'), 'utf8')).failedStep, 'timeout');
+});
+
+test('pid reuse: a lock whose pid is alive but whose file nobody refreshed is stale', async () => {
+	const { call, runner, runsDir } = await boot();
+	runner.alive.add(888); // some unrelated process that got the number after a crash
+	mkdirSync(path.join(runsDir, '20260101T000000Z'), { recursive: true });
+	const lockPath = path.join(runsDir, '.lock');
+	writeFileSync(lockPath, JSON.stringify({ id: '20260101T000000Z', pid: 888, startedAt: '2026-01-01T00:00:00.000Z', actor: 'old' }));
+	const old = new Date(Date.now() - 10 * 60_000);
+	utimesSync(lockPath, old, old);
+	assert.equal((await call('GET', '/state')).json.running, false);
+	const r = await call('POST', '/deploy', { body: {} });
+	assert.equal(r.status, 202);
+	assert.equal(JSON.parse(readFileSync(path.join(runsDir, '20260101T000000Z', 'result.json'), 'utf8')).failedStep, 'interrupted');
+});
+
+test('a lock that is alive and inside the refresh margin blocks a deploy', async () => {
+	const { call, runner, runsDir } = await boot();
+	runner.alive.add(889);
+	mkdirSync(runsDir, { recursive: true });
+	const lockPath = path.join(runsDir, '.lock');
+	writeFileSync(lockPath, JSON.stringify({ id: '20260101T000000Z', pid: 889, startedAt: 'x', actor: 'a' }));
+	const recent = new Date(Date.now() - 2 * 60_000);
+	utimesSync(lockPath, recent, recent);
+	assert.equal((await call('POST', '/deploy', { body: {} })).status, 409);
+});
+
+test('a run started by hand (lock source cli) shows as running and blocks a deploy and a check', async () => {
+	const { call, runner, runsDir } = await boot();
+	runner.alive.add(890);
+	mkdirSync(runsDir, { recursive: true });
+	writeFileSync(path.join(runsDir, '.lock'), JSON.stringify({ id: '20261018T150000Z', pid: 890, startedAt: new Date().toISOString(), actor: 'me', source: 'cli' }));
+	const s = await call('GET', '/state');
+	assert.equal(s.json.running, true);
+	assert.equal(s.json.current.id, '20261018T150000Z');
+	assert.equal((await call('POST', '/deploy', { body: {} })).status, 409);
+	assert.equal((await call('POST', '/check')).status, 409);
+});
+
+test('adopting a hand-started run does not write a result when it ends', async () => {
+	const lock = { id: '20261018T150000Z', pid: 891, startedAt: new Date().toISOString(), actor: 'me', source: 'cli' };
+	const { runner, runsDir } = await bootRecovered(lock, (r) => r.alive.add(891));
+	rmSync(path.join(runsDir, lock.id), { recursive: true }); // a hand-run has no run folder of ours
+	runner.alive.delete(891);
+	await until(() => !existsSync(path.join(runsDir, '.lock')), 4000);
+	assert.equal(existsSync(path.join(runsDir, lock.id)), false);
+});
+
+test('GET /runs/:id never returns half a character while the run is live', async () => {
+	const { call, runner } = await boot();
+	const { json } = await call('POST', '/deploy', { body: {} });
+	const logPath = runner.runs[0].logPath;
+	const bytes = Buffer.from('abé'); // 61 62 c3 a9
+	writeFileSync(logPath, bytes.subarray(0, 3)); // ends in the lead byte c3
+	let r = await call('GET', `/runs/${json.id}`);
+	assert.equal(r.json.log, 'ab');
+	assert.equal(r.json.nextOffset, 2);
+	writeFileSync(logPath, bytes); // the second byte arrives
+	r = await call('GET', `/runs/${json.id}?offset=${r.json.nextOffset}`);
+	assert.equal(r.json.log, 'é');
+	assert.equal(r.json.nextOffset, 4);
 });
