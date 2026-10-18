@@ -31,6 +31,7 @@ defineProps<{
 		:notice="edit.draft.notice.value"
 		:can-remove="side.build.canRemove.value"
 		:can-dissolve="side.build.canDissolve.value"
+		:can-tidy="edit.body.value.items.length > 0"
 		@undo="side.build.undo()"
 		@redo="side.build.redo()"
 		@rename="edit.draft.rename"
@@ -38,6 +39,7 @@ defineProps<{
 		@pick="side.build.pickerOpen.value = true"
 		@remove="side.build.removeSelected()"
 		@dissolve="side.build.dissolveSelected()"
+		@tidy="canvas.tidy()"
 		@open="edit.openDraft"
 		@dismiss-notice="edit.draft.notice.value = ''"
 	>

@@ -22,9 +22,8 @@ export type WorkState = 'planned' | 'done';
 /** A new operation or test starts planned: laying out work is the common case, and planned records need only their structure (E5). */
 export const DEFAULT_WORK_STATE: WorkState = 'planned';
 
-/** Gap between cards of a column the draft places itself (a picked column of samples, a copy next to its original). */
+/** Gap between cards of a column the draft places itself (a picked column of samples). */
 export const COLUMN_GAP = 140;
-export const COPY_OFFSET = 48;
 
 export type ContainerSource =
 	/** A blank operation of one method, or a blank test of one test type. */
@@ -411,32 +410,31 @@ const columnAt = (at: Pos | undefined, i: number): Pos | undefined => (at ? { x:
 
 function duplicateItem(w: Work, source: DraftItem, n: number, record?: Record<string, unknown>) {
 	const base = source.existing ? newFromValues({ ...(record ?? {}), ...source.values }) : source.values;
-	const origin = w.body.positions[source.key];
-	const spot = (i: number): Pos | undefined => (origin ? { x: origin.x + (i + 1) * COPY_OFFSET, y: origin.y + (i + 1) * COPY_OFFSET } : undefined);
+	// A copy keeps no place of its own (no `at` below): the layout puts it in the nearest free slot beside the original (R6), never on top of it.
 	// Wires are read from the body as it was, so the copies of one action all see the original's.
 	const before = w.body;
 	let index = indexAfter(before, source.key) ?? w.body.items.length;
 	for (let i = 0; i < n; i += 1) {
 		if (source.kind === 'sample') {
-			newSample(w, base, spot(i), index);
+			newSample(w, base, undefined, index);
 		} else if (source.kind === 'test') {
 			const copy: DraftTest = { key: takeKeys(w, 1)[0], kind: 'test', workState: source.workState, values: { ...base } };
-			put(w, copy, spot(i), index);
+			put(w, copy, undefined, index);
 			for (const s of subjectsOf(before, source.key)) addWire(w, { key: s }, { key: copy.key });
 		} else if (isInPlace(before, source)) {
 			// A pass: copies chain after the original on its sample, in order (sample → copy → sample).
 			const sample = inputSampleOf(before, { key: source.key, row: 0 });
 			if (sample) {
 				const back = wiresOutOf(before, source.key, 0).some((x) => x.to.key === sample);
-				const op = newOperation(w, { values: base, workState: source.workState, at: spot(i), index });
+				const op = newOperation(w, { values: base, workState: source.workState, index });
 				addWire(w, { key: sample }, { key: op.key, row: 0 });
 				if (back) addWire(w, { key: op.key, row: 0 }, { key: sample });
 			} else {
-				newOperation(w, { values: base, workState: source.workState, at: spot(i), index });
+				newOperation(w, { values: base, workState: source.workState, index });
 			}
 		} else {
 			// Anything else keeps the same input wires and gets open outputs of its own.
-			const op = newOperation(w, { values: base, workState: source.workState, rows: source.rows.length, at: spot(i), index });
+			const op = newOperation(w, { values: base, workState: source.workState, rows: source.rows.length, index });
 			source.rows.forEach((_, row) => {
 				const sample = inputSampleOf(before, { key: source.key, row });
 				if (sample) addWire(w, { key: sample }, { key: op.key, row });

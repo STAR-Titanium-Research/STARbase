@@ -19,7 +19,7 @@ import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { blocking, warnings } from './checks';
 import type { MenuTarget } from './menuTarget';
-import { decodeSocket, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
+import { decodeSocket, draftKeyOfNode, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
 import type { EditMode } from './useEditMode';
 import { connectActions, dropVerdict, type DropVerdict } from './wireDrop';
 
@@ -38,6 +38,14 @@ export function canvasEditOf(edit: EditMode): CanvasEdit {
 		moved: (n, at) => {
 			const key = keyOf(n);
 			if (key) edit.apply({ type: 'move', key, x: at.x, y: at.y });
+		},
+		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
+		settled: (cards) => {
+			const moves = cards.flatMap(({ node, at }) => {
+				const key = keyOf(node);
+				return key ? [{ type: 'move' as const, key, x: at.x, y: at.y }] : [];
+			});
+			if (moves.length) edit.apply(moves, { merge: true });
 		},
 		relaid: (cards) => {
 			const moves = cards.flatMap(({ node, at }) => {

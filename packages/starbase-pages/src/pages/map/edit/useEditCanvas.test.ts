@@ -387,6 +387,33 @@ describe('where the draft keeps its cards', () => {
 		expect(hooks.positionOf({ ...card, ref: { ...card.ref, id: 'draft:n9' } })).toBeUndefined();
 	});
 
+	it('a card moved off its place to clear another keeps the new place in the step that added the card: undo takes both', async () => {
+		const { edit } = await setup(emptyBody());
+		const hooks = canvasEditOf(edit);
+		edit.apply({ type: 'addSample', at: { x: 10, y: 10 } });
+		hooks.settled?.([{ node: card, at: { x: 400, y: 10 } }]);
+		expect(edit.body.value.positions.n1).toEqual({ x: 400, y: 10 });
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+		expect(edit.body.value.positions).toEqual({});
+		edit.redo();
+		expect(edit.body.value.positions.n1).toEqual({ x: 400, y: 10 });
+	});
+
+	it('says which cards are the draft\'s own for Tidy: new items, and samples picked from the index, nothing of the loaded history', async () => {
+		const { edit } = await setup(run([{ type: 'addSample' }, { type: 'addExistingSamples', samples: [{ id: 'picked', version: 1 }, { id: 'old', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		edit.catalog.samples.set('picked', { id: 'picked', code: 'P', nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
+		const hooks = canvasEditOf(edit);
+		const rec = (id: string, extra: Record<string, unknown> = {}) => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [], ...extra }) as MapNode;
+		expect(hooks.owned?.(rec('draft:n1', { draft: true }))).toBe(true);
+		expect(hooks.owned?.(rec('picked'))).toBe(true);
+		expect(hooks.owned?.(rec('old'))).toBe(false); // in the draft because it was built from, but part of the history
+		expect(hooks.owned?.(rec('elsewhere'))).toBe(false);
+		const box = { id: 'op:draft:n5', type: 'container', draft: true } as unknown as MapNode;
+		expect(hooks.owned?.(box)).toBe(true);
+		expect(hooks.owned?.({ id: 'op:o1', type: 'container' } as unknown as MapNode)).toBe(false);
+	});
+
 	it('keeps a card that is dropped, and every card after a re-layout as one undoable step', async () => {
 		const { edit } = await setup(run([{ type: 'addSample' }, { type: 'addSample' }]));
 		const hooks = canvasEditOf(edit);

@@ -350,7 +350,8 @@ describe('duplicate', () => {
 		expect(b.items[2].values).toEqual({ form: 'disc', diameter_mm: 20 });
 		expect(b.items.every((i) => !i.existing)).toBe(true);
 		expect(b.wires).toHaveLength(0);
-		expect(Object.keys(b.positions)).toHaveLength(3);
+		// The copies have no place of their own: the layout finds them a free one beside the original, so they never lie on it.
+		expect(Object.keys(b.positions)).toEqual(['n1']);
 	});
 
 	it('copies of an in-place operation chain after the original as further passes', () => {

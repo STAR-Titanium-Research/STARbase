@@ -124,7 +124,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 			build.problem.value = 'That record is still being read, so it cannot be copied yet. Try again in a moment.';
 			return true;
 		}
-		edit.apply({ type: 'duplicate', key: item.key, n, record });
+		// The copies are laid out beside the card they were copied from.
+		edit.apply({ type: 'duplicate', key: item.key, n, record }, { anchor: o.map.selectedId.value ?? undefined });
 		return true;
 	}
 	/** Shift+Ctrl+D: asks how many. */

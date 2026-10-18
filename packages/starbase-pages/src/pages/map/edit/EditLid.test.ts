@@ -37,6 +37,14 @@ describe('EditLid', () => {
 		expect(on).toContain('Ctrl/⌘+Delete');
 	});
 
+	it('has Tidy, on only when the draft has cards', async () => {
+		const off = await render(base);
+		expect(off).toMatch(/<button[^>]*disabled[^>]*>(?:<i[^>]*>[^<]*<\/i>)?Tidy/);
+		const on = await render({ ...base, canTidy: true });
+		expect(on).toContain('Tidy');
+		expect(on).not.toMatch(/disabled[^>]*>(?:<i[^>]*>[^<]*<\/i>)?Tidy/);
+	});
+
 	it('disables undo with nothing to undo and redo with nothing to redo', async () => {
 		const html = await render(base);
 		expect(html).toMatch(/<button[^>]*disabled[^>]*aria-label="Undo"|<button[^>]*aria-label="Undo"[^>]*disabled/);
