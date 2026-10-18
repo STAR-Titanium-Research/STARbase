@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	buildTurningWithNewSample, card, cards, clickWire, createButton, pressCreate, readDraft, sampleIdOf, fit, makePlanned, savedDraft, selectCard, startEditingMapOf, wireBetween,
+	buildTurningWithNewSample, card, cards, canvasOf, chooseFromSocketMenu, clickWire, createButton, dragFrom, draftIdOf, emptySpot, pressCreate, readDraft, sampleIdOf, fit, makePlanned, savedDraft, selectCard, startEditingMapOf, wireBetween,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -162,6 +162,66 @@ test.describe('as a Lab Member', () => {
 		await expect(output).toHaveCount(0);
 		// The input sample is untouched.
 		expect((await readRecord<{ current_status: string }>(member, 'physical_samples', inputId, 'current_status')).current_status).toBe('active');
+	});
+
+	// ---- 3. a wire end dragged off its socket; dissolve; a cut with three pieces -------------------------------------------------------
+	test('dragging a wired input off its socket onto empty canvas removes that wire and opens no menu; undo puts it back (R4)', async ({ page }) => {
+		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		await savedDraft(page, member, (b) => b.wires.length === 2, 'both wires saved');
+		await fit(page);
+		const wire = wireBetween(page, 'op:draft:', 's:draft:');
+		await expect(wire).toHaveCount(1);
+		const input = canvasOf(page).locator('[data-sock^="sample|draft:"][data-sock$="|in"]:not(.free)');
+		await expect(input).toHaveCount(1);
+		await dragFrom(page, input, await emptySpot(page));
+		await expect(wire).toHaveCount(0);
+		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		const body = await savedDraft(page, member, (b) => b.wires.length === 1, 'the dragged wire removed');
+		expect(body.items, 'the cards stay').toHaveLength(3);
+		expect(body.wires[0].to.key, 'the other wire, into the operation, is the one left').not.toBe(body.items.find((i) => i.kind === 'sample' && !i.existing)!.key);
+		await page.keyboard.press('Control+z');
+		await expect(wire).toHaveCount(1);
+		await savedDraft(page, member, (b) => b.wires.length === 2, 'undo put the wire back');
+	});
+
+	test('Dissolve (Ctrl+Delete) on a one-in-one-out new operation joins its input to its output, and undo restores it (R4)', async ({ page }) => {
+		const { sampleId } = await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		// A second step after the new sample, so there is something to join the input to.
+		await chooseFromSocketMenu(page, canvasOf(page).locator('[data-sock^="sample|draft:"][data-sock$="|out"]').first(), /CNC Turning/);
+		await savedDraft(page, member, (b) => b.items.length === 4 && b.wires.length === 3, 'sample, operation, new sample, second operation');
+		await fit(page);
+		const first = cards(page).and(page.getByRole('group', { name: 'CNC Turning, Operation' })).first();
+		await selectCard(page, first);
+		await page.keyboard.press('Control+Delete');
+		const body = await savedDraft(page, member, (b) => b.items.length === 2, 'the operation and its output sample removed');
+		expect(body.wires, 'the input sample is wired straight into the second operation').toHaveLength(1);
+		const source = body.items.find((i) => i.existing?.id === sampleId)!;
+		expect(body.wires[0].from.key).toBe(source.key);
+		expect(body.items.find((i) => i.key === body.wires[0].to.key)?.kind).toBe('operation');
+		await expect(page.getByRole('group', { name: 'New sample, Sample' })).toHaveCount(0);
+		await expect(wireBetween(page, `s:${sampleId}:out`, 'op:draft:')).toHaveCount(1);
+		await page.keyboard.press('Control+z');
+		await savedDraft(page, member, (b) => b.items.length === 4 && b.wires.length === 3, 'undo restored the operation, its sample and their wires');
+		await expect(page.getByRole('group', { name: 'New sample, Sample' })).toBeVisible();
+	});
+
+	test('Dissolve refuses a cut with three pieces, with the reason, and changes nothing (R4)', async ({ page }) => {
+		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		const cut = card(page, /, Operation$/);
+		// Two more pieces, each from the card's free output socket (a derived socket: it is on the selected card).
+		for (let piece = 2; piece <= 3; piece++) {
+			await selectCard(page, cut);
+			await chooseFromSocketMenu(page, canvasOf(page).locator('.free[data-sock^="row|draft:"][data-sock$="|out|add"]'), /^New sample/);
+			await savedDraft(page, member, (b) => b.items.find((i) => i.kind === 'operation')?.rows?.length === piece, `${piece} pieces`);
+		}
+		await expect(page.locator('.vue-flow__node').and(page.getByRole('group', { name: 'New sample, Sample' }))).toHaveCount(3);
+		const before = await savedDraft(page, member, (b) => b.items.length === 5, 'the sample, the cut and three new samples');
+		await selectCard(page, cut);
+		await page.keyboard.press('Control+Delete');
+		await expect(page.locator('.pm-banner[role="alert"]')).toHaveText(/3 outputs/);
+		await expect(cut).toBeVisible();
+		await expect(page.locator('.vue-flow__node').and(page.getByRole('group', { name: 'New sample, Sample' }))).toHaveCount(3);
+		expect(await readDraft(member, draftIdOf(page)), 'nothing was changed').toEqual(before);
 	});
 
 	test('a done operation, a done sample and the wire between them cannot be removed: a lock, the reason, and nothing is sent (R4, ADR-0019 §6)', async ({ page }) => {
