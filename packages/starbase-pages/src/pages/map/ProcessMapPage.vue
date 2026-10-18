@@ -334,7 +334,7 @@ const tipHint = computed(() => {
 							<VueFlow
 								:node-types="canvas.nodeTypes"
 								:edge-types="canvas.edgeTypes"
-								:nodes-draggable="true"
+								:nodes-draggable="true" :delete-key-code="null"
 								:nodes-focusable="true"
 								:edges-focusable="false"
 								:nodes-connectable="false"
