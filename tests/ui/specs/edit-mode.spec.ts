@@ -187,7 +187,6 @@ test.describe('as a Lab Member', () => {
 	test('the Create toast counts the records it created (spec §3 item 1)', async ({ page }) => {
 		// Spec §3 item 1: the toast counts map KEYS, not records. This Create makes 2 records (an operation and a sample) under 3
 		// keys (the operation is under its item key and its row key), and the toast says "Created 3 records".
-		known('spec §3 item 1: "Created 3 records" for 2 records');
 		await buildTurningWithNewSample(page);
 		const { status, body } = await pressCreate(page);
 		expect(status, JSON.stringify(body)).toBe(200);
@@ -196,20 +195,17 @@ test.describe('as a Lab Member', () => {
 	});
 
 	test('Create is disabled while the draft only holds picked existing samples (spec §3 item 3)', async ({ page }) => {
-		// Spec §3 item 3: an empty draft is disabled, but once a sample is picked the button says "Nothing to create yet" and is
-		// ENABLED (pressing it does nothing useful).
-		known('spec §3 item 3: Create is enabled for a draft that makes nothing');
+		// Spec §3 item 3: an empty draft is disabled, and so is one that only holds a picked sample (fixed in slice 1: it used to be enabled and do nothing).
 		await openNewDraft(page);
 		await expect(createButton(page)).toBeDisabled();
 		await pickSample(page, seeds.raw2.code);
-		await expect(createButton(page)).toHaveText('Nothing to create yet');
+		await expect(createButton(page)).toHaveText('Add an operation, test or new sample to create');
 		await expect(createButton(page)).toBeDisabled();
 	});
 
 	test('a draft card has no Open record, Process map of, or Expand (spec §3 item 2)', async ({ page }) => {
 		// Spec §3 item 2: a `draft:` id is not a record, yet the rail offers "Open record", "Process map of New sample" and
 		// "Expand" for it, and the card shows its ＋ Expand button.
-		known('spec §3 item 2: record actions are offered for a draft card');
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
 		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
@@ -225,7 +221,6 @@ test.describe('as a Lab Member', () => {
 	test('a new sample no operation makes can be Created (spec §3 item 4)', async ({ page }) => {
 		// Spec §3 item 4: `current_status` is required in Directus's field metadata but never drawn on the form, so a new sample
 		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 thing missing".
-		known('spec §3 item 4: Create blocked by the never-shown current_status');
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
 		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
@@ -245,7 +240,7 @@ test.describe('as a Lab Member', () => {
 		expect(status, JSON.stringify(body)).toBe(200);
 		const [sampleRef] = distinctRecords(body.data!.created);
 		const sample = await readRecord<{ current_status: string; owner_person_id: string }>(member, 'physical_samples', sampleRef.id, 'current_status,owner_person_id');
-		expect(sample.current_status, 'planned: nothing has made it yet').toBe('planned');
+		expect(sample.current_status, 'active: no planned operation makes it (R9)').toBe('active');
 		expect(sample.owner_person_id).toBe(seeds.memberPersonId);
 	});
 });
