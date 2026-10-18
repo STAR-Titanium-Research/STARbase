@@ -11,6 +11,10 @@ type ProcessMap = ReturnType<typeof useProcessMap>;
 /** How long the toast stays up when nobody closes it. */
 export const TOAST_MS = 30_000;
 
+/** How many records were made: the server files an operation under its row key and its item key, so keys over-count. */
+export const distinctCreated = (created: Record<string, { collection: string; id: string }>): number =>
+	new Set(Object.values(created).map((c) => `${c.collection}:${c.id}`)).size;
+
 export function useCreate(o: { edit: EditMode; map: ProcessMap; select: (key: string) => void }) {
 	const { edit, map } = o;
 	const error = ref('');
@@ -41,7 +45,7 @@ export function useCreate(o: { edit: EditMode; map: ProcessMap; select: (key: st
 			return;
 		}
 		const first = out.sampleIds[0];
-		toast.value = { sampleIds: out.sampleIds, count: Object.keys(out.created).length };
+		toast.value = { sampleIds: out.sampleIds, count: distinctCreated(out.created) };
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(closeToast, TOAST_MS);
 		// Edit mode closes and the first new sample is the focus; with none (work on existing samples) this map is read again.

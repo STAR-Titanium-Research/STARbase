@@ -51,6 +51,23 @@ describe('Create', () => {
 		expect(none.create.toast.value?.count).toBe(1);
 	});
 
+	it('counts distinct created records, not the keys the server files them under (an operation is under its row key and its item key)', async () => {
+		const { create, s } = await setup();
+		const op = { collection: 'manufacturing_operations', id: 'op1', code: null };
+		s.createAnswer = {
+			data: {
+				created: {
+					n1: { collection: 'physical_samples', id: 'new1', code: null },
+					n2: op,
+					n3: op,
+				},
+				sampleIds: ['new1'],
+			},
+		};
+		await create.create();
+		expect(create.toast.value?.count).toBe(2);
+	});
+
 	it('the toast goes away when it is closed', async () => {
 		const { create } = await setup();
 		await create.create();
