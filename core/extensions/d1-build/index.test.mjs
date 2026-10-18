@@ -85,11 +85,12 @@ function fakeServices(world, log = { built: [], reads: [] }) {
 
     async readByQuery(query) {
       log.reads.push({ collection: this.collection, query });
-      if (world.deniedReads.has(this.collection)) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      const system = !this.options.accountability; // system rights read everything
+      if (!system && world.deniedReads.has(this.collection)) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
       const pk = COLLECTION_PK[this.collection];
       const rows = [];
       for (const id of query.filter[pk]._in) {
-        const r = world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+        const r = !system && world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
         if (r) rows.push(Object.fromEntries(query.fields.map((f) => [f, r[f]])));
       }
       return rows;
@@ -97,13 +98,14 @@ function fakeServices(world, log = { built: [], reads: [] }) {
 
     async readOne(id, query) {
       log.reads.push({ collection: this.collection, query: { one: id, ...query } });
-      const r = world.deniedReads.has(this.collection) || world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+      const system = !this.options.accountability;
+      const r = !system && (world.deniedReads.has(this.collection) || world.hiddenIds.has(String(id).toLowerCase())) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
       if (!r) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
       return { ...r };
     }
 
     async createOne(data) {
-      world.failOn?.('create', this.collection, data);
+      world.failOn?.('create', this.collection, data, this.options);
       const pk = COLLECTION_PK[this.collection];
       const id = ID(2000 + (world.seq += 1));
       const row = { [pk]: id, version: 1, ...data };
@@ -118,20 +120,20 @@ function fakeServices(world, log = { built: [], reads: [] }) {
         row.work_state ??= 'done';
       }
       (world.records[this.collection] ??= new Map()).set(id, row);
-      world.ops.push({ op: 'create', collection: this.collection, id, data, knex: this.options.knex });
+      world.ops.push({ op: 'create', collection: this.collection, id, data, knex: this.options.knex, accountability: this.options.accountability });
       return id;
     }
 
     async updateOne(id, data) {
-      world.failOn?.('update', this.collection, data);
+      world.failOn?.('update', this.collection, data, this.options);
       const row = world.records[this.collection].get(id.toLowerCase());
       Object.assign(row, data, { version: row.version + 1 });
-      world.ops.push({ op: 'update', collection: this.collection, id, data, knex: this.options.knex });
+      world.ops.push({ op: 'update', collection: this.collection, id, data, knex: this.options.knex, accountability: this.options.accountability });
       return id;
     }
 
     async deleteOne(id) {
-      world.failOn?.('delete', this.collection, { id });
+      world.failOn?.('delete', this.collection, { id }, this.options);
       world.records[this.collection].delete(id.toLowerCase());
       world.ops.push({ op: 'delete', collection: this.collection, id, knex: this.options.knex });
       return id;
@@ -1595,29 +1597,76 @@ test('mark-done: a record that is done already is a 409 ALREADY_DONE; one the ca
   assert.deepEqual(env.world.ops, []);
 });
 
-test('mark-done: an update the caller may not make is a 403 and nothing is changed, even the first write', async () => {
+// A caller's own rights: the fake refuses a write of `collection` made with an accountability (the caller's), never one made
+// with system rights (accountability null), as Directus does.
+const refuseCaller = (...collections) => (op, collection, data, options) => {
+  if (collections.includes(collection) && options?.accountability) {
+    throw Object.assign(new Error('You do not have permission'), { status: 403, code: 'FORBIDDEN' });
+  }
+};
+
+test('mark-done (R10): someone who may edit the operation but not its samples still marks it done; the flip runs with system rights', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.failOn = refuseCaller('physical_samples');
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40), date: '2026-10-12' });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const trx = env.world.trx;
+  assert.deepEqual(env.world.ops.map((o) => [o.op, o.collection, o.id]), [
+    ['update', 'manufacturing_operations', ID(40)], ['update', 'physical_samples', ID(11)],
+  ], 'the operation first, then the sample');
+  const [opUpdate, flip] = env.world.ops;
+  assert.ok(opUpdate.accountability?.user === ALICE, 'the operation is updated as the caller');
+  assert.equal(flip.accountability, null, 'the flip runs with system rights');
+  assert.equal(flip.knex, trx, 'in the same transaction');
+  assert.deepEqual(flip.data, { current_status: 'active' }, 'it touches current_status only');
+  assert.equal(env.world.records.physical_samples.get(ID(11)).current_status, 'active');
+  assert.equal(env.world.records.manufacturing_operations.get(ID(40)).work_state, 'done');
+});
+
+test('mark-done (R10): someone who may not edit the operation is refused with 403 and nothing is written, the samples included', async () => {
+  const env = setup();
+  doneWorld(env);
+  const before = stateOf(env.world);
+  env.world.failOn = refuseCaller('manufacturing_operations');
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
+  assert.deepEqual(env.world.ops, [], 'the sample is never touched when the operation update is refused');
+  assert.equal(stateOf(env.world), before, 'the operation is still planned');
+  assert.deepEqual(env.cleared, []);
+
+  const guarded = setup();
+  doneWorld(guarded);
+  guarded.world.failOn = (op, collection) => {
+    if (collection === 'manufacturing_operations') throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can do that.' } });
+  };
+  const res2 = await markDone(guarded, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res2.statusCode, 403);
+  assert.equal(res2.body.errors[0].message, 'Only the owner can do that.');
+});
+
+test('mark-done (R10): a failure of the flip itself rolls the operation back too', async () => {
   const env = setup();
   doneWorld(env);
   const before = stateOf(env.world);
   env.world.failOn = (op, collection) => {
-    if (op === 'update' && collection === 'physical_samples') {
-      throw Object.assign(new Error('You do not have permission'), { status: 403, code: 'FORBIDDEN' });
-    }
+    if (collection === 'physical_samples') throw Object.assign(new Error('boom'), { code: '23514' });
   };
   const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
-  assert.equal(res.statusCode, 403);
-  assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
-  assert.equal(stateOf(env.world), before, 'the operation is still planned');
-  assert.deepEqual(env.cleared, []);
+  assert.equal(res.statusCode, 400);
+  assert.equal(stateOf(env.world), before);
+});
 
-  const first = setup();
-  doneWorld(first);
-  first.world.failOn = (op, collection) => {
-    if (collection === 'manufacturing_operations') throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can do that.' } });
-  };
-  const res2 = await markDone(first, { collection: 'manufacturing_operations', id: ID(40) });
-  assert.equal(res2.statusCode, 403);
-  assert.equal(res2.body.errors[0].message, 'Only the owner can do that.');
+test('mark-done (R10): what the sample form requires is still checked for an output the caller cannot read', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.required = [{ collection: 'physical_samples', field: 'mass_grams', translations: [{ language: 'en-US', translation: 'Mass' }] }];
+  env.world.hiddenIds.add(ID(11));
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(res.body.errors[0].extensions.checks.map((c) => [c.key, c.field, c.code]), [[ID(11), 'mass_grams', 'REQUIRED']]);
+  assert.deepEqual(env.world.ops, []);
 });
 
 test('mark-done: an output that is not planned (or no output) is left alone', async () => {
@@ -2246,9 +2295,14 @@ test('mark-done: the output samples it turns active must have what the sample fo
     { key: ID(14), field: 'form', level: 'block', code: 'REQUIRED', text: 'Form is required before the sample it makes can be made active.' },
   ]);
   assert.deepEqual(env.world.ops, []);
-  // an output the caller cannot read is left to the update; once filled in, it goes through
+  // an output the caller cannot read is checked all the same (R10: the flip runs with system rights, so the rule must hold for
+  // them too); once filled in, it goes through
   env.world.hiddenIds.add(ID(12));
   env.world.records.physical_samples.get(ID(14)).form = 'disc';
+  const hidden = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(hidden.statusCode, 409);
+  assert.deepEqual(hidden.body.errors[0].extensions.checks.map((c) => [c.key, c.field]), [[ID(12), 'material_id']]);
+  env.world.records.physical_samples.get(ID(12)).material_id = MATERIAL;
   const last = await markDone(env, { collection: OPS, ids: allIds });
   assert.equal(last.statusCode, 200, JSON.stringify(last.body));
 });

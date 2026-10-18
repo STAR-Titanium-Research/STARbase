@@ -19,7 +19,9 @@
 //                                              (everything is rolled back, the draft is untouched)
 //   POST   /d1-build/mark-done {collection, ids (1 to 100 of one collection) | id, date?, personId?}
 //                                           -> { data: { ids, work_state: 'done' } }  (one transaction, all or nothing; a single `id` request
-//                                              also gets `id`; 409 CHECKS as above, 409 ALREADY_DONE)
+//                                              also gets `id`; 409 CHECKS as above, 409 ALREADY_DONE). Whoever may edit the operation may mark
+//                                              it done (R10): the operation updates as the caller, then its planned output samples turn active
+//                                              with SYSTEM rights (accountability null, same transaction), current_status only.
 //   POST   /d1-build/mark-planned {collection, ids | id} -> { data: { ids, work_state: 'planned' } }  (owner or admin only through the access
 //                                              guard; clears the date, done_by and done_at; planned output samples go back to planned unless
 //                                              something done hangs off them: 409 CHECKS REMOVE_BLOCKED; 409 ALREADY_PLANNED)
@@ -1307,6 +1309,8 @@ export function mount(router, context, clock = () => new Date()) {
     // All of them, in ONE transaction: all done or none.
     await inTransaction(acc, async (trx) => {
       const svc = (c) => itemsFor(schema, req.accountability, c, trx);
+      // System rights (accountability null), in the same transaction: for the one write the caller's rights do not cover.
+      const systemSvc = (c) => itemsFor(schema, null, c, trx);
       const recs = await readContainers(svc, trx, collection, ids);
       if (recs.some((r) => r.state !== 'planned')) throw new HttpError(409, 'ALREADY_DONE', recs.length > 1 ? 'One of those records is already marked done.' : 'That record is already marked done.');
       const checks = [];
@@ -1333,8 +1337,9 @@ export function mount(router, context, clock = () => new Date()) {
           checks.push({ key: id, level: 'block', code: 'STRUCTURE', text: 'Its sample is still planned; mark the operation that makes it done first.' });
         }
       }
-      // An operation's planned output turns active, so what the sample's form marks required must be there too (as the caller
-      // reads it; an output they cannot read is left to the update, which will refuse it).
+      // An operation's planned output turns active, so what the sample's form marks required must be there too. The sample is read
+      // with system rights, like the flip itself (R10): the caller may edit the operation without being able to read its sample,
+      // and the rule must hold for them as for anyone. Only the label of a missing field is ever said, never a value.
       const outputs = new Map(); // record id -> output sample id
       if (collection === 'manufacturing_operations') {
         for (const { id, rec } of recs) {
@@ -1346,7 +1351,7 @@ export function mount(router, context, clock = () => new Date()) {
           outputs.set(id, sid);
           let row = null;
           try {
-            row = await svc('physical_samples').readOne(sid, { fields: ['*'] });
+            row = await systemSvc('physical_samples').readOne(sid, { fields: ['*'] });
           } catch (err) {
             if (!isDenied(err)) throw err;
           }
@@ -1370,11 +1375,18 @@ export function mount(router, context, clock = () => new Date()) {
       const day = b.date ?? clock().toISOString().slice(0, 10);
       const data = { work_state: 'done', [dateField]: `${day}T00:00:00.000Z`, done_at: clock().toISOString() };
       if (person) data.done_by_person_id = person;
-      // Each record first (the caller's update rule decides), then its planned output turns active: what makes a sample first.
+      // Each record first (the caller's update rule decides: whoever may edit the operation may mark it done), then its planned
+      // output turns active with system rights (R10, ADR-0019 amendment): editing an operation does not imply editing its samples.
+      // It only runs once the operation's own update went through, and it touches current_status and nothing else.
       for (const { id } of collection === 'manufacturing_operations' ? inOrder(recs) : recs) {
         try {
           await svc(collection).updateOne(id, data);
-          if (outputs.has(id)) await svc('physical_samples').updateOne(outputs.get(id), { current_status: 'active' });
+        } catch (err) {
+          throw refused(err);
+        }
+        if (!outputs.has(id)) continue;
+        try {
+          await systemSvc('physical_samples').updateOne(outputs.get(id), { current_status: 'active' });
         } catch (err) {
           throw refused(err);
         }
