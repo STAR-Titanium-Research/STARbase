@@ -88,6 +88,8 @@ DX_PORT="${D1_STACK_DIRECTUS_PORT:-18057}"
 STAR_PORT="${D1_STACK_STARBASE_PORT:-5190}"
 DIRECTUS_VERSION="${D1_STACK_DIRECTUS_VERSION:-11.17.4}"
 DBMATE_VERSION="${D1_STACK_DBMATE_VERSION:-2.23.0}"
+# The last migration applied before scripts/configure_all.sh's SQL files run (see `migrate`).
+CONFIGURE_AFTER="${D1_STACK_CONFIGURE_AFTER:-20260629000051}"
 DB_NAME=d1_database
 DB_USER=d1
 DX_URL="http://127.0.0.1:$DX_PORT"
@@ -323,14 +325,45 @@ relax_directus_fks() {
 }
 
 # ---- migrations, reference data, roles and policies ----------------------------------------------------------------------------
+dbmate_up() { # dbmate_up <migrations dir>
+  local out
+  out="$("$DBMATE" --url "$(db_url)" --migrations-dir "$1" --no-dump-schema up 2>&1)" \
+    || { printf '%s\n' "$out" | tail -30; die "dbmate up failed"; }
+  printf '%s\n' "$out" | grep -c '^Applying' | sed 's/^/   applied: /'
+}
+
+# Directus's field, collection, relation and preset metadata of live: the configure_*.sql files of scripts/configure_all.sh, in its order.
+# They carry the labels, required flags, hidden fields and groups the process map's draft forms are drawn from, and d1-build reads its
+# REQUIRED checks from the same rows (core/extensions/d1-build `parseRequired`): without them physical_samples has 23 field rows instead of
+# its hundred-odd and spec §3 item 4 (`current_status` required but never shown) cannot show. configure_all.sh itself is not run: it
+# `docker exec`s into containers and restarts Directus. Each file is its own transaction with ON_ERROR_STOP.
+configure_metadata() {
+  say "Directus metadata (the configure_*.sql files of scripts/configure_all.sh, in order)"
+  local f
+  for f in $(sed -n '/^FILES=(/,/^)/p' "$REPO/scripts/configure_all.sh" | grep -o '[a-z_]*\.sql'); do
+    psql_d1 -f "$REPO/scripts/$f" >/dev/null || die "scripts/$f failed"
+  done
+}
+
+# The migrations, in the order live lived them: scripts/configure_all.sh was run in the summer on a database that had only the early
+# migrations (configure_all.sh's own header: it deletes the directus_fields rows that LATER migrations added, which is what happened on
+# live and why migration ...143 repairs it). So the early migrations go first (every one up to D1_STACK_CONFIGURE_AFTER), then the
+# configure scripts, then everything else, whose metadata inserts land on top. Running the scripts after all 200+ migrations instead
+# wipes the `subject` alias of test_sessions, the inline parameter fields and more, and the process map's test queries then answer 403.
+# The scripts run only on a fresh database (marker run/configured); a later `up` with new migrations just applies them.
 migrate() {
   say "dbmate up"
   relax_directus_fks
   roles_first
-  local out
-  out="$("$DBMATE" --url "$(db_url)" --migrations-dir "$REPO/db/migrations" --no-dump-schema up 2>&1)" \
-    || { printf '%s\n' "$out" | tail -30; die "dbmate up failed"; }
-  printf '%s\n' "$out" | grep -c '^Applying' | sed 's/^/   applied: /'
+  if [[ -f "$RUN/configured" ]]; then dbmate_up "$REPO/db/migrations"; return; fi
+  local early f b; early="$(mktemp -d)"
+  for f in "$REPO"/db/migrations/*.sql; do
+    b="$(basename "$f")"
+    [[ "${b%%_*}" -le "$CONFIGURE_AFTER" ]] && ln -s "$f" "$early/$b"
+  done
+  dbmate_up "$early"; rm -rf "$early"
+  configure_metadata; touch "$RUN/configured"
+  dbmate_up "$REPO/db/migrations"
 }
 
 reference_data() {
@@ -422,8 +455,6 @@ cmd_up() {
   if [[ "${pending:-1}" != 0 || "$(psql_d1 -Atc "SELECT to_regclass('public.physical_samples') IS NULL")" == t ]]; then
     migrate; reference_data; policies
   fi
-  # Roles and policies are idempotent and cheap: a fresh database gets them in the branch above, an old one keeps them.
-  [[ "$(psql_d1 -Atc "SELECT count(*) FROM directus_policies WHERE id='20000002-0000-0000-0000-000000000002'")" == 1 ]] || policies
   directus_start
   seed
   starbase_start
