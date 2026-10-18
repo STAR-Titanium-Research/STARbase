@@ -102,10 +102,11 @@ describe('a sample card in edit mode', () => {
 		expect(freeButtons(idle)).toHaveLength(1);
 		expect(idle).toContain('Free output of');
 		expect(socks(idle).sort()).toEqual(['sample|draft:n4|in', 'sample|draft:n4|out']);
-		// Selected: a free input beside the wired one too.
+		// Selected: still no free input, whatever the selection. An operation makes it already, and a sample has one maker.
 		const picked = await render(RecordNode, { id: made.id, data: made, selected: true }, e);
-		expect(freeButtons(picked)).toHaveLength(2);
-		expect(socks(picked).filter((s) => s.endsWith('|in'))).toHaveLength(2);
+		expect(freeButtons(picked)).toHaveLength(1);
+		expect(freeButtons(picked)[0]).toContain('Free output');
+		expect(socks(picked).filter((s) => s.endsWith('|in'))).toHaveLength(1);
 	});
 
 	it('a sample with a wire out keeps its socket and a free one beside it only while selected', async () => {

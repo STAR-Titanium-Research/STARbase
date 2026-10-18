@@ -197,6 +197,60 @@ test.describe('as a Lab Member', () => {
 		await savedDraft(page, member, (b) => b.wires.length === 2, 'undo put the wire back');
 	});
 
+	test('dragging from a FREE socket onto empty canvas opens the Add menu and removes no wire; a sample that has its maker offers no free input (R4, R5)', async ({ page }) => {
+		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
+		await savedDraft(page, member, (b) => b.wires.length === 2, 'both wires saved');
+		const operation = card(page, 'CNC Turning, Operation');
+		await selectCard(page, operation);
+		// The operation's free input stands for a sample that does not feed it yet: it is not the wire from LOCAL-RAW-1.
+		const freeIn = canvasOf(page).locator('.free[data-sock$="|in|add"]');
+		await expect(freeIn).toHaveCount(1);
+		await dragFrom(page, freeIn, await emptySpot(page));
+		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(wireBetween(page, 's:', 'op:draft:')).toHaveCount(1);
+		expect((await readDraft(member, draftIdOf(page))).wires, 'no wire was taken').toHaveLength(2);
+		// The same for the free output (nothing to take there either) ...
+		const freeOut = canvasOf(page).locator('.free[data-sock$="|out|add"]');
+		await dragFrom(page, freeOut, await emptySpot(page));
+		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await page.keyboard.press('Escape');
+		expect((await readDraft(member, draftIdOf(page))).wires, 'still both wires').toHaveLength(2);
+		// ... and a sample an operation makes has no free input to offer: it has its maker.
+		await selectCard(page, card(page, 'New sample, Sample'));
+		await expect(canvasOf(page).locator('.free[data-sock^="sample|draft:"][data-sock$="|in"]')).toHaveCount(0);
+		await expect(canvasOf(page).locator('.free[data-sock^="sample|draft:"][data-sock$="|out"]')).toHaveCount(1);
+	});
+
+	test('dragging off an input that has two wires (a test of two samples) takes neither and says so; Delete on a clicked wire takes just that one (R4)', async ({ page }) => {
+		const [raw1, raw2] = [await sampleIdOf(admin, 'LOCAL-RAW-1'), await sampleIdOf(admin, 'LOCAL-RAW-2')];
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1', 'LOCAL-RAW-2']);
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${raw1}|out`).first(), /Tensile/i);
+		const test_ = card(page, /, Test$/);
+		await expect(test_).toBeVisible();
+		await selectCard(page, test_);
+		// The second sample wired to the same test (drawn from its output to the test's free input).
+		await fit(page);
+		await dragFrom(page, sockOf(page, `sample|${raw2}|out`).first(), centreOf(await boxOf(canvasOf(page).locator('.free[data-sock^="row|draft:"][data-sock$="|in"]'))));
+		const two = await savedDraft(page, member, (b) => b.wires.length === 2, 'two samples feed the test');
+		expect(new Set(two.wires.map((w) => w.to.key)).size, 'both into the same test').toBe(1);
+
+		const input = canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|in"]:not(.free)');
+		await expect(input).toHaveCount(1);
+		await dragFrom(page, input, await emptySpot(page));
+		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-banner[role="alert"]')).toHaveText(/2 wires/);
+		expect((await readDraft(member, draftIdOf(page))).wires, 'neither wire was taken').toHaveLength(2);
+
+		// One wire, chosen by a click on it: only that one goes.
+		await clickWire(page, wireBetween(page, `s:${raw2}`, 'op:'.replace('op:', 'test:')));
+		await page.keyboard.press('Delete');
+		const one = await savedDraft(page, member, (b) => b.wires.length === 1, 'one wire taken');
+		expect(one.wires[0].from.key, 'the wire from LOCAL-RAW-1 is the one left').toBe(one.items.find((i) => i.existing?.id === raw1)!.key);
+	});
+
 	test('Dissolve (Ctrl+Delete) on a one-in-one-out new operation joins its input to its output, and undo restores it (R4)', async ({ page }) => {
 		const { sampleId } = await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
 		// A second step after the new sample, so there is something to join the input to.

@@ -50,8 +50,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	}
 
 	// ---- the pieces ------------------------------------------------------------------------------------------
-	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef) => boolean } = { menu: () => undefined, connect: () => undefined, dropWire: () => false };
-	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s) => late.dropWire(s) });
+	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean } = { menu: () => undefined, connect: () => undefined, dropWire: () => false };
+	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s, id) => late.dropWire(s, id) });
 	// Remove, Dissolve and wire removal (R4); what it has to say goes where the canvas says its own problems.
 	const removal = useEditRemoval({ edit, map: o.map, canvasEl, say: (text) => void (build.problem.value = text) });
 	late.dropWire = removal.dropWireAt;

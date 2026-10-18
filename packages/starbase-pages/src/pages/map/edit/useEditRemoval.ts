@@ -11,9 +11,8 @@ import type { useProcessMap } from '../useProcessMap';
 import { recordKey } from './checks';
 import { apply, type DraftAction } from './draft';
 import { focusCanvas } from './focusCanvas';
-import { dissolveVerdict, removeActions, removeVerdict, unwireActions, unwireEnd, unwireVerdict, type ExistingTarget, type RemovalCtx } from './removal';
+import { dissolveVerdict, removeActions, removeVerdict, unwireActions, unwireVerdict, type ExistingTarget, type RemovalCtx } from './removal';
 import type { SocketRef } from './socketRefs';
-import { resolveEnd } from './socketRefs';
 import type { EditMode } from './useEditMode';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
@@ -155,15 +154,25 @@ export function useEditRemoval(o: { edit: EditMode; map: ProcessMap; canvasEl: R
 	}
 
 	/**
-	 * A wire's end dragged off its socket and dropped on empty canvas: the draft's wire into that socket goes. True when there was one
-	 * (the socket's own wire: only an input has exactly one).
+	 * A wire end dragged off its WIRED input socket (`socketId`: the Handle's id) and dropped on empty canvas: the one wire drawn on that
+	 * socket goes, by the same rules as Delete on it (a done wire says why and stays). True when the drop was dealt with, so the Add menu does
+	 * not open; false when there is nothing to take (an output, a socket nothing is drawn on). A socket several wires end on (a test of two
+	 * samples) cannot tell which was grabbed: none goes, and the person is told to click the one they mean.
 	 */
-	function dropWireAt(sock: SocketRef): boolean {
-		if (!edit.editing.value || sock.side !== 'in') return false;
-		const end = resolveEnd(edit.body.value, sock);
-		if (!end) return false;
-		const v = unwireEnd(edit.body.value, end);
-		if (!v.ok) return false;
+	function dropWireAt(sock: SocketRef, socketId: string | null): boolean {
+		const graph = map.graph.value;
+		if (!edit.editing.value || sock.side !== 'in' || !socketId || !graph) return false;
+		const into = graph.wires.filter((w) => w.to === socketId);
+		if (!into.length) return false;
+		if (into.length > 1) {
+			o.say(`${into.length} wires end on this socket. Click the wire you mean and press Delete.`);
+			return true;
+		}
+		const v = unwireVerdict(edit.body.value, graph, into[0].id);
+		if (!v.ok) {
+			o.say(v.reason);
+			return true;
+		}
 		edit.apply(unwireActions(v));
 		return true;
 	}

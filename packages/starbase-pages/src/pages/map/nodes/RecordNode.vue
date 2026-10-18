@@ -34,8 +34,10 @@ const edit = useMapEdit();
 const isSample = computed(() => props.data.kind === 'sample');
 const outRef = computed<SocketRef | null>(() => (isSample.value ? { kind: 'sample', id: props.data.ref.id, side: 'out' } : null));
 const inRef = computed<SocketRef | null>(() => (isSample.value && props.data.draft ? { kind: 'sample', id: props.data.ref.id, side: 'in' } : null));
-// Sockets are derived (R5): one per wire, and one free one on a side while the card is selected or has nothing wired there. Nothing is kept.
-const freeIn = computed(() => !!edit?.editing.value && !!inRef.value && (selected.value || props.data.ins.length === 0));
+// Sockets are derived (R5): one per wire, and one free one on a side while the card is selected or has nothing wired there (an input only
+// while nothing makes the sample). Nothing is kept.
+// A sample has one maker: once an operation makes it (a wire into it) there is no free input to offer, selected or not.
+const freeIn = computed(() => !!edit?.editing.value && !!inRef.value && props.data.ins.length === 0);
 const editSample = computed(() => !!edit?.editing.value && !!outRef.value);
 /** A sample's outputs share the one socket (a fan), so it has a socket to draw only when a wire leaves it; the free one stands in otherwise. */
 const wiredOut = computed(() => (edit && editSample.value ? [...edit.wiredSockets(props.data)].filter((id) => props.data.outs.includes(id)).length : 0));

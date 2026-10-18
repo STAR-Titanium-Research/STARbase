@@ -81,8 +81,11 @@ export function useEditCanvas(o: {
 	canvasEl: Ref<HTMLElement | null>;
 	openMenu: (t: MenuTarget) => void;
 	openConnect?: (t: MenuTarget) => void;
-	/** A wire end dragged off its socket and dropped on empty canvas: takes the wire (true) instead of opening the menu. */
-	dropWire?: (sock: SocketRef) => boolean;
+	/**
+	 * A wire end dragged off a WIRED socket and dropped on empty canvas: takes the wire (true) instead of opening the menu. `socketId` is the id
+	 * of the socket grabbed (the Handle's), which is how the wire is told from the others. Never asked for a free socket.
+	 */
+	dropWire?: (sock: SocketRef, socketId: string) => boolean;
 }) {
 	const { edit, map, canvas, canvasEl } = o;
 
@@ -170,6 +173,9 @@ export function useEditCanvas(o: {
 	function socketDown(sock: SocketRef, e: PointerEvent): void {
 		if (!edit.editing.value || (e.pointerType === 'mouse' && e.button !== 0) || stop) return;
 		const el = e.currentTarget as HTMLElement;
+		// A free socket is a button with nothing wired to it, though its reference is the wired socket's of the same row; a wired one is a Handle.
+		const free = !!el.classList?.contains('free');
+		const socketId = free ? null : (el.dataset.handleid ?? null);
 		const rect = el.getBoundingClientRect();
 		const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 		const anchor = (el.closest('.vue-flow__node') as HTMLElement | null)?.dataset.id;
@@ -211,8 +217,8 @@ export function useEditCanvas(o: {
 			if (v?.ok) void connect(v, anchor);
 			else if (v) say(v.reason ?? 'That does not fit.', relative(ev.clientX, ev.clientY));
 			else if (onEmptyCanvas(ev.clientX, ev.clientY)) {
-				// An input that has a wire, dragged off and let go on empty canvas, takes the wire off (R4); a free one opens the menu.
-				if (o.dropWire?.(sock)) return;
+				// A wired input, dragged off and let go on empty canvas, takes the wire off (R4); a free socket, or one with no wire, opens the menu.
+				if (socketId && o.dropWire?.(sock, socketId)) return;
 				o.openMenu({ sock, at: { x: ev.clientX, y: ev.clientY }, flow: canvas.toFlow(ev.clientX, ev.clientY), anchor });
 			}
 		};
