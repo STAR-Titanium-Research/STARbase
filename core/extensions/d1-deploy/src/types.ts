@@ -36,6 +36,7 @@ export interface RunStep {
 	name: string;
 	ok: boolean;
 	ms: number;
+	skipped?: boolean;
 }
 
 export interface RunResult {
@@ -44,9 +45,9 @@ export interface RunResult {
 	startedAt: string;
 	finishedAt: string;
 	actor: string | null;
-	branch: string;
-	fromSha: string;
-	toSha: string;
+	branch: string | null;
+	fromSha: string | null;
+	toSha: string | null;
 	steps: RunStep[];
 	backup: string | null;
 	failedStep: string | null;

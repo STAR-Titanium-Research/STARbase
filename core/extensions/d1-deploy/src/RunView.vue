@@ -11,9 +11,11 @@
 			<li v-for="s in stepRows" :key="s.name">
 				<v-icon v-if="s.state === 'ok'" name="check_circle" class="ok" small />
 				<v-icon v-else-if="s.state === 'bad'" name="error" class="bad" small />
+				<v-icon v-else-if="s.state === 'skip'" name="remove_circle_outline" class="muted" small />
 				<v-progress-circular v-else-if="s.state === 'running'" indeterminate small />
 				<span class="mono">{{ s.name }}</span>
-				<span v-if="s.ms != null" class="muted"> {{ (s.ms / 1000).toFixed(1) }}s</span>
+				<span v-if="s.state === 'skip'" class="muted"> skipped</span>
+				<span v-else-if="s.ms != null" class="muted"> {{ (s.ms / 1000).toFixed(1) }}s</span>
 			</li>
 			<li v-if="!stepRows.length && !result" class="muted">Starting…</li>
 		</ul>
@@ -59,21 +61,21 @@ let stopped = false;
 
 interface Row {
 	name: string;
-	state: 'ok' | 'bad' | 'running';
+	state: 'ok' | 'bad' | 'running' | 'skip';
 	ms: number | null;
 }
 
 const stepRows = computed<Row[]>(() => {
 	const r = result.value;
 	if (r?.steps.length) {
-		const rows: Row[] = r.steps.map((s) => ({ name: s.name, state: s.ok ? 'ok' : 'bad', ms: s.ms }));
+		const rows: Row[] = r.steps.map((s) => ({ name: s.name, state: s.skipped ? 'skip' : s.ok ? 'ok' : 'bad', ms: s.skipped ? null : s.ms }));
 		if (r.failedStep && !rows.some((x) => x.name === r.failedStep)) rows.push({ name: r.failedStep, state: 'bad', ms: null });
 		return rows;
 	}
 	const seen = stepsInLog(log.value);
 	return seen.map((name, i) => ({
 		name,
-		state: r ? (r.failedStep === name ? 'bad' : 'ok') : i === seen.length - 1 ? 'running' : 'ok',
+		state: r ? (r.failedStep === name || (!r.ok && i === seen.length - 1) ? 'bad' : 'ok') : i === seen.length - 1 ? 'running' : 'ok',
 		ms: null,
 	}));
 });

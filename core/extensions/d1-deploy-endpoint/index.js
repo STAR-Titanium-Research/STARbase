@@ -18,7 +18,7 @@ export const MAX_ACK = 50;
 export const MAX_ACK_CHARS = 300;
 // `POST /check` runs git fetch + docker compose config on the host (agent limit 90 s).
 export const CHECK_TIMEOUT_MS = 100_000;
-export const DEFAULT_TIMEOUT_MS = 15_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
 export const AGENT_AUTH_ERROR =
     "deploy agent rejected the server's token (DEPLOY_AGENT_TOKEN does not match)";
 
