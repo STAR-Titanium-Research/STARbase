@@ -11,6 +11,13 @@ describe('edit keys: what each means', () => {
 		expect(d({ key: 'a' })).toBeNull();
 	});
 
+	it('X removes too, as in a node editor, but not with Shift or Ctrl', () => {
+		expect(d({ key: 'x' })).toEqual({ do: 'remove' });
+		expect(d({ key: 'X', shiftKey: true })).toBeNull();
+		expect(d({ key: 'x', ctrlKey: true })).toBeNull();
+		expect(d({ key: 'x' }, { typing: true })).toBeNull();
+	});
+
 	it('Delete and Backspace remove', () => {
 		expect(d({ key: 'Delete' })).toEqual({ do: 'remove' });
 		expect(d({ key: 'Backspace' })).toEqual({ do: 'remove' });

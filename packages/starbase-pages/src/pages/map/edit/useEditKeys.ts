@@ -2,7 +2,7 @@
 // browser; the composable puts one keydown on the window while a draft can be changed and calls what the page gives it.
 //
 //   Shift+A                        the Add menu, unconnected, at the pointer
-//   Delete, Backspace              remove the selected card or wire
+//   Delete, Backspace, X           remove the selected card or wire
 //   Ctrl/⌘+Delete (or Backspace)   dissolve the selected container: its input is wired straight to its output
 //   Shift+D, Ctrl/⌘+D              duplicate it; Shift+Ctrl/⌘+D asks how many copies
 //   Ctrl/⌘+Z                       undo; Ctrl/⌘+Shift+Z (or Ctrl+Y) redo
@@ -50,7 +50,7 @@ export function keyDecision(e: KeyEvent, s: KeyState): EditKeyAction | null {
 		if (key === 'd') return { do: 'duplicate' };
 		return null;
 	}
-	if (key === 'Delete' || key === 'Backspace') return { do: 'remove' };
+	if (key === 'Delete' || key === 'Backspace' || key === 'x') return { do: 'remove' };
 	return null;
 }
 
