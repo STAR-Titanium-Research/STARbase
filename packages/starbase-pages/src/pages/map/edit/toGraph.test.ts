@@ -255,6 +255,49 @@ describe('toGraph', () => {
 		expect(toGraph(null, body, ctx).samples[0].draft).toBeUndefined();
 	});
 
+	describe('a planned record the draft deletes', () => {
+		const loaded = () =>
+			mkData({
+				samples: [mkSample('s1'), mkSample('s2', { status: 'planned' }), mkSample('s3', { status: 'planned' })],
+				operations: [
+					mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', methodName: 'Cut', workState: 'planned' }),
+					mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', methodName: 'Cut', workState: 'planned' }),
+				],
+				tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], workState: 'planned' })],
+			});
+		const removed = (kind: 'operation' | 'test' | 'sample', id: string) => {
+			const add: DraftAction =
+				kind === 'sample' ? { type: 'addExistingSamples', samples: [{ id, version: 1 }] } : { type: 'addExisting', kind, record: { id, version: 1 }, workState: 'planned' };
+			return run([add, { type: 'remove', key: 'n1', deleteRecord: true }]);
+		};
+
+		it('is marked removing, with the planned sample its operation made', () => {
+			const data = toGraph(loaded(), removed('operation', 'o1'), ctx);
+			expect(data.operations.find((o) => o.id === 'o1')?.removing).toBe(true);
+			expect(data.operations.find((o) => o.id === 'o2')?.removing).toBeUndefined();
+			expect(data.samples.find((x) => x.id === 's2')?.removing).toBe(true);
+			expect(data.samples.find((x) => x.id === 's3')?.removing).toBeUndefined();
+			const g = draw(data);
+			expect(container(g, 'op:o1').removing).toBe(true);
+			expect(container(g, 'op:o2').removing).toBeUndefined();
+			expect(record(g, 's:s2').removing).toBe(true);
+			expect(record(g, 's:s1').removing).toBeUndefined();
+		});
+
+		it('a test and a sample are marked the same way, and the loaded data is not touched', () => {
+			const base = loaded();
+			expect(toGraph(base, removed('test', 't1'), ctx).tests[0].removing).toBe(true);
+			expect(record(draw(toGraph(base, removed('sample', 's3'), ctx)), 's:s3').removing).toBe(true);
+			expect(base.tests[0].removing).toBeUndefined();
+			expect(base.samples[2].removing).toBeUndefined();
+		});
+
+		it('a record that is only in the draft, not removed, is not marked', () => {
+			const body = run([{ type: 'addExisting', kind: 'operation', record: { id: 'o1', version: 1 }, workState: 'planned' }]);
+			expect(toGraph(loaded(), body, ctx).operations.some((o) => o.removing)).toBe(false);
+		});
+	});
+
 	it('relations of the form become refs the Inside tray reads', () => {
 		const body = run([
 			{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] },
