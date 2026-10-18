@@ -37,9 +37,15 @@ export function countDraft(body: DraftBody): Counts {
 	return c;
 }
 
+/** True when Create would write nothing: no new record, no attach, no edit, no delete (a draft of only picked existing samples). */
+export const makesNothing = (body: DraftBody): boolean => Object.values(countDraft(body)).every((n) => n === 0);
+
+/** What the disabled Create button says when the draft would make nothing: what to do next. */
+export const NOTHING_TO_MAKE = 'Add an operation, test or new sample to create';
+
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "Create 2 operations, 4 samples", plus the changes to records that exist; "Nothing to create yet" for an empty draft. */
+/** "Create 2 operations, 4 samples", plus the changes to records that exist; what to do next when the draft would make nothing. */
 export function summaryText(body: DraftBody): string {
 	const c = countDraft(body);
 	const made = [
@@ -52,7 +58,7 @@ export function summaryText(body: DraftBody): string {
 		c.changed ? `change ${plural(c.changed, 'record')}` : '',
 		c.removed ? `delete ${plural(c.removed, 'planned record')}` : '',
 	].filter(Boolean);
-	if (!made.length && !other.length) return 'Nothing to create yet';
+	if (!made.length && !other.length) return NOTHING_TO_MAKE;
 	if (made.length) return [`Create ${made.join(', ')}`, ...other].join('; ');
 	return [`${other[0][0].toUpperCase()}${other[0].slice(1)}`, ...other.slice(1)].join('; ');
 }

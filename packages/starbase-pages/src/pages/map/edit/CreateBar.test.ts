@@ -52,9 +52,9 @@ describe('CreateBar', () => {
 		expect(await render(base)).not.toContain('role="alert"');
 	});
 
-	it('an empty draft is disabled but still says its summary', async () => {
-		const html = await render({ summary: 'Nothing to create yet', missing: 0, creating: false, empty: true });
+	it('a draft that makes nothing is disabled and says what to do', async () => {
+		const html = await render({ summary: 'Add an operation, test or new sample to create', missing: 0, creating: false, empty: true });
 		expect(button(html)).toContain('disabled');
-		expect(text(html)).toBe('Nothing to create yet');
+		expect(text(html)).toBe('Add an operation, test or new sample to create');
 	});
 });

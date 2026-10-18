@@ -126,4 +126,13 @@ describe('Create', () => {
 		edit.apply({ type: 'remove', key: 'n1' });
 		expect(create.empty.value).toBe(true);
 	});
+
+	it('a draft of only picked existing samples would make nothing', async () => {
+		const { create, edit } = await setup();
+		edit.apply([{ type: 'remove', key: 'n1' }, { type: 'addExistingSamples', samples: [{ id: 's9', version: 1 }] }]);
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(create.empty.value).toBe(true);
+		edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n2' } });
+		expect(create.empty.value).toBe(false);
+	});
 });
