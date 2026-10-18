@@ -1183,8 +1183,27 @@ test('create: a done operation keeps its date, its pieces are active, and it is 
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.deepEqual(writes(env.world), ['create:physical_samples', 'create:manufacturing_operations']);
   const [s, o] = env.world.ops;
-  assert.equal('current_status' in s.data, false, 'an active sample keeps the database default');
+  assert.equal(s.data.current_status, 'active', 'the piece a done operation makes is active');
   assert.deepEqual([o.data.work_state, o.data.operation_date, o.data.sample_id, o.data.output_sample_id, 'batch_id' in o.data], ['done', '2026-10-14T08:30:00Z', ID(10), s.id, false]);
+});
+
+test('create (R9): done at Create writes the outputs active, planned work writes them planned, in the same transaction', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('done1', { operation_date: '2026-10-14T08:30:00Z' }, { workState: 'done' }), sample('n1', { values: code('{seq}-X') }),
+      mop('plan1', {}, { workState: 'planned' }), sample('n2', { values: code('{seq}-Y') }),
+    ],
+    [wire(w('s0'), w('done1')), wire(w('done1', 0), w('n1')), wire(w('s0'), w('plan1')), wire(w('plan1', 0), w('n2'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const status = (key) => env.world.records.physical_samples.get(res.body.data.created[key].id).current_status;
+  assert.equal(status('n1'), 'active');
+  assert.equal(status('n2'), 'planned');
+  assert.ok(env.world.ops.every((o) => o.knex === env.world.trx));
 });
 
 test('create: tests are written with their samples as subjects, a planned test without a session date', async () => {

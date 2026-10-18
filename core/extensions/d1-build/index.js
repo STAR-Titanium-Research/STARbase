@@ -1517,7 +1517,9 @@ export function mount(router, context, clock = () => new Date()) {
       // 4. New samples, in key order (the code trigger numbers them in this order).
       for (const s of plan.samples) {
         const data = cleanValues(s.values);
-        if (s.planned) data.current_status = 'planned';
+        // Made by a planned operation: planned. Made by one that is done (R9: done at Create), or by none: active, said outright
+        // rather than left to the column default, so a draft's done work never leaves a planned piece behind.
+        data.current_status = s.planned ? 'planned' : 'active';
         const newId = await attempt(s.key, () => svc('physical_samples').createOne(data));
         sampleId.set(s.key, newId);
         newSampleIds.push(newId);
