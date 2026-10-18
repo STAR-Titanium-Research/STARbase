@@ -22,7 +22,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$RepoDir,
   [string]$NodePath,
   [switch]$NoStart,
   [switch]$StorePassword,
@@ -30,6 +30,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# $PSScriptRoot is empty in a param() default under some hosts, so resolve the default here.
+if (-not $RepoDir) {
+  $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  $RepoDir = (Resolve-Path (Join-Path $here '....')).Path
+}
 $TaskName = 'D1 Deploy Agent'
 
 if ($Uninstall) {
