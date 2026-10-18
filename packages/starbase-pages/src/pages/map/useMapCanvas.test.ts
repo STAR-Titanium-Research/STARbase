@@ -1042,7 +1042,8 @@ describe('useMapCanvas: edit mode does not lay out again for what a card says', 
 
 describe('useMapCanvas: edit mode places new cards clear of the others (R6)', () => {
   const extra = ref(false);
-  const stored = new Map<string, { x: number; y: number }>();
+  // Reactive, like the draft's places: the canvas watches them.
+  const stored = reactive(new Map<string, { x: number; y: number }>());
   const calls: string[] = [];
   let ownedIds: string[] = [];
   const overlay = {
@@ -1055,9 +1056,16 @@ describe('useMapCanvas: edit mode places new cards clear of the others (R6)', ()
     active: () => true,
     positionOf: (n: MapNode) => stored.get(n.id),
     moved: () => undefined,
-    relaid: (cards) => void calls.push(`relaid ${cards.map((c) => c.node.id).join(',')}`),
+    relaid: (cards) => {
+      for (const c of cards) stored.set(c.node.id, c.at);
+      calls.push(`relaid ${cards.map((c) => c.node.id).join(',')}`);
+    },
     owned: (n: MapNode) => ownedIds.includes(n.id),
-    settled: (cards) => void calls.push(`settled ${cards.map((c) => `${c.node.id}@${c.at.x},${c.at.y}`).join(',')}`),
+    // (As the page does: the draft keeps the places it is told of.)
+    settled: (cards) => {
+      for (const c of cards) stored.set(c.node.id, c.at);
+      calls.push(`settled ${cards.map((c) => `${c.node.id}@${c.at.x},${c.at.y}`).join(',')}`);
+    },
   };
   let scope = effectScope();
   afterEach(() => scope.stop());
@@ -1147,6 +1155,42 @@ describe('useMapCanvas: edit mode places new cards clear of the others (R6)', ()
     for (const [id, p] of Object.entries(before)) expect(at(id), id).toEqual(p);
     expect(calls.filter((c) => c.startsWith('relaid'))).toEqual(['relaid s:new1']);
     for (const id of Object.keys(before)) expect(apart(box('s:new1'), box(id)), id).toBe(true);
+  });
+
+  it('Tidy keeps where the draft\'s cards were when the draft had no place for them, in the step before, so Undo can take them back', async () => {
+    const { canvas } = await openIt(true);
+    ownedIds = ['s:new1'];
+    const was = { ...at('s:new1') };
+    await canvas.tidy();
+    await settle();
+    expect(calls[0]).toBe(`settled s:new1@${was.x},${was.y}`);
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual(['relaid s:new1']);
+  });
+
+  it('a place the draft changes by itself (Undo, Redo of a drag or of Tidy) is followed: the card goes there', async () => {
+    await openIt(true);
+    stored.set('s:new1', { x: 900, y: 900 });
+    await settle();
+    expect(at('s:new1')).toEqual({ x: 900, y: 900 });
+    stored.set('s:new1', { x: 1300, y: 40 }); // Undo or Redo brings another place back
+    await settle();
+    expect(at('s:new1')).toEqual({ x: 1300, y: 40 });
+    expect(calls).toEqual([]); // following the draft writes nothing to it
+  });
+
+  it('a card that comes back (Undo) goes to the place the draft has for it, even on another card, and writes nothing', async () => {
+    await openIt(true);
+    const onA = { ...at('s:a') };
+    stored.set('s:new1', { x: 5000, y: 5000 });
+    await settle();
+    extra.value = false; // the card is removed
+    await settle();
+    expect(nodesOf().some((n) => n.id === 's:new1')).toBe(false);
+    stored.set('s:new1', onA); // Undo brings it back: the draft has it where the person had dragged it, lying on a card
+    extra.value = true;
+    await settle();
+    expect(at('s:new1')).toEqual(onA);
+    expect(calls).toEqual([]);
   });
 
   it('canTidy is on only while the canvas holds something of the draft\'s own', async () => {

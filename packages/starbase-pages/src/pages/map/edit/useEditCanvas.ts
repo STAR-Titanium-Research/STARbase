@@ -35,9 +35,12 @@ export function canvasEditOf(edit: EditMode, inHistory: (sampleId: string) => bo
 	return {
 		active: () => edit.drafted.value,
 		positionOf: (n) => (edit.editing.value ? (edit.body.value.positions[keyOf(n) ?? ''] ?? undefined) : undefined),
-		moved: (n, at) => {
+		moved: (n, at, from) => {
 			const key = keyOf(n);
-			if (key) edit.apply({ type: 'move', key, x: at.x, y: at.y });
+			if (!key) return;
+			// A card the draft kept no place for: where it was taken from is kept in the step before, so Undo of this drag can bring it back.
+			if (from && !edit.body.value.positions[key]) edit.apply({ type: 'move', key, x: from.x, y: from.y }, { merge: true });
+			edit.apply({ type: 'move', key, x: at.x, y: at.y });
 		},
 		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && !inHistory(n.ref.id) && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
 		settled: (cards) => {
@@ -45,7 +48,8 @@ export function canvasEditOf(edit: EditMode, inHistory: (sampleId: string) => bo
 				const key = keyOf(node);
 				return key ? [{ type: 'move' as const, key, x: at.x, y: at.y }] : [];
 			});
-			if (moves.length) edit.apply(moves, { merge: true });
+			// A layout's write is nobody's step: it joins the step that added the card, and Redo is left as it was.
+			if (moves.length) edit.apply(moves, { merge: true, keepFuture: true });
 		},
 		relaid: (cards) => {
 			const moves = cards.flatMap(({ node, at }) => {

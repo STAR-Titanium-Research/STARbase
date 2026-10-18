@@ -382,6 +382,56 @@ test.describe('as a Lab Member', () => {
 		expect(after.y, 'y after the reload').toBeCloseTo(dragged.y, 0);
 	});
 
+	test('Undo of a drag puts the card back where it was, and Redo drags it again (R6)', async ({ page }) => {
+		await openNewDraft(page);
+		await addFromLid(page, /^New sample/);
+		const sample = card(page, 'New sample, Sample');
+		await expect(sample).toHaveCount(1);
+		await settledOverlaps(page);
+		await fit(page);
+		const before = await flowPos(sample);
+		await dragCard(page, sample, { x: 120, y: 90 });
+		await expect.poll(async () => (await flowPos(sample)).y, { message: 'the card followed the pointer' }).toBeGreaterThan(before.y + 20);
+		const dropped = await flowPos(sample);
+		await savedDraft(page, member, (b) => Object.keys(b.positions).length === 1, 'the place saved');
+		await page.keyboard.press('Control+z');
+		await expect.poll(async () => Math.abs((await flowPos(sample)).y - before.y) + Math.abs((await flowPos(sample)).x - before.x), { message: 'Undo took the card back' }).toBeLessThan(1);
+		await page.keyboard.press('Control+Shift+z');
+		await expect.poll(async () => Math.abs((await flowPos(sample)).y - dropped.y) + Math.abs((await flowPos(sample)).x - dropped.x), { message: 'Redo dropped it again' }).toBeLessThan(1);
+	});
+
+	test('Undo of a Delete brings a dragged card back where it was dragged, even close to another card, and Redo is still there (R6)', async ({ page }) => {
+		await openNewDraft(page);
+		await addFromLid(page, /^New sample/);
+		await addFromLid(page, /^New sample/);
+		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
+		await settledOverlaps(page);
+		await fit(page);
+		const ids = await card(page, 'New sample, Sample').evaluateAll((els) => els.map((e) => e.getAttribute('data-id')!));
+		const [a, b] = ids.map((id) => canvasOf(page).locator(`.vue-flow__node[data-id="${id}"]`));
+		// Drag A to just beside B: the gap between them is smaller than the layout's own (28), so a layout would move it.
+		const [boxA, boxB] = [await boxOf(a), await boxOf(b)];
+		const grab = await boxOf(a.locator('.ntop'));
+		const wanted = { x: boxB.x + boxB.width + 8 + (grab.x - boxA.x) + 40, y: boxB.y + (grab.y - boxA.y) + grab.height / 2 };
+		await dragCard(page, a, null, wanted);
+		await expect.poll(async () => Math.round((await boxOf(a)).x - (boxB.x + boxB.width)), { message: 'A sits 8 px right of B' }).toBeLessThan(14);
+		const dragged = await flowPos(a);
+		await savedDraft(page, member, (d) => Object.keys(d.positions).length >= 1, 'the dragged place saved');
+
+		await selectCard(page, a);
+		await page.keyboard.press('Delete');
+		await expect(a).toHaveCount(0);
+		await page.keyboard.press('Control+z');
+		await expect(a).toHaveCount(1);
+		await settledOverlaps(page);
+		const back = await flowPos(a);
+		expect(back.x, 'A is where it was dragged (x)').toBeCloseTo(dragged.x, 0);
+		expect(back.y, 'A is where it was dragged (y)').toBeCloseTo(dragged.y, 0);
+		await expect(page.getByRole('button', { name: 'Redo', exact: true }), 'Redo is still on').toBeEnabled();
+		await page.keyboard.press('Control+Shift+z');
+		await expect(a).toHaveCount(0);
+	});
+
 	test('dragging one card moves only that card: the selected card, and a recorded one, stay where they are (R6)', async ({ page }) => {
 		const bar1 = await sampleIdOf(admin, 'LOCAL-BAR-1');
 		// The map opens with BAR-1 (the focus) selected: a recorded card.
@@ -443,8 +493,15 @@ test.describe('as a Lab Member', () => {
 		// One Ctrl+Z puts every draft card back where it was (and removes nothing else).
 		await page.keyboard.press('Control+z');
 		await expect.poll(async () => JSON.stringify(await flowPositions(page)), { message: 'undo restored the positions' }).toBe(JSON.stringify(messy));
-		const undone = await savedDraft(page, member, (b) => JSON.stringify(b.positions) === JSON.stringify(savedBefore.positions), 'undo saved the old positions');
+		// The draft has them back too: every loose sample where it was before Tidy (and nothing of the history, which has no place of the draft's).
+		const sampleKeys = draftIds.filter((id) => id.startsWith('s:draft:')).map((id) => id.slice('s:draft:'.length));
+		const undone = await savedDraft(
+			page, member,
+			(b) => sampleKeys.every((k) => !!b.positions[k] && Math.abs(b.positions[k].x - messy[`s:draft:${k}`].x) < 1 && Math.abs(b.positions[k].y - messy[`s:draft:${k}`].y) < 1),
+			'undo saved the places from before Tidy',
+		);
 		expect(undone.items, 'undo took back Tidy and nothing else').toHaveLength(savedBefore.items.length);
+		expect(Object.keys(undone.positions).every((k) => !history[`s:${k}`]), 'no recorded card has a place of the draft\'s').toBe(true);
 	});
 
 	// ---- 6. Mark done and Back to planned (R10, plain fix 13) -----------------------------------------------------------------------

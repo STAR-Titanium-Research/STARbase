@@ -217,11 +217,11 @@ export function useEditMode(o: EditModeOptions) {
 
 	// ---- changing the draft ---------------------------------------------------------------------------
 	/** Does one action, or several as one undoable step; the canvas lays out only what is new, beside `anchor` when there is a card the change grew out of. */
-	function apply(action: DraftAction | DraftAction[], opts: { anchor?: string; merge?: boolean } = {}): DraftBody {
+	function apply(action: DraftAction | DraftAction[], opts: { anchor?: string; merge?: boolean; keepFuture?: boolean } = {}): DraftBody {
 		if (!editing.value) return draft.body.value;
 		if (!opts.merge) typing = null;
 		const before = draft.body.value;
-		const o2 = opts.merge ? { merge: true } : undefined;
+		const o2 = opts.merge ? { merge: true, ...(opts.keepFuture ? { keepFuture: true } : {}) } : undefined;
 		const next = Array.isArray(action) ? draft.applyAll(action, o2) : draft.apply(action, o2);
 		if (next !== before) o.hint?.({ anchor: opts.anchor });
 		return next;
