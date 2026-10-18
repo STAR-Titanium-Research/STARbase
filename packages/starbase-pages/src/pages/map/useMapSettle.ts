@@ -6,7 +6,7 @@
 import { computed, watch, type Ref } from 'vue';
 import type { GraphNode, useVueFlow } from '@vue-flow/core';
 import { nodeOfSocket } from './model/sockets';
-import type { Box } from './model/placeMerged';
+import { placeMerged, type Box } from './model/placeMerged';
 import { settleNodes, tidyPositions } from './model/placeNode';
 import type { MapNode } from './model/types';
 import type { MergeHint } from './useMapExpand';
@@ -48,8 +48,44 @@ export interface SettleCtx {
 /** A place that differs from where a card is by less than this (flow units) is the same place. */
 const SAME = 0.5;
 
+const median = (xs: number[]): number => {
+	if (!xs.length) return 0;
+	const s = [...xs].sort((a, b) => a - b);
+	const mid = s.length >> 1;
+	return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+};
+
 export function useMapSettle(ctx: SettleCtx) {
 	const { vf, map, edit, tween, placed, dragged } = ctx;
+
+	/**
+	 * ＋ or − on a card: the whole map as ELK puts it, moved so that the card pressed keeps its place (no jump across the map), and
+	 * every card that was dragged stays where it was dropped (spec D18). With no such card left (a − that took it away) the cards that
+	 * were already on the map keep their typical offset instead.
+	 */
+	function fullAroundDragged(elk: Points, graph: Graph, sizes: Sizes, anchors: string[]): Points {
+		const dir = map.dir.value;
+		const here: Record<string, Box> = {};
+		for (const n of vf.getNodes.value) {
+			const was = placed.get(n.id);
+			if (was && dragged.has(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+		}
+		// Where a card is: where the last layout sent it (a card still moving is not there yet, and a layout that arrives mid-way must not
+		// take that for its place: rapid ＋ and − would drift the map); a dragged card is where it is dropped.
+		const placeOf = (id: string): { x: number; y: number } | undefined => (dragged.has(id) ? undefined : placed.get(id)) ?? vf.findNode(id)?.position;
+		let shift = { x: 0, y: 0 };
+		const anchor = anchors.find((id) => elk[id] && placeOf(id));
+		if (anchor) {
+			const now = placeOf(anchor)!;
+			shift = { x: now.x - elk[anchor].x, y: now.y - elk[anchor].y };
+		} else {
+			const kept = vf.getNodes.value.filter((n) => placed.has(n.id) && !dragged.has(n.id) && elk[n.id]);
+			shift = { x: median(kept.map((n) => placed.get(n.id)!.x - elk[n.id].x)), y: median(kept.map((n) => placed.get(n.id)!.y - elk[n.id].y)) };
+		}
+		const moved = Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + shift.x, y: p.y + shift.y }]));
+		const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
+		return placeMerged({ elk: moved, sizes, placed: here, edges: wires, dir, anchors, pinned: dragged, exact: true });
+	}
 
 	/**
 	 * Where the cards go once the ones that would lie on another have stepped aside (model/placeNode.ts). `stored`: the cards the draft keeps a
@@ -180,5 +216,33 @@ export function useMapSettle(ctx: SettleCtx) {
 			});
 		});
 	}
-	return { settleFresh, tidy, canTidy, followStored, dragging };
+	/** Where each card being dragged was when the pointer took it: Undo of a first drag goes back there. */
+	const pickedUpAt = new Map<string, { x: number; y: number }>();
+	/**
+	 * Grabbing a card takes it out of the move (it follows the pointer, not the layout); letting go pins it (spec D18), tells the draft
+	 * where it went (and where it came from) and the sockets of the cards it is wired to may now be better the other way round.
+	 */
+	function watchDrags(): void {
+		vf.onNodeDragStart((e) => {
+			tween.cancel(e.nodes.map((n) => n.id));
+			for (const n of e.nodes) {
+				dragging.add(n.id);
+				const at = vf.findNode(n.id)?.position;
+				if (at) pickedUpAt.set(n.id, { x: at.x, y: at.y });
+			}
+		});
+		vf.onNodeDragStop((e) => {
+			for (const n of e.nodes) {
+				dragged.add(n.id);
+				dragging.delete(n.id);
+			}
+			void ctx.reorderSockets(ctx.currentPositions());
+		});
+		vf.onNodeDragStop(({ node }) => {
+			edit?.moved(node.data as MapNode, { x: node.position.x, y: node.position.y }, pickedUpAt.get(node.id));
+			pickedUpAt.delete(node.id);
+		});
+	}
+
+	return { settleFresh, fullAroundDragged, tidy, canTidy, followStored, watchDrags, dragging };
 }
