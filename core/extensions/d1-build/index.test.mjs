@@ -57,7 +57,8 @@ function fakeWorld() {
     deniedReads: new Set(), hiddenIds: new Set(), // collections, and record ids, the caller cannot read
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
-    people: [], // { person_id, user_id, is_researcher }
+    // { person_id, user_id, is_researcher }: Alice and Bob are researchers unless a test says otherwise
+    people: [{ person_id: ID(70), user_id: ALICE, is_researcher: true }, { person_id: ID(71), user_id: BOB, is_researcher: true }],
     noBuild: new Set(), // users whose policies grant no create on manufacturing_operations (a Lab Viewer)
     permissionAsks: [], // the bindings of every "may this caller build" question
     templates: [], roles: [ROLE_A, ROLE_B, ID(83)],
@@ -217,7 +218,7 @@ function fakeDatabase(world) {
       case SQL.personExists:
         return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
       case SQL.personOfUser:
-        return { rows: world.people.filter((p) => p.user_id === b[0]).map((p) => ({ person_id: p.person_id })).slice(0, 1) };
+        return { rows: world.people.filter((p) => p.user_id === b[0] && p.is_researcher === true).map((p) => ({ person_id: p.person_id })).slice(0, 1) };
       case SQL.lockSamples:
         return { rows: csvOf(b).filter((id) => world.records.physical_samples.has(id)).map((sample_id) => ({ sample_id })) };
       case SQL.requiredFields:
@@ -1273,6 +1274,46 @@ test('create (R9): done at Create writes the outputs active, planned work writes
   assert.ok(env.world.ops.every((o) => o.knex === env.world.trx));
 });
 
+const NO_RESEARCHER_TEXT = "Your account isn't linked to a researcher record. Ask an admin.";
+
+test('create (R11b): a caller with no researcher People row is refused with 422 NO_RESEARCHER, and nothing is written or deleted', async () => {
+  for (const people of [[], [{ person_id: ID(70), user_id: ALICE, is_researcher: false }], [{ person_id: ID(70), user_id: BOB, is_researcher: true }]]) {
+    const env = setup();
+    seed(env.world, 'physical_samples', [sampleRow(10)]);
+    env.world.people = people;
+    const id = await keep(env, cutDraft());
+    const before = stateOf(env.world);
+    const res = await createCall(env, id);
+    assert.equal(res.statusCode, 422, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { errors: [{ message: NO_RESEARCHER_TEXT, extensions: { code: 'NO_RESEARCHER', source: 'd1-build' } }] });
+    assert.deepEqual(env.world.ops, []);
+    assert.equal(stateOf(env.world), before);
+    assert.equal(env.world.drafts.length, 1, 'the draft is kept');
+  }
+});
+
+test('create (R11b): the researcher rule only matters when Create makes records; edits and removals need no owner', async () => {
+  const env = setup();
+  env.world.people = [];
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 }, values: { notes: 'hello' } })]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writes(env.world), ['update:physical_samples']);
+  // an empty draft too (nothing to make)
+  const empty = await createCall(env, await keep(env, emptyBody()));
+  assert.equal(empty.statusCode, 200);
+});
+
+test('create (R11b): a researcher is found by the same rule as d1-owner-default (user_id and is_researcher)', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  env.world.people = [{ person_id: ID(70), user_id: ALICE, is_researcher: false }, { person_id: ID(72), user_id: ALICE, is_researcher: true }];
+  assert.equal((await createCall(env, await keep(env, cutDraft()))).statusCode, 200);
+  assert.match(SQL.personOfUser, /user_id = \?/);
+  assert.match(SQL.personOfUser, /is_researcher = true/);
+});
+
 test('create: tests are written with their samples as subjects, a planned test without a session date', async () => {
   const env = setup();
   seed(env.world, 'physical_samples', [sampleRow(10)]);
@@ -1581,7 +1622,7 @@ const markDone = (env, body, user = ALICE) => env.call('POST', '/mark-done', { u
 function doneWorld(env) {
   seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11), outcome_notes: 'ok' })]);
   seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }, { person_id: ID(71), user_id: BOB }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }, { person_id: ID(71), user_id: BOB, is_researcher: true }];
 }
 
 test('mark-done: an operation turns done with its date, who and when, and its planned output turns active', async () => {
@@ -1617,6 +1658,13 @@ test('mark-done: the date defaults to today and who defaults to the caller\'s pe
   await markDone(named, { collection: 'manufacturing_operations', id: ID(40), personId: ID(71).toUpperCase() });
   assert.equal(named.world.ops[0].data.done_by_person_id, ID(71));
 
+  // the caller's person is the researcher row only: a People row that is not a researcher is not "who did it"
+  const plain = setup();
+  doneWorld(plain);
+  plain.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: false }];
+  await markDone(plain, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal('done_by_person_id' in plain.world.ops[0].data, false);
+
   const nobody = setup();
   doneWorld(nobody);
   nobody.world.people = [];
@@ -1634,7 +1682,7 @@ test('mark-done: the date defaults to today and who defaults to the caller\'s pe
 test('mark-done: a test turns done with its session date and has no output to change', async () => {
   const env = setup();
   seed(env.world, 'test_sessions', [testRow(50)]);
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }];
   const res = await markDone(env, { collection: 'test_sessions', id: ID(50), date: '2026-10-13' });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.deepEqual(env.world.ops.map((o) => o.collection), ['test_sessions']);
@@ -2266,7 +2314,7 @@ const OPS = 'manufacturing_operations';
 function cutWorld(env, state = 'planned', outputStatus = 'planned') {
   seed(env.world, 'physical_samples', [sampleRow(10), ...[11, 12, 13, 14].map((n) => sampleRow(n, { current_status: outputStatus }))]);
   seed(env.world, OPS, [11, 12, 13, 14].map((n) => opRow(n + 30, { sample_id: ID(10), output_sample_id: ID(n), work_state: state })));
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }];
 }
 const allIds = [41, 42, 43, 44].map(ID);
 

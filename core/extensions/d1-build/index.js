@@ -27,6 +27,8 @@
 //                                              something done hangs off them: 409 CHECKS REMOVE_BLOCKED; 409 ALREADY_PLANNED)
 //   GET    /d1-build/templates              -> { data: [{ id, name, scope, role_id, collection, values, user_id, updated_at, version }] }
 //   GET    /d1-build/templates/:id, POST /d1-build/templates, PATCH /d1-build/templates/:id, DELETE /d1-build/templates/:id
+//   POST /d1-build/drafts/:id/create also answers 422 { errors: [{ extensions: { code: 'NO_RESEARCHER' } }] } (message "Your account isn't linked to a
+//   researcher record. Ask an admin.") when it would make records for a caller with no People row that has is_researcher = true (R11b).
 //   Check = { key: DraftKey (or a record id for mark-done); field?: string; level: 'block' | 'warn'; code: CheckCode; text: string }
 //   CheckCode (CHECK_CODES) is a stable reason to branch on: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION (reserved:
 //   no check says it yet, a refused write is WRITE_FAILED), REQUIRED, STRUCTURE, OTHER.
@@ -362,9 +364,11 @@ export const SQL = {
     + ' WHERE (a."user" = ? OR a.role IN (SELECT id FROM tree) OR (a."user" IS NULL AND a.role IS NULL))'
     + ' AND (p.admin_access OR EXISTS (SELECT 1 FROM directus_permissions x WHERE x.policy = p.id'
     + " AND x.collection = 'manufacturing_operations' AND x.action = 'create'))) AS allowed",
-  // Mark done: is this person there, and which person is the caller (a researcher's row first, as d1-owner-default does).
+  // Is this person there, and which person is the caller: their RESEARCHER row, the lookup d1-owner-default makes to own a new record
+  // (people.user_id = the login and is_researcher = true). Create refuses a caller without one (R11b) and Mark done records them as
+  // who did it by the same rule.
   personExists: 'SELECT person_id FROM people WHERE person_id = ?',
-  personOfUser: 'SELECT person_id FROM people WHERE user_id = ? ORDER BY is_researcher DESC, person_id LIMIT 1',
+  personOfUser: 'SELECT person_id FROM people WHERE user_id = ? AND is_researcher = true ORDER BY person_id LIMIT 1',
   // The code the triggers gave a new record.
   codeOf: {
     physical_samples: 'SELECT sample_code AS code FROM physical_samples WHERE sample_id = ?',
@@ -1493,6 +1497,13 @@ export function mount(router, context, clock = () => new Date()) {
       if (!valid.ok) throw new HttpError(400, 'INVALID_PAYLOAD', valid.message);
       const ctx = await loadContext(req, body, { db: trx, knex: trx, lock: true });
       const { checks, plan } = buildPlan(body, ctx);
+      // R11b: no ownerless records. d1-owner-default owns a new record to the caller's researcher row and leaves it blank when they
+      // have none, which hides the record from its own creator (ADR-0011), so refuse before anything is written, and say why.
+      // Only a Create that makes records needs an owner: edits, attaches and removals do not.
+      const makes = plan.samples.length > 0 || plan.tests.length > 0 || plan.operations.some((r) => r.mode === 'new');
+      if (makes && !rowsOf(await trx.raw(SQL.personOfUser, [acc.user]))[0]) {
+        throw new HttpError(422, 'NO_RESEARCHER', "Your account isn't linked to a researcher record. Ask an admin.");
+      }
       if (checks.some((c) => c.level === 'block')) {
         throw new HttpError(409, 'CHECKS', 'Some things are missing, so nothing was created.', { checks });
       }
