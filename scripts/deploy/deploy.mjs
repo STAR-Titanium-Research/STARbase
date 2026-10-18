@@ -22,6 +22,7 @@ import {
 	parseEnv,
 	parseMergeTree,
 	parsePending,
+	parsePendingFiles,
 	parsePorcelainZ,
 	planSteps,
 	rewriteDbUrl,
@@ -87,9 +88,13 @@ async function readBuildServices(ctx) {
 export async function computeCheck(ctx) {
 	must(await git(ctx, ['fetch', '-q', 'origin']), 'git fetch');
 	const branch = must(await git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD']), 'git rev-parse HEAD').trim();
-	const head = must(await git(ctx, ['rev-parse', '--short=8', 'HEAD']), 'git rev-parse HEAD').trim();
-	const target = must(await git(ctx, ['rev-parse', '--short=8', 'origin/main']), 'git rev-parse origin/main').trim();
-	const logOut = must(await git(ctx, ['log', '--format=%H%x09%s', 'HEAD..origin/main']), 'git log');
+	const headSha = must(await git(ctx, ['rev-parse', 'HEAD']), 'git rev-parse HEAD').trim();
+	// The target is resolved ONCE. Everything after this (diffs, scans, the worktree, the merge) uses this sha, so a
+	// push to main in the middle of a run cannot make the deploy act on something other than what was checked.
+	const targetSha = must(await git(ctx, ['rev-parse', 'origin/main']), 'git rev-parse origin/main').trim();
+	const head = headSha.slice(0, 8);
+	const target = targetSha.slice(0, 8);
+	const logOut = must(await git(ctx, ['log', '--format=%H%x09%s', `HEAD..${targetSha}`]), 'git log');
 	const commits = logOut
 		.split('\n')
 		.filter(Boolean)
@@ -104,25 +109,31 @@ export async function computeCheck(ctx) {
 		branch,
 		head,
 		target,
+		headSha,
+		targetSha,
 		commits,
 		changedCount: 0,
 		steps: [],
 		migrations: [],
 		dirty,
 		overlap: [],
+		untrackedOverlap: [],
 		conflicts: [],
 		blockers: [],
 		needsAck: [],
 	};
 	if (result.upToDate) return result;
 
-	const changed = splitNul(must(await git(ctx, ['diff', '--name-only', '-z', 'HEAD...origin/main']), 'git diff'));
+	// --no-renames: a renamed file is a delete plus an add, so a renamed migration counts as added and overlap sees both paths.
+	const range = `HEAD...${targetSha}`;
+	const changed = splitNul(must(await git(ctx, ['diff', '--name-only', '-z', '--no-renames', range]), 'git diff'));
 	result.changedCount = changed.length;
-	const added = splitNul(
-		must(await git(ctx, ['diff', '--name-only', '-z', '--diff-filter=AM', 'HEAD...origin/main', '--', 'db/migrations']), 'git diff migrations'),
+	const added = splitNul(must(await git(ctx, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', range]), 'git diff added'));
+	const migrationFiles = splitNul(
+		must(await git(ctx, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=AM', range, '--', 'db/migrations']), 'git diff migrations'),
 	).filter((f) => f.endsWith('.sql'));
-	for (const file of added) {
-		const show = await git(ctx, ['show', `origin/main:${file}`]);
+	for (const file of migrationFiles) {
+		const show = await git(ctx, ['show', `${targetSha}:${file}`]);
 		const destructive = show.code === 0 ? scanDestructive(show.stdout) : ['unreadable'];
 		result.migrations.push({ file, destructive });
 		if (destructive.length) result.needsAck.push(file);
@@ -131,14 +142,23 @@ export async function computeCheck(ctx) {
 	const { services, error } = await readBuildServices(ctx);
 	result.steps = planSteps(changed, services);
 	result.overlap = overlap(dirty, changed);
+	// A new file in the update that already exists untracked here: git refuses the merge ("would be overwritten").
+	const untracked = splitNul(must(await git(ctx, ['ls-files', '--others', '--exclude-standard', '-z']), 'git ls-files'));
+	result.untrackedOverlap = overlap(untracked, added);
 
-	const mt = await git(ctx, ['merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main']);
+	const mt = await git(ctx, ['merge-tree', '--write-tree', '--name-only', '-z', 'HEAD', targetSha]);
 	result.conflicts = parseMergeTree(mt);
 
 	if (result.overlap.length) {
 		result.blockers.push({
 			code: 'overlap',
 			message: `Uncommitted edits in files this update also changes: ${result.overlap.join(', ')}. Resolve them with /starbase-deploy.`,
+		});
+	}
+	if (result.untrackedOverlap.length) {
+		result.blockers.push({
+			code: 'untracked_overlap',
+			message: `Untracked files here would be overwritten by files the update adds: ${result.untrackedOverlap.join(', ')}. Move or remove them, or use /starbase-deploy.`,
 		});
 	}
 	if (result.conflicts?.length) {
@@ -217,6 +237,18 @@ export async function runDeploy(ctx, opts = {}) {
 	}
 	const has = (s) => check.steps.includes(s);
 
+	/** Refuse when the checkout is not exactly what preflight looked at (a branch switch, a commit, a pull). */
+	async function assertCheckoutUnmoved() {
+		const branch = (await git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+		const head = (await git(ctx, ['rev-parse', 'HEAD'])).stdout.trim();
+		if (branch !== check.branch) {
+			throw new StepError(`The live checkout changed branch since the preflight (${check.branch} -> ${branch || 'unknown'}); nothing was merged. Check it, then deploy again.`);
+		}
+		if (head !== check.headSha) {
+			throw new StepError(`The live checkout moved since the preflight (${check.head} -> ${head.slice(0, 8) || 'unknown'}); nothing was merged. Check it, then deploy again.`);
+		}
+	}
+
 	try {
 		await step('preflight', async () => {
 			check = await computeCheck(ctx);
@@ -247,10 +279,11 @@ export async function runDeploy(ctx, opts = {}) {
 			await step('worktree', async () => {
 				await git(ctx, ['worktree', 'remove', '--force', WORKTREE_REL]); // a stale one; failure is fine
 				await git(ctx, ['worktree', 'prune']);
-				must(await git(ctx, ['worktree', 'add', '-q', '--detach', WORKTREE_REL, 'origin/main'], { onData: ctx.onData }), 'git worktree add');
+				must(await git(ctx, ['worktree', 'add', '-q', '--detach', WORKTREE_REL, check.targetSha], { onData: ctx.onData }), 'git worktree add');
 				worktree = true;
 			});
 			await step('migrate', async () => {
+				await assertCheckoutUnmoved();
 				const dbUrl = envFile.DATABASE_URL;
 				if (!dbUrl) throw new StepError('DATABASE_URL is not set in .env.');
 				const network = setting('DEPLOY_DOCKER_NETWORK', 'd1-database_d1net');
@@ -263,6 +296,19 @@ export async function runDeploy(ctx, opts = {}) {
 				if (pending === 0) {
 					ctx.out('No pending migrations, no backup taken.\n');
 					return;
+				}
+				// Only migrations that were scanned (added or changed by this update) may be applied. A pending one that is
+				// not among them was never looked at: leave it to a person.
+				const pendingFiles = parsePendingFiles(status.stdout);
+				if (pendingFiles.length === 0) {
+					throw new StepError(`dbmate reports ${pending} pending migration(s) but its status output could not be read, so they cannot be checked against this update. Nothing was applied; use /starbase-deploy.`);
+				}
+				const scanned = new Set(check.migrations.map((m) => m.file.split('/').pop()));
+				const unknown = pendingFiles.filter((f) => !scanned.has(f));
+				if (unknown.length) {
+					throw new StepError(
+						`Migration ${unknown.join(', ')} is pending but not part of this update; deploy it with /starbase-deploy. Nothing was applied and no backup was taken.`,
+					);
 				}
 				ctx.out(`${pending} pending migration(s). Backing up first.\n`);
 				const bash = setting('DEPLOY_BASH', 'C:\\Program Files\\Git\\bin\\bash.exe');
@@ -282,15 +328,18 @@ export async function runDeploy(ctx, opts = {}) {
 
 		// ---- merge
 		await step('merge', async () => {
-			const m = await git(ctx, ['merge', '--no-edit', 'origin/main'], { onData: ctx.onData });
+			await assertCheckoutUnmoved();
+			// Merge the sha the preflight looked at, not whatever origin/main is by now.
+			const m = await git(ctx, ['merge', '--no-edit', '-m', `Deploy: merge origin/main (${check.target})`, check.targetSha], { onData: ctx.onData });
 			if (m.code !== 0) {
-				const conflicted = splitNul((await git(ctx, ['diff', '--name-only', '-z', '--diff-filter=U'])).stdout);
-				await git(ctx, ['merge', '--abort']);
+				const conflicted = splitNul((await git(ctx, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=U'])).stdout);
+				const abort = await git(ctx, ['merge', '--abort']);
 				const where = conflicted.length ? ` in ${conflicted.join(', ')}` : '';
-				throw new StepError(
-					`git merge origin/main failed${where}; the merge was aborted and the working tree is as before.` +
-						(migrated ? ` The migration(s) already applied stay in place; backup ${result.backup}.` : ''),
-				);
+				const tail = migrated ? ` The migration(s) already applied stay in place; backup ${result.backup}.` : '';
+				if (abort.code !== 0) {
+					throw new StepError(`git merge of origin/main failed${where}, and the merge abort FAILED: the checkout may be mid-merge, fix it by hand (git status, then git merge --abort).${tail}`);
+				}
+				throw new StepError(`git merge origin/main failed${where}; the merge was aborted and the working tree is as before.${tail}`);
 			}
 			const head = (await git(ctx, ['rev-parse', '--short=8', 'HEAD'])).stdout.trim();
 			if (head) result.toSha = head;
@@ -337,7 +386,8 @@ export async function runDeploy(ctx, opts = {}) {
 					const r = await compose(ctx, args);
 					if (r.code !== 0) throw new StepError(`${what} failed (exit ${r.code}).`);
 				};
-				await must0(['up', '-d'], 'docker compose up -d');
+				// A plain `up -d` touches every service whose definition changed, so only when the compose file itself changed.
+				if (wants('compose-up')) await must0(['up', '-d'], 'docker compose up -d');
 				if (wants('recreate:directus')) {
 					await must0(['up', '-d', '--force-recreate', 'directus'], 'recreate directus');
 					touched.push('directus');
@@ -368,7 +418,7 @@ export async function runDeploy(ctx, opts = {}) {
 						touched.push(svc);
 					} else {
 						await must0([...prof, 'build', svc], `build ${svc}`);
-						ctx.out(`${svc} is not running (profile ${b.profiles.join(",")}); image rebuilt, container left stopped.\n`);
+						ctx.out(`${svc} is not running (profile ${b.profiles.join(',')}); image rebuilt, container left stopped.\n`);
 					}
 				}
 			});

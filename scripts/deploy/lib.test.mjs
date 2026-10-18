@@ -14,6 +14,7 @@ import {
 	parseEnv,
 	parseMergeTree,
 	parsePending,
+	parsePendingFiles,
 	parsePorcelainZ,
 	planSteps,
 	rewriteDbUrl,
@@ -227,4 +228,15 @@ test('makeExec passes env and cwd', async () => {
 	const exec = makeExec();
 	const r = await exec(process.execPath, ['-e', 'console.log(process.env.DEPLOY_T + "|" + process.cwd())'], { env: { ...process.env, DEPLOY_T: 'x y' }, cwd: path.resolve('.') });
 	assert.equal(r.stdout.trim(), `x y|${path.resolve('.')}`);
+});
+
+test('parsePendingFiles lists the pending migrations of a dbmate status', () => {
+	assert.deepEqual(parsePendingFiles('[X] 1_a.sql\n[ ] 2_b.sql\n[ ] 3_c.sql\n\nApplied: 1\nPending: 2\n'), ['2_b.sql', '3_c.sql']);
+	assert.deepEqual(parsePendingFiles('[X] 1_a.sql\n'), []);
+});
+
+test('parseMergeTree understands the -z (NUL separated) form', () => {
+	const NUL = '\u0000';
+	assert.deepEqual(parseMergeTree({ code: 1, stdout: `oid${NUL}a b/c.js${NUL}d.txt${NUL}${NUL}Auto-merging a b/c.js${NUL}` }), ['a b/c.js', 'd.txt']);
+	assert.deepEqual(parseMergeTree({ code: 0, stdout: `oid${NUL}` }), []);
 });

@@ -108,18 +108,20 @@ export function overlap(dirty, changed) {
 }
 
 /**
- * `git merge-tree --write-tree --name-only HEAD origin/main`: line 1 is the tree id, then the conflicted paths,
- * then a blank line and the informational messages. Exit 0 clean, 1 conflicts, anything else means "unknown"
- * (git without --write-tree answers with a usage error), reported as null so nothing is claimed.
+ * `git merge-tree --write-tree --name-only -z HEAD <sha>`: with -z the output is NUL separated: the tree id, the
+ * conflicted paths, an empty field, then the informational messages (the newline form is still understood).
+ * Exit 0 clean, 1 conflicts, anything else means "unknown" (git without --write-tree answers with a usage error),
+ * reported as null so nothing is claimed.
  */
 export function parseMergeTree({ code, stdout }) {
 	if (code === 0) return [];
 	if (code !== 1) return null;
-	const lines = String(stdout ?? '').split(/\r?\n/);
+	const text = String(stdout ?? '');
+	const fields = text.includes('\0') ? text.split('\0') : text.split(/\r?\n/);
 	const files = [];
-	for (let i = 1; i < lines.length; i++) {
-		if (lines[i] === '') break;
-		files.push(lines[i]);
+	for (let i = 1; i < fields.length; i++) {
+		if (fields[i] === '') break;
+		files.push(fields[i]);
 	}
 	return [...new Set(files)];
 }
@@ -156,6 +158,11 @@ export function parsePending(stdout) {
 	const m = /Pending:\s*(\d+)/i.exec(stdout ?? '');
 	if (m) return Number(m[1]);
 	return (String(stdout ?? '').match(/^\[ \]/gm) ?? []).length;
+}
+
+/** The pending migration file names listed by `dbmate status` (lines like `[ ] 202610180900_x.sql`). */
+export function parsePendingFiles(stdout) {
+	return [...String(stdout ?? '').matchAll(/^\[ \]\s+(\S+)/gm)].map((m) => m[1]);
 }
 
 /** The dump's file name from backup.sh's "Local copy : <path>" line. */

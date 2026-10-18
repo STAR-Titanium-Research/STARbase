@@ -20,6 +20,8 @@ const COMPOSE_CONFIG = JSON.stringify({
 	},
 });
 
+const HEAD_SHA = 'a'.repeat(40);
+const TARGET_SHA = 'b'.repeat(40);
 const MIGRATION_FILE = 'db/migrations/202610180900_add_thing.sql';
 const SAFE_SQL = '-- migrate:up\nCREATE TABLE thing(id int);\n-- migrate:down\nDROP TABLE thing;\n';
 const DESTRUCTIVE_SQL = '-- migrate:up\nALTER TABLE thing DROP COLUMN old;\n-- migrate:down\nSELECT 1;\n';
@@ -32,6 +34,8 @@ function world(s = {}) {
 	const calls = [];
 	let t = 1_760_000_000_000;
 	let psCalls = 0;
+	let headCalls = 0;
+	let branchCalls = 0;
 	const changed = s.changed ?? ['core/extensions/a/index.js'];
 	const files = new Map([
 		[path.join(REPO, '.env'), s.envText ?? ENV_TEXT],
@@ -48,22 +52,36 @@ function world(s = {}) {
 		t += 5;
 		const k = `${cmd} ${args.join(' ')}`;
 		if (k === 'git fetch -q origin') return s.fetch ?? ok();
-		if (k === 'git rev-parse --abbrev-ref HEAD') return ok(`${s.branch ?? 'feat/x'}\n`);
-		if (k === 'git rev-parse --short=8 HEAD') return ok(calls.some((c) => c.args.join(' ') === 'merge --no-edit origin/main') && !s.mergeCode ? 'bbbbbbbb\n' : 'aaaaaaaa\n');
-		if (k === 'git rev-parse --short=8 origin/main') return ok('bbbbbbbb\n');
+		if (k === 'git rev-parse --abbrev-ref HEAD') {
+			branchCalls++;
+			return ok(`${s.branchSeq ? s.branchSeq(branchCalls) : (s.branch ?? 'feat/x')}\n`);
+		}
+		if (k === 'git rev-parse HEAD') {
+			headCalls++;
+			return ok(`${s.headSeq ? s.headSeq(headCalls) : HEAD_SHA}\n`);
+		}
+		if (k === 'git rev-parse --short=8 HEAD') return ok(calls.some((c) => c.args[0] === 'merge' && c.args[1] === '--no-edit') && !s.mergeCode ? 'bbbbbbbb\n' : 'aaaaaaaa\n');
+		if (k === 'git rev-parse origin/main') return ok(`${TARGET_SHA}\n`);
 		if (k.startsWith('git log --format=')) return ok(s.upToDate ? '' : `${'1'.repeat(40)}\tfeat: one\n${'2'.repeat(40)}\tfix: two\n`);
 		if (k.startsWith('git status --porcelain -z --untracked-files=no -- package-lock.json')) return ok(s.lockDirtyAfterInstall ? ` M package-lock.json${NUL}` : '');
 		if (k.startsWith('git status --porcelain')) return ok((s.dirty ?? []).map((f) => ` M ${f}${NUL}`).join(''));
-		if (k.startsWith('git diff --name-only -z --diff-filter=AM')) return ok(changed.filter((f) => f.startsWith('db/migrations/')).map((f) => f + NUL).join(''));
-		if (k === 'git diff --name-only -z HEAD...origin/main') return ok(changed.map((f) => f + NUL).join(''));
-		if (k.startsWith('git diff --name-only -z --diff-filter=U')) return ok(s.conflicted ? s.conflicted.map((f) => f + NUL).join('') : '');
-		if (k.startsWith('git show origin/main:')) return ok(s.sql ?? SAFE_SQL);
-		if (k.startsWith('git merge-tree')) return s.mergeTree ?? { code: 0, stdout: 'treeoid\n', stderr: '' };
-		if (k === 'git merge --no-edit origin/main') return s.mergeCode ? { code: s.mergeCode, stdout: 'CONFLICT', stderr: '' } : ok('Merge made');
+		if (k.startsWith('git diff --name-only -z --no-renames --diff-filter=AM')) return ok(changed.filter((f) => f.startsWith('db/migrations/')).map((f) => f + NUL).join(''));
+		if (k.startsWith('git diff --name-only -z --no-renames --diff-filter=A ')) return ok((s.added ?? changed).map((f) => f + NUL).join(''));
+		if (k === `git diff --name-only -z --no-renames HEAD...${TARGET_SHA}`) return ok(changed.map((f) => f + NUL).join(''));
+		if (k.startsWith('git diff --name-only -z --no-renames --diff-filter=U')) return ok(s.conflicted ? s.conflicted.map((f) => f + NUL).join('') : '');
+		if (k.startsWith('git ls-files --others --exclude-standard -z')) return ok((s.untracked ?? []).map((f) => f + NUL).join(''));
+		if (k.startsWith(`git show ${TARGET_SHA}:`)) return ok(s.sql ?? SAFE_SQL);
+		if (k.startsWith('git merge-tree')) return s.mergeTree ?? { code: 0, stdout: `treeoid${NUL}`, stderr: '' };
+		if (k === 'git merge --abort') return s.abortCode ? { code: s.abortCode, stdout: '', stderr: 'no merge to abort' } : ok();
+		if (k.startsWith('git merge --no-edit ')) return s.mergeCode ? { code: s.mergeCode, stdout: 'CONFLICT', stderr: '' } : ok('Merge made');
 		if (cmd === 'docker' && args.join(' ').startsWith('compose --profile * config')) return s.composeConfigFail ? { code: 1, stdout: '', stderr: 'bad interpolation' } : ok(COMPOSE_CONFIG);
 		if (cmd === 'docker' && args[0] === 'run') {
 			const tail = args.slice(args.indexOf('ghcr.io/amacneil/dbmate:2') + 1).join(' ');
-			if (tail === 'status') return ok(`[X] a.sql\n[ ] b.sql\n\nApplied: 1\nPending: ${s.pending ?? 1}\n`);
+			if (tail === 'status') {
+				const n = s.pending ?? 1;
+				const names = s.pendingFiles ?? [MIGRATION_FILE.split('/').pop()].slice(0, n);
+				return ok(`[X] a.sql\n${names.map((f) => `[ ] ${f}`).join('\n')}\n\nApplied: 1\nPending: ${n}\n`);
+			}
 			if (tail === '--no-dump-schema up') return s.upCode ? { code: s.upCode, stdout: '', stderr: 'boom' } : ok('Applying: b.sql\n');
 		}
 		if (/bash(\.exe)?$/.test(cmd) && args[0] === 'infra/backup/backup.sh') {
@@ -114,9 +132,9 @@ test('check: up to date changes nothing and lists nothing', async () => {
 	assert.deepEqual(w.keys(), [
 		'git fetch -q origin',
 		'git rev-parse --abbrev-ref HEAD',
-		'git rev-parse --short=8 HEAD',
-		'git rev-parse --short=8 origin/main',
-		'git log --format=%H%x09%s HEAD..origin/main',
+		'git rev-parse HEAD',
+		'git rev-parse origin/main',
+		`git log --format=%H%x09%s HEAD..${TARGET_SHA}`,
 		'git status --porcelain -z --untracked-files=no',
 	]);
 });
@@ -148,7 +166,7 @@ test('check: overlap with uncommitted edits is a blocker', async () => {
 });
 
 test('check: merge conflicts are a blocker; old git reports conflicts as null and claims nothing', async () => {
-	let w = world({ mergeTree: { code: 1, stdout: 'oid\ncore/extensions/foo/index.js\n\nCONFLICT (content)', stderr: '' } });
+	let w = world({ mergeTree: { code: 1, stdout: `oid${NUL}core/extensions/foo/index.js${NUL}${NUL}CONFLICT (content)${NUL}`, stderr: '' } });
 	let c = await computeCheck(w.ctx);
 	assert.deepEqual(c.conflicts, ['core/extensions/foo/index.js']);
 	assert.equal(c.blockers[0].code, 'conflict');
@@ -192,14 +210,15 @@ test('run: full deploy with migrations runs the steps in order and never npm ci'
 
 	const keys = w.keys();
 	const at = (prefix) => keys.findIndex((k) => k.startsWith(prefix));
-	assert.ok(at('git worktree add -q --detach .claude/worktrees/deploy-main origin/main') > -1);
+	// the worktree and the merge use the sha resolved at preflight, never the symbolic ref
+	assert.ok(at(`git worktree add -q --detach .claude/worktrees/deploy-main ${TARGET_SHA}`) > -1);
 	// order: worktree, status, backup, up, merge, install, builds, compose, verify, worktree removal
 	const order = [
 		at('git worktree add'),
 		keys.findIndex((k) => k.startsWith('docker run') && k.endsWith('dbmate:2 status')),
 		keys.findIndex((k) => /bash/.test(k) && k.includes('infra/backup/backup.sh')),
 		keys.findIndex((k) => k.startsWith('docker run') && k.endsWith('--no-dump-schema up')),
-		at('git merge --no-edit origin/main'),
+		at('git merge --no-edit'),
 		at('npm install --no-audit --no-fund'),
 		at('npm run build:extensions'),
 		at('npm run build:starbase'),
@@ -293,7 +312,7 @@ test('run: a failed merge is aborted and names the conflicting paths, after the 
 	assert.match(r.message, /core\/extensions\/a\/index\.js/);
 	assert.match(r.message, /d1_20261018_1200\.sql\.gz/);
 	const keys = w.keys();
-	const merge = keys.indexOf('git merge --no-edit origin/main');
+	const merge = keys.findIndex((k) => k.startsWith('git merge --no-edit'));
 	const abort = keys.indexOf('git merge --abort');
 	assert.ok(merge > -1 && abort > merge);
 	assert.equal(keys.filter((k) => k.startsWith('npm') || k.startsWith('docker compose up')).length, 0);
@@ -451,4 +470,128 @@ test('run: package-lock.json that npm install rewrote is restored; one that was 
 	const b = world({ changed: ['package.json'], lockDirtyAfterInstall: true, dirty: ['package-lock.json'] });
 	await runDeploy(b.ctx, {});
 	assert.ok(!b.keys().includes('git checkout -- package-lock.json'));
+});
+
+// ---- pinned target, untracked collisions, migration whitelist, merge abort ---------------------
+
+test('run: the worktree and the merge use the sha resolved at preflight, not origin/main', async () => {
+	const w = world({ changed: [MIGRATION_FILE, 'docs/x.md'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	const merge = w.seen('git merge --no-edit')[0];
+	assert.equal(merge.args.at(-1), TARGET_SHA);
+	assert.ok(!merge.args.includes('origin/main'));
+	const add = w.seen('git worktree add')[0];
+	assert.equal(add.args.at(-1), TARGET_SHA);
+	// every ref-taking read after the fetch is pinned too (only the one rev-parse resolves the symbolic name)
+	const resolvers = w.keys().filter((k) => /(^| )origin\/main($| )/.test(k) && !k.includes('-m '));
+	assert.deepEqual(resolvers, ['git rev-parse origin/main']);
+});
+
+test('check: the result carries the full shas it pinned', async () => {
+	const c = await computeCheck(world({}).ctx);
+	assert.equal(c.headSha, HEAD_SHA);
+	assert.equal(c.targetSha, TARGET_SHA);
+});
+
+test('run: refuses to merge when HEAD moved after the preflight', async () => {
+	const w = world({ changed: ['docs/x.md'], headSeq: (n) => (n === 1 ? HEAD_SHA : 'c'.repeat(40)) });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, false);
+	assert.equal(r.failedStep, 'merge');
+	assert.match(r.message, /moved since the preflight/);
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+});
+
+test('run: refuses to merge when the branch changed after the preflight', async () => {
+	const w = world({ changed: ['docs/x.md'], branchSeq: (n) => (n === 1 ? 'feat/x' : 'main') });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'merge');
+	assert.match(r.message, /changed branch.*feat\/x -> main/);
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+});
+
+test('run: a moved HEAD is caught before the migration too (no backup, nothing applied)', async () => {
+	const w = world({ changed: [MIGRATION_FILE], headSeq: (n) => (n === 1 ? HEAD_SHA : 'c'.repeat(40)) });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'migrate');
+	assert.equal(w.keys().filter((k) => k.includes('backup.sh') || k.endsWith('--no-dump-schema up')).length, 0);
+});
+
+test('every diff call uses --no-renames, and name lists use -z', async () => {
+	const w = world({ changed: [MIGRATION_FILE, 'core/extensions/a/index.js'], mergeCode: 1, conflicted: ['x'] });
+	await runDeploy(w.ctx, {});
+	const diffs = w.seen('git diff');
+	assert.ok(diffs.length >= 4);
+	for (const d of diffs) {
+		assert.ok(d.args.includes('--no-renames'), d.args.join(' '));
+		assert.ok(d.args.includes('-z'), d.args.join(' '));
+	}
+	assert.ok(w.seen('git merge-tree')[0].args.includes('-z'));
+});
+
+test('check: an untracked file that the update adds is a blocker (untracked_overlap)', async () => {
+	const w = world({ changed: ['apps/new.txt', 'README.md'], added: ['apps/new.txt'], untracked: ['apps/new.txt', 'scratch.txt'] });
+	const c = await computeCheck(w.ctx);
+	assert.deepEqual(c.untrackedOverlap, ['apps/new.txt']);
+	assert.equal(c.blockers.length, 1);
+	assert.equal(c.blockers[0].code, 'untracked_overlap');
+	assert.match(c.blockers[0].message, /apps\/new\.txt/);
+	// untracked files the update does not add are no problem
+	const ok = await computeCheck(world({ changed: ['README.md'], added: [], untracked: ['scratch.txt'] }).ctx);
+	assert.deepEqual(ok.blockers, []);
+});
+
+test('run: an untracked collision stops at preflight and changes nothing', async () => {
+	const w = world({ changed: ['apps/new.txt'], added: ['apps/new.txt'], untracked: ['apps/new.txt'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'preflight');
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+	assert.equal(w.seen('git worktree add').length, 0);
+});
+
+test('run: a failed merge abort is reported, not claimed clean', async () => {
+	const w = world({ changed: ['core/extensions/a/index.js'], mergeCode: 1, conflicted: ['core/extensions/a/index.js'], abortCode: 128 });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'merge');
+	assert.match(r.message, /merge abort FAILED/);
+	assert.match(r.message, /mid-merge/);
+	assert.doesNotMatch(r.message, /working tree is as before/);
+});
+
+test('run: a pending migration that is not part of this update is refused before any backup', async () => {
+	const w = world({ changed: [MIGRATION_FILE], pending: 2, pendingFiles: ['202610170000_old_leftover.sql', '202610180900_add_thing.sql'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, false);
+	assert.equal(r.failedStep, 'migrate');
+	assert.match(r.message, /202610170000_old_leftover\.sql is pending but not part of this update; deploy it with \/starbase-deploy/);
+	assert.doesNotMatch(r.message, /202610180900_add_thing/);
+	assert.equal(w.keys().filter((k) => k.includes('backup.sh') || k.endsWith('--no-dump-schema up')).length, 0);
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+	assert.equal(r.backup, null);
+});
+
+test('run: an unreadable dbmate status with pending migrations is refused', async () => {
+	const w = world({ changed: [MIGRATION_FILE], pending: 1, pendingFiles: [] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'migrate');
+	assert.match(r.message, /could not be read/);
+	assert.equal(w.keys().filter((k) => k.includes('backup.sh')).length, 0);
+});
+
+test('run: a renamed migration counts as added and is applied', async () => {
+	// with --no-renames git reports the new name as an addition
+	const renamed = 'db/migrations/202610180901_renamed.sql';
+	const w = world({ changed: ['db/migrations/202610180900_old_name.sql', renamed], pendingFiles: ['202610180901_renamed.sql'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.equal(w.keys().filter((k) => k.endsWith('--no-dump-schema up')).length, 1);
+});
+
+test('run: no plain `up -d` unless docker-compose.yml changed', async () => {
+	const w = world({ changed: ['core/extensions/a/index.js'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true, r.message);
+	assert.ok(!w.keys().includes('docker compose up -d'));
+	assert.ok(w.keys().includes('docker compose up -d --force-recreate directus'));
 });
