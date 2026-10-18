@@ -12,7 +12,7 @@
   The parameters below exist so the loop can be tested quickly; the defaults are the real ones.
 #>
 param(
-  [string]$RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$RepoDir,
   [string]$NodePath = 'node',
   [double]$InitialDelaySeconds = 2,
   [double]$MaxDelaySeconds = 60,
@@ -20,6 +20,11 @@ param(
   [int]$MaxRestarts = 0   # 0 = forever
 )
 
+# $PSScriptRoot is empty in a param() default under some hosts, so resolve the default here.
+if (-not $RepoDir) {
+  $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  $RepoDir = (Resolve-Path (Join-Path $here '....')).Path
+}
 $agent = Join-Path $RepoDir 'infra\deploy-agent\agent.mjs'
 Set-Location -LiteralPath $RepoDir
 $delay = $InitialDelaySeconds
