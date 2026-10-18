@@ -31,6 +31,8 @@ export function fakeServer() {
 		/** What Create and Mark done answer: a body, or an error to throw. */
 		createAnswer: { data: { created: { n1: { collection: 'physical_samples', id: 'new1', code: '1-Ti64-MC' } }, sampleIds: ['new1'] } } as unknown,
 		markAnswer: null as unknown,
+		/** What Back to planned answers: a body, or an error to throw. */
+		plannedAnswer: null as unknown,
 		bodies: [] as unknown[],
 		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
 			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
@@ -82,6 +84,11 @@ export function fakeServer() {
 				s.bodies.push(body);
 				if (s.markAnswer instanceof Error) throw s.markAnswer;
 				return { data: s.markAnswer ?? { data: { ids: (body as { ids?: string[] } | undefined)?.ids ?? [], work_state: 'done' } } };
+			}
+			if (path === '/d1-build/mark-planned') {
+				s.bodies.push(body);
+				if (s.plannedAnswer instanceof Error) throw s.plannedAnswer;
+				return { data: s.plannedAnswer ?? { data: { ids: (body as { ids?: string[] } | undefined)?.ids ?? [], work_state: 'planned' } } };
 			}
 			throw httpError(404);
 		},

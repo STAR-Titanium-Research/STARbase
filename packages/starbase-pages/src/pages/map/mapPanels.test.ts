@@ -75,6 +75,12 @@ describe('MapRail', () => {
     expect(text(await render(MapRail, railProps({ canMarkDone: true })))).toContain('Mark done');
   });
 
+  it('offers Back to planned only for a done card, and asks for it', async () => {
+    expect(text(await render(MapRail, railProps()))).not.toContain('Back to planned');
+    const html = await render(MapRail, railProps({ canMarkPlanned: true }));
+    expect(text(html)).toContain('Back to planned');
+  });
+
   it('draws the sample drawing for a sample, and none for a record with no form', async () => {
     expect(await render(MapRail, railProps())).toContain('d1-geometry');
     expect(await render(MapRail, railProps({ info: info(op.id) }))).not.toContain('d1-geometry');

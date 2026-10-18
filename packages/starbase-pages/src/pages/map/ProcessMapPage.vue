@@ -198,11 +198,12 @@ const railProps = computed(() => ({
 	reach: map.reach.value,
 	drawnReach: map.effectiveReach.value,
 	canMarkDone: markDone.canMarkDone.value,
+	canMarkPlanned: markDone.canMarkPlanned.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
-const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show };
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show, markPlanned: markDone.markPlanned };
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });

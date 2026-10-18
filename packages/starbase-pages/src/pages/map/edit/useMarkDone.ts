@@ -25,6 +25,24 @@ export function markTargetOf(node: { type: string } | undefined): MarkTarget | n
 	return { collection: c.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', ids: [...c.group.rowIds], title: `Mark ${c.kind === 'test' ? 'test' : 'operation'} ${name} done` };
 }
 
+export interface PlannedTarget {
+	collection: 'manufacturing_operations' | 'test_sessions';
+	ids: string[];
+	title: string;
+}
+
+/**
+ * The card a Back to planned applies to (E6): a done container of records, none still in a draft. The rail does not know who owns it,
+ * so the button shows for every done container and the server (owner or admin only) refuses the rest, with the reason shown.
+ */
+export function plannedTargetOf(node: { type: string } | undefined): PlannedTarget | null {
+	if (node?.type !== 'container') return null;
+	const c = node as ContainerNode;
+	if (c.planned || c.draft || c.collapsed || !c.group.rowIds.length || c.group.rowIds.some((id) => id.startsWith('draft:'))) return null;
+	const name = c.stacked || c.group.batch ? c.title : c.code || c.title;
+	return { collection: c.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', ids: [...c.group.rowIds], title: `Set ${c.kind === 'test' ? 'test' : 'operation'} ${name} back to planned` };
+}
+
 export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
 	const { edit, map } = o;
 	const open = ref(false);
@@ -39,6 +57,25 @@ export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
 	const target = computed(() => (open.value && opened.value ? opened.value : selectedTarget.value));
 	/** The button shows for a planned card, when d1-build is there to do it. */
 	const canMarkDone = computed(() => !!selectedTarget.value && edit.available.value);
+	/** Back to planned shows for a done card (the server decides who may: its owner or an admin). */
+	const selectedPlanned = computed(() => plannedTargetOf(map.graph.value?.nodes.find((n) => n.id === map.selectedId.value)));
+	const canMarkPlanned = computed(() => !!selectedPlanned.value && edit.available.value);
+	const settingBack = ref(false);
+
+	/** Back to planned: at once, no dialog. A refusal (not the owner) is said in `error`, which the page shows. */
+	async function markPlanned(): Promise<void> {
+		const t = selectedPlanned.value;
+		if (!t || !canMarkPlanned.value || settingBack.value) return;
+		settingBack.value = true;
+		error.value = '';
+		try {
+			const out = await edit.draft.markPlanned({ collection: t.collection, ids: t.ids });
+			if (out.ok) map.reload();
+			else error.value = out.message;
+		} finally {
+			settingBack.value = false;
+		}
+	}
 
 	function show(): void {
 		if (!canMarkDone.value) return;
@@ -73,5 +110,5 @@ export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
 		}
 	}
 
-	return { open, busy, checks, error, target, canMarkDone, show, cancel, confirm };
+	return { open, busy, checks, error, target, canMarkDone, show, cancel, confirm, canMarkPlanned, markPlanned, settingBack };
 }

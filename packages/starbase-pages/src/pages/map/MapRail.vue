@@ -42,6 +42,8 @@ const props = defineProps<{
 	drawnReach?: Reach;
 	/** The selected card is a planned operation or test that can be marked done (E6): the button shows, in view mode and on phones too. */
 	canMarkDone?: boolean;
+	/** The selected card is a done operation or test: Back to planned shows (the server decides who may; a refusal is said on the page). */
+	canMarkPlanned?: boolean;
 }>();
 const emit = defineEmits<{
 	expand: [];
@@ -53,6 +55,7 @@ const emit = defineEmits<{
 	setStack: [on: boolean];
 	setReach: [reach: Reach];
 	markDone: [];
+	markPlanned: [];
 }>();
 
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
@@ -139,6 +142,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 				<v-button v-if="onMap && !isDraft" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 				<v-button v-if="canMarkDone" small @click="emit('markDone')"><v-icon name="done" small left />Mark done</v-button>
+				<v-button v-if="canMarkPlanned" small secondary @click="emit('markPlanned')"><v-icon name="undo" small left />Back to planned</v-button>
 			</template>
 			<template v-if="drawable || (preview && preview.kind !== 'none') || showComposition" #extra>
 				<SampleGeometry v-if="drawable" :dims="dims" aria-hidden="true" />
