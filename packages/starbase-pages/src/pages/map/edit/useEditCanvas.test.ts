@@ -7,6 +7,7 @@ import { fakeServer, settle } from './fakeBuildServer';
 import type { MenuTarget } from './menuTarget';
 import { encodeSocket, type SocketRef } from './socketRefs';
 import { CLICK_SLOP, canvasEditOf, useEditCanvas } from './useEditCanvas';
+import { dropVerdict } from './wireDrop';
 import { useEditMode } from './useEditMode';
 
 // The pointer on sockets, in a node environment: window, document and the canvas element are small stand-ins that record what is
@@ -324,16 +325,55 @@ describe('badges and ＋ output', () => {
 		expect(ec.mapEdit.badge(card)).toMatchObject({ level: 'warn', text: expect.stringMatching(/Changed since you added it/) });
 	});
 
-	it('offer ＋ output on a new operation that is not a stack, and add the row', async () => {
-		const { ec, edit, map } = await setup(twoCards());
+	it('lists the sockets of a card that have a wire, from the drawn graph', async () => {
+		const { ec, map } = await setup(twoCards());
+		(map as unknown as { graph: { value: { nodes: MapNode[]; wires: unknown[] } } }).graph.value.wires = [
+			{ id: 'w1', from: 's:a:out:0', to: 'op:b:in:0' },
+			{ id: 'w2', from: 'op:b:out:0', to: 's:c:in:0' },
+		];
 		const op = container('draft:n3');
-		(map as unknown as { graph: { value: { nodes: MapNode[] } } }).graph.value.nodes.push(op);
-		expect(ec.mapEdit.canAddRow(op)).toBe(true);
-		expect(ec.mapEdit.canAddRow(container('draft:n3', { stacked: true }))).toBe(false);
-		expect(ec.mapEdit.canAddRow(container('recorded'))).toBe(false);
-		ec.mapEdit.addRow(op.id);
-		const item = edit.body.value.items.find((i) => i.key === 'n2');
-		expect(item?.kind === 'operation' && item.rows).toHaveLength(2);
+		const wired = ec.mapEdit.wiredSockets({ ...op, id: 'op:b' });
+		expect([...wired].sort()).toEqual(['op:b:in:0', 'op:b:out:0']);
+		expect([...ec.mapEdit.wiredSockets({ ...op, id: 'op:z' })]).toEqual([]);
+	});
+
+	it('a connection to a free socket that stands for a new row adds the row and wires it, as one undoable step', async () => {
+		// n1 sample → n2 (row n3) → n4 sample; every row has its wire: the free sockets add rows.
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addSample' },
+		]);
+		const { ec, edit } = await setup(body);
+		const v = dropVerdict(edit.body.value, { kind: 'row', id: 'draft:n3', side: 'out', add: true }, { kind: 'sample', id: 'draft:n5', side: 'in' });
+		expect(v.ok).toBe(true);
+		expect(await ec.connect(v)).toBe(true);
+		const op = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(op?.kind === 'operation' && op.rows).toHaveLength(2);
+		// The new piece shares the one sample going in, and makes the sample it was wired to.
+		expect(edit.body.value.wires).toContainEqual({ from: { key: 'n1' }, to: { key: 'n2', row: 1 } });
+		expect(edit.body.value.wires).toContainEqual({ from: { key: 'n2', row: 1 }, to: { key: 'n5' } });
+		edit.undo();
+		const back = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(back?.kind === 'operation' && back.rows).toHaveLength(1);
+		expect(edit.body.value.wires).toHaveLength(2);
+	});
+
+	it('a connection to a free input that adds a row gives the new row its own sample, not the first row\'s', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample' },
+		]);
+		const { ec, edit } = await setup(body);
+		const v = dropVerdict(edit.body.value, { kind: 'sample', id: 'draft:n4', side: 'out' }, { kind: 'row', id: 'draft:n3', side: 'in', add: true });
+		expect(v.ok).toBe(true);
+		expect(await ec.connect(v)).toBe(true);
+		expect(edit.body.value.wires).toEqual([
+			{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } },
+			{ from: { key: 'n4' }, to: { key: 'n2', row: 1 } },
+		]);
 	});
 });
 

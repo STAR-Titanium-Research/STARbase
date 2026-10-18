@@ -148,12 +148,12 @@ describe('removing a wire', () => {
 		const g = graphOf(null, body);
 		const into = g.wires.find((w) => w.to.startsWith('op:draft:n3:in'))!;
 		const v = unwireVerdict(body, g, into.id);
-		expect(v).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }] });
+		expect(v).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }], rows: [] });
 		const after = unwireActions(v as never).reduce((b, a) => apply(b, a), body);
 		expect(after.wires).toEqual([{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }]);
 		const out = g.wires.find((w) => w.from.startsWith('op:draft:n3:out'))!;
 		const vo = unwireVerdict(body, g, out.id);
-		expect(vo).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }] });
+		expect(vo).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }], rows: [] });
 	});
 
 	it('the way back to the sample goes with the way in (an operation in place on it)', () => {
@@ -168,8 +168,8 @@ describe('removing a wire', () => {
 
 	it('the wire into an input socket goes (a wire end dragged off its socket), for a sample made by an operation too', () => {
 		const body = built();
-		expect(unwireEnd(body, { key: 'n2', row: 0 })).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }] });
-		expect(unwireEnd(body, { key: 'n4' })).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }] });
+		expect(unwireEnd(body, { key: 'n2', row: 0 })).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }], rows: [] });
+		expect(unwireEnd(body, { key: 'n4' })).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }], rows: [] });
 		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
 		expect(unwireEnd(emptyBody(), { key: 'zz' })).toMatchObject({ ok: false });
 	});
@@ -299,5 +299,45 @@ describe('dissolve', () => {
 			const after = v.actions.reduce((b, a) => apply(b, a), body);
 			expect(after.wires.filter((w) => w.from.key === 'n1')).toHaveLength(2);
 		}
+	});
+});
+
+describe('a wire taken off a piece of a cut', () => {
+	const cut = () =>
+		run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 2, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addSample', from: { key: 'n2', row: 1 } },
+		]);
+
+	it('takes the piece with it: a socket nothing leaves is not kept', () => {
+		const body = cut();
+		const v = unwireEnd(body, { key: 'n6' });
+		expect(v).toMatchObject({ ok: true, rows: [{ key: 'n2', row: 1 }] });
+		if (!v.ok) return;
+		const after = unwireActions(v).reduce((b, a) => apply(b, a), body);
+		const op = after.items.find((i) => i.key === 'n2') as { rows: unknown[] };
+		expect(op.rows).toHaveLength(1);
+		expect(after.wires).toEqual([
+			{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } },
+			{ from: { key: 'n2', row: 0 }, to: { key: 'n5' } },
+		]);
+		// One undo step brings the piece, its input and its output wire back.
+		let h = push(createHistory(body), after);
+		h = undo(h);
+		expect(h.present).toBe(body);
+	});
+
+	it('never takes the last piece, and an operation of one piece keeps its row', () => {
+		const body = cut();
+		const both = unwireEnd(unwireActions(unwireEnd(body, { key: 'n6' }) as never).reduce((b, a) => apply(b, a), body), { key: 'n5' });
+		expect(both).toMatchObject({ ok: true, rows: [] });
+		const single = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
+		expect(unwireEnd(single, { key: 'n4' })).toMatchObject({ ok: true, rows: [] });
+	});
+
+	it('an input wire taken off does not take the piece: it still has its output', () => {
+		expect(unwireEnd(cut(), { key: 'n2', row: 1 })).toMatchObject({ ok: true, rows: [] });
 	});
 });

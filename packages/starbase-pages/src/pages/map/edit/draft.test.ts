@@ -539,3 +539,43 @@ describe('orderedRows (the order Create writes operations)', () => {
 		expect(orderedRows(looped).map((r) => r.rowKey)).toEqual(['n2', 'n4']);
 	});
 });
+
+describe('rows of a new operation: a socket nobody uses is not kept (R5)', () => {
+	const cut = (rows = 3) => run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows, from: { key: 'n1' } }]);
+
+	it('an added row shares the input by default, and not when asked', () => {
+		const shared = apply(cut(1), { type: 'addOutputRow', key: 'n2' });
+		expect(shared.wires.filter((w) => w.to.key === 'n2').map((w) => w.to.row)).toEqual([0, 1]);
+		const own = apply(cut(1), { type: 'addOutputRow', key: 'n2', share: false });
+		expect(own.wires.filter((w) => w.to.key === 'n2').map((w) => w.to.row)).toEqual([0]);
+		expect((own.items.find((i) => i.key === 'n2') as { rows: unknown[] }).rows).toHaveLength(2);
+	});
+
+	it('removing a row takes its wires and moves the rows after it up', () => {
+		let b = cut(3);
+		b = apply(b, { type: 'addSample', from: { key: 'n2', row: 1 } });
+		b = apply(b, { type: 'addSample', from: { key: 'n2', row: 2 } });
+		const sample1 = b.items.find((i) => i.key === 'n6')!.key;
+		const sample2 = b.items.find((i) => i.key === 'n7')!.key;
+		const after = apply(b, { type: 'removeRow', key: 'n2', row: 1 });
+		const op = after.items.find((i) => i.key === 'n2') as { rows: { key: string }[] };
+		expect(op.rows.map((r) => r.key)).toEqual(['n3', 'n5']);
+		expect(after.wires.some((w) => w.to.key === sample1 || w.from.key === sample1)).toBe(false);
+		// Row 2 is row 1 now, with its sample and its input.
+		expect(after.wires).toContainEqual({ from: { key: 'n2', row: 1 }, to: { key: sample2 } });
+		expect(after.wires).toContainEqual({ from: { key: 'n1' }, to: { key: 'n2', row: 1 } });
+		expect(after.wires.filter((w) => w.to.key === 'n2')).toHaveLength(2);
+		expect(after.wires.every((w) => (w.from.row ?? 0) < 2 && (w.to.row ?? 0) < 2)).toBe(true);
+	});
+
+	it('never removes the last row, a row that is not there, a row of a record that exists, or of a card that is not an operation', () => {
+		const one = cut(1);
+		expect(apply(one, { type: 'removeRow', key: 'n2', row: 0 })).toBe(one);
+		const three = cut(3);
+		expect(apply(three, { type: 'removeRow', key: 'n2', row: 3 })).toBe(three);
+		expect(apply(three, { type: 'removeRow', key: 'n2', row: -1 })).toBe(three);
+		expect(apply(three, { type: 'removeRow', key: 'n1', row: 0 })).toBe(three);
+		const rec = run([{ type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 1 }, workState: 'planned' }]);
+		expect(apply(rec, { type: 'removeRow', key: 'n1', row: 0 })).toBe(rec);
+	});
+});

@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref } from 'vue';
+import type { DraftBody } from '@d1/ui';
+import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
 import type { MenuTarget } from './menuTarget';
 import { useAddMenu } from './useAddMenu';
 import { useEditCanvas } from './useEditCanvas';
 import { useEditMode } from './useEditMode';
 
-async function setup(editing = true) {
+async function setup(editing = true, body?: DraftBody) {
 	const server = fakeServer();
-	server.s.seed('d');
+	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
 	const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace: vi.fn() }, isPhone: ref(!editing), focus: () => null });
 	await settle();
@@ -104,5 +106,47 @@ describe('the Add menu\'s state', () => {
 		const { menu, edit } = await setup();
 		await menu.choose({ kind: 'newSample' });
 		expect(edit.body.value.items).toHaveLength(0);
+	});
+});
+
+describe('the Add menu on a free socket that adds a row (R5)', () => {
+	const run = (actions: DraftAction[]): DraftBody => actions.reduce((b, a) => apply(b, a), emptyBody());
+	const body = () =>
+		run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+		]);
+
+	it('a new sample from it adds the piece and the sample as one step; undo takes both', async () => {
+		const { menu, edit } = await setup(true, body());
+		menu.open({ sock: { kind: 'row', id: 'draft:n3', side: 'out', add: true }, at: { x: 300, y: 200 }, anchor: 'card' });
+		await menu.choose({ kind: 'newSample' });
+		const op = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(op?.kind === 'operation' && op.rows).toHaveLength(2);
+		const made = edit.body.value.items.filter((i) => i.kind === 'sample');
+		expect(made).toHaveLength(3);
+		expect(edit.body.value.wires).toContainEqual({ from: { key: 'n2', row: 1 }, to: { key: made[2].key } });
+		edit.undo();
+		const back = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(back?.kind === 'operation' && back.rows).toHaveLength(1);
+		expect(edit.body.value.items.filter((i) => i.kind === 'sample')).toHaveLength(2);
+	});
+
+	it('a sample from the free input is wired to a new row of its own', async () => {
+		const { menu, edit } = await setup(true, body());
+		menu.open({ sock: { kind: 'row', id: 'draft:n3', side: 'in', add: true }, at: { x: 300, y: 200 }, anchor: 'card' });
+		await menu.choose({ kind: 'newSample' });
+		const op = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(op?.kind === 'operation' && op.rows).toHaveLength(2);
+		expect(edit.body.value.wires.filter((w) => w.to.key === 'n2').map((w) => w.to.row)).toEqual([0, 1]);
+	});
+
+	it('does nothing when the card cannot take a row', async () => {
+		const rec = run([{ type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 1 }, workState: 'planned' }]);
+		const { menu, edit } = await setup(true, rec);
+		menu.open({ sock: { kind: 'row', id: 'op-1', side: 'out', add: true }, at: { x: 1, y: 1 } });
+		await menu.choose({ kind: 'newSample' });
+		expect(edit.body.value).toBe(rec);
 	});
 });

@@ -41,7 +41,14 @@ export type DraftAction =
 	| { type: 'addExisting'; kind: 'operation' | 'test'; record: { id: string; version: number }; workState: WorkState; at?: Pos }
 	| { type: 'addContainer'; kind: 'operation' | 'test'; source: ContainerSource; workState?: WorkState; rows?: number; at?: Pos; from?: WireEnd }
 	| { type: 'attach'; operation: { id: string; version: number }; workState: WorkState; values?: Record<string, unknown>; at?: Pos; from?: WireEnd }
-	| { type: 'addOutputRow'; key: DraftKey }
+	/**
+	 * One more row of a new operation: a cut piece, or one more sample in a batch. `share` (default true) gives it the first row's input
+	 * sample (every piece of a cut has the one sample in); `false` leaves its input free (a batch over several samples). The page does
+	 * this when a wire is connected to a free socket that stands for a new row: nothing about sockets is kept in the draft.
+	 */
+	| { type: 'addOutputRow'; key: DraftKey; share?: boolean }
+	/** Takes a row of a new operation away again (with its wires); the rows after it move up. Never the last row. */
+	| { type: 'removeRow'; key: DraftKey; row: number }
 	| {
 			type: 'addPass';
 			/** The sample the pass is done on: one already in the draft, or an existing one (added to the draft). */
@@ -521,8 +528,26 @@ export function apply(body: DraftBody, action: DraftAction): DraftBody {
 			const next: DraftOperation = { ...op, rows: [...op.rows, { key: rowKey }] };
 			w.body.items[w.body.items.indexOf(op)] = next;
 			// Every record of a cut has the one sample as its input: the new row takes it too.
-			const first = wireInto(body, op.key, 0);
+			const first = action.share === false ? undefined : wireInto(body, op.key, 0);
 			if (first) w.body.wires.push({ from: { ...first.from }, to: { key: op.key, row: next.rows.length - 1 } });
+			return w.body;
+		}
+		case 'removeRow': {
+			const op = itemOf(body, action.key);
+			if (op?.kind !== 'operation' || op.existing || op.rows.length < 2 || action.row < 0 || action.row >= op.rows.length) return body;
+			const w = copyBody(body);
+			w.body.items[w.body.items.indexOf(op)] = { ...op, rows: op.rows.filter((_, i) => i !== action.row) };
+			// The wires of the row go; those of the rows after it keep their sockets, which are one row nearer now.
+			const shift = (e: WireEnd): WireEnd | null => {
+				if (e.key !== op.key) return e;
+				const row = e.row ?? 0;
+				return row === action.row ? null : { key: e.key, row: row > action.row ? row - 1 : row };
+			};
+			w.body.wires = body.wires.flatMap((x) => {
+				const from = shift(x.from);
+				const to = shift(x.to);
+				return from && to ? [{ from, to }] : [];
+			});
 			return w.body;
 		}
 		case 'addPass': {

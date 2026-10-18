@@ -1,6 +1,10 @@
 // Edit mode on the canvas (spec E8, E9, §7.2): what a click or a drag on a socket does, the red badges, ＋ output, and where the draft keeps
 // its cards. The node components only draw buttons and report pointer events (nodes/actions.ts, MapEdit); this decides.
 //
+// Sockets are derived (R5): a card draws a socket for each wire it has and one free one on each side while it is selected (or has nothing
+// wired on that side). Nothing about them is in the draft. A wire connected to the free socket of an operation that has a wire on every
+// row adds the row it stands for, in the same step (`connectActions`).
+//
 // A click on a socket (a pointer that did not move) opens the Add menu there. A drag draws a wire preview that follows the pointer
 // and marks the socket it is over green when the draft takes the wire and red when it does not (with the reducer's reason as a
 // tooltip); dropped on a socket that fits it makes the wire, dropped on empty canvas it opens the Add menu at that point, and
@@ -9,14 +13,15 @@
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import type { DraftKey } from '@d1/ui';
 import type { MapEdit } from '../nodes/actions';
+import { nodeOfSocket } from '../model/sockets';
 import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { blocking, warnings } from './checks';
 import type { MenuTarget } from './menuTarget';
-import { decodeSocket, draftKeysOfNode, encodeSocket, nearestSocket, newOperationOf, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
+import { decodeSocket, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
 import type { EditMode } from './useEditMode';
-import { dropVerdict, wireOf, type DropVerdict } from './wireDrop';
+import { connectActions, dropVerdict, type DropVerdict } from './wireDrop';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
 type Canvas = ReturnType<typeof useMapCanvas>;
@@ -119,10 +124,11 @@ export function useEditCanvas(o: {
 			if (!(await ensureSample(s.id, { merge: folded }))) return false;
 			if (!had) folded = true;
 		}
-		const wire = wireOf(edit.body.value, v);
-		if (!wire) return false;
+		// The row a free socket stands for (when one does) and the wire: one step.
+		const actions = connectActions(edit.body.value, v);
+		if (!actions) return false;
 		const before = edit.body.value;
-		edit.apply({ type: 'wire', ...wire }, { anchor, merge: folded });
+		edit.apply(actions, { anchor, merge: folded });
 		return edit.body.value !== before;
 	}
 
@@ -250,16 +256,17 @@ export function useEditCanvas(o: {
 		const soft = warned.value.filter((c) => keys.includes(c.key));
 		return soft.length ? { count: soft.length, text: soft.map((c) => c.text).join(' '), level: 'warn' } : null;
 	}
-	const canAddRow = (node: MapNode): boolean => node.type === 'container' && node.kind === 'operation' && !node.stacked && !!newOperationOf(edit.body.value, draftKeysOfNode(edit.body.value, node)[0] ?? null);
-	function addRow(nodeId: string): void {
-		const node = nodeById(nodeId);
-		const key = node ? draftKeysOfNode(edit.body.value, node)[0] : undefined;
-		if (!key || !canAddRow(node!)) return;
-		// The card grows: the layout that follows measures it again and pushes the cards it now lies on (placeMerged).
-		edit.apply({ type: 'addOutputRow', key }, { anchor: nodeId });
+	/** The sockets of a card that have a wire: the rest are spare, and a card shows at most one free one per side (R5). */
+	function wiredSockets(node: MapNode): ReadonlySet<string> {
+		const out = new Set<string>();
+		for (const w of map.graph.value?.wires ?? []) {
+			if (nodeOfSocket(w.from) === node.id) out.add(w.from);
+			if (nodeOfSocket(w.to) === node.id) out.add(w.to);
+		}
+		return out;
 	}
 
-	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, addRow, canAddRow };
+	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

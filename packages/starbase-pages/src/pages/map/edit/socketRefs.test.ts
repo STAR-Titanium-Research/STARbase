@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
 import type { ContainerNode, MapNode, RecordNode } from '../model/types';
-import { decodeSocket, draftKeyOfNode, encodeSocket, isDraftNode, nearestSocket, newOperationOf, resolveEnd, rowItemOf, rowRecordId, sampleItemOf } from './socketRefs';
+import { decodeSocket, draftKeyOfNode, encodeSocket, grown, isDraftNode, nearestSocket, newOperationOf, resolveEnd, rowItemOf, rowRecordId, sampleItemOf } from './socketRefs';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
@@ -140,5 +140,45 @@ describe('the socket under the pointer', () => {
 		expect(nearestSocket(spots, 200, 200)).toBeNull();
 		expect(nearestSocket([], 0, 0)).toBeNull();
 		expect(nearestSocket(spots, 100, 120, 18)).toBeNull();
+	});
+});
+
+describe('a socket that adds a row (R5)', () => {
+	const op = (): DraftBody =>
+		run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+		]);
+
+	it('round-trips through the attribute with its extra word', () => {
+		const s = { kind: 'row', id: 'draft:n3', side: 'out', add: true } as const;
+		expect(encodeSocket(s)).toBe('row|draft:n3|out|add');
+		expect(decodeSocket(encodeSocket(s))).toEqual(s);
+		expect(decodeSocket('row|draft:n3|out|more')).toBeNull();
+		expect(decodeSocket('row|draft:n3|out|add|x')).toBeNull();
+		expect(decodeSocket('row|draft:n3|out')).toEqual({ kind: 'row', id: 'draft:n3', side: 'out' });
+	});
+
+	it('is the draft with the row it stands for: an output piece shares the input, a new input does not', () => {
+		const b = op();
+		const out = grown(b, { kind: 'row', id: 'draft:n3', side: 'out', add: true });
+		expect(out?.action).toEqual({ type: 'addOutputRow', key: 'n2', share: true });
+		expect(out?.body.wires.filter((w) => w.to.key === 'n2')).toHaveLength(2);
+		const inn = grown(b, { kind: 'row', id: 'draft:n3', side: 'in', add: true });
+		expect(inn?.action).toEqual({ type: 'addOutputRow', key: 'n2', share: false });
+		expect(inn?.body.wires.filter((w) => w.to.key === 'n2')).toHaveLength(1);
+		// The socket then means the new row.
+		expect(resolveEnd(out!.body, { kind: 'row', id: 'draft:n3', side: 'out', add: true })).toEqual({ key: 'n2', row: 1 });
+		// Where nothing is added, the body is as it is.
+		const same = grown(b, { kind: 'row', id: 'draft:n3', side: 'out' });
+		expect(same).toEqual({ body: b, action: null });
+	});
+
+	it('cannot be added to a record that exists, a test or a card that is not there', () => {
+		const rec = run([{ type: 'addExisting', kind: 'operation', record: { id: 'op-1', version: 1 }, workState: 'planned' }]);
+		expect(grown(rec, { kind: 'row', id: 'op-1', side: 'out', add: true })).toBeNull();
+		expect(grown(op(), { kind: 'row', id: 'draft:zz', side: 'out', add: true })).toBeNull();
+		expect(grown(op(), { kind: 'sample', id: 'draft:n1', side: 'out', add: true })).toBeNull();
 	});
 });

@@ -164,10 +164,41 @@ export function unwireEnd(body: DraftBody, end: WireEnd): UnwireVerdict {
 	const into = body.wires.filter((w) => w.to.key === end.key && (itemOf(body, end.key)?.kind === 'operation' ? (w.to.row ?? 0) === (end.row ?? 0) : true));
 	// A wire back to the sample an operation took in is not a wire the person drew into the sample.
 	const real = into.filter((w) => !(itemOf(body, w.from.key)?.kind === 'operation' && itemOf(body, w.to.key)?.kind === 'sample' && inputSampleOf(body, { key: w.from.key, row: w.from.row ?? 0 }) === w.to.key));
-	return real.length ? { ok: true, wires: withBackEdges(body, real) } : { ok: false, reason: 'Nothing is wired to that socket.', locked: false };
+	if (!real.length) return { ok: false, reason: 'Nothing is wired to that socket.', locked: false };
+	const wires = withBackEdges(body, real);
+	return { ok: true, wires, rows: spareRows(body, wires) };
 }
 
-export type UnwireVerdict = { ok: true; wires: { from: WireEnd; to: WireEnd }[] } | { ok: false; reason: string; locked: boolean };
+export type UnwireVerdict =
+	| {
+			ok: true;
+			wires: { from: WireEnd; to: WireEnd }[];
+			/** Output rows of a new operation that nothing leaves any more: a socket nobody uses is not kept, so the row goes (never the last one). */
+			rows: { key: DraftKey; row: number }[];
+	  }
+	| { ok: false; reason: string; locked: boolean };
+
+/** The output rows left with no wire once `gone` are off: more than one row, so a row is a piece that nothing comes out of any more. */
+function spareRows(body: DraftBody, gone: { from: WireEnd; to: WireEnd }[]): { key: DraftKey; row: number }[] {
+	const same = (a: WireEnd, b: WireEnd) => a.key === b.key && (a.row ?? 0) === (b.row ?? 0);
+	const candidates: { key: DraftKey; row: number }[] = [];
+	for (const w of gone) {
+		const op = itemOf(body, w.from.key);
+		if (op?.kind !== 'operation' || op.existing || op.rows.length < 2) continue;
+		const row = w.from.row ?? 0;
+		if (itemOf(body, w.to.key)?.kind !== 'sample' || candidates.some((c) => c.key === op.key && c.row === row)) continue;
+		const left = body.wires.some((x) => same(x.from, { key: op.key, row }) && !gone.some((g) => same(g.from, x.from) && same(g.to, x.to)));
+		if (!left) candidates.push({ key: op.key, row });
+	}
+	// One operation never loses every row: when they would all go, the first of them stays.
+	const out: { key: DraftKey; row: number }[] = [];
+	for (const key of new Set(candidates.map((c) => c.key))) {
+		const mine = candidates.filter((c) => c.key === key);
+		const rows = (itemOf(body, key) as DraftOperation).rows.length;
+		out.push(...(mine.length >= rows ? mine.slice(1) : mine));
+	}
+	return out.sort((a, b) => b.row - a.row);
+}
 
 /**
  * What removing the drawn wire `wireId` does: the draft's wires between those two cards go (and the way back to the sample, when the
@@ -180,7 +211,10 @@ export function unwireVerdict(body: DraftBody, graph: ProcessGraph, wireId: stri
 	const from = nodeOfSocket(wire.from);
 	const to = nodeOfSocket(wire.to);
 	const hits = body.wires.filter((w) => nodeOfEnd(body, graph, w.from) === from && nodeOfEnd(body, graph, w.to) === to);
-	if (hits.length) return { ok: true, wires: withBackEdges(body, hits) };
+	if (hits.length) {
+		const wires = withBackEdges(body, hits);
+		return { ok: true, wires, rows: spareRows(body, wires) };
+	}
 	const nodes = byId(graph);
 	const ends = [nodes.get(from), nodes.get(to)].filter((n): n is MapNode => !!n);
 	// Done wiring is a wire between records that are done; a wire with a planned end is that planned record's (remove it instead).
@@ -189,7 +223,11 @@ export function unwireVerdict(body: DraftBody, graph: ProcessGraph, wireId: stri
 }
 
 /** The actions that take those wires off, as one step. */
-export const unwireActions = (v: Extract<UnwireVerdict, { ok: true }>): DraftAction[] => v.wires.map((w) => ({ type: 'unwire' as const, from: w.from, to: w.to }));
+export const unwireActions = (v: Extract<UnwireVerdict, { ok: true }>): DraftAction[] => [
+	...v.wires.map((w) => ({ type: 'unwire' as const, from: w.from, to: w.to })),
+	// Highest row first, so the rows still to go keep their numbers.
+	...v.rows.map((r) => ({ type: 'removeRow' as const, key: r.key, row: r.row })),
+];
 
 // ---- dissolve ------------------------------------------------------------------------------------
 

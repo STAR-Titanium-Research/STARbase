@@ -8,6 +8,7 @@ import { toGraph } from '../edit/toGraph';
 import { buildGraph } from '../model/buildGraph';
 import { groupBatches } from '../model/groupBatches';
 import type { ContainerNode as ContainerData, MapNode, RecordNode as RecordData } from '../model/types';
+import { nodeOfSocket } from '../model/sockets';
 import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, editSocketProps, type MapActions, type MapEdit } from './actions';
 import ContainerNode from './ContainerNode.vue';
 import RecordNode from './RecordNode.vue';
@@ -27,10 +28,17 @@ const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('
 const noop: MapActions = { select() {}, expand() {}, hover() {}, toggleRows() {}, toggleMore() {} };
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
-const nodesOf = (body: DraftBody): MapNode[] => {
+const graphOf = (body: DraftBody) => {
 	const data = toGraph(null, body);
 	const groups = groupBatches(data.operations, data.tests, { probable: false, stack: true });
-	return buildGraph(data, groups, { slots: () => [] }).nodes;
+	return buildGraph(data, groups, { slots: () => [] });
+};
+const nodesOf = (body: DraftBody): MapNode[] => graphOf(body).nodes;
+/** `wiredSockets` as the page has it: the sockets of a card that a wire of the drawn graph touches. */
+const wiredBy = (body: DraftBody) => (n: MapNode): ReadonlySet<string> => {
+	const out = new Set<string>();
+	for (const w of graphOf(body).wires) for (const s of [w.from, w.to]) if (nodeOfSocket(s) === n.id) out.add(s);
+	return out;
 };
 const samples = (body: DraftBody) => nodesOf(body).filter((n): n is RecordData => n.type === 'record' && n.kind === 'sample');
 const containers = (body: DraftBody) => nodesOf(body).filter((n): n is ContainerData => n.type === 'container');
@@ -45,8 +53,7 @@ function edit(over: Partial<MapEdit> = {}): MapEdit & { calls: unknown[][] } {
 		socketKey: (...a) => void calls.push(['key', ...a]),
 		socketClick: (...a) => void calls.push(['click', ...a]),
 		badge: () => null,
-		addRow: (id) => void calls.push(['addRow', id]),
-		canAddRow: () => false,
+		wiredSockets: () => new Set(),
 		selectedWire: ref(null),
 		selectWire: (id) => void calls.push(['selectWire', id]),
 		lockOf: () => null,
@@ -77,28 +84,47 @@ describe('a draft card is not a record yet', () => {
 });
 
 describe('a sample card in edit mode', () => {
-	it('has an output to build from, and a free input when a new sample has nothing making it', async () => {
+	it('has a free output to build from, and a free input when a new sample has nothing making it', async () => {
 		const [s] = samples(run([{ type: 'addSample' }]));
 		const html = await render(RecordNode, { id: s.id, data: s }, edit());
-		expect(socks(html)).toContain('sample|draft:n1|out');
-		expect(socks(html)).toContain('sample|draft:n1|in');
-		expect(freeButtons(html)).toHaveLength(1);
+		expect(socks(html).sort()).toEqual(['sample|draft:n1|in', 'sample|draft:n1|out']);
+		expect(freeButtons(html)).toHaveLength(2);
 		expect(html).toContain('Free input of New sample');
+		expect(html).toContain('Free output of New sample');
 	});
 
-	it('has no free input once an operation makes it (the input is a socket already, a place to drop)', async () => {
+	it('shows the socket of each wire, and a free one on a side only while selected (R5)', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
 		const made = samples(body).find((s) => s.ref.id === 'draft:n4')!;
-		const html = await render(RecordNode, { id: made.id, data: made }, edit());
-		expect(freeButtons(html)).toHaveLength(0);
-		expect(socks(html)).toContain('sample|draft:n4|in');
+		const e = edit({ wiredSockets: wiredBy(body) });
+		// Made by an operation: its input is a wire's socket already, its output has none: only that one is free.
+		const idle = await render(RecordNode, { id: made.id, data: made, selected: false }, e);
+		expect(freeButtons(idle)).toHaveLength(1);
+		expect(idle).toContain('Free output of');
+		expect(socks(idle).sort()).toEqual(['sample|draft:n4|in', 'sample|draft:n4|out']);
+		// Selected: a free input beside the wired one too.
+		const picked = await render(RecordNode, { id: made.id, data: made, selected: true }, e);
+		expect(freeButtons(picked)).toHaveLength(2);
+		expect(socks(picked).filter((s) => s.endsWith('|in'))).toHaveLength(2);
+	});
+
+	it('a sample with a wire out keeps its socket and a free one beside it only while selected', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const [s] = samples(body);
+		const e = edit({ wiredSockets: wiredBy(body) });
+		const idle = await render(RecordNode, { id: s.id, data: s, selected: false }, e);
+		expect(freeButtons(idle).filter((b) => b.includes('Free output'))).toHaveLength(0);
+		expect(idle).toMatch(/data-id="s:draft:n1:out:0"/);
+		const picked = await render(RecordNode, { id: s.id, data: s, selected: true }, e);
+		expect(picked).toContain('Free output of');
+		expect(picked).toMatch(/data-id="s:draft:n1:out:0"/);
 	});
 
 	it('offers the output of a sample of the loaded history too (the page adds it to the draft on first use), but no input', async () => {
 		const old: RecordData = { id: 's:old', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 'old', code: 'S-1' }, ins: ['s:old:in:0'], outs: ['s:old:out:0'] };
 		const html = await render(RecordNode, { id: old.id, data: old }, edit());
 		expect(socks(html)).toEqual(['sample|old|out']);
-		expect(freeButtons(html)).toHaveLength(0);
+		expect(freeButtons(html)).toHaveLength(1);
 	});
 
 	it('offers nothing to build from on a card that is not a sample', async () => {
@@ -130,7 +156,7 @@ describe('a container in edit mode', () => {
 		expect(c.draft).toBe(true);
 		const html = await render(ContainerNode, { id: c.id, data: c }, edit());
 		expect(socks(html)).toEqual(['row|draft:n2|in', 'row|draft:n2|out']);
-		expect(freeButtons(html)).toHaveLength(1);
+		expect(freeButtons(html)).toHaveLength(2); // nothing is wired: a free socket on each side, none more
 		expect(html).toContain('rail-sock in free'); // on the rail, at the left edge
 		expect(html).toContain('Makes 1 sample');
 	});
@@ -142,30 +168,58 @@ describe('a container in edit mode', () => {
 		expect(freeButtons(html)).toHaveLength(1);
 	});
 
-	it('keeps the sockets of a wired row as sockets, and gives the free side a button', async () => {
+	it('keeps the socket of a wire as a socket, and a side with nothing on it gets the one free button', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
 		const [c] = containers(body);
 		expect(c.rows[0].in).toBeTruthy();
-		const html = await render(ContainerNode, { id: c.id, data: c }, edit());
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ wiredSockets: wiredBy(body) }));
 		expect(socks(html)).toEqual(['row|draft:n3|in', 'row|draft:n3|out']);
-		expect(freeButtons(html)).toHaveLength(0); // its output is a Handle with nothing on it, an input with the wire on it
+		expect(html).toMatch(/data-id="op:draft:n3:in:0"/); // the input has its wire: a socket of its own
+		expect(freeButtons(html)).toHaveLength(1); // the output has none: the free one, and no spare Handle beside it
+		expect(html).not.toMatch(/data-id="op:draft:n3:out:0"/);
 	});
 
-	it('gives each row of a cut its own sockets', async () => {
+	it('draws one free output for a cut whose pieces have no wire yet, not one per piece', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 3, from: { key: 'n1' } }]);
 		const [c] = containers(body);
-		const html = await render(ContainerNode, { id: c.id, data: c }, edit());
-		const outs = socks(html).filter((s) => s.endsWith('|out'));
-		expect(outs).toEqual(['row|draft:n3|out', 'row|draft:n4|out', 'row|draft:n5|out']);
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ wiredSockets: wiredBy(body) }));
+		expect(socks(html).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out']);
+		expect(freeButtons(html)).toHaveLength(1);
 	});
 
-	it('offers ＋ output on a new operation, and runs it', async () => {
+	it('once a piece is wired its socket stays; the free one for the next piece shows while the card is selected', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 3, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+		]);
+		const [c] = containers(body);
+		const e = edit({ wiredSockets: wiredBy(body) });
+		const idle = await render(ContainerNode, { id: c.id, data: c, selected: false }, e);
+		expect(freeButtons(idle).filter((b) => b.includes(' out '))).toHaveLength(0);
+		expect(socks(idle).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out']);
+		const picked = await render(ContainerNode, { id: c.id, data: c, selected: true }, e);
+		expect(socks(picked).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out', 'row|draft:n4|out']);
+	});
+
+	it('has no ＋ output row: a connection to the free socket adds the piece', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]));
-		const e = edit({ canAddRow: () => true });
-		const html = await render(ContainerNode, { id: c.id, data: c }, e);
-		expect(html).toMatch(/class="rtoggle addrow[^"]*"[^>]*aria-label="Add an output"/);
-		expect(html).toContain('output');
-		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ canAddRow: () => false }))).not.toContain('addrow');
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit());
+		expect(html).not.toContain('addrow');
+		expect(html).not.toContain('Add an output');
+	});
+
+	it('when every row has a wire on a side, the selected card offers a free socket that adds a row', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+		]);
+		const [c] = containers(body);
+		const e = edit({ wiredSockets: wiredBy(body) });
+		expect(socks(await render(ContainerNode, { id: c.id, data: c, selected: false }, e))).toEqual(['row|draft:n3|in', 'row|draft:n3|out']);
+		const picked = socks(await render(ContainerNode, { id: c.id, data: c, selected: true }, e));
+		expect(picked).toEqual(['row|draft:n3|in', 'row|draft:n3|in|add', 'row|draft:n3|out', 'row|draft:n3|out|add']);
 	});
 
 	it('wears an amber badge when there are only warnings', async () => {

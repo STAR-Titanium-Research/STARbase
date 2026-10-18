@@ -66,9 +66,8 @@ export interface MapEdit {
 	socketClick(sock: SocketRef, e: MouseEvent): void;
 	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
 	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
-	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
-	addRow(nodeId: string): void;
-	canAddRow(node: MapNode): boolean;
+	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */
+	wiredSockets(node: MapNode): ReadonlySet<string>;
 	/** The wire the person selected to remove (a click on it), or null. */
 	selectedWire: Ref<string | null>;
 	selectWire(id: string): void;

@@ -71,3 +71,57 @@ describe('socketOwners', () => {
 		expect(socketOwners(test).has('op:t1:in:0')).toBe(true);
 	});
 });
+
+describe('derived sockets (R5): a socket per wire and one free one per side', () => {
+	const editing = { editable: true };
+	const wiredIn = new Set(['op:o1:in:0']);
+
+	it('a socket nobody wired is not drawn as one: the free socket stands for it', () => {
+		const node = con([{ recordId: 'draft:n3', in: 'op:o1:in:0', out: 'op:o1:out:0' }]);
+		const s = railSockets(node, 'out', { ...editing, wired: wiredIn });
+		expect(s).toEqual([{ id: 'free:out:draft:n3', fat: false, recordId: 'draft:n3', row: 0, free: true }]);
+		expect(ids(railSockets(node, 'in', { ...editing, wired: wiredIn }))).toEqual(['op:o1:in:0']);
+	});
+
+	it('shows a wired side as its sockets only, until the card is selected: then a free one is beside them', () => {
+		const node = con([{ recordId: 'draft:n3', in: 'op:o1:in:0', out: 'op:o1:out:0' }], { draft: true });
+		const wired = new Set(['op:o1:in:0', 'op:o1:out:0']);
+		expect(ids(railSockets(node, 'out', { ...editing, wired }))).toEqual(['op:o1:out:0']);
+		const picked = railSockets(node, 'out', { ...editing, wired, selected: true });
+		expect(ids(picked)).toEqual(['op:o1:out:0', 'free:out:+']);
+		// Every row has a wire: the free socket stands for a row that is not there yet (its recordId is the last row's).
+		expect(picked[1]).toMatchObject({ free: true, add: true, recordId: 'draft:n3', row: 1 });
+	});
+
+	it('has at most one free socket on a side, for the first row with no wire, however many have none', () => {
+		const node = con(['a', 'b', 'c'].map((r, i) => ({ recordId: r, in: 'op:o1:in:0', out: `op:o1:out:${i}` })), { draft: true });
+		const wired = new Set(['op:o1:in:0', 'op:o1:out:1']);
+		const outs = railSockets(node, 'out', { ...editing, wired, selected: true });
+		expect(ids(outs)).toEqual(['op:o1:out:1', 'free:out:a']);
+		expect(outs.filter((s) => s.free)).toHaveLength(1);
+	});
+
+	it('never adds a free socket that is not editable, to a deck of passes, to a recorded operation, or to a test output', () => {
+		const rows = [{ recordId: 'a', in: 'op:o1:in:0', out: 'op:o1:out:0' }];
+		const wired = new Set(['op:o1:in:0', 'op:o1:out:0']);
+		expect(ids(railSockets(con(rows, { draft: true }), 'out', { wired, selected: true }))).toEqual(['op:o1:out:0']);
+		expect(ids(railSockets(con(rows, { draft: true, stacked: true }), 'out', { ...editing, wired, selected: true }))).toEqual(['op:o1:out:0']);
+		expect(ids(railSockets(con(rows), 'out', { ...editing, wired, selected: true }))).toEqual(['op:o1:out:0']); // not a draft: it cannot grow
+		const test = con([{ recordId: 't1', in: 'op:t:in:0' }], { kind: 'test', draft: true });
+		expect(railSockets(test, 'out', { ...editing, wired: new Set(['op:t:in:0']), selected: true })).toEqual([]);
+	});
+
+	it('a test takes any number of samples: its free input is there when selected, even with every row wired', () => {
+		const test = con([{ recordId: 't1', in: 'op:t:in:0' }], { kind: 'test', draft: true });
+		const wired = new Set(['op:t:in:0']);
+		expect(ids(railSockets(test, 'in', { ...editing, wired }))).toEqual(['op:t:in:0']);
+		expect(ids(railSockets(test, 'in', { ...editing, wired, selected: true }))).toEqual(['op:t:in:0', 'free:in:t1']);
+	});
+
+	it('is the same, with nothing kept, whenever it is asked again', () => {
+		const node = con([{ recordId: 'draft:n3', in: 'op:o1:in:0', out: 'op:o1:out:0' }], { draft: true });
+		const o = { ...editing, wired: new Set(['op:o1:in:0']), selected: true };
+		expect(railSockets(node, 'out', o)).toEqual(railSockets(node, 'out', o));
+		expect(JSON.stringify(node)).not.toContain('free');
+	});
+});

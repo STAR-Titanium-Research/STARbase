@@ -6,7 +6,7 @@ import { shallowRef, type Ref } from 'vue';
 import type { useMapCanvas } from '../useMapCanvas';
 import { actionsFor, menuFor, type MenuChoice, type TemplateEntry } from './menuModel';
 import type { MenuTarget } from './menuTarget';
-import { resolveEnd, sampleItemOf } from './socketRefs';
+import { grown, resolveEnd, sampleItemOf } from './socketRefs';
 import type { EditMode } from './useEditMode';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
@@ -65,10 +65,13 @@ export function useAddMenu(o: {
 			if (!key) return;
 			resolved = { kind: 'wireSample', key };
 		}
-		const body = o.edit.body.value;
-		const f = menuFor(body, t.sock);
+		// A free socket that stands for a new row adds it first, in the same step.
+		const g = t.sock ? grown(o.edit.body.value, t.sock) : { body: o.edit.body.value, action: null };
+		if (!g) return;
+		const body = g.body;
+		const f = menuFor(o.edit.body.value, t.sock); // (it reads a socket that adds a row as the body with the row itself)
 		const actions = actionsFor({ body, end: t.sock ? resolveEnd(body, t.sock) : null, side: f.side, card: f.card, at: t.flow }, resolved);
-		if (actions.length) o.edit.apply(actions, { anchor: t.anchor, merge: folded });
+		if (actions.length) o.edit.apply([...(g.action ? [g.action] : []), ...actions], { anchor: t.anchor, merge: folded });
 	}
 
 	return { target, open, close, choose };
