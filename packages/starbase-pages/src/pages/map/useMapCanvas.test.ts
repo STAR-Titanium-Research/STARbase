@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { effectScope, nextTick, reactive, type ShallowRef } from 'vue';
+import { effectScope, nextTick, reactive, ref, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import { nodeOfSocket } from './model/sockets';
-import type { ContainerNode as ContainerData, ProcessData } from './model/types';
-import { MIN_ZOOM, screenPixel, useMapCanvas } from './useMapCanvas';
+import type { ContainerNode as ContainerData, MapNode, ProcessData } from './model/types';
+import { MIN_ZOOM, screenPixel, useMapCanvas, type CanvasEdit } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
@@ -61,6 +61,7 @@ vi.mock('@vue-flow/core', async (orig) => {
     onNodesInitialized: () => undefined,
     onNodeDragStop: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStops.push(fn),
     onNodeDragStart: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStarts.push(fn),
+    screenToFlowCoordinate: (p: { x: number; y: number }) => ({ x: p.x - 10, y: p.y - 20 }),
     fitView: async () => true,
     setCenter: async () => true,
   };
@@ -103,6 +104,10 @@ const at = (id: string) => nodesOf().find((n) => n.id === id)!.position;
 const drag = (id: string, to: { x: number; y: number }) => {
   nodesOf().find((n) => n.id === id)!.position = { ...to };
   for (const fn of store.dragStops) fn({ node: { id }, nodes: [{ id }] });
+};
+/** The drop of a card, as Vue Flow reports it: the node with its data and place. */
+const dropOn = (id: string, position: { x: number; y: number }) => {
+  for (const fn of store.dragStops) fn({ node: { id, data: { id }, position } as never, nodes: [{ id }] });
 };
 const noOverlaps = (involving: string[]) => {
   const boxes = nodesOf().map((n) => ({ id: n.id, ...n.position, width: n.dimensions.width, height: n.dimensions.height }));
@@ -906,5 +911,117 @@ describe('screenPixel: dashed outlines keep their on-screen width', () => {
     expect(screenPixel(1.6)).toBeCloseTo(0.625);
     expect(screenPixel(0.01)).toBeCloseTo(1 / MIN_ZOOM); // below the minimum zoom counts as the minimum
     expect(screenPixel(Number.NaN)).toBeCloseTo(1 / MIN_ZOOM);
+  });
+});
+
+describe('useMapCanvas: edit mode', () => {
+  const editHooks = (over: Partial<CanvasEdit> = {}) => {
+    const calls: string[] = [];
+    const hooks: CanvasEdit = {
+      positionOf: () => undefined,
+      moved: (n, to) => void calls.push(`moved ${n.id} ${to.x},${to.y}`),
+      relaid: (cards) => void calls.push(`relaid ${cards.length}`),
+      ...over,
+    };
+    return { hooks, calls };
+  };
+  async function openEdit(hooks: CanvasEdit) {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const canvas = useMapCanvas(map, hooks);
+    await settle();
+    return { map, canvas };
+  }
+
+  it('keeps a card where the draft says it is, whatever the layout would do', async () => {
+    const { hooks } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    expect(at('op:u3')).not.toEqual({ x: 700, y: 650 });
+  });
+
+  it('tells the draft when a card is dropped', async () => {
+    const { hooks, calls } = editHooks();
+    await openEdit(hooks);
+    dropOn('op:u1', { x: 12, y: 34 });
+    expect(calls).toEqual(['moved op:u1 12,34']);
+  });
+
+  it('Re-layout puts every card where ELK says, and tells the draft the places (one change for all)', async () => {
+    const { hooks, calls } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    const { canvas } = await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    await canvas.relayout();
+    await settle();
+    expect(at('op:u2')).not.toEqual({ x: 700, y: 650 });
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual([`relaid ${nodesOf().length}`]);
+  });
+
+  it('turns a point of the window into the map\'s own coordinates', async () => {
+    const { canvas } = await openEdit(editHooks().hooks);
+    expect(canvas.toFlow(110, 120)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('is as before without edit mode: no hook is called', async () => {
+    await open();
+    dropOn('op:u1', { x: 1, y: 2 });
+    expect(at('op:u1')).toBeDefined();
+  });
+});
+
+describe('useMapCanvas: edit mode does not lay out again for what a card says', () => {
+  const code = ref('OP-1');
+  const overlay = {
+    active: () => true,
+    blank: () => false,
+    keep: () => false,
+    merge: (d: ProcessData | null) => ({ ...d!, operations: d!.operations.map((o) => ({ ...o, code: code.value })) }),
+  };
+  let scope = effectScope();
+  afterEach(() => scope.stop());
+  async function openOverlay() {
+    scope = effectScope();
+    code.value = 'OP-1';
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const { map, canvas } = scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      return { map, canvas: useMapCanvas(map, { active: () => true, positionOf: () => undefined, moved: () => undefined, relaid: () => undefined }) };
+    })!;
+    await settle();
+    return { map, canvas };
+  }
+  const container = () => nodesOf().find((n) => (n.data as { type?: string }).type === 'container')!;
+
+  it('patches the card in place: the same nodes, the new words, no layout', async () => {
+    await openOverlay();
+    const before = container();
+    const layouts = store.layouts;
+    code.value = 'OP-1x';
+    await settle();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(container()).toBe(before);
+    expect((container().data as ContainerData).code).toBe('OP-1x');
+    expect(store.layouts).toBe(layouts);
+  });
+
+  it('lays out again, once, when the card changed size, after the typing pauses', async () => {
+    await openOverlay();
+    const layouts = store.layouts;
+    store.tall.set(container().id, 320);
+    for (let i = 0; i < 5; i++) {
+      code.value = `OP-${i}`;
+      await settle();
+    }
+    expect(store.layouts).toBe(layouts); // typing: nothing yet
+    await new Promise((r) => setTimeout(r, 300));
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
   });
 });

@@ -70,6 +70,11 @@ describe('MapRail', () => {
     expect(text(html)).toContain('Centre');
   });
 
+  it('offers Mark done only for a card that can be marked done (a planned operation or test)', async () => {
+    expect(text(await render(MapRail, railProps()))).not.toContain('Mark done');
+    expect(text(await render(MapRail, railProps({ canMarkDone: true })))).toContain('Mark done');
+  });
+
   it('draws the sample drawing for a sample, and none for a record with no form', async () => {
     expect(await render(MapRail, railProps())).toContain('d1-geometry');
     expect(await render(MapRail, railProps({ info: info(op.id) }))).not.toContain('d1-geometry');

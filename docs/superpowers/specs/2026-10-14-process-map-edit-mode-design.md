@@ -48,6 +48,19 @@ before the cut) and to **record** it afterwards.
 | E20 | Phones (< 768 px): no building; drafts open read-only; **Mark done** is available. |
 | E21 | Keyboard: Shift+A add menu at the focused point; Enter on a focused socket opens its menu; "Connect to…" lists compatible sockets, searchable by code; Delete removes the selected draft item; Shift+D duplicates; Ctrl/⌘+Z / Ctrl/⌘+Shift+Z. No gesture needs dragging. |
 
+### 2.1 Deviations as built
+
+Two decisions above were built differently, on purpose. The table is left as decided.
+
+- **E17, key settings.** They are not edited inside the card. The rail's compact form (the same generated form, its key-settings group
+  first) edits them, and the card shows them as read-only lines. The reason is layout cost: a form inside the card makes every card
+  taller as it opens and every keystroke would re-measure and re-lay out the map; the rail has the room, and a card that is selected
+  has its form beside it.
+- **E8, "Existing sample…" on an operation's output.** It lists the samples **on the canvas** only (filtered as you type). A sample
+  that is not on the canvas comes in through the sample picker (E7), or by "Existing sample…" on a free **input**, which does search the
+  Samples index (two letters at least, eight rows). The output menu stays a list of what is drawn, so the person picks among cards
+  they can see and the menu does not make a request per keystroke.
+
 ## 3. Delivery
 
 One spec, six slices, one plan; executed in this order, each usable alone:

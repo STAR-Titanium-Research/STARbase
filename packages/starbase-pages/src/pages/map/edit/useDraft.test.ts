@@ -267,6 +267,40 @@ describe('useDraft: undo and redo', () => {
 		draft.apply({ type: 'addSample', values: { form: 'bar' } });
 		expect(draft.canRedo.value).toBe(false);
 	});
+
+	it('merge folds a change into the step before it, so typing in a field is one undo step', async () => {
+		const { draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample' });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'd' } });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'di' } }, { merge: true });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'disc' } }, { merge: true });
+		expect(draft.body.value.items[0].values.form).toBe('disc');
+		draft.undo();
+		expect(draft.body.value.items[0].values.form).toBeUndefined();
+		expect(draft.body.value.items).toHaveLength(1);
+		// with nothing before it to fold into, it is a step of its own
+		const fresh = make();
+		await fresh.draft.start();
+		fresh.draft.apply({ type: 'addSample' }, { merge: true });
+		expect(fresh.draft.canUndo.value).toBe(true);
+	});
+
+	it('applyAll does several actions as one undoable step, and nothing when none of them changes anything', async () => {
+		const { s, draft } = make();
+		await draft.start();
+		draft.applyAll([{ type: 'addSample' }, { type: 'addSample' }, { type: 'move', key: 'n1', x: 5, y: 6 }]);
+		expect(draft.body.value.items).toHaveLength(2);
+		expect(draft.body.value.positions.n1).toEqual({ x: 5, y: 6 });
+		draft.undo();
+		expect(draft.body.value.items).toHaveLength(0);
+		expect(draft.canUndo.value).toBe(false);
+		const before = draft.body.value;
+		expect(draft.applyAll([{ type: 'remove', key: 'nope' }])).toBe(before);
+		expect(draft.canUndo.value).toBe(false);
+		await tick();
+		expect(patches(s.calls)).toHaveLength(1);
+	});
 });
 
 describe('useDraft: a draft that changed elsewhere (409)', () => {

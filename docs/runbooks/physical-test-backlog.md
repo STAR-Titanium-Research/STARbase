@@ -1211,6 +1211,48 @@ migration 141 prints about ownerless records.
   field of an existing planned operation: it shows empty, and after Create the record's field is empty too. An
   existing sample's Status is not offered (d1-build refuses it), and the date done is not offered on a planned
   operation or test. Since: Process map edit mode, stream D2 (PR pending).
+- [ ] **PME-D1-1 — Build a cut on the canvas, with the mouse.** Open a real sample's map and press **Edit**. Click the
+  sample's output socket: the menu lists the manufacturing methods by process category (as in `manufacturing_methods`)
+  and the test types; type "wire", Enter. Expect: a Wire cut container appears wired from the sample, with a free
+  output; **＋ output** adds rows (3 clicks, 4 rows); dragging each row's output into empty canvas offers New sample /
+  Same sample / Existing sample…; New sample makes a draft sample card. Drag a wire onto a socket that does not fit
+  (an input that already has a sample): the socket goes red with the reason as a tooltip and nothing is wired; onto one
+  that fits: green, and the wire is made. Cards you drag stay where you drop them after the next addition and after
+  reload of the draft; **Re-layout** moves them all back (one undo step). Right-click on empty canvas and the lid's
+  **Add** open the same menu with Templates (empty until the templates slice), methods and tests, New sample and Pick
+  samples. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-2 — Pick samples and the fly-in on a real list.** **Pick samples** with a saved view applied, tick 4 rows
+  (one of them on page 2), Add. Expect: the cards fly from their rows to a column at the top left of the canvas, 40 ms
+  apart, the one picked on another page only fades in; the draft's project becomes the first sample's project (shown as
+  the project frame). Ctrl/⌘+Z plays it backwards and takes all 4 away in one step, Ctrl/⌘+Shift+Z brings them back. With
+  the OS setting "reduce motion" the cards only fade (150 ms). A sample already on the canvas is greyed in the picker.
+  Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-3 — Keyboard only.** Without the mouse: Tab to a sample's output socket, Enter opens the menu (arrows,
+  Enter choose), **C** opens Connect to… (type a code, Enter wires); Shift+A opens the menu at the pointer; select a
+  draft card and press Shift+D (a copy), Shift+Ctrl/⌘+D (asks how many, Enter), Delete (the card and its wires go); the
+  keys do nothing while typing in a field of the rail form. Existing records: Shift+D on an existing sample makes a
+  new sample with the same details and no code. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-4 — Create, the toast and Mark done in view mode, on real data.** Build a cut with 4 planned outputs
+  (project defaulted from the sample), fix what Checks lists, press **Create 1 operation, 4 samples** (the button says
+  what it will make, and "N things missing" while something blocks). Expect: edit mode closes, the first new sample is
+  focused (planned, ghosted), the toast offers **Print labels for 4 new samples** (`/labels?ids=…` lists the four) and
+  the draft is gone from My drafts. A Create that the server refuses with Checks leaves the draft, shows the reason under
+  the button and marks the empty required fields. Then, in view mode (and in a window under 768 px), select the planned
+  cut: **Mark done** is in the rail, asks the date and who, marks all 4 rows in one request and the map reloads with
+  solid cards. Open `/map?edit=new` on a server where `d1-build` is not deployed: the panel says "Building processes
+  isn't available on this server yet." and the map still works. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-5 — Edit mode in a real browser: typing, zoom, focus, lost connection.** On a real sample's map in edit
+  mode: (a) type a long value into a field of a new operation's rail form: the map does not re-lay out or flicker while
+  you type (cards keep their places), and a value that makes the card taller (a long note shown in the card) makes room
+  once you pause. (b) Zoom the map out to about 50 % and use **Pick samples**: the cards still fly in from their rows (not
+  from far off). (c) Create, with a screen reader or just Tab: focus lands on the toast (its labels link), the toast stays
+  while the map reloads, and Dismiss puts focus back on a card. (d) Delete a draft card with the keyboard: focus stays on
+  the map. (e) With the Mark done dialog or the Finder (Ctrl+K) open, Delete, Shift+A and Ctrl+Z do nothing to the draft.
+  (f) Turn the network off (DevTools offline) after a change, press **Done editing**: you stay in edit mode and the page
+  says "Your last changes are not kept yet"; turn it on and **Done editing** again leaves, with the change kept (see it in
+  My drafts). Press Space on a free socket button and on a wired socket: the menu opens each time. A card with only a
+  warning (no machine yet) wears an amber badge, a card with a blocking check a red one. Since: Process map edit mode,
+  stream D1 review fixes (PR pending).
 
 #### Process map edit mode, server side (migrations 189 and 190, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
 

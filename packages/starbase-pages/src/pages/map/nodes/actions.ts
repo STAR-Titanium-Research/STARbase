@@ -18,8 +18,10 @@
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
 import { isKeyboardFocus } from '../keyboard';
+import type { SocketRef } from '../edit/socketRefs';
+import { encodeSocket } from '../edit/socketRefs';
 import type { Dir } from '../model/elkInput';
-import type { Ref as RecordRef } from '../model/types';
+import type { MapNode, Ref as RecordRef } from '../model/types';
 
 export interface MapActions {
 	select(id: string, opts?: { centre?: boolean }): void;
@@ -46,8 +48,35 @@ export interface MapView {
 	expanded?: Ref<ReadonlySet<string>>;
 }
 
+/**
+ * What the cards need of edit mode (spec §7.2), provided by the page only while a draft can be changed: free sockets become
+ * buttons (click, Enter or a drag from them), a dragged wire marks the socket it would land on, a card shows the number of
+ * things its checks block Create on, and a new operation offers "＋ output".
+ */
+export interface MapEdit {
+	/** The draft can be changed: the cards draw their edit controls. */
+	editing: Ref<boolean>;
+	/** The socket a dragged wire is over, and whether it would fit: the card draws it green or red. `sock` is `encodeSocket`. */
+	drop: Ref<{ sock: string; ok: boolean } | null>;
+	/** A pointer went down on a socket: a click opens the Add menu there, a drag draws a wire. */
+	socketDown(sock: SocketRef, e: PointerEvent): void;
+	/** A key on a focused socket: Enter (or Space on one that is not a button) opens its menu, C "Connect to…". */
+	socketKey(sock: SocketRef, e: KeyboardEvent): void;
+	/** A click on a socket that no pointer made (`detail` 0: Space on a button, a screen reader's activate): opens its menu. */
+	socketClick(sock: SocketRef, e: MouseEvent): void;
+	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
+	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
+	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
+	addRow(nodeId: string): void;
+	canAddRow(node: MapNode): boolean;
+}
+
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
 export const MAP_VIEW: InjectionKey<MapView> = Symbol('mapView');
+export const MAP_EDIT: InjectionKey<MapEdit> = Symbol('mapEdit');
+
+/** The edit controls of the page above, or null where there are none (view mode, a card drawn on its own). */
+export const useMapEdit = (): MapEdit | null => inject(MAP_EDIT, null);
 
 /** The id of a record in the map's actions: `<collection>:<id>`. */
 export const refKey = (r: Pick<RecordRef, 'collection' | 'id'>): string => `${r.collection}:${r.id}`;
@@ -185,3 +214,38 @@ export function useSocketProps(): (socket: string, side: 'in' | 'out') => Return
 	const view = useMapView();
 	return (socket, side) => socketProps(actions, socket, side, view.socketLabel);
 }
+
+// ---- edit mode: sockets that can be clicked and dragged ---------------------------------------------
+
+/**
+ * What a socket binds in edit mode: `data-sock` (the page finds sockets under the pointer by it), the pointer and key handlers, and
+ * the classes that draw it as a button and mark it when a dragged wire is over it. Spread it next to `sockProps` on a Handle, or
+ * on the button of a free socket (one with no wire, so no Handle).
+ */
+export const editSocketProps = (edit: MapEdit, sock: SocketRef) => {
+	const key = encodeSocket(sock);
+	const drop = edit.drop.value;
+	return {
+		'data-sock': key,
+		// A wired socket is a Handle (a span): while editing it is a button too, and says which keys work on it.
+		role: 'button',
+		'aria-keyshortcuts': 'Enter C',
+		class: { editable: true, 'drop-ok': drop?.sock === key && drop.ok, 'drop-bad': drop?.sock === key && !drop.ok },
+		onPointerdown: (e: PointerEvent) => edit.socketDown(sock, e),
+		onKeydown: (e: KeyboardEvent) => edit.socketKey(sock, e),
+		onClick: (e: MouseEvent) => edit.socketClick(sock, e),
+	};
+};
+
+/**
+ * `bind(socket, side, ref)` for the component in hand: what a Handle binds. The map's own props, plus the edit controls when edit
+ * mode is on and `ref` says which end of a wire the socket is (null for a socket nobody can build from: a stock lot's, a test's output).
+ */
+export function useSocketBinder(): (socket: string, side: 'in' | 'out', ref?: SocketRef | null) => Record<string, unknown> {
+	const sockProps = useSocketProps();
+	const edit = useMapEdit();
+	return (socket, side, ref) => (edit?.editing.value && ref ? { ...sockProps(socket, side), ...editSocketProps(edit, ref) } : sockProps(socket, side));
+}
+
+/** The label of a free socket, for screen readers. */
+export const freeSocketLabel = (side: 'in' | 'out', what: string): string => (side === 'in' ? `Free input of ${what}: click to choose what feeds it` : `Free output of ${what}: click to add what comes next`);

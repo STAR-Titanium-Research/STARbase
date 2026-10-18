@@ -2,9 +2,11 @@
 import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge, processLabel } from '@d1/ui';
+import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode } from '../model/types';
+import { railSockets, socketOwners, SHOWN_WHEN_FOLDED, type RailSocketModel } from '../model/railSockets';
 import { isBundleSocket } from '../model/sockets';
-import { activating, cardHandlers, stopping, useExpanded, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
+import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 import HiddenPill from './HiddenPill.vue';
@@ -23,8 +25,6 @@ defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
 const { direction, moreOpen } = useMapView();
 
-/** Rows drawn on their own sockets when a container is folded. */
-const SHOWN_WHEN_FOLDED = 2;
 /** More rows than this fold by default; an unfolded container with more offers "fold". */
 const FOLD_ABOVE = 3;
 
@@ -52,38 +52,39 @@ const open = useExpanded(() => props.id);
 const PITCH = 16;
 const RAIL_PAD = 8;
 
-interface RailSocket {
-	id: string;
-	fat: boolean;
-	top: string;
-}
+/** A rail socket (model/railSockets) with where it sits on the rail. */
+type RailSocket = RailSocketModel & { top: string };
 
 const hidden = computed(() => (props.data.bundled ? props.data.rows.slice(SHOWN_WHEN_FOLDED) : []));
 const canFold = computed(() => !props.data.bundled && props.data.rows.length > FOLD_ABOVE);
 
-/** Each side's socket ids, in row order, each once; the bundle socket (if any) last. */
-function sideSockets(side: 'in' | 'out'): { id: string; fat: boolean }[] {
-	const seen = new Set<string>();
-	const out: { id: string; fat: boolean }[] = [];
-	const rows = props.data.bundled ? props.data.rows.slice(0, SHOWN_WHEN_FOLDED) : props.data.rows;
-	for (const r of rows) {
-		const id = r[side];
-		if (!id || isBundleSocket(id) || seen.has(id)) continue;
-		seen.add(id);
-		out.push({ id, fat: false });
-	}
-	const bundle = hidden.value.find((r) => r[side] && isBundleSocket(r[side]!))?.[side];
-	if (bundle) out.push({ id: bundle, fat: true });
-	return out;
-}
+// Edit mode (spec E8, E9): the sockets of a new container are where wires start and end. A socket with a wire is a Handle already; a
+// side with nothing wired has none drawn, so edit mode draws a free one, a button, on the rail in its place (a blank operation is
+// one row with a free input). Which row a socket is comes from the model (model/railSockets), not from the rail.
+const edit = useMapEdit();
+const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
+/** The edit controls of one row's `side`: where a wire starts or ends on the draft. */
+const rowRef = (recordId: string, side: EndSide): SocketRef => ({ kind: 'row', id: rowRecordId(props.data, recordId, side), side });
+const owners = computed(() => socketOwners(props.data));
+/** The edit controls of a rail socket drawn as a Handle (null where nobody can build from it: folded bundles, a test's output). */
+const railRef = (socket: string, side: EndSide): SocketRef | null => {
+	const owner = editable.value ? owners.value.get(socket) : undefined;
+	return owner && owner.side === side ? rowRef(owner.recordId, side) : null;
+};
+const freeProps = (recordId: string | null, side: EndSide) => (edit && editable.value && recordId !== null ? editSocketProps(edit, rowRef(recordId, side)) : {});
+const what = computed(() => props.data.code || props.data.title);
+const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+const canAddRow = computed(() => editable.value && !!edit?.canAddRow(props.data));
+const addRow = stopping(() => edit?.addRow(props.id));
+const addRowKey = activating(() => edit?.addRow(props.id));
 
 // The two stacks are centred on each other, so a cut's one input sits level with the middle of its pieces
 // and rows in place (same count each side) line up straight across.
 const rail = computed(() => {
-	const ins = sideSockets('in');
-	const outs = sideSockets('out');
+	const ins = railSockets(props.data, 'in', { editable: editable.value });
+	const outs = railSockets(props.data, 'out', { editable: editable.value });
 	const tall = Math.max(ins.length, outs.length, 1);
-	const place = (list: { id: string; fat: boolean }[]): RailSocket[] =>
+	const place = (list: RailSocketModel[]): RailSocket[] =>
 		list.map((s, i) => ({ ...s, top: `${RAIL_PAD + PITCH / 2 + ((tall - list.length) / 2 + i) * PITCH}px` }));
 	return { ins: place(ins), outs: place(outs), height: `${RAIL_PAD * 2 + tall * PITCH}px` };
 });
@@ -116,7 +117,7 @@ const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.val
 const card = cardHandlers(actions, () => props.id, () => open.value, () => (props.data.stacked ? 'unstack' : props.data.unstackedPass ? 'restack' : null));
 const unstack = stopping(() => actions.unstack?.(props.id));
 const unstackKey = activating(() => actions.unstack?.(props.id));
-const sockProps = useSocketProps();
+const sockProps = useSocketBinder();
 const hiddenSides = useHiddenSides(() => props.id);
 const refold = stopping(() => actions.toggleRows(props.id));
 const toggleMore = stopping(() => actions.toggleMore(props.id));
@@ -152,6 +153,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
+			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 			<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
 		<div class="oname">
@@ -163,33 +165,52 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		</div>
 
 		<div v-if="data.rows.length && !data.collapsed" class="rail" :style="{ minHeight: rail.height }">
-			<Handle
-				v-for="s in rail.ins"
-				:id="s.id"
-				:key="s.id"
-				class="sock rail-sock in"
-				:class="{ fat: s.fat }"
-				type="target"
-				:position="inPos"
-				:connectable="false"
-				:style="{ top: s.top }"
-				v-bind="sockProps(s.id, 'in')"
-			/>
+			<template v-for="s in rail.ins" :key="s.id">
+				<button
+					v-if="s.free"
+					type="button"
+					class="sock rail-sock in free nodrag nopan"
+					:style="{ top: s.top }"
+					:aria-label="freeSocketLabel('in', what)"
+					v-bind="freeProps(s.recordId, 'in')"
+				></button>
+				<Handle
+					v-else
+					:id="s.id"
+					class="sock rail-sock in"
+					:class="{ fat: s.fat }"
+					type="target"
+					:position="inPos"
+					:connectable="false"
+					:style="{ top: s.top }"
+					v-bind="sockProps(s.id, 'in', railRef(s.id, 'in'))"
+				/>
+			</template>
 			<span class="sum">{{ summary }}</span>
 			<button v-if="railToggle" class="rtoggle nodrag nopan" type="button" @click="refold" @keydown="refoldKey">{{ railToggle }}</button>
 			<button v-if="data.stacked" class="rtoggle nodrag nopan" type="button" :aria-label="`Unstack ${data.group.rowIds.length} passes`" title="Unstack (or double-click the stack)" @click="unstack" @keydown="unstackKey">Unstack</button>
-			<Handle
-				v-for="s in rail.outs"
-				:id="s.id"
-				:key="s.id"
-				class="sock rail-sock out"
-				:class="{ fat: s.fat }"
-				type="source"
-				:position="outPos"
-				:connectable="false"
-				:style="{ top: s.top }"
-				v-bind="sockProps(s.id, 'out')"
-			/>
+			<button v-if="canAddRow" class="rtoggle addrow nodrag nopan" type="button" aria-label="Add an output" @click="addRow" @keydown="addRowKey"><v-icon name="add" x-small />output</button>
+			<template v-for="s in rail.outs" :key="s.id">
+				<button
+					v-if="s.free"
+					type="button"
+					class="sock rail-sock out free nodrag nopan"
+					:style="{ top: s.top }"
+					:aria-label="freeSocketLabel('out', what)"
+					v-bind="freeProps(s.recordId, 'out')"
+				></button>
+				<Handle
+					v-else
+					:id="s.id"
+					class="sock rail-sock out"
+					:class="{ fat: s.fat }"
+					type="source"
+					:position="outPos"
+					:connectable="false"
+					:style="{ top: s.top }"
+					v-bind="sockProps(s.id, 'out', railRef(s.id, 'out'))"
+				/>
+			</template>
 		</div>
 
 		<div v-if="data.slots.length && !data.collapsed" class="slots" @click.stop>
@@ -226,6 +247,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 .m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .deck { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--k) 22%, var(--d1-surface)); font-variant-numeric: tabular-nums; }
 .m + .xbtn, .deck + .xbtn { margin-left: auto; }
+.m + .chk { margin-left: auto; }
 
 /* The step's own name: the full operation code wraps rather than running out of the card. */
 .oname { display: flex; flex-direction: column; gap: 1px; padding: 8px 14px 2px; }

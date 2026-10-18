@@ -60,7 +60,7 @@ export interface MapExportOptions {
   canvas: Pick<MapCanvas, 'whenSettled'>;
   /** The project frame in flow coordinates, or null when the page does not draw it (it is part of the map only when it is). */
   projectFrame: () => Bounds | null;
-  map: Pick<ProcessMap, 'nodes' | 'data' | 'clearHover'>;
+  map: Pick<ProcessMap, 'nodes' | 'overlaid' | 'clearHover'>;
   /** The name to put on the header; null leaves "by …" out. */
   person: () => string | null;
   deps?: Partial<ExportDeps>;
@@ -162,7 +162,7 @@ export function useMapExport({ canvas, projectFrame, map, person, deps: given = 
       const [capture, PdfDocument] = await Promise.all([deps.loadCapture(), format === 'pdf' ? deps.loadJsPdf() : Promise.resolve(null)]);
       if (!(await canvas.whenSettled())) throw new Error(NOT_SETTLED);
       const bounds = drawnBounds();
-      const data = map.data.value;
+      const data = map.overlaid.value; // what is drawn: a draft-only canvas has something to export
       if (!bounds || !data) throw new Error('Nothing to export yet.');
       map.clearHover(); // a hovered card dims the rest: the picture is of the map at rest
       const kinds = map.nodes.value.flatMap((n): Kind[] => (n.type === 'record' || n.type === 'container' ? [n.kind] : n.type === 'junction' ? ['junction'] : []));
