@@ -215,6 +215,53 @@ export async function emptySpot(page: Page): Promise<{ x: number; y: number }> {
 	throw new Error('no empty spot on the canvas');
 }
 
+/** A card's position in the map's own coordinates (Vue Flow's node transform): it does not depend on the viewport, so a reload can be compared. */
+export async function flowPos(l: Locator): Promise<{ x: number; y: number }> {
+	return l.evaluate((el) => {
+		const m = /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\s*\)/.exec((el as HTMLElement).style.transform);
+		if (!m) throw new Error(`no node transform: ${(el as HTMLElement).style.transform}`);
+		return { x: Number(m[1]), y: Number(m[2]) };
+	});
+}
+/** Every card's flow position by node id. */
+export async function flowPositions(page: Page): Promise<Record<string, { x: number; y: number }>> {
+	const out: Record<string, { x: number; y: number }> = {};
+	const n = await cards(page).count();
+	for (let i = 0; i < n; i++) {
+		const c = cards(page).nth(i);
+		out[(await c.getAttribute('data-id')) ?? `#${i}`] = await flowPos(c);
+	}
+	return out;
+}
+/** The pairs of overlapping cards once the layout has stopped moving (two identical snapshots in a row: cards glide to their place). */
+export async function settledOverlaps(page: Page): Promise<string[]> {
+	let last = '';
+	await expect
+		.poll(async () => {
+			const now = JSON.stringify(await flowPositions(page)) + JSON.stringify([...(await cardBoxes(page))].map(([, b]) => [b.width, b.height]));
+			const same = now === last;
+			last = now;
+			return same;
+		}, { message: 'the cards stop moving', intervals: [200, 200, 300, 400], timeout: 15_000 })
+		.toBe(true);
+	return overlaps(page);
+}
+
+/** The lid's Add button, then one entry of its menu. */
+export async function addFromLid(page: Page, entry: RegExp): Promise<void> {
+	await page.getByRole('button', { name: /^Add\b/ }).first().click();
+	await page.locator('.pm-addmenu').getByRole('option', { name: entry }).click();
+	await expect(page.locator('.pm-addmenu')).toBeHidden();
+}
+/** Duplicate ×N of the selected card (Ctrl+Shift+D asks how many). */
+export async function duplicateMany(page: Page, n: number): Promise<void> {
+	await page.keyboard.press('Control+Shift+D');
+	const dialog = page.getByRole('dialog', { name: /^Duplicate / });
+	await dialog.getByRole('spinbutton').fill(String(n));
+	await page.keyboard.press('Enter');
+	await expect(dialog).toBeHidden();
+}
+
 /** A click on an empty spot of the canvas: lets go of the selection. */
 export async function clickEmpty(page: Page): Promise<void> {
 	const at = await emptySpot(page);

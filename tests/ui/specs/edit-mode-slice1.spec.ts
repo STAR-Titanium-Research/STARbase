@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, createButton, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, makePlanned, relativeLayout, savedDraft, selectCard, startEditingMapOf, wireBetween,
+	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, makePlanned, relativeLayout, savedDraft, selectCard, startEditingMapOf, wireBetween,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -305,6 +305,135 @@ test.describe('as a Lab Member', () => {
 		expect(body.wires.filter((w) => w.to.key === op.key).map((w) => `${w.from.key}->${w.to.key}:${w.to.row ?? 0}`).sort(), 'the one input sample feeds every piece').toEqual([`${input.key}->${op.key}:0`, `${input.key}->${op.key}:1`]);
 		expect(body.wires.filter((w) => w.from.key === op.key).map((w) => w.from.row).sort(), 'one wire out of each piece').toEqual([0, 1]);
 		await expect(createButton(page)).toHaveText('Create 2 operations, 2 samples');
+	});
+
+	// ---- 5. layout (R6) ------------------------------------------------------------------------------------------------------------
+	test('no two cards overlap after Add, Duplicate x4 and picking three samples (R6)', async ({ page }) => {
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1', 'LOCAL-RAW-2', 'LOCAL-BAR-1']);
+		expect(await settledOverlaps(page), 'after picking three samples').toEqual([]);
+		await addFromLid(page, /^New sample/);
+		await expect(card(page, 'New sample, Sample')).toHaveCount(1);
+		expect(await settledOverlaps(page), 'after Add: a new sample').toEqual([]);
+		await addFromLid(page, /CNC Turning/);
+		await expect(card(page, /, Operation$/)).toHaveCount(1);
+		expect(await settledOverlaps(page), 'after Add: an operation').toEqual([]);
+		await selectCard(page, card(page, 'New sample, Sample'));
+		await duplicateMany(page, 4);
+		await expect(card(page, 'New sample, Sample')).toHaveCount(5);
+		expect(await settledOverlaps(page), 'after Duplicate x4').toEqual([]);
+		// Duplicating the operation too (a card that is wider than a sample).
+		await selectCard(page, card(page, /, Operation$/));
+		await page.keyboard.press('Shift+D');
+		await expect(card(page, /, Operation$/)).toHaveCount(2);
+		expect(await settledOverlaps(page), 'after Duplicate of the operation').toEqual([]);
+		// Undo and redo leave no overlap either.
+		await page.keyboard.press('Control+z');
+		await expect(card(page, /, Operation$/)).toHaveCount(1);
+		expect(await settledOverlaps(page), 'after undo').toEqual([]);
+		await page.keyboard.press('Control+Shift+z');
+		await expect(card(page, /, Operation$/)).toHaveCount(2);
+		expect(await settledOverlaps(page), 'after redo').toEqual([]);
+	});
+
+	test('a card the person dragged keeps its position after a reload, with the cards around it left alone (R6)', async ({ page }) => {
+		await openNewDraft(page);
+		await addFromLid(page, /^New sample/);
+		await addFromLid(page, /^New sample/);
+		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
+		await settledOverlaps(page);
+		await fit(page);
+		const mover = card(page, 'New sample, Sample').first();
+		const id = (await mover.getAttribute('data-id'))!;
+		const key = id.replace(/^s:draft:/, '');
+		const was = await flowPos(mover);
+		const spot = await boxOf(mover);
+		// Drag it down and to the left, well away from where it was put.
+		await dragBetween(page, { x: spot.x + 40, y: spot.y + 12 }, { x: spot.x - 60, y: spot.y + 160 });
+		await expect.poll(async () => (await flowPos(mover)).y, { message: 'the card moved with the pointer' }).toBeGreaterThan(was.y + 20);
+		const dragged = await flowPos(mover);
+		const saved = await savedDraft(page, member, (b) => !!b.positions[key] && Math.abs(b.positions[key].y - dragged.y) < 1, 'the dragged position saved');
+		expect(saved.positions[key].x).toBeCloseTo(dragged.x, 0);
+		// Something else is added: the dragged card does not move.
+		await addFromLid(page, /CNC Turning/);
+		await settledOverlaps(page);
+		const afterAdd = await flowPos(mover);
+		expect(afterAdd.x, 'x after adding something').toBeCloseTo(dragged.x, 0);
+		expect(afterAdd.y, 'y after adding something').toBeCloseTo(dragged.y, 0);
+		await savedDraft(page, member, (b) => b.items.length === 3, 'the operation saved');
+		await page.reload();
+		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
+		await settledOverlaps(page);
+		const after = await flowPos(card(page, `New sample, Sample`).and(page.locator(`[data-id="${id}"]`)));
+		expect(after.x, 'x after the reload').toBeCloseTo(dragged.x, 0);
+		expect(after.y, 'y after the reload').toBeCloseTo(dragged.y, 0);
+	});
+
+	test('dragging one card moves only that card: the selected card, and a recorded one, stay where they are (R6)', async ({ page }) => {
+		const bar1 = await sampleIdOf(admin, 'LOCAL-BAR-1');
+		// The map opens with BAR-1 (the focus) selected: a recorded card.
+		await startEditingMapOf(page, 'physical_samples', bar1);
+		await addFromLid(page, /^New sample/);
+		await settledOverlaps(page);
+		await fit(page);
+		const focus = card(page, 'LOCAL-BAR-1, Sample');
+		const loose = card(page, 'New sample, Sample');
+		const [focusWas, looseWas] = [await flowPos(focus), await flowPos(loose)];
+		const b = await boxOf(loose);
+		await dragBetween(page, { x: b.x + 40, y: b.y + 12 }, { x: b.x + 40, y: b.y - 150 });
+		await expect.poll(async () => (await flowPos(loose)).y, { message: 'the dragged card moved up' }).toBeLessThan(looseWas.y - 40);
+		expect(await flowPos(focus), 'the recorded, selected card did not move with it').toEqual(focusWas);
+		// Select another card, then drag the first again: the one selected does not follow.
+		const material = card(page, 'AA, Material');
+		const [materialWas, looseNow] = [await flowPos(material), await flowPos(loose)];
+		await selectCard(page, material);
+		const b2 = await boxOf(loose);
+		await dragBetween(page, { x: b2.x + 40, y: b2.y + 12 }, { x: b2.x + 140, y: b2.y + 12 });
+		await expect.poll(async () => (await flowPos(loose)).x, { message: 'the dragged card moved right' }).toBeGreaterThan(looseNow.x + 40);
+		expect(await flowPos(material), 'the selected material did not follow the drag').toEqual(materialWas);
+		expect(await flowPos(focus)).toEqual(focusWas);
+	});
+
+	test('Tidy lays the draft out again, leaves recorded cards where they are, and one Ctrl+Z puts the draft cards back (R6)', async ({ page }) => {
+		const bar1 = await sampleIdOf(admin, 'LOCAL-BAR-1');
+		const bar2 = await sampleIdOf(admin, 'LOCAL-BAR-2');
+		await startEditingMapOf(page, 'physical_samples', bar1);
+		await expect(card(page, 'LOCAL-BAR-2, Sample')).toBeVisible();
+		await settledOverlaps(page);
+		// Every card on the map now is recorded history (the draft is still empty): these must stay put through everything below.
+		const history = await flowPositions(page);
+		const recordedIds = Object.keys(history);
+		// Build from a recorded sample (it joins the draft as an existing item), and add loose cards of the draft's own.
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${bar2}|out`).first(), /CNC Turning/);
+		await addFromLid(page, /^New sample/);
+		await addFromLid(page, /^New sample/);
+		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
+		await settledOverlaps(page);
+		await fit(page);
+		// A mess: drag the two loose samples on top of the operation the draft added.
+		const target = await boxOf(card(page, /, Operation$/).and(page.locator('[data-id^="op:draft:"]')));
+		for (const loose of [card(page, 'New sample, Sample').nth(0), card(page, 'New sample, Sample').nth(1)]) {
+			const b = await boxOf(loose);
+			await dragBetween(page, { x: b.x + 40, y: b.y + 12 }, { x: target.x + 60, y: target.y + 16 });
+		}
+		const messy = await flowPositions(page);
+		const draftIds = Object.keys(messy).filter((id) => id.includes('draft:'));
+		expect(draftIds.length, 'the loose samples and the operation of the draft').toBeGreaterThanOrEqual(3);
+		const savedBefore = await savedDraft(page, member, (b) => Object.keys(b.positions).length >= 2, 'the dragged positions saved');
+
+		await page.getByRole('button', { name: /^Tidy$/ }).click();
+		await expect.poll(async () => JSON.stringify(await flowPositions(page)) !== JSON.stringify(messy), { message: 'Tidy moved something' }).toBe(true);
+		expect(await settledOverlaps(page), 'after Tidy').toEqual([]);
+		const tidy = await flowPositions(page);
+		for (const id of recordedIds) expect(tidy[id], `recorded card ${id} did not move`).toEqual(history[id]);
+		expect(draftIds.some((id) => tidy[id].x !== messy[id].x || tidy[id].y !== messy[id].y), 'a card of the draft moved').toBe(true);
+		await savedDraft(page, member, (b) => JSON.stringify(b.positions) !== JSON.stringify(savedBefore.positions), 'Tidy saved');
+
+		// One Ctrl+Z puts every draft card back where it was (and removes nothing else).
+		await page.keyboard.press('Control+z');
+		await expect.poll(async () => JSON.stringify(await flowPositions(page)), { message: 'undo restored the positions' }).toBe(JSON.stringify(messy));
+		const undone = await savedDraft(page, member, (b) => JSON.stringify(b.positions) === JSON.stringify(savedBefore.positions), 'undo saved the old positions');
+		expect(undone.items, 'undo took back Tidy and nothing else').toHaveLength(savedBefore.items.length);
 	});
 
 	test('a done operation, a done sample and the wire between them cannot be removed: a lock, the reason, and nothing is sent (R4, ADR-0019 §6)', async ({ page }) => {
