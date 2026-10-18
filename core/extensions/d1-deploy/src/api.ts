@@ -2,11 +2,11 @@ import type { ApiProblem } from './types';
 
 /** Turn an axios error from `useApi()` into the endpoint's message, code and HTTP status. */
 export function describeError(e: unknown): ApiProblem {
-	const err = e as { response?: { status?: number; data?: { error?: string; code?: string; errors?: { message?: string }[] } }; message?: string };
+	const err = e as { response?: { status?: number; data?: { error?: string; code?: string; errors?: { message?: string; extensions?: { code?: string } }[] } }; message?: string };
 	const data = err?.response?.data;
 	return {
 		status: err?.response?.status ?? null,
-		code: data?.code ?? null,
+		code: data?.code ?? data?.errors?.[0]?.extensions?.code ?? null,
 		message: data?.error ?? data?.errors?.[0]?.message ?? err?.message ?? 'Request failed',
 	};
 }

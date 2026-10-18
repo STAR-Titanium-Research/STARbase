@@ -99,8 +99,9 @@ async function poll() {
 		}
 	} catch (e) {
 		const p = describeError(e);
-		if (p.status === 404) {
-			// The run is gone (pruned or never existed): nothing left to watch.
+		if (p.status === 404 && p.code !== 'ROUTE_NOT_FOUND') {
+			// The agent has no such run (pruned or never existed): nothing left to watch. Directus's own
+			// ROUTE_NOT_FOUND (endpoint not loaded yet after a restart) is retried like any other failure.
 			problem.value = p;
 			stopped = true;
 			emit('done', null);
