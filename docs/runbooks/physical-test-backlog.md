@@ -1436,7 +1436,10 @@ touch confirm:
   search (the Finder opens where it did before, except over a dialog). Since: edit-mode redesign slice 2a (PR pending).
 - [ ] **PM8-5 — Dragging from the palette with a finger or a pen.** On a tablet at least 768 px wide (and a pen on a Windows touch
   screen): drag a palette entry onto the canvas, a socket and a wire. Expect it to follow the finger, mark the target, drop, and the
-  page not to scroll or pan during the drag. Since: edit-mode redesign slice 2a (PR pending).
+  page not to scroll or pan during the drag. A finger must also be able to **scroll the palette** by swiping up and down on its
+  entries (the list moves, nothing is carried); an entry is carried by a long press (about a third of a second) or a clear sideways
+  swipe, and a mouse or pen drag is unchanged. Switching to another app or window mid-drag (or locking the screen) lets the drag go
+  with nothing dropped. Since: edit-mode redesign slice 2a (PR pending); the scroll and the let-go: slice 2c fixes.
 
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
