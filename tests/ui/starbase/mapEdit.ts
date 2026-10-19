@@ -112,6 +112,8 @@ export async function inView(page: Page, l: Locator): Promise<boolean> {
 }
 /** Fits the map when `l` is not all in view (the map keeps its viewport when something is added, so new cards can be off screen). */
 export async function reach(page: Page, l: Locator): Promise<void> {
+	// Cards glide to their places after a change (and a late size check can lay them out again): look once they rest, or a card that is on screen mid-glide is off it a moment later.
+	await settledOverlaps(page);
 	if (!(await inView(page, l))) await fit(page);
 	expect(await inView(page, l), `${l} is in view after Fit`).toBe(true);
 }
