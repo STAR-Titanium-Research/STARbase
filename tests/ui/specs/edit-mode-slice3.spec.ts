@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from '@
 import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	DRAFT_URL, addSearch, canvasOf, cards, createButton, distinctRecords, draftIdOf, openNewDraft, openAddSearch, paletteEntry, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, secondMember, selectCard,
-	sockOf, startEditingMapOf, clickWire, wireBetween, boxOf, canvasMiddle, dragEntryTo,
+	sockOf, startEditingMapOf, clickWire, wireBetween, boxOf, canvasMiddle, dragEntryTo, fit,
 	type Ref,
 } from '../starbase/mapEdit';
 
@@ -113,6 +113,13 @@ const shot = async (page: Page, name: string): Promise<void> => {
 };
 const rowSockOut = (page: Page): Locator => canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|out"]');
 
+/** The card that holds keyboard focus (its data-id), else the focused element's tag. */
+const focusedCard = (page: Page): Promise<string> =>
+	page.evaluate(() => {
+		const el = document.activeElement as HTMLElement | null;
+		return el?.closest<HTMLElement>('.vue-flow__node')?.dataset.id ?? `<${el?.tagName.toLowerCase() ?? 'nothing'}>`;
+	});
+
 /** Opens the add search on a sample's output socket (the keyboard: Enter on the socket) and chooses From database…. */
 async function openFromDatabase(page: Page, sampleId: string): Promise<void> {
 	await sockOf(page, `sample|${sampleId}|out`).first().press('Enter');
@@ -137,6 +144,8 @@ async function attachTo(page: Page, sampleCode: string, orphan: Orphan): Promise
 	await (await find(page, orphan)).click();
 	await expect(picker(page)).toBeHidden();
 	await expect(opCard(page, orphan.operationId)).toBeVisible();
+	// The picker is gone and so is the add search it came from: focus is back on the card the person started on, not on the page body.
+	await expect.poll(() => focusedCard(page), { message: 'focus after the picker closes' }).toBe(`s:${sampleId}`);
 	return sampleId;
 }
 
@@ -411,6 +420,128 @@ test.describe('as a Lab Member', () => {
 	});
 });
 
+/** A sample made FROM `from`'s sample by a planned operation (so it descends from it), made by `member`. */
+async function makeDescendant(from: Orphan): Promise<{ sampleId: string; sampleCode: string }> {
+	const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+	const [parent] = await listRecords<{ material_id: string }>(admin, 'physical_samples', `filter[sample_id][_eq]=${from.sampleId}&fields=material_id`);
+	const sampleCode = `LOCAL-DESC-${Date.now().toString(36)}${(counter += 1)}`.toUpperCase();
+	const sample = await member.post(`${D1}/items/physical_samples`, { data: { sample_code: sampleCode, current_status: 'planned', material_id: parent.material_id, form: 'cylinder', primary_method_id: method.method_id } });
+	expect(sample.ok(), await sample.text()).toBeTruthy();
+	const sampleId = JSON.parse(await sample.text()).data.sample_id as string;
+	noteMade({ collection: 'physical_samples', id: sampleId });
+	const op = await member.post(`${D1}/items/manufacturing_operations`, { data: { sample_id: from.sampleId, output_sample_id: sampleId, method_id: method.method_id, work_state: 'planned', process_category: 'machining' } });
+	expect(op.ok(), await op.text()).toBeTruthy();
+	noteMade({ collection: 'manufacturing_operations', id: JSON.parse(await op.text()).data.operation_id as string });
+	return { sampleId, sampleCode };
+}
+
+test.describe('what Create refuses whatever the page showed', () => {
+	test.beforeEach(async ({ page }) => {
+		await signIn(page, 'member');
+	});
+
+	test('an operation is never attached to the sample it made: wired by hand from its own output, the page blocks it and Create (asked directly) refuses, nothing written', async ({ page }) => {
+		const orphan = await makeOrphan('planned');
+		await openNewDraft(page);
+		await paletteEntry(page, /From database/).click();
+		await (await find(page, orphan)).click();
+		await expect(opCard(page, orphan.operationId)).toBeVisible();
+		// The sample it made is drawn after it: drag from that sample's output onto the operation's free input (the whole map in view first: the palette covers its left).
+		await fit(page);
+		const out = await boxOf(sockOf(page, `sample|${orphan.sampleId}|out`).first());
+		const into = await boxOf(sockOf(page, `row|${orphan.operationId}|in`).first());
+		await page.mouse.move(out.x + out.width / 2, out.y + out.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(into.x + into.width / 2, into.y + into.height / 2, { steps: 12 });
+		await page.mouse.up();
+		await expect(wireBetween(page, `s:${orphan.sampleId}:out`, `op:${orphan.operationId}:in`)).toHaveCount(1);
+		await expect(checks(page)).toContainText('The sample this operation made cannot be an input of it.');
+		await expect(createButton(page)).toBeDisabled();
+		await savedDraft(page, member, (b) => b.items.some((i) => i.attach) && b.wires.length === 1, 'the attach wired to its own output');
+		const before = await operationRow(member, orphan.operationId);
+		const refused = await member.post(`${D1}/d1-build/drafts/${draftIdOf(page)}/create`, { data: {} });
+		expect(refused.status(), await refused.text()).toBe(409);
+		expect(await refused.text()).toContain('cannot be an input of the operation that made it');
+		expect(await operationRow(member, orphan.operationId), 'nothing was written').toEqual(before);
+		expect(before.sample_id).toBeNull();
+	});
+
+	test('a lineage loop the page cannot see (a sample picked from the index has no history on the map) is blocked by the server with a visible check, nothing written', async ({ page }) => {
+		const orphan = await makeOrphan('planned');
+		const descendant = await makeDescendant(orphan); // orphan.sample -> descendant.sample, in the database
+		await openNewDraft(page);
+		await pickSamples(page, [descendant.sampleCode]);
+		await openFromDatabase(page, descendant.sampleId);
+		await (await find(page, orphan)).click();
+		await expect(opCard(page, orphan.operationId)).toBeVisible();
+		await expect(checks(page)).toContainText(`It made ${orphan.sampleCode}, which the sample you attached it to comes from: that would run in a circle.`);
+		await expect(createButton(page)).toBeDisabled();
+		const before = await operationRow(member, orphan.operationId);
+		const lineage = await lineageOf(member, orphan.sampleId);
+		const refused = await member.post(`${D1}/d1-build/drafts/${draftIdOf(page)}/create`, { data: {} });
+		expect(refused.status(), await refused.text()).toBe(409);
+		expect(await refused.text()).toContain('would run in a circle');
+		expect(await operationRow(member, orphan.operationId), 'nothing was written').toEqual(before);
+		expect(await lineageOf(member, orphan.sampleId), 'no lineage row was added').toEqual(lineage);
+	});
+
+	test('a sample that already comes from another sample is greyed in the picker, and Create refuses an attach that would give it a second origin (the other origin appeared after the pick)', async ({ page }) => {
+		const rawId = await sampleIdOf(admin, 'LOCAL-RAW-2');
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		const makeOrigin = async (o: Orphan): Promise<void> => {
+			const maker = await member.post(`${D1}/items/manufacturing_operations`, { data: { sample_id: rawId, output_sample_id: o.sampleId, method_id: method.method_id, work_state: 'planned', process_category: 'machining' } });
+			expect(maker.ok(), await maker.text()).toBeTruthy();
+			noteMade({ collection: 'manufacturing_operations', id: JSON.parse(await maker.text()).data.operation_id as string });
+		};
+		const withOrigin = await makeOrphan('planned');
+		await makeOrigin(withOrigin); // another operation already makes its sample from RAW-2
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		await openFromDatabase(page, await sampleIdOf(admin, 'LOCAL-RAW-1'));
+		const row = await find(page, withOrigin);
+		await expect(row).toHaveAttribute('aria-disabled', 'true');
+		await expect(row).toContainText('already comes from another sample: attaching would give it a second origin');
+		await page.keyboard.press('Escape');
+		await expect(picker(page)).toBeHidden();
+
+		// The origin appears AFTER the pick: the picker could not grey it, d1-build refuses.
+		const late = await makeOrphan('planned');
+		await page.goto(`${STAR}/map`, { waitUntil: 'domcontentloaded' });
+		await attachTo(page, 'LOCAL-RAW-1', late);
+		await expect(createButton(page)).toBeEnabled();
+		await savedDraft(page, member, (b) => b.items.some((i) => i.attach) && b.wires.length === 1, 'the attach, saved');
+		await makeOrigin(late);
+		const before = await operationRow(member, late.operationId);
+		const refused = await member.post(`${D1}/d1-build/drafts/${draftIdOf(page)}/create`, { data: {} });
+		expect(refused.status(), await refused.text()).toBe(409);
+		expect(await refused.text()).toContain('second origin');
+		expect(await operationRow(member, late.operationId), 'nothing was written').toEqual(before);
+	});
+
+	test('Show more keeps the keyboard in the dialog: focus on the search box, the highlighted row where it was, Esc still closes', async ({ page }) => {
+		test.setTimeout(180_000);
+		for (let i = 0; i < 22; i++) await makeOrphan('planned');
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		await openFromDatabase(page, await sampleIdOf(admin, 'LOCAL-RAW-1'));
+		const options = picker(page).getByRole('option');
+		await expect(options).toHaveCount(20);
+		await page.keyboard.press('ArrowDown');
+		await page.keyboard.press('ArrowDown');
+		await expect(options.nth(2)).toHaveAttribute('aria-selected', 'true');
+		await picker(page).getByRole('button', { name: 'Show more' }).focus();
+		await page.keyboard.press('Enter');
+		await expect(options).toHaveCount(22);
+		await expect(picker(page).getByRole('button', { name: 'Show more' }), 'the last page: the button is gone').toHaveCount(0);
+		await expect(options.nth(2), 'the highlight did not jump to the first row').toHaveAttribute('aria-selected', 'true');
+		await expect(picker(page).getByRole('combobox'), 'focus is on the search box, not the page body').toBeFocused();
+		await page.keyboard.press('ArrowDown');
+		await expect(options.nth(3)).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Escape');
+		await expect(picker(page)).toBeHidden();
+	});
+});
+
 test.describe('who can see what', () => {
 	test('a Lab Member sees the orphan operations they may read, not another member\'s', async ({ page, playwright }) => {
 		const mine = await makeOrphan('planned');
@@ -445,7 +576,7 @@ test.describe('who can see what', () => {
 });
 
 test.describe('who may change what', () => {
-	test('a member who may read an operation (as an investigator of its project) but not change it is refused at Create with a visible message, and nothing is written', async ({ page, playwright }) => {
+	test('a member who may read an operation (as an investigator of its project) but not change it is told so at the pick, and nothing joins the draft', async ({ page, playwright }) => {
 		const [project] = await listRecords<{ project_id: string }>(admin, 'projects', 'filter[project_code][_eq]=LOCAL-PROJ&fields=project_id');
 		const orphan = await makeOrphan('planned', member, memberPerson, project.project_id);
 		const other = await secondMember(playwright, admin, noteUser);
@@ -462,15 +593,15 @@ test.describe('who may change what', () => {
 		await page.getByRole('button', { name: /^sign in$/i }).click();
 		await page.waitForURL((u) => !u.pathname.startsWith('/signin'), { timeout: 30_000 });
 		const before = await operationRow(member, orphan.operationId);
-		await attachTo(page, 'LOCAL-RAW-1', orphan);
-		await expect(createButton(page)).toBeEnabled();
-		const { status, body } = await pressCreate(page, noteMade);
-		expect(status, JSON.stringify(body)).toBeGreaterThanOrEqual(400);
+		const rawId = await sampleIdOf(admin, 'LOCAL-RAW-1');
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		await openFromDatabase(page, rawId);
+		await (await find(page, orphan)).click();
+		await expect(picker(page).getByRole('status')).toContainText('You can see this operation but not change it.');
 		await shot(page, 'refused-may-read-not-change');
-		// Said where the person looks (the Create bar or Checks), in words, not as a bare status.
-		await expect(page.locator('.pm-create')).toContainText('You are not allowed to write that record.');
+		await expect(picker(page), 'the picker stays open to choose another').toBeVisible();
+		await expect(opCard(page, orphan.operationId)).toHaveCount(0);
 		expect(await operationRow(member, orphan.operationId), 'nothing was written').toEqual(before);
-		expect(await lineageOf(member, orphan.sampleId)).toEqual([]);
 	});
 });
-

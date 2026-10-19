@@ -1463,13 +1463,24 @@ live data and the real accounts confirm:
   made has the same fields as before; no new sample anywhere. The map of the output sample now shows the new input. Since: edit-mode redesign slice 3 (PR pending).
 - [ ] **PM10-3 — Who may attach.** Attaching updates the operation, which the access rules allow its **owner** (or an owner or co-owner of the sample it
   acts on: an orphan has none). As a Lab Member who can **read** an orphan only through a project or campaign (PI or investigator, campaign owner) and
-  does not own it, pick it and Create. Expect a refusal in words under the Create button (the local stack shows "You are not allowed to write that record."), the operation unchanged, and the
-  draft kept. As a Lab Viewer the Edit toggle is not there. As an admin it works. The page does not say at the pick that the operation is read-only for you (open question: grey such rows). Since: edit-mode redesign slice 3 (PR pending).
+  does not own it, pick it and Create. Expect the picker to refuse it at the pick ("You can see this operation but not change it.": the page asks Directus's `/permissions/me` for the record) and
+  nothing to join the draft; if the owner changes between the pick and Create, the check "Changed since you added it..." (a change of owner bumps the version), the operation
+  unchanged, and the draft kept. (Create also answers a bare "You are not allowed to write that record." under the button for a refusal the page did not
+  foresee; it could not be reached on the local stack, where every change moves the version first.) As a Lab Viewer the Edit toggle is not there. As an admin it works. Check `/permissions/me` answers `update.access` the same way for real rules (a co-owned sample, a campaign owner). Since: edit-mode redesign slice 3 (PR pending).
 - [ ] **PM10-4 — Greyed rows on a real map.** Open the map of the sample an orphan made (the orphan is drawn as its maker) and open **From database…** from a
   sample's output: that orphan is greyed "Already on the canvas." On a **planned** sample every **done** orphan is greyed "Its sample is still planned;
   mark the operation that makes it done first." and a planned one is not. Attach an orphan, open the picker again from another sample: it is greyed
   "Already attached in this draft." An orphan that made a sample the target comes from (as far as the loaded lineage goes) is greyed as a circle. Greyed rows
   cannot be chosen by click or Enter. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-6 — Lineage loops, own output, second origin, on real lineage.** Needs real lineage depth (the local stack has two levels). On live: (a) pick the
+  sample an orphan made and open **From database…** from the output of a **descendant** of it three or more steps down, in a draft that picked only that
+  descendant from the Samples list (the map has no history loaded): the picker cannot see the loop, so attach the orphan and press Create. Expect the
+  blocking check "It made <code>, which the sample you attached it to comes from: that would run in a circle." (the server read the lineage), nothing written.
+  (b) An orphan whose output sample already has a genealogy parent that is not the sample you attach it to is greyed "already comes from another sample", and
+  if you get it onto the draft some other way Create refuses it with the same words. (c) Attach an orphan to the sample it made (drag the output's wire onto
+  its own input): Create is refused with "cannot be an input of the operation that made it". Check the time the server takes on a deep lineage (the recursion
+  is bounded at 100 levels and visits each sample once per path) and that a sample you may not read is named "the sample it made", not by its code.
+  Since: edit-mode redesign slice 3 review fixes (PR pending).
 - [ ] **PM10-5 — Changed, gone or given an input while the draft is open.** Attach a real orphan in a draft and leave it open; as another account (or in
   Data Studio) (a) give that operation an input, (b) edit it (any field), (c) delete it, one case per draft. Reload the draft and press Create. Expect
   (a) a blocking check "It got an input in the meantime, so it cannot be attached any more.", (b) "Changed since you added it. Your edits were made against
