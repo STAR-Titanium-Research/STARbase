@@ -222,9 +222,8 @@ onMounted(() => {
 
 <template>
 	<ExplorerView title="Print labels">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Print labels</span></nav>
-
 			<p v-if="selectionError" class="d1-note bad" role="alert">{{ selectionError }}</p>
 			<p v-if="selectionNote" class="d1-note warn" role="status">{{ selectionNote }}</p>
 
