@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import AddSearch from './AddSearch.vue';
+import AttachPicker from './AttachPicker.vue';
 import ConnectTo from './ConnectTo.vue';
 import CreateToast from './CreateToast.vue';
 import DuplicatePrompt from './DuplicatePrompt.vue';
@@ -40,6 +41,17 @@ function closeToast(): void {
 		<ConnectTo v-if="side.build.connecting.value" :entries="side.build.connectEntries.value" :from="side.build.connectFrom.value" :at="side.build.connecting.value.at" @choose="side.build.connectTo" @close="side.build.connecting.value = null" />
 		<DuplicatePrompt v-if="side.build.duplicating.value" :what="side.build.duplicating.value.what" @confirm="side.build.confirmDuplicate" @close="side.build.duplicating.value = null" />
 		<SamplePicker v-if="side.build.pickerOpen.value" :taken="side.build.picking.taken.value" @pick="side.build.picking.picked" @close="side.build.pickerOpen.value = false" />
+		<AttachPicker
+			v-if="side.build.attaching.target.value"
+			:heading="side.build.attachHeading.value"
+			:search="side.build.attaching.search"
+			:reason-of="side.build.attaching.reasonOf"
+			:problem="side.build.attaching.problem.value"
+			:busy="side.build.attaching.busy.value"
+			:restore-focus="() => focusCanvas(canvasEl, side.build.attaching.target.value?.anchor)"
+			@pick="side.build.attaching.pick"
+			@close="side.build.attaching.close"
+		/>
 		<AddSearch
 			v-if="side.build.menu.target.value"
 			:target="side.build.menu.target.value"
