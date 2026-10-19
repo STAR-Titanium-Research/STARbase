@@ -245,8 +245,9 @@ _Avoid_: command palette, add menu
 
 **Insert**:
 To put an operation between the two ends of a **wire** (drop it on the wire), or before or after the
-selected card (I and Shift+I). One undoable step, and never on a wire of done records. A done sample
-is never given a new parent: **Add an earlier step** starts a new planned chain upstream of it instead.
+selected card (I and Shift+I). One undoable step, and never on a wire of done records. Inserting
+**before** a sample that already exists as a record (done, or planned and saved) is refused: its
+history is recorded and can't change from the map. Start from a new sample instead.
 _Avoid_: splice, re-parent
 
 **Remove** / **Delete** / **Dissolve**:
