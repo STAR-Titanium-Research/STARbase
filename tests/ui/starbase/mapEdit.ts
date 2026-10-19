@@ -465,6 +465,8 @@ async function resolveTarget(t: DropTarget): Promise<{ x: number; y: number }> {
 export async function holdEntryOver(page: Page, entry: Locator, to: DropTarget): Promise<void> {
 	await viewportSettled(page);
 	await settledOverlaps(page);
+	// An entry further down the palette than the window is tall (the list scrolls inside its dock) is brought into view first: a pointer cannot go down on it where it is not.
+	await entry.scrollIntoViewIfNeeded();
 	const target = await resolveTarget(to);
 	const from = centreOf(await boxOf(entry));
 	await page.mouse.move(from.x, from.y);
