@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 16 minutes, 77 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts, 9 of edit-mode-slice4.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 16 minutes, 84 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts, 16 of edit-mode-slice4.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -120,7 +120,7 @@ template is untouched). Other tests: the notes only when ticked and a test templ
 second member's own browser (no ⋯ controls); the Lab Viewer's 403 from `/d1-build/templates` and its missing edit mode; rename, who can use it,
 replace with the selected card's settings and delete without changing a card made from the template; a template that changed elsewhere (409:
 plain words, the list reloads, the second try works); and a template that names a retired tool, greyed with the reason in the palette and the add
-search with a warning in Checks. It makes a tool and templates (all named "PM4 ...") and removes them, the records it Creates and the second
+search with a warning in Checks. Review fixes: a done tensile test with a result, a status, a file and an owner, and a recorded FAST/SPS operation with a run number, are saved as templates and carry none of them (two operations made from the FAST template are both created); the arrow keys and focus in the template controls, a refused change putting the radio back (a PATCH answered 403 through `page.route`), the Save dialog's focus; and a template whose method no longer exists. It makes a tool and templates (all named "PM4 ...") and removes them, the records it Creates and the second
 member afterwards. The pickers' options are found by typing, so the spec needs a seeded machine "Haas VF-2" (the reference data has one).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)

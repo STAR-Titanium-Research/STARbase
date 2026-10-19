@@ -1447,13 +1447,21 @@ Templates (R7) are unit-tested and were driven in a real browser on the local st
 machine, a tool made for the run, two Lab Members, an administrator and a Lab Viewer; the three scopes; rename, who can use it, replace, delete;
 a stale version; a retired tool). What only live data, live roles and real people confirm:
 
-- [ ] **PM9-1 — A template on real tools, edges, operators and lists.** On live, build an operation of each process category you use, fill in
-  the machine, the tool, the cutting edge, the operator, the additional operators, the typed settings and anything that is a list or a choice
+- [ ] **PM9-1 — A template on real tools, edges, operators and lists, and what it must NOT carry.** On live, build an operation of each process
+  category you use, fill in the machine, the tool, the cutting edge, the operator, the typed settings and anything that is a list or a choice
   on that method's form, and **Save as template** (card right-click menu and the rail's Template section). The dialog's "Keeps" line must name
-  what you filled in and never the sample, the dates or Done. Drop the template on an empty canvas: every field you filled is on the new card
-  (open "all fields"), the date and the sample are not, and Create writes them (read the operation in Data Studio). Note every field that did
-  NOT come back: a field of a many-to-many (for example additional operators) is left out of a template by design (only real columns travel),
-  so say which ones you missed. Do the same for a test of each type you use. Since: edit-mode redesign slice 4 (PR pending).
+  what you filled in. Drop the template on an empty canvas: every setting you filled is on the new card (open "all fields"), and Create writes
+  them (read the operation in Data Studio). Note every field that did NOT come back: a template keeps only the setup and the form's process
+  settings (an allow-list read from the form's groups), and a many-to-many such as additional operators is left out by design. Then the
+  negative cases, on a RECORDED, finished record of each kind: save it as a template and open it in Data Studio's API or look at
+  `GET /d1-build/templates`: (a) a done **tensile, hardness, Charpy, compression, tribology, fatigue, creep, CLEMX and optical** test: only the
+  type, the machine, the operator and the test parameters are there, no result (UTS, yield, hardness, absorbed energy, cycles, grain size...),
+  no `status` (analysed...), no data file, plot or summary, no owner, no test code column; (b) a **FAST/SPS** operation with a run number: no
+  `sintering_run_number`, batch, mass, recipe, `source_system` or `recorded_metadata`, and two operations made from the template on two samples
+  are both created (the second is not refused as "That code or value is already used"); (c) an operation with a g-code file or an owner other
+  than you: no `gcode_file`, no `owner`. (d) A **restricted** record (one only some people may read): the dialog offers only Only me and says
+  why. (e) A column renamed or dropped by a later migration: an old template still adds a card and the draft still saves. Since: edit-mode
+  redesign slice 4 (PR pending); the negative cases: slice 4 review fixes.
 - [ ] **PM9-2 — Sharing with a real account role.** As a Lab Member save one template for **My account role** and one for **Everyone**.
   Sign in as another Lab Member: both are in the palette (Templates first) and in Shift+A, and neither has the ⋯ controls. Sign in as an
   administrator (another role): only the one for everyone is listed; the administrator can still rename and delete the role one if they

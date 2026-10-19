@@ -57,12 +57,20 @@ the keyboard**, and **removal that works**.
 
 ### 2.2 Details as built in slice 4 (R7)
 
-- **What a template holds.** The container's fields as they stand (a recorded operation or test is read first), minus what only that run
-  was: the wiring and work state (the server refuses them in a draft), the dates, codes, owner and `notes`/`outcome_notes` (an operation's
-  notes are `outcome_notes`, a test's are `notes`), the project and campaign (the draft's top bar chooses those) and the files of one
-  run. Machine, tool, cutting edge, operator and the typed settings stay. Only real columns travel (d1-build refuses anything else), so a
-  many-to-many such as additional operators is not in a template. The notes are kept only when the person ticks "Keep the notes too" in the
-  dialog. An operation needs its method and a test its type before it can be saved.
+- **What a template holds: an allow-list.** Only the SETUP of the work: the method (or test type) and its process category, the machine, tool,
+  cutting edge and operator, and the process settings of the form's settings groups (cutting, tooling, heat treatment, deformation, additive,
+  the FAST machine settings, and a test type's `*_params`). It is decided from the field definitions the generated form already loads
+  (`meta.group`, read-only, interface: `templateFields.ts`), so a settings field added to a group tomorrow is kept and a result field is not.
+  Never kept: results and QA readings (any `*_results` group), a test's `status`, the dates, codes and `notes`, the sample links, the legacy and
+  imported-run columns (`sintering_run_number`, which is unique with its machine, `source_*`, recipes, `recorded_metadata`), files and their
+  paths, the owner (every owner column, the legacy `owner` too), test code columns, the project and campaign (the draft's top bar chooses
+  those), and any link to another record that is not one of the setup references. A deny-list of the known bad columns backs the allow-list,
+  and only real columns travel (a many-to-many such as additional operators is not in a template). The notes (an operation's `outcome_notes`,
+  a test's `notes`) are kept only when the person ticks "Keep the notes too". The same clean-up runs again when a template is used, so a
+  template made before a column changed cannot put a stale field into a draft. An operation needs its method and a test its type before it
+  can be saved. `newFromValues` (new from, duplicate) also drops the run identity, owner, files, test status and test code columns.
+- **Restricted records.** A restricted record (ADR-0011) can only be saved as **Only me**: the dialog offers no other scope and says why, and
+  Replace will not put a restricted card into a template others can see.
 - **Making one.** **Save as template** on any container: the rail's Template section (shown for every selected operation or test, new or
   recorded) and the card's right-click menu. The dialog asks for a name (started with the method or test type) and who can use it: **Only me**,
   **My account role**, **Everyone** (the three saved-view scopes: `private`, `role` with the maker's own role, `global`), and lists what it
@@ -78,7 +86,8 @@ the keyboard**, and **removal that works**.
 - **Retired and used-up gear.** A template that names a machine or tool with `is_active` false, or a cutting edge with `is_used` true, is
   greyed with the reason under it in the palette and the add search (it can still be chosen), and any new card that names such gear (from a
   template or typed) has the same warning in Checks. A warning only: Create is not blocked. Reading the state is best effort: gear the person
-  may not read is not warned about.
+  may not read is not warned about, and a read that failed is not repeated until another draft is opened. A template whose method or test type
+  is no longer in the lists is greyed with that reason and cannot be added (it can still be deleted).
 - **Not there.** The empty "Templates" placeholder of the old Add menu stays gone: no templates, no group. A Lab Viewer, who may not build,
   gets 403 from `/d1-build/templates` and sees no edit mode.
 
