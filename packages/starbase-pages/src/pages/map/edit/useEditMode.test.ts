@@ -354,6 +354,37 @@ describe('useEditMode: typing in two fields of one item', () => {
 	});
 });
 
+describe('useEditMode: typing in two fields of one item, as the form hands the values over (fix 10)', () => {
+	it('the form sends every value the card has: a change to another field is its own undo step, and the same field keeps folding', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample', values: { form: 'disc', notes: 'x' } });
+		// Both fields are always in what the form sends; only the one that differs from the draft is the change.
+		edit.setValues('n1', { form: 'rod', notes: 'x' });
+		edit.setValues('n1', { form: 'rods', notes: 'x' });
+		edit.setValues('n1', { form: 'rods', notes: 'xy' });
+		edit.setValues('n1', { form: 'rods', notes: 'xyz' });
+		edit.undo(); // the notes, both keys of them
+		expect(edit.body.value.items[0].values).toEqual({ form: 'rods', notes: 'x' });
+		edit.undo(); // the form, not both
+		expect(edit.body.value.items[0].values).toEqual({ form: 'disc', notes: 'x' });
+		edit.redo();
+		edit.redo();
+		expect(edit.body.value.items[0].values).toEqual({ form: 'rods', notes: 'xyz' });
+	});
+
+	it('a value the form hands back unchanged is no step and does not end the one being typed', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'di' });
+		edit.undo();
+		expect(edit.body.value.items[0].values.form).toBeUndefined();
+	});
+});
+
 describe('useEditMode: reading what the draft holds', () => {
 	it('does not ask again for a sample that could not be read, on every change of the draft', async () => {
 		const server = fakeServer();

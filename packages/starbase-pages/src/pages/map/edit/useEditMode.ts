@@ -230,10 +230,20 @@ export function useEditMode(o: EditModeOptions) {
 	/** Keys typed in one field of one item within this long are one undo step. */
 	const TYPING_MS = 1500;
 	let typing: { key: DraftKey; fields: string; at: number } | null = null;
-	/** The form's change of an item's values: successive changes to the same field of the same item are folded into one step while the person types. */
+	/** The same value, as the draft compares them (a cleared field is `undefined`, `null` or absent). */
+	const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+	/**
+	 * The form's change of an item's values: successive changes to the same field of the same item are folded into one step while the person
+	 * types. The form hands over every value the item has, so what changed is worked out against the draft: a change to another field of
+	 * the same card is a step of its own (undo takes back one field at a time).
+	 */
 	function setValues(key: DraftKey, values: Record<string, unknown>): void {
 		const now = Date.now();
-		const fields = Object.keys(values).sort().join(',');
+		const item = draft.body.value.items.find((i) => i.key === key);
+		const changed = Object.keys(values).filter((k) => !sameValue(item?.values[k], values[k]));
+		// Nothing that is not already there: the reducer treats it as no change, and the step being typed in stays open.
+		if (!changed.length) return;
+		const fields = changed.sort().join(',');
 		const merge = !!typing && typing.key === key && typing.fields === fields && now - typing.at < TYPING_MS;
 		apply({ type: 'setValues', key, values }, { merge });
 		typing = { key, fields, at: now };
