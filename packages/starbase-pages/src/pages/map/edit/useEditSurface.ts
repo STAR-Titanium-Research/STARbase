@@ -28,6 +28,7 @@ import { useEditInsert } from './useEditInsert';
 import { useEditKeys } from './useEditKeys';
 import { useEditRemoval } from './useEditRemoval';
 import { usePalette } from './usePalette';
+import { useTemplateUi } from './useTemplateUi';
 import { useSamplePicking } from './useSamplePicking';
 import { workChipOf } from './workChip';
 
@@ -78,7 +79,9 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	const nameOf = (n: MapNode): string => (n.type === 'record' ? n.ref.code || 'this sample' : n.type === 'container' ? n.title || n.method || 'this step' : 'this card');
 	const insert = useEditInsert({ edit, map: o.map, canvasEl, sampleActions: build.sampleActions, open: menu.open, nameOf, say: (text, at) => (at ? build.say(text, at) : void (build.problem.value = text)) });
 	late.insert = insert.choose;
-	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, recents: menu.recents, person: () => o.person?.() });
+	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, templates: () => edit.templates.items.value, recents: menu.recents, person: () => o.person?.() });
+	// Save as template, and what the palette does to a template (R7).
+	const templateUi = useTemplateUi({ edit, map: o.map, openPalette: () => palette.fold(false) });
 	const dragging = useAddDrag({
 		body: () => edit.body.value,
 		editing: () => edit.editing.value,
@@ -92,8 +95,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		say: build.say,
 	});
 	/** What the palette draws and does, for the page to bind in one go. */
-	const paletteProps = computed(() => ({ entries: palette.entries.value, grouped: palette.grouped.value, folded: palette.folded.value, drag: dragging.drag.value, consumeClick: dragging.consumeClick }));
-	const paletteEvents = { toggle: () => palette.toggle(), add: (e: MenuEntry) => paletteAdd(e), drag: dragging.start };
+	const paletteProps = computed(() => ({ entries: palette.entries.value, grouped: palette.grouped.value, folded: palette.folded.value, drag: dragging.drag.value, consumeClick: dragging.consumeClick, ...templateUi.paletteProps.value }));
+	const paletteEvents = { toggle: () => palette.toggle(), add: (e: MenuEntry) => paletteAdd(e), drag: dragging.start, ...templateUi.paletteEvents };
 	/**
 	 * Enter or a click on a palette entry (no dragging needed): "Existing sample…" opens the picker; anything else is added next to the selected card,
 	 * else at the middle of the canvas, and the layout keeps it clear of every other card.
@@ -197,7 +200,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		}
 		menu.open({ sock: null, at: at ?? pointerOnCanvas(), ...(anchor ? { anchor } : {}) });
 	};
-	const blocked = computed(() => !!menu.target.value || !!connecting.value || !!duplicating.value || pickerOpen.value || !!o.blockedBy?.());
+	const blocked = computed(() => !!menu.target.value || !!connecting.value || !!duplicating.value || pickerOpen.value || !!templateUi.saving.value || !!o.blockedBy?.());
 	useEditKeys({
 		editing: () => edit.editing.value,
 		blocked: () => blocked.value,
@@ -229,6 +232,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, dropWire: dragging.dropWire, work: (node) => workChipOf(edit, node) } as MapEdit,
 		menu,
 		palette,
+		templateUi,
 		paletteProps,
 		paletteEvents,
 		dragging,

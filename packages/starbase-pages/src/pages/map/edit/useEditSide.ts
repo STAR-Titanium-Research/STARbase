@@ -24,6 +24,7 @@ export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio' | 'us
 		labelFor: build.labelForKey,
 		select: build.selectKey,
 		showMissing: create.showMissing,
+		saveTemplate: { can: build.templateUi.canSaveSelected, open: () => void build.templateUi.openSelected() },
 		// A field the form cannot draw: Data Studio draws it, once there is a record to open. A new item's form says so in place of the
 		// link ("Opens in Data Studio after Create", item 12), so nothing is asked here for one.
 		openExternal: (key: string, _field: FormField) => {

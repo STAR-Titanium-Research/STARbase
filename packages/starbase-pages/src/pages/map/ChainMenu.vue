@@ -8,6 +8,8 @@ const props = defineProps<{
 	x: number;
 	y: number;
 	dir: ChainDir;
+	/** Edit mode, an operation or a test: Save as template… (R7). */
+	canTemplate?: boolean;
 	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
 	canRemove?: boolean;
 	canDissolve?: boolean;
@@ -15,7 +17,7 @@ const props = defineProps<{
 	canInsert?: boolean;
 	earlier?: boolean;
 }>();
-const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
+const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after']; template: [] }>();
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -60,7 +62,7 @@ onBeforeUnmount(() => {
 			<span>{{ o.label }}</span>
 			<v-icon v-if="o.dir === props.dir" class="ck" name="check" x-small />
 		</button>
-		<template v-if="canRemove || canDissolve || canInsert">
+		<template v-if="canRemove || canDissolve || canInsert || canTemplate">
 			<div class="hd">Edit</div>
 			<template v-if="canInsert">
 				<button type="button" role="menuitem" class="it" @click="emit('insert', 'before'), emit('close')">
@@ -74,6 +76,10 @@ onBeforeUnmount(() => {
 					<kbd>I</kbd>
 				</button>
 			</template>
+			<button v-if="canTemplate" type="button" role="menuitem" class="it" @click="emit('template'), emit('close')">
+				<v-icon name="bookmark_add" x-small />
+				<span>Save as template…</span>
+			</button>
 			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove'), emit('close')">
 				<v-icon name="delete" x-small />
 				<span>Remove</span>

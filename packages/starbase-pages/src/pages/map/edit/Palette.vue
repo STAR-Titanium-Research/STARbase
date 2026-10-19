@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue';
 import { draggable, type PaletteDrag } from './useAddDrag';
 import type { MenuEntry } from './menuModel';
+import TemplateManage from './TemplateManage.vue';
+import type { TemplateScope } from './templates';
 
 // The palette (redesign R1): the left dock of edit mode. A search box over the one catalog (samples, operations by process category, tests),
 // every entry a drag source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between
@@ -16,9 +18,27 @@ const props = defineProps<{
 	drag: PaletteDrag | null;
 	/** The click a finished drag leaves behind on its entry is not an add: true once for it. */
 	consumeClick: () => boolean;
+	/** Templates (R7): what was just done to one, or what failed, said above the list. */
+	templateNotice?: string;
+	templateFailed?: boolean;
+	templateBusy?: boolean;
+	/** The kind of the selected container on the canvas, and what it is called: a template of that kind can take its settings. */
+	selectedKind?: 'operation' | 'test' | null;
+	selectedTitle?: string;
 }>();
 const query = defineModel<string>('query', { default: '' });
-const emit = defineEmits<{ toggle: []; add: [entry: MenuEntry]; drag: [entry: MenuEntry, e: PointerEvent] }>();
+const emit = defineEmits<{
+	toggle: [];
+	add: [entry: MenuEntry];
+	drag: [entry: MenuEntry, e: PointerEvent];
+	'template-rename': [id: string, name: string];
+	'template-scope': [id: string, scope: TemplateScope];
+	'template-replace': [id: string];
+	'template-delete': [id: string];
+	'template-dismiss': [];
+}>();
+/** The template whose controls are open. */
+const managing = ref<string | null>(null);
 
 const rows = computed(() => props.entries.map((e, i) => ({ e, head: props.grouped && (i === 0 || props.entries[i - 1].section !== e.section) ? e.section : null })));
 const list = ref<HTMLElement | null>(null);
@@ -52,22 +72,52 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 		<template v-if="!folded">
 			<input v-model="query" class="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search…" aria-label="Search the palette" @keydown.esc.stop="query = ''" />
 			<p class="hint">Drag onto the canvas, a socket or a wire. Enter adds.</p>
+			<p v-if="templateNotice" class="note" :class="{ bad: templateFailed }" role="status" data-template-notice>
+				<span>{{ templateNotice }}</span>
+				<button type="button" class="x" aria-label="Dismiss" @click="emit('template-dismiss')"><v-icon name="close" x-small /></button>
+			</p>
 			<div ref="list" class="list" role="group" aria-label="Things to add">
 				<template v-for="r in rows" :key="r.e.id">
 					<div v-if="r.head" class="sec" role="presentation">{{ r.head }}</div>
-					<button
-						type="button"
-						class="pe"
-						:class="{ drag: draggable(r.e) }"
-						:data-entry="r.e.id"
-						:title="draggable(r.e) ? 'Drag onto the canvas, a socket or a wire. Enter adds it.' : r.e.detail"
-						@pointerdown="draggable(r.e) && emit('drag', r.e, $event)"
-						@click="click(r.e)"
-					>
-						<span class="lab">{{ r.e.label }}</span>
-						<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
-						<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
-					</button>
+					<div class="pr">
+						<button
+							type="button"
+							class="pe"
+							:class="{ drag: draggable(r.e), grey: !!r.e.warn }"
+							:data-entry="r.e.id"
+							:title="draggable(r.e) ? 'Drag onto the canvas, a socket or a wire. Enter adds it.' : r.e.detail"
+							@pointerdown="draggable(r.e) && emit('drag', r.e, $event)"
+							@click="click(r.e)"
+						>
+							<span class="lab">{{ r.e.label }}</span>
+							<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
+							<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
+							<span v-if="r.e.warn" class="warn" data-warning>{{ r.e.warn }}</span>
+						</button>
+						<button
+							v-if="r.e.template?.mine"
+							type="button"
+							class="tm"
+							:aria-label="`Manage the template ${r.e.template.name}`"
+							:aria-expanded="managing === r.e.template.id"
+							title="Rename, who can use it, replace, delete"
+							@click="managing = managing === r.e.template.id ? null : r.e.template.id"
+						>
+							<v-icon name="more_horiz" x-small />
+						</button>
+						<TemplateManage
+							v-if="r.e.template && managing === r.e.template.id"
+							:info="r.e.template"
+							:selected-kind="selectedKind ?? null"
+							:selected-title="selectedTitle ?? ''"
+							:busy="!!templateBusy"
+							@rename="(n) => emit('template-rename', r.e.template!.id, n)"
+							@scope="(sc) => emit('template-scope', r.e.template!.id, sc)"
+							@replace="emit('template-replace', r.e.template!.id)"
+							@delete="(emit('template-delete', r.e.template!.id), (managing = null))"
+							@close="managing = null"
+						/>
+					</div>
 				</template>
 				<p v-if="!rows.length" class="none" role="status">Nothing fits what you typed.</p>
 			</div>
@@ -120,6 +170,17 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 .hint { margin: 0; padding: 0 2px; color: var(--d1-dim); font-size: var(--fs-xs, 11px); line-height: 1.35; }
 .list { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
 .sec { padding: 8px 4px 3px; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }
+.pr { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.pr > .pe { flex: 1; width: auto; min-width: 0; }
+.tm { flex: none; display: inline-grid; place-items: center; width: 26px; height: 26px; margin: 3px 0 0 2px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--d1-dim); cursor: pointer; }
+.tm:hover, .tm:focus-visible, .tm[aria-expanded='true'] { background: var(--d1-tile); color: inherit; outline: none; }
+.note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 4px 6px; border-radius: 6px; background: var(--d1-tint); font-size: var(--fs-xs, 11px); line-height: 1.35; }
+.note.bad { color: var(--d1-bad); }
+.note span { flex: 1; }
+.note .x { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+/* A template that names a retired machine or tool or a used-up edge: still there to use, greyed, with the reason under it. */
+.pe.grey .lab, .pe.grey .det { opacity: 0.6; }
+.warn { flex-basis: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-warn, var(--theme--warning)); }
 .pe {
 	display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px;
 	background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: pan-y;

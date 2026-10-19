@@ -358,10 +358,12 @@ const tipHint = computed(() => {
 									:can-dissolve="edit.editing.value && build.canDissolve.value"
 									:can-insert="edit.editing.value && build.canInsertSelected()"
 									:earlier="build.selectedIsDoneSample()"
+									:can-template="build.templateUi.canSaveSelected.value"
 									@pick="map.setChainDir"
 									@remove="build.removeSelected"
 									@dissolve="build.dissolveSelected"
 									@insert="build.insertSelected"
+									@template="build.templateUi.openSelected"
 									@close="chainMenu = null"
 								/>
 							</div>

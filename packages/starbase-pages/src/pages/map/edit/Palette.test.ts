@@ -3,6 +3,7 @@ import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import Palette from './Palette.vue';
 import { catalogEntries } from './menuModel';
+import type { TemplateItem } from './templates';
 
 const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('i', { class: 'v-icon' }, p.name) });
 const entries = catalogEntries({
@@ -59,5 +60,55 @@ describe('Palette', () => {
 		expect(html).not.toContain('class="sec"');
 		expect(text(html)).toContain('Machining');
 		expect(text(await render({ entries: [] }))).toContain('Nothing fits what you typed.');
+	});
+});
+
+describe('Palette templates (R7)', () => {
+	const tpl = (id: string, name: string, extra: Partial<TemplateItem> = {}): TemplateItem => ({
+		rec: { id, name, scope: 'private', role_id: null, collection: 'manufacturing_operations', values: { method_id: 'mt' }, user_id: 'u1', updated_at: 'now', version: 1 },
+		mine: true,
+		...extra,
+	});
+	const withTemplates = (items: TemplateItem[]) =>
+		catalogEntries({ methods: [{ id: 'mt', name: 'CNC Turning', code: 'MC', category: 'machining' }], testTypes: [], templates: items });
+	const html = (items: TemplateItem[], props: Record<string, unknown> = {}) => render({ entries: withTemplates(items), ...props });
+
+	it('lists the Templates group first, each a drag source', async () => {
+		const out = await html([tpl('t1', 'Roughing pass')]);
+		expect(out.indexOf('Templates')).toBeLessThan(out.indexOf('Samples'));
+		const tag = out.match(/<button[^>]*data-entry="tpl:t1"[^>]*>/)?.[0] ?? '';
+		expect(tag).toMatch(/class="[^"]*\bdrag\b/);
+		expect(text(out)).toContain('Roughing pass');
+		expect(text(out)).toContain('CNC Turning');
+	});
+
+	it('has no Templates group while there are none', async () => {
+		const out = await html([]);
+		expect(text(out)).not.toContain('Templates');
+	});
+
+	it('gives a manage button only for a template the person made', async () => {
+		const out = await html([tpl('t1', 'Mine'), tpl('t2', 'Theirs', { mine: false })]);
+		expect(out).toContain('aria-label="Manage the template Mine"');
+		expect(out).not.toContain('Manage the template Theirs');
+	});
+
+	it('greys a template that names retired gear and says why, still a button to use', async () => {
+		const out = await html([tpl('t1', 'Old tool', { warn: 'The tool Holder 3 is retired.' })]);
+		const tag = out.match(/<button[^>]*data-entry="tpl:t1"[^>]*>/)?.[0] ?? '';
+		expect(tag).toMatch(/\bgrey\b/);
+		expect(tag).not.toContain('disabled');
+		expect(out).toContain('data-warning');
+		expect(text(out)).toContain('The tool Holder 3 is retired.');
+	});
+
+	it('says what was done to a template, or what failed, above the list', async () => {
+		const ok = await html([], { templateNotice: 'Saved the template Roughing.' });
+		expect(ok).toContain('data-template-notice');
+		expect(text(ok)).toContain('Saved the template Roughing.');
+		expect(ok).not.toMatch(/class="bad note"/);
+		const bad = await html([], { templateNotice: 'Only the person who made a template can change it.', templateFailed: true });
+		expect(bad).toMatch(/class="bad note"/);
+		expect(text(await html([]))).not.toContain('Saved the template');
 	});
 });
