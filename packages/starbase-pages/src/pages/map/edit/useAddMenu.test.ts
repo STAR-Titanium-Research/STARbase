@@ -22,8 +22,9 @@ async function setup(editing = true, body?: DraftBody, person: string | null = '
 	const ec = useEditCanvas({ edit, map: { graph: { value: { nodes: [] } }, clearHover() {} } as never, canvas: canvas as never, canvasEl, openMenu: () => undefined });
 	const connect = vi.fn();
 	const insert = vi.fn();
-	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked, connect, person: () => person, insert });
-	return { edit, menu, picked, connect, insert };
+	const attach = vi.fn();
+	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked, connect, attach, person: () => person, insert });
+	return { edit, menu, picked, connect, insert, attach };
 }
 
 describe('the add search\'s state', () => {
@@ -67,6 +68,29 @@ describe('the add search\'s state', () => {
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'pickSamples' });
 		expect(picked).toHaveBeenCalled();
+		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('From database… opens the picker for the socket the menu was on, and changes nothing yet', async () => {
+		const { menu, attach, edit } = await setup();
+		const t: MenuTarget = { sock: { kind: 'sample', id: 's1', side: 'out' }, at: { x: 1, y: 1 }, anchor: 'card' };
+		menu.open(t);
+		await menu.choose({ kind: 'fromDatabase' });
+		expect(attach).toHaveBeenCalledWith(t);
+		expect(menu.target.value).toBeNull();
+		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('the operation the picker chose is attached to the sample at the socket, the sample joining the draft in the same undo step', async () => {
+		const { menu, edit } = await setup();
+		const t: MenuTarget = { sock: { kind: 'sample', id: 's1', side: 'out' }, at: { x: 300, y: 200 }, anchor: 'card' };
+		await menu.applyAt(t, { kind: 'attachOperation', id: 'op-1', version: 3, workState: 'planned' });
+		const sample = edit.body.value.items.find((i) => i.kind === 'sample');
+		const op = edit.body.value.items.find((i) => i.kind === 'operation');
+		expect(sample?.existing?.id).toBe('s1');
+		expect(op).toMatchObject({ existing: { id: 'op-1', version: 3 }, attach: true, workState: 'planned' });
+		expect(edit.body.value.wires).toEqual([{ from: { key: sample!.key }, to: { key: op!.key, row: 0 } }]);
+		edit.undo();
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 

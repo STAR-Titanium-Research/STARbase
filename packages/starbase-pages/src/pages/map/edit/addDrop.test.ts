@@ -60,6 +60,14 @@ describe('dropping a catalog entry on a socket', () => {
 		expect(socketVerdict(b, sock('sample', 'draft:n5', 'out'), { kind: 'pickSamples' })).toMatchObject({ ok: false });
 	});
 
+	it('From database… fits a sample\'s output (the picker chooses the operation), and nothing else', () => {
+		const db: MenuChoice = { kind: 'fromDatabase' };
+		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'out'), db)).toEqual({ ok: true });
+		for (const s of [sock('sample', 'draft:n5', 'in'), sock('row', 'draft:n3', 'out'), sock('row', 'draft:n3', 'in'), sock('row', 'draft:n4', 'in')]) {
+			expect(socketVerdict(body(), s, db)).toMatchObject({ ok: false, reason: expect.stringContaining('attached to a sample') });
+		}
+	});
+
 	it('refuses with the draft\'s own reason when the reducer says no: an operation output that already goes to a sample', () => {
 		const made = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
 		expect(socketVerdict(made, sock('row', 'draft:n3', 'out'), sample)).toEqual({ ok: false, reason: 'That output already goes to a sample.' });

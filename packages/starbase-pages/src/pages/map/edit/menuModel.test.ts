@@ -3,6 +3,7 @@ import type { DraftBody, DraftOperation } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { apply, emptyBody, itemOf, type DraftAction } from './draft';
 import { grown } from './socketRefs';
+import { recentIdOf } from './recents';
 import { actionsFor, canvasSampleEntries, catalogEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuCatalog, type MenuChoice, type MenuEntry } from './menuModel';
 import type { SocketRef } from './socketRefs';
 
@@ -59,17 +60,18 @@ describe('the entries', () => {
 	it('from a sample output: operations by category (the lab\'s order, no category last), then the tests', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n1', 'out')), catalog);
-		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
-		expect(labels(es)).toEqual(['Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
+		expect(sections(es)).toEqual(['From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+		expect(labels(es)).toEqual(['From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
 		expect(es.find((e) => e.label === 'Turning')?.detail).toBe('MC');
 	});
 
 	it('unconnected: the whole catalog, one flat list: the samples, the operations by category, the tests', () => {
 		const es = rootEntries(body(), menuFor(body(), null), catalog);
 		expect(es).toEqual(catalogEntries(catalog));
-		expect(sections(es)).toEqual(['Samples', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
-		expect(labels(es).slice(0, 2)).toEqual(['New sample', 'Existing sample…']);
+		expect(sections(es)).toEqual(['Samples', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
+		expect(labels(es).slice(0, 3)).toEqual(['New sample', 'Existing sample…', 'From database…']);
 		expect(es[1].choice).toEqual({ kind: 'pickSamples' });
+		expect(es[2].choice).toEqual({ kind: 'fromDatabase' });
 	});
 
 	it('the operations alone (insert before and after) have no samples and no tests', () => {
@@ -105,6 +107,27 @@ describe('the entries', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), catalog);
 		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Wire']);
+	});
+
+	it('From database… is offered from a sample\'s output and unconnected, not at an operation, a test or a sample\'s input', () => {
+		const b = body();
+		const has = (s: SocketRef | null) => labels(rootEntries(b, menuFor(b, s), catalog)).includes('From database…');
+		expect(has(sock('sample', 'draft:n1', 'out'))).toBe(true);
+		expect(has(null)).toBe(true);
+		expect(has(sock('sample', 'draft:n5', 'in'))).toBe(false);
+		expect(has(sock('row', 'draft:n3', 'out'))).toBe(false);
+		expect(has(sock('row', 'draft:n3', 'in'))).toBe(false);
+		expect(has(sock('row', 'draft:n4', 'in'))).toBe(false);
+		// the operations alone (insert before / after) never list it
+		expect(labels(operationOnlyEntries(catalog))).not.toContain('From database…');
+	});
+
+	it('is found by typing "database" or "attach", and is not a recent', () => {
+		const es = rootEntries(body(), menuFor(body(), null), catalog);
+		expect(labels(searchEntries(es, 'database'))).toEqual(['From database…']);
+		expect(labels(searchEntries(es, 'attach'))).toEqual(['From database…']);
+		expect(recentIdOf({ kind: 'fromDatabase' })).toBeNull();
+		expect(recentIdOf({ kind: 'attachOperation', id: 'o', version: 1, workState: 'planned' })).toBeNull();
 	});
 
 	it('lists the samples on the canvas an output could go to, the others greyed with the draft\'s reason', () => {
@@ -266,6 +289,29 @@ describe('what a choice does', () => {
 		const free = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]);
 		const inn = doIt(free, sock('row', 'draft:n3', 'in'), { kind: 'wireSample', key: 'n1' });
 		expect(inn.wires.at(-1)).toEqual({ from: { key: 'n1' }, to: { key: 'n2', row: 0 } });
+	});
+
+	it('an operation from the database is attached to the sample whose output the menu is for, with the version it was read at', () => {
+		const choice: MenuChoice = { kind: 'attachOperation', id: 'op-9', version: 4, workState: 'planned' };
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), choice, { at });
+		expect(b.items.at(-1)).toMatchObject({ kind: 'operation', existing: { id: 'op-9', version: 4 }, attach: true, workState: 'planned' });
+		expect(b.wires.at(-1)).toEqual({ from: { key: 'n5' }, to: { key: 'n6', row: 0 } });
+		expect(b.positions.n6).toEqual(at);
+		// unconnected: it lands floating, unattached
+		const floating = doIt(body(), null, { ...choice, workState: 'done' });
+		expect(floating.items.at(-1)).toMatchObject({ existing: { id: 'op-9', version: 4 }, attach: true, workState: 'done' });
+		expect(floating.wires).toEqual(body().wires);
+		// one step
+		expect(actionsFor(target(body(), sock('sample', 'draft:n5', 'out')), choice)).toHaveLength(1);
+	});
+
+	it('an operation from the database fits nowhere but a sample\'s output (or nowhere in particular)', () => {
+		const choice: MenuChoice = { kind: 'attachOperation', id: 'op-9', version: 4, workState: 'planned' };
+		for (const s of [sock('sample', 'draft:n5', 'in'), sock('row', 'draft:n3', 'out'), sock('row', 'draft:n3', 'in'), sock('row', 'draft:n4', 'in')]) {
+			expect(actionsFor(target(body(), s), choice)).toEqual([]);
+		}
+		// opening the picker is not an action
+		expect(actionsFor(target(body(), sock('sample', 'draft:n5', 'out')), { kind: 'fromDatabase' })).toEqual([]);
 	});
 
 	it('does nothing for a choice that does not fit, or that is not an action (picking samples, searching)', () => {

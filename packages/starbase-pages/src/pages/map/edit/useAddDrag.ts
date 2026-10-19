@@ -41,8 +41,8 @@ export interface PaletteDrag {
 	reason: string | null;
 }
 
-/** An entry the pointer can carry: a thing to add, not a sub-menu ("Existing sample…" opens the picker). */
-export const draggable = (e: MenuEntry): boolean => e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newSample';
+/** An entry the pointer can carry: a thing to add, not a sub-menu ("Existing sample…" opens the picker). "From database…" can be carried to the sample it is for. */
+export const draggable = (e: MenuEntry): boolean => e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newSample' || e.choice.kind === 'fromDatabase';
 
 export function useAddDrag(o: {
 	body: () => DraftBody;
