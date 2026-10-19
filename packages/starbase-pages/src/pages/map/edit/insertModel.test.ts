@@ -8,7 +8,7 @@ import type { MapNode, ProcessData, ProcessGraph, RecordNode } from '../model/ty
 import { apply, emptyBody, type DraftAction } from './draft';
 import type { MenuChoice } from './menuModel';
 import { ALREADY_GOING, DONE_WIRE, SAVED_WIRE } from './removal';
-import { NO_FIT, SAMPLE_BETWEEN, STACKED, TEST_AFTER, TEST_BETWEEN, earlierStep, insertAround, insertOnWire, insertRefusal } from './insertModel';
+import { BEFORE_RECORDED, NO_FIT, SAMPLE_BETWEEN, STACKED, TEST_AFTER, TEST_BETWEEN, insertAround, insertBeforeRefusal, insertOnWire, insertRefusal } from './insertModel';
 import { toGraph } from './toGraph';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
@@ -144,34 +144,36 @@ describe('insert before and after a selected card', () => {
 		expect(wiresText(after)).toEqual(['n2.0>n1', 'n4>n2.0']);
 	});
 
-	it('before a planned sample that exists: the draft refuses to give it a maker, and says so', () => {
+	it('before a planned sample that exists is refused up front: its history is recorded', () => {
 		const data = mkData({ samples: [mkSample('s4', { status: 'planned' })] });
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's4', version: 1 }] }]);
 		const g = graphOf(data, body);
-		const v = insertAround({ body, graph: g, node: sampleNode(g, 's4'), where: 'before', choice: turning });
-		expect(v).toMatchObject({ ok: false, reason: 'That sample already exists with its own history: it cannot be made by this operation.' });
+		expect(insertAround({ body, graph: g, node: sampleNode(g, 's4'), where: 'before', choice: turning })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
+		// Not even in the draft yet: the same answer, nothing to add first.
+		const g0 = graphOf(data, emptyBody());
+		expect(insertAround({ body: emptyBody(), graph: g0, node: sampleNode(g0, 's4'), where: 'before', choice: turning })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
 	});
 
-	it('before a DONE sample is never a new parent: an operation is refused, and Add an earlier step starts a chain upstream that is wired to nothing', () => {
+	it('before a DONE sample is refused with the one reason, whatever is chosen and whether or not it is in the draft; nothing is planned', () => {
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's2', version: 1 }] }]);
 		const g = graphOf(history(), body);
 		const s2 = sampleNode(g, 's2');
-		expect(insertAround({ body, graph: g, node: s2, where: 'before', choice: turning })).toEqual({ ok: false, reason: DONE_WIRE, locked: true });
-		const after = run(done(insertAround({ body, graph: g, node: s2, where: 'before', choice: { kind: 'earlierStep' } })), body);
-		expect(kinds(after)).toEqual(['n1:sample', 'n2:sample', 'n3:operation', 'n5:sample']);
-		expect(after.items.find((i) => i.key === 'n3')).toMatchObject({ workState: 'planned' });
-		// Wired among the new things only; the done sample gets no wire.
-		expect(wiresText(after)).toEqual(['n2>n3.0', 'n3.0>n5']);
-		expect(after.items[0]).toMatchObject({ existing: { id: 's2' } });
+		expect(BEFORE_RECORDED).toBe("Its history is recorded and can't change from the map. Start from a new sample instead.");
+		expect(insertAround({ body, graph: g, node: s2, where: 'before', choice: turning })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
+		expect(insertAround({ body, graph: g, node: s2, where: 'before', choice: { kind: 'newSample' } })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
+		const g0 = graphOf(history(), emptyBody());
+		expect(insertAround({ body: emptyBody(), graph: g0, node: sampleNode(g0, 's2'), where: 'before', choice: turning })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
 	});
 
-	it('Add an earlier step is only for a done sample before it', () => {
-		const body = chain();
-		const g = graphOf(null, body);
-		expect(insertAround({ body, graph: g, node: sampleNode(g, 'draft:n4'), where: 'before', choice: { kind: 'earlierStep' } })).toMatchObject({ ok: false });
-		const b2 = run([{ type: 'addExistingSamples', samples: [{ id: 's2', version: 1 }] }]);
-		const g2 = graphOf(history(), b2);
-		expect(insertAround({ body: b2, graph: g2, node: sampleNode(g2, 's2'), where: 'after', choice: { kind: 'earlierStep' } })).toMatchObject({ ok: false });
+	it('insertBeforeRefusal: a sample that is a record (done or planned) is refused; a new sample, a container and a junction are not', () => {
+		const g = graphOf(history(), emptyBody());
+		expect(insertBeforeRefusal(sampleNode(g, 's2'))).toBe(BEFORE_RECORDED);
+		expect(insertBeforeRefusal(node(g, 'op:o1'))).toBeNull();
+		const fresh = chain();
+		const gf = graphOf(null, fresh);
+		expect(insertBeforeRefusal(sampleNode(gf, 'draft:n4'))).toBeNull();
+		const gp = graphOf(mkData({ samples: [mkSample('s4', { status: 'planned' })] }), emptyBody());
+		expect(insertBeforeRefusal(sampleNode(gp, 's4'))).toBe(BEFORE_RECORDED);
 	});
 
 	it('after a sample with one outgoing wire: between them', () => {
@@ -237,10 +239,10 @@ describe('after a sample whose one outgoing wire is done', () => {
 		expect(g.wires.filter((w) => nodeOfSocket(w.from) === 's:s1')).toHaveLength(1);
 		const after = run(done(insertAround({ body, graph: g, node: node(g, 's:s1') as RecordNode, where: 'after', choice: turning })), body);
 		expect(wiresText(after)).toEqual(['n1>n2.0']);
-		// Before it is still the wire that makes it, never changed.
+		// Before it is refused whole: the wire that makes it is never changed.
 		const b2 = run([{ type: 'addExistingSamples', samples: [{ id: 's2', version: 1 }] }]);
 		const g2 = graphOf(data, b2);
-		expect(insertAround({ body: b2, graph: g2, node: node(g2, 's:s2') as RecordNode, where: 'before', choice: turning })).toEqual({ ok: false, reason: DONE_WIRE, locked: true });
+		expect(insertAround({ body: b2, graph: g2, node: node(g2, 's:s2') as RecordNode, where: 'before', choice: turning })).toEqual({ ok: false, reason: BEFORE_RECORDED, locked: true });
 	});
 });
 
@@ -327,28 +329,11 @@ describe('around a planned operation that already exists', () => {
 		expect(insertRefusal(body, node(gp, 'op:o3'))).toEqual({ reason: SAVED_WIRE, locked: false });
 		const gone = run([{ type: 'remove', key: 'n1', deleteRecord: true }], body);
 		expect(insertRefusal(gone, node(graphOf(planned(), gone), 'op:o3'))).toEqual({ reason: ALREADY_GOING, locked: false });
-		// What can be inserted around: a new card, and a sample (done or not: its "before" is the earlier step).
+		// What can be inserted around: a new card, and a sample (a done one only after it: before it is refused by insertBeforeRefusal).
 		const fresh = chain();
 		const gf = graphOf(null, fresh);
 		expect(insertRefusal(fresh, node(gf, 'op:draft:n3'))).toBeNull();
 		expect(insertRefusal(fresh, node(gf, 's:draft:n1'))).toBeNull();
 		expect(insertRefusal(emptyBody(), node(g, 's:s2'))).toBeNull();
-	});
-});
-
-describe('Add an earlier step', () => {
-	it('does not need the done sample to be part of the draft: the draft keeps no record of it', () => {
-		const body = emptyBody();
-		const g = graphOf(history(), body);
-		const v = insertAround({ body, graph: g, node: node(g, 's:s2') as RecordNode, where: 'before', choice: { kind: 'earlierStep' } });
-		expect(run(done(v)).items).toHaveLength(3);
-	});
-
-	it('is a planned sample, an operation of no method yet that it feeds, and the sample that makes: three new items, two wires', () => {
-		const v = earlierStep(emptyBody(), { x: 5, y: 6 });
-		const body = run(done(v));
-		expect(kinds(body)).toEqual(['n1:sample', 'n2:operation', 'n4:sample']);
-		expect(wiresText(body)).toEqual(['n1>n2.0', 'n2.0>n4']);
-		expect(body.positions.n1).toEqual({ x: 5, y: 6 });
 	});
 });

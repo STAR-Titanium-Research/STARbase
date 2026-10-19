@@ -1,12 +1,12 @@
-// "Insert before / after" the selected card, a drop on a wire, and "Add an earlier step" (redesign R2, R3): the page's side of insertModel.ts. It reads
-// what is selected, opens the add search for it (the operations that can go there, or the one step a done sample may take), and does the
-// verdict of the pure rules as ONE history step; a refusal is said where the person is looking (the lock reason of a done wire among them).
+// "Insert before / after" the selected card and a drop on a wire (redesign R2, R3): the page's side of insertModel.ts. It reads what is selected,
+// opens the add search for it (the operations that can go there), and does the verdict of the pure rules as ONE history step; a refusal is
+// said where the person is looking (the lock reason of a done wire, or that a recorded sample can't be inserted before, among them).
 
 import type { Ref } from 'vue';
 import type { MapNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
 import { apply, type DraftAction } from './draft';
-import { insertAround, insertOnWire, insertRefusal, type InsertVerdict } from './insertModel';
+import { insertAround, insertBeforeRefusal, insertOnWire, insertRefusal, type InsertVerdict } from './insertModel';
 import type { MenuChoice } from './menuModel';
 import type { InsertTarget, MenuTarget } from './menuTarget';
 import { sampleItemOf } from './socketRefs';
@@ -38,8 +38,8 @@ export function useEditInsert(o: {
 	const isCard = (n: MapNode | undefined): n is MapNode => !!n && ((n.type === 'record' && n.kind === 'sample') || n.type === 'container');
 	/** The card's menu offers Insert only where something can be inserted: not on a struck-through card, a done or saved container, a recorded operation. */
 	const canInsert = (n: MapNode | undefined): n is MapNode => isCard(n) && !insertRefusal(edit.body.value, n);
-	/** A done sample is never given a parent: "before" it is the earlier step (R3). */
-	const isDoneSample = (n: MapNode | undefined): boolean => !!n && n.type === 'record' && n.kind === 'sample' && !n.draft && !n.planned;
+	/** Why "Insert before" is refused for the card (a recorded sample, R3), or null: the card's menu shows it disabled with this as its title. */
+	const beforeRefusal = (n: MapNode | undefined): string | null => insertBeforeRefusal(n);
 
 	/** Where the search opens for a card: just under its title, at its left. */
 	function pointOf(node: MapNode): { x: number; y: number } {
@@ -57,7 +57,13 @@ export function useEditInsert(o: {
 			o.say(no.reason);
 			return true;
 		}
-		const insert: InsertTarget = { where, nodeId: node.id, what: o.nameOf(node), ...(where === 'before' && isDoneSample(node) ? { earlier: true as const } : {}) };
+		// A sample that is already a record is never given a maker from the map: no search, no draft change, no undo step.
+		const noBefore = where === 'before' ? beforeRefusal(node) : null;
+		if (noBefore) {
+			o.say(noBefore);
+			return true;
+		}
+		const insert: InsertTarget = { where, nodeId: node.id, what: o.nameOf(node) };
 		o.open({ sock: null, at: pointOf(node), anchor: node.id, insert });
 		return true;
 	}
@@ -79,7 +85,7 @@ export function useEditInsert(o: {
 		// A sample of the loaded history joins the draft (with the version it was read at) in the same step as the insert, but only if the insert
 		// is not refused: the verdict is taken on a copy of the draft that already holds it, and nothing is applied before it.
 		let adds: DraftAction[] = [];
-		if (node.type === 'record' && choice.kind !== 'earlierStep' && !sampleItemOf(edit.body.value, node.ref.id)) {
+		if (node.type === 'record' && !(ins.where === 'before' && beforeRefusal(node)) && !sampleItemOf(edit.body.value, node.ref.id)) {
 			const read = await o.sampleActions(node.ref.id);
 			if (!read) return false;
 			adds = read;
@@ -108,7 +114,7 @@ export function useEditInsert(o: {
 		return v.ok ? null : { reason: v.reason, locked: v.locked };
 	}
 
-	return { openFor, choose, dropOnWire, wireVerdict, selected, canInsert, isDoneSample };
+	return { openFor, choose, dropOnWire, wireVerdict, selected, canInsert, beforeRefusal };
 }
 
 export type EditInsert = ReturnType<typeof useEditInsert>;

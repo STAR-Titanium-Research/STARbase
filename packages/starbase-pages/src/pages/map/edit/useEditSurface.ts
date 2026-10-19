@@ -235,7 +235,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		paletteAdd,
 		insertSelected: insert.openFor,
 		canInsertSelected: () => insert.canInsert(insert.selected()),
-		selectedIsDoneSample: () => insert.isDoneSample(insert.selected()),
+		selectedInsertBeforeRefusal: () => insert.beforeRefusal(insert.selected()),
 		picking,
 		pickerOpen,
 		undo: picking.undo,

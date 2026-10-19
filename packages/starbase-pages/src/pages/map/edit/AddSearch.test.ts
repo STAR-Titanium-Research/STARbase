@@ -82,11 +82,4 @@ describe('AddSearch', () => {
 		expect(t).not.toContain('Tensile');
 		expect(t).not.toContain('New sample');
 	});
-
-	it('for a done sample offers the one step it may take, and nothing that would give it a new parent', async () => {
-		const t = text(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 }, insert: { where: 'before', nodeId: 's:x', what: 'LOCAL-BAR-2', earlier: true } } }));
-		expect(t).toContain('Add an earlier step to LOCAL-BAR-2');
-		expect(t).toContain('The done record is not changed');
-		expect(t).not.toContain('Turning');
-	});
 });

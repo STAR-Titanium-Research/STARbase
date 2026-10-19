@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
-import { EARLIER_STEP, canvasSampleEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuChoice, type MenuEntry } from './menuModel';
+import { canvasSampleEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuChoice, type MenuEntry } from './menuModel';
 import { grown } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
 import { restoreFocus as giveFocusBack } from './focusCanvas';
@@ -68,7 +68,7 @@ const all = computed<MenuEntry[]>(() => {
 	if (mode.value === 'records') return found.value;
 	if (mode.value === 'canvas') return canvasSampleEntries(view.value, purpose.value.end, (key) => sampleLabel(props.body, key, props.codeOf ?? (() => undefined)));
 	const ins = props.target.insert;
-	if (ins) return ins.earlier ? [EARLIER_STEP] : operationOnlyEntries({ methods: props.methods, testTypes: props.testTypes });
+	if (ins) return operationOnlyEntries({ methods: props.methods, testTypes: props.testTypes });
 	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes });
 });
 // The search of the database is the server's: its rows are not filtered again by the same words. The catalog is ranked, recents first.
@@ -93,7 +93,7 @@ const title = computed(() => {
 	if (mode.value === 'records') return 'Find a sample';
 	if (mode.value === 'canvas') return 'Samples on the canvas';
 	const ins = props.target.insert;
-	if (ins) return ins.earlier ? `Add an earlier step to ${ins.what}` : `Insert ${ins.where} ${ins.what}`;
+	if (ins) return `Insert ${ins.where} ${ins.what}`;
 	const f = purpose.value;
 	if (f.side === 'out' && f.card === 'operation') return 'What does this operation make?';
 	if (f.side === 'in' && f.card !== 'sample') return 'What feeds this in?';
