@@ -113,6 +113,36 @@ describe('the From database picker', () => {
 		expect(el.querySelector('.more')).toBeNull();
 	});
 
+	it('Show more keeps the highlighted row and the focus in the dialog (the button is aria-disabled while it reads, and gone with the last page), and lists a repeated row once', async () => {
+		let release: () => void = () => undefined;
+		const search = vi.fn((_q: string, offset: number) =>
+			offset
+				? new Promise<{ rows: OrphanRow[]; more: boolean }>((r) => void (release = () => r({ rows: [row('b'), row('c')], more: false })))
+				: Promise.resolve({ rows: [row('a'), row('b')], more: true }),
+		);
+		const el = mount({ search });
+		await settle();
+		const dialog = el.querySelector<HTMLElement>('[role="dialog"]')!;
+		dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+		await nextTick();
+		expect(options(el)[1].getAttribute('aria-selected')).toBe('true');
+		const more = el.querySelector<HTMLButtonElement>('.more')!;
+		more.focus();
+		more.click();
+		await nextTick();
+		expect(more.disabled, 'not disabled: a disabled button drops the focus').toBe(false);
+		expect(more.getAttribute('aria-disabled')).toBe('true');
+		release();
+		await settle();
+		expect(options(el).map((o) => o.getAttribute('data-operation')), 'b is not listed twice').toEqual(['a', 'b', 'c']);
+		expect(options(el)[1].getAttribute('aria-selected'), 'the highlight stayed').toBe('true');
+		expect(el.querySelector('.more')).toBeNull();
+		expect(document.activeElement, 'focus is on the search box, not the page').toBe(el.querySelector('input'));
+		dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+		await nextTick();
+		expect(options(el)[2].getAttribute('aria-selected'), 'the dialog\'s keys still work').toBe('true');
+	});
+
 	it('says so when nothing matches, when the list cannot be read, and what went wrong with a pick', async () => {
 		const el = mount({ search: async () => ({ rows: [], more: false }) });
 		await settle();

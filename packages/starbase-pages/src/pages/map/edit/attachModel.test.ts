@@ -10,7 +10,7 @@ describe('the query', () => {
 	it('asks for operations with no input sample, newest first, one more than a page', () => {
 		const p = orphanParams('');
 		expect(JSON.parse(p.filter as string)).toEqual({ _and: [{ sample_id: { _null: true } }] });
-		expect(p).toMatchObject({ sort: ['-created_at'], limit: ORPHAN_PAGE + 1, offset: 0 });
+		expect(p).toMatchObject({ sort: ['-created_at', '-operation_id'], limit: ORPHAN_PAGE + 1, offset: 0 });
 		expect(p.fields).toEqual(expect.arrayContaining(['operation_id', 'version', 'work_state', 'method_id.method_name', 'output_sample_id.sample_code', 'owner_person_id.full_name']));
 	});
 
@@ -32,7 +32,7 @@ describe('a row of the answer', () => {
 	};
 
 	it('has the code, method, day, state, owner, the sample it made and the version to attach against', () => {
-		expect(orphanRowOf(raw)).toEqual({ id: 'op-1', version: 3, code: 'LOCAL-ORPHAN-1', method: 'CNC Turning', date: '2026-10-01', workState: 'done', owner: 'Ada Member', output: { id: 's9', code: 'AA-0009' } });
+		expect(orphanRowOf(raw)).toEqual({ id: 'op-1', version: 3, code: 'LOCAL-ORPHAN-1', method: 'CNC Turning', date: '2026-10-01', workState: 'done', owner: 'Ada Member', output: { id: 's9', code: 'AA-0009' }, origins: [] });
 	});
 
 	it('a planned operation shows the day it is meant to happen', () => {
@@ -41,7 +41,7 @@ describe('a row of the answer', () => {
 
 	it('copes with what the caller may not read: no owner, no output sample, no method, no pass code', () => {
 		const r = orphanRowOf({ operation_id: 'op-2', version: 1, owner_person_id: null, output_sample_id: 'bare-id', method_id: null, pass_code: null, operation_sequence: null });
-		expect(r).toEqual({ id: 'op-2', version: 1, code: 'Uncoded operation', method: 'No method', date: null, workState: 'done', owner: null, output: null });
+		expect(r).toEqual({ id: 'op-2', version: 1, code: 'Uncoded operation', method: 'No method', date: null, workState: 'done', owner: null, output: null, origins: [] });
 	});
 
 	it('names an uncoded operation by the sample it made', () => {
@@ -55,7 +55,7 @@ describe('a row of the answer', () => {
 });
 
 describe('why a row is greyed', () => {
-	const row = (over: Partial<OrphanRow> = {}): OrphanRow => ({ id: 'op-1', version: 1, code: 'X', method: 'M', date: null, workState: 'planned', owner: null, output: { id: 's9', code: 'AA-0009' }, ...over });
+	const row = (over: Partial<OrphanRow> = {}): OrphanRow => ({ id: 'op-1', version: 1, code: 'X', method: 'M', date: null, workState: 'planned', owner: null, output: { id: 's9', code: 'AA-0009' }, origins: [], ...over });
 	const site = (over: Partial<Parameters<typeof orphanReason>[1]> = {}) => ({ body: emptyBody(), onCanvas: new Set<string>(), ...over });
 
 	it('can be attached when nothing is against it', () => {
@@ -80,6 +80,12 @@ describe('why a row is greyed', () => {
 	it('is greyed when it makes a sample the target comes from (the lineage would run in a circle)', () => {
 		expect(orphanReason(row(), site({ ancestors: new Set(['s9', 's1']) }))).toMatch(/makes AA-0009, which this sample comes from/);
 		expect(orphanReason(row(), site({ ancestors: new Set(['s1']) }))).toBeNull();
+	});
+
+	it('is greyed when the sample it made already comes from another sample (a second origin); the sample it is attached to is no other', () => {
+		expect(orphanReason(row({ origins: ['p1'] }), site({ target: 's1' }))).toMatch(/AA-0009, which already comes from another sample: attaching would give it a second origin/);
+		expect(orphanReason(row({ origins: ['p1'] }), site())).toMatch(/second origin/);
+		expect(orphanReason(row({ origins: ['s1'] }), site({ target: 's1' }))).toBeNull();
 	});
 
 	it('is greyed when it made the very sample it would be attached to', () => {

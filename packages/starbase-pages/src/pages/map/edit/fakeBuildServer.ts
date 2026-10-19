@@ -82,7 +82,11 @@ export function fakeServer() {
 				let rows = (s.rows[path.slice('/items/'.length)] ?? []).filter((r) => !ids || ids.includes(String(r[key])));
 				// The picker's search (attachModel.ts): no input sample, every word in the pass code, the method name or the output sample's code.
 				const and: Record<string, any>[] | undefined = filter?._and;
-				if (and) {
+				const makes: string[] | undefined = and?.find((c) => c.output_sample_id?._in)?.output_sample_id._in;
+				if (makes) {
+					// The picker's "which of these already come from another sample": operations that make them from an input.
+					rows = rows.filter((r) => makes.includes(String(r.output_sample_id)) && r.sample_id !== null && r.sample_id !== undefined);
+				} else if (and) {
 					const lower = (v: unknown) => String((v as { method_name?: string; sample_code?: string } | null)?.method_name ?? (v as { sample_code?: string } | null)?.sample_code ?? v ?? '').toLowerCase();
 					rows = rows.filter((r) =>
 						and.every((c) =>
@@ -93,7 +97,7 @@ export function fakeServer() {
 					);
 					const offset = Number(config?.params?.offset ?? 0);
 					const limit = Number(config?.params?.limit ?? rows.length);
-					rows = rows.slice(offset, offset + limit);
+					rows = limit < 0 ? rows.slice(offset) : rows.slice(offset, offset + limit);
 				}
 				return { data: { data: rows } };
 			}

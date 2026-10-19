@@ -167,6 +167,15 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 			out.push(warn(item.key, `${label} makes no new sample yet: add a sample to its output socket.`));
 		}
 	});
+	// An attached operation is given an input at Create; it cannot be the sample it made (the genealogy trigger skips that row, so the record would
+	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see.
+	if (item.attach && item.existing) {
+		const made = loadedOf(item, ctx)?.values.output_sample_id;
+		const into = itemOf(body, inputSampleOf(body, { key: item.key, row: 0 }) ?? '');
+		if (typeof made === 'string' && into?.kind === 'sample' && into.existing && into.existing.id.toLowerCase() === made.toLowerCase()) {
+			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.'));
+		}
+	}
 	const planned = item.workState === 'planned';
 	// Done work on a sample that is still planned: its maker is not done yet (d1-build refuses it).
 	if (item.workState === 'done' && (!item.existing || item.attach)) {

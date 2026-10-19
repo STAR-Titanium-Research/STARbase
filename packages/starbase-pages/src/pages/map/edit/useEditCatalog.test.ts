@@ -116,6 +116,13 @@ describe('useEditCatalog', () => {
 			expect((await catalog.searchOrphans('nothing like it')).rows).toEqual([]);
 		});
 
+		it('marks the operations whose sample already comes from another sample (another operation makes it from an input)', async () => {
+			const { catalog, s } = make();
+			s.rows.manufacturing_operations = [orphan('a'), orphan('b', { output_sample_id: { sample_id: 's1', sample_code: 'PS-001' } }), { operation_id: 'maker', sample_id: 's9', output_sample_id: 's1', version: 1 }];
+			const { rows } = await catalog.searchOrphans('');
+			expect(rows.map((r) => [r.id, r.origins])).toEqual([['a', []], ['b', ['s9']]]);
+		});
+
 		it('pages: a full page and one more row mean there is a next page', async () => {
 			const { catalog, s } = make();
 			s.rows.manufacturing_operations = Array.from({ length: 25 }, (_, i) => orphan(`o${i}`));

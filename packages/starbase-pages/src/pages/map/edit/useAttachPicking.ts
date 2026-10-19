@@ -49,6 +49,8 @@ export function useAttachPicking(o: {
 	const { edit } = o;
 	/** Where the picker is for: open while set. */
 	const target = shallowRef<MenuTarget | null>(null);
+	/** The card the picker was opened from, kept after it closes: focus goes back to it (the target is already gone when the picker unmounts). */
+	const anchor = ref<string | undefined>(undefined);
 	/** What went wrong with the last pick, said in the picker. */
 	const problem = ref('');
 	const busy = ref(false);
@@ -56,6 +58,7 @@ export function useAttachPicking(o: {
 	function open(t: MenuTarget): void {
 		if (!edit.editing.value) return;
 		problem.value = '';
+		anchor.value = t.anchor;
 		target.value = t;
 	}
 	const close = (): void => void (target.value = null);
@@ -117,7 +120,7 @@ export function useAttachPicking(o: {
 		}
 	}
 
-	return { target, problem, busy, open, close, search, reasonOf, pick };
+	return { target, anchor, problem, busy, open, close, search, reasonOf, pick };
 }
 
 export type AttachPicking = ReturnType<typeof useAttachPicking>;

@@ -205,13 +205,40 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	}
 
 	/**
+	 * Which of the samples these operations made already come from another sample: a genealogy row with it as the child, or another operation that
+	 * makes it from an input. Read as the caller (what they cannot read they cannot see; Create asks the database); a failed read leaves the rows as they are.
+	 */
+	async function addOrigins(rows: OrphanRow[]): Promise<void> {
+		const outs = [...new Set(rows.flatMap((r) => (r.output ? [r.output.id] : [])))];
+		if (!outs.length) return;
+		const found = new Map<string, Set<string>>();
+		const note = (child: unknown, parent: unknown) => {
+			if (typeof child !== 'string' || typeof parent !== 'string') return;
+			if (!found.has(child)) found.set(child, new Set());
+			found.get(child)!.add(parent);
+		};
+		try {
+			const [lineage, makers] = await Promise.all([
+				api.get('/items/sample_genealogy', { params: { filter: JSON.stringify({ child_sample_id: { _in: outs } }), fields: ['child_sample_id', 'parent_sample_id'], limit: -1 } }),
+				api.get('/items/manufacturing_operations', { params: { filter: JSON.stringify({ _and: [{ output_sample_id: { _in: outs } }, { sample_id: { _nnull: true } }] }), fields: ['output_sample_id', 'sample_id'], limit: -1 } }),
+			]);
+			for (const r of (lineage.data?.data ?? []) as Row[]) note(r.child_sample_id, r.parent_sample_id);
+			for (const r of (makers.data?.data ?? []) as Row[]) if (r.output_sample_id !== r.sample_id) note(r.output_sample_id, r.sample_id);
+		} catch {
+			return;
+		}
+		for (const r of rows) r.origins = r.output ? [...(found.get(r.output.id) ?? [])] : [];
+	}
+
+	/**
 	 * The recorded operations that have no input sample, for the picker: `query` narrows by pass code, method name and the code of the sample
 	 * each made, a page at a time (`offset`). Read as the signed-in user, so Directus decides which the caller sees. `more`: another page exists.
 	 */
 	async function searchOrphans(query: string, offset = 0): Promise<{ rows: OrphanRow[]; more: boolean }> {
 		const res = await api.get('/items/manufacturing_operations', { params: orphanParams(query, offset) });
-		const rows = ((res.data?.data ?? []) as Row[]).map(orphanRowOf).filter((r): r is OrphanRow => !!r);
-		return { rows: rows.slice(0, ORPHAN_PAGE), more: (res.data?.data ?? []).length > ORPHAN_PAGE };
+		const rows = ((res.data?.data ?? []) as Row[]).map(orphanRowOf).filter((r): r is OrphanRow => !!r).slice(0, ORPHAN_PAGE);
+		await addOrigins(rows);
+		return { rows, more: (res.data?.data ?? []).length > ORPHAN_PAGE };
 	}
 
 	const missingMaterials = new Set<string>();

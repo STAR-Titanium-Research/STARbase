@@ -508,6 +508,15 @@ describe('From database… (slice 3)', () => {
 		expect(surface.attachHeading.value).toBe('Add to the canvas');
 	});
 
+	it('keeps the card it was opened from after it closes, so focus can go back to it', async () => {
+		const { surface } = await open();
+		expect(surface.attaching.anchor.value).toBe('s:s1');
+		const row = (await surface.attaching.search('')).rows[0];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.target.value).toBeNull();
+		expect(surface.attaching.anchor.value).toBe('s:s1');
+	});
+
 	it('closing the picker changes nothing', async () => {
 		const { surface, edit } = await open();
 		surface.attaching.close();

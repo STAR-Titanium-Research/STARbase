@@ -48,7 +48,7 @@ function closeToast(): void {
 			:reason-of="side.build.attaching.reasonOf"
 			:problem="side.build.attaching.problem.value"
 			:busy="side.build.attaching.busy.value"
-			:restore-focus="() => focusCanvas(canvasEl, side.build.attaching.target.value?.anchor)"
+			:restore-focus="() => focusCanvas(canvasEl, side.build.attaching.anchor.value)"
 			@pick="side.build.attaching.pick"
 			@close="side.build.attaching.close"
 		/>

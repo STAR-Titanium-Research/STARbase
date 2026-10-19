@@ -44,7 +44,7 @@ export function orphanParams(query: string, offset = 0, limit = ORPHAN_PAGE + 1)
 			})),
 		],
 	};
-	return { fields: ORPHAN_FIELDS, filter: JSON.stringify(filter), sort: ['-created_at'], limit, offset };
+	return { fields: ORPHAN_FIELDS, filter: JSON.stringify(filter), sort: ['-created_at', '-operation_id'], limit, offset };
 }
 
 export interface OrphanRow {
@@ -59,6 +59,8 @@ export interface OrphanRow {
 	owner: string | null;
 	/** The sample it made (an operation needs an input or an output, so an operation with no input has one). Absent when the caller cannot read it. */
 	output: { id: string; code: string } | null;
+	/** The samples the sample it made already comes from, as far as the caller can read them (the catalog fills it in). */
+	origins: string[];
 }
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -83,6 +85,7 @@ export function orphanRowOf(r: Record<string, unknown>): OrphanRow | null {
 		workState: r.work_state === 'planned' ? 'planned' : 'done',
 		owner: text(rel(r.owner_person_id)?.full_name),
 		output,
+		origins: [],
 	};
 }
 
@@ -110,6 +113,8 @@ export function orphanReason(row: OrphanRow, site: AttachSite): string | null {
 	if (site.onCanvas.has(row.id)) return ON_CANVAS;
 	if (row.workState === 'done' && site.samplePlanned) return SAMPLE_STILL_PLANNED;
 	if (row.output && site.target && row.output.id === site.target) return `It makes ${row.output.code}: a sample cannot be an input of the operation that made it.`;
+	// It made a sample that already comes from another one: attaching would give it a second origin (joining two processes, not done from the map).
+	if (row.output && row.origins.some((p) => p !== site.target)) return `It made ${row.output.code}, which already comes from another sample: attaching would give it a second origin.`;
 	if (row.output && site.ancestors?.has(row.output.id)) return `It makes ${row.output.code}, which this sample comes from: that would run in a circle.`;
 	return null;
 }

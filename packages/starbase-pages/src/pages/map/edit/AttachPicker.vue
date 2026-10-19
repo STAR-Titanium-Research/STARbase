@@ -34,6 +34,7 @@ const answered = ref(false);
 const active = ref(-1);
 let timer: ReturnType<typeof setTimeout> | null = null;
 let asked = 0;
+let keepActive = false;
 
 async function load(offset: number): Promise<void> {
 	const mine = ++asked;
@@ -42,9 +43,14 @@ async function load(offset: number): Promise<void> {
 	try {
 		const page = await props.search(query.value.trim(), offset);
 		if (mine !== asked) return;
-		rows.value = offset ? [...rows.value, ...page.rows] : page.rows;
+		// A next page is added below: the highlighted row stays, and one the page repeats (the list moved on under it) is not listed twice.
+		keepActive = offset > 0;
+		const have = new Set(rows.value.map((r) => r.id));
+		rows.value = offset ? [...rows.value, ...page.rows.filter((r) => !have.has(r.id))] : page.rows;
 		more.value = page.more;
 		answered.value = true;
+		// Show more was pressed (or its button has just gone with the last page): focus stays in the dialog, on the search box, so its keys keep working.
+		if (offset > 0) void nextTick(() => input.value?.focus());
 	} catch {
 		if (mine !== asked) return;
 		failed.value = true;
@@ -62,7 +68,17 @@ watch(query, () => {
 
 const items = computed(() => rows.value.map((r) => ({ r, why: props.reasonOf(r) })));
 const firstChoosable = () => items.value.findIndex((i) => !i.why);
-watch(items, (list) => void (active.value = list.findIndex((i) => !i.why)), { immediate: true });
+watch(
+	items,
+	(list) => {
+		if (keepActive) {
+			keepActive = false;
+			if (active.value >= 0 && active.value < list.length && !list[active.value].why) return;
+		}
+		active.value = list.findIndex((i) => !i.why);
+	},
+	{ immediate: true },
+);
 
 const message = computed(() => {
 	if (failed.value) return 'The list could not be read. Try again.';
@@ -168,7 +184,7 @@ const day = (d: string | null): string => d ?? 'no date';
 					<span class="meta">{{ day(it.r.date) }}<template v-if="it.r.owner"> · {{ it.r.owner }}</template><template v-if="it.r.output"> · makes {{ it.r.output.code }}</template></span>
 					<span v-if="it.why" class="why">{{ it.why }}</span>
 				</button>
-				<button v-if="more" type="button" class="more" :disabled="loading" @click="load(rows.length)">{{ loading ? 'Reading…' : 'Show more' }}</button>
+				<button v-if="more" type="button" class="more" :aria-disabled="loading || undefined" @click="!loading && load(rows.length)">{{ loading ? 'Reading…' : 'Show more' }}</button>
 			</div>
 			<!-- One status region, always mounted: a live region that appears together with its text is often not announced. -->
 			<p class="none" :class="{ bad: failed || !!problem, empty: !message && !problem }" role="status" aria-live="polite" aria-atomic="true">{{ problem || message }}</p>
@@ -221,7 +237,7 @@ const day = (d: string | null): string => d ?? 'no date';
 .meta { grid-column: 1 / -1; color: var(--d1-dim); font-size: var(--fs-xs, 11px); }
 .why { grid-column: 1 / -1; font-size: var(--fs-xs, 11px); color: var(--d1-bad); }
 .more { margin: 6px auto 0; padding: 5px 14px; border: 1px solid var(--d1-line); border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
-.more:hover:not(:disabled), .more:focus-visible { background: var(--d1-tile); outline: none; }
+.more:hover:not([aria-disabled]), .more:focus-visible { background: var(--d1-tile); outline: none; }
 .none { margin: 0; padding: 4px 2px; color: var(--d1-dim); }
 .none.bad { color: var(--d1-bad); }
 .none.empty { padding: 0; }
