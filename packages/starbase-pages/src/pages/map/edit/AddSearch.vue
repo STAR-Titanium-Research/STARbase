@@ -4,6 +4,7 @@ import type { DraftBody } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { EARLIER_STEP, canvasSampleEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuChoice, type MenuEntry } from './menuModel';
 import { grown } from './socketRefs';
+import type { TemplateItem } from './templates';
 import type { MenuTarget } from './menuTarget';
 import { restoreFocus as giveFocusBack } from './focusCanvas';
 
@@ -17,6 +18,8 @@ const props = defineProps<{
 	body: DraftBody;
 	methods: MethodEntry[];
 	testTypes: TestTypeEntry[];
+	/** The templates this person may use (R7): listed first, found by name or method. */
+	templates?: readonly TemplateItem[];
 	/** What this person added lately (entry ids, newest first): listed first. */
 	recents?: string[];
 	/** Searches the samples of the database by code or nickname. */
@@ -68,8 +71,8 @@ const all = computed<MenuEntry[]>(() => {
 	if (mode.value === 'records') return found.value;
 	if (mode.value === 'canvas') return canvasSampleEntries(view.value, purpose.value.end, (key) => sampleLabel(props.body, key, props.codeOf ?? (() => undefined)));
 	const ins = props.target.insert;
-	if (ins) return ins.earlier ? [EARLIER_STEP] : operationOnlyEntries({ methods: props.methods, testTypes: props.testTypes });
-	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes });
+	if (ins) return ins.earlier ? [EARLIER_STEP] : operationOnlyEntries({ methods: props.methods, testTypes: props.testTypes, templates: props.templates });
+	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes, templates: props.templates });
 });
 // The search of the database is the server's: its rows are not filtered again by the same words. The catalog is ranked, recents first.
 const entries = computed(() => (mode.value === 'records' ? all.value : searchEntries(all.value, query.value, mode.value === 'root' ? (props.recents ?? []) : [])));
@@ -191,7 +194,7 @@ onBeforeUnmount(() => {
 						type="button"
 						role="option"
 						class="opt"
-						:class="{ on: r.i === active, off: !!r.e.disabled }"
+						:class="{ on: r.i === active, off: !!r.e.disabled, grey: !!r.e.warn }"
 						:aria-selected="r.i === active"
 						:aria-disabled="!!r.e.disabled || undefined"
 						:title="r.e.disabled"
@@ -203,6 +206,7 @@ onBeforeUnmount(() => {
 						<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
 						<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
 						<span v-if="r.e.disabled" class="why">{{ r.e.disabled }}</span>
+						<span v-else-if="r.e.warn" class="why warn">{{ r.e.warn }}</span>
 					</button>
 				</template>
 			</div>
@@ -246,6 +250,9 @@ onBeforeUnmount(() => {
 }
 .opt.on { background: var(--d1-tint); box-shadow: inset 3px 0 0 var(--d1-accent, var(--theme--primary)); }
 .opt.off { cursor: default; opacity: 0.6; }
+/* A template that names a retired machine or a used-up edge: still there to use, greyed, with the warning under it. */
+.opt.grey .lab, .opt.grey .det { opacity: 0.6; }
+.why.warn { color: var(--d1-warn, var(--theme--warning)); }
 .lab { font-weight: 600; }
 .det { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .cat { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }

@@ -18,10 +18,11 @@ import type { MethodEntry, TestTypeEntry } from './catalog';
 import { CATEGORIES } from './catalog';
 import { inputSampleOf, itemOf, nextKey, wireProblem, type DraftAction, type Pos, type WireEnd } from './draft';
 import { grown, resolveEnd, type SocketRef } from './socketRefs';
+import { templateEntries, type TemplateInfo, type TemplateItem } from './templates';
 
 export type MenuChoice =
-	| { kind: 'operation'; methodId: string; category: ProcessCategory }
-	| { kind: 'test'; testType: string }
+	| { kind: 'operation'; methodId: string; category: ProcessCategory; template?: TemplateChoice }
+	| { kind: 'test'; testType: string; template?: TemplateChoice }
 	| { kind: 'newSample' }
 	/** The operation's output is the sample it took in: the work is done in place. */
 	| { kind: 'sameSample' }
@@ -38,6 +39,12 @@ export type MenuChoice =
 	/** A sample found in the database: the page adds it to the draft (with its version), then it is a `wireSample`. */
 	| { kind: 'record'; id: string; code: string };
 
+/** An operation or test chosen from a template (R7): the fields it starts with. It is the same choice as the method or test it is made of, so every rule about where one fits applies unchanged. */
+export interface TemplateChoice {
+	id: string;
+	values: Record<string, unknown>;
+}
+
 export interface MenuEntry {
 	id: string;
 	section: string;
@@ -48,6 +55,10 @@ export interface MenuEntry {
 	choice: MenuChoice;
 	/** Why it cannot be chosen now. */
 	disabled?: string;
+	/** A template's entry: what the palette needs to rename, re-scope, replace or delete it (R7). */
+	template?: TemplateInfo;
+	/** Said under an entry that can still be chosen (a template that names a retired machine or a used-up edge). */
+	warn?: string;
 }
 
 /** What the menu is for: the socket it was opened on, as the draft sees it. */
@@ -92,11 +103,14 @@ const testEntries = (types: readonly TestTypeEntry[]): MenuEntry[] =>
 export interface MenuCatalog {
 	methods: readonly MethodEntry[];
 	testTypes: readonly TestTypeEntry[];
+	/** The templates this person may use (R7): listed first, as their own group, before the categories. */
+	templates?: readonly TemplateItem[];
 }
 
-/** The whole catalog (the palette's list, and what an unconnected add search offers): samples, then operations by category, then tests. */
+/** The whole catalog (the palette's list, and what an unconnected add search offers): templates, samples, then operations by category, then tests. */
 export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
 	return [
+		...templateEntries(cat.templates ?? [], cat),
 		{ id: 'sample:new', section: 'Samples', label: 'New sample', detail: 'a blank card', choice: { kind: 'newSample' } },
 		{ id: 'sample:pick', section: 'Samples', label: 'Existing sample…', detail: 'pick from the Samples list', choice: { kind: 'pickSamples' } },
 		...operationEntries(cat.methods),
@@ -105,7 +119,7 @@ export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
 }
 
 /** The operations of the catalog alone (what "Insert before / after" offers: a test has no output to carry on from). */
-export const operationOnlyEntries = (cat: MenuCatalog): MenuEntry[] => operationEntries(cat.methods);
+export const operationOnlyEntries = (cat: MenuCatalog): MenuEntry[] => [...templateEntries(cat.templates ?? [], cat, 'operation'), ...operationEntries(cat.methods)];
 
 /** What "Insert before" offers for a done sample: its parentage is never rewritten, so one step that starts a new planned chain upstream (R3). */
 export const EARLIER_STEP: MenuEntry = {
@@ -148,6 +162,7 @@ function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[]
 	// Unconnected: the whole catalog.
 	if (f.side === null) return catalogEntries(cat);
 	// From a sample's output, or a sample's input: the containers that can be made (a test has no output, so it cannot make a sample).
+	out.push(...templateEntries(cat.templates ?? [], cat, f.side === 'in' ? 'operation' : undefined));
 	out.push(...operationEntries(cat.methods));
 	if (f.side !== 'in') out.push(...testEntries(cat.testTypes));
 	return out;
@@ -187,9 +202,11 @@ export function searchEntries(entries: readonly MenuEntry[], query: string, rece
 		return i < 0 ? Number.POSITIVE_INFINITY : i;
 	};
 	if (!words.length) {
-		const hot = entries.filter((e) => !e.disabled && recency(e) < Number.POSITIVE_INFINITY).sort((a, b) => recency(a) - recency(b));
+		// Templates are their own group and stay first (R7); the recents come next, then the rest.
+		const own = entries.filter((e) => e.template);
+		const hot = entries.filter((e) => !e.template && !e.disabled && recency(e) < Number.POSITIVE_INFINITY).sort((a, b) => recency(a) - recency(b));
 		if (!hot.length) return [...entries];
-		return [...hot.map((e) => ({ ...e, section: RECENT })), ...entries.filter((e) => !hot.includes(e))];
+		return [...own, ...hot.map((e) => ({ ...e, section: RECENT })), ...entries.filter((e) => !hot.includes(e) && !e.template)];
 	}
 	const rank = (e: MenuEntry): number => {
 		const label = e.label.toLowerCase();
@@ -261,9 +278,9 @@ export function actionsFor(t: ChoiceTarget, choice: MenuChoice): DraftAction[] {
 	};
 	switch (choice.kind) {
 		case 'operation':
-			return container('operation', { from: 'template', values: operationValues(choice.methodId, choice.category) });
+			return container('operation', { from: 'template', values: choice.template ? choice.template.values : operationValues(choice.methodId, choice.category) });
 		case 'test':
-			return container('test', { from: 'blank', testType: choice.testType });
+			return container('test', choice.template ? { from: 'template', values: choice.template.values } : { from: 'blank', testType: choice.testType });
 		case 'newSample':
 			if (side === null) return [{ type: 'addSample', at }];
 			if (side === 'out' && t.card === 'operation' && end) return [{ type: 'addSample', from: end, at }];

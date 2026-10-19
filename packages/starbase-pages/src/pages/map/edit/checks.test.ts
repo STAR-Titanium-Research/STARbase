@@ -349,3 +349,26 @@ describe('helpers', () => {
 		expect(mergeChecks([a], [b, a])).toEqual([b, a]);
 	});
 });
+
+describe('gear a new card names (R7)', () => {
+	const gear: CheckCtx['gear'] = (field, id) => (field === 'tool_id' && id === 'old' ? 'The tool Holder 3 is retired.' : field === 'insert_edge_id' && id === 'spent' ? 'The cutting edge H13A is used up.' : undefined);
+	const withGear: CheckCtx = { ...ctx, gear };
+
+	it('warns, never blocks, when a new operation names a retired tool or a used-up edge', () => {
+		const b = run([{ type: 'setValues', key: 'n2', values: { tool_id: 'old', insert_edge_id: 'spent' } }], planned());
+		expect(texts(checks(b, withGear), 'n2')).toEqual(['warn:tool_id:The tool Holder 3 is retired.', 'warn:insert_edge_id:The cutting edge H13A is used up.']);
+		expect(blocking(checks(b, withGear))).toEqual([]);
+	});
+
+	it('says nothing for gear that is fine or not known, or without the question being asked', () => {
+		const fine = run([{ type: 'setValues', key: 'n2', values: { tool_id: 'good' } }], planned());
+		expect(checks(fine, withGear)).toEqual([]);
+		const old = run([{ type: 'setValues', key: 'n2', values: { tool_id: 'old' } }], planned());
+		expect(checks(old, ctx)).toEqual([]);
+	});
+
+	it('warns for a new test too', () => {
+		const b = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }, { type: 'addContainer', kind: 'test', source: { from: 'template', values: { test_type: 'tensile', equipment_id: 'm', tool_id: 'old' } }, from: { key: 'n1' } }, { type: 'setValues', key: 'n2', values: { planned_date: '2026-11-01' } }]);
+		expect(texts(checks(b, withGear), 'n2')).toEqual(['warn:tool_id:The tool Holder 3 is retired.']);
+	});
+});

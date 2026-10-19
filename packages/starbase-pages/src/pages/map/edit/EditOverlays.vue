@@ -46,6 +46,7 @@ function closeToast(): void {
 			:body="edit.body.value"
 			:methods="edit.catalog.methods.value"
 			:test-types="edit.catalog.testTypes.value"
+			:templates="edit.templates.items.value"
 			:recents="side.build.menu.recents.value"
 			:search="edit.catalog.searchSamples"
 			:code-of="(id: string) => edit.catalog.samples.get(id)?.code"

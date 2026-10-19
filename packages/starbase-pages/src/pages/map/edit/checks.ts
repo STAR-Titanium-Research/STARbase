@@ -11,6 +11,7 @@
 
 import { isReserved, type Check, type DraftBody, type DraftItem, type DraftKey, type DraftOperation, type DraftSample } from '@d1/ui';
 import { inputSampleOf, itemOf, outputSampleOf, subjectsOf, wiresOutOf } from './draft';
+import { gearIn, type GearField } from './gearStatus';
 import { inheritedValues, makerOf, sampleCodeFor, type InheritCtx } from './inherit';
 
 export type CheckCollection = 'physical_samples' | 'manufacturing_operations' | 'test_sessions';
@@ -38,6 +39,8 @@ export interface CheckCtx extends InheritCtx {
 	fields?: Partial<Record<CheckCollection, FieldDef[]>>;
 	/** Existing records re-read, by `<collection>:<id>`. `null` = gone or no longer readable; a key that is absent = not read (yet). */
 	records?: Record<string, LoadedRecord | null>;
+	/** What is wrong with a machine, tool or cutting edge (retired, used up), or undefined when it is fine or not known (R7). */
+	gear?: (field: GearField, id: string) => string | undefined;
 }
 
 export const recordKey = (collection: CheckCollection, id: string) => `${collection}:${id}`;
@@ -151,6 +154,15 @@ function sampleChecks(item: DraftSample, body: DraftBody, ctx: CheckCtx): Check[
 	return out;
 }
 
+/** A new card that names gear that is retired or used up (typed in, or brought by a template): only a warning, the person may have a reason. */
+function gearChecks(item: DraftItem, values: Record<string, unknown>, ctx: CheckCtx): Check[] {
+	if (!ctx.gear || (item.existing && !(item.kind === 'operation' && item.attach))) return [];
+	return gearIn(values).flatMap((g) => {
+		const text = ctx.gear!(g.field, g.id);
+		return text ? [warn(item.key, text, g.field)] : [];
+	});
+}
+
 function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): Check[] {
 	if (item.remove) return removeChecks(item, ctx);
 	const out: Check[] = [];
@@ -177,6 +189,7 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 		if (!item.existing && planned && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));
 		if (empty(values.equipment_id)) out.push(warn(item.key, 'No machine yet.', 'equipment_id'));
 	}
+	out.push(...gearChecks(item, values, ctx));
 	if (item.workState === 'done') out.push(...missingRequired(item, body, ctx, values));
 	return out;
 }
@@ -196,6 +209,7 @@ function testChecks(item: DraftItem & { kind: 'test' }, body: DraftBody, ctx: Ch
 		if (item.workState === 'planned' && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));
 		if (empty(values.equipment_id)) out.push(warn(item.key, 'No machine yet.', 'equipment_id'));
 	}
+	out.push(...gearChecks(item, values, ctx));
 	if (item.workState === 'done') out.push(...missingRequired(item, body, ctx, values));
 	return out;
 }

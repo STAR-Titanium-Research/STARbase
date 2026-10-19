@@ -14,6 +14,8 @@ export const isRecentable = (e: Pick<MenuEntry, 'id'>): boolean => e.id.startsWi
 
 /** The entry id a choice of the catalog is remembered under, or null for a choice that is not one of its things (Same sample, a wire...). */
 export function recentIdOf(choice: MenuChoice): string | null {
+	// A template is its own list at the top of both surfaces; it is not a recent (its entry can be renamed or gone).
+	if ((choice.kind === 'operation' || choice.kind === 'test') && choice.template) return null;
 	if (choice.kind === 'operation') return `op:${choice.methodId}`;
 	if (choice.kind === 'test') return `test:${choice.testType}`;
 	return choice.kind === 'newSample' ? 'sample:new' : null;

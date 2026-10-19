@@ -5,6 +5,7 @@ import { apply, emptyBody, itemOf, type DraftAction } from './draft';
 import { grown } from './socketRefs';
 import { actionsFor, canvasSampleEntries, catalogEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuCatalog, type MenuChoice, type MenuEntry } from './menuModel';
 import type { SocketRef } from './socketRefs';
+import { templateEntries, type TemplateItem } from './templates';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
@@ -293,5 +294,95 @@ describe('names in menus', () => {
 		expect(sampleLabel(b, 'n2', known)).toBe('New sample');
 		expect(sampleLabel(b, 'n3', known)).toBe('PS-001');
 		expect(sampleLabel(b, 'zz', known)).toBe('zz');
+	});
+});
+
+// ---- templates in the catalog (redesign R7) ----------------------------------------------------------------------------------
+
+describe('templates in the catalog', () => {
+	const tplOp = (id: string, name: string, values: Record<string, unknown>, extra: Partial<TemplateItem> = {}): TemplateItem => ({
+		rec: { id, name, scope: 'private', role_id: null, collection: 'manufacturing_operations', values, user_id: 'u1', updated_at: 'now', version: 1 },
+		mine: true,
+		...extra,
+	});
+	const tplTest = (id: string, name: string, values: Record<string, unknown>): TemplateItem => ({
+		rec: { id, name, scope: 'global', role_id: null, collection: 'test_sessions', values, user_id: 'u2', updated_at: 'now', version: 1 },
+		mine: false,
+	});
+	const templates = [tplOp('t1', 'Roughing pass', { method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1' }), tplTest('t2', 'Pull to break', { test_type: 'tensile', equipment_id: 'e2' })];
+	const withTemplates: MenuCatalog = { ...catalog, templates };
+	const tpl = (es: MenuEntry[]) => es.filter((e) => e.template);
+	const doIt = (b: DraftBody, s: SocketRef | null, choice: MenuChoice, over: { at?: { x: number; y: number } } = {}) => {
+		const f = menuFor(b, s);
+		return run(actionsFor({ body: b, end: f.end, side: f.side, card: f.card, at: over.at }, choice), b);
+	};
+
+	it('puts the Templates group first in the whole catalog, above the samples and the categories', () => {
+		const es = catalogEntries(withTemplates);
+		expect(sections(es)[0]).toBe('Templates');
+		expect(labels(es).slice(0, 3)).toEqual(['Pull to break', 'Roughing pass', 'New sample']);
+		expect(labels(catalogEntries(catalog))[0]).toBe('New sample'); // no templates, no empty group
+	});
+
+	it('offers them at a sample output (operations and tests) and a sample input (operations only), not at an operation or a test', () => {
+		const b = body();
+		expect(labels(tpl(rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'out')), withTemplates)))).toEqual(['Pull to break', 'Roughing pass']);
+		expect(labels(tpl(rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), withTemplates)))).toEqual(['Roughing pass']);
+		expect(tpl(rootEntries(b, menuFor(b, sock('row', 'draft:n3', 'out')), withTemplates))).toEqual([]);
+		expect(tpl(rootEntries(b, menuFor(b, sock('row', 'draft:n3', 'in')), withTemplates))).toEqual([]);
+	});
+
+	it('offers the operation templates to an insert, before the methods', () => {
+		const es = operationOnlyEntries(withTemplates);
+		expect(labels(es).slice(0, 2)).toEqual(['Roughing pass', 'Turning']);
+		expect(labels(tpl(es))).toEqual(['Roughing pass']);
+	});
+
+	it('finds one by its name or by the method or test type it is made of, ahead of the method itself', () => {
+		const es = catalogEntries(withTemplates);
+		expect(labels(searchEntries(es, 'rough'))).toEqual(['Roughing pass']);
+		expect(labels(searchEntries(es, 'pull'))).toEqual(['Pull to break']);
+		expect(labels(searchEntries(es, 'turning'))).toEqual(['Turning', 'Roughing pass']); // a label match ranks first, then the template made of it
+		expect(searchEntries(es, 'tensile').map((e) => e.id)).toEqual(['test:tensile', 'tpl:t2']); // the test's own label first, then the template made of it
+		expect(labels(searchEntries(es, 'template'))).toEqual(['Pull to break', 'Roughing pass']);
+	});
+
+	it('keeps the Templates group first while the recents are on top of the rest', () => {
+		const es = searchEntries(catalogEntries(withTemplates), '', ['op:mf']);
+		expect(es.map((e) => e.section).slice(0, 4)).toEqual(['Templates', 'Templates', 'Recent', 'Samples']);
+		expect(es.filter((e) => e.id === 'op:mf')).toHaveLength(1);
+	});
+
+	it('a template operation adds a container with the template values, not linked to the template', () => {
+		const choice = templateEntries([templates[0]], catalog)[0].choice;
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), choice, { at: { x: 5, y: 6 } });
+		const made = b.items.at(-1) as DraftOperation;
+		expect(made).toMatchObject({ kind: 'operation', workState: 'planned', values: { method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1', process_category: 'machining' } });
+		expect(b.wires.at(-1)).toEqual({ from: { key: 'n5' }, to: { key: made.key, row: 0 } });
+		expect(JSON.stringify(made)).not.toContain('t1'); // nothing of the template is kept, not even its id
+		// The container's values are a copy: the template's own are untouched.
+		expect(templates[0].rec.values).toEqual({ method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1' });
+	});
+
+	it('a template test adds a test with the template values; on empty canvas both stand alone', () => {
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), templateEntries([templates[1]], catalog)[0].choice);
+		expect(b.items.at(-1)).toMatchObject({ kind: 'test', workState: 'planned', values: { test_type: 'tensile', equipment_id: 'e2' } });
+		const alone = doIt(body(), null, templateEntries([templates[0]], catalog)[0].choice);
+		expect(alone.items.at(-1)).toMatchObject({ kind: 'operation', values: { method_id: 'mt', equipment_id: 'e1' } });
+		expect(alone.wires).toEqual(body().wires);
+	});
+
+	it('a template operation at a free sample input makes the operation and wires it to make that sample', () => {
+		const b = doIt(body(), sock('sample', 'draft:n5', 'in'), templateEntries([templates[0]], catalog)[0].choice);
+		const made = b.items.at(-1) as DraftOperation;
+		expect(made.values).toMatchObject({ method_id: 'mt', tool_id: 'tool1' });
+		expect(b.wires.at(-1)).toEqual({ from: { key: made.key, row: 0 }, to: { key: 'n5' } });
+	});
+
+	it('carries a gear warning on the entry and does not block it', () => {
+		const warned = templateEntries([tplOp('t3', 'Old tool', { method_id: 'mt', tool_id: 'x' }, { warn: 'The tool X is retired.' })], catalog)[0];
+		expect(warned.warn).toBe('The tool X is retired.');
+		expect(warned.disabled).toBeUndefined();
+		expect(firstChoosable([warned])).toBe(0);
 	});
 });
