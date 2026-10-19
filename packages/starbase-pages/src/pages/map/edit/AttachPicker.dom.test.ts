@@ -7,7 +7,7 @@ import AttachPicker from './AttachPicker.vue';
 import type { OrphanRow } from './attachModel';
 
 let app: App | null = null;
-const row = (id: string, over: Partial<OrphanRow> = {}): OrphanRow => ({ id, version: 1, code: `CODE-${id}`, method: 'Turning', date: '2026-10-01', workState: 'planned', owner: 'Ada', output: { id: `s-${id}`, code: `S-${id}` }, ...over });
+const row = (id: string, over: Partial<OrphanRow> = {}): OrphanRow => ({ id, version: 1, code: `CODE-${id}`, method: 'Turning', date: '2026-10-01', workState: 'planned', owner: 'Ada', output: { id: `s-${id}`, code: `S-${id}` }, origins: [], ...over });
 
 function mount(props: { search?: (q: string, offset: number) => Promise<{ rows: OrphanRow[]; more: boolean }>; reasonOf?: (r: OrphanRow) => string | null; problem?: string; onPick?: (r: OrphanRow) => void; onClose?: () => void }) {
 	app = createApp({

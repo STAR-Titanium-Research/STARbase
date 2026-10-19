@@ -492,7 +492,7 @@ describe('From database… (slice 3)', () => {
 		server.s.readOnly = [];
 		server.s.permissionError = true;
 		await surface.attaching.pick(row);
-		expect(edit.body.value.items.some((i) => i.attach)).toBe(true);
+		expect(edit.body.value.items.some((i) => i.kind === 'operation' && i.attach)).toBe(true);
 	});
 
 	it('an operation that is gone, or that the caller cannot read, is refused at the pick', async () => {
