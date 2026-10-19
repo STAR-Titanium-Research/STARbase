@@ -7,13 +7,13 @@
 		</template>
 
 		<template #actions>
-			<v-button secondary :loading="checking" :disabled="busy || !state" @click="runCheck">
+			<v-button secondary :loading="checking" :disabled="busy || !state" @click="runCheck()">
 				<v-icon name="update" left />
 				Check for updates
 			</v-button>
 			<v-button :disabled="!canDeploy" kind="danger" @click="confirmOpen = true">
 				<v-icon name="rocket_launch" left />
-				Deploy
+				{{ deployLabel }}
 			</v-button>
 		</template>
 
@@ -36,9 +36,15 @@
 
 		<v-dialog v-model="confirmOpen" @esc="confirmOpen = false">
 			<v-card>
-				<v-card-title>Deploy to d1-server?</v-card-title>
+				<v-card-title>{{ check?.resume ? 'Finish the earlier deploy on d1-server?' : 'Deploy to d1-server?' }}</v-card-title>
 				<v-card-text>
-					<template v-if="check">
+					<template v-if="check?.resume">
+						The merge is already in place. This runs the steps the earlier deploy did not finish:
+						<strong>{{ check.steps.join(', ') || 'no steps' }}</strong>.
+						<template v-if="check.holders?.length"> It stops {{ check.holders.length }} process(es) holding node_modules first.</template>
+						Directus may restart; this page keeps following the run.
+					</template>
+					<template v-else-if="check">
 						This merges {{ check.commits.length }} {{ check.commits.length === 1 ? 'commit' : 'commits' }} from origin/main and runs:
 						<strong>{{ check.steps.join(', ') || 'no steps' }}</strong>.
 						<template v-if="check.needsAck.length"> You have confirmed {{ check.needsAck.length }} destructive migration(s). A database backup is taken first.</template>
@@ -47,7 +53,7 @@
 				</v-card-text>
 				<v-card-actions>
 					<v-button secondary @click="confirmOpen = false">Cancel</v-button>
-					<v-button kind="danger" :loading="starting" @click="startDeploy">Deploy</v-button>
+					<v-button kind="danger" :loading="starting" @click="startDeploy">{{ deployLabel }}</v-button>
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
@@ -83,6 +89,8 @@ const actionHint = computed(() => hintFor(actionProblem.value?.code ?? null));
 const runDone = ref(false); // the run shown in RunView has finished
 const busy = computed(() => (runId.value !== null && !runDone.value) || state.value?.running === true);
 
+const deployLabel = computed(() => (check.value?.resume ? 'Resume deploy' : 'Deploy'));
+
 const canDeploy = computed(() => {
 	const c = check.value;
 	if (!c || c.upToDate || busy.value || starting.value) return false;
@@ -109,10 +117,14 @@ async function loadState() {
 	}
 }
 
-async function runCheck() {
+/**
+ * Ask the agent what a deploy would do now. `quiet` is for the automatic check after a run: it keeps the run's
+ * log on screen and shows no error (the agent may still be restarting Directus).
+ */
+async function runCheck(quiet = false) {
 	checking.value = true;
 	actionProblem.value = null;
-	if (runDone.value) runId.value = null; // dismiss the finished run's view
+	if (!quiet && runDone.value) runId.value = null; // dismiss the finished run's view
 	try {
 		const { data } = await api.post<Check>('/d1-deploy/check');
 		check.value = data;
@@ -120,7 +132,7 @@ async function runCheck() {
 		acks.value = acks.value.filter((f) => data.needsAck.includes(f));
 	} catch (e) {
 		check.value = null;
-		actionProblem.value = describeError(e);
+		if (!quiet) actionProblem.value = describeError(e);
 	} finally {
 		checking.value = false;
 	}
@@ -160,6 +172,9 @@ async function onRunDone(_result: RunResult | null) {
 	await loadState();
 	// The agent may still report the run as running for a moment after result.json is written.
 	if (state.value?.running && state.value.current?.id === runId.value) state.value = { ...state.value, running: false };
+	// A run clears the earlier check, which would leave Deploy greyed out until someone pressed Check again (after a
+	// failure that is exactly when a Resume is on offer), so look again straight away.
+	await runCheck(true);
 }
 
 onMounted(loadState);

@@ -49,7 +49,20 @@ The button never resolves a judgement call. It stops, changes nothing beyond a b
 | The checkout moved | The live branch or HEAD changed between preflight and the migration or merge | Look at what changed it, then deploy again |
 | A migration needs an acknowledgement | Its `migrate:up` has `DROP ...`, `TRUNCATE`, `DELETE FROM`, `UPDATE ... SET` or `ALTER ... DROP` | Read the migration. If it is meant, tick *I've read this* on the page (or pass `--ack <file>` on the command line) and deploy again |
 | `compose_config` blocker | `docker compose config` failed, so the services to rebuild cannot be worked out | Fix `.env` / the compose file, then check again |
+| A process holds `node_modules` | A dev server (vite and its esbuild child, a native module) is running from the live `node_modules`, so `npm install` would fail with EBUSY. Windows only; looked for only when an install is planned | Stop it yourself, or tick *Stop these processes before installing* on the page (or pass `--ack stop-node-modules-holders`). The deploy then stops exactly the processes it listed (whole tree), right before the install |
 | A step failed | See the log; the run records `failedStep` and `message` | Below |
+
+## Finishing a deploy that stopped after the merge
+
+The merge is the point of no return: afterwards `HEAD` already equals `origin/main`, so a plain check says "up to date" and
+the install, builds and restarts that did not finish would never run. A run records the merge in `logs/deploy/pending.json`
+(`fromSha` = HEAD before the merge) and deletes it when it succeeds. While it exists, **Check for updates** offers **Resume
+deploy** instead: the steps are worked out from `fromSha..HEAD`, the merge and migrations are skipped (they already happened),
+and the rest runs as normal. A resume that fails again keeps the record. A record whose `fromSha` is no longer in `HEAD`'s
+history, or a damaged file, is ignored. After every run the page checks again by itself, so the button is not left grey.
+
+Finishing by hand (no Resume available, e.g. a failure from before this existed): `/starbase-deploy`, or write the file with the
+sha the live checkout was on before the merge: `{"fromSha":"<sha>"}`.
 
 Not covered at all: rollback, restoring a database, deploying a branch other than `origin/main`, auto-deploy on merge.
 
@@ -129,7 +142,8 @@ curl -s -H "X-Deploy-Token: $TOKEN" http://127.0.0.1:8212/state
   **FAILED**, the checkout may be mid-merge: `git status`, then `git merge --abort` by hand.
 - **Migration failed**: the backup is named in the message (`backups/` and MinIO `d1-backups`). Restore only with the maintainer
   ([backup-restore](backup-restore.md)).
-- **`npm install` fails on `node_modules`**: a vite dev server from another session holds it. Stop that server and deploy again.
+- **`npm install` fails on `node_modules`** (`EBUSY`): a dev server from another session holds it (check lists it as *Blocking npm
+  install* beforehand, so this is only left for a process that started after the check). Stop it, press Check, then Resume.
 - **Verify timed out**: a service is not healthy after 180 s. `docker compose ps`, `docker compose logs --since 5m <service>`.
 - **The agent restarted by itself after a deploy**: if the deploy changed `infra/deploy-agent/agent.mjs`, the agent exits with
   code 75 once the run is recorded and the task's wrapper (`run-agent.ps1`) starts the new code at once. Any other exit (a missing

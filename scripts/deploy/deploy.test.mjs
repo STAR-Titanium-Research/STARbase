@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'node:test';
 import { computeCheck, main, parseArgs, runDeploy } from './deploy.mjs';
+import { parseHolders, STOP_HOLDERS_ACK } from './lib.mjs';
 
 const REPO = path.resolve('/repo');
 const NUL = '\0';
@@ -21,6 +22,7 @@ const COMPOSE_CONFIG = JSON.stringify({
 });
 
 const HEAD_SHA = 'a'.repeat(40);
+const PENDING_FROM = '9'.repeat(40);
 const TARGET_SHA = 'b'.repeat(40);
 const MIGRATION_FILE = 'db/migrations/202610180900_add_thing.sql';
 const SAFE_SQL = '-- migrate:up\nCREATE TABLE thing(id int);\n-- migrate:down\nDROP TABLE thing;\n';
@@ -42,9 +44,16 @@ function world(s = {}) {
 		[path.join(REPO, '.env.example'), s.envExample ?? ENV_EXAMPLE],
 	]);
 	const written = new Map();
+	const removed = [];
+	if (s.pendingFile) files.set(path.join(REPO, 'logs', 'deploy', 'pending.json'), JSON.stringify(s.pendingFile));
 	const fsx = {
-		readText: (p) => files.get(p) ?? null,
+		readText: (p) => written.get(p) ?? files.get(p) ?? null,
 		writeText: (p, text) => written.set(p, text),
+		remove: (p) => {
+			removed.push(p);
+			written.delete(p);
+			files.delete(p);
+		},
 	};
 	const ok = (stdout = '') => ({ code: 0, stdout, stderr: '' });
 	const exec = async (cmd, args, opts = {}) => {
@@ -52,6 +61,10 @@ function world(s = {}) {
 		t += 5;
 		const k = `${cmd} ${args.join(' ')}`;
 		if (k === 'git fetch -q origin') return s.fetch ?? ok();
+		if (cmd === 'powershell.exe') return ok(s.holders ? JSON.stringify(s.holders) : '[]');
+		if (cmd === 'taskkill') return ok();
+		if (k.startsWith('git merge-base --is-ancestor ')) return s.staleBase ? { code: 1, stdout: '', stderr: '' } : ok();
+		if (k === `git diff --name-only -z --no-renames ${PENDING_FROM} HEAD`) return ok(changed.map((f) => f + NUL).join(''));
 		if (k === 'git rev-parse --abbrev-ref HEAD') {
 			branchCalls++;
 			return ok(`${s.branchSeq ? s.branchSeq(branchCalls) : (s.branch ?? 'feat/x')}\n`);
@@ -105,6 +118,8 @@ function world(s = {}) {
 		exec,
 		repoDir: REPO,
 		env: s.processEnv ?? {},
+		platform: 'win32',
+		pid: 4242,
 		fsx,
 		now: () => t,
 		sleep: async (ms) => {
@@ -115,7 +130,7 @@ function world(s = {}) {
 	};
 	const seen = (prefix) => calls.filter((c) => `${c.cmd} ${c.args.join(' ')}`.startsWith(prefix));
 	const keys = () => calls.map((c) => `${c.cmd} ${c.args.join(' ')}`);
-	return { ctx, calls, out, written, files, seen, keys };
+	return { ctx, calls, out, written, removed, files, seen, keys };
 }
 
 const stepNames = (r) => r.steps.map((x) => x.name);
@@ -773,4 +788,153 @@ test('run: the starbase tailnet device is recreated only when it is already runn
 	assert.equal(r.ok, true, r.message);
 	assert.ok(!w.keys().some((k) => k.includes('force-recreate starbase')));
 	assert.match(w.out.join(''), /starbase is not running; left stopped/);
+});
+
+// ---- processes holding node_modules ---------------------------------------------------------------
+
+const HOLDER = { pid: 99684, name: 'node.exe', cmd: 'node vite.js preview', reason: 'has a node_modules native module loaded' };
+
+test('parseHolders reads the PowerShell JSON and drops junk', () => {
+	assert.deepEqual(parseHolders('[{"pid":7,"name":"a","cmd":"b","reason":"c"}]'), [{ pid: 7, name: 'a', cmd: 'b', reason: 'c' }]);
+	assert.deepEqual(parseHolders('{"pid":7,"name":"a"}\n').map((h) => h.pid), [7]);
+	assert.deepEqual(parseHolders('[{"pid":4},{"pid":"x"},null]'), []);
+	assert.deepEqual(parseHolders('not json'), []);
+	assert.deepEqual(parseHolders(''), []);
+});
+
+test('check: a process holding node_modules needs a tick when npm install is planned', async () => {
+	const w = world({ changed: ['package.json'], holders: [HOLDER] });
+	const c = await computeCheck(w.ctx);
+	assert.deepEqual(c.holders.map((h) => h.pid), [99684]);
+	assert.deepEqual(c.needsAck, [STOP_HOLDERS_ACK]);
+	assert.deepEqual(c.blockers, []);
+});
+
+test('check: holders are not even looked for when no install is planned', async () => {
+	const w = world({ changed: ['core/extensions/a/index.js'], holders: [HOLDER] });
+	const c = await computeCheck(w.ctx);
+	assert.deepEqual(c.holders, []);
+	assert.deepEqual(c.needsAck, []);
+	assert.equal(w.seen('powershell.exe').length, 0);
+});
+
+test('run: holders without the tick stop at preflight and nothing is stopped or merged', async () => {
+	const w = world({ changed: ['package.json'], holders: [HOLDER] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, false);
+	assert.equal(r.failedStep, 'preflight');
+	assert.match(r.message, /node\.exe \(pid 99684\)/);
+	assert.equal(w.seen('taskkill').length, 0);
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+	assert.equal(w.written.size, 0);
+});
+
+test('run: with the tick the holders are stopped (whole tree) right before npm install', async () => {
+	const w = world({ changed: ['package.json'], holders: [HOLDER] });
+	const r = await runDeploy(w.ctx, { ack: [STOP_HOLDERS_ACK] });
+	assert.equal(r.ok, true, r.message);
+	const keys = w.keys();
+	const kill = keys.indexOf('taskkill /PID 99684 /T /F');
+	assert.ok(kill > -1);
+	assert.ok(kill > keys.findIndex((k) => k.startsWith('git merge --no-edit')));
+	assert.ok(kill < keys.indexOf('npm install --no-audit --no-fund'));
+	assert.match(w.out.join(''), /Stopped node\.exe \(pid 99684\)/);
+});
+
+test('run: an EBUSY from npm install says what to do', async () => {
+	const w = world({ changed: ['package.json'], installCode: 4294963214 });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'install');
+	assert.match(r.message, /holds a file in node_modules/);
+});
+
+// ---- finishing a deploy that stopped after the merge ----------------------------------------------
+
+const PENDING_PATH = path.join(REPO, 'logs', 'deploy', 'pending.json');
+
+test('run: a failure after the merge records it, so the rest can be finished', async () => {
+	const w = world({ changed: ['package.json'], installCode: 1 });
+	const r = await runDeploy(w.ctx, { id: '20261019T165715Z' });
+	assert.equal(r.failedStep, 'install');
+	const pending = JSON.parse(w.written.get(PENDING_PATH));
+	assert.equal(pending.fromSha, HEAD_SHA);
+	assert.equal(pending.runId, '20261019T165715Z');
+	assert.equal(pending.failedStep, 'install');
+	assert.match(r.message, /Resume/);
+});
+
+test('run: a success leaves no pending record', async () => {
+	const w = world({ changed: ['package.json'] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.ok, true);
+	assert.equal(w.written.has(PENDING_PATH), false);
+	assert.deepEqual(w.removed, [PENDING_PATH]);
+});
+
+test('run: a failure before the merge records nothing', async () => {
+	const w = world({ changed: ['core/extensions/a/index.js'], mergeCode: 1 });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'merge');
+	assert.equal(w.written.has(PENDING_PATH), false);
+});
+
+const PENDING = { runId: '20261019T165715Z', fromSha: PENDING_FROM, failedStep: 'install', message: 'npm install failed (exit 4294963214).' };
+
+test('check: an unfinished deploy is offered as a resume, though HEAD already equals origin/main', async () => {
+	const w = world({ upToDate: true, pendingFile: PENDING, changed: [MIGRATION_FILE, 'package.json', 'apps/starbase/x.js'] });
+	const c = await computeCheck(w.ctx);
+	assert.equal(c.upToDate, false);
+	assert.equal(c.resume.fromSha, PENDING_FROM);
+	assert.deepEqual(c.steps.slice(0, 2), ['install', 'build:starbase']);
+	assert.ok(!c.steps.includes('migrate'), 'the migrations already ran before the merge');
+	assert.equal(c.changedCount, 3);
+	assert.equal(c.target, c.head);
+	assert.deepEqual(c.blockers, []);
+});
+
+test('check: a stale pending record (its base is not in HEAD) is ignored', async () => {
+	const w = world({ upToDate: true, pendingFile: PENDING, staleBase: true });
+	const c = await computeCheck(w.ctx);
+	assert.equal(c.upToDate, true);
+	assert.equal(c.resume, null);
+});
+
+test('check: a damaged pending file is ignored', async () => {
+	const w = world({ upToDate: true });
+	w.files.set(PENDING_PATH, '{ not json');
+	const c = await computeCheck(w.ctx);
+	assert.equal(c.upToDate, true);
+});
+
+test('run: resume skips migrate and merge, runs the rest, and clears the record', async () => {
+	const w = world({ upToDate: true, pendingFile: PENDING, changed: [MIGRATION_FILE, 'package.json', 'apps/starbase/x.js'] });
+	const r = await runDeploy(w.ctx, { id: '20261019T170500Z' });
+	assert.equal(r.ok, true, r.message);
+	assert.deepEqual(stepNames(r), ['preflight', 'worktree', 'migrate', 'merge', 'install', 'build', 'restart', 'verify', 'notes']);
+	assert.ok(r.steps.slice(1, 4).every((x) => x.skipped));
+	assert.equal(w.seen('git merge --no-edit').length, 0);
+	assert.equal(w.seen('git worktree add').length, 0);
+	assert.equal(w.seen('docker run').length, 0, 'no dbmate');
+	assert.ok(w.keys().includes('npm install --no-audit --no-fund'));
+	assert.match(r.message, /^Finished the earlier deploy:/);
+	assert.equal(r.fromSha, PENDING_FROM.slice(0, 8));
+	assert.deepEqual(w.removed, [PENDING_PATH]);
+});
+
+test('run: a resume that fails again keeps the record (with the new failure)', async () => {
+	const w = world({ upToDate: true, pendingFile: PENDING, changed: ['package.json'], installCode: 1 });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'install');
+	const pending = JSON.parse(w.written.get(PENDING_PATH));
+	assert.equal(pending.fromSha, PENDING_FROM);
+	assert.equal(pending.failedStep, 'install');
+	assert.equal(w.removed.length, 0);
+});
+
+test('run: a resume with holders also needs the tick', async () => {
+	const w = world({ upToDate: true, pendingFile: PENDING, changed: ['package.json'], holders: [HOLDER] });
+	const r = await runDeploy(w.ctx, {});
+	assert.equal(r.failedStep, 'preflight');
+	assert.equal(w.seen('npm install').length, 0);
+	assert.equal(w.files.has(PENDING_PATH), true, 'the record is untouched');
 });
