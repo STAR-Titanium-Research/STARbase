@@ -24,11 +24,11 @@ export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio'>; edi
 		labelFor: build.labelForKey,
 		select: build.selectKey,
 		showMissing: create.showMissing,
-		// A field the form cannot draw: Data Studio draws it, once there is a record to open.
-		openExternal: (key: string, field: FormField) => {
+		// A field the form cannot draw: Data Studio draws it, once there is a record to open. A new item's form says so in place of the
+		// link ("Opens in Data Studio after Create", item 12), so nothing is asked here for one.
+		openExternal: (key: string, _field: FormField) => {
 			const item = edit.body.value.items.find((i) => i.key === key);
 			if (item?.existing) host.openDataStudio(dataStudioRoute(collectionOf(item), item.existing.id));
-			else build.problem.value = `${field.label} can only be filled in Data Studio, once the record is created.`;
 		},
 	});
 	return { build, create, markDone };

@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { FieldForm, toFormFields } from '@d1/ui';
 import type { DraftItem, FieldDef, FormField, FormValues } from '@d1/ui';
-import { collectionFor, existingModel, existingPatch, formDefsFor, inheritedFor, patchOf, TEXT_OVERRIDES } from './draftForm';
+import { collectionFor, existingModel, existingPatch, formDefsFor, inheritedFor, NEW_RECORD_EXTERNAL, patchOf, TEXT_OVERRIDES } from './draftForm';
 
 // STARbase's own form for one item of a draft (spec E15, E17), over the kit's FieldForm. The item's `values` are the v-model:
 // only what the person set (a new record: all its fields; an existing one: the changes), and `update` carries a patch ready for
@@ -63,6 +63,7 @@ const fields = computed(() =>
 		:inherited="(editsRecord ? undefined : inheritedFor(item, inherited)) as FormValues | undefined"
 		:readonly="readonly"
 		:show-missing="showMissing"
+		:external-hint="item.existing ? undefined : NEW_RECORD_EXTERNAL"
 		@update:model-value="onUpdate($event)"
 		@open-external="emit('openExternal', $event)"
 	/>

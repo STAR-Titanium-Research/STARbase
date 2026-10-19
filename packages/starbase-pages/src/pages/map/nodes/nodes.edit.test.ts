@@ -248,6 +248,18 @@ describe('a container in edit mode', () => {
 		expect(html).toMatch(/class="chk"[^>]*>3</);
 	});
 
+	it('wears the Planned / Done chip of a new operation (R9), and none without edit mode or when the page offers none', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		const chip = (state: 'planned' | 'done') => edit({ work: () => ({ state, label: `label ${state}`, toggle() {} }) });
+		const planned = await render(ContainerNode, { id: c.id, data: c }, chip('planned'));
+		expect(planned).toMatch(/<button[^>]*class="[^"]*\bwchip\b[^"]*"[^>]*aria-label="label planned"[^>]*data-work="planned"[^>]*>Planned</);
+		const done = await render(ContainerNode, { id: c.id, data: c }, chip('done'));
+		expect(done).toMatch(/data-work="done"[^>]*>Done</);
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit())).not.toContain('wchip');
+		expect(await render(ContainerNode, { id: c.id, data: c })).not.toContain('wchip');
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ editing: ref(false), work: () => ({ state: 'planned', label: 'x', toggle() {} }) }))).not.toContain('wchip');
+	});
+
 	it('is plain in view mode: a recorded operation has none of it, and a draft one without edit mode neither', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
 		const html = await render(ContainerNode, { id: c.id, data: c });

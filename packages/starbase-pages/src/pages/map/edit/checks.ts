@@ -76,22 +76,30 @@ const known = (item: DraftItem, field: string, ctx: CheckCtx): boolean => !item.
 
 const labelOf = (defs: FieldDef[] | undefined, field: string) => defs?.find((d) => d.field === field)?.label ?? field.replace(/_/g, ' ');
 
+/**
+ * The fields a record that is done is asked for: the ones the forms mark required (the field definitions), less what the draft fills in
+ * itself and what the server fills or refuses in a draft (reserved fields, `current_status`, the draft's project and campaign). The
+ * rail shows these with the key settings of a done card, and `missingRequired` asks for the ones with no value: one list for both,
+ * as d1-build's `needDone` reads one. A record that exists is only asked again for what the draft changes.
+ */
+export function doneRequiredFields(item: DraftItem, body: DraftBody, defs: readonly FieldDef[] | undefined): FieldDef[] {
+	return (defs ?? []).filter((d) => {
+		if (!d.required || d.hidden || d.readonly || BY_THE_DRAFT.has(d.field)) return false;
+		// What the server fills and refuses in a draft (reserved fields, `current_status`): asking for it would block a Create that is fine.
+		if (isReserved(item.kind, d.field) || d.field === 'current_status') return false;
+		if (d.field === 'project_id' && body.projectId) return false;
+		if (d.field === 'campaign_id' && body.campaignId) return false;
+		return !(item.existing && !(d.field in item.values));
+	});
+}
+
 /** The required fields (from the field definitions) that have no value, for a record that is done. */
 function missingRequired(item: DraftItem, body: DraftBody, ctx: CheckCtx, values: Record<string, unknown>): Check[] {
 	const defs = ctx.fields?.[collectionOf(item)];
 	if (!defs) return [];
-	const out: Check[] = [];
-	for (const d of defs) {
-		if (!d.required || d.hidden || d.readonly || BY_THE_DRAFT.has(d.field)) continue;
-		// What the server fills and refuses in a draft (reserved fields, `current_status`): asking for it would block a Create that is fine.
-		if (isReserved(item.kind, d.field) || d.field === 'current_status') continue;
-		if (d.field === 'project_id' && body.projectId) continue;
-		if (d.field === 'campaign_id' && body.campaignId) continue;
-		// A record that exists is only asked again for what this draft changes.
-		if (item.existing && !(d.field in item.values)) continue;
-		if (empty(values[d.field])) out.push(block(item.key, `Fill in ${labelOf(defs, d.field)}: ${item.kind === 'sample' ? 'a new sample' : `a done ${WORDS[item.kind]}`} needs it.`, d.field));
-	}
-	return out;
+	return doneRequiredFields(item, body, defs)
+		.filter((d) => empty(values[d.field]))
+		.map((d) => block(item.key, `Fill in ${labelOf(defs, d.field)}: ${item.kind === 'sample' ? 'a new sample' : `a done ${WORDS[item.kind]}`} needs it.`, d.field));
 }
 
 /** What E13 asks of an existing record that was read again. */

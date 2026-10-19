@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Section, type FormField } from '@d1/ui';
-import { collectionOf, recordKey } from './checks';
+import { collectionOf, doneRequiredFields, recordKey } from './checks';
 import DraftItemForm from './DraftItemForm.vue';
 import { inheritedValues } from './inherit';
 import { formTitle, keyFieldsFor, withCategory } from './railForm';
 import { useEditRail } from './railContext';
 import { useEditModeInjected } from './useEditMode';
+import WorkToggle from './WorkToggle.vue';
+import { canChooseWork } from './workState';
 
 // The rail's form for the draft item selected on the canvas (spec E17, §7.1): its key settings first, every other field under
 // "All fields". D2's DraftItemForm draws them from the Directus field definitions; what the person types goes to the draft as setValues.
@@ -20,7 +22,12 @@ const collection = computed(() => (item.value ? collectionOf(item.value) : null)
 const defs = computed(() => (collection.value ? (edit?.catalog.rawFields.value[collection.value] ?? []) : []));
 const current = computed(() => (item.value?.existing && collection.value ? edit?.catalog.records.get(recordKey(collection.value, item.value.existing.id))?.values : undefined));
 const inherited = computed(() => (item.value && !item.value.existing && item.value.kind === 'sample' && edit ? inheritedValues(edit.body.value, item.value.key, edit.catalog.ctx()).values : undefined));
-const keyFields = computed(() => (item.value ? keyFieldsFor(item.value, current.value) : []));
+/** A new operation or test is planned or done at Create (R9): the toggle, and for Done the fields the forms require, with the key settings. */
+const choosable = computed(() => (canChooseWork(item.value) ? item.value : null));
+const requiredForDone = computed(() =>
+	item.value && collection.value && edit ? doneRequiredFields(item.value, edit.body.value, edit.catalog.ctx().fields?.[collection.value]).map((d) => d.field) : [],
+);
+const keyFields = computed(() => (item.value ? keyFieldsFor(item.value, current.value, requiredForDone.value) : []));
 /** An existing record is edited once it has been read: until then the form would show it empty. */
 const ready = computed(() => !!item.value && (!item.value.existing || !!current.value));
 
@@ -37,6 +44,7 @@ function external(field: FormField) {
 <template>
 	<template v-if="item && ready">
 		<Section :title="`${formTitle(item)}: key settings`" class="pm-item">
+			<WorkToggle v-if="choosable" :state="choosable.workState" :what="choosable.kind" @change="(state) => edit?.setWorkState(choosable!.key, state)" />
 			<DraftItemForm
 				:item="item"
 				:field-defs="defs"

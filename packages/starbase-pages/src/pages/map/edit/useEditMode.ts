@@ -12,12 +12,15 @@ import type { MapNode, ProcessData } from '../model/types';
 import type { MergeHint } from '../useMapExpand';
 import type { MapOverlay, MapRoute, MapRouter } from '../useProcessMap';
 import { blocking } from './checks';
-import type { DraftAction } from './draft';
+import type { DraftAction, WorkState } from './draft';
 import { draftKeyOfNode, isDraftNode } from './socketRefs';
 import { defaultName, isoDay, summaryText } from './summary';
 import { toGraph, type ToGraphCtx } from './toGraph';
 import { useDraft, type DraftApi } from './useDraft';
+import { chooseCampaign, chooseProject } from './projectCampaign';
 import { useEditCatalog, type EditCatalog } from './useEditCatalog';
+import { useProjectChoices } from './useProjectChoices';
+import { workStateActions } from './workState';
 
 export interface EditModeOptions {
 	api: HostApi;
@@ -134,6 +137,11 @@ export function useEditMode(o: EditModeOptions) {
 				writeQuery({ edit: null });
 				return;
 			}
+			// Build a process while a draft with nothing in it is open: that one is the new draft (none is left behind on the server).
+			if (draft.draftId.value && !starting && isEmptyBody(draft.body.value)) {
+				writeQuery({ edit: draft.draftId.value });
+				return;
+			}
 			if (starting) return;
 			starting = true;
 			try {
@@ -230,14 +238,47 @@ export function useEditMode(o: EditModeOptions) {
 	/** Keys typed in one field of one item within this long are one undo step. */
 	const TYPING_MS = 1500;
 	let typing: { key: DraftKey; fields: string; at: number } | null = null;
-	/** The form's change of an item's values: successive changes to the same field of the same item are folded into one step while the person types. */
+	/** The same value, as the draft compares them (a cleared field is `undefined`, `null` or absent). */
+	const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+	/**
+	 * The form's change of an item's values: successive changes to the same field of the same item are folded into one step while the person
+	 * types. The form hands over every value the item has, so what changed is worked out against the draft: a change to another field of
+	 * the same card is a step of its own (undo takes back one field at a time).
+	 */
 	function setValues(key: DraftKey, values: Record<string, unknown>): void {
 		const now = Date.now();
-		const fields = Object.keys(values).sort().join(',');
+		const item = draft.body.value.items.find((i) => i.key === key);
+		const changed = Object.keys(values).filter((k) => !sameValue(item?.values[k], values[k]));
+		// Nothing that is not already there: the reducer treats it as no change, and the step being typed in stays open.
+		if (!changed.length) return;
+		const fields = changed.sort().join(',');
 		const merge = !!typing && typing.key === key && typing.fields === fields && now - typing.at < TYPING_MS;
 		apply({ type: 'setValues', key, values }, { merge });
 		typing = { key, fields, at: now };
 	}
+	/**
+	 * Planned or done at Create for new operations or tests (R9): the state, and for Done the date it happened, as ONE undoable step whether the
+	 * rail's toggle or the card's chip asks. Several keys (a stack of passes) are one step too.
+	 */
+	function setWorkState(keys: DraftKey | DraftKey[], state: WorkState): void {
+		const actions = (Array.isArray(keys) ? keys : [keys]).flatMap((k) => {
+			const item = draft.body.value.items.find((i) => i.key === k);
+			return item ? workStateActions(item, state) : [];
+		});
+		if (actions.length) apply(actions);
+	}
+	// ---- the draft's project and campaign (R12) ------------------------------------------------------------
+	const choices = useProjectChoices(o.api);
+	watch(
+		() => editing.value,
+		(on) => on && void choices.ensure(),
+		{ immediate: true },
+	);
+	/** The chooser's project: the campaign goes with it unless it belongs to the new one, as one undo step. */
+	const setProject = (projectId: string | null): DraftBody => apply(chooseProject(draft.body.value, projectId, choices.campaigns.value));
+	/** The chooser's campaign: it brings its project when the draft has another or none. */
+	const setCampaign = (campaignId: string | null): DraftBody => apply(chooseCampaign(draft.body.value, campaignId, choices.campaigns.value));
+
 	function undo(): void {
 		if (!editing.value) return;
 		typing = null;
@@ -324,7 +365,7 @@ export function useEditMode(o: EditModeOptions) {
 		// the lid
 		startEditing, openDraft, done, discardDraft,
 		// changing
-		apply, setValues, undo, redo, writeQuery,
+		apply, setValues, setWorkState, setProject, setCampaign, choices, undo, redo, writeQuery,
 		refreshDrafts: draft.refresh,
 	};
 	return api;

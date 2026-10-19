@@ -36,6 +36,8 @@ const emit = defineEmits<{
 	tidy: [];
 	rename: [name: string];
 	open: [id: string];
+	/** My drafts was opened: the page reads the list again (names and summaries move while a draft is edited). */
+	menu: [];
 	dismissNotice: [];
 }>();
 
@@ -54,6 +56,7 @@ const openBtn = ref<HTMLElement | null>(null);
 async function toggleMenu() {
 	menu.value = !menu.value;
 	if (menu.value) {
+		emit('menu');
 		await nextTick();
 		menuEl.value?.querySelector<HTMLElement>('button')?.focus();
 	}
@@ -116,6 +119,7 @@ const when = (iso: string): string => {
 				</button>
 			</div>
 		</span>
+		<slot name="scope" />
 		<span class="save" :class="{ bad: !!saveError }" role="status">{{ saveError || (saving ? 'Saving…' : 'Draft kept') }}</span>
 		<span class="spacer"></span>
 		<slot name="create" />

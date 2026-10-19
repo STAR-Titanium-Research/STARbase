@@ -25,7 +25,7 @@ const SAMPLE_DEFS = [
 	{ field: 'notes', type: 'text', schema: { data_type: 'text' }, meta: { interface: 'input-multiline', sort: 9, width: 'full' } },
 ];
 
-async function start(body: DraftBody, edit = true, selected?: string) {
+async function start(body: DraftBody, edit = true, selected?: string | object) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -36,7 +36,7 @@ async function start(body: DraftBody, edit = true, selected?: string) {
 		router: { replace: vi.fn() },
 		isPhone: ref(!edit),
 		focus: () => null,
-		selected: () => (selected ? ({ id: `s:${selected}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: selected, code: 'x' }, ins: [], outs: [] } as never) : undefined),
+		selected: () => (typeof selected === 'object' ? (selected as never) : selected ? ({ id: `s:${selected}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: selected, code: 'x' }, ins: [], outs: [] } as never) : undefined),
 	});
 	await settle();
 	await nextTick();
@@ -76,6 +76,26 @@ describe('the rail\'s form for the selected item', () => {
 		expect(t).toContain('New sample: key settings');
 		expect(t).toContain('New sample: all fields');
 		expect(t).toContain('Geometry');
+	});
+
+	it('a new operation has the Planned / Done toggle at the top of its section; Done asks for the date it happened', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const container = { id: 'g:n3', type: 'container', kind: 'operation', group: { rowIds: ['draft:n3'] }, rows: [], slots: [] } as never;
+		const mode = await start(body, true, container);
+		const html = await render(EditRailItem, mode);
+		expect(html).toContain('role="radiogroup"');
+		expect(text(html)).toContain('New operation: key settings');
+		expect(html).toMatch(/data-state="planned"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-state="planned"/);
+		expect(text(html)).not.toContain('Create writes it as done');
+		mode.setWorkState('n2', 'done');
+		const done = await render(EditRailItem, mode);
+		expect(done).toMatch(/data-state="done"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-state="done"/);
+		expect(text(done)).toContain('Create writes it as done');
+	});
+
+	it('a sample has no Planned / Done toggle', async () => {
+		const html = await render(EditRailItem, await start(run([{ type: 'addSample' }]), true, 'draft:n1'));
+		expect(html).not.toContain('radiogroup');
 	});
 
 	it('draws nothing with nothing selected, outside edit mode, or for a card that is not in the draft', async () => {

@@ -29,6 +29,9 @@ export const TEXT_OVERRIDES: Record<string, Partial<FormField>> = {
 	test_code: { kind: 'text', readonly: true, required: false, interfaceName: 'input' },
 };
 
+/** What a field the form cannot draw says on a new item, which has no record to open yet (spec 2026-10-18 §3, item 12). */
+export const NEW_RECORD_EXTERNAL = 'Opens in Data Studio after Create';
+
 const COLLECTION: Record<DraftItem['kind'], string> = { sample: 'physical_samples', operation: 'manufacturing_operations', test: 'test_sessions' };
 /** The Directus collection a draft item's record lives in. */
 export const collectionFor = (item: DraftItem): string => COLLECTION[item.kind];

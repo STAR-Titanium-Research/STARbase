@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 6 minutes, 37 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 10 minutes, 49 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 12 of edit-mode-slice2b.spec.ts)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -75,6 +75,17 @@ planned by the owner and its refusal to a second Lab Member (made by the admin a
 read back for `test_category` and the inherited `material_id`. Everything a test makes is removed afterwards (a done operation is sent back to
 planned by the admin first, a second member is deleted with their People row). One test is a known failure that says so: Back to planned by an
 operation's owner who cannot edit its output sample is refused (a design gap, reported with the slice).
+
+`specs/edit-mode-slice2b.spec.ts` is slice 2b (R9 Planned / Done at Create, R12 the project and campaign chooser, plain fixes 9 to 12), as the Lab Member:
+a new operation made Done with a date and Created, read back for `work_state`, the date, `done_by_person_id`, `done_at` and its output sample `active`;
+a done operation and a planned test in one draft; a done test whose required-for-done fields on the page are compared with d1-build's own `/check`
+answer for the same saved draft; a done operation on a planned sample refused with the server's reason (and the same reason from the server); the
+toggle's one-step undo and redo from the rail and from the card's chip; the chooser (pre-filled from the first sample, campaigns limited to the project,
+a campaign cleared when the project changes, saved in the draft and kept over a reload, applied to every new record at Create, the new sample in the
+campaign); My drafts listing a new draft with the list request failing; Build a process reusing an empty open draft; per-field undo; the blank-canvas
+hint and the hidden Find / Reset / Clear; the "after Create" note on a new item's Data Studio field. The seed (`scripts/dev/local-stack.seed.sql`) has a
+second project and a campaign in each for it. To run beside another stack, give the script and the suite the same `D1_STACK_DIR` and the three
+`D1_STACK_PG_PORT`, `D1_STACK_DIRECTUS_PORT` and `D1_STACK_STARBASE_PORT` values (the Playwright helpers read the last two).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

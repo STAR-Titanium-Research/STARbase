@@ -13,7 +13,7 @@
 --                  └── test LOCAL-BAR-1-TENSILE (tensile, done) on LOCAL-BAR-1
 --
 -- plus the reference data of db/seeds/001_reference_data.sql (the manufacturing methods list, materials, equipment) that `up` loads,
--- a project LOCAL-PROJ the member leads, and People rows with is_researcher = true for the admin and the member (the viewer's is
+-- a project LOCAL-PROJ the member leads (and a second, LOCAL-PROJ-B, with one campaign in each: LOCAL-CAMP-A, LOCAL-CAMP-B), and People rows with is_researcher = true for the admin and the member (the viewer's is
 -- made a non-researcher: a Lab Viewer builds nothing, and R11 of the redesign spec needs an account without a researcher row).
 \set ON_ERROR_STOP on
 BEGIN;
@@ -30,6 +30,21 @@ SELECT 'LOCAL-PROJ', 'Local stack project', 'Made by scripts/dev/local-stack.see
 FROM people p JOIN directus_users u ON u.id = p.user_id
 WHERE u.email = :'member_email'
   AND NOT EXISTS (SELECT 1 FROM projects WHERE project_code = 'LOCAL-PROJ');
+
+-- A second project and a campaign in each, for the project / campaign chooser of the draft (slice 2b, R12): the samples below belong to
+-- LOCAL-PROJ, so a draft that picks one is pre-filled with LOCAL-PROJ and offers LOCAL-CAMP-A; LOCAL-PROJ-B has the other campaign.
+INSERT INTO projects (project_code, project_name, description, principal_investigator_person)
+SELECT 'LOCAL-PROJ-B', 'Local stack project B', 'The second project of scripts/dev/local-stack.seed.sql (the chooser needs two).', p.person_id
+FROM people p JOIN directus_users u ON u.id = p.user_id
+WHERE u.email = :'member_email'
+  AND NOT EXISTS (SELECT 1 FROM projects WHERE project_code = 'LOCAL-PROJ-B');
+
+INSERT INTO campaigns (project_id, campaign_type, campaign_code, name, owner_person_id)
+SELECT pr.project_id, 'machining_trial', v.code, v.name, p.person_id
+FROM (VALUES ('LOCAL-PROJ', 'LOCAL-CAMP-A', 'Local campaign A'), ('LOCAL-PROJ-B', 'LOCAL-CAMP-B', 'Local campaign B')) AS v(project, code, name)
+JOIN projects pr ON pr.project_code = v.project
+CROSS JOIN (SELECT person_id FROM people p JOIN directus_users u ON u.id = p.user_id WHERE u.email = :'member_email') p
+WHERE NOT EXISTS (SELECT 1 FROM campaigns c WHERE c.campaign_code = v.code);
 
 -- Samples
 INSERT INTO physical_samples (sample_code, material_id, project_id, owner_person_id, form, current_status, nickname)

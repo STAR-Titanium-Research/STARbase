@@ -26,6 +26,13 @@ describe('EditLid', () => {
 		expect(html).toContain('My drafts');
 	});
 
+	it('has a slot for the draft\'s project and campaign, before the saved state', async () => {
+		const html = await render(base, { scope: () => h('span', { class: 'the-scope' }, 'Project and campaign') });
+		expect(html).toContain('the-scope');
+		expect(html.indexOf('the-scope')).toBeLessThan(html.indexOf('Draft kept'));
+		expect(await render(base)).not.toContain('the-scope');
+	});
+
 	it('has Remove and Dissolve, off until something is selected', async () => {
 		const off = await render(base);
 		expect(off).toMatch(/<button[^>]*disabled[^>]*aria-label="Remove"|<button[^>]*aria-label="Remove"[^>]*disabled/);

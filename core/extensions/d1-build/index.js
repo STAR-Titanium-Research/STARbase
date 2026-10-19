@@ -1541,7 +1541,8 @@ export function mount(router, context, clock = () => new Date()) {
       // have none, which hides the record from its own creator (ADR-0011), so refuse before anything is written, and say why.
       // Only a Create that makes records needs an owner: edits, attaches and removals do not.
       const makes = plan.samples.length > 0 || plan.tests.length > 0 || plan.operations.some((r) => r.mode === 'new');
-      if (makes && !rowsOf(await trx.raw(SQL.personOfUser, [acc.user]))[0]) {
+      const researcher = rowsOf(await trx.raw(SQL.personOfUser, [acc.user]))[0]?.person_id ?? null;
+      if (makes && !researcher) {
         throw new HttpError(422, 'NO_RESEARCHER', "Your account isn't linked to a researcher record. Ask an admin.");
       }
       if (checks.some((c) => c.level === 'block')) {
@@ -1568,6 +1569,14 @@ export function mount(router, context, clock = () => new Date()) {
       const record = async (key, collection, idValue) => {
         const [r] = rowsOf(await trx.raw(SQL.codeOf[collection], [idValue]));
         created[key] = { collection, id: idValue, code: r?.code ?? null };
+      };
+      // R9, done at Create: who and when, as Mark done records them, and today when the person gave no date.
+      const doneStamp = (workState, dateField, values) => {
+        if (workState !== 'done') return {};
+        const stamp = { done_at: clock().toISOString() };
+        if (isBlank(values[dateField])) stamp[dateField] = `${clock().toISOString().slice(0, 10)}T00:00:00.000Z`;
+        if (researcher) stamp.done_by_person_id = researcher;
+        return stamp;
       };
       const project = (values) => (isBlank(values.project_id) ? (body.projectId ?? undefined) : values.project_id);
       const campaign = (values) => (isBlank(values.campaign_id) ? (body.campaignId ?? undefined) : values.campaign_id);
@@ -1620,6 +1629,7 @@ export function mount(router, context, clock = () => new Date()) {
         const data = {
           ...cleanValues(r.values, r.workState === 'planned' ? ['operation_date'] : []),
           work_state: r.workState,
+          ...doneStamp(r.workState, 'operation_date', r.values),
         };
         if (r.input) data.sample_id = refId(r.input);
         if (r.output) data.output_sample_id = refId(r.output);
@@ -1638,6 +1648,7 @@ export function mount(router, context, clock = () => new Date()) {
         const data = {
           ...cleanValues(t.values, t.workState === 'planned' ? ['session_date'] : []),
           work_state: t.workState,
+          ...doneStamp(t.workState, 'session_date', t.values),
           subject: { create: t.subjects.map((ref) => ({ collection: 'physical_samples', item: refId(ref) })) },
         };
         if (isBlank(t.values.test_category) && t.category) data.test_category = t.category;

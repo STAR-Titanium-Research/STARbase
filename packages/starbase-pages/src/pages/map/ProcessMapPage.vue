@@ -15,6 +15,7 @@ import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
 import EditOverlays from './edit/EditOverlays.vue';
+import EmptyDraftHint from './edit/EmptyDraftHint.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { isNotice, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSide } from './edit/useEditSide';
@@ -112,6 +113,8 @@ const blank = computed(() => !map.focus.value);
 // The record the map is opened on is not always a sample (a tool, a project, an operation...).
 // The loaded record's collection; before anything is loaded (not visible) the one in the address.
 const focusCollection = computed(() => map.data.value?.focus.collection ?? map.focus.value?.collection ?? 'physical_samples');
+/** A blank canvas whose draft has nothing on it yet: it says what to do first, and Find / Reset / Clear (of the map's focus) are not offered. */
+const emptyDraft = computed(() => blank.value && edit.drafted.value && edit.body.value.items.length === 0);
 const focusWord = computed(() => recordWord(focusCollection.value));
 const pageTitle = computed(() => (blank.value && edit.drafted.value ? 'Build a process' : map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
 
@@ -305,12 +308,12 @@ const tipHint = computed(() => {
 
 					<Section class="pm-panel" title="Process map">
 						<template #actions>
-							<v-button small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
+							<v-button v-if="!emptyDraft" small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
 							<SegmentedControl :model-value="map.dir.value" :options="DIRECTIONS" label="Direction" @update:model-value="map.setDir" />
 							<v-button small secondary @click="canvas.relayout()">Re-layout</v-button>
 							<v-button small secondary @click="canvas.fit()">Fit</v-button>
-							<v-button small secondary :disabled="!!map.expanding.value" @click="map.reset()">Reset</v-button>
-							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
+							<v-button v-if="!emptyDraft" small secondary :disabled="!!map.expanding.value" @click="map.reset()">Reset</v-button>
+							<v-button v-if="!emptyDraft" small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
 
 						<MapStrip :edit="edit" :side="side" :map="map" :canvas="canvas" :map-export="mapExport" />
@@ -353,6 +356,7 @@ const tipHint = computed(() => {
 								<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
 								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 							</VueFlow>
+							<EmptyDraftHint v-if="emptyDraft" />
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />

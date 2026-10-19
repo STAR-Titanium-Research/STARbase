@@ -1380,6 +1380,33 @@ message for a Lab Viewer in (h). They stay unticked: this list is for what live 
 confirm. Not run anywhere yet: PM6-9 (b), (e), (f), (g) beyond the second Lab Member's refusal, and the Lab Viewer's missing Edit toggle and
 My drafts in (h) (a known failure of `edit-mode.spec.ts`), a phone, and Tidy on a map of hundreds of cards.
 
+#### Process map edit mode redesign, slice 2b draft controls (`pm-redesign/2b-draft-controls`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The Planned / Done toggle, the project and campaign chooser and plain fixes 9 to 12 are unit-tested and were driven in a real browser on the local
+stack by `tests/ui/specs/edit-mode-slice2b.spec.ts` (2026-10-19). What only live confirms is the field definitions, the project and campaign
+lists and the accounts of the real lab.
+
+- [ ] **PM7-1 — Done at Create asks for what live's forms require.** On live, build an operation of each process category you use (machining,
+  sintering, heat treatment, sample prep) and a test of each type on a real sample, and press **Done** on each. Expect the rail to ask for the
+  date it happened (today by default) and for exactly the fields the form of that method or test marks required, in the key settings; the
+  Checks list the same fields (and the server agrees: Create is refused with the same fields until they are filled). Fill them, Create. Read
+  the records: `work_state` done, the date, `done_by_person_id` (you), `done_at`, and the operation's output sample `active`. A required field
+  that live has and the local stack does not (a hand-added one) must show here, not first as a refusal at Create. Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-2 — Planned and done in one draft, a planned input.** One draft with a done cut, a planned polish on its output and a done test on
+  the polished piece: the test and the polish say "Its sample is still planned; mark the operation that makes it done first." until the
+  operation before them is Done too; set the whole chain Done (the chip on each card) and Create: every record is done and every output active.
+  Undo steps back one toggle at a time. Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-3 — Project and campaign chooser on live's lists.** In a draft, pick a sample of a real project: the Project box takes it. Open
+  Campaign: only that project's campaigns are listed; change the project to another: a campaign of the first is cleared. Pick a campaign with
+  no project: its project is set. As a Lab Member with a long project list (over 500) the box says it shows the first 500. Create: every new
+  operation, test and sample carries the project, the campaign is on the operations and tests, and the new samples are in the campaign (Campaign
+  page, Samples). Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-4 — My drafts, Build a process, undo and the blank canvas on real accounts.** (a) Press **Build a process** twice in a row: one draft
+  in My drafts, not two. (b) In a form field of a new operation, change the feed, then the speed, then the feed again within a second or two:
+  Undo takes them back one at a time. (c) A blank canvas says "Pick samples, or press Shift+A…" and has no Find, Reset or Clear until something is
+  on it. (d) In the rail's all-fields form of a new sample, a field the form cannot draw (Co-owners, Files) says "Opens in Data Studio after
+  Create", with no link; on a record that exists it still offers Open in Data Studio. Since: edit-mode redesign slice 2b (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
