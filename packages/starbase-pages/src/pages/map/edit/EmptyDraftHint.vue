@@ -5,14 +5,14 @@
 </script>
 
 <template>
-	<div class="pm-empty" role="status">
+	<div class="pm-blank" role="status">
 		<strong>Nothing here yet</strong>
 		<span>Pick samples, or press <kbd>Shift+A</kbd> to add an operation or test.</span>
 	</div>
 </template>
 
 <style scoped>
-.pm-empty {
+.pm-blank {
 	position: absolute;
 	inset: 0;
 	z-index: 2;
@@ -27,7 +27,7 @@
 	font-size: var(--fs-md, 13px);
 	pointer-events: none;
 }
-.pm-empty strong { font-size: var(--fs-lg, 15px); color: var(--theme--foreground); }
+.pm-blank strong { font-size: var(--fs-lg, 15px); color: var(--theme--foreground); }
 kbd {
 	padding: 0 5px;
 	border: 1px solid var(--d1-line);
