@@ -9,3 +9,9 @@ export function focusCanvas(canvas: HTMLElement | null | undefined, id?: string)
 	if (target === canvas && !canvas.hasAttribute('tabindex')) canvas.setAttribute('tabindex', '-1');
 	target.focus({ preventScroll: true });
 }
+
+/** Puts focus back where it was before something opened over the page: on its opener, or, when the opener is gone (a menu that closed with the click that opened this), on `fallback`. */
+export function restoreFocus(opener: HTMLElement | null | undefined, fallback?: () => void): void {
+	if (opener?.isConnected) opener.focus();
+	else fallback?.();
+}

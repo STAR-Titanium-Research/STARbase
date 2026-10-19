@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
+import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, dragCard, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, driftedWires, wireEndOffsets, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, distinctRecords, makePlanned, makeTechSituation, relativeLayout, secondMember, savedDraft, selectCard, startEditingMapOf, viewportSettled, wireBetween,
 	type Ref,
@@ -34,12 +34,12 @@ test.beforeAll(async ({ playwright }) => {
 	test.skip(!stackAvailable(), 'the local stack is not up: run `bash scripts/dev/local-stack.sh up`');
 	admin = await apiAs(playwright, 'admin');
 	member = await apiAs(playwright, 'member');
-	const me = await (await member.get(`${D1}/users/me?fields=id`)).json();
+	const me = await (await getRetrying(member, `${D1}/users/me?fields=id`)).json();
 	memberPerson = (await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`))[0].person_id;
 });
 
 async function deleteDrafts(api: APIRequestContext): Promise<void> {
-	const r = await api.get(`${D1}/d1-build/drafts`);
+	const r = await getRetrying(api, `${D1}/d1-build/drafts`);
 	if (!r.ok()) return;
 	for (const d of (await r.json()).data as { id: string }[]) await api.delete(`${D1}/d1-build/drafts/${d.id}`);
 }

@@ -4,7 +4,7 @@ import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { catalogEntries, type MenuEntry } from './menuModel';
 import { encodeSocket, type SocketRef } from './socketRefs';
-import { DRAG_SLOP, NOT_HERE, draggable, useAddDrag } from './useAddDrag';
+import { DRAG_SLOP, LONG_PRESS_MS, NOT_HERE, TOUCH_SLOP, draggable, useAddDrag } from './useAddDrag';
 
 // An entry of the palette carried over the canvas, in a node environment: window, document and the canvas element are small stand-ins.
 
@@ -35,6 +35,9 @@ function setup(opts: { sockets?: ReturnType<typeof socketEl>[]; under?: Under; i
 		removeEventListener: (t: string, l: Listener) => void (listeners[t] = (listeners[t] ?? []).filter((x) => x !== l)),
 	});
 	vi.stubGlobal('document', {
+		visibilityState: 'visible',
+		addEventListener: (t: string, l: Listener) => void (listeners[t] = [...(listeners[t] ?? []), l]),
+		removeEventListener: (t: string, l: Listener) => void (listeners[t] = (listeners[t] ?? []).filter((x) => x !== l)),
 		body: { style },
 		elementFromPoint: () => {
 			const u = state.under;
@@ -62,7 +65,7 @@ function setup(opts: { sockets?: ReturnType<typeof socketEl>[]; under?: Under; i
 		say,
 	});
 	const down = (entry: MenuEntry, x = 20, y = 20, over: Record<string, unknown> = {}) => drag.start(entry, { clientX: x, clientY: y, pointerType: 'mouse', button: 0, ...over } as PointerEvent);
-	return { drag, drop, applyAt, dropOnWire, say, wireVerdict, down, state, style, move: (x: number, y: number) => fire('pointermove', { clientX: x, clientY: y }), up: (x: number, y: number) => fire('pointerup', { clientX: x, clientY: y }) };
+	return { drag, drop, applyAt, dropOnWire, say, wireVerdict, down, state, style, move: (x: number, y: number, over: Record<string, unknown> = {}) => fire('pointermove', { clientX: x, clientY: y, ...over }), up: (x: number, y: number) => fire('pointerup', { clientX: x, clientY: y }) };
 }
 beforeEach(() => void (listeners = {}));
 afterEach(() => void vi.unstubAllGlobals());
@@ -214,11 +217,156 @@ describe('letting go of nothing', () => {
 		expect(listeners.pointermove ?? []).toHaveLength(0);
 	});
 
-	it('only one drag at a time', () => {
+	it('only one finger drags at a time', () => {
+		const t = setup();
+		t.down(turning, 20, 20, { pointerType: 'touch' });
+		t.down(newSample, 20, 20, { pointerType: 'touch' });
+		t.move(400, 300, { pointerType: 'touch' });
+		expect(t.drag.drag.value?.entry).toBe(turning);
+	});
+
+	it('a mouse pressed again while a drag is still going lost the end of the first: that one is let go, nothing dropped, and the new one starts', () => {
 		const t = setup();
 		t.down(turning);
+		t.move(400, 300, { buttons: 1 });
+		expect(t.drag.drag.value?.entry).toBe(turning);
 		t.down(newSample);
-		t.move(400, 300);
+		expect(t.drag.drag.value).toBeNull();
+		expect(t.applyAt).not.toHaveBeenCalled();
+		t.move(400, 300, { buttons: 1 });
+		expect(t.drag.drag.value?.entry).toBe(newSample);
+	});
+});
+
+describe('a drag that loses its pointer is let go, not left holding it', () => {
+	const dragging = () => {
+		const t = setup();
+		t.down(turning);
+		t.move(400, 300, { buttons: 1 });
+		expect(t.drag.drag.value).not.toBeNull();
+		return t;
+	};
+	const gone = (t: ReturnType<typeof setup>) => {
+		expect(t.drag.drag.value).toBeNull();
+		expect(t.drop.value).toBeNull();
+		expect(t.style.userSelect).toBe('');
+		for (const type of ['pointermove', 'pointerup', 'pointercancel', 'blur', 'keydown', 'visibilitychange', 'touchmove']) expect(listeners[type] ?? [], type).toHaveLength(0);
+		// A later pointerup (the button let go in the page again) drops nothing.
+		t.up(400, 300);
+		expect(t.applyAt).not.toHaveBeenCalled();
+		expect(t.drag.consumeClick()).toBe(false);
+	};
+
+	it('the window losing focus (a pointerup outside the window never arrives)', () => {
+		const t = dragging();
+		fire('blur', {});
+		gone(t);
+	});
+
+	it('the page being hidden, but not becoming visible', () => {
+		const t = dragging();
+		fire('visibilitychange', {});
+		expect(t.drag.drag.value).not.toBeNull();
+		(document as unknown as { visibilityState: string }).visibilityState = 'hidden';
+		fire('visibilitychange', {});
+		gone(t);
+	});
+
+	it('a mouse or pen that moves with no button down: its button was let go somewhere that heard nothing', () => {
+		for (const pointerType of ['mouse', 'pen']) {
+			const t = dragging();
+			t.move(410, 310, { buttons: 0, pointerType });
+			gone(t);
+		}
+	});
+
+	it('a finger has no buttons: moving on is still dragging', () => {
+		const t = setup();
+		t.down(turning, 20, 20, { pointerType: 'touch' });
+		t.move(60, 20, { buttons: 0, pointerType: 'touch' });
+		t.move(400, 300, { buttons: 0, pointerType: 'touch' });
+		expect(t.drag.drag.value).toMatchObject({ over: 'canvas', x: 400, y: 300 });
+	});
+
+	it('a drag started again after one was lost works (stop was released)', () => {
+		const t = dragging();
+		fire('blur', {});
+		t.down(newSample);
+		t.move(400, 300, { buttons: 1 });
+		expect(t.drag.drag.value?.entry).toBe(newSample);
+		t.up(400, 300);
+		expect(t.applyAt).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('a finger scrolls the palette and carries an entry only on purpose', () => {
+	const touch = { pointerType: 'touch', buttons: 1 };
+	beforeEach(() => void vi.useFakeTimers());
+	afterEach(() => void vi.useRealTimers());
+
+	it('a vertical move is a scroll: nothing is carried, even after the long press time', () => {
+		const t = setup();
+		t.down(turning, 20, 20, touch);
+		t.move(20, 20 + TOUCH_SLOP + 4, touch);
+		expect(t.drag.drag.value).toBeNull();
+		vi.advanceTimersByTime(LONG_PRESS_MS + 50);
+		expect(t.drag.drag.value).toBeNull();
+		t.move(400, 300, touch);
+		t.up(400, 300);
+		expect(t.applyAt).not.toHaveBeenCalled();
+		expect(listeners.pointermove ?? []).toHaveLength(0);
+	});
+
+	it('a clearly horizontal move carries it, at once', () => {
+		const t = setup();
+		t.down(turning, 20, 20, touch);
+		t.move(20 + TOUCH_SLOP + 2, 24, touch);
+		expect(t.drag.drag.value?.entry).toBe(turning);
+		t.move(400, 300, touch);
+		t.up(400, 300);
+		expect(t.applyAt).toHaveBeenCalledWith({ sock: null, at: { x: 400, y: 300 }, flow: { x: 300, y: 250 } }, turning.choice);
+	});
+
+	it('a long press carries it (the chip shows at the finger), then any move follows, up as well as sideways', () => {
+		const t = setup();
+		t.down(turning, 20, 20, touch);
+		vi.advanceTimersByTime(LONG_PRESS_MS - 10);
+		expect(t.drag.drag.value).toBeNull();
+		vi.advanceTimersByTime(20);
+		expect(t.drag.drag.value).toMatchObject({ entry: turning, x: 20, y: 20 });
+		t.move(404, 300, touch);
+		expect(t.drag.drag.value).toMatchObject({ over: 'canvas', x: 404, y: 300 });
+		t.up(400, 300);
+		expect(t.applyAt).toHaveBeenCalledTimes(1);
+	});
+
+	it('a finger lifted before the long press, without moving, is a tap: the entry\'s own click', () => {
+		const t = setup();
+		t.down(turning, 20, 20, touch);
+		vi.advanceTimersByTime(100);
+		t.up(20, 20);
+		vi.advanceTimersByTime(LONG_PRESS_MS * 2);
+		expect(t.drag.drag.value).toBeNull();
+		expect(t.applyAt).not.toHaveBeenCalled();
+		expect(t.drag.consumeClick()).toBe(false);
+	});
+
+	it('the page does not pan under a finger that is carrying an entry (touchmove is cancelled), but is left alone before', () => {
+		const t = setup();
+		t.down(turning, 20, 20, touch);
+		const early = { cancelable: true, preventDefault: vi.fn() };
+		fire('touchmove', early);
+		expect(early.preventDefault).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(LONG_PRESS_MS + 10);
+		const later = { cancelable: true, preventDefault: vi.fn() };
+		fire('touchmove', later);
+		expect(later.preventDefault).toHaveBeenCalled();
+	});
+
+	it('a mouse is unchanged: any move past the slop carries it, no long press', () => {
+		const t = setup();
+		t.down(turning);
+		t.move(20, 20 + DRAG_SLOP + 1, { buttons: 1 });
 		expect(t.drag.drag.value?.entry).toBe(turning);
 	});
 });

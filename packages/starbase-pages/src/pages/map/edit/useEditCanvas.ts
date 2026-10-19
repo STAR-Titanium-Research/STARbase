@@ -20,6 +20,7 @@ import type { useProcessMap } from '../useProcessMap';
 import { blocking, warnings } from './checks';
 import type { MenuTarget } from './menuTarget';
 import { onEmptyCanvas, socketSpots } from './canvasHits';
+import type { DraftAction } from './draft';
 import { draftKeyOfNode, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
 import type { EditMode } from './useEditMode';
 import { connectActions, dropVerdict, type DropVerdict } from './wireDrop';
@@ -112,7 +113,19 @@ export function useEditCanvas(o: {
 	 * `merge`: it joins the step before it in the undo history (a second sample, or the wire that needed it) instead of being its own.
 	 */
 	async function ensureSample(recordId: string, opts: { merge?: boolean } = {}): Promise<boolean> {
-		if (sampleItemOf(edit.body.value, recordId)) return true;
+		const actions = await sampleActions(recordId);
+		if (!actions) return false;
+		if (actions.length) edit.apply(actions, { merge: opts.merge });
+		return !!sampleItemOf(edit.body.value, recordId);
+	}
+
+	/**
+	 * What adds a sample of the loaded history to the draft, WITHOUT doing it (the sample and, when the draft has none yet, the project it takes from
+	 * it: E16): empty when the draft holds it already, null (and said) when it could not be read. A caller that may still refuse what it wants to do
+	 * with the sample plays these on a copy first, and applies them with its own actions as one step.
+	 */
+	async function sampleActions(recordId: string): Promise<DraftAction[] | null> {
+		if (sampleItemOf(edit.body.value, recordId)) return [];
 		let read;
 		try {
 			read = (await edit.catalog.loadSamples([recordId])).get(recordId);
@@ -121,14 +134,12 @@ export function useEditCanvas(o: {
 		}
 		if (!read) {
 			problem.value = 'That sample could not be read, so it cannot be built from.';
-			return false;
+			return null;
 		}
-		// One step: the sample and, when the draft has none yet, the project it takes from it (E16).
-		edit.apply([
+		return [
 			{ type: 'addExistingSamples', samples: [{ id: recordId, version: read.version }] },
 			...(!edit.body.value.projectId && read.sample.projectId ? [{ type: 'setProject' as const, projectId: read.sample.projectId }] : []),
-		], { merge: opts.merge });
-		return !!sampleItemOf(edit.body.value, recordId);
+		];
 	}
 
 	/** Makes the wire a verdict stands for: adds the samples it needs to the draft first; the samples and the wire are one undo step. */
@@ -281,5 +292,5 @@ export function useEditCanvas(o: {
 		});
 	}
 
-	return { mapEdit, preview, refusal, problem, say, relative, ensureSample, connect, nodeById };
+	return { mapEdit, preview, refusal, problem, say, relative, ensureSample, sampleActions, connect, nodeById };
 }

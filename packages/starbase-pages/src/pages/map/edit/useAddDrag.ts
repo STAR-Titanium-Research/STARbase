@@ -23,6 +23,12 @@ export const NOT_HERE = 'Drop it on the empty canvas, on a free socket or on a w
 /** A pointer that moves less than this many pixels between going down and up on an entry is a click (it adds the entry at the keyboard's place). */
 export const DRAG_SLOP = 5;
 
+/** A finger that moves this far before the long press is deciding: clearly sideways drags, anything else is the palette scrolling. */
+export const TOUCH_SLOP = 8;
+
+/** How long a finger rests on an entry before it is carried (a vertical move earlier is a scroll). */
+export const LONG_PRESS_MS = 350;
+
 /** What is being dragged and what is under it: the palette draws a chip at the pointer, in the colour of the verdict. */
 export interface PaletteDrag {
 	entry: MenuEntry;
@@ -50,6 +56,8 @@ export function useAddDrag(o: {
 	/** An entry on a wire: the reason it is refused (and whether the wire is locked), or null; and doing it. */
 	wireVerdict: (wireId: string, choice: MenuChoice) => { reason: string; locked: boolean } | null;
 	dropOnWire: (wireId: string, choice: MenuChoice, flow: { x: number; y: number } | undefined, at: { x: number; y: number }) => boolean;
+	/** Why a socket of a recorded card (not in the draft) takes nothing: its lock (the page reads it off the drawn graph). */
+	whyNot?: (sock: SocketRef) => string;
 	/** Says why a drop was refused, at the point (the canvas's own pixels). */
 	say: (text: string, at: { x: number; y: number }) => void;
 }) {
@@ -66,7 +74,7 @@ export function useAddDrag(o: {
 		// The sockets are read where they are NOW: the cards glide to their places after a change, and a map can be zoomed with the wheel mid-drag.
 		const spot = nearestSocket(socketSpots(o.canvasEl.value), x, y);
 		if (spot) {
-			const v = socketVerdict(o.body(), spot.sock, choice);
+			const v = socketVerdict(o.body(), spot.sock, choice, o.whyNot);
 			return { over: 'socket', ok: v.ok, reason: v.ok ? null : (v.reason ?? null), sock: spot.sock };
 		}
 		const wire = wireAt(o.canvasEl.value, x, y);
@@ -82,36 +90,86 @@ export function useAddDrag(o: {
 		return { x: x - (r?.left ?? 0), y: y - (r?.top ?? 0) };
 	};
 
-	/** A pointer went down on `entry`: from here it is a click (nothing, the click handler adds it) or a drag. */
+	/**
+	 * A pointer went down on `entry`: from here it is a click (nothing, the click handler adds it) or a drag.
+	 *
+	 * A mouse or pen drags once it has moved a few pixels. A finger must be able to scroll the palette (its entries are `touch-action: pan-y`), so it
+	 * drags only after a clearly horizontal move or a long press; a vertical move is the browser's scroll and the drag is let go.
+	 *
+	 * Whatever ends the pointer's gesture ends the drag, so it can never be left holding the pointer and drop later: pointerup, pointercancel, Esc,
+	 * the window losing focus, the page being hidden, and a mouse or pen that moves with no button down (the button was let go where no
+	 * pointerup came: outside the window, over a dialog).
+	 */
 	function start(entry: MenuEntry, e: PointerEvent): void {
-		if (!o.editing() || !draggable(entry) || (e.pointerType === 'mouse' && e.button !== 0) || stop) return;
+		if (!o.editing() || !draggable(entry) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+		// A mouse has one button: a drag that is still going when it is pressed again lost its end somewhere, and is let go. Fingers and pens may be two.
+		if (stop) {
+			if (e.pointerType !== 'mouse') return;
+			stop();
+		}
 		const choice = entry.choice;
+		const touch = e.pointerType === 'touch';
 		const down = { x: e.clientX, y: e.clientY };
 		const before = document.body.style.userSelect;
 		let moved = false;
+		/** A finger has shown it means to drag (long press, or a clearly horizontal move). */
+		let armed = !touch;
+		let timer: ReturnType<typeof setTimeout> | null = null;
 		let last: Hit = { over: 'none', ok: null, reason: null };
 
-		const onMove = (ev: PointerEvent) => {
-			if (!moved && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) < DRAG_SLOP) return;
-			if (!moved) {
-				moved = true;
-				document.body.style.userSelect = 'none';
-			}
-			last = hitAt(choice, ev.clientX, ev.clientY);
+		const begin = (x: number, y: number) => {
+			moved = true;
+			document.body.style.userSelect = 'none';
+			show(x, y);
+		};
+		const show = (x: number, y: number) => {
+			last = hitAt(choice, x, y);
 			o.drop.value = last.sock && last.ok !== null ? { sock: encodeSocket(last.sock), ok: !!last.ok } : null;
 			dropWire.value = last.wire ? { id: last.wire, ok: !!last.ok } : null;
-			drag.value = { entry, x: ev.clientX, y: ev.clientY, over: last.over, ok: last.ok, reason: last.reason };
+			drag.value = { entry, x, y, over: last.over, ok: last.ok, reason: last.reason };
+		};
+		const onMove = (ev: PointerEvent) => {
+			if (ev.pointerType !== 'touch' && ev.buttons === 0) return cancel();
+			if (!moved) {
+				const dx = ev.clientX - down.x;
+				const dy = ev.clientY - down.y;
+				const far = Math.hypot(dx, dy);
+				if (touch && !armed) {
+					if (far < TOUCH_SLOP) return;
+					if (Math.abs(dx) <= Math.abs(dy)) return cancel(); // a vertical move: the browser scrolls the palette
+					armed = true;
+				}
+				if (far < DRAG_SLOP) return;
+				begin(ev.clientX, ev.clientY);
+			}
+			show(ev.clientX, ev.clientY);
+		};
+		/** Once the finger is dragging, the page must not also pan under it. */
+		const onTouchMove = (ev: TouchEvent) => {
+			if (moved && ev.cancelable) ev.preventDefault();
 		};
 		const finish = () => {
+			if (timer) clearTimeout(timer);
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			window.removeEventListener('pointercancel', onCancel);
+			window.removeEventListener('pointercancel', cancel);
+			window.removeEventListener('blur', cancel);
+			window.removeEventListener('touchmove', onTouchMove);
 			window.removeEventListener('keydown', onKey, true);
+			document.removeEventListener('visibilitychange', onVisibility);
 			document.body.style.userSelect = before;
 			o.drop.value = null;
 			dropWire.value = null;
 			drag.value = null;
 			stop = null;
+		};
+		/** Lets go of the drag with nothing dropped. */
+		const cancel = () => {
+			moved = false;
+			finish();
+		};
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') cancel();
 		};
 		const onUp = (ev: PointerEvent) => {
 			const hit = moved ? hitAt(choice, ev.clientX, ev.clientY) : null;
@@ -127,17 +185,25 @@ export function useAddDrag(o: {
 			else if (hit.over === 'wire' && hit.wire) o.dropOnWire(hit.wire, choice, flow, relative(at.x, at.y));
 			else void o.applyAt({ sock: null, at, flow }, choice);
 		};
-		const onCancel = () => finish();
 		const onKey = (ev: KeyboardEvent) => {
 			if (ev.key !== 'Escape') return;
 			ev.stopPropagation();
-			moved = false;
-			finish();
+			cancel();
 		};
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
-		window.addEventListener('pointercancel', onCancel);
+		window.addEventListener('pointercancel', cancel);
+		window.addEventListener('blur', cancel);
 		window.addEventListener('keydown', onKey, true);
+		document.addEventListener('visibilitychange', onVisibility);
+		if (touch) {
+			window.addEventListener('touchmove', onTouchMove, { passive: false });
+			// A long press is the other way to mean it: the chip shows at the finger, and from then on it follows.
+			timer = setTimeout(() => {
+				armed = true;
+				begin(down.x, down.y);
+			}, LONG_PRESS_MS);
+		}
 		stop = finish;
 	}
 

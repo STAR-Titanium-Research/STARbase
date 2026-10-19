@@ -94,6 +94,9 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 	width: 236px;
 	padding: 8px;
 	overflow: hidden;
+	/* No taller than the canvas beside it (the same height the page gives it): the list scrolls inside the dock, with a finger too, and the page does not grow with the catalog. */
+	max-height: max(420px, calc(100vh - var(--d1-header-offset, 72px) - 130px));
+	max-height: max(420px, calc(100dvh - var(--d1-header-offset, 72px) - 130px));
 	background: var(--d1-surface, var(--theme--background));
 	color: var(--theme--foreground);
 	border-right: 1px solid var(--d1-line, var(--theme--border-color-subdued));
@@ -119,9 +122,11 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 .sec { padding: 8px 4px 3px; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }
 .pe {
 	display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px;
-	background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: none;
+	background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: pan-y;
 }
 .pe.drag { cursor: grab; }
+/* A finger scrolls the list (touch-action above) and carries an entry only after a long press: no selection or callout in the way. */
+@media (pointer: coarse) { .pe { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; } }
 .pe:hover, .pe:focus-visible { background: var(--d1-tile); border-color: var(--d1-line); outline: none; }
 .pe:focus-visible { border-color: var(--d1-accent, var(--theme--primary)); }
 .lab { font-weight: 600; }

@@ -5,6 +5,7 @@ import type { MethodEntry, TestTypeEntry } from './catalog';
 import { EARLIER_STEP, canvasSampleEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuChoice, type MenuEntry } from './menuModel';
 import { grown } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
+import { restoreFocus as giveFocusBack } from './focusCanvas';
 
 // The add search (redesign R1, R2): a search box and a list at a point of the canvas. Shift+A or Ctrl/⌘+K open it at the pointer (or at the
 // focused card or socket); from a socket it lists only what can legally connect there (menuModel.ts), and what is chosen is connected.
@@ -22,6 +23,8 @@ const props = defineProps<{
 	search?: (query: string) => Promise<{ id: string; code: string; detail: string }[]>;
 	/** The code of an existing sample of the draft, for the list of samples on the canvas. */
 	codeOf?: (id: string) => string | undefined;
+	/** Where focus goes when the element that had it before the search opened is gone (the right-click menu): the selected card. */
+	restoreFocus?: (anchor?: string) => void;
 }>();
 const emit = defineEmits<{ choose: [choice: MenuChoice]; close: [] }>();
 
@@ -154,7 +157,7 @@ onMounted(async () => {
 watch(entries, () => void nextTick(place));
 onBeforeUnmount(() => {
 	if (timer) clearTimeout(timer);
-	if (opener?.isConnected) opener.focus();
+	giveFocusBack(opener, () => props.restoreFocus?.(props.target.anchor));
 });
 </script>
 

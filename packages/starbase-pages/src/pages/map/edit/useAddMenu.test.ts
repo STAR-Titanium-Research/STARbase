@@ -225,6 +225,22 @@ describe('the add search remembers what was added, and does a choice wherever it
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 
+	it('a choice that did nothing is not a recent: a drop on a socket the draft cannot build on, an insert that was refused', async () => {
+		const { menu, edit, insert } = await setup();
+		const turning = { kind: 'operation', methodId: 'm-turn', category: 'machining' } as const;
+		// A row socket of a recorded operation: the draft does not hold it, so there is nothing to connect to.
+		await menu.applyAt({ sock: { kind: 'row', id: 'o1', side: 'out' }, at: { x: 1, y: 1 } }, { kind: 'newSample' });
+		expect(edit.body.value.items).toHaveLength(0);
+		expect(menu.recents.value).toEqual([]);
+		insert.mockResolvedValueOnce(false);
+		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'after', nodeId: 's:x', what: 'S-1' } }, turning);
+		expect(menu.recents.value).toEqual([]);
+		// Done: remembered.
+		insert.mockResolvedValueOnce(true);
+		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'after', nodeId: 's:x', what: 'S-1' } }, turning);
+		expect(menu.recents.value).toEqual(['op:m-turn']);
+	});
+
 	it('an earlier step goes to the insert too', async () => {
 		const { menu, insert } = await setup();
 		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'before', nodeId: 's:x', what: 'S-1', earlier: true } }, { kind: 'earlierStep' });

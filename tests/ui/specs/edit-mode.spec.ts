@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
+import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 
 /**
  * Process map edit mode (`/map?edit=new`) in a REAL browser against the LOCAL STACK: STARbase's dev server, a real Directus 11 with the
@@ -54,7 +54,7 @@ test.beforeAll(async ({ playwright }) => {
 		expect(row, `the seed sample ${code} (bash scripts/dev/local-stack.sh seed)`).toBeTruthy();
 		return { id: row.sample_id, code };
 	};
-	const me = await (await member.get(`${D1}/users/me?fields=id`)).json();
+	const me = await (await getRetrying(member, `${D1}/users/me?fields=id`)).json();
 	const [person] = await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`);
 	const [turning] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
 	expect(person && turning, 'the Lab Member People row and the CNC Turning method').toBeTruthy();
@@ -63,7 +63,7 @@ test.beforeAll(async ({ playwright }) => {
 
 /** Drafts are the account's own and survive a test: delete them so the next test starts with an empty "My drafts". */
 async function deleteDrafts(api: APIRequestContext): Promise<void> {
-	const r = await api.get(`${D1}/d1-build/drafts`);
+	const r = await getRetrying(api, `${D1}/d1-build/drafts`);
 	if (!r.ok()) return;
 	for (const d of (await r.json()).data as { id: string }[]) await api.delete(`${D1}/d1-build/drafts/${d.id}`);
 }
@@ -256,12 +256,12 @@ test.describe('as a Lab Viewer', () => {
 	let serverRefusesViewers = false;
 	test.beforeAll(async () => {
 		if (!stackAvailable()) return;
-		serverRefusesViewers =(await viewer.get(`${D1}/d1-build/drafts`)).status() === 403;
+		serverRefusesViewers =(await getRetrying(viewer, `${D1}/d1-build/drafts`)).status() === 403;
 	});
 
 	test('d1-build refuses an account that may not create operations, with a 403 (R11)', async () => {
 		known(serverRefusesViewers ? '' : 'R11 server half (slice 1a): d1-build still answers 200/201 to a Lab Viewer', serverRefusesViewers);
-		const list = await viewer.get(`${D1}/d1-build/drafts`);
+		const list = await getRetrying(viewer, `${D1}/d1-build/drafts`);
 		expect(list.status(), 'GET /d1-build/drafts as a Lab Viewer').toBe(403);
 		expect((await list.json()).errors[0].extensions.code).toBe('FORBIDDEN');
 		const post = await viewer.post(`${D1}/d1-build/drafts`, { data: { body: draftBody } });
