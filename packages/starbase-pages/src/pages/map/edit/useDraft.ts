@@ -262,6 +262,8 @@ export function useDraft(options: UseDraftOptions = {}) {
 			serverChecks.value = [];
 			notice.value = '';
 			saveError.value = '';
+			// In My drafts at once: the list was read before this draft was made (spec 2026-10-18 §3, item 9).
+			drafts.value = [{ id: rec.id, name: rec.name, updated_at: rec.updated_at, summary: '' }, ...drafts.value.filter((d) => d.id !== rec.id)];
 			return rec.id;
 		} catch (e) {
 			saveError.value = errorText(e, 'Could not start a draft.');

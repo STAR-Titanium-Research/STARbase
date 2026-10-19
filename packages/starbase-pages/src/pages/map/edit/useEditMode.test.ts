@@ -316,6 +316,40 @@ describe('useEditMode: changing the draft', () => {
 	});
 });
 
+describe('useEditMode: a new draft (fix 9)', () => {
+	it('shows in My drafts at once, before any list is read again', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		expect(edit.draft.draftId.value).toBe('d1');
+		expect(edit.drafts.value.map((d) => d.id)).toEqual(['d1']);
+		expect(s.calls.filter((c) => c === 'GET /d1-build/drafts')).toHaveLength(1);
+	});
+
+	it('Build a process while the open draft is empty reuses it: no second draft on the server', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		expect(route.query.edit).toBe('d1');
+		// the sidebar link: /map?edit=new again, on the same page
+		route.query = { edit: 'new' };
+		await flush();
+		expect(s.drafts.size).toBe(1);
+		expect(route.query.edit).toBe('d1');
+		expect(edit.draft.draftId.value).toBe('d1');
+		expect(s.calls.filter((c) => c === 'POST /d1-build/drafts')).toHaveLength(1);
+	});
+
+	it('Build a process while the open draft has something in it starts another one, and keeps the first', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		await edit.draft.flush();
+		route.query = { edit: 'new' };
+		await flush();
+		expect(s.drafts.size).toBe(2);
+		expect(route.query.edit).toBe('d2');
+	});
+});
+
 describe('useEditMode: typing in a form', () => {
 	it('folds the changes of one item\'s values into one undo step, until something else changes', async () => {
 		const { edit } = setup({ edit: 'new' });

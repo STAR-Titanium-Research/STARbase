@@ -134,6 +134,11 @@ export function useEditMode(o: EditModeOptions) {
 				writeQuery({ edit: null });
 				return;
 			}
+			// Build a process while a draft with nothing in it is open: that one is the new draft (none is left behind on the server).
+			if (draft.draftId.value && !starting && isEmptyBody(draft.body.value)) {
+				writeQuery({ edit: draft.draftId.value });
+				return;
+			}
 			if (starting) return;
 			starting = true;
 			try {

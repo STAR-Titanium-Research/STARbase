@@ -41,6 +41,7 @@ defineProps<{
 		@dissolve="side.build.dissolveSelected()"
 		@tidy="canvas.tidy()"
 		@open="edit.openDraft"
+		@menu="edit.refreshDrafts()"
 		@dismiss-notice="edit.draft.notice.value = ''"
 	>
 		<template #create>
