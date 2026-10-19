@@ -17,6 +17,7 @@ import { connectTargets, type ConnectEntry, type ConnectNames } from './connectM
 import { sampleLabel, type MenuChoice, type MenuEntry } from './menuModel';
 import { draftKeysOfNode } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
+import { recordedSocketReason } from './addDrop';
 import { dropVerdict } from './wireDrop';
 import { resolveEnd, type SocketRef } from './socketRefs';
 import { useAddDrag } from './useAddDrag';
@@ -56,7 +57,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	}
 
 	// ---- the pieces ------------------------------------------------------------------------------------------
-	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean; insert: (t: MenuTarget, c: MenuChoice) => Promise<void> | void } = { menu: () => undefined, connect: () => undefined, dropWire: () => false, insert: () => undefined };
+	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean; insert: (t: MenuTarget, c: MenuChoice) => Promise<boolean | void> | boolean | void } = { menu: () => undefined, connect: () => undefined, dropWire: () => false, insert: () => undefined };
 	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s, id) => late.dropWire(s, id) });
 	// Remove, Dissolve and wire removal (R4); what it has to say goes where the canvas says its own problems.
 	const removal = useEditRemoval({ edit, map: o.map, canvasEl, say: (text) => void (build.problem.value = text) });
@@ -75,7 +76,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 
 	// ---- insert before / after, a drop on a wire, and the palette (R1, R2, R3) ---------------------------------------
 	const nameOf = (n: MapNode): string => (n.type === 'record' ? n.ref.code || 'this sample' : n.type === 'container' ? n.title || n.method || 'this step' : 'this card');
-	const insert = useEditInsert({ edit, map: o.map, canvasEl, ensureSample: build.ensureSample, open: menu.open, nameOf, say: (text, at) => (at ? build.say(text, at) : void (build.problem.value = text)) });
+	const insert = useEditInsert({ edit, map: o.map, canvasEl, sampleActions: build.sampleActions, open: menu.open, nameOf, say: (text, at) => (at ? build.say(text, at) : void (build.problem.value = text)) });
 	late.insert = insert.choose;
 	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, recents: menu.recents, person: () => o.person?.() });
 	const dragging = useAddDrag({
@@ -87,6 +88,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		applyAt: menu.applyAt,
 		wireVerdict: insert.wireVerdict,
 		dropOnWire: insert.dropOnWire,
+		whyNot: (s) => recordedSocketReason(o.map.graph.value, s),
 		say: build.say,
 	});
 	/** What the palette draws and does, for the page to bind in one go. */

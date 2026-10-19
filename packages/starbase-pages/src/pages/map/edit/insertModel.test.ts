@@ -7,8 +7,8 @@ import { nodeOfSocket } from '../model/sockets';
 import type { MapNode, ProcessData, ProcessGraph, RecordNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import type { MenuChoice } from './menuModel';
-import { DONE_WIRE, SAVED_WIRE } from './removal';
-import { NO_FIT, SAMPLE_BETWEEN, TEST_AFTER, TEST_BETWEEN, earlierStep, insertAround, insertOnWire } from './insertModel';
+import { ALREADY_GOING, DONE_WIRE, SAVED_WIRE } from './removal';
+import { NO_FIT, SAMPLE_BETWEEN, STACKED, TEST_AFTER, TEST_BETWEEN, earlierStep, insertAround, insertOnWire, insertRefusal } from './insertModel';
 import { toGraph } from './toGraph';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
@@ -226,6 +226,113 @@ describe('insert before and after a selected card', () => {
 	it('a sample the draft does not hold yet is the page\'s to add first', () => {
 		const g = graphOf(history(), emptyBody());
 		expect(insertAround({ body: emptyBody(), graph: g, node: node(g, 's:s1') as RecordNode, where: 'after', choice: turning })).toMatchObject({ ok: false });
+	});
+});
+
+describe('after a sample whose one outgoing wire is done', () => {
+	it('falls back to a new branch (an operation it feeds), as a sample with none or several already does', () => {
+		const data = mkData({ samples: [mkSample('s1', { status: 'active' }), mkSample('s2', { status: 'active' })], operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', methodName: 'Cut', date: '2026-09-01T09:00:00Z' })] });
+		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }]);
+		const g = graphOf(data, body);
+		expect(g.wires.filter((w) => nodeOfSocket(w.from) === 's:s1')).toHaveLength(1);
+		const after = run(done(insertAround({ body, graph: g, node: node(g, 's:s1') as RecordNode, where: 'after', choice: turning })), body);
+		expect(wiresText(after)).toEqual(['n1>n2.0']);
+		// Before it is still the wire that makes it, never changed.
+		const b2 = run([{ type: 'addExistingSamples', samples: [{ id: 's2', version: 1 }] }]);
+		const g2 = graphOf(data, b2);
+		expect(insertAround({ body: b2, graph: g2, node: node(g2, 's:s2') as RecordNode, where: 'before', choice: turning })).toEqual({ ok: false, reason: DONE_WIRE, locked: true });
+	});
+});
+
+describe('a cut, and a stack of passes', () => {
+	/** n1 sample cut into three pieces: one operation (n2) with three rows, all fed by n1. */
+	const cut = (): DraftBody => run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addOutputRow', key: 'n2', share: true }, { type: 'addOutputRow', key: 'n2', share: true }]);
+	const pass = { type: 'addPass', sample: { key: 'n1' }, values: { method_id: 'mm' } } as const;
+
+	it('is one wire to the eye and one insert: the new operation makes a sample that feeds all three pieces', () => {
+		const body = cut();
+		expect(body.wires).toHaveLength(3);
+		const g = graphOf(null, body);
+		const wire = g.wires.find((w) => nodeOfSocket(w.to) === 'batch:draft:n2')!.id;
+		const after = run(done(insertOnWire(body, g, wire, turning)), body);
+		expect(wiresText(after)).toEqual(['n1>n6.0', 'n6.0>n8', 'n8>n2.0', 'n8>n2.1', 'n8>n2.2']);
+		// One input stays shared; no piece was left on the old sample.
+		expect(after.wires.filter((w) => w.from.key === 'n1')).toHaveLength(1);
+	});
+
+	it('insert before the cut card, without a wire in hand, does the same', () => {
+		const body = cut();
+		const g = graphOf(null, body);
+		const after = run(done(insertAround({ body, graph: g, node: node(g, 'batch:draft:n2'), where: 'before', choice: turning })), body);
+		expect(after.wires.filter((w) => w.to.key === 'n2').map((w) => w.from.key)).toEqual(['n8', 'n8', 'n8']);
+	});
+
+	it('a stack of passes says it is a stack (not "several wires meet here")', () => {
+		const body = run([{ type: 'addSample' }, pass, pass, pass]);
+		const g = graphOf(null, body);
+		const wire = g.wires.find((w) => nodeOfSocket(w.to).startsWith('stack:'))!.id;
+		expect(insertOnWire(body, g, wire, turning)).toEqual({ ok: false, reason: STACKED, locked: false });
+		expect(insertAround({ body, graph: g, node: node(g, nodeOfSocket(g.wires.find((w) => nodeOfSocket(w.to).startsWith('stack:'))!.to)), where: 'before', choice: turning })).toEqual({ ok: false, reason: STACKED, locked: false });
+	});
+
+	it('after an in-place pass (or the last of a stack): the operation is wired to the pass itself, not to a sample (its way back already goes to one)', () => {
+		const one = run([{ type: 'addSample' }, pass]);
+		const g = graphOf(null, one);
+		const after = run(done(insertAround({ body: one, graph: g, node: node(g, 'op:draft:n3'), where: 'after', choice: turning })), one);
+		expect(wiresText(after)).toContain('n2.0>n4.0');
+		expect(after.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'operation']);
+		const stack = run([{ type: 'addSample' }, pass, pass]);
+		const gs = graphOf(null, stack);
+		const stackNode = gs.nodes.find((n) => n.type === 'container')!;
+		const s2 = run(done(insertAround({ body: stack, graph: gs, node: stackNode, where: 'after', choice: turning })), stack);
+		expect(wiresText(s2)).toContain('n4.0>n6.0');
+	});
+});
+
+describe('around a planned operation that already exists', () => {
+	/** s1 (done) feeds o3, a planned operation that makes nothing yet (a saved record, not a draft one). */
+	const planned = (): ProcessData => mkData({ samples: [mkSample('s1', { status: 'active' })], operations: [mkOp({ id: 'o3', sampleId: 's1', methodName: 'Cut', workState: 'planned' })] });
+	const held = (): DraftBody => run([{ type: 'addExisting', kind: 'operation', record: { id: 'o3', version: 2 }, workState: 'planned' }]);
+
+	it('is refused whichever side: the draft would write operation -> sample on a saved operation, which d1-build refuses', () => {
+		const body = held();
+		const g = graphOf(planned(), body);
+		for (const where of ['before', 'after'] as const) {
+			expect(insertAround({ body, graph: g, node: node(g, 'op:o3'), where, choice: turning })).toEqual({ ok: false, reason: SAVED_WIRE, locked: false });
+		}
+	});
+
+	it('one struck through as "will be deleted" says so, and nothing is written', () => {
+		const body = run([{ type: 'remove', key: 'n1', deleteRecord: true }], held());
+		const g = graphOf(planned(), body);
+		expect((node(g, 'op:o3') as { removing?: boolean }).removing).toBe(true);
+		for (const where of ['before', 'after'] as const) {
+			expect(insertAround({ body, graph: g, node: node(g, 'op:o3'), where, choice: turning })).toEqual({ ok: false, reason: ALREADY_GOING, locked: false });
+		}
+	});
+
+	it('a planned sample struck through is not inserted around either', () => {
+		const data = mkData({ samples: [mkSample('s4', { status: 'planned' })] });
+		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's4', version: 1 }] }, { type: 'remove', key: 'n1', deleteRecord: true }]);
+		const g = graphOf(data, body);
+		expect(insertAround({ body, graph: g, node: node(g, 's:s4') as RecordNode, where: 'after', choice: turning })).toEqual({ ok: false, reason: ALREADY_GOING, locked: false });
+	});
+
+	it('canInsertAround says no up front, with the reason, for it and for a container that is not in the draft', () => {
+		const g = graphOf(history(), emptyBody());
+		expect(insertRefusal(emptyBody(), node(g, 'op:o1'))).toEqual({ reason: DONE_WIRE, locked: true });
+		expect(insertRefusal(emptyBody(), node(g, 'op:o2'))).toEqual({ reason: SAVED_WIRE, locked: false });
+		const body = held();
+		const gp = graphOf(planned(), body);
+		expect(insertRefusal(body, node(gp, 'op:o3'))).toEqual({ reason: SAVED_WIRE, locked: false });
+		const gone = run([{ type: 'remove', key: 'n1', deleteRecord: true }], body);
+		expect(insertRefusal(gone, node(graphOf(planned(), gone), 'op:o3'))).toEqual({ reason: ALREADY_GOING, locked: false });
+		// What can be inserted around: a new card, and a sample (done or not: its "before" is the earlier step).
+		const fresh = chain();
+		const gf = graphOf(null, fresh);
+		expect(insertRefusal(fresh, node(gf, 'op:draft:n3'))).toBeNull();
+		expect(insertRefusal(fresh, node(gf, 's:draft:n1'))).toBeNull();
+		expect(insertRefusal(emptyBody(), node(g, 's:s2'))).toBeNull();
 	});
 });
 

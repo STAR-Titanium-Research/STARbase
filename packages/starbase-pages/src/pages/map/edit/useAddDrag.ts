@@ -50,6 +50,8 @@ export function useAddDrag(o: {
 	/** An entry on a wire: the reason it is refused (and whether the wire is locked), or null; and doing it. */
 	wireVerdict: (wireId: string, choice: MenuChoice) => { reason: string; locked: boolean } | null;
 	dropOnWire: (wireId: string, choice: MenuChoice, flow: { x: number; y: number } | undefined, at: { x: number; y: number }) => boolean;
+	/** Why a socket of a recorded card (not in the draft) takes nothing: its lock (the page reads it off the drawn graph). */
+	whyNot?: (sock: SocketRef) => string;
 	/** Says why a drop was refused, at the point (the canvas's own pixels). */
 	say: (text: string, at: { x: number; y: number }) => void;
 }) {
@@ -66,7 +68,7 @@ export function useAddDrag(o: {
 		// The sockets are read where they are NOW: the cards glide to their places after a change, and a map can be zoomed with the wheel mid-drag.
 		const spot = nearestSocket(socketSpots(o.canvasEl.value), x, y);
 		if (spot) {
-			const v = socketVerdict(o.body(), spot.sock, choice);
+			const v = socketVerdict(o.body(), spot.sock, choice, o.whyNot);
 			return { over: 'socket', ok: v.ok, reason: v.ok ? null : (v.reason ?? null), sock: spot.sock };
 		}
 		const wire = wireAt(o.canvasEl.value, x, y);

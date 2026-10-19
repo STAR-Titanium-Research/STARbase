@@ -3,8 +3,10 @@
 // it is the reducer that says no. Pure, no DOM.
 
 import type { DraftBody } from '@d1/ui';
+import type { ProcessGraph } from '../model/types';
 import { apply, newKeys, wireProblem, type DraftAction } from './draft';
 import { actionsFor, menuFor, type MenuChoice, type MenuFor } from './menuModel';
+import { DONE_WIRE, SAVED_WIRE } from './removal';
 import { grown, resolveEnd, type SocketRef } from './socketRefs';
 
 /**
@@ -48,19 +50,34 @@ export function misfit(f: MenuFor, choice: MenuChoice): string | null {
 	}
 }
 
+/** A card that is neither a sample of the loaded history nor part of the draft, and nothing else is known about it. */
+export const NOT_IN_DRAFT = 'That card is not part of the draft.';
+
+/**
+ * Why a socket of a recorded operation or test (not in the draft) takes nothing: a done record's wires are locked, a planned one's belong to
+ * records that are already saved. The page asks it of the drawn graph.
+ */
+export function recordedSocketReason(graph: ProcessGraph | null | undefined, sock: SocketRef): string {
+	const node = graph?.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(sock.id));
+	return node?.type === 'container' ? (node.planned ? SAVED_WIRE : DONE_WIRE) : NOT_IN_DRAFT;
+}
+
 /**
  * The verdict for dropping `choice` on `sock` of the draft. A sample of the loaded history that the draft does not hold yet is judged by what
  * kind of card it is (the page adds it, with its version, when the drop is made); a socket of the draft is also tried on a copy of the body, so
  * a wire the draft would refuse (an input that already has a sample) is refused here with its reason.
  */
-export function socketVerdict(body: DraftBody, sock: SocketRef, choice: MenuChoice): AddVerdict {
+export function socketVerdict(body: DraftBody, sock: SocketRef, choice: MenuChoice, why: (sock: SocketRef) => string = () => NOT_IN_DRAFT): AddVerdict {
 	const f = menuFor(body, sock);
 	const bad = misfit(f, choice);
 	if (bad) return { ok: false, reason: bad };
 	const g = grown(body, sock);
 	if (!g) return { ok: false, reason: 'Only a new operation can take another row.' };
 	// A sample of the loaded history: it joins the draft first when something is built from its output; nothing can make it.
-	if (!f.end) return sock.kind === 'sample' && sock.side === 'in' ? { ok: false, reason: 'That sample already exists with its own history: it cannot be made by this operation.' } : { ok: true };
+	if (!f.end) {
+		if (sock.kind !== 'sample') return { ok: false, reason: why(sock) };
+		return sock.side === 'in' ? { ok: false, reason: 'That sample already exists with its own history: it cannot be made by this operation.' } : { ok: true };
+	}
 	const actions = actionsFor({ body: g.body, end: resolveEnd(g.body, sock), side: f.side, card: f.card }, choice);
 	if (!actions.length) return { ok: false, reason: 'That does not fit there.' };
 	let cur = g.body;

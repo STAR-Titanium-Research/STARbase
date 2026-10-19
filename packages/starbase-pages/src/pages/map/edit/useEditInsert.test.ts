@@ -8,7 +8,7 @@ import { nodeOfSocket } from '../model/sockets';
 import type { MapNode, ProcessData } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
-import { DONE_WIRE } from './removal';
+import { ALREADY_GOING, DONE_WIRE } from './removal';
 import { toGraph } from './toGraph';
 import { useAddMenu } from './useAddMenu';
 import { useEditInsert } from './useEditInsert';
@@ -59,9 +59,10 @@ async function setup(body: DraftBody, over: { loaded?: ProcessData | null; selec
 		insert: (t, c) => insert.choose(t, c),
 	});
 	const nameOf = (n: MapNode) => (n.type === 'record' ? n.ref.code : 'the card');
-	insert = useEditInsert({ edit, map, canvasEl, ensureSample: ensure, open: menu.open, nameOf, say: (text, at) => void said.push({ text, at }) });
+	const sampleActions = vi.fn(async (id: string): Promise<DraftAction[] | null> => (edit.body.value.items.some((i) => i.existing?.id === id) ? [] : [{ type: 'addExistingSamples', samples: [{ id, version: 1 }] }]));
+	insert = useEditInsert({ edit, map, canvasEl, sampleActions, open: menu.open, nameOf, say: (text, at) => void said.push({ text, at }) });
 	const wireOf = (from: string, to: string) => graph.value.wires.find((w) => nodeOfSocket(w.from) === from && nodeOfSocket(w.to) === to)!.id;
-	return { edit, insert, menu, said, graph, selectedId, ensure, wireOf };
+	return { edit, insert, menu, said, graph, selectedId, ensure, sampleActions, wireOf };
 }
 
 /** n1 sample -> n2 operation (row n3) -> n4 sample. */
@@ -95,11 +96,11 @@ describe('Insert before and after the selected card', () => {
 	});
 
 	it('before a DONE sample, the search is the earlier step alone; choosing it adds three new cards and does not even add the done sample to the draft', async () => {
-		const { insert, menu, edit, ensure } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
+		const { insert, menu, edit, sampleActions } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
 		insert.openFor('before');
 		expect(menu.target.value?.insert).toMatchObject({ where: 'before', earlier: true, nodeId: 's:s2' });
 		await menu.choose({ kind: 'earlierStep' });
-		expect(ensure).not.toHaveBeenCalled();
+		expect(sampleActions).not.toHaveBeenCalled();
 		expect(edit.body.value.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'sample']);
 		expect(edit.body.value.items.every((i) => !i.existing)).toBe(true);
 		edit.undo();
@@ -126,6 +127,41 @@ describe('Insert before and after the selected card', () => {
 		expect(insert.canInsert(undefined)).toBe(false);
 		expect(edit.body.value.items.filter((i) => i.kind === 'operation')).toEqual([]);
 		expect(edit.body.value.wires).toEqual(before.wires);
+		// The sample was not added to the draft as a step of its own either: nothing to undo.
+		expect(edit.body.value.items).toEqual([]);
+		expect(edit.draft.canUndo.value).toBe(false);
+	});
+
+	it('after a done sample whose one outgoing wire is done: a new branch, the sample and the operation one undo step', async () => {
+		const { insert, menu, edit, said } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s1' });
+		insert.openFor('after');
+		await menu.choose(turning);
+		expect(said).toEqual([]);
+		expect(edit.body.value.items.map((i) => i.kind).sort()).toEqual(['operation', 'sample']);
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+		expect(edit.draft.canUndo.value).toBe(false);
+	});
+
+	it('a done operation is not offered Insert, and the key says why up front (no search opens)', async () => {
+		const { insert, menu, said, graph, selectedId } = await setup(emptyBody(), { loaded: loaded(), selected: 'op:o1' });
+		expect(insert.canInsert(graph.value.nodes.find((n) => n.id === 'op:o1'))).toBe(false);
+		expect(insert.openFor('after')).toBe(true);
+		selectedId.value = 'op:o1';
+		expect(insert.openFor('before')).toBe(true);
+		expect(said.map((s) => s.text)).toEqual([DONE_WIRE, DONE_WIRE]);
+		expect(menu.target.value).toBeNull();
+		// A done sample is still asked about (its "before" is the earlier step), and so is a new card.
+		expect(insert.canInsert(graph.value.nodes.find((n) => n.id === 's:s2'))).toBe(true);
+	});
+
+	it('a card struck through as "will be deleted" is not offered Insert either', async () => {
+		const data = mkData({ samples: [mkSample('s4', { status: 'planned' })] });
+		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's4', version: 1 }] }, { type: 'remove', key: 'n1', deleteRecord: true }]);
+		const { insert, said, graph } = await setup(body, { loaded: data, selected: 's:s4' });
+		expect(insert.canInsert(graph.value.nodes.find((n) => n.id === 's:s4'))).toBe(false);
+		expect(insert.openFor('after')).toBe(true);
+		expect(said.map((s) => s.text)).toEqual([ALREADY_GOING]);
 	});
 });
 

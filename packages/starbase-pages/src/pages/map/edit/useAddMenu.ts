@@ -25,7 +25,7 @@ export function useAddMenu(o: {
 	/** Who is building (the recents are theirs). */
 	person?: () => string | null | undefined;
 	/** A choice made in an "Insert before / after" search: the page decides what it does (insertModel.ts). */
-	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<void> | void;
+	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<boolean | void> | boolean | void;
 }) {
 	const target = shallowRef<MenuTarget | null>(null);
 	/** What this person added lately (entry ids, newest first). Read when the person is known (a moment after the page opens), and again on every open. */
@@ -55,9 +55,10 @@ export function useAddMenu(o: {
 	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<void> {
 		if (choice.kind === 'pickSamples') return o.pickSamples();
 		if (choice.kind === 'connectTo') return void o.connect(t);
+		// What was added lately is noted only once the choice did something: a refused drop or insert, or one that changed nothing, is no "recent".
 		const recent = recentIdOf(choice);
-		if (recent) recents.value = pushRecent(o.person?.(), recent);
-		if (t.insert || choice.kind === 'earlierStep') return void (await o.insert?.(t, choice));
+		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
+		if (t.insert || choice.kind === 'earlierStep') return void ((await o.insert?.(t, choice)) !== false && note());
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		// The samples it adds and the choice made on them are one undo step.
 		let folded = false;
@@ -80,7 +81,9 @@ export function useAddMenu(o: {
 		const body = g.body;
 		const f = menuFor(o.edit.body.value, t.sock); // (it reads a socket that adds a row as the body with the row itself)
 		const actions = actionsFor({ body, end: t.sock ? resolveEnd(body, t.sock) : null, side: f.side, card: f.card, at: t.flow }, resolved);
-		if (actions.length) o.edit.apply([...(g.action ? [g.action] : []), ...actions], { anchor: t.anchor, merge: folded });
+		if (!actions.length) return;
+		o.edit.apply([...(g.action ? [g.action] : []), ...actions], { anchor: t.anchor, merge: folded });
+		note();
 	}
 
 	async function choose(choice: MenuChoice): Promise<void> {

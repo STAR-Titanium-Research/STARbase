@@ -5,7 +5,8 @@
 import type { Ref } from 'vue';
 import type { MapNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
-import { insertAround, insertOnWire, type InsertVerdict } from './insertModel';
+import { apply, type DraftAction } from './draft';
+import { insertAround, insertOnWire, insertRefusal, type InsertVerdict } from './insertModel';
 import type { MenuChoice } from './menuModel';
 import type { InsertTarget, MenuTarget } from './menuTarget';
 import { sampleItemOf } from './socketRefs';
@@ -17,7 +18,8 @@ export function useEditInsert(o: {
 	edit: EditMode;
 	map: ProcessMap;
 	canvasEl: Ref<HTMLElement | null>;
-	ensureSample: (recordId: string, opts?: { merge?: boolean }) => Promise<boolean>;
+	/** What adds a sample of the loaded history to the draft, not yet done (useEditCanvas): null when it could not be read. */
+	sampleActions: (recordId: string) => Promise<DraftAction[] | null>;
 	/** Opens the add search for an insert. */
 	open: (t: MenuTarget) => void;
 	/** What a card is called in a title ("S-0412-A"). */
@@ -32,8 +34,10 @@ export function useEditInsert(o: {
 		return id ? nodeById(id) : undefined;
 	};
 
-	/** Samples and containers can be inserted around; a junction or a "+N more" cannot. */
-	const canInsert = (n: MapNode | undefined): n is MapNode => !!n && ((n.type === 'record' && n.kind === 'sample') || n.type === 'container');
+	/** Samples and containers are asked about; a junction or a "+N more" is not (the key is the browser's). */
+	const isCard = (n: MapNode | undefined): n is MapNode => !!n && ((n.type === 'record' && n.kind === 'sample') || n.type === 'container');
+	/** The card's menu offers Insert only where something can be inserted: not on a struck-through card, a done or saved container, a recorded operation. */
+	const canInsert = (n: MapNode | undefined): n is MapNode => isCard(n) && !insertRefusal(edit.body.value, n);
 	/** A done sample is never given a parent: "before" it is the earlier step (R3). */
 	const isDoneSample = (n: MapNode | undefined): boolean => !!n && n.type === 'record' && n.kind === 'sample' && !n.draft && !n.planned;
 
@@ -46,7 +50,13 @@ export function useEditInsert(o: {
 
 	/** Opens the insert search for the selected card. False (the key is the browser's) when nothing that can be inserted around is selected. */
 	function openFor(where: 'before' | 'after', node: MapNode | undefined = selected()): boolean {
-		if (!edit.editing.value || !canInsert(node)) return false;
+		if (!edit.editing.value || !isCard(node)) return false;
+		// Refused up front, with the reason, not only after an operation is picked.
+		const no = insertRefusal(edit.body.value, node);
+		if (no) {
+			o.say(no.reason);
+			return true;
+		}
 		const insert: InsertTarget = { where, nodeId: node.id, what: o.nameOf(node), ...(where === 'before' && isDoneSample(node) ? { earlier: true as const } : {}) };
 		o.open({ sock: null, at: pointOf(node), anchor: node.id, insert });
 		return true;
@@ -62,20 +72,25 @@ export function useEditInsert(o: {
 	}
 
 	/** A choice made in the insert search. */
-	async function choose(t: MenuTarget, choice: MenuChoice): Promise<void> {
+	async function choose(t: MenuTarget, choice: MenuChoice): Promise<boolean> {
 		const ins = t.insert;
 		const node = ins ? nodeById(ins.nodeId) : undefined;
-		if (!ins || !node) return;
-		// A sample of the loaded history joins the draft first (with the version it was read at): the two are one undo step.
-		let folded = false;
+		if (!ins || !node) return false;
+		// A sample of the loaded history joins the draft (with the version it was read at) in the same step as the insert, but only if the insert
+		// is not refused: the verdict is taken on a copy of the draft that already holds it, and nothing is applied before it.
+		let adds: DraftAction[] = [];
 		if (node.type === 'record' && choice.kind !== 'earlierStep' && !sampleItemOf(edit.body.value, node.ref.id)) {
-			if (!(await o.ensureSample(node.ref.id))) return;
-			folded = true;
+			const read = await o.sampleActions(node.ref.id);
+			if (!read) return false;
+			adds = read;
 		}
 		const graph = map.graph.value;
 		const fresh = nodeById(ins.nodeId) ?? node;
-		if (!graph) return;
-		applyVerdict(insertAround({ body: edit.body.value, graph, node: fresh, where: ins.where, choice, at: t.flow }), ins.nodeId, folded);
+		if (!graph) return false;
+		const body = adds.reduce((b, a) => apply(b, a), edit.body.value);
+		const v = insertAround({ body, graph, node: fresh, where: ins.where, choice, at: t.flow });
+		if (!v.ok) return applyVerdict(v, ins.nodeId, false);
+		return applyVerdict({ ok: true, actions: [...adds, ...v.actions] }, ins.nodeId, false);
 	}
 
 	/** An entry dropped on the drawn wire `wireId`: put between its two ends, as one step; refused with the reason (a done wire's lock among them). */
