@@ -4,4 +4,4 @@ scikit-learn>=1.5
 h5py>=3.10
 numpy>=1.26
 scipy>=1.11
-Pillow>=10.1
+Pillow>=12.3.0
