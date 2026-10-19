@@ -1,27 +1,25 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
-	paletteEntry, paletteOf, pickSamples, pressCreate, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
-	type DraftBody, type Ref,
+	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
+	paletteEntry, paletteOf, pickSamples, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
+	type DraftBody,
 } from '../starbase/mapEdit';
 
 /**
  * Slice 2a of the process map edit mode redesign (R1 the palette and the add search, R2 drops on the empty canvas, a socket and a wire, and
- * insert before / after, R3 "Add an earlier step" for a done sample) in a REAL browser against the LOCAL STACK, as the seeded Lab Member.
+ * insert before / after, R3 "Insert before" refused on a recorded sample) in a REAL browser against the LOCAL STACK, as the seeded Lab Member.
  * The plan: docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md; the rules: docs/superpowers/specs/2026-10-18-process-map-edit-mode-redesign.md.
  *
  *   bash scripts/dev/local-stack.sh up
  *   cd tests/ui && npx playwright test -c playwright.local-stack.config.ts specs/edit-mode-slice2a.spec.ts
  *
- * Everything a test makes is removed again afterwards through the admin API, and the drafts the member leaves are deleted, so the suite can
+ * No test here creates a record; the drafts the member leaves are deleted, so the suite can
  * run again on the same stack. No sleeps: waits are for something on the page or for what the server holds (`savedDraft` polls the draft).
  */
 
 let admin: APIRequestContext;
 let member: APIRequestContext;
-const made: Ref[] = [];
-const noteMade = (r: Ref): void => void (made.some((m) => m.id === r.id) || made.push(r));
 
 test.beforeAll(async ({ playwright }) => {
 	test.skip(!stackAvailable(), 'the local stack is not up: run `bash scripts/dev/local-stack.sh up`');
@@ -38,18 +36,12 @@ async function deleteDrafts(api: APIRequestContext): Promise<void> {
 test.afterEach(async () => {
 	if (!stackAvailable() || !admin) return;
 	await deleteDrafts(member);
-	for (const collection of ['manufacturing_operations', 'test_sessions', 'physical_samples']) {
-		for (const ref of made.filter((m) => m.collection === collection)) {
-			if (collection !== 'physical_samples') await admin.post(`${D1}/d1-build/mark-planned`, { data: { collection, ids: [ref.id] } });
-			const r = await admin.delete(`${D1}/items/${collection}/${ref.id}`);
-			if (!r.ok() && r.status() !== 404) console.warn(`clean-up: DELETE ${collection}/${ref.id} answered ${r.status()}: ${await r.text()}`);
-		}
-	}
-	made.length = 0;
 });
 
 const wiresOf = (b: DraftBody): string[] => b.wires.map((w) => `${w.from.key}${w.from.row !== undefined ? `.${w.from.row}` : ''}>${w.to.key}${w.to.row !== undefined ? `.${w.to.row}` : ''}`).sort();
 const operations = (b: DraftBody) => b.items.filter((i) => i.kind === 'operation');
+/** What "Insert before" on a sample that already exists as a record says (insertModel.ts `BEFORE_RECORDED`, R3). */
+const BEFORE_RECORDED = "Its history is recorded and can't change from the map. Start from a new sample instead.";
 
 test.describe('as a Lab Member', () => {
 	test.beforeEach(async ({ page }) => {
@@ -386,7 +378,7 @@ test.describe('as a Lab Member', () => {
 		expect(await settledOverlaps(page)).toEqual([]);
 	});
 
-	test('the card\'s right-click menu offers Insert before / after, and "Add an earlier step…" on a done sample (R2, R3)', async ({ page }) => {
+	test('the card\'s right-click menu offers Insert after, and Insert before… disabled with the reason on a done sample (R2, R3)', async ({ page }) => {
 		const bar2 = await sampleIdOf(member, 'LOCAL-BAR-2');
 		await startEditingMapOf(page, 'physical_samples', bar2);
 		const done = card(page, 'LOCAL-BAR-2, Sample');
@@ -394,11 +386,12 @@ test.describe('as a Lab Member', () => {
 		await done.locator('.code').first().click({ button: 'right' });
 		const menu = page.getByRole('menu', { name: 'Highlight' });
 		await expect(menu.getByRole('menuitem', { name: /^Insert after/ })).toBeVisible();
-		await expect(menu.getByRole('menuitem', { name: /^Insert before/ })).toHaveCount(0);
-		await menu.getByRole('menuitem', { name: /^Add an earlier step/ }).click();
-		await expect(page.getByRole('dialog', { name: 'Add an earlier step to LOCAL-BAR-2' })).toBeVisible();
+		const before = menu.getByRole('menuitem', { name: /^Insert before/ });
+		await expect(before, 'shown, but not available').toBeDisabled();
+		await expect(before).toHaveAttribute('title', BEFORE_RECORDED);
+		await expect(menu.getByRole('menuitem', { name: /earlier step/i })).toHaveCount(0);
 		await page.keyboard.press('Escape');
-		await expect(addSearch(page)).toBeHidden();
+		await expect(menu).toBeHidden();
 		// "After" a done sample is an ordinary operation it feeds.
 		await done.locator('.code').first().click({ button: 'right' });
 		await menu.getByRole('menuitem', { name: /^Insert after/ }).click();
@@ -411,59 +404,38 @@ test.describe('as a Lab Member', () => {
 		expect(await settledOverlaps(page)).toEqual([]);
 	});
 
-	test('"Add an earlier step" on the done sample LOCAL-BAR-2 creates a new planned chain upstream and changes nothing about any done record (R3)', async ({ page }) => {
+	test('Shift+I on the done sample LOCAL-BAR-2 is refused with the reason: nothing is added, there is no undo step, and no record changes (R3)', async ({ page }) => {
 		const bar2 = await sampleIdOf(member, 'LOCAL-BAR-2');
 		const snapshot = async () => ({
 			sample: await readRecord<Record<string, unknown>>(admin, 'physical_samples', bar2, 'sample_id,sample_code,current_status,version,updated_at,owner_person_id'),
 			maker: await listRecords<Record<string, unknown>>(admin, 'manufacturing_operations', `filter[output_sample_id][_eq]=${bar2}&fields=operation_id,sample_id,output_sample_id,work_state,version,updated_at&sort=operation_id`),
 			asParent: await listRecords<Record<string, unknown>>(admin, 'sample_genealogy', `filter[parent_sample_id][_eq]=${bar2}&fields=parent_sample_id,child_sample_id`),
 			asChild: await listRecords<Record<string, unknown>>(admin, 'sample_genealogy', `filter[child_sample_id][_eq]=${bar2}&fields=parent_sample_id,child_sample_id&sort=parent_sample_id`),
+			operations: (await listRecords<Record<string, unknown>>(admin, 'manufacturing_operations', 'fields=operation_id&limit=-1')).length,
+			samples: (await listRecords<Record<string, unknown>>(admin, 'physical_samples', 'fields=sample_id&limit=-1')).length,
 		});
 		const before = await snapshot();
 		await startEditingMapOf(page, 'physical_samples', bar2);
 		const done = card(page, 'LOCAL-BAR-2, Sample');
 		await selectCard(page, done);
-		// "Before" a done sample offers one thing, and no operation that would be its new parent.
+		const cardsBefore = await cards(page).count();
+		await expect(page.getByRole('button', { name: 'Undo' }), 'nothing to undo yet').toBeDisabled();
+
 		await page.keyboard.press('Shift+I');
-		await expect(page.getByRole('dialog', { name: 'Add an earlier step to LOCAL-BAR-2' })).toBeVisible();
-		expect(await searchOptions(page)).toEqual(['Add an earlier step']);
-		await page.keyboard.press('Enter');
-		await expect(addSearch(page)).toBeHidden();
+		// The reason is said where the canvas says its problems; no search opens.
+		await expect(page.locator('.pm-banner[role="alert"]')).toContainText(BEFORE_RECORDED);
+		await expect(addSearch(page)).toHaveCount(0);
 
-		// Three new cards: a planned sample, an operation of no method yet, the sample it makes. Not wired to LOCAL-BAR-2.
-		const body = await savedDraft(page, member, (b) => b.items.length === 3, 'the earlier chain');
-		expect(body.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'sample']);
-		expect(body.items.every((i) => !i.existing), 'the done sample is not even part of the draft').toBe(true);
-		expect(body.wires).toHaveLength(2);
-		const newSamples = cards(page).filter({ has: page.locator('.node.draft') }).and(page.getByRole('group', { name: 'New sample, Sample' }));
-		await expect(newSamples).toHaveCount(2);
-		expect(await settledOverlaps(page)).toEqual([]);
+		// Nothing was added, there is no undo step, and the draft holds nothing to create.
+		await expect(cards(page)).toHaveCount(cardsBefore);
+		await expect(page.getByRole('button', { name: 'Undo' })).toBeDisabled();
+		await expect(createButton(page), 'nothing to create').toBeDisabled();
+		await expect(createButton(page)).toHaveText('Add an operation, test or new sample to create');
+		const body = await savedDraft(page, member, (b) => b.items.length === 0, 'an empty draft');
+		expect(body.items).toEqual([]);
+		expect(body.wires).toEqual([]);
 
-		// Fill in what a new sample and a planned operation need, then Create, and read everything back.
-		await selectCard(page, newSamples.first());
-		await page.getByPlaceholder(/Search materials/).fill('Ti-6Al');
-		await page.getByRole('option', { name: /Ti-6Al-4V Grade 5/ }).click();
-		await page.getByLabel(/^Geometry/).selectOption({ label: 'Cylinder' });
-		await page.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
-		await page.getByRole('option', { name: /CNC Turning/ }).click();
-		await selectCard(page, canvasOf(page).locator('.vue-flow__node[data-id^="op:draft:"]'));
-		await page.getByPlaceholder(/^Search methods/).fill('Turning');
-		await page.getByRole('option', { name: /CNC Turning/ }).click();
-		await expect(createButton(page)).toHaveText('Create 1 operation, 2 samples');
-		await expect(createButton(page)).toBeEnabled();
-		const { status, body: answer } = await pressCreate(page, noteMade);
-		expect(status, JSON.stringify(answer)).toBe(200);
-		const records = distinctRecords(answer.data!.created);
-		expect(records.filter((r) => r.collection === 'manufacturing_operations')).toHaveLength(1);
-		const [op] = records.filter((r) => r.collection === 'manufacturing_operations');
-		const created = await readRecord<{ work_state: string; sample_id: string; output_sample_id: string }>(member, 'manufacturing_operations', op.id, 'work_state,sample_id,output_sample_id');
-		expect(created.work_state, 'planned').toBe('planned');
-		expect(created.sample_id, 'the new chain does not start from the done sample').not.toBe(bar2);
-		expect(created.output_sample_id, 'and does not make it').not.toBe(bar2);
-		const output = await readRecord<{ current_status: string }>(member, 'physical_samples', created.output_sample_id, 'current_status');
-		expect(output.current_status, 'a planned operation makes a planned sample').toBe('planned');
-
-		// The done records are exactly as they were: the sample, its maker, and no lineage row gained or lost.
+		// Insert AFTER the same sample still works (its own test above); the refusal changed nothing about any record.
 		expect(await snapshot()).toEqual(before);
 	});
 });
