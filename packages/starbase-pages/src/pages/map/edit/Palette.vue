@@ -94,6 +94,9 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 	width: 236px;
 	padding: 8px;
 	overflow: hidden;
+	/* No taller than the canvas beside it (the same height the page gives it): the list scrolls inside the dock, with a finger too, and the page does not grow with the catalog. */
+	max-height: max(420px, calc(100vh - var(--d1-header-offset, 72px) - 130px));
+	max-height: max(420px, calc(100dvh - var(--d1-header-offset, 72px) - 130px));
 	background: var(--d1-surface, var(--theme--background));
 	color: var(--theme--foreground);
 	border-right: 1px solid var(--d1-line, var(--theme--border-color-subdued));
