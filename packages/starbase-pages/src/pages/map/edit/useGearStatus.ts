@@ -13,6 +13,8 @@ export function useGearStatus(api: HostApi) {
 	/** '' = fine, otherwise the warning; a key that is absent has not been read (or could not be). */
 	const state = reactive(new Map<string, string>());
 	const asked = new Set<string>();
+	/** Gear whose read failed: not asked again until `forget` (the draft changed), so a rail keystroke does not repeat a read that cannot work. */
+	const failed = new Set<string>();
 
 	/** Reads the gear the given values name (any number of records' values), for the ones not read yet. */
 	async function ensure(valueSets: Iterable<Record<string, unknown>>): Promise<void> {
@@ -29,17 +31,23 @@ export function useGearStatus(api: HostApi) {
 					const pages = await Promise.all(chunkByBudget(ids, build).map((chunk) => api.get(`/items/${read.collection}`, { params: build(chunk) })));
 					for (const row of pages.flatMap((p) => (p.data?.data ?? []) as Row[])) state.set(gearKey(field, String(row[read.key])), gearProblem(field, row) ?? '');
 				} catch {
-					// Not readable (a role without access to it) or the server failed: unknown, and asked about again next time.
-					for (const id of ids) asked.delete(gearKey(field, id));
+					// Not readable (a role without access to it) or the server failed: unknown, and left alone until `forget`.
+					for (const id of ids) failed.add(gearKey(field, id));
 				}
 			}),
 		);
 	}
 
+	/** Lets the gear whose read failed be asked about again (a different draft was opened). */
+	function forget(): void {
+		for (const k of failed) asked.delete(k);
+		failed.clear();
+	}
+
 	/** The warning for one piece of gear, or undefined when it is fine or not known. */
 	const problem = (field: GearField, id: string): string | undefined => state.get(gearKey(field, id)) || undefined;
 
-	return { ensure, problem, state };
+	return { ensure, forget, problem, state };
 }
 
 export type GearStatus = ReturnType<typeof useGearStatus>;

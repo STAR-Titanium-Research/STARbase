@@ -18,13 +18,24 @@ export const NO_TEMPLATES = 'Your account may not use templates.';
 
 const status = (e: unknown): number | undefined => (e as { response?: { status?: number } })?.response?.status;
 
-/** The plain words for a failed write. `what` is the thing that was being done ("rename it"). */
+/** What the server said, if it said anything (the Directus error shape). */
+const said = (e: unknown): string => String((e as { response?: { data?: { errors?: { message?: string }[] } } })?.response?.data?.errors?.[0]?.message ?? '');
+
+/** The 400 messages d1-build writes for people (the name, the role to share with); every other 400 names a column or a field and is for developers. */
+const PLAIN_400 = /^(A name|You have no account role|A template can only be shared)/;
+
+/**
+ * The plain words for a failed write. `what` is the thing that was being done ("rename the template"). A 403 is either the build gate (this
+ * account may not build processes at all) or "not yours to change": the server's own words tell them apart, and both are plain already.
+ */
 export function failureText(e: unknown, what: string): string {
 	const s = status(e);
-	if (s === 403 || isForbidden(e)) return 'Only the person who made a template, or an administrator, can change it.';
+	const msg = said(e);
+	if (s === 403 || isForbidden(e)) return /build processes/i.test(msg) ? msg : 'Only the person who made a template, or an administrator, can change it.';
 	if (s === 404) return 'That template does not exist any more.';
 	if (s === 409) return 'This template changed since you opened it. It has been reloaded: try again.';
 	if (s === undefined || s === 0) return `Could not reach the server to ${what}.`;
+	if (s === 400) return PLAIN_400.test(msg) ? msg : `Could not ${what}: the server did not accept it. If the template's method or test type was removed, replace its settings or delete it.`;
 	return errorText(e, `The server refused to ${what}.`);
 }
 

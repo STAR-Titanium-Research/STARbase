@@ -102,6 +102,14 @@ describe('Palette templates (R7)', () => {
 		expect(text(out)).toContain('The tool Holder 3 is retired.');
 	});
 
+	it('a template whose method is gone cannot be dragged or added, and says why', async () => {
+		const out = await render({ entries: catalogEntries({ methods: [{ id: 'mt', name: 'CNC Turning', code: 'MC', category: 'machining' }], testTypes: [], templates: [tpl('t1', 'Orphan', { rec: { ...tpl('t1', 'Orphan').rec, values: { method_id: 'gone' } } })] }) });
+		const tag = out.match(/<button[^>]*data-entry="tpl:t1"[^>]*>/)?.[0] ?? '';
+		expect(tag).not.toMatch(/\bdrag\b/);
+		expect(tag).toContain('aria-disabled="true"');
+		expect(text(out)).toContain('no longer in the list of methods');
+	});
+
 	it('says what was done to a template, or what failed, above the list', async () => {
 		const ok = await html([], { templateNotice: 'Saved the template Roughing.' });
 		expect(ok).toContain('data-template-notice');

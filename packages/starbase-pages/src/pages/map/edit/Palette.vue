@@ -52,7 +52,7 @@ const rows = computed(() => props.entries.map((e, i) => ({ e, head: props.groupe
 const list = ref<HTMLElement | null>(null);
 
 function click(e: MenuEntry) {
-	if (props.consumeClick()) return;
+	if (props.consumeClick() || e.disabled) return;
 	emit('add', e);
 }
 /** ArrowUp/ArrowDown move between the entries (and from the search box into the list), as in a list. */
@@ -94,7 +94,8 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 						<button
 							type="button"
 							class="pe"
-							:class="{ drag: draggable(r.e), grey: !!r.e.warn }"
+							:class="{ drag: draggable(r.e), grey: !!r.e.warn || !!r.e.disabled, off: !!r.e.disabled }"
+							:aria-disabled="!!r.e.disabled || undefined"
 							:data-entry="r.e.id"
 							:title="draggable(r.e) ? 'Drag onto the canvas, a socket or a wire. Enter adds it.' : r.e.detail"
 							@pointerdown="draggable(r.e) && emit('drag', r.e, $event)"
@@ -103,7 +104,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 							<span class="lab">{{ r.e.label }}</span>
 							<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
 							<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
-							<span v-if="r.e.warn" class="warn" data-warning>{{ r.e.warn }}</span>
+							<span v-if="r.e.disabled || r.e.warn" class="warn" data-warning>{{ r.e.disabled ?? r.e.warn }}</span>
 						</button>
 						<button
 							v-if="r.e.template?.mine"
@@ -192,6 +193,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 .note .x { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
 /* A template that names a retired machine or tool or a used-up edge: still there to use, greyed, with the reason under it. */
 .pe.grey .lab, .pe.grey .det { opacity: 0.6; }
+.pe.off { cursor: default; }
 .warn { flex-basis: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-warn, var(--theme--warning)); }
 .pe {
 	display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px;

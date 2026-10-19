@@ -157,7 +157,6 @@ describe('making, changing and deleting', () => {
 		await x.t.ensure();
 		x.s.templateStatus = -1;
 		expect(await x.t.create({ name: 'A', scope: 'private', collection: 'manufacturing_operations', values: OP })).toMatchObject({ ok: false, message: expect.stringMatching(/Could not reach the server/) });
-		expect(failureText(httpError(400), 'rename it')).toBe('HTTP 400');
 		expect(failureText(httpError(500), 'rename it')).toBe('HTTP 500');
 		expect(x.t.busy.value).toBe(false);
 	});
@@ -167,6 +166,32 @@ describe('making, changing and deleting', () => {
 		await x.t.ensure();
 		expect(await x.t.rename('nope', 'x')).toMatchObject({ ok: false });
 		expect(x.calls.filter((c) => c.startsWith('PATCH'))).toEqual([]);
+	});
+});
+
+describe('the words of a failure', () => {
+	const err = (status: number, message: string) => Object.assign(new Error(message), { response: { status, data: { errors: [{ message }] } } });
+
+	it('a 400 about a column or a field is not shown as the server wrote it; the messages made for people are', () => {
+		const dev = 'values names obsolete_col, which is not a column of manufacturing_operations: a template sets columns only.';
+		const out = failureText(err(400, dev), 'save the template');
+		expect(out).not.toMatch(/column|values names|manufacturing_operations/);
+		expect(out).toMatch(/Could not save the template: the server did not accept it/);
+		expect(failureText(err(400, 'A name is needed.'), 'rename')).toBe('A name is needed.');
+		expect(failureText(err(400, 'A template can only be shared with your own account role.'), 'x')).toBe('A template can only be shared with your own account role.');
+		expect(failureText(err(400, 'An operation template needs a method.'), 'save')).not.toMatch(/needs a method/);
+	});
+
+	it('the two 403s are told apart: the build gate says the account may not build, the other says only the maker may change it', () => {
+		expect(failureText(err(403, 'Your account may not build processes.'), 'save the template')).toBe('Your account may not build processes.');
+		expect(failureText(err(403, 'Only the person who made a template, or an administrator, can change it.'), 'x')).toMatch(/^Only the person who made a template/);
+		expect(failureText(err(403, 'HTTP 403'), 'x')).toMatch(/^Only the person who made a template/);
+	});
+
+	it('404, 409 and a lost connection have their own words', () => {
+		expect(failureText(err(404, 'x'), 'x')).toBe('That template does not exist any more.');
+		expect(failureText(err(409, 'x'), 'x')).toMatch(/changed since you opened it/);
+		expect(failureText(new Error('Network Error'), 'rename the template')).toBe('Could not reach the server to rename the template.');
 	});
 });
 

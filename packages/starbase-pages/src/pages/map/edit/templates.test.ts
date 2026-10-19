@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftItem, DraftOperation, DraftTest, TemplateRecord } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { OPERATION_DEFS, TEST_DEFS } from './templateFields.fixtures';
-import { SCOPES, canChange, scopeLabel, templateCollectionOf, templateEntries, templateEntry, templateProblem, templateValuesOf, templatesOf, warnOf, type TemplateItem } from './templates';
+import { MISSING_METHOD, MISSING_TYPE, SCOPES, canChange, scopeLabel, templateCollectionOf, templateEntries, templateEntry, templateProblem, templateValuesOf, templatesOf, warnOf, type TemplateItem } from './templates';
 
 const methods: MethodEntry[] = [
 	{ id: 'mt', name: 'CNC Turning', code: 'MC', category: 'machining' },
@@ -135,10 +135,21 @@ describe('the entries', () => {
 		expect(e.disabled).toBeUndefined();
 	});
 
-	it('survives a method that is not in the catalog (it is still an operation of that id)', () => {
+	it('a method that is no longer in the list makes the entry unusable with the reason (Create would fail on the reference), once the list is known', () => {
 		const e = templateEntry(item(rec({ values: { method_id: 'gone' } })), cat);
 		expect(e.detail).toBe('Operation');
+		expect(e.disabled).toBe(MISSING_METHOD);
 		expect(e.choice).toMatchObject({ kind: 'operation', methodId: 'gone', category: null });
+		// While the methods are still being read nothing is known: not marked.
+		expect(templateEntry(item(rec({ values: { method_id: 'gone' } })), { methods: [], testTypes: [] }).disabled).toBeUndefined();
+		expect(templateEntry(item(), cat).disabled).toBeUndefined();
+	});
+
+	it('a test type that is no longer in the list is unusable too', () => {
+		const t = rec({ id: 't9', collection: 'test_sessions', values: { test_type: 'retired_type' } });
+		expect(templateEntry(item(t), cat).disabled).toBe(MISSING_TYPE);
+		expect(templateEntry(item(t), { methods, testTypes: [] }).disabled).toBeUndefined();
+		expect(templateEntry(item(rec({ id: 't8', collection: 'test_sessions', values: { test_type: 'tensile' } })), cat).disabled).toBeUndefined();
 	});
 
 	it('sorts by name and narrows to operations or tests', () => {

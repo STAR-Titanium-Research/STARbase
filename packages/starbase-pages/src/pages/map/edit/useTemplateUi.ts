@@ -188,8 +188,11 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 			templates.error.value = RESTRICTED_TEXT;
 			return false;
 		}
-		const r = await templates.replaceValues(id, taken.values);
-		if (r.ok) say(`Replaced the settings of ${t.name} with those of ${node.title || 'the selected card'}.`);
+		// The template's own notes are not a setting of the card: they stay (a replace must not delete what the person wrote there without saying so).
+		const notes = t.collection === 'manufacturing_operations' ? 'outcome_notes' : 'notes';
+		const keepNotes = typeof t.values[notes] === 'string' && t.values[notes] !== '';
+		const r = await templates.replaceValues(id, keepNotes ? { ...taken.values, [notes]: t.values[notes] } : taken.values);
+		if (r.ok) say(`Replaced the settings of ${t.name} with those of ${node.title || 'the selected card'}.${keepNotes ? ' Its notes were kept.' : ''}`);
 		return r.ok;
 	}
 

@@ -324,6 +324,78 @@ test.describe('as a Lab Member', () => {
 		await savedDraft(page, member, (b) => withHaas(b) === 3, 'Enter on the template entry');
 	});
 
+	test('a FAST/SPS operation saved as a template carries no run number, so two operations made from it are both created (migration 156 makes machine + run number unique)', async ({ page }) => {
+		const haas = await machineId('Haas VF-2');
+		const [fast] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MF&fields=method_id');
+		const raw1 = await sampleIdOf(member, 'LOCAL-RAW-1');
+		const raw2 = await sampleIdOf(member, 'LOCAL-RAW-2');
+		// A recorded FAST operation with a run number, a machine and a setting (made by the administrator, deleted afterwards).
+		const run = 7000 + Math.floor(Math.random() * 1000);
+		const op = await admin.post(`${D1}/items/manufacturing_operations`, {
+			data: { sample_id: raw2, method_id: fast.method_id, process_category: 'sintering', equipment_id: haas, sintering_run_number: run, sintering_max_temp_celsius: 1450, sintering_batch_number: 'B-PM4', work_state: 'planned' },
+		});
+		expect(op.ok(), await op.text()).toBeTruthy();
+		const opId = (await op.json()).data.operation_id as string;
+		noteMade({ collection: 'manufacturing_operations', id: opId });
+
+		await startEditingMapOf(page, 'physical_samples', raw2);
+		const container = cards(page).filter({ hasText: /FAST/i });
+		await expect(container.first()).toBeVisible();
+		await container.first().locator('.code, .oname .n').first().click({ button: 'right' });
+		await page.getByRole('menu', { name: 'Highlight' }).getByRole('menuitem', { name: /Save as template/ }).click();
+		const saved = await saveAsTemplate(page, nm('Fast run'), /^Only me/, { opened: true });
+		// (a decimal column reads back from Directus as a string: "1450.00")
+		expect(saved.values).toMatchObject({ equipment_id: haas, process_category: 'sintering' });
+		expect(Number(saved.values.sintering_max_temp_celsius)).toBe(1450);
+		for (const f of ['sintering_run_number', 'sintering_batch_number', 'source_system', 'recorded_metadata', 'owner', 'gcode_file']) expect(saved.values, `no ${f}`).not.toHaveProperty(f);
+
+		// Two operations from the template, one on each sample: Create accepts both.
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1', 'LOCAL-RAW-2']);
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${raw1}|out`).first(), new RegExp(nm('Fast run')));
+		await chooseFromSocketMenu(page, sockOf(page, `sample|${raw2}|out`).first(), new RegExp(nm('Fast run')));
+		const body = await savedDraft(page, member, (b) => b.items.filter((i) => i.kind === 'operation').length === 2 && b.wires.length === 2, 'two operations made from the template');
+		for (const i of body.items.filter((x) => x.kind === 'operation')) {
+			expect(i.values.equipment_id).toBe(haas);
+			expect(Number(i.values.sintering_max_temp_celsius)).toBe(1450);
+		}
+		const answer = await pressCreate(page, noteMade);
+		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+		const made2 = distinctRecords(answer.body.data!.created).filter((r) => r.collection === 'manufacturing_operations');
+		expect(made2).toHaveLength(2);
+		for (const r of made2) {
+			const row = await readRecord<Record<string, unknown>>(member, 'manufacturing_operations', r.id, 'equipment_id,sintering_run_number,sintering_max_temp_celsius,process_category');
+			expect(row).toMatchObject({ equipment_id: haas, sintering_run_number: null, process_category: 'sintering' });
+			expect(Number(row.sintering_max_temp_celsius)).toBe(1450);
+		}
+	});
+
+	test('a done test saved as a template keeps its type and parameters and never its results, status, files, owner or codes', async ({ page }) => {
+		const bar1 = await sampleIdOf(member, 'LOCAL-BAR-1');
+		const [t] = await listRecords<Record<string, unknown>>(admin, 'test_sessions', 'filter[test_code][_eq]=LOCAL-BAR-1-TENSILE&fields=session_id,status,tensile_uts_mpa,tensile_gauge_length_mm,data_file_uri,summary_stats,owner');
+		const me = await (await getRetrying(admin, `${D1}/users/me?fields=id`)).json();
+		const patch = async (data: Record<string, unknown>) => {
+			const r = await admin.patch(`${D1}/items/test_sessions/${t.session_id}`, { data });
+			expect(r.ok(), await r.text()).toBeTruthy();
+		};
+		// The seeded done tensile test gets a pipeline status, a result, a file and an owner for the run of this test, and has them back after it.
+		await patch({ status: 'analysed', tensile_uts_mpa: 960, tensile_gauge_length_mm: 25, data_file_uri: 's3://pm4/data.csv', owner: me.data.id });
+		try {
+			await startEditingMapOf(page, 'physical_samples', bar1);
+			const test1 = cards(page).filter({ hasText: /tensile/i }).first();
+			await expect(test1).toBeVisible();
+			await test1.locator('.code, .oname .n').first().click({ button: 'right' });
+			await page.getByRole('menu', { name: 'Highlight' }).getByRole('menuitem', { name: /Save as template/ }).click();
+			const saved = await saveAsTemplate(page, nm('Done tensile'), /^Everyone/, { opened: true });
+			expect(saved.collection).toBe('test_sessions');
+			expect(saved.values.test_type).toBe('tensile');
+			expect(Number(saved.values.tensile_gauge_length_mm)).toBe(25);
+			for (const f of ['status', 'tensile_uts_mpa', 'data_file_uri', 'summary_stats', 'owner', 'test_code_number', 'test_code_subject_id', 'session_date', 'work_state']) expect(saved.values, `no ${f}`).not.toHaveProperty(f);
+		} finally {
+			await patch({ status: t.status ?? null, tensile_uts_mpa: t.tensile_uts_mpa ?? null, tensile_gauge_length_mm: t.tensile_gauge_length_mm ?? null, data_file_uri: t.data_file_uri ?? null, owner: t.owner ?? null });
+		}
+	});
+
 	// ---- the scopes ----------------------------------------------------------------------------------------------------------
 	test('private, my account role and everyone: who sees which, and who may change them (R7, E11)', async ({ page, playwright, browser }) => {
 		const second = await secondMember(playwright, admin, noteUser);
@@ -607,6 +679,37 @@ test.describe('as a Lab Member', () => {
 		await page.keyboard.press('Escape');
 		await expect(dialogOf(page)).toBeHidden();
 		expect(await focusNow(page)).toBe('card');
+	});
+
+	test('a template whose method no longer exists is listed with the reason and cannot be added, from the palette or the add search', async ({ page }) => {
+		const r = await member.post(`${D1}/d1-build/templates`, { data: { name: nm('Orphan'), collection: 'manufacturing_operations', values: { method_id: '00000000-0000-4000-8000-0000000000aa' } } });
+		expect(r.status()).toBe(201);
+		await openNewDraft(page);
+		const entry = paletteEntry(page, nm('Orphan'));
+		await expect(entry).toBeVisible();
+		await expect(entry).toHaveAttribute('aria-disabled', 'true');
+		await expect(entry.locator('[data-warning]')).toContainText('no longer in the list of methods');
+		// Dragging it, clicking it and Enter on it add nothing.
+		await dragEntryTo(page, entry, await canvasMiddle(page));
+		await entry.click({ force: true });
+		await entry.focus();
+		await page.keyboard.press('Enter');
+		await expect(cards(page)).toHaveCount(0);
+		expect((await readDraft(member, draftIdOf(page))).items).toEqual([]);
+		// The add search lists it greyed with the reason; it cannot be chosen.
+		await openAddSearch(page);
+		const option = addSearch(page).getByRole('option', { name: new RegExp(nm('Orphan')) });
+		await expect(option).toHaveAttribute('aria-disabled', 'true');
+		await expect(option).toContainText('no longer in the list of methods');
+		await option.click({ force: true });
+		await expect(cards(page)).toHaveCount(0);
+		await page.keyboard.press('Escape');
+		// It can still be deleted from the controls.
+		const manage = paletteOf(page).getByRole('group', { name: /^Manage the template PM4 Orphan/ });
+		await paletteOf(page).getByRole('button', { name: `Manage the template ${nm('Orphan')}` }).click();
+		await manage.getByRole('button', { name: 'Delete', exact: true }).click();
+		await manage.getByRole('button', { name: 'Delete', exact: true }).last().click();
+		await expect(entry).toHaveCount(0);
 	});
 
 	// ---- the gear a template names --------------------------------------------------------------------------------------------

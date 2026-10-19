@@ -103,7 +103,7 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 	 * else at the middle of the canvas, and the layout keeps it clear of every other card.
 	 */
 	function paletteAdd(entry: MenuEntry): void {
-		if (!edit.editing.value) return;
+		if (!edit.editing.value || entry.disabled) return;
 		if (entry.choice.kind === 'pickSamples') return void (pickerOpen.value = true);
 		const anchor = o.map.selectedId.value ?? undefined;
 		const r = canvasEl.value?.getBoundingClientRect();

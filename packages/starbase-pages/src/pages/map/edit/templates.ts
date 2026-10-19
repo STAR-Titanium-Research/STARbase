@@ -136,6 +136,10 @@ export interface TemplateCatalog {
 	testTypes: readonly TestTypeEntry[];
 }
 
+/** Said under a template whose method or test type is no longer in the lists: creating from it would fail on the database's own reference. */
+export const MISSING_METHOD = "This template's method is no longer in the list of methods. Delete it or replace its settings.";
+export const MISSING_TYPE = "This template's test type is no longer in the list of test types. Delete it or replace its settings.";
+
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 /** The entry of one template: found by its name, its method or test type and "template"; it is chosen like the method or test it is made of. */
@@ -148,17 +152,20 @@ export function templateEntry(t: TemplateItem, cat: TemplateCatalog): MenuEntry 
 		const method = cat.methods.find((m) => m.id === methodId);
 		const category: ProcessCategory = method?.category ?? ((text(rec.values.process_category) || null) as ProcessCategory);
 		const values = category && !rec.values.process_category ? { ...rec.values, process_category: category } : rec.values;
+		// A method that is not in the list (deleted, or this person may not read it) cannot be created: the entry says so and cannot be chosen.
+		const gone = cat.methods.length > 0 && !method ? MISSING_METHOD : undefined;
 		return {
 			id: `tpl:${rec.id}`, section: TEMPLATES, label: rec.name, detail: `${method?.name ?? 'Operation'}${shared}`,
-			keys: `template ${method?.name ?? ''} ${method?.code ?? ''}`, template: info, ...(t.warn ? { warn: t.warn } : {}),
+			keys: `template ${method?.name ?? ''} ${method?.code ?? ''}`, template: info, ...(t.warn ? { warn: t.warn } : {}), ...(gone ? { disabled: gone } : {}),
 			choice: { kind: 'operation', methodId, category, template: { id: rec.id, values } },
 		};
 	}
 	const type = text(rec.values.test_type);
 	const name = cat.testTypes.find((x) => x.value === type)?.name ?? (type || 'Test');
+	const gone = cat.testTypes.length > 0 && !cat.testTypes.some((x) => x.value === type) ? MISSING_TYPE : undefined;
 	return {
 		id: `tpl:${rec.id}`, section: TEMPLATES, label: rec.name, detail: `${name}${shared}`, keys: `template test ${name} ${type}`,
-		template: info, ...(t.warn ? { warn: t.warn } : {}),
+		template: info, ...(t.warn ? { warn: t.warn } : {}), ...(gone ? { disabled: gone } : {}),
 		choice: { kind: 'test', testType: type, template: { id: rec.id, values: rec.values } },
 	};
 }

@@ -179,6 +179,19 @@ describe('managing from the palette', () => {
 		expect(x.ui.notice.value).toMatch(/Replaced the settings of Roughing with those of Turning/);
 	});
 
+	it('keeps the template\'s own notes when its settings are replaced, and says so; a template without notes gets none', async () => {
+		const x = setup();
+		await seeded(x, { values: { method_id: 'm-turn', equipment_id: 'old', outcome_notes: 'check the chuck first' } });
+		expect(await x.ui.replace('t1')).toBe(true);
+		expect(x.s.templates[0].values).toMatchObject({ equipment_id: 'e1', outcome_notes: 'check the chuck first' });
+		expect(x.ui.notice.value).toMatch(/Its notes were kept\./);
+		const plain = setup();
+		await seeded(plain);
+		await plain.ui.replace('t1');
+		expect(plain.s.templates[0].values).not.toHaveProperty('outcome_notes');
+		expect(plain.ui.notice.value).not.toMatch(/notes/);
+	});
+
 	it('refuses to replace a test template with an operation card, and nothing is sent', async () => {
 		const x = setup();
 		await seeded(x, { collection: 'test_sessions', values: { test_type: 'tensile' } });

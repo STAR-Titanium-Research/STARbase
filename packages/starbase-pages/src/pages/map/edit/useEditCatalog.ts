@@ -83,7 +83,10 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	/** Records being read (with the read that has them), and records whose read failed: neither is asked for again on every change of the draft. */
 	const readingRecords = new Map<string, Promise<void>>();
 	const failedRecords = new Set<string>();
-	const forgetFailed = (): void => failedRecords.clear();
+	const forgetFailed = (): void => {
+		failedRecords.clear();
+		gear.forget();
+	};
 
 	/**
 	 * Reads the existing records of a draft (version and fields): what its checks and its stale warnings are made of. A record that is being
