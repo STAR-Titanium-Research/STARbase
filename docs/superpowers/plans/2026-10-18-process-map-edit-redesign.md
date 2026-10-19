@@ -14,8 +14,8 @@
 | 1a — correctness, server: R10, R11, `test_category`/`material_id` (`d1-build`) | agent worktree | `pm-redesign/1a-server` | built, reviewed, merged into the working branch (2026-10-19) |
 | 1b — correctness, client: remove, derived sockets, layout, plain fixes (needs 0 for its browser check) | agent worktree | `pm-redesign/1b-canvas` (+ `1c-verify`: browser specs and the fixes they and the Opus review found) | built, reviewed, merged into the working branch; slice 1 PR up (2026-10-19) |
 | 2 — adding: palette, add search, drops, insert before, planned/done toggle, project/campaign | agent worktree | `pm-redesign/2-adding` | not started (needs 1) |
-| 3 — attach from the database | agent worktree | `pm-redesign/3-attach` | not started (needs 2) |
-| 4 — templates | agent worktree | `pm-redesign/4-templates` | not started (needs 2) |
+| 3 — attach from the database: scoped to existing operations with no input sample (decided 2026-10-19) | agent worktree | `pm-redesign/3-attach` | not started |
+| 4 — templates | agent worktree | `pm-redesign/4-templates` | in progress (2026-10-19) |
 
 ## Global constraints
 
@@ -56,14 +56,14 @@
 
 - [ ] R1: the palette (left dock, drag source) and add search (Shift+A / Ctrl/⌘+K) over one catalog; replace the nested Add menu.
 - [ ] R2: drop onto empty canvas, socket and wire; click on a free socket opens the filtered add search; "Insert before/after" without dragging.
-- [ ] R3: "Add an earlier step" for done samples.
+- [x] R3: built as a refusal: Insert before a recorded sample says why; no 'earlier step' (maintainer, 2026-10-19).
 - [ ] R9: Planned / Done toggle per new operation or test, date for done, Create writes done.
 - [ ] R12: project/campaign chooser in the top bar.
 - [ ] Plain fixes 9–12.
 
 ## Slice 3 — attach from the database
 
-- [ ] "From database…" entry with searches per socket kind; compatibility rules; greyed with reason; one-line confirmation when it joins another process; a joined family loads onto the canvas.
+- [ ] "From database…" entry that searches existing operations with NO input sample (planned or done) and attaches the chosen one to the sample's output socket (the draft's `attach` action; d1-build already supports it). Greyed with the reason when it cannot attach. Other attach kinds (a test onto a sample, a sample as an operation's output, merging another process tree) are out of scope (maintainer, 2026-10-19).
 
 ## Slice 4 — templates
 
