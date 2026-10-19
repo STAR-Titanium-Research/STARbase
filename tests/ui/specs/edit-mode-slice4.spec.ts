@@ -493,6 +493,122 @@ test.describe('as a Lab Member', () => {
 		await expect.poll(async () => (await templatesOf(member)).find((t) => t.id === tpl.id)?.name).toBe(nm('Stale mine'));
 	});
 
+	// ---- the keyboard and focus around the controls (review: arrows, a refused change, where focus goes) ------------------------------
+	/** Where focus is now: the `.pm-tm` panel it is in, the template ⋯ button it is on, the card, or "the page body". */
+	const focusNow = (page: Page): Promise<string> =>
+		page.evaluate(() => {
+			const el = document.activeElement as HTMLElement | null;
+			if (!el || el === document.body) return 'body';
+			if (el.closest('.pm-tm')) return 'panel';
+			if (el.dataset.tm) return `more:${el.dataset.tm}`;
+			if (el.closest('.vue-flow__node')) return 'card';
+			if (el.matches('input[type="search"]')) return 'search';
+			if (el.getAttribute('role') === 'dialog') return 'dialog';
+			return el.tagName.toLowerCase() + (el.textContent ? `:${el.textContent.trim().slice(0, 30)}` : '');
+		});
+	const makeTemplate = async (name: string, values: Record<string, unknown> = {}): Promise<Template> => {
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		const r = await member.post(`${D1}/d1-build/templates`, { data: { name, collection: 'manufacturing_operations', values: { method_id: method.method_id, process_category: 'machining', ...values } } });
+		expect(r.status()).toBe(201);
+		return (await r.json()).data as Template;
+	};
+	const openManage = async (page: Page, name: string): Promise<Locator> => {
+		await paletteOf(page).getByRole('button', { name: `Manage the template ${name}` }).click();
+		return paletteOf(page).getByRole('group', { name: /^Manage the template PM4 Keys/ });
+	};
+
+	test('the arrow keys inside a template\'s controls change "Who can use it" and do not jump to the first entry (keyboard)', async ({ page }) => {
+		const tpl = await makeTemplate(nm('Keys'));
+		await openNewDraft(page);
+		const manage = await openManage(page, nm('Keys'));
+		const only = manage.getByRole('radio', { name: 'Only me' });
+		await only.focus();
+		await page.keyboard.press('ArrowDown');
+		// The native radio group moved to the next one; the page did not take the key for the entry list.
+		await expect.poll(async () => (await templatesOf(member)).find((t) => t.id === tpl.id)?.scope).toBe('role');
+		expect(await focusNow(page)).toBe('panel');
+		await expect(manage.getByRole('radio', { name: 'My account role' })).toBeChecked();
+		await page.keyboard.press('ArrowDown');
+		await expect.poll(async () => (await templatesOf(member)).find((t) => t.id === tpl.id)?.scope).toBe('global');
+		expect(await focusNow(page)).toBe('panel');
+		// The same keys still walk the entries from the search box.
+		await paletteOf(page).getByRole('searchbox').focus();
+		await page.keyboard.press('ArrowDown');
+		expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.closest('.pe') !== null)).toBe(true);
+	});
+
+	test('a refused change puts the radio back and says why; focus stays in the controls (403 on PATCH)', async ({ page }) => {
+		const tpl = await makeTemplate(nm('Keys'));
+		await openNewDraft(page);
+		const manage = await openManage(page, nm('Keys'));
+		await page.route(`**/d1-build/templates/${tpl.id}`, (route) =>
+			route.request().method() === 'PATCH'
+				? route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errors: [{ message: 'Only the person who made a template, or an administrator, can change it.', extensions: { code: 'FORBIDDEN' } }] }) })
+				: route.continue(),
+		);
+		await manage.getByRole('radio', { name: 'Everyone' }).check();
+		await expect(page.locator('[data-template-notice]')).toContainText('Only the person who made a template, or an administrator, can change it.');
+		await expect(manage.getByRole('radio', { name: 'Only me' })).toBeChecked();
+		await expect(manage.getByRole('radio', { name: 'Everyone' })).not.toBeChecked();
+		expect(await focusNow(page)).not.toBe('body');
+		expect((await templatesOf(member)).find((t) => t.id === tpl.id)?.scope).toBe('private');
+	});
+
+	test('focus never falls to the page body: Esc, Replace, Cancel and Delete in the controls (keyboard)', async ({ page }) => {
+		const tpl = await makeTemplate(nm('Keys'));
+		await openNewDraft(page);
+		await dropTurning(page, member);
+		await selectOperation(page);
+		const manage = await openManage(page, nm('Keys'));
+		// Esc closes the panel and gives focus to the ⋯ button of that template.
+		await manage.getByLabel('Template name').focus();
+		await page.keyboard.press('Escape');
+		await expect(manage).toHaveCount(0);
+		expect(await focusNow(page)).toBe(`more:${tpl.id}`);
+		// Replace: ask, cancel with the keyboard, ask again and confirm; the focus is on the controls each time.
+		const again = await openManage(page, nm('Keys'));
+		await again.getByRole('button', { name: /^Replace with the selected card/ }).click();
+		await again.getByRole('button', { name: 'Cancel' }).focus();
+		await page.keyboard.press('Enter');
+		expect(await focusNow(page)).toBe('panel');
+		await again.getByRole('button', { name: /^Replace with the selected card/ }).click();
+		await again.getByRole('button', { name: 'Replace', exact: true }).click();
+		await expect(page.locator('[data-template-notice]')).toContainText('Replaced the settings of');
+		expect(await focusNow(page)).toBe('panel');
+		// Delete: the entry goes; focus is on the search box.
+		await again.getByRole('button', { name: 'Delete', exact: true }).click();
+		await again.getByRole('button', { name: 'Delete', exact: true }).last().click();
+		await expect(paletteEntry(page, nm('Keys'))).toHaveCount(0);
+		expect(await focusNow(page)).toBe('search');
+	});
+
+	test('the Save as template dialog: with nothing to save it takes focus and Esc closes it; from the right-click menu focus comes back to the card (keyboard)', async ({ page }) => {
+		await openNewDraft(page);
+		await dropTurning(page, member);
+		await selectOperation(page);
+		// No method, nothing to save: the dialog says so and holds focus itself.
+		await page.getByRole('button', { name: 'Clear Method' }).first().click();
+		await savedDraft(page, member, (b) => !b.items[0].values.method_id, 'the method cleared');
+		await page.getByRole('button', { name: /^Save as template/ }).click();
+		const dialog = dialogOf(page);
+		await expect(dialog).toContainText('Choose the method of this operation first.');
+		await expect(dialog).toBeFocused();
+		await page.keyboard.press('Escape');
+		await expect(dialog).toBeHidden();
+		expect(await focusNow(page)).toContain('button:');
+		// From the card's right-click menu (which has closed by then): focus returns to the selected card.
+		await page.getByRole('combobox', { name: 'Method' }).first().click();
+		await page.getByRole('combobox', { name: 'Method' }).first().fill('Turning');
+		await page.getByRole('option', { name: /CNC Turning/ }).first().click();
+		await savedDraft(page, member, (b) => !!b.items[0].values.method_id, 'the method back');
+		await cards(page).filter({ hasText: /Turning/ }).first().locator('.code, .oname .n').first().click({ button: 'right' });
+		await page.getByRole('menu', { name: 'Highlight' }).getByRole('menuitem', { name: /Save as template/ }).click();
+		await expect(dialogOf(page)).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(dialogOf(page)).toBeHidden();
+		expect(await focusNow(page)).toBe('card');
+	});
+
 	// ---- the gear a template names --------------------------------------------------------------------------------------------
 	test('a template that names a retired tool is greyed with the reason in the palette and the add search, and its card warns in Checks (R7)', async ({ page }) => {
 		const tool = await makeTool('RETIRED');

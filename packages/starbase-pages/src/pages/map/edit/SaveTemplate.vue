@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { enterConfirms } from './dialogKeys';
+import { restoreFocus } from './focusCanvas';
 import { SCOPES, type TemplateScope } from './templates';
 
 // "Save as template" (redesign R7, spec E11): a name and who may use it, for the operation or test selected. The fields it keeps are listed
@@ -22,6 +23,8 @@ const props = defineProps<{
 	/** What the server said when the last try failed. */
 	error: string;
 	busy: boolean;
+	/** Where focus goes when the thing that opened the dialog is gone (the card's right-click menu closed with the click): the selected card. */
+	restoreFocus?: () => void;
 }>();
 const emit = defineEmits<{ save: [v: { name: string; scope: TemplateScope; notes: boolean }]; close: [] }>();
 
@@ -29,6 +32,7 @@ const text = ref(props.name);
 const scope = ref<TemplateScope>('private');
 const notes = ref(false);
 const input = ref<HTMLInputElement | null>(null);
+const box = ref<HTMLElement | null>(null);
 const opener = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
 const trimmed = computed(() => text.value.trim());
 const nameProblem = computed(() => (trimmed.value ? (trimmed.value.length > 120 ? 'Keep the name to 120 letters.' : '') : 'Give the template a name.'));
@@ -50,17 +54,18 @@ function onKey(e: KeyboardEvent) {
 }
 onMounted(async () => {
 	await nextTick();
-	input.value?.focus();
-	input.value?.select();
+	// With no name field (the record cannot be saved) the dialog itself takes focus, so Esc and Tab work from the first moment.
+	if (input.value) {
+		input.value.focus();
+		input.value.select();
+	} else box.value?.focus();
 });
-onBeforeUnmount(() => {
-	if (opener?.isConnected) opener.focus();
-});
+onBeforeUnmount(() => restoreFocus(opener, props.restoreFocus));
 </script>
 
 <template>
 	<div class="pm-tpl-back" @pointerdown.self="emit('close')">
-		<div class="d1-kit d1-process-map pm-tpl" role="dialog" aria-modal="true" :aria-label="`Save this ${what} as a template`" @keydown="onKey">
+		<div ref="box" tabindex="-1" class="d1-kit d1-process-map pm-tpl" role="dialog" aria-modal="true" :aria-label="`Save this ${what} as a template`" @keydown="onKey">
 			<label class="ttl" for="pm-tpl-name">Save this {{ what }} as a template</label>
 			<p v-if="problem" class="bad" role="alert">{{ problem }}</p>
 			<template v-else>
@@ -100,6 +105,7 @@ onBeforeUnmount(() => {
 	font-size: var(--fs-md, 13px);
 }
 .ttl { font-weight: 700; }
+.pm-tpl:focus { outline: none; }
 input[type='text'] {
 	width: 100%; box-sizing: border-box; padding: 6px 10px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--theme--form--field--input--background, var(--d1-surface)); color: inherit; font: inherit;

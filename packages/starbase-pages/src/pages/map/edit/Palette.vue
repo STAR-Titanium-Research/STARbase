@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { draggable, type PaletteDrag } from './useAddDrag';
 import type { MenuEntry } from './menuModel';
 import TemplateManage from './TemplateManage.vue';
@@ -39,6 +39,14 @@ const emit = defineEmits<{
 }>();
 /** The template whose controls are open. */
 const managing = ref<string | null>(null);
+const search = ref<HTMLInputElement | null>(null);
+/** Closes a template's controls and puts focus where the keyboard can go on: its ⋯ button, or the search box when the template is gone. */
+async function closeManage(id: string, then: 'button' | 'search' = 'button'): Promise<void> {
+	managing.value = null;
+	await nextTick();
+	if (then === 'search') search.value?.focus();
+	else list.value?.querySelector<HTMLElement>(`[data-tm="${CSS.escape(id)}"]`)?.focus();
+}
 
 const rows = computed(() => props.entries.map((e, i) => ({ e, head: props.grouped && (i === 0 || props.entries[i - 1].section !== e.section) ? e.section : null })));
 const list = ref<HTMLElement | null>(null);
@@ -50,6 +58,9 @@ function click(e: MenuEntry) {
 /** ArrowUp/ArrowDown move between the entries (and from the search box into the list), as in a list. */
 function onKey(ev: KeyboardEvent) {
 	if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+	// Only the search box and the entries are a list: arrows inside a template's controls (the scope radios, a field) are theirs.
+	const t = ev.target as HTMLElement | null;
+	if (!t?.matches?.('.q') && !t?.closest?.('.pe')) return;
 	const items = [...(list.value?.querySelectorAll<HTMLElement>('.pe') ?? [])];
 	if (!items.length) return;
 	ev.preventDefault();
@@ -70,7 +81,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 			</button>
 		</div>
 		<template v-if="!folded">
-			<input v-model="query" class="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search…" aria-label="Search the palette" @keydown.esc.stop="query = ''" />
+			<input ref="search" v-model="query" class="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search…" aria-label="Search the palette" @keydown.esc.stop="query = ''" />
 			<p class="hint">Drag onto the canvas, a socket or a wire. Enter adds.</p>
 			<p v-if="templateNotice" class="note" :class="{ bad: templateFailed }" role="status" data-template-notice>
 				<span>{{ templateNotice }}</span>
@@ -98,6 +109,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 							v-if="r.e.template?.mine"
 							type="button"
 							class="tm"
+							:data-tm="r.e.template.id"
 							:aria-label="`Manage the template ${r.e.template.name}`"
 							:aria-expanded="managing === r.e.template.id"
 							title="Rename, who can use it, replace, delete"
@@ -114,8 +126,8 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 							@rename="(n) => emit('template-rename', r.e.template!.id, n)"
 							@scope="(sc) => emit('template-scope', r.e.template!.id, sc)"
 							@replace="emit('template-replace', r.e.template!.id)"
-							@delete="(emit('template-delete', r.e.template!.id), (managing = null))"
-							@close="managing = null"
+							@delete="(emit('template-delete', r.e.template!.id), closeManage(r.e.template!.id, 'search'))"
+							@close="closeManage(r.e.template!.id)"
 						/>
 					</div>
 				</template>

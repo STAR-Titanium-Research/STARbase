@@ -50,6 +50,7 @@ function closeToast(): void {
 			:problem="side.build.templateUi.saving.value.problem"
 			:error="side.build.templateUi.saving.value.error"
 			:busy="side.build.templateUi.saving.value.busy"
+			:restore-focus="() => focusCanvas(canvasEl, side.build.templateUi.selectedNodeId.value ?? undefined)"
 			@save="side.build.templateUi.save"
 			@close="side.build.templateUi.closeSave"
 		/>

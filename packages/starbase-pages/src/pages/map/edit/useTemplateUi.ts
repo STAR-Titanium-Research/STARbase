@@ -213,7 +213,10 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 		},
 	};
 
-	return { saving, notice, canSaveSelected, selectedKind, openSelected, closeSave, save, rename, setScope, remove, replace, paletteProps, paletteEvents };
+	/** The drawn card that is selected (where focus goes back to when the dialog closes). */
+	const selectedNodeId = computed(() => map.selectedId.value ?? null);
+
+	return { saving, notice, selectedNodeId, canSaveSelected, selectedKind, openSelected, closeSave, save, rename, setScope, remove, replace, paletteProps, paletteEvents };
 }
 
 export type TemplateUi = ReturnType<typeof useTemplateUi>;
