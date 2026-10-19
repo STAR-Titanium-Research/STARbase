@@ -34,8 +34,17 @@ describe('SaveTemplate', () => {
 	it('lists what it keeps and says it never keeps the sample or the dates', async () => {
 		const t = text(await save());
 		expect(t).toContain('Keeps: Method, Machine, Tool.');
-		expect(t).toContain('Never the sample, the dates or whether it is done.');
+		expect(t).toContain('Only the setup: the method or type, machine, tool, edge, operator and process settings. Never the sample, the dates, whether it is done, results, files or codes.');
 		expect(text(await save({ labels: Array.from({ length: 11 }, (_, i) => `F${i}`) }))).toContain('F7, 3 more.');
+	});
+
+	it('for a restricted record offers only Only me and says why', async () => {
+		const html = await save({ restricted: true });
+		expect(text(html)).toContain('This record is restricted, so a template made from it can only be for Only me.');
+		expect(html).toMatch(/name="pm-tpl-scope" value="role" disabled/);
+		expect(html).toMatch(/name="pm-tpl-scope" value="global" disabled/);
+		expect(html).not.toMatch(/name="pm-tpl-scope" value="private" disabled/);
+		expect(await save()).not.toContain('data-restricted');
 	});
 
 	it('offers the notes only when there are some, unticked', async () => {

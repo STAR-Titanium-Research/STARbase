@@ -180,7 +180,7 @@ test.describe('as a Lab Member', () => {
 		const keeps = dialog.locator('[data-keeps]');
 		for (const word of ['Method', 'Machine', 'Tool', 'Operator']) await expect(keeps).toContainText(word);
 		await expect(keeps).not.toContainText('Planned date');
-		await expect(keeps).toContainText('Never the sample, the dates or whether it is done.');
+		await expect(keeps).toContainText('Never the sample, the dates, whether it is done, results, files or codes.');
 		await expect(dialog.getByRole('checkbox', { name: /notes/i })).not.toBeChecked();
 		const saved = await saveAsTemplate(page, nm('Round'), /^Only me/, { opened: true });
 		expect(saved).toMatchObject({ name: nm('Round'), scope: 'private', role_id: null, collection: 'manufacturing_operations' });

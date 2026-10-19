@@ -13,16 +13,18 @@ const run = (actions: DraftAction[]) => actions.reduce((b, a) => apply(b, a), em
 const labels = { method_id: 'Method', equipment_id: 'Machine', tool_id: 'Tool', operator_person_id: 'Operator', machining_feed_mm_per_rev: 'Feed' } as Record<string, string>;
 
 /** A draft with one new Turning operation (n2, row n3) that has a machine, a tool, an operator, a date and notes, selected on the canvas. */
-function setup(over: { values?: Record<string, unknown>; me?: { id?: string; admin?: boolean }; select?: boolean } = {}) {
+function setup(over: { values?: Record<string, unknown>; me?: { id?: string; admin?: boolean }; select?: boolean; recorded?: { restricted: boolean } } = {}) {
 	const f = fakeServer();
 	const templates = useTemplates({ api: f.api, gear: useGearStatus(f.api), me: () => over.me ?? { id: 'u1' } });
 	const body = ref(
-		run([
+		over.recorded
+			? run([{ type: 'addExisting', kind: 'operation', record: { id: 'o1', version: 3 }, workState: 'done' }])
+			: run([
 			{ type: 'addSample' },
 			{ type: 'addContainer', kind: 'operation', source: { from: 'template', values: over.values ?? { method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', tool_id: 'tool1', operator_person_id: 'p1', machining_feed_mm_per_rev: 0.2, planned_date: '2026-11-02', outcome_notes: 'hold 2 min' } }, from: { key: 'n1' } },
 		]),
 	);
-	const node = { id: 'c1', type: 'container', kind: 'operation', title: 'Turning', group: { id: 'g1', kind: 'operation', rowIds: ['draft:n3'], batch: null } } as unknown as ContainerNode;
+	const node = { id: 'c1', type: 'container', kind: 'operation', title: 'Turning', group: { id: 'g1', kind: 'operation', rowIds: [over.recorded ? 'o1' : 'draft:n3'], batch: null } } as unknown as ContainerNode;
 	const selectedId = ref<string | null>(over.select === false ? null : 'c1');
 	const edit = {
 		editing: ref(true),
@@ -38,6 +40,7 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 			gear: { ensure: async () => undefined },
 		},
 	};
+	if (over.recorded) edit.catalog.records.set('manufacturing_operations:o1', { version: 3, values: { method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', restricted: over.recorded.restricted } } as never);
 	const map = { graph: ref({ nodes: [node], wires: [], hidden: [], truncated: false }), selectedId };
 	let opened = 0;
 	const ui = useTemplateUi({ edit: edit as never, templates, map: map as never, openPalette: () => void (opened += 1) });
@@ -106,6 +109,46 @@ describe('Save as template', () => {
 		x.ui.closeSave();
 		expect(x.ui.saving.value).toBeNull();
 		expect(x.s.templates).toEqual([]);
+	});
+});
+
+describe('a restricted record is not published through a template', () => {
+	it('opens for a restricted record with the shared scopes refused, and a role or everyone save sends nothing', async () => {
+		const x = setup({ recorded: { restricted: true } });
+		expect(await x.ui.openSelected()).toBe(true);
+		expect(x.ui.saving.value).toMatchObject({ restricted: true, problem: null });
+		await x.ui.save({ name: 'Shared', scope: 'role', notes: false });
+		expect(x.ui.saving.value?.error).toMatch(/restricted.*only me/i);
+		await x.ui.save({ name: 'Shared', scope: 'global', notes: false });
+		expect(x.s.templates).toEqual([]);
+		expect(x.s.calls.filter((c) => c.startsWith('POST /d1-build/templates'))).toEqual([]);
+		// Private is fine: nobody else sees it.
+		await x.ui.save({ name: 'Mine', scope: 'private', notes: false });
+		expect(x.s.templates).toHaveLength(1);
+		expect(x.s.templates[0]).toMatchObject({ name: 'Mine', scope: 'private', values: { method_id: 'm-turn', equipment_id: 'e1' } });
+	});
+
+	it('a record that is not restricted, and a new card, are shared as asked', async () => {
+		const open = setup({ recorded: { restricted: false } });
+		await open.ui.openSelected();
+		expect(open.ui.saving.value?.restricted).toBe(false);
+		await open.ui.save({ name: 'Shared', scope: 'global', notes: false });
+		expect(open.s.templates[0].scope).toBe('global');
+		const fresh = setup();
+		await fresh.ui.openSelected();
+		expect(fresh.ui.saving.value?.restricted).toBe(false);
+	});
+
+	it('will not put a restricted card\'s settings into a template others can see', async () => {
+		const x = setup({ recorded: { restricted: true } });
+		x.s.templates.push({ id: 't1', name: 'Shared', scope: 'global', role_id: null, collection: 'manufacturing_operations', values: { method_id: 'm-turn' }, user_id: 'u1', updated_at: 'now', version: 1 } as never);
+		await x.templates.ensure();
+		expect(await x.ui.replace('t1')).toBe(false);
+		expect(x.templates.error.value).toMatch(/restricted/);
+		expect(x.s.calls.filter((c) => c.startsWith('PATCH'))).toEqual([]);
+		x.s.templates[0].scope = 'private';
+		await x.templates.refresh();
+		expect(await x.ui.replace('t1')).toBe(true);
 	});
 });
 

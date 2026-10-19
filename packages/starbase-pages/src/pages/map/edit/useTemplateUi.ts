@@ -27,6 +27,8 @@ export interface SaveState {
 	/** The labels of the fields kept. */
 	labels: string[];
 	hasNotes: boolean;
+	/** The record it was made from is restricted: only a private template may be made from it. */
+	restricted: boolean;
 	problem: string | null;
 	error: string;
 	busy: boolean;
@@ -40,10 +42,13 @@ interface Taken {
 	values: Record<string, unknown>;
 	valuesWithNotes: Record<string, unknown>;
 	labels: string[];
+	restricted: boolean;
 	problem: string | null;
 }
 
 const RECORDED_READ = 'Could not read that record. Try again in a moment.';
+/** What is said when a restricted record would go into a template others can see (ADR-0011: its parameters are not for everyone). */
+export const RESTRICTED_TEXT = 'This record is restricted, so a template made from it can only be for Only me.';
 
 export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: ProcessMap; /** Opens the palette: a template just saved is in it. */ openPalette: () => void }) {
 	const { edit, map, templates } = o;
@@ -95,7 +100,7 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 			const key = recordKey(c, it.existing.id);
 			await edit.catalog.loadRecords({ physical_samples: [], manufacturing_operations: c === 'manufacturing_operations' ? [it.existing.id] : [], test_sessions: c === 'test_sessions' ? [it.existing.id] : [] }, { retry: true });
 			loaded = edit.catalog.records.get(key)?.values;
-			if (!loaded) return { what: it.kind as 'operation' | 'test', collection, name: '', values: {}, valuesWithNotes: {}, labels: [], problem: RECORDED_READ };
+			if (!loaded) return { what: it.kind as 'operation' | 'test', collection, name: '', values: {}, valuesWithNotes: {}, labels: [], restricted: false, problem: RECORDED_READ };
 		}
 		const values = templateValuesOf(it, loaded, defsOf(c));
 		const valuesWithNotes = templateValuesOf(it, loaded, defsOf(c), { notes: true });
@@ -106,6 +111,7 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 			values,
 			valuesWithNotes,
 			labels: Object.keys(values).filter((k) => k !== 'process_category').map((k) => labelOf(c, k)),
+			restricted: loaded?.restricted === true,
 			problem: templateProblem(it, values),
 		};
 	}
@@ -124,13 +130,17 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 		if (!edit.editing.value || !node) return false;
 		const t = await take(draftItemOfNode(node), node);
 		if (!t) return false;
-		saving.value = { what: t.what, collection: t.collection, name: t.name, values: t.values, valuesWithNotes: t.valuesWithNotes, labels: t.labels, hasNotes: Object.keys(t.valuesWithNotes).length > Object.keys(t.values).length, problem: t.problem, error: '', busy: false };
+		saving.value = { what: t.what, collection: t.collection, name: t.name, values: t.values, valuesWithNotes: t.valuesWithNotes, labels: t.labels, hasNotes: Object.keys(t.valuesWithNotes).length > Object.keys(t.values).length, restricted: t.restricted, problem: t.problem, error: '', busy: false };
 		return true;
 	}
 	const closeSave = (): void => void (saving.value = null);
 	async function save(v: { name: string; scope: TemplateScope; notes: boolean }): Promise<void> {
 		const s = saving.value;
 		if (!s || s.busy) return;
+		if (s.restricted && v.scope !== 'private') {
+			saving.value = { ...s, error: RESTRICTED_TEXT };
+			return;
+		}
 		saving.value = { ...s, busy: true, error: '' };
 		const r = await templates.create({ name: v.name, scope: v.scope, collection: s.collection, values: v.notes ? s.valuesWithNotes : s.values });
 		if (!saving.value) return;
@@ -172,6 +182,10 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 		const taken = await take(draftItemOfNode(node), node);
 		if (!taken || taken.problem) {
 			templates.error.value = taken?.problem ?? 'That card cannot be saved as a template.';
+			return false;
+		}
+		if (taken.restricted && t.scope !== 'private') {
+			templates.error.value = RESTRICTED_TEXT;
 			return false;
 		}
 		const r = await templates.replaceValues(id, taken.values);

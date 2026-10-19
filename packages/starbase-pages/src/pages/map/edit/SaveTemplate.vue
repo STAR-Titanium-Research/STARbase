@@ -15,6 +15,8 @@ const props = defineProps<{
 	labels: readonly string[];
 	/** The card has notes it could keep (unticked by default). */
 	hasNotes: boolean;
+	/** The record it is made from is restricted: only Only me is offered. */
+	restricted?: boolean;
 	/** Why it cannot be saved (no method or test type yet): the dialog says so and Save is off. */
 	problem: string | null;
 	/** What the server said when the last try failed. */
@@ -66,13 +68,14 @@ onBeforeUnmount(() => {
 				<fieldset class="scope">
 					<legend>Who can use it</legend>
 					<label v-for="s in SCOPES" :key="s.value" class="opt">
-						<input v-model="scope" type="radio" name="pm-tpl-scope" :value="s.value" />
+						<input v-model="scope" type="radio" name="pm-tpl-scope" :value="s.value" :disabled="restricted && s.value !== 'private'" />
 						<span><strong>{{ s.label }}</strong> <span class="hint">{{ s.hint }}</span></span>
 					</label>
 				</fieldset>
+				<p v-if="restricted" class="hint" data-restricted>This record is restricted, so a template made from it can only be for Only me.</p>
 				<p class="keeps" data-keeps>
 					<strong>Keeps:</strong> {{ shown.join(', ') || 'nothing yet' }}.
-					<span class="hint">Never the sample, the dates or whether it is done.</span>
+					<span class="hint">Only the setup: the method or type, machine, tool, edge, operator and process settings. Never the sample, the dates, whether it is done, results, files or codes.</span>
 				</p>
 				<label v-if="hasNotes" class="opt notes">
 					<input v-model="notes" type="checkbox" />

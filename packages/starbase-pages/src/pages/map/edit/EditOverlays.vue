@@ -46,6 +46,7 @@ function closeToast(): void {
 			:name="side.build.templateUi.saving.value.name"
 			:labels="side.build.templateUi.saving.value.labels"
 			:has-notes="side.build.templateUi.saving.value.hasNotes"
+			:restricted="side.build.templateUi.saving.value.restricted"
 			:problem="side.build.templateUi.saving.value.problem"
 			:error="side.build.templateUi.saving.value.error"
 			:busy="side.build.templateUi.saving.value.busy"
