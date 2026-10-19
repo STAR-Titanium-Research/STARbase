@@ -1275,6 +1275,44 @@ test('create (R9): done at Create writes the outputs active, planned work writes
   assert.ok(env.world.ops.every((o) => o.knex === env.world.trx));
 });
 
+test('create (R9): done at Create records who and when like Mark done does, and a done record with no date gets today; planned work gets neither', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('done1', { operation_date: '2026-10-12T08:30:00Z' }, { workState: 'done' }), sample('n1', { values: code('{seq}-X') }),
+      mop('plan1', {}, { workState: 'planned' }), sample('n2', { values: code('{seq}-Y') }),
+      test_('t1', { workState: 'done', values: { test_type: 'tensile' } }),
+      test_('t2', { workState: 'planned', values: { test_type: 'tensile' } }),
+      test_('t3', { workState: 'done', values: { test_type: 'tensile', session_date: '2026-10-13T00:00:00Z' } }),
+    ],
+    [wire(w('s0'), w('done1')), wire(w('done1', 0), w('n1')), wire(w('s0'), w('plan1')), wire(w('plan1', 0), w('n2')),
+      wire(w('s0'), w('t1')), wire(w('s0'), w('t2')), wire(w('s0'), w('t3'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const made = (key) => env.world.ops.find((o) => o.op === 'create' && o.id === res.body.data.created[key].id).data;
+  const stamp = { done_by_person_id: ID(70), done_at: NOW.toISOString() };
+  assert.deepEqual([made('done1').done_by_person_id, made('done1').done_at, made('done1').operation_date], [ID(70), NOW.toISOString(), '2026-10-12T08:30:00Z'], 'the date the person gave is kept');
+  assert.deepEqual([made('t1').done_by_person_id, made('t1').done_at, made('t1').session_date], [stamp.done_by_person_id, stamp.done_at, '2026-10-14T00:00:00.000Z'], 'no date: today');
+  assert.equal(made('t3').session_date, '2026-10-13T00:00:00Z');
+  for (const k of ['plan1', 't2']) {
+    const d = made(k);
+    assert.deepEqual(['done_by_person_id' in d, 'done_at' in d, 'operation_date' in d, 'session_date' in d], [false, false, false, false], `${k} is planned`);
+  }
+});
+
+test('create (R9): a done record made by a login without a researcher row is refused before anything is written (NO_RESEARCHER), so done_by is never empty', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  env.world.people = [];
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 } }), test_('t1', { workState: 'done', values: { test_type: 'tensile' } })], [wire(w('s0'), w('t1'))]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 422);
+  assert.deepEqual(env.world.ops, []);
+});
+
 const NO_RESEARCHER_TEXT = "Your account isn't linked to a researcher record. Ask an admin.";
 
 test('create (R11b): a caller with no researcher People row is refused with 422 NO_RESEARCHER, and nothing is written or deleted', async () => {
@@ -1419,7 +1457,7 @@ test('create: tests are written with their samples as subjects, a planned test w
     subject: { create: [{ collection: 'physical_samples', item: n1 }, { collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(t2.data, {
-    test_type: 'tensile', test_category: 'destructive', session_date: '2026-10-21', work_state: 'done',
+    test_type: 'tensile', test_category: 'destructive', session_date: '2026-10-21', work_state: 'done', done_at: NOW.toISOString(), done_by_person_id: ID(70),
     subject: { create: [{ collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(res.body.data.created.t1, { collection: 'test_sessions', id: t1.id, code: 'T-3' });
