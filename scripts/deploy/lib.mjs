@@ -540,3 +540,90 @@ export function startHeartbeat(lockfs, id, everyMs = LOCK_HEARTBEAT_MS) {
 	t.unref?.();
 	return () => clearInterval(t);
 }
+
+// ---- processes holding node_modules -------------------------------------------------------------
+// On Windows a running dev server (vite and its esbuild child, a native .node module) locks files under
+// node_modules, and `npm install` then fails with EBUSY. The deploy finds those processes so a person can
+// confirm stopping them (pseudo-ack STOP_HOLDERS_ACK) instead of discovering the lock halfway through.
+
+/** Pseudo-acknowledgement in `needsAck` / `--ack`: "stop the processes listed in `holders` before npm install". */
+export const STOP_HOLDERS_ACK = 'stop-node-modules-holders';
+
+/**
+ * PowerShell that lists processes using `$env:DEPLOY_NM_ROOT`: an executable or command line under it, or a loaded
+ * native module from it. The calling process, its ancestors and its descendants are never listed. Prints one JSON array.
+ */
+export const HOLDERS_PS = `
+$ErrorActionPreference = 'SilentlyContinue'
+$root = $env:DEPLOY_NM_ROOT.TrimEnd('\') + '\'
+$self = [int]$env:DEPLOY_SELF_PID
+$procs = @(Get-CimInstance Win32_Process)
+$parent = @{}
+foreach ($p in $procs) { $parent[[int]$p.ProcessId] = [int]$p.ParentProcessId }
+$skip = @{}
+$id = $self
+while ($id -and -not $skip.ContainsKey($id)) { $skip[$id] = $true; $id = $parent[$id] }
+foreach ($p in $procs) {
+  $id = [int]$p.ProcessId; $up = $id; $n = 0
+  while ($up -and $n -lt 32) { if ($up -eq $self) { $skip[$id] = $true; break }; $up = $parent[$up]; $n++ }
+}
+$found = @()
+foreach ($p in $procs) {
+  $id = [int]$p.ProcessId
+  if ($skip.ContainsKey($id) -or $id -le 4) { continue }
+  $cmd = [string]$p.CommandLine
+  $exe = [string]$p.ExecutablePath
+  $reason = $null
+  if ($exe -and $exe.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $reason = 'runs from node_modules' }
+  elseif ($cmd -and $cmd.Replace('/', '\').IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $reason = 'command line uses node_modules' }
+  elseif ($p.Name -match '^(node|esbuild)') {
+    $mods = (Get-Process -Id $id).Modules | Where-Object { $_.FileName.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) }
+    if ($mods) { $reason = 'has a node_modules native module loaded' }
+  }
+  if ($reason) { $found += [pscustomobject]@{ pid = $id; name = [string]$p.Name; cmd = $(if ($cmd.Length -gt 200) { $cmd.Substring(0, 200) } else { $cmd }); reason = $reason } }
+}
+ConvertTo-Json -InputObject @($found) -Compress
+`;
+
+/** PowerShell -EncodedCommand argument (base64 of UTF-16LE): no quoting problems across spawn. */
+export const encodePs = (script) => Buffer.from(script, 'utf16le').toString('base64');
+
+/** Parse the JSON array HOLDERS_PS prints; anything unreadable is "no holders". */
+export function parseHolders(stdout) {
+	const line = String(stdout ?? '').trim().split('\n').filter(Boolean).at(-1);
+	if (!line) return [];
+	try {
+		const v = JSON.parse(line);
+		const rows = Array.isArray(v) ? v : [v];
+		return rows
+			.filter((r) => r && Number.isInteger(r.pid) && r.pid > 4)
+			.map((r) => ({ pid: r.pid, name: String(r.name ?? ''), cmd: String(r.cmd ?? ''), reason: String(r.reason ?? '') }));
+	} catch {
+		return [];
+	}
+}
+
+// ---- unfinished deploy (logs/deploy/pending.json) ------------------------------------------------
+// The merge is the point of no return: after it HEAD already equals origin/main, so a plain check says "up to
+// date" and the install/build/restart steps that did not finish would never run. runDeploy records the merge here
+// and clears it when the run succeeds; the next check then offers to finish those steps.
+
+export const PENDING_FILE = path.join('logs', 'deploy', 'pending.json');
+
+export function parsePendingDeploy(text) {
+	if (!text) return null;
+	try {
+		const v = JSON.parse(text);
+		if (v && typeof v.fromSha === 'string' && /^[0-9a-f]{7,40}$/.test(v.fromSha)) {
+			return {
+				runId: typeof v.runId === 'string' ? v.runId : null,
+				fromSha: v.fromSha,
+				failedStep: typeof v.failedStep === 'string' ? v.failedStep : null,
+				message: typeof v.message === 'string' ? v.message : '',
+			};
+		}
+	} catch {
+		/* a damaged file is no pending deploy */
+	}
+	return null;
+}

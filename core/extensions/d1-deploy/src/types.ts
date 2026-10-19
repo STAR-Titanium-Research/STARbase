@@ -16,6 +16,24 @@ export interface CheckBlocker {
 	message: string;
 }
 
+export interface CheckHolder {
+	pid: number;
+	name: string;
+	cmd: string;
+	reason: string;
+}
+
+/** An earlier deploy that merged but did not finish its install/build/restart steps. */
+export interface CheckResume {
+	runId: string | null;
+	fromSha: string;
+	failedStep: string | null;
+	message: string;
+}
+
+/** The pseudo-acknowledgement for "stop the processes in `holders` before npm install". */
+export const STOP_HOLDERS_ACK = 'stop-node-modules-holders';
+
 export interface CheckResult {
 	upToDate: boolean;
 	branch: string;
@@ -30,6 +48,10 @@ export interface CheckResult {
 	conflicts: string[] | null;
 	blockers: CheckBlocker[];
 	needsAck: string[];
+	/** Processes holding files in node_modules (absent from older agents). */
+	holders?: CheckHolder[];
+	/** Set when this check finishes an earlier, unfinished deploy (absent from older agents). */
+	resume?: CheckResume | null;
 }
 
 export interface RunStep {

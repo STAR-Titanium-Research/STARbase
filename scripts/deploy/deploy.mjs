@@ -8,13 +8,15 @@
 // `check` changes nothing (it only fetches). `run` stops, without touching anything beyond a backup, whenever a
 // judgement call is needed. Never: git stash, redis-cli FLUSHALL, npm ci, git push, other sessions' containers.
 // The process runner is injected (`exec`) so the tests never call real git, docker or npm.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	buildServicesFromConfig,
 	acquireRunLock,
+	encodePs,
 	formatRunId,
+	HOLDERS_PS,
 	isPidAlive,
 	makeExec,
 	makeLockFs,
@@ -24,10 +26,13 @@ import {
 	parseBackupName,
 	parseComposePs,
 	parseEnv,
+	parseHolders,
 	parseMergeTree,
 	parsePending,
+	parsePendingDeploy,
 	parsePendingFiles,
 	parsePorcelainZ,
+	PENDING_FILE,
 	planSteps,
 	releaseRunLock,
 	rewriteDbUrl,
@@ -36,6 +41,7 @@ import {
 	serviceProblems,
 	splitNul,
 	startHeartbeat,
+	STOP_HOLDERS_ACK,
 } from './lib.mjs';
 
 const DBMATE_IMAGE = 'ghcr.io/amacneil/dbmate:2';
@@ -74,7 +80,45 @@ export function makeFsx() {
 			writeFileSync(tmp, text);
 			renameSync(tmp, p);
 		},
+		remove(p) {
+			try {
+				unlinkSync(p);
+			} catch {
+				/* already gone */
+			}
+		},
 	};
+}
+
+/** Processes using the live node_modules (a dev server's esbuild, a native module). Windows only; [] elsewhere or on any failure. */
+async function findHolders(ctx) {
+	if ((ctx.platform ?? process.platform) !== 'win32') return [];
+	const r = await ctx.exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePs(HOLDERS_PS)], {
+		cwd: ctx.repoDir,
+		env: { ...ctx.env, DEPLOY_NM_ROOT: path.join(ctx.repoDir, 'node_modules'), DEPLOY_SELF_PID: String(ctx.pid ?? process.pid) },
+		timeoutMs: T.git,
+	});
+	return r.code === 0 ? parseHolders(r.stdout) : [];
+}
+
+/** Stop what holds node_modules right now (whole process tree), never this process or its ancestors. Returns what was stopped. */
+async function stopHolders(ctx) {
+	const holders = await findHolders(ctx);
+	const self = ctx.pid ?? process.pid;
+	for (const h of holders) {
+		if (h.pid === self) continue;
+		await ctx.exec('taskkill', ['/PID', String(h.pid), '/T', '/F'], { cwd: ctx.repoDir, timeoutMs: T.git });
+	}
+	if (holders.length) await ctx.sleep(1500); // let Windows release the file handles
+	return holders;
+}
+
+/** The unfinished deploy recorded after a merge whose later steps failed, if its base is still in HEAD's history. */
+async function readUnfinished(ctx) {
+	const pending = parsePendingDeploy(ctx.fsx.readText(path.join(ctx.repoDir, PENDING_FILE)));
+	if (!pending) return null;
+	const anc = await git(ctx, ['merge-base', '--is-ancestor', pending.fromSha, 'HEAD']);
+	return anc.code === 0 ? pending : null; // an unknown or rewritten base means the record is stale
 }
 
 /** git never prompts for credentials (a prompt would hang a run nobody is watching). */
@@ -147,7 +191,14 @@ export async function computeCheck(ctx) {
 		conflicts: [],
 		blockers: [],
 		needsAck: [],
+		holders: [],
+		resume: null,
 	};
+
+	// A merge that landed but whose install/build/restart did not finish: HEAD already equals origin/main, so the
+	// plain comparison says "up to date". Offer to finish what was missed instead.
+	const unfinished = await readUnfinished(ctx);
+	if (unfinished) return resumeCheck(ctx, result, unfinished);
 	if (result.upToDate) return result;
 
 	// --no-renames: a renamed file is a delete plus an add, so a renamed migration counts as added and overlap sees both paths.
@@ -167,6 +218,7 @@ export async function computeCheck(ctx) {
 
 	const { services, error } = await readBuildServices(ctx);
 	result.steps = planSteps(changed, services);
+	await addHolders(ctx, result);
 	result.overlap = overlap(dirty, changed);
 	// A new file in the update that already exists untracked here: git refuses the merge ("would be overwritten").
 	const untracked = splitNul(must(await git(ctx, ['ls-files', '--others', '--exclude-standard', '-z']), 'git ls-files'));
@@ -199,14 +251,60 @@ export async function computeCheck(ctx) {
 	return result;
 }
 
+/** When npm install is planned, list the processes that would make it fail with EBUSY; stopping them needs a tick. */
+async function addHolders(ctx, result) {
+	if (!result.steps.includes('install')) return;
+	result.holders = await findHolders(ctx);
+	if (result.holders.length) result.needsAck.push(STOP_HOLDERS_ACK);
+}
+
+/** `check` for an unfinished deploy: the merge is in HEAD, so the steps come from the diff since the merge's base. */
+async function resumeCheck(ctx, result, pending) {
+	const changed = splitNul(must(await git(ctx, ['diff', '--name-only', '-z', '--no-renames', pending.fromSha, 'HEAD']), 'git diff'));
+	const logOut = must(await git(ctx, ['log', '--format=%H%x09%s', `${pending.fromSha}..HEAD`]), 'git log');
+	const { services, error } = await readBuildServices(ctx);
+	Object.assign(result, {
+		upToDate: false,
+		resume: pending,
+		target: result.head,
+		targetSha: result.headSha,
+		commits: logOut
+			.split('\n')
+			.filter(Boolean)
+			.map((l) => {
+				const [sha, ...rest] = l.split('\t');
+				return { sha: sha.slice(0, 8), subject: rest.join('\t') };
+			}),
+		changedCount: changed.length,
+		// The migrations ran before the merge; they are not run again.
+		steps: planSteps(changed, services).filter((s) => s !== 'migrate'),
+	});
+	await addHolders(ctx, result);
+	if (error) {
+		result.blockers.push({ code: 'compose_config', message: `docker compose config failed, so the services to rebuild cannot be worked out: ${error}` });
+	}
+	return result;
+}
+
 function summarise(check) {
 	const lines = [];
+	if (check.resume) {
+		const r = check.resume;
+		lines.push(`An earlier deploy (run ${r.runId ?? 'unknown'}) merged ${r.fromSha.slice(0, 8)} -> ${check.target} but stopped at ${r.failedStep ?? 'a later step'}${r.message ? `: ${r.message}` : ''}`);
+		lines.push(`Resuming it: ${check.commits.length} commit(s), ${check.changedCount} file(s) changed since then.`);
+		lines.push(`Steps: ${check.steps.length ? check.steps.join(', ') : 'none'}`);
+		for (const h of check.holders) lines.push(`Holding node_modules: ${h.name} (pid ${h.pid}) ${h.reason}`);
+		for (const b of check.blockers) lines.push(`BLOCKED (${b.code}): ${b.message}`);
+		if (check.needsAck.length) lines.push(`Needs acknowledgement: ${check.needsAck.join(', ')}`);
+		return lines.join('\n');
+	}
 	if (check.upToDate) return `Up to date with origin/main (${check.head}) on ${check.branch}.`;
 	lines.push(`${check.commits.length} new commit(s) on origin/main (${check.head} -> ${check.target}), ${check.changedCount} file(s) changed.`);
 	for (const c of check.commits.slice(0, 20)) lines.push(`  ${c.sha} ${c.subject}`);
 	lines.push(`Steps: ${check.steps.length ? check.steps.join(', ') : 'none'}`);
 	for (const m of check.migrations) lines.push(`Migration ${m.file}${m.destructive.length ? ` (destructive: ${m.destructive.join(', ')})` : ''}`);
 	if (check.dirty.length) lines.push(`Uncommitted: ${check.dirty.join(', ')}`);
+	for (const h of check.holders) lines.push(`Holding node_modules: ${h.name} (pid ${h.pid}) ${h.reason}`);
 	for (const b of check.blockers) lines.push(`BLOCKED (${b.code}): ${b.message}`);
 	if (check.needsAck.length) lines.push(`Needs acknowledgement: ${check.needsAck.join(', ')}`);
 	return lines.join('\n');
@@ -238,6 +336,15 @@ export async function runDeploy(ctx, opts = {}) {
 	let worktree = false;
 	let check = null;
 	let migrated = false;
+	let merged = false; // the merge is in HEAD (this run's, or an earlier unfinished run's)
+	let resumed = false;
+	const pendingPath = path.join(repoDir, PENDING_FILE);
+	/** Record that the merge landed, so a failure after it can be finished later (see readUnfinished). */
+	const writePending = (fromSha) =>
+		ctx.fsx.writeText(
+			pendingPath,
+			`${JSON.stringify({ runId: result.id, fromSha, failedStep: result.failedStep, message: result.message, at: iso(ctx.now()) }, null, 2)}\n`,
+		);
 
 	const envText = ctx.fsx.readText(path.join(repoDir, '.env'));
 	const envFile = parseEnv(envText);
@@ -287,8 +394,13 @@ export async function runDeploy(ctx, opts = {}) {
 				throw new StepError(`Not deploying: ${check.blockers.map((b) => b.message).join(' ')} Nothing was changed.`);
 			}
 			const missing = check.needsAck.filter((f) => !ack.has(f));
-			if (missing.length) {
-				throw new StepError(`Not deploying: these migrations need an explicit acknowledgement first: ${missing.join(', ')}. Nothing was changed.`);
+			const missingMigrations = missing.filter((f) => f !== STOP_HOLDERS_ACK);
+			if (missingMigrations.length) {
+				throw new StepError(`Not deploying: these migrations need an explicit acknowledgement first: ${missingMigrations.join(', ')}. Nothing was changed.`);
+			}
+			if (missing.includes(STOP_HOLDERS_ACK)) {
+				const who = check.holders.map((h) => `${h.name} (pid ${h.pid})`).join(', ');
+				throw new StepError(`Not deploying: ${who} hold files in node_modules, so npm install would fail. Stop them yourself, or confirm that the deploy may stop them. Nothing was changed.`);
 			}
 		});
 
@@ -301,7 +413,13 @@ export async function runDeploy(ctx, opts = {}) {
 
 		// ---- worktree + migrate (before the merge: Directus hot-loads new code, so the schema must be ready first)
 		const migrate = has('migrate');
-		if (migrate) {
+		if (check.resume) {
+			// An earlier run already merged (and migrated); only its unfinished steps are left.
+			resumed = true;
+			merged = true;
+			result.fromSha = check.resume.fromSha.slice(0, 8);
+			for (const name of ['worktree', 'migrate', 'merge']) skip(name, `finishing run ${check.resume.runId ?? 'an earlier run'}: already done`);
+		} else if (migrate) {
 			await step('worktree', async () => {
 				await git(ctx, ['worktree', 'remove', '--force', WORKTREE_REL]); // a stale one; failure is fine
 				await git(ctx, ['worktree', 'prune']);
@@ -353,7 +471,7 @@ export async function runDeploy(ctx, opts = {}) {
 		}
 
 		// ---- merge
-		await step('merge', async () => {
+		if (!resumed) await step('merge', async () => {
 			await assertCheckoutUnmoved();
 			// Merge the sha the preflight looked at, not whatever origin/main is by now.
 			const m = await git(ctx, ['merge', '--no-edit', '-m', `Deploy: merge origin/main (${check.target})`, check.targetSha], { onData: ctx.onData, timeoutMs: T.checkout });
@@ -369,13 +487,25 @@ export async function runDeploy(ctx, opts = {}) {
 			}
 			const head = (await git(ctx, ['rev-parse', '--short=8', 'HEAD'])).stdout.trim();
 			if (head) result.toSha = head;
+			merged = true;
+			writePending(check.headSha);
 		});
 
 		// ---- install (never npm ci: a vite dev server from another session can lock node_modules)
 		if (has('install')) {
 			await step('install', async () => {
+				// Stop what holds node_modules, but only what a person confirmed on the page (the ack) and only what is
+				// there now, not the list from the check.
+				if (ack.has(STOP_HOLDERS_ACK)) {
+					const stopped = await stopHolders(ctx);
+					if (stopped.length) ctx.out(`Stopped ${stopped.map((h) => `${h.name} (pid ${h.pid})`).join(', ')}, which held files in node_modules.\n`);
+				}
 				const r = await ctx.exec('npm', ['install', '--no-audit', '--no-fund'], { cwd: repoDir, onData: ctx.onData, timeoutMs: T.install });
-				if (r.code !== 0) throw new StepError(`npm install failed (${why(r)}).`);
+				if (r.code !== 0) {
+					// 4294963214 is -4082 (EBUSY) as an unsigned exit code.
+					const busy = r.code === 4294963214 || r.code === -4082 || /EBUSY/.test(r.stderr ?? '');
+					throw new StepError(`npm install failed (${why(r)}).${busy ? ' A running process holds a file in node_modules; press Check to see which, stop it, then resume.' : ''}`);
+				}
 				// npm install rewrites package-lock.json on this host (a different resolution than CI's). Left
 				// dirty, it would block the next deploy as an overlap, so put it back unless it was already
 				// dirty before this run (an edit of the maintainer's, which must stay).
@@ -479,9 +609,10 @@ export async function runDeploy(ctx, opts = {}) {
 		});
 
 		result.ok = true;
+		ctx.fsx.remove?.(pendingPath); // nothing is left unfinished
 		const n = check.commits.length;
 		result.message =
-			`Deployed ${n} commit${n === 1 ? '' : 's'} (${result.fromSha} -> ${result.toSha}).` +
+			`${resumed ? 'Finished the earlier deploy:' : 'Deployed'} ${n} commit${n === 1 ? '' : 's'} (${result.fromSha} -> ${result.toSha}).` +
 			(result.backup ? ` Backup: ${result.backup}.` : '') +
 			(result.missingEnv?.length ? ` Missing .env keys: ${result.missingEnv.join(', ')}.` : '');
 		return result;
@@ -490,6 +621,14 @@ export async function runDeploy(ctx, opts = {}) {
 		if (!result.failedStep) result.failedStep = 'unexpected';
 		if (!result.message) result.message = e?.message ?? String(e);
 		if (migrated && !result.message.includes(result.backup ?? '\0')) result.message += ` A migration was applied; backup ${result.backup}.`;
+		if (merged) {
+			try {
+				writePending(resumed ? check.resume.fromSha : check.headSha);
+				result.message += ' The merge is in place; press Check, then Resume to finish the remaining steps.';
+			} catch {
+				/* the run's own result still records the failure */
+			}
+		}
 		return result;
 	} finally {
 		if (worktree) await git(ctx, ['worktree', 'remove', '--force', WORKTREE_REL]);
