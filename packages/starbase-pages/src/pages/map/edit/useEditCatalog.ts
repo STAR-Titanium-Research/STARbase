@@ -6,9 +6,10 @@
 
 import { computed, reactive, ref, shallowRef } from 'vue';
 import type { FieldDef as DirectusField, HostApi } from '@d1/ui';
-import type { SampleRec } from '../model/types';
+import type { OpRow, SampleRec } from '../model/types';
 import { chunkByBudget } from '../model/requests';
-import { SAMPLE_FIELDS, mapSample } from '../model/rows';
+import { OPERATION_FIELDS, SAMPLE_FIELDS, mapOperation, mapSample } from '../model/rows';
+import { collapseRelations, orphanParams, orphanRowOf, ORPHAN_PAGE, type OrphanRow } from './attachModel';
 import type { CheckCollection, CheckCtx, FieldDef, LoadedRecord } from './checks';
 import { collectionOf, recordKey } from './checks';
 import { KEY_FIELD, METHOD_FIELDS, checkFieldsOf, existingIds, loadedRecordOf, methodsOf, testTypesOf, type MethodEntry, type TestTypeEntry } from './catalog';
@@ -35,6 +36,8 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	const records = reactive(new Map<string, LoadedRecord | null>());
 	/** Existing samples of the draft that are not part of the loaded history (picked from the index), as the map draws them. */
 	const samples = reactive(new Map<string, SampleRec>());
+	/** Existing operations the draft attaches, as the map draws them (the loader did not read them: they have no input sample the family reaches), by id. */
+	const operations = reactive(new Map<string, OpRow>());
 	/** The alloy code and the name of a material, by id. */
 	const materials = reactive(new Map<string, { alloy: string | null; name: string | null }>());
 
@@ -167,6 +170,50 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 		return ((res.data?.data ?? []) as Row[]).map((r) => ({ id: String(r.sample_id), code: String(r.sample_code ?? 'Sample'), detail: [r.nickname, r.form].filter(Boolean).join(' · ') }));
 	}
 
+	type OperationRead = Map<string, { op: OpRow; version: number; values: Row; /** It has an input sample now: it cannot be attached. */ hasInput: boolean }>;
+	/**
+	 * Reads operations to attach: the card the map draws, the version (what the attach is checked against at Create) and the record with its
+	 * relations as ids, and the sample each one made (so the canvas can draw it). `fresh` asks again for ones already read: a pick reads the
+	 * record as it is NOW. Operations the caller cannot read, or that are gone, are missing from the answer. Throws when the read fails.
+	 */
+	async function loadOperations(ids: string[], opts: { fresh?: boolean } = {}): Promise<OperationRead> {
+		const out: OperationRead = new Map();
+		const want = [...new Set(ids)].filter((id) => id && (opts.fresh || !operations.has(id)));
+		if (want.length) {
+			const rows = await readRows('manufacturing_operations', want, ['*', ...OPERATION_FIELDS, 'version']);
+			const made: string[] = [];
+			for (const row of rows) {
+				const op = mapOperation(row);
+				const version = Number(row.version);
+				if (!Number.isFinite(version)) continue;
+				const values: Row = collapseRelations(row);
+				const hasInput = !!op.sampleId;
+				operations.set(op.id, op);
+				records.set(recordKey('manufacturing_operations', op.id), { version, values, hasInput });
+				out.set(op.id, { op, version, values, hasInput });
+				if (op.outputSampleId) made.push(op.outputSampleId);
+			}
+			// The sample it made is drawn too. A sample the caller cannot read stays a stub card ("another piece"); that is no reason to refuse.
+			await loadSamples(made.filter((id) => !samples.has(id))).catch(() => undefined);
+		}
+		for (const id of ids) {
+			const op = operations.get(id);
+			const rec = records.get(recordKey('manufacturing_operations', id));
+			if (op && rec && !out.has(id)) out.set(id, { op, version: rec.version, values: rec.values, hasInput: !!rec.hasInput });
+		}
+		return out;
+	}
+
+	/**
+	 * The recorded operations that have no input sample, for the picker: `query` narrows by pass code, method name and the code of the sample
+	 * each made, a page at a time (`offset`). Read as the signed-in user, so Directus decides which the caller sees. `more`: another page exists.
+	 */
+	async function searchOrphans(query: string, offset = 0): Promise<{ rows: OrphanRow[]; more: boolean }> {
+		const res = await api.get('/items/manufacturing_operations', { params: orphanParams(query, offset) });
+		const rows = ((res.data?.data ?? []) as Row[]).map(orphanRowOf).filter((r): r is OrphanRow => !!r);
+		return { rows: rows.slice(0, ORPHAN_PAGE), more: (res.data?.data ?? []).length > ORPHAN_PAGE };
+	}
+
 	const missingMaterials = new Set<string>();
 	/** Asks for the alloy code of these materials, once each (the sample code is made of it). */
 	async function ensureMaterials(ids: Iterable<string>): Promise<void> {
@@ -200,8 +247,8 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	}
 
 	return {
-		methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
-		ensure, loadRecords, loadSamples, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
+		methods, testTypes, rawFields, checkFields, loading, records, samples, operations, materials, methodById,
+		ensure, loadRecords, loadSamples, loadOperations, searchOrphans, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};
 }

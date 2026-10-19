@@ -247,6 +247,57 @@ describe('toGraph', () => {
 		expect(stub.operations[0]).toMatchObject({ id: 'x', sampleId: 's1' });
 	});
 
+	describe('an operation attached from the database (slice 3): the map has not loaded it, nor the sample it made', () => {
+		const fresh = mkData({ samples: [mkSample('s1')] });
+		const attachOp = () => run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }, { type: 'attach', operation: { id: 'orph', version: 5 }, workState: 'done', from: { key: 'n1' } }]);
+		const orphan = mkOp({ id: 'orph', sampleId: null, outputSampleId: 'made', methodName: 'Turning', date: '2026-09-01T09:00:00Z' });
+
+		it('draws input sample -> the operation (solid, as it was recorded) -> the sample it made, drawn from ctx; nothing is made twice', () => {
+			const data = toGraph(fresh, attachOp(), { ...ctx, operations: { orph: orphan }, samples: { made: mkSample('made', { code: 'S-MADE' }) } });
+			expect(data.operations).toHaveLength(1);
+			expect(data.operations[0]).toMatchObject({ id: 'orph', sampleId: 's1', outputSampleId: 'made' });
+			expect(data.operations[0].draft).toBeUndefined();
+			expect(data.samples.map((s) => s.id).sort()).toEqual(['made', 's1']);
+			expect(data.samples.find((s) => s.id === 'made')).toMatchObject({ code: 'S-MADE' });
+			expect(data.samples.find((s) => s.id === 'made')?.draft).toBeUndefined();
+			const g = draw(data);
+			expect(wire(g, 's:s1:out:0', 'op:orph:in:0')).toBeDefined();
+			expect(g.wires.some((w) => w.from === 'op:orph:out:0' && w.to.startsWith('s:made:in'))).toBe(true);
+			expect(container(g, 'op:orph').planned).toBeFalsy();
+		});
+
+		it('a planned one is drawn planned (ghosted)', () => {
+			const data = toGraph(fresh, attachOp(), { ...ctx, operations: { orph: { ...orphan, workState: 'planned', plannedDate: '2026-11-01' } }, samples: { made: mkSample('made', { status: 'planned' }) } });
+			expect(container(draw(data), 'op:orph').planned).toBe(true);
+		});
+
+		it('a sample the caller cannot read stays a stub card, no refusal', () => {
+			const data = toGraph(fresh, attachOp(), { ...ctx, operations: { orph: orphan } });
+			expect(data.samples.map((s) => s.id)).toEqual(['s1']);
+			const g = draw(data);
+			expect(g.wires.some((w) => w.from === 'op:orph:out:0')).toBe(true);
+		});
+
+		it('a sample the map has loaded already is not drawn twice', () => {
+			const loaded = mkData({ samples: [mkSample('s1'), mkSample('made')] });
+			const data = toGraph(loaded, attachOp(), { ...ctx, operations: { orph: orphan }, samples: { made: mkSample('made') } });
+			expect(data.samples.filter((s) => s.id === 'made')).toHaveLength(1);
+		});
+
+		it('still drawn when the draft has no wire to it any more (attached, then the wire was taken off), so it can be deleted from the canvas', () => {
+			const body = apply(attachOp(), { type: 'unwire', from: { key: 'n1' }, to: { key: 'n2', row: 0 } });
+			const g = draw(toGraph(fresh, body, { ...ctx, operations: { orph: orphan }, samples: { made: mkSample('made') } }));
+			expect(node(g, 'op:orph')).toBeDefined();
+			expect(g.wires.some((w) => w.to === 'op:orph:in:0')).toBe(false);
+		});
+
+		it('still drawn when it is unwired and the sample it made cannot be read: the draft holds it, so the canvas shows it', () => {
+			const body = apply(attachOp(), { type: 'unwire', from: { key: 'n1' }, to: { key: 'n2', row: 0 } });
+			const g = draw(toGraph(fresh, body, { ...ctx, operations: { orph: orphan } }));
+			expect(node(g, 'op:orph')).toBeDefined();
+		});
+	});
+
 	it('an existing sample outside the loaded family is added from ctx, else as a stub with its label', () => {
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 'far', version: 2 }] }]);
 		expect(toGraph(null, body, { ...ctx, samples: { far: mkSample('far', { code: 'S-FAR' }) } }).samples[0].code).toBe('S-FAR');

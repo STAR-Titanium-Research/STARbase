@@ -123,7 +123,7 @@ function staleChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	return out;
 }
 
-const SAMPLE_STILL_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
+export const SAMPLE_STILL_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
 
 /** A sample no done operation has made yet: a new one made by a planned operation, or an existing one the record says is planned. */
 function samplePlanned(body: DraftBody, key: DraftKey | null, ctx: CheckCtx): boolean {

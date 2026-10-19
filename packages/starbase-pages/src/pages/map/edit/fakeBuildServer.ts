@@ -79,7 +79,23 @@ export function fakeServer() {
 				const filter = typeof config?.params?.filter === 'string' ? JSON.parse(config.params.filter) : {};
 				const key = path === '/items/test_sessions' ? 'session_id' : 'operation_id';
 				const ids: string[] | undefined = filter?.[key]?._in;
-				return { data: { data: (s.rows[path.slice('/items/'.length)] ?? []).filter((r) => !ids || ids.includes(String(r[key]))) } };
+				let rows = (s.rows[path.slice('/items/'.length)] ?? []).filter((r) => !ids || ids.includes(String(r[key])));
+				// The picker's search (attachModel.ts): no input sample, every word in the pass code, the method name or the output sample's code.
+				const and: Record<string, any>[] | undefined = filter?._and;
+				if (and) {
+					const lower = (v: unknown) => String((v as { method_name?: string; sample_code?: string } | null)?.method_name ?? (v as { sample_code?: string } | null)?.sample_code ?? v ?? '').toLowerCase();
+					rows = rows.filter((r) =>
+						and.every((c) =>
+							c.sample_id?._null
+								? r.sample_id === null || r.sample_id === undefined
+								: !c._or || c._or.some((o: Record<string, any>) => String(r.pass_code ?? '').toLowerCase().includes(String(o.pass_code?._icontains ?? '\u0000').toLowerCase()) || lower(r.method_id).includes(String(o.method_id?.method_name?._icontains ?? '\u0000').toLowerCase()) || lower(r.output_sample_id).includes(String(o.output_sample_id?.sample_code?._icontains ?? '\u0000').toLowerCase())),
+						),
+					);
+					const offset = Number(config?.params?.offset ?? 0);
+					const limit = Number(config?.params?.limit ?? rows.length);
+					rows = rows.slice(offset, offset + limit);
+				}
+				return { data: { data: rows } };
 			}
 			return { data: { data: [] } };
 		},

@@ -218,6 +218,13 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 		};
 		if (at >= 0) operations[at] = record;
 		else operations.push(record);
+		// The sample it made: the map has not loaded it when the operation came from the database. Drawn as the record it is (not a draft card);
+		// one the caller cannot read stays the stub card buildGraph makes for an output nobody loaded. Attaching writes only the operation's input.
+		const made = record.outputSampleId;
+		if (made && !have.has(made) && ctx.samples?.[made]) {
+			have.add(made);
+			samples.push(ctx.samples[made]);
+		}
 	}
 
 	markRemoving(body, samples, operations, tests);
