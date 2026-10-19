@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { focusCanvas } from './focusCanvas';
+import { focusCanvas, restoreFocus } from './focusCanvas';
 
 interface Fake {
 	dataset: Record<string, string>;
@@ -43,5 +43,25 @@ describe('focusCanvas', () => {
 
 	it('does nothing without a canvas', () => {
 		expect(() => focusCanvas(null)).not.toThrow();
+	});
+});
+
+describe('restoreFocus', () => {
+	it('goes back to the opener while it is still on the page', () => {
+		const opener = { isConnected: true, focus: vi.fn() };
+		const fallback = vi.fn();
+		restoreFocus(opener as never, fallback);
+		expect(opener.focus).toHaveBeenCalledOnce();
+		expect(fallback).not.toHaveBeenCalled();
+	});
+
+	it('falls back when the opener is gone (the right-click menu closes with the click that opened the search), or there never was one', () => {
+		const opener = { isConnected: false, focus: vi.fn() };
+		const fallback = vi.fn();
+		restoreFocus(opener as never, fallback);
+		restoreFocus(null, fallback);
+		expect(opener.focus).not.toHaveBeenCalled();
+		expect(fallback).toHaveBeenCalledTimes(2);
+		expect(() => restoreFocus(opener as never)).not.toThrow();
 	});
 });

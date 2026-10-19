@@ -49,6 +49,7 @@ function closeToast(): void {
 			:recents="side.build.menu.recents.value"
 			:search="edit.catalog.searchSamples"
 			:code-of="(id: string) => edit.catalog.samples.get(id)?.code"
+			:restore-focus="(anchor?: string) => focusCanvas(canvasEl, anchor)"
 			@choose="side.build.menu.choose"
 			@close="side.build.menu.close"
 		/>
