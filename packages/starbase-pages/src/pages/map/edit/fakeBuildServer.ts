@@ -1,5 +1,5 @@
 // d1-build in a box, for the tests of edit mode (not imported by production code): drafts in memory with the routes edit mode
-// calls, the reference data the Add menu reads, a table of samples, and a log of the calls.
+// calls, the reference data the add search reads, a table of samples, and a log of the calls.
 
 import type { DraftBody, DraftRecord, HostApi } from '@d1/ui';
 import { emptyBody } from './draft';

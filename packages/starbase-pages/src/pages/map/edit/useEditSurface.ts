@@ -1,34 +1,39 @@
-// What the page puts on the canvas for edit mode, assembled: the socket interactions (useEditCanvas), the Add menu (useAddMenu),
-// "Connect to…", the sample picker and its fly-in (useSamplePicking), the keyboard (useEditKeys) with what its keys do to the selected
-// card or wire (remove and dissolve in useEditRemoval; duplicate, ×N here), and the pointer they open at. The page binds what this returns; the rules live in the modules
-// it is made of.
+// What the page puts on the canvas for edit mode, assembled: the socket interactions (useEditCanvas), the add search (useAddMenu) and the palette
+// with its drags (usePalette, useAddDrag), insert before / after and a drop on a wire (useEditInsert), "Connect to…", the sample picker and its
+// fly-in (useSamplePicking), the keyboard (useEditKeys) with what its keys do to the selected card or wire (remove and dissolve in
+// useEditRemoval; duplicate, ×N here), and the pointer they open at. The page binds what this returns; the rules live in the modules it is
+// made of.
 
-import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
+import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
 import type { DraftItem } from '@d1/ui';
+import type { MapNode } from '../model/types';
 import type { MapEdit } from '../nodes/actions';
 import type { useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
+import { isKeyboardFocus } from '../keyboard';
 import { collectionOf, recordKey } from './checks';
 import { writableValues } from './catalog';
 import { connectTargets, type ConnectEntry, type ConnectNames } from './connectModel';
-import { focusCanvas } from './focusCanvas';
-import { sampleLabel } from './menuModel';
+import { sampleLabel, type MenuChoice, type MenuEntry } from './menuModel';
 import { draftKeysOfNode } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
 import { dropVerdict } from './wireDrop';
 import { resolveEnd, type SocketRef } from './socketRefs';
+import { useAddDrag } from './useAddDrag';
 import { useAddMenu } from './useAddMenu';
 import { useEditCanvas } from './useEditCanvas';
 import type { EditMode } from './useEditMode';
+import { useEditInsert } from './useEditInsert';
 import { useEditKeys } from './useEditKeys';
 import { useEditRemoval } from './useEditRemoval';
+import { usePalette } from './usePalette';
 import { useSamplePicking } from './useSamplePicking';
 import { workChipOf } from './workChip';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
-export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; /** Something else the page has open over the map (the Mark done dialog, the Finder): the keys leave it alone. */ blockedBy?: () => boolean }) {
+export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; /** Something else the page has open over the map (the Mark done dialog, the Finder): the keys leave it alone. */ blockedBy?: () => boolean; /** Who is building: the palette's folded state and the recents are theirs. */ person?: () => string | null | undefined }) {
 	const { edit, canvasEl } = o;
 
 	/** The sample picker over the canvas (E7) and the fly-in of what it picks. */
@@ -51,7 +56,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	}
 
 	// ---- the pieces ------------------------------------------------------------------------------------------
-	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean } = { menu: () => undefined, connect: () => undefined, dropWire: () => false };
+	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean; insert: (t: MenuTarget, c: MenuChoice) => Promise<void> | void } = { menu: () => undefined, connect: () => undefined, dropWire: () => false, insert: () => undefined };
 	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s, id) => late.dropWire(s, id) });
 	// Remove, Dissolve and wire removal (R4); what it has to say goes where the canvas says its own problems.
 	const removal = useEditRemoval({ edit, map: o.map, canvasEl, say: (text) => void (build.problem.value = text) });
@@ -63,8 +68,42 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		ensureSample: build.ensureSample,
 		pickSamples: () => void (pickerOpen.value = true),
 		connect: (t) => late.connect(t),
+		person: o.person,
+		insert: (t, c) => late.insert(t, c),
 	});
 	late.menu = menu.open;
+
+	// ---- insert before / after, a drop on a wire, and the palette (R1, R2, R3) ---------------------------------------
+	const nameOf = (n: MapNode): string => (n.type === 'record' ? n.ref.code || 'this sample' : n.type === 'container' ? n.title || n.method || 'this step' : 'this card');
+	const insert = useEditInsert({ edit, map: o.map, canvasEl, ensureSample: build.ensureSample, open: menu.open, nameOf, say: (text, at) => (at ? build.say(text, at) : void (build.problem.value = text)) });
+	late.insert = insert.choose;
+	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, recents: menu.recents, person: () => o.person?.() });
+	const dragging = useAddDrag({
+		body: () => edit.body.value,
+		editing: () => edit.editing.value,
+		canvas: o.canvas,
+		canvasEl,
+		drop: build.mapEdit.drop,
+		applyAt: menu.applyAt,
+		wireVerdict: insert.wireVerdict,
+		dropOnWire: insert.dropOnWire,
+		say: build.say,
+	});
+	/** What the palette draws and does, for the page to bind in one go. */
+	const paletteProps = computed(() => ({ entries: palette.entries.value, grouped: palette.grouped.value, folded: palette.folded.value, drag: dragging.drag.value, consumeClick: dragging.consumeClick }));
+	const paletteEvents = { toggle: () => palette.toggle(), add: (e: MenuEntry) => paletteAdd(e), drag: dragging.start };
+	/**
+	 * Enter or a click on a palette entry (no dragging needed): "Existing sample…" opens the picker; anything else is added next to the selected card,
+	 * else at the middle of the canvas, and the layout keeps it clear of every other card.
+	 */
+	function paletteAdd(entry: MenuEntry): void {
+		if (!edit.editing.value) return;
+		if (entry.choice.kind === 'pickSamples') return void (pickerOpen.value = true);
+		const anchor = o.map.selectedId.value ?? undefined;
+		const r = canvasEl.value?.getBoundingClientRect();
+		const at = r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
+		void menu.applyAt({ sock: null, at, ...(anchor ? { anchor } : { flow: o.canvas.toFlow(at.x, at.y) }) }, entry.choice);
+	}
 
 	// ---- Connect to… (E21) -----------------------------------------------------------------------------------
 	/** The socket the list is for, where it opened, and the card it is on. */
@@ -141,14 +180,29 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		duplicateSelected(n);
 	}
 
-	/** Shift+A, the lid's Add and a right click on empty canvas: the menu with nothing to connect to. */
-	const addUnconnected = (at: { x: number; y: number } = pointerOnCanvas()) => menu.open({ sock: null, at });
+	/** The card a person on the keyboard has focus on (a Tab stop of the canvas), else null: the add search opens there, not at a pointer that has not moved. */
+	function focusedCard(): { el: HTMLElement; id: string | undefined } | null {
+		const el = document.activeElement as HTMLElement | null;
+		const card = el?.closest?.('.vue-flow__node') as HTMLElement | null;
+		return el && card && canvasEl.value?.contains(card) && isKeyboardFocus(el) ? { el: card, id: card.dataset.id } : null;
+	}
+	/** Shift+A, Ctrl/⌘+K, the lid's Add and a right click on empty canvas: the add search with nothing to connect to. */
+	const addUnconnected = (at?: { x: number; y: number }, anchor?: string) => {
+		const focus = at ? null : focusedCard();
+		if (focus) {
+			const r = focus.el.getBoundingClientRect();
+			return menu.open({ sock: null, at: { x: r.right + 24, y: r.top }, anchor: focus.id });
+		}
+		menu.open({ sock: null, at: at ?? pointerOnCanvas(), ...(anchor ? { anchor } : {}) });
+	};
 	const blocked = computed(() => !!menu.target.value || !!connecting.value || !!duplicating.value || pickerOpen.value || !!o.blockedBy?.());
 	useEditKeys({
 		editing: () => edit.editing.value,
 		blocked: () => blocked.value,
 		pointer: pointerOnCanvas,
-		add: addUnconnected,
+		// A person on the keyboard (focus on a card) gets the search there; the pointer has not moved to say anything.
+		add: (at) => addUnconnected(focusedCard() ? undefined : at),
+		insert: (where) => insert.openFor(where),
 		undo: () => picking.undo(),
 		redo: () => picking.redo(),
 		remove: removal.removeSelected,
@@ -170,8 +224,16 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	return {
 		...build,
 		/** What the cards read: the canvas's, and the wire selection and locks of removal. */
-		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, work: (node) => workChipOf(edit, node) } as MapEdit,
+		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, dropWire: dragging.dropWire, work: (node) => workChipOf(edit, node) } as MapEdit,
 		menu,
+		palette,
+		paletteProps,
+		paletteEvents,
+		dragging,
+		paletteAdd,
+		insertSelected: insert.openFor,
+		canInsertSelected: () => insert.canInsert(insert.selected()),
+		selectedIsDoneSample: () => insert.isDoneSample(insert.selected()),
 		picking,
 		pickerOpen,
 		undo: picking.undo,

@@ -21,7 +21,7 @@ export interface TestTypeEntry {
 	name: string;
 }
 
-/** Fields of manufacturing_methods the Add menu reads (db/migrations 20260618000002 and 20261003000129). */
+/** Fields of manufacturing_methods the add search reads (db/migrations 20260618000002 and 20261003000129). */
 export const METHOD_FIELDS = ['method_id', 'method_name', 'method_code', 'process_category'];
 
 /** The primary key column of the three collections a draft holds. */

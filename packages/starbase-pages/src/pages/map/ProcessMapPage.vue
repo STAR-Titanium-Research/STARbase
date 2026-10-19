@@ -19,6 +19,7 @@ import EmptyDraftHint from './edit/EmptyDraftHint.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
 import { isNotice, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSide } from './edit/useEditSide';
+import Palette from './edit/Palette.vue';
 import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
 import type { ChainDir } from './model/hoverFocus';
@@ -240,6 +241,11 @@ function menuDissolve() {
 	chainMenu.value = null;
 	build.dissolveSelected();
 }
+/** Insert before / after from the card's menu: the card was selected when the menu opened. */
+function menuInsert(where: 'before' | 'after') {
+	chainMenu.value = null;
+	build.insertSelected(where);
+}
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
 // The project frame is part of the picture only when it is drawn (the same test the template makes).
@@ -318,60 +324,66 @@ const tipHint = computed(() => {
 
 						<MapStrip :edit="edit" :side="side" :map="map" :canvas="canvas" :map-export="mapExport" />
 
-						<div
-							ref="canvasEl"
-							class="pm-canvas"
-							:class="{ pending: !canvas.laidOut.value && map.nodes.value.length > 0 }"
-							:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
-							@mouseleave="map.clearHover()"
-							@keydown="input.onKey"
-							@focusin="input.onFocusIn"
-							@pointerdown.capture="input.onPointerDown"
-							@pointermove.capture="input.onPointerMove"
-							@pointerup.capture="input.onPointerEnd"
-							@pointercancel.capture="input.onPointerEnd"
-							@click.capture="input.onClickCapture"
-							@click="build.onCanvasClick"
-							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
-						>
-							<VueFlow
-								:node-types="canvas.nodeTypes"
-								:edge-types="canvas.edgeTypes"
-								:nodes-draggable="true" :delete-key-code="null"
-								:nodes-focusable="true"
-								:edges-focusable="false"
-								:nodes-connectable="false"
-								:elements-selectable="false"
-								:zoom-on-double-click="false"
-								:min-zoom="MIN_ZOOM"
-								:max-zoom="1.6"
-								:only-render-visible-elements="false"
+						<div class="pm-row">
+							<Palette v-if="edit.editing.value" v-bind="build.paletteProps.value" v-model:query="build.palette.query.value" v-on="build.paletteEvents" />
+							<div
+								ref="canvasEl"
+								class="pm-canvas"
+								:class="{ pending: !canvas.laidOut.value && map.nodes.value.length > 0 }"
+								:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
+								@mouseleave="map.clearHover()"
+								@keydown="input.onKey"
+								@focusin="input.onFocusIn"
+								@pointerdown.capture="input.onPointerDown"
+								@pointermove.capture="input.onPointerMove"
+								@pointerup.capture="input.onPointerEnd"
+								@pointercancel.capture="input.onPointerEnd"
+								@click.capture="input.onClickCapture"
+								@click="build.onCanvasClick"
+								@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
 							>
-								<template #zoom-pane>
-									<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
-										<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
-									</div>
-								</template>
-								<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-								<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
-								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
-							</VueFlow>
-							<EmptyDraftHint v-if="emptyDraft" />
-							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
-							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
-							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
-							<ChainMenu
-								v-if="chainMenu"
-								:x="chainMenu.x"
-								:y="chainMenu.y"
-								:dir="map.chainDir.value"
-								:can-remove="edit.editing.value"
-								:can-dissolve="edit.editing.value && build.canDissolve.value"
-								@pick="pickChain"
-								@remove="menuRemove"
-								@dissolve="menuDissolve"
-								@close="chainMenu = null"
-							/>
+								<VueFlow
+									:node-types="canvas.nodeTypes"
+									:edge-types="canvas.edgeTypes"
+									:nodes-draggable="true" :delete-key-code="null"
+									:nodes-focusable="true"
+									:edges-focusable="false"
+									:nodes-connectable="false"
+									:elements-selectable="false"
+									:zoom-on-double-click="false"
+									:min-zoom="MIN_ZOOM"
+									:max-zoom="1.6"
+									:only-render-visible-elements="false"
+								>
+									<template #zoom-pane>
+										<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
+											<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
+										</div>
+									</template>
+									<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
+									<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+									<Controls :show-interactive="false" :position="controlsPosition(phone)" />
+								</VueFlow>
+								<EmptyDraftHint v-if="emptyDraft" />
+								<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
+								<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
+								<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
+								<ChainMenu
+									v-if="chainMenu"
+									:x="chainMenu.x"
+									:y="chainMenu.y"
+									:dir="map.chainDir.value"
+									:can-remove="edit.editing.value"
+									:can-dissolve="edit.editing.value && build.canDissolve.value"
+								:can-insert="edit.editing.value && build.canInsertSelected()"
+								:earlier="build.selectedIsDoneSample()"
+									@pick="pickChain"
+									@remove="menuRemove"
+									@dissolve="menuDissolve"
+								@insert="menuInsert"
+									@close="chainMenu = null"
+								/>
+							</div>
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>
@@ -401,8 +413,11 @@ const tipHint = computed(() => {
 .pm-panel :deep(.body) { padding: 0; }
 .pm-panel :deep(.head) { flex-wrap: wrap; }
 .pm-panel :deep(.head .spacer) { min-width: 0; }
+.pm-row { display: flex; align-items: stretch; }
 .pm-canvas {
 	position: relative;
+	flex: 1;
+	min-width: 0;
 	height: max(420px, calc(100vh - var(--d1-header-offset, 72px) - 130px));
 	height: max(420px, calc(100dvh - var(--d1-header-offset, 72px) - 130px));
 	background: var(--d1-surface, var(--theme--background));

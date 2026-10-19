@@ -347,7 +347,7 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
       }
-      // Cards the person placed (dragged, or dropped from the Add menu) stay where the draft says, whatever ELK would do.
+      // Cards the person placed (dragged, or dropped from the add search) stay where the draft says, whatever ELK would do.
       const stored = new Set<string>();
       if (edit && !relaying) {
         positions = { ...positions };

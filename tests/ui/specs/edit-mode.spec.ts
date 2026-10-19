@@ -109,8 +109,8 @@ async function pickSample(page: Page, code: string): Promise<void> {
  */
 async function chooseFromSocketMenu(page: Page, socket: Locator, entry: RegExp): Promise<void> {
 	await socket.press('Enter');
-	await page.locator('.pm-addmenu').getByRole('option', { name: entry }).click();
-	await expect(page.locator('.pm-addmenu')).toBeHidden();
+	await page.locator('.pm-addsearch').getByRole('option', { name: entry }).click();
+	await expect(page.locator('.pm-addsearch')).toBeHidden();
 }
 
 /** Picks LOCAL-RAW-1, adds a CNC Turning operation from its output socket and wires a new sample out of the operation. */
@@ -208,7 +208,7 @@ test.describe('as a Lab Member', () => {
 		// "Expand" for it, and the card shows its ＋ Expand button.
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');
@@ -223,7 +223,7 @@ test.describe('as a Lab Member', () => {
 		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 thing missing".
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');

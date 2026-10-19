@@ -24,7 +24,7 @@ the keyboard**, and **removal that works**.
 |---|---|
 | R1 | **Two ways to add, one catalog.** A side **palette** (grouped by process category, with a search box and a Templates group first) is dragged from. **Add search** (Shift+A or Ctrl/⌘+K) opens at the pointer and takes typing. Both list the same things: sample, operation by method, test by type, template, and "From database…". Replaces E8's nested category → method → blank/attach/new-from menu. |
 | R2 | **Where a drop lands.** Empty canvas: a floating node. A socket: connected there. An existing **wire**: inserted between its two ends. Clicking a free socket opens the add search filtered to what can legally connect. Selecting a card and choosing "Insert before" / "Insert after" does the same without dragging (E21's no-drag rule stands). |
-| R3 | **Before a sample.** Allowed for new and planned samples. A done sample is never given a new parent: "Add an earlier step" creates a new planned upstream sample with the operation between it and a new link; the done record's lineage is not rewritten from the map. |
+| R3 | **Before a sample.** Allowed for new and planned samples. A done sample is never given a new parent: "Add an earlier step" creates a new planned upstream sample with the operation between it and a new link; the done record's lineage is not rewritten from the map. *As built (slice 2a), the least surprising reading of "a new link":* a chain of three new items, **a new planned sample → an operation (no method yet) → the sample it makes**, laid out beside the done sample and wired to nothing of the recorded history. The wire from the chain to the done sample is not drawn because it would be a new parent: nothing in the draft can give a done sample one, and d1-build writes no lineage rows. The done sample is not even added to the draft. If the maintainer wants the chain joined to the done sample (a lineage-only link), that needs a server change first: it is the open question of R3. |
 | R4 | **Removal.** Delete or X removes the selected node or wire. New and planned items can be removed; a planned record that already exists is shown struck through as "will be deleted" and deleted at Create (E18, ADR-0019 §6). A done record shows a lock and the reason and cannot be removed. Dragging a wire off its socket removes it, with the same rule. **Dissolve** (Ctrl/⌘+Delete) removes a container and wires its input to its output. Undo covers all of it. |
 | R5 | **Sockets are derived.** A card or container shows a socket for each wire it has plus one free one. A spare that nothing uses disappears when the next one is connected or the selection leaves it. Nothing about sockets is stored in the draft. Replaces the ＋ output / ＋ pass rows as the way to add them (E9): connecting to the free socket does it. |
 | R6 | **Layout.** A new node is placed in the nearest free slot beside what it was attached to and never overlaps another node. Positions the person dragged are kept and never re-flowed. **Tidy** is an explicit, undoable button that re-lays out the draft's own items. Replaces automatic re-layout on every change. |
@@ -34,6 +34,26 @@ the keyboard**, and **removal that works**.
 | R10 | **Mark done by whoever may edit the operation** (ADR-0019 amendment): the status flip of its output samples uses system rights after the operation update succeeds. |
 | R11 | **Who may build.** `d1-build` answers 403 to an account that may not create operations, and the page hides edit mode for it. Create refuses with a clear message when the caller has no researcher People row (ADR-0018 amendment). |
 | R12 | **Project and campaign** are chosen in the draft's top bar: pre-filled from the first sample, editable, the campaign limited to the chosen project (E16 made reachable). |
+
+### 2.1 Details as built in slice 2a (R1, R2, R3)
+
+- **One catalog.** New sample, Existing sample… (opens the sample picker; the lid's Pick samples stays), an operation per manufacturing method
+  by process category, a test per test type. Templates (slice 4) and "From database…" (slice 3) are not in it yet. Both surfaces are one flat
+  list: no category → method → blank menu. Opened at a socket the add search lists what can legally connect there (the old fit rules of
+  `menuModel.ts`), ends with **Connect to…** and **Existing sample…** where that applies, and what is chosen is connected.
+- **Recents.** The last six things added (a method, a test type, a new sample), per person, in `localStorage`; first in the add search and the
+  palette while nothing is typed, and ahead of equals while typing. The palette's folded state is per person too.
+- **Keys.** Shift+A and Ctrl/⌘+K open the add search at the pointer (at the focused card for a person on the keyboard); Ctrl/⌘+K is taken in
+  the capture phase so the shell's Finder does not also open, and passes on while typing in a field or with a dialog open. **I** and **Shift+I**
+  insert after / before the selected card; the card's right-click menu has the same (and "Add an earlier step…" on a done sample).
+  Enter on a palette entry adds it next to the selected card, else at the middle of the canvas.
+- **Drops.** Empty canvas: a floating card at the pointer. A socket: connected, if it fits (`addDrop.ts` runs the same actions on a copy and
+  refuses with the draft's reason). A wire: the card goes between the ends. A test cannot (no output); a new sample goes only between two
+  operations; wires of records that are done or saved are refused with the lock reason. One undo step each.
+- **Insert before / after** (no dragging): on the card's one input / output wire when it has exactly one; a sample nothing makes gets an
+  operation that makes it with a new input sample; "after" a sample or a container with nothing leaving it adds the operation fed by it (a
+  branch). A planned sample that already exists cannot be given a maker (the draft and d1-build refuse it: "already exists with its own
+  history"), so for it "before" is refused with that reason rather than offered.
 
 ## 3. Plain fixes found by the audit (no decision needed)
 

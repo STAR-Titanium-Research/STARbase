@@ -48,6 +48,8 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
 cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 10 minutes, 49 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 12 of edit-mode-slice2b.spec.ts)
+
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 15 minutes on a busy machine, 52 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -86,6 +88,20 @@ campaign); My drafts listing a new draft with the list request failing; Build a 
 hint and the hidden Find / Reset / Clear; the "after Create" note on a new item's Data Studio field. The seed (`scripts/dev/local-stack.seed.sql`) has a
 second project and a campaign in each for it. To run beside another stack, give the script and the suite the same `D1_STACK_DIR` and the three
 `D1_STACK_PG_PORT`, `D1_STACK_DIRECTUS_PORT` and `D1_STACK_STARBASE_PORT` values (the Playwright helpers read the last two).
+
+`specs/edit-mode-slice2a.spec.ts` is slice 2a of the redesign (R1 palette and add search, R2 drops and insert, R3 the earlier step), with the
+helpers of `starbase/mapEdit.ts` for the palette (`paletteEntry`, `dragEntryTo`, `holdEntryOver`: they let the map settle and find their
+target afterwards, because a Fit or a card gliding moves it) and the add search (`addSearch`, `searchOptions`, `openAddSearch`). As the Lab
+Member: the palette lists the one catalog by category, narrows by name, code, category and test type, folds and stays folded after a reload;
+an entry dragged onto the empty canvas is a floating card where the pointer let go, over a card it is refused with where it can go, onto
+a free sample socket it connects and onto a socket it does not fit it is refused with the reason (and the socket shows red), onto a wire
+it is inserted between the ends as one undo step (the wire shows green while the pointer is over it) and onto a wire of done records it is
+refused with the lock reason; Enter on an entry adds it; Shift+A and Ctrl+K open the add search (Ctrl+K not the Finder), typing narrows it,
+Enter adds the top hit, Esc closes it; from a free socket it lists only what fits and connects; what was added lately is first, in the
+search and the palette, after a reload; Shift+I and I and the card's menu insert around a selected card; "Add an earlier step" on the done
+seed sample LOCAL-BAR-2 makes a new planned chain wired to nothing of the history, and after a Create (the sample and the operation filled
+in) the done sample, its maker and its lineage read back through REST are exactly as before. Makes only planned records and removes them
+afterwards, like the other two files.
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

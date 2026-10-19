@@ -60,7 +60,7 @@ export interface MapEdit {
 	editing: Ref<boolean>;
 	/** The socket a dragged wire is over, and whether it would fit: the card draws it green or red. `sock` is `encodeSocket`. */
 	drop: Ref<{ sock: string; ok: boolean } | null>;
-	/** A pointer went down on a socket: a click opens the Add menu there, a drag draws a wire. */
+	/** A pointer went down on a socket: a click opens the add search there, a drag draws a wire. */
 	socketDown(sock: SocketRef, e: PointerEvent): void;
 	/** A key on a focused socket: Enter (or Space on one that is not a button) opens its menu, C "Connect to…". */
 	socketKey(sock: SocketRef, e: KeyboardEvent): void;
@@ -70,6 +70,8 @@ export interface MapEdit {
 	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
 	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */
 	wiredSockets(node: MapNode): ReadonlySet<string>;
+	/** The wire an entry dragged from the palette is over, and whether it would be inserted there (green) or refused (red). */
+	dropWire?: Ref<{ id: string; ok: boolean } | null>;
 	/** The wire the person selected to remove (a click on it), or null. */
 	selectedWire: Ref<string | null>;
 	selectWire(id: string): void;

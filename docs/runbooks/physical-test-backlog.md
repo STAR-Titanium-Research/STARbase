@@ -1407,6 +1407,37 @@ lists and the accounts of the real lab.
   on it. (d) In the rail's all-fields form of a new sample, a field the form cannot draw (Co-owners, Files) says "Opens in Data Studio after
   Create", with no link; on a record that exists it still offers Open in Data Studio. Since: edit-mode redesign slice 2b (PR pending).
 
+#### Process map edit mode redesign, slice 2a adding (`pm-redesign/2a-adding`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The palette, the add search, the drops, insert and the earlier step are unit-tested and were driven in a real browser on the local stack by
+`tests/ui/specs/edit-mode-slice2a.spec.ts` (a seeded family of four samples, eight methods). What only live data, other browsers and real
+touch confirm:
+
+- [ ] **PM8-1 — The palette on the live catalog.** In `/map?edit=new` on live: the palette lists every manufacturing method under its
+  process category (no method missing, none twice, methods with no category under "Other methods"), every test type, and the two
+  samples entries; the list scrolls inside the dock and the dock never pushes the canvas off the page at 1280 and 1920 px. Fold it,
+  reload: still folded; sign in as someone else in the same browser: open. Add things from the palette and the add search, close the
+  tab, come back: what you added lately is first in both. Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-2 — Drops on a real draft.** Pick a real family's sample, build an operation from its output, then drag a method from the
+  palette (a) onto empty canvas (a floating card where you let go), (b) onto a free socket (connected), (c) onto a wire the draft made
+  (the card goes between, one Ctrl+Z puts it all back), (d) onto a wire between two done records of the real history (the wire shows
+  red, the reason "Done records' wires can't be removed from the map" follows the pointer, nothing changes), (e) onto a wire of a
+  planned record that exists (refused: remove the planned record instead). No two cards overlap after any of them. Since: edit-mode
+  redesign slice 2a (PR pending).
+- [ ] **PM8-3 — Add an earlier step on a real done sample.** Open the map of a real done sample, select it, Shift+I (or right-click >
+  Add an earlier step…), Enter. Three new cards appear beside it and are wired to nothing of the real history. Fill in the new sample,
+  choose a method for the operation, Create. Expect: the done sample, its maker and its lineage rows are unchanged (same `version` and
+  `date_updated`; `sample_genealogy` has no new row naming it), the new operation is planned and its output sample planned. Note on
+  the map how the unwired chain reads next to the real family: if it looks like it should be joined, that is the open question of
+  spec R3. Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-4 — Ctrl/⌘+K in each browser.** On Windows (Chrome, Edge, Firefox) and macOS (Safari, Chrome, Firefox) press Ctrl/⌘+K in edit
+  mode with the pointer over the canvas: the add search opens at the pointer, the browser's own search bar and STARbase's Finder do not.
+  With the focus in the draft's name field, in a form field of the rail, or with a dialog open, the same keys do not open the add
+  search (the Finder opens where it did before, except over a dialog). Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-5 — Dragging from the palette with a finger or a pen.** On a tablet at least 768 px wide (and a pen on a Windows touch
+  screen): drag a palette entry onto the canvas, a socket and a wire. Expect it to follow the finger, mark the target, drop, and the
+  page not to scroll or pan during the drag. Since: edit-mode redesign slice 2a (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
