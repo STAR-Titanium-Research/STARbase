@@ -309,10 +309,11 @@ test.describe('as a Lab Member', () => {
 	// ---- plain fixes 9 to 12 ------------------------------------------------------------------------------------------------------
 	test('a newly started draft is in My drafts at once, even when the list cannot be read again (fix 9)', async ({ page }) => {
 		// The page reads the list of drafts when it opens; from then on the server does not answer it, so the entry can only be the page's own.
+		const listed = page.waitForResponse((r) => /\/d1-build\/drafts$/.test(r.url()) && r.request().method() === 'GET');
 		await page.goto(`${STAR}/map`, { waitUntil: 'domcontentloaded' });
 		const link = page.getByRole('link', { name: 'Build a process' });
 		await expect(link).toBeVisible();
-		await page.waitForResponse((r) => /\/d1-build\/drafts$/.test(r.url()) && r.request().method() === 'GET');
+		await listed;
 		await page.route(/\/d1-build\/drafts$/, (route) => (route.request().method() === 'GET' ? route.abort() : route.fallback()));
 		await link.click();
 		await page.waitForURL(DRAFT_URL);
