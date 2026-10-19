@@ -161,7 +161,7 @@ test.describe('as a Lab Member', () => {
 		await fit(page);
 		const wire = wireBetween(page, 'op:draft:', 's:draft:');
 		await expect(wire).toHaveCount(1);
-		
+
 		// While dragging, the wire is marked green: it takes the entry.
 		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), () => wireMidpoint(wire));
 		await expect(page.locator('.d1-wire.drop-ok')).toHaveCount(1);
