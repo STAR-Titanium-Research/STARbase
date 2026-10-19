@@ -22,7 +22,6 @@ import { useEditSide } from './edit/useEditSide';
 import Palette from './edit/Palette.vue';
 import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
-import type { ChainDir } from './model/hoverFocus';
 import ExportFrame from './ExportFrame.vue';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
@@ -228,24 +227,6 @@ function onContextMenu(e: MouseEvent) {
 	const r = canvasEl.value.getBoundingClientRect();
 	chainMenu.value = { x: Math.min(e.clientX - r.left, r.width - MENU_W), y: Math.min(e.clientY - r.top, r.height - MENU_H) };
 }
-function pickChain(d: ChainDir) {
-	map.setChainDir(d);
-	chainMenu.value = null;
-}
-/** Remove and Dissolve from the card's menu (edit mode): the card was selected when the menu opened. */
-function menuRemove() {
-	chainMenu.value = null;
-	build.removeSelected();
-}
-function menuDissolve() {
-	chainMenu.value = null;
-	build.dissolveSelected();
-}
-/** Insert before / after from the card's menu: the card was selected when the menu opened. */
-function menuInsert(where: 'before' | 'after') {
-	chainMenu.value = null;
-	build.insertSelected(where);
-}
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
 // The project frame is part of the picture only when it is drawn (the same test the template makes).
@@ -370,17 +351,16 @@ const tipHint = computed(() => {
 								<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
 								<ChainMenu
 									v-if="chainMenu"
-									:x="chainMenu.x"
-									:y="chainMenu.y"
+									:x="chainMenu.x" :y="chainMenu.y"
 									:dir="map.chainDir.value"
 									:can-remove="edit.editing.value"
 									:can-dissolve="edit.editing.value && build.canDissolve.value"
-								:can-insert="edit.editing.value && build.canInsertSelected()"
-								:earlier="build.selectedIsDoneSample()"
-									@pick="pickChain"
-									@remove="menuRemove"
-									@dissolve="menuDissolve"
-								@insert="menuInsert"
+									:can-insert="edit.editing.value && build.canInsertSelected()"
+									:earlier="build.selectedIsDoneSample()"
+									@pick="map.setChainDir"
+									@remove="build.removeSelected"
+									@dissolve="build.dissolveSelected"
+									@insert="build.insertSelected"
 									@close="chainMenu = null"
 								/>
 							</div>
