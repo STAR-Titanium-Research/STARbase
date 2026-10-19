@@ -999,6 +999,32 @@ test('attach: an existing operation without an input gets one from a wire; once 
   assert.match(where(unwired.checks, 'o1')[0].text, /Wire a sample into this operation to attach it/);
 });
 
+test('attach: done work cannot be attached to a sample that is still planned (judged by the record, not the draft); planned work can', () => {
+  const TEXT = 'Its sample is still planned; mark the operation that makes it done first.';
+  const body = (state) => draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true, workState: state })],
+    [wire(w('s0'), w('o1'))],
+  );
+  const planned = (state) => known(sampleRow(10, { current_status: 'planned' }), opRow(40, { work_state: state }));
+  // the record is done: blocked, whatever the draft says
+  for (const said of ['done', 'planned']) {
+    assert.deepEqual(buildPlan(body(said), { existing: planned('done') }).checks.filter((c) => c.level === 'block').map((c) => [c.key, c.code, c.text]), [['o1', 'STRUCTURE', TEXT]]);
+  }
+  // the record is planned: fine on a planned sample
+  assert.deepEqual(buildPlan(body('planned'), { existing: planned('planned') }).checks.filter((c) => c.level === 'block'), []);
+  // done on an active sample is fine
+  assert.deepEqual(buildPlan(body('done'), { existing: known(sampleRow(10), opRow(40, { work_state: 'done' })) }).checks.filter((c) => c.level === 'block'), []);
+});
+
+test('attach: nothing is wired out of an attached operation (Create writes only its input, so the sample would be made and never linked)', () => {
+  const ctx = { existing: known(sampleRow(10), opRow(40, { output_sample_id: ID(11) })) };
+  const out = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true }), sample('n1', { values: code() })],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1'))],
+  );
+  assert.deepEqual(buildPlan(out, ctx).checks.filter((c) => c.level === 'block').map((c) => [c.key, c.text]), [['o1', 'An existing operation keeps the sample it made: a new wire out of it cannot be created.']]);
+});
+
 test('a wire into an existing operation that is not being attached is left alone; one out of it, or into an existing test, is refused', () => {
   const ctx = { existing: known(sampleRow(10), sampleRow(11), opRow(40, { sample_id: ID(12) }), testRow(50)) };
   const into = draft(

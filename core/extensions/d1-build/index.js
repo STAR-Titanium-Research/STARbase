@@ -568,7 +568,8 @@ export function buildPlan(body, ctx = {}) {
       const rows = to.row === undefined ? rowsFor(to.item).map((_, i) => i) : [rowSel(to, 'it goes into')];
       for (const i of rows) if (i !== null) push(inWires, `${to.item.key}#${i}`, src);
     } else if (fk === 'operation' && tk === 'sample') {
-      if (!isNew(from.item) && !from.item.attach) {
+      // An attached operation too: Create writes its input only, so a sample wired out of it would be made and never linked.
+      if (!isNew(from.item)) {
         block(from.item.key, 'An existing operation keeps the sample it made: a new wire out of it cannot be created.');
         continue;
       }
@@ -683,7 +684,9 @@ export function buildPlan(body, ctx = {}) {
   const plannedSample = (ref) => !!ref && (ref.startsWith('item:')
     ? makers.get(ref)?.[0]?.workState === 'planned'
     : existing.get(existingKey('physical_samples', ref.slice(3)))?.current_status === 'planned');
-  for (const r of records) if (r.mode === 'new' && r.workState === 'done' && plannedSample(r.input)) block(r.itemKey, SAMPLE_PLANNED);
+  // An attached operation is judged by the work state it has now (the record, not what the draft says), and so is a new one by the draft's.
+  const stateNow = (r) => (r.mode === 'attach' ? (existing.get(existingKey('manufacturing_operations', r.existingId))?.work_state ?? r.workState) : r.workState);
+  for (const r of records) if ((r.mode === 'new' || r.mode === 'attach') && stateNow(r) === 'done' && plannedSample(r.input)) block(r.itemKey, SAMPLE_PLANNED);
 
   // -- samples (new) ------------------------------------------------------------------------------------------------------
   const sampleValues = (ref, trail = new Set()) => {
