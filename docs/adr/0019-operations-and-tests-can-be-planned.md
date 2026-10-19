@@ -44,7 +44,8 @@ who drew it can see.
 - **2026-10-18 — who may mark done.** Anyone who may edit the operation or test may mark it done, as decision 4
   says. The operation's own update runs as the caller; flipping its planned output samples to `active` then runs
   with system rights, because editing the operation does not imply editing its samples (a technician with edit
-  access to the operation got a 403 and nothing was marked done). The flip touches `current_status` only.
+  access to the operation got a 403 and nothing was marked done). The flip touches `current_status` only. Back to planned does the same in reverse: the owner rule (decision 5) is the
+  operation's, and its output samples go back to `planned` with system rights.
 - **2026-10-18 — done at Create.** A new operation or test in a draft can be planned or done. Done carries its date
   (default today), and Create writes it as done in the same transaction, with its outputs `active`, so recording
   work that already happened is one step, not Create followed by Mark done.

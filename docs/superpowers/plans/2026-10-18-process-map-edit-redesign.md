@@ -10,9 +10,9 @@
 
 | Slice | Worktree | Branch | State |
 |---|---|---|---|
-| 0 — harness: local Postgres + Directus + STARbase, Playwright suite for edit mode | agent worktree | `pm-redesign/0-harness` | **in progress** (2026-10-18) |
-| 1a — correctness, server: R10, R11, `test_category`/`material_id` (`d1-build`) | agent worktree | `pm-redesign/1a-server` | **in progress** (2026-10-18) |
-| 1b — correctness, client: remove, derived sockets, layout, plain fixes (needs 0 for its browser check) | agent worktree | `pm-redesign/1b-canvas` | **in progress** (2026-10-18) |
+| 0 — harness: local Postgres + Directus + STARbase, Playwright suite for edit mode | agent worktree | `pm-redesign/0-harness` | built, **merged** into the working branch (2026-10-19) |
+| 1a — correctness, server: R10, R11, `test_category`/`material_id` (`d1-build`) | agent worktree | `pm-redesign/1a-server` | built, reviewed, merged into the working branch (2026-10-19) |
+| 1b — correctness, client: remove, derived sockets, layout, plain fixes (needs 0 for its browser check) | agent worktree | `pm-redesign/1b-canvas` (+ `1c-verify`: browser specs and the fixes they and the Opus review found) | built, reviewed, merged into the working branch; slice 1 PR up (2026-10-19) |
 | 2 — adding: palette, add search, drops, insert before, planned/done toggle, project/campaign | agent worktree | `pm-redesign/2-adding` | not started (needs 1) |
 | 3 — attach from the database | agent worktree | `pm-redesign/3-attach` | not started (needs 2) |
 | 4 — templates | agent worktree | `pm-redesign/4-templates` | not started (needs 2) |

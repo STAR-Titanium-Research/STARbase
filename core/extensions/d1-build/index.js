@@ -1502,10 +1502,18 @@ export function mount(router, context, clock = () => new Date()) {
       }
       if (checks.length) throw new HttpError(409, 'CHECKS', 'Something done depends on this, so it cannot go back to planned.', { checks });
       const data = { work_state: 'planned', [dateField]: null, done_by_person_id: null, done_at: null };
+      // As for Mark done (R10): the record's own update runs as the caller (the access guard's owner rule decides), then its output
+      // sample goes back to planned with system rights, current_status only: owning an operation does not imply editing its samples.
+      const systemSvc = (c) => itemsFor(schema, null, c, trx);
       for (const { id } of recs) {
         try {
           await svc(collection).updateOne(id, data);
-          if (back.has(id)) await svc('physical_samples').updateOne(back.get(id), { current_status: 'planned' });
+        } catch (err) {
+          throw refused(err);
+        }
+        if (!back.has(id)) continue;
+        try {
+          await systemSvc('physical_samples').updateOne(back.get(id), { current_status: 'planned' });
         } catch (err) {
           throw refused(err);
         }

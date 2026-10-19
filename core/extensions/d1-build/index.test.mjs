@@ -2545,6 +2545,21 @@ test('mark-planned: a done container goes back to planned in one transaction, it
   assert.deepEqual(t.world.ops[0].data, { work_state: 'planned', session_date: null, done_by_person_id: null, done_at: null });
 });
 
+test('mark-planned (R10): the owner who may not edit the output sample still goes back to planned; the sample flips with system rights', async () => {
+  const env = setup();
+  cutWorld(env, 'done', 'active');
+  env.world.failOn = refuseCaller('physical_samples');
+  const res = await markPlanned(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const flips = env.world.ops.filter((o) => o.collection === 'physical_samples');
+  assert.equal(flips.length, 4);
+  for (const f of flips) {
+    assert.equal(f.accountability, null, 'the flip runs with system rights');
+    assert.deepEqual(f.data, { current_status: 'planned' }, 'it touches current_status only');
+  }
+  assert.ok(env.world.ops.filter((o) => o.collection === OPS).every((o) => o.accountability?.user === ALICE), 'the operations update as the caller');
+});
+
 test('mark-planned: refused (REMOVE_BLOCKED) while something done hangs off an output; the code is named only if the caller can read it', async () => {
   const run = async (hide) => {
     const env = setup();
