@@ -1,4 +1,4 @@
-openpyxl>=3.1
+openpyxl>=3.1.5
 psycopg2-binary>=2.9
 scikit-learn>=1.5
 h5py>=3.10
