@@ -33,6 +33,15 @@ export function fakeServer() {
 		markAnswer: null as unknown,
 		/** Rows `GET /items/manufacturing_operations` and `/items/test_sessions` answer (what an existing record's read returns). */
 		rows: {} as Record<string, Record<string, unknown>[]>,
+		/** What `GET /items/projects` and `/items/campaigns` answer (the draft's project and campaign chooser). */
+		projects: [
+			{ project_id: 'proj1', project_code: 'P-1', project_name: 'Alpha' },
+			{ project_id: 'proj2', project_code: 'P-2', project_name: 'Beta' },
+		] as Record<string, unknown>[],
+		campaigns: [
+			{ campaign_id: 'camp1', campaign_code: 'C-1', name: 'Trial 1', project_id: 'proj1' },
+			{ campaign_id: 'camp2', campaign_code: 'C-2', name: 'Trial 2', project_id: 'proj2' },
+		] as Record<string, unknown>[],
 		/** What Back to planned answers: a body, or an error to throw. */
 		plannedAnswer: null as unknown,
 		bodies: [] as unknown[],
@@ -55,6 +64,8 @@ export function fakeServer() {
 				return { data: { data: d } };
 			}
 			if (path === '/items/manufacturing_methods') return { data: { data: FAKE_METHODS } };
+			if (path === '/items/projects') return { data: { data: s.projects } };
+			if (path === '/items/campaigns') return { data: { data: s.campaigns } };
 			if (path === '/items/physical_samples') {
 				const filter = typeof config?.params?.filter === 'string' ? JSON.parse(config.params.filter) : {};
 				const ids: string[] | undefined = filter?.sample_id?._in;

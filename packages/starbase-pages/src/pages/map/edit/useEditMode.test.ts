@@ -362,6 +362,53 @@ describe('useEditMode: planned or done at Create (R9)', () => {
 	});
 });
 
+describe('useEditMode: the draft\'s project and campaign (R12)', () => {
+	it('reads the projects and campaigns once editing starts, through the host API', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		expect(s.calls.filter((c) => c === 'GET /items/projects')).toHaveLength(1);
+		expect(edit.choices.projects.value.map((p) => p.value)).toEqual(['proj1', 'proj2']);
+		expect(edit.choices.campaigns.value.map((c) => c.projectId)).toEqual(['proj1', 'proj2']);
+	});
+
+	it('is pre-filled from the first sample added (the existing behaviour: the draft takes its project), and editable', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'setProject', projectId: 'proj1' });
+		edit.setCampaign('camp1');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+
+	it('changing the project clears a campaign that is not in it, as one undo step', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.setProject('proj1');
+		edit.setCampaign('camp1');
+		edit.setProject('proj2');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: null });
+		edit.undo();
+		expect(edit.body.value).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+
+	it('choosing a campaign with no project sets its project too', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.setCampaign('camp2');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: 'camp2' });
+		edit.setCampaign(null);
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: null });
+	});
+
+	it('is saved in the draft', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		edit.setProject('proj1');
+		edit.setCampaign('camp1');
+		await edit.draft.flush();
+		expect(s.drafts.get('d1')!.body).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+});
+
 describe('useEditMode: a new draft (fix 9)', () => {
 	it('shows in My drafts at once, before any list is read again', async () => {
 		const { edit, s } = setup({ edit: 'new' });

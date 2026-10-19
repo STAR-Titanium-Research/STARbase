@@ -119,6 +119,7 @@ const when = (iso: string): string => {
 				</button>
 			</div>
 		</span>
+		<slot name="scope" />
 		<span class="save" :class="{ bad: !!saveError }" role="status">{{ saveError || (saving ? 'Saving…' : 'Draft kept') }}</span>
 		<span class="spacer"></span>
 		<slot name="create" />

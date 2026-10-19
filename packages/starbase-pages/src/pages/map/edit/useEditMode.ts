@@ -17,7 +17,9 @@ import { draftKeyOfNode, isDraftNode } from './socketRefs';
 import { defaultName, isoDay, summaryText } from './summary';
 import { toGraph, type ToGraphCtx } from './toGraph';
 import { useDraft, type DraftApi } from './useDraft';
+import { chooseCampaign, chooseProject } from './projectCampaign';
 import { useEditCatalog, type EditCatalog } from './useEditCatalog';
+import { useProjectChoices } from './useProjectChoices';
 import { workStateActions } from './workState';
 
 export interface EditModeOptions {
@@ -265,6 +267,18 @@ export function useEditMode(o: EditModeOptions) {
 		});
 		if (actions.length) apply(actions);
 	}
+	// ---- the draft's project and campaign (R12) ------------------------------------------------------------
+	const choices = useProjectChoices(o.api);
+	watch(
+		() => editing.value,
+		(on) => on && void choices.ensure(),
+		{ immediate: true },
+	);
+	/** The chooser's project: the campaign goes with it unless it belongs to the new one, as one undo step. */
+	const setProject = (projectId: string | null): DraftBody => apply(chooseProject(draft.body.value, projectId, choices.campaigns.value));
+	/** The chooser's campaign: it brings its project when the draft has another or none. */
+	const setCampaign = (campaignId: string | null): DraftBody => apply(chooseCampaign(draft.body.value, campaignId, choices.campaigns.value));
+
 	function undo(): void {
 		if (!editing.value) return;
 		typing = null;
@@ -351,7 +365,7 @@ export function useEditMode(o: EditModeOptions) {
 		// the lid
 		startEditing, openDraft, done, discardDraft,
 		// changing
-		apply, setValues, setWorkState, undo, redo, writeQuery,
+		apply, setValues, setWorkState, setProject, setCampaign, choices, undo, redo, writeQuery,
 		refreshDrafts: draft.refresh,
 	};
 	return api;
