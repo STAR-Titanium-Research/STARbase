@@ -70,6 +70,8 @@ export interface MapEdit {
 	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
 	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */
 	wiredSockets(node: MapNode): ReadonlySet<string>;
+	/** The wire an entry dragged from the palette is over, and whether it would be inserted there (green) or refused (red). */
+	dropWire?: Ref<{ id: string; ok: boolean } | null>;
 	/** The wire the person selected to remove (a click on it), or null. */
 	selectedWire: Ref<string | null>;
 	selectWire(id: string): void;

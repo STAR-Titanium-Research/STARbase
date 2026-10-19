@@ -11,6 +11,23 @@ describe('edit keys: what each means', () => {
 		expect(d({ key: 'a' })).toBeNull();
 	});
 
+	it('Ctrl/⌘+K opens the add search too, but not with Shift', () => {
+		expect(d({ key: 'k', ctrlKey: true })).toEqual({ do: 'add' });
+		expect(d({ key: 'K', metaKey: true })).toEqual({ do: 'add' });
+		expect(d({ key: 'k', ctrlKey: true, shiftKey: true })).toBeNull();
+		expect(d({ key: 'k', ctrlKey: true, altKey: true })).toBeNull();
+		expect(d({ key: 'k' })).toBeNull();
+		expect(d({ key: 'k', ctrlKey: true }, { typing: true })).toBeNull(); // in a field it is the shell's Finder
+		expect(d({ key: 'k', ctrlKey: true }, { blocked: true })).toBeNull();
+	});
+
+	it('I inserts after the selected card, Shift+I before it', () => {
+		expect(d({ key: 'i' })).toEqual({ do: 'insert', where: 'after' });
+		expect(d({ key: 'I', shiftKey: true })).toEqual({ do: 'insert', where: 'before' });
+		expect(d({ key: 'i', ctrlKey: true })).toBeNull();
+		expect(d({ key: 'i' }, { typing: true })).toBeNull();
+	});
+
 	it('X removes too, as in a node editor, but not with Shift or Ctrl', () => {
 		expect(d({ key: 'x' })).toEqual({ do: 'remove' });
 		expect(d({ key: 'X', shiftKey: true })).toBeNull();
@@ -84,7 +101,7 @@ describe('keys that are not the canvas\'s', () => {
 
 	it('are left alone by the handler when pressed inside one', () => {
 		const calls: string[] = [];
-		const { onKeydown } = useEditKeys({ editing: () => true, blocked: () => false, pointer: () => ({ x: 0, y: 0 }), add: () => void calls.push('add'), undo: () => undefined, redo: () => undefined, remove: () => (calls.push('remove'), true), dissolve: () => (calls.push('dissolve'), true), duplicate: () => true, duplicateMany: () => true });
+		const { onKeydown } = useEditKeys({ editing: () => true, blocked: () => false, pointer: () => ({ x: 0, y: 0 }), add: () => void calls.push('add'), insert: () => false, undo: () => undefined, redo: () => undefined, remove: () => (calls.push('remove'), true), dissolve: () => (calls.push('dissolve'), true), duplicate: () => true, duplicateMany: () => true });
 		const e = { key: 'Delete', target: { tagName: 'LI', closest: () => ({}) }, preventDefault: vi.fn() } as unknown as KeyboardEvent;
 		onKeydown(e);
 		expect(calls).toEqual([]);
@@ -109,6 +126,7 @@ describe('the keydown handler', () => {
 			blocked: () => false,
 			pointer: () => ({ x: 5, y: 6 }),
 			add: (at) => void calls.push(`add ${at.x},${at.y}`),
+			insert: (where) => (calls.push(`insert ${where}`), true),
 			undo: () => void calls.push('undo'),
 			redo: () => void calls.push('redo'),
 			remove: () => (calls.push('remove'), true),
@@ -123,15 +141,15 @@ describe('the keydown handler', () => {
 
 	it('calls what the page gave it and swallows the key', () => {
 		const { calls, onKeydown } = make();
-		const events = [key({}), key({ key: 'z', shiftKey: false, ctrlKey: true }), key({ key: 'Z', ctrlKey: true }), key({ key: 'Delete', shiftKey: false }), key({ key: 'Delete', shiftKey: false, ctrlKey: true }), key({ key: 'D' }), key({ key: 'd', shiftKey: true, ctrlKey: true })];
+		const events = [key({}), key({ key: 'k', shiftKey: false, ctrlKey: true }), key({ key: 'i', shiftKey: false }), key({ key: 'I' }), key({ key: 'z', shiftKey: false, ctrlKey: true }), key({ key: 'Z', ctrlKey: true }), key({ key: 'Delete', shiftKey: false }), key({ key: 'Delete', shiftKey: false, ctrlKey: true }), key({ key: 'D' }), key({ key: 'd', shiftKey: true, ctrlKey: true })];
 		events.forEach(onKeydown);
-		expect(calls).toEqual(['add 5,6', 'undo', 'redo', 'remove', 'dissolve', 'duplicate', 'many']);
+		expect(calls).toEqual(['add 5,6', 'add 5,6', 'insert after', 'insert before', 'undo', 'redo', 'remove', 'dissolve', 'duplicate', 'many']);
 		for (const e of events) expect(e.preventDefault).toHaveBeenCalled();
 	});
 
 	it('leaves the key to the browser when there was nothing to act on', () => {
-		const { onKeydown } = make({ remove: () => false, dissolve: () => false, duplicate: () => false, duplicateMany: () => false });
-		for (const e of [key({ key: 'Backspace', shiftKey: false }), key({ key: 'd', shiftKey: false, ctrlKey: true }), key({ key: 'D', ctrlKey: true })]) {
+		const { onKeydown } = make({ remove: () => false, dissolve: () => false, duplicate: () => false, duplicateMany: () => false, insert: () => false });
+		for (const e of [key({ key: 'i', shiftKey: false }), key({ key: 'Backspace', shiftKey: false }), key({ key: 'd', shiftKey: false, ctrlKey: true }), key({ key: 'D', ctrlKey: true })]) {
 			onKeydown(e);
 			expect(e.preventDefault).not.toHaveBeenCalled();
 		}
@@ -147,5 +165,53 @@ describe('the keydown handler', () => {
 		blocked = true;
 		onKeydown(key({}));
 		expect(calls).toEqual([]);
+	});
+});
+
+describe('Ctrl/⌘+K in the capture phase', () => {
+	const make = (over: Partial<EditKeysOptions> = {}) => {
+		const calls: string[] = [];
+		const o: EditKeysOptions = {
+			editing: () => true,
+			blocked: () => false,
+			pointer: () => ({ x: 5, y: 6 }),
+			add: (at) => void calls.push(`add ${at.x},${at.y}`),
+			insert: () => false,
+			undo: () => undefined,
+			redo: () => undefined,
+			remove: () => false,
+			dissolve: () => false,
+			duplicate: () => false,
+			duplicateMany: () => false,
+			...over,
+		};
+		return { calls, ...useEditKeys(o) };
+	};
+	const press = (over: Record<string, unknown> = {}) => ({ key: 'k', ctrlKey: true, target: { tagName: 'DIV' }, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...over }) as unknown as KeyboardEvent & { preventDefault: ReturnType<typeof vi.fn>; stopPropagation: ReturnType<typeof vi.fn> };
+
+	it('opens the add search and keeps the shell\'s Finder from also opening', () => {
+		const { calls, onSearchKey } = make();
+		const e = press();
+		onSearchKey(e);
+		expect(calls).toEqual(['add 5,6']);
+		expect(e.preventDefault).toHaveBeenCalled();
+		expect(e.stopPropagation).toHaveBeenCalled();
+	});
+
+	it('leaves the key to the shell outside edit mode, in a field, with the search already open, or with Shift', () => {
+		let editing = true;
+		let blocked = false;
+		const { calls, onSearchKey } = make({ editing: () => editing, blocked: () => blocked });
+		const events = [press({ target: { tagName: 'INPUT' } }), press({ shiftKey: true }), press({ key: 'j' }), press({ ctrlKey: false })];
+		events.forEach(onSearchKey);
+		editing = false;
+		events.push(press());
+		onSearchKey(events[4]);
+		editing = true;
+		blocked = true;
+		events.push(press());
+		onSearchKey(events[5]);
+		expect(calls).toEqual([]);
+		for (const e of events) expect(e.stopPropagation).not.toHaveBeenCalled();
 	});
 });

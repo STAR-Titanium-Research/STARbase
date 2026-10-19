@@ -19,7 +19,8 @@ import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { blocking, warnings } from './checks';
 import type { MenuTarget } from './menuTarget';
-import { decodeSocket, draftKeyOfNode, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
+import { onEmptyCanvas, socketSpots } from './canvasHits';
+import { draftKeyOfNode, draftKeysOfNode, encodeSocket, nearestSocket, sampleItemOf, type SocketRef, type SocketSpot } from './socketRefs';
 import type { EditMode } from './useEditMode';
 import { connectActions, dropVerdict, type DropVerdict } from './wireDrop';
 
@@ -147,22 +148,9 @@ export function useEditCanvas(o: {
 		return edit.body.value !== before;
 	}
 
-	// ---- sockets under the pointer ------------------------------------------------------------------------
-	function spotsOf(): SocketSpot[] {
-		const out: SocketSpot[] = [];
-		for (const el of canvasEl.value?.querySelectorAll<HTMLElement>('[data-sock]') ?? []) {
-			const sock = decodeSocket(el.dataset.sock);
-			if (!sock) continue;
-			const r = el.getBoundingClientRect();
-			out.push({ sock, x: r.left + r.width / 2, y: r.top + r.height / 2 });
-		}
-		return out;
-	}
-	/** Anywhere on the empty canvas: not on a card, a control or the minimap. */
-	function onEmptyCanvas(x: number, y: number): boolean {
-		const el = document.elementFromPoint(x, y);
-		return !!el && !!canvasEl.value?.contains(el) && !el.closest('.vue-flow__node, .vue-flow__controls, .vue-flow__minimap, .vue-flow__edge, .pm-wirepreview');
-	}
+	// ---- sockets under the pointer (canvasHits.ts) ---------------------------------------------------------
+	const spotsOf = (): SocketSpot[] => socketSpots(canvasEl.value);
+	const emptyAt = (x: number, y: number): boolean => onEmptyCanvas(canvasEl.value, x, y);
 	const relative = (x: number, y: number) => {
 		const r = canvasEl.value?.getBoundingClientRect();
 		return { x: x - (r?.left ?? 0), y: y - (r?.top ?? 0) };
@@ -216,7 +204,7 @@ export function useEditCanvas(o: {
 			}
 			if (v?.ok) void connect(v, anchor);
 			else if (v) say(v.reason ?? 'That does not fit.', relative(ev.clientX, ev.clientY));
-			else if (onEmptyCanvas(ev.clientX, ev.clientY)) {
+			else if (emptyAt(ev.clientX, ev.clientY)) {
 				// A wired input, dragged off and let go on empty canvas, takes the wire off (R4); a free socket, or one with no wire, opens the menu.
 				if (socketId && o.dropWire?.(sock, socketId)) return;
 				o.openMenu({ sock, at: { x: ev.clientX, y: ev.clientY }, flow: canvas.toFlow(ev.clientX, ev.clientY), anchor });
@@ -293,5 +281,5 @@ export function useEditCanvas(o: {
 		});
 	}
 
-	return { mapEdit, preview, refusal, problem, ensureSample, connect, nodeById };
+	return { mapEdit, preview, refusal, problem, say, relative, ensureSample, connect, nodeById };
 }

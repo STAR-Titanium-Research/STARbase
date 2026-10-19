@@ -11,8 +11,11 @@ const props = defineProps<{
 	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
 	canRemove?: boolean;
 	canDissolve?: boolean;
+	/** Edit mode, a sample or a container: Insert before / after it (the add search); a done sample's "before" is "Add an earlier step". */
+	canInsert?: boolean;
+	earlier?: boolean;
 }>();
-const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: [] }>();
+const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -57,8 +60,20 @@ onBeforeUnmount(() => {
 			<span>{{ o.label }}</span>
 			<v-icon v-if="o.dir === props.dir" class="ck" name="check" x-small />
 		</button>
-		<template v-if="canRemove || canDissolve">
+		<template v-if="canRemove || canDissolve || canInsert">
 			<div class="hd">Edit</div>
+			<template v-if="canInsert">
+				<button type="button" role="menuitem" class="it" @click="emit('insert', 'before')">
+					<v-icon name="keyboard_double_arrow_left" x-small />
+					<span>{{ earlier ? 'Add an earlier step…' : 'Insert before…' }}</span>
+					<kbd>Shift+I</kbd>
+				</button>
+				<button type="button" role="menuitem" class="it" @click="emit('insert', 'after')">
+					<v-icon name="keyboard_double_arrow_right" x-small />
+					<span>Insert after…</span>
+					<kbd>I</kbd>
+				</button>
+			</template>
 			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove')">
 				<v-icon name="delete" x-small />
 				<span>Remove</span>

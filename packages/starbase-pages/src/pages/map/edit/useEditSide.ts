@@ -14,10 +14,10 @@ import type { EditMode } from './useEditMode';
 import { useEditSurface } from './useEditSurface';
 import { useMarkDone } from './useMarkDone';
 
-export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
+export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio' | 'user'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
 	const { host, edit } = o;
 	const markDone = useMarkDone({ edit, map: o.map });
-	const build = useEditSurface({ ...o, blockedBy: () => markDone.open.value || !!o.finderOpen?.() });
+	const build = useEditSurface({ ...o, blockedBy: () => markDone.open.value || !!o.finderOpen?.(), person: () => host.user.value?.id });
 	provide(MAP_EDIT, build.mapEdit);
 	const create = useCreate({ edit, map: o.map, select: build.selectKey });
 	provide(EDIT_RAIL_KEY, {
