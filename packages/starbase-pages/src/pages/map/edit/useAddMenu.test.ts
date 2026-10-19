@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
@@ -8,7 +8,7 @@ import { useAddMenu } from './useAddMenu';
 import { useEditCanvas } from './useEditCanvas';
 import { useEditMode } from './useEditMode';
 
-async function setup(editing = true, body?: DraftBody) {
+async function setup(editing = true, body?: DraftBody, person: string | null = 'u-test') {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -21,8 +21,9 @@ async function setup(editing = true, body?: DraftBody) {
 	const picked = vi.fn();
 	const ec = useEditCanvas({ edit, map: { graph: { value: { nodes: [] } }, clearHover() {} } as never, canvas: canvas as never, canvasEl, openMenu: () => undefined });
 	const connect = vi.fn();
-	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked, connect });
-	return { edit, menu, picked, connect };
+	const insert = vi.fn();
+	const menu = useAddMenu({ edit, canvas, canvasEl, ensureSample: ec.ensureSample, pickSamples: picked, connect, person: () => person, insert });
+	return { edit, menu, picked, connect, insert };
 }
 
 describe('the Add menu\'s state', () => {
@@ -61,7 +62,7 @@ describe('the Add menu\'s state', () => {
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 
-	it('Pick samples opens the picker instead', async () => {
+	it('Existing sample… of the catalog opens the picker instead', async () => {
 		const { menu, picked, edit } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'pickSamples' });
@@ -148,5 +149,69 @@ describe('the Add menu on a free socket that adds a row (R5)', () => {
 		menu.open({ sock: { kind: 'row', id: 'op-1', side: 'out', add: true }, at: { x: 1, y: 1 } });
 		await menu.choose({ kind: 'newSample' });
 		expect(edit.body.value).toBe(rec);
+	});
+});
+
+describe('the add search remembers what was added, and does a choice wherever it is dropped', () => {
+	const store = new Map<string, string>();
+	beforeEach(() => {
+		store.clear();
+		vi.stubGlobal('window', { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) } });
+	});
+	afterEach(() => void vi.unstubAllGlobals());
+
+	it('a method, a test type and a new sample go to the front of the recents, for this person only', async () => {
+		const { menu } = await setup();
+		menu.open({ sock: null, at: { x: 300, y: 200 } });
+		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
+		menu.open({ sock: null, at: { x: 300, y: 200 } });
+		await menu.choose({ kind: 'test', testType: 'tensile' });
+		expect(menu.recents.value).toEqual(['test:tensile', 'op:m-turn']);
+		expect(JSON.parse(store.get('d1.map.add.recent.v1.u-test')!)).toEqual(['test:tensile', 'op:m-turn']);
+		// Opening again reads them: a second visit starts with them.
+		const again = await setup();
+		again.menu.open({ sock: null, at: { x: 1, y: 1 } });
+		expect(again.menu.recents.value).toEqual(['test:tensile', 'op:m-turn']);
+		const other = await setup(true, undefined, 'someone-else');
+		other.menu.open({ sock: null, at: { x: 1, y: 1 } });
+		expect(other.menu.recents.value).toEqual([]);
+	});
+
+	it('Same sample, a wire and the picker are not remembered', async () => {
+		const { menu } = await setup();
+		menu.open({ sock: null, at: { x: 1, y: 1 } });
+		await menu.choose({ kind: 'pickSamples' });
+		expect(menu.recents.value).toEqual([]);
+	});
+
+	it('applyAt does a choice at a target without the search being open: a floating card at the flow point', async () => {
+		const { menu, edit } = await setup();
+		await menu.applyAt({ sock: null, at: { x: 300, y: 200 }, flow: { x: 12, y: 34 } }, { kind: 'newSample' });
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(edit.body.value.positions.n1).toEqual({ x: 12, y: 34 });
+	});
+
+	it('applyAt on a socket connects there, as one step', async () => {
+		const { menu, edit } = await setup();
+		await menu.applyAt({ sock: { kind: 'sample', id: 's1', side: 'out' }, at: { x: 1, y: 1 }, anchor: 'card' }, { kind: 'operation', methodId: 'm-turn', category: 'machining' });
+		expect(edit.body.value.wires).toHaveLength(1);
+		edit.undo();
+		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('a choice made in an insert search goes to the insert, not to the draft', async () => {
+		const { menu, edit, insert } = await setup();
+		const t: MenuTarget = { sock: null, at: { x: 5, y: 5 }, insert: { where: 'before', nodeId: 's:x', what: 'S-1' } };
+		menu.open(t);
+		expect(menu.target.value?.flow, 'an insert is not placed at a point').toBeUndefined();
+		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
+		expect(insert).toHaveBeenCalledWith(expect.objectContaining({ insert: t.insert }), { kind: 'operation', methodId: 'm-turn', category: 'machining' });
+		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('an earlier step goes to the insert too', async () => {
+		const { menu, insert } = await setup();
+		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'before', nodeId: 's:x', what: 'S-1', earlier: true } }, { kind: 'earlierStep' });
+		expect(insert).toHaveBeenCalled();
 	});
 });

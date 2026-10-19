@@ -68,7 +68,7 @@ export function useEditInsert(o: {
 		if (!ins || !node) return;
 		// A sample of the loaded history joins the draft first (with the version it was read at): the two are one undo step.
 		let folded = false;
-		if (node.type === 'record' && !sampleItemOf(edit.body.value, node.ref.id)) {
+		if (node.type === 'record' && choice.kind !== 'earlierStep' && !sampleItemOf(edit.body.value, node.ref.id)) {
 			if (!(await o.ensureSample(node.ref.id))) return;
 			folded = true;
 		}

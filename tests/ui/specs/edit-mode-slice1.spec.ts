@@ -188,7 +188,7 @@ test.describe('as a Lab Member', () => {
 		await expect(input).toHaveCount(1);
 		await dragFrom(page, input, await emptySpot(page));
 		await expect(wire).toHaveCount(0);
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		const body = await savedDraft(page, member, (b) => b.wires.length === 1, 'the dragged wire removed');
 		expect(body.items, 'the cards stay').toHaveLength(3);
 		expect(body.wires[0].to.key, 'the other wire, into the operation, is the one left').not.toBe(body.items.find((i) => i.kind === 'sample' && !i.existing)!.key);
@@ -206,15 +206,15 @@ test.describe('as a Lab Member', () => {
 		const freeIn = canvasOf(page).locator('.free[data-sock$="|in|add"]');
 		await expect(freeIn).toHaveCount(1);
 		await dragFrom(page, freeIn, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await expect(page.locator('.pm-addsearch')).toBeVisible();
 		await page.keyboard.press('Escape');
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		await expect(wireBetween(page, 's:', 'op:draft:')).toHaveCount(1);
 		expect((await readDraft(member, draftIdOf(page))).wires, 'no wire was taken').toHaveLength(2);
 		// The same for the free output (nothing to take there either) ...
 		const freeOut = canvasOf(page).locator('.free[data-sock$="|out|add"]');
 		await dragFrom(page, freeOut, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await expect(page.locator('.pm-addsearch')).toBeVisible();
 		await page.keyboard.press('Escape');
 		expect((await readDraft(member, draftIdOf(page))).wires, 'still both wires').toHaveLength(2);
 		// ... and a sample an operation makes has no free input to offer: it has its maker.
@@ -240,7 +240,7 @@ test.describe('as a Lab Member', () => {
 		const input = canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|in"]:not(.free)');
 		await expect(input).toHaveCount(1);
 		await dragFrom(page, input, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		await expect(page.locator('.pm-banner[role="alert"]')).toHaveText(/2 wires/);
 		expect((await readDraft(member, draftIdOf(page))).wires, 'neither wire was taken').toHaveLength(2);
 
@@ -376,8 +376,8 @@ test.describe('as a Lab Member', () => {
 		const cut = card(page, /, Operation$/);
 		// A loose new sample (from the lid's Add), the second piece's output.
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
-		await expect(page.locator('.pm-addmenu')).toBeHidden();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
+		await expect(page.locator('.pm-addsearch')).toBeHidden();
 		await savedDraft(page, member, (b) => b.items.length === 4, 'the loose sample');
 		await fit(page);
 		await selectCard(page, cut);

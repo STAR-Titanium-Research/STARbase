@@ -230,6 +230,13 @@ describe('insert before and after a selected card', () => {
 });
 
 describe('Add an earlier step', () => {
+	it('does not need the done sample to be part of the draft: the draft keeps no record of it', () => {
+		const body = emptyBody();
+		const g = graphOf(history(), body);
+		const v = insertAround({ body, graph: g, node: node(g, 's:s2') as RecordNode, where: 'before', choice: { kind: 'earlierStep' } });
+		expect(run(done(v)).items).toHaveLength(3);
+	});
+
 	it('is a planned sample, an operation of no method yet that it feeds, and the sample that makes: three new items, two wires', () => {
 		const v = earlierStep(emptyBody(), { x: 5, y: 6 });
 		const body = run(done(v));

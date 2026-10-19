@@ -129,9 +129,10 @@ const wiresOn = (graph: ProcessGraph, node: MapNode, side: 'in' | 'out') => grap
 export function insertAround(o: { body: DraftBody; graph: ProcessGraph; node: MapNode; where: 'before' | 'after'; choice: MenuChoice; at?: Pos }): InsertVerdict {
 	const { body, graph, node, where, choice, at } = o;
 	if (node.type === 'record' && node.kind === 'sample') {
+		// The earlier step does not touch the done sample, so it does not even need to be part of the draft.
+		if (choice.kind === 'earlierStep') return where === 'before' && !node.draft && !node.planned ? earlierStep(body, at) : fail(NO_FIT);
 		const item = sampleItemOf(body, node.ref.id);
 		if (!item) return fail('That sample is not part of the draft yet.');
-		if (choice.kind === 'earlierStep') return where === 'before' && !node.draft && !node.planned ? earlierStep(body, at) : fail(NO_FIT);
 		// A done sample is never given a parent, whatever is chosen: the earlier step is the only way before it.
 		if (where === 'before' && !node.draft && !node.planned) return fail(DONE_WIRE, true);
 		const wires = wiresOn(graph, node, where === 'before' ? 'in' : 'out');
