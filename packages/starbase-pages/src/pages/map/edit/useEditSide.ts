@@ -14,21 +14,21 @@ import type { EditMode } from './useEditMode';
 import { useEditSurface } from './useEditSurface';
 import { useMarkDone } from './useMarkDone';
 
-export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
+export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio' | 'user'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
 	const { host, edit } = o;
 	const markDone = useMarkDone({ edit, map: o.map });
-	const build = useEditSurface({ ...o, blockedBy: () => markDone.open.value || !!o.finderOpen?.() });
+	const build = useEditSurface({ ...o, blockedBy: () => markDone.open.value || !!o.finderOpen?.(), person: () => host.user.value?.id });
 	provide(MAP_EDIT, build.mapEdit);
 	const create = useCreate({ edit, map: o.map, select: build.selectKey });
 	provide(EDIT_RAIL_KEY, {
 		labelFor: build.labelForKey,
 		select: build.selectKey,
 		showMissing: create.showMissing,
-		// A field the form cannot draw: Data Studio draws it, once there is a record to open.
-		openExternal: (key: string, field: FormField) => {
+		// A field the form cannot draw: Data Studio draws it, once there is a record to open. A new item's form says so in place of the
+		// link ("Opens in Data Studio after Create", item 12), so nothing is asked here for one.
+		openExternal: (key: string, _field: FormField) => {
 			const item = edit.body.value.items.find((i) => i.key === key);
 			if (item?.existing) host.openDataStudio(dataStudioRoute(collectionOf(item), item.existing.id));
-			else build.problem.value = `${field.label} can only be filled in Data Studio, once the record is created.`;
 		},
 	});
 	return { build, create, markDone };

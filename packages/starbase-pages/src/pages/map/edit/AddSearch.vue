@@ -2,24 +2,29 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
-import { canvasSampleEntries, filterEntries, firstChoosable, menuFor, moveActive, placeMenu, rootEntries, sampleLabel, type MenuChoice, type MenuEntry, type TemplateEntry } from './menuModel';
+import { canvasSampleEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuChoice, type MenuEntry } from './menuModel';
 import { grown } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
+import { restoreFocus as giveFocusBack } from './focusCanvas';
 
-// The Add menu (spec E8): a search box and a list at a point of the canvas, filtered by what fits where it was opened (menuModel.ts).
-// Keyboard: type to narrow, ArrowUp/ArrowDown move, Enter chooses, Esc goes back (or closes). "Existing sample…" switches the list to a
-// search of the samples: the ones on the canvas for an output, the database for an input.
+// The add search (redesign R1, R2): a search box and a list at a point of the canvas. Shift+A or Ctrl/⌘+K open it at the pointer (or at the
+// focused card or socket); from a socket it lists only what can legally connect there (menuModel.ts), and what is chosen is connected.
+// "Insert before / after" lists the operations that can go there. It is one flat list over the same catalog as the palette: type to narrow
+// (the best match first, what was added lately before the rest), ArrowUp/ArrowDown move, Enter adds the top hit, Esc closes.
+// "Existing sample…" switches the list to a search of the samples: the ones on the canvas for an output, the database for an input.
 const props = defineProps<{
 	target: MenuTarget;
 	body: DraftBody;
 	methods: MethodEntry[];
 	testTypes: TestTypeEntry[];
-	/** Saved templates (stream E); none until it lands. */
-	templates?: TemplateEntry[];
+	/** What this person added lately (entry ids, newest first): listed first. */
+	recents?: string[];
 	/** Searches the samples of the database by code or nickname. */
 	search?: (query: string) => Promise<{ id: string; code: string; detail: string }[]>;
 	/** The code of an existing sample of the draft, for the list of samples on the canvas. */
 	codeOf?: (id: string) => string | undefined;
+	/** Where focus goes when the element that had it before the search opened is gone (the right-click menu): the selected card. */
+	restoreFocus?: (anchor?: string) => void;
 }>();
 const emit = defineEmits<{ choose: [choice: MenuChoice]; close: [] }>();
 
@@ -28,7 +33,7 @@ const purpose = computed(() => menuFor(props.body, props.target.sock));
 /** The draft the entries are asked about: with the row a free socket stands for, when it stands for one. */
 const view = computed(() => (props.target.sock?.add ? (grown(props.body, props.target.sock)?.body ?? props.body) : props.body));
 const query = ref('');
-/** 'root': the sections; 'canvas': samples on the canvas; 'records': a search of the database. */
+/** 'root': the catalog; 'canvas': samples on the canvas; 'records': a search of the database. */
 const mode = ref<'root' | 'canvas' | 'records'>('root');
 const active = ref(-1);
 
@@ -62,10 +67,14 @@ watch([query, mode], () => {
 const all = computed<MenuEntry[]>(() => {
 	if (mode.value === 'records') return found.value;
 	if (mode.value === 'canvas') return canvasSampleEntries(view.value, purpose.value.end, (key) => sampleLabel(props.body, key, props.codeOf ?? (() => undefined)));
-	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes, templates: props.templates });
+	const ins = props.target.insert;
+	if (ins) return operationOnlyEntries({ methods: props.methods, testTypes: props.testTypes });
+	return rootEntries(view.value, purpose.value, { methods: props.methods, testTypes: props.testTypes });
 });
-// The search of the database is the server's: its rows are not filtered again by the same words.
-const entries = computed(() => (mode.value === 'records' ? all.value : filterEntries(all.value, query.value)));
+// The search of the database is the server's: its rows are not filtered again by the same words. The catalog is ranked, recents first.
+const entries = computed(() => (mode.value === 'records' ? all.value : searchEntries(all.value, query.value, mode.value === 'root' ? (props.recents ?? []) : [])));
+/** Section headers only while nothing is typed: a ranked answer is one list, each row says its own category. */
+const grouped = computed(() => !query.value.trim());
 /** What the list has to say instead of entries (and what the status region announces); empty while there are some. */
 const message = computed(() => {
 	if (mode.value === 'records' && query.value.trim().length < 2) return 'Type at least two letters of the code.';
@@ -76,13 +85,15 @@ const message = computed(() => {
 });
 watch(entries, (list) => void (active.value = firstChoosable(list)), { immediate: true });
 
-/** The entries with a header before each new section. */
-const rows = computed(() => entries.value.map((e, i) => ({ e, i, head: i === 0 || entries.value[i - 1].section !== e.section ? e.section : null })));
+/** The entries with a header before each new section (while nothing is typed). */
+const rows = computed(() => entries.value.map((e, i) => ({ e, i, head: grouped.value && (i === 0 || entries.value[i - 1].section !== e.section) ? e.section : null })));
 const optionId = (i: number) => `${uid}-opt-${i}`;
 
 const title = computed(() => {
 	if (mode.value === 'records') return 'Find a sample';
 	if (mode.value === 'canvas') return 'Samples on the canvas';
+	const ins = props.target.insert;
+	if (ins) return `Insert ${ins.where} ${ins.what}`;
 	const f = purpose.value;
 	if (f.side === 'out' && f.card === 'operation') return 'What does this operation make?';
 	if (f.side === 'in' && f.card !== 'sample') return 'What feeds this in?';
@@ -90,7 +101,7 @@ const title = computed(() => {
 	if (f.side === 'out') return 'What happens to this sample?';
 	return 'Add';
 });
-const placeholder = computed(() => (mode.value === 'records' ? 'Sample code or nickname…' : mode.value === 'canvas' ? 'Filter the samples…' : 'Search methods, tests…'));
+const placeholder = computed(() => (mode.value === 'records' ? 'Sample code or nickname…' : mode.value === 'canvas' ? 'Filter the samples…' : 'Search operations, tests, samples…'));
 
 function choose(e: MenuEntry | undefined) {
 	if (!e || e.disabled) return;
@@ -123,7 +134,7 @@ function onKey(e: KeyboardEvent) {
 		e.preventDefault();
 		choose(entries.value[active.value]);
 	} else if (e.key === 'Tab') {
-		e.preventDefault(); // the menu is one place: Tab does not leave it for the page behind
+		e.preventDefault(); // the search is one place: Tab does not leave it for the page behind
 	}
 }
 
@@ -146,13 +157,14 @@ onMounted(async () => {
 watch(entries, () => void nextTick(place));
 onBeforeUnmount(() => {
 	if (timer) clearTimeout(timer);
-	if (opener?.isConnected) opener.focus();
+	giveFocusBack(opener, () => props.restoreFocus?.(props.target.anchor));
 });
 </script>
 
 <template>
-	<div class="pm-addmenu-back" @pointerdown.self="emit('close')" @contextmenu.prevent="emit('close')">
-		<div ref="box" class="d1-kit d1-process-map pm-addmenu" role="dialog" :aria-label="title" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }" @keydown="onKey">
+	<div class="pm-addsearch-back" @pointerdown.self="emit('close')" @contextmenu.prevent="emit('close')">
+		<!-- aria-modal: a dialog is in front, so Ctrl/⌘+K does not open the shell's Finder over it. -->
+		<div ref="box" class="d1-kit d1-process-map pm-addsearch" role="dialog" aria-modal="true" :aria-label="title" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }" @keydown="onKey">
 			<div class="top">
 				<button v-if="mode !== 'root'" type="button" class="back" aria-label="Back" @click="back"><v-icon name="arrow_back" x-small /></button>
 				<span class="ttl">{{ title }}</span>
@@ -189,6 +201,7 @@ onBeforeUnmount(() => {
 					>
 						<span class="lab">{{ r.e.label }}</span>
 						<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
+						<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
 						<span v-if="r.e.disabled" class="why">{{ r.e.disabled }}</span>
 					</button>
 				</template>
@@ -200,13 +213,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.pm-addmenu-back { position: fixed; inset: 0; z-index: 60; }
-.pm-addmenu {
+.pm-addsearch-back { position: fixed; inset: 0; z-index: 60; }
+.pm-addsearch {
 	position: fixed;
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-	width: 300px;
+	width: 320px;
 	max-width: calc(100vw - 16px);
 	padding: 8px;
 	background: var(--d1-surface, var(--theme--background));
@@ -217,7 +230,7 @@ onBeforeUnmount(() => {
 	font-size: var(--fs-md, 13px);
 }
 .top { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 2px; }
-.ttl { font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }
+.ttl { font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .back:hover, .back:focus-visible { background: var(--d1-tile); outline: none; }
 .q {
@@ -235,6 +248,7 @@ onBeforeUnmount(() => {
 .opt.off { cursor: default; opacity: 0.6; }
 .lab { font-weight: 600; }
 .det { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+.cat { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .why { flex-basis: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .none { margin: 0; padding: 10px 8px; color: var(--d1-dim); }
 .none.bad { color: var(--d1-bad); }

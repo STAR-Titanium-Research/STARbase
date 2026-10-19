@@ -33,6 +33,22 @@ describe('the compact form of an item', () => {
 	});
 });
 
+describe('the compact form of a new item that is done (R9)', () => {
+	const done = <T extends DraftItem>(item: T): T => ({ ...item, workState: 'done' }) as T;
+	it('an operation asks for the date it happened instead of the planned date, then what the forms require, then the key settings', () => {
+		expect(keyFieldsFor(done(op({ process_category: 'machining' })), undefined, ['operation_date', 'outcome_notes']).slice(0, 4)).toEqual(['method_id', 'equipment_id', 'operation_date', 'outcome_notes']);
+		expect(keyFieldsFor(done(op()))).toEqual(['method_id', 'equipment_id', 'operation_date']);
+		expect(keyFieldsFor(done(op())).includes('planned_date')).toBe(false);
+	});
+	it('a test asks for session_date and what the forms require, after its own results', () => {
+		expect(keyFieldsFor(done(test({ test_type: 'tensile' })), undefined, ['session_date', 'operator'])).toEqual(['test_type', 'tensile_uts_mpa', 'equipment_id', 'session_date', 'operator']);
+	});
+	it('a planned item or a record that exists is as before: the required-for-done list is not asked of it', () => {
+		expect(keyFieldsFor(op(), undefined, ['outcome_notes'])).toEqual(['method_id', 'equipment_id', 'planned_date']);
+		expect(keyFieldsFor(done(op({}, { id: 'o', version: 1 })), {}, ['outcome_notes'])).toEqual(['method_id', 'equipment_id', 'planned_date']);
+	});
+});
+
 describe('changing the method', () => {
 	const categoryOf = (id: string) => (id === 'mt' ? ('machining' as const) : id === 'mf' ? ('sintering' as const) : undefined);
 

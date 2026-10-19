@@ -48,7 +48,10 @@ who drew it can see.
   operation's, and its output samples go back to `planned` with system rights.
 - **2026-10-18 — done at Create.** A new operation or test in a draft can be planned or done. Done carries its date
   (default today), and Create writes it as done in the same transaction, with its outputs `active`, so recording
-  work that already happened is one step, not Create followed by Mark done.
+  work that already happened is one step, not Create followed by Mark done. It records who and when as Mark done does
+  (`done_by_person_id` is the caller's researcher row, `done_at` is the time of Create), and the date is today when the draft
+  carries none; a planned record gets none of these. The edit mode's rail and card offer the choice as a Planned / Done toggle
+  (one undo step), and a Done record is asked for the fields the forms mark required, with the same words the server uses.
 
 ## Alternatives considered
 

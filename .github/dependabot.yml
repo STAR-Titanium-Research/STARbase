@@ -82,6 +82,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 3
+    # scikit-learn stays on the 1.5 line: CI installs scripts/requirements.txt next to the exact
+    # numpy/scipy/scikit-learn pins of plugins/diag-service (the diag goldens), so raising the lower bound
+    # past 1.5 makes pip fail to resolve (2026-10-19, "Scripts and diagnostics"). Move it with the diag service.
+    ignore:
+      - dependency-name: scikit-learn
     groups:
       python:
         update-types: [minor, patch]

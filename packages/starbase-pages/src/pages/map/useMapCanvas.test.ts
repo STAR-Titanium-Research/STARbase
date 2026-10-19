@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], fitAt: [] as number[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -64,7 +64,7 @@ vi.mock('@vue-flow/core', async (orig) => {
     onNodeDragStop: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStops.push(fn),
     onNodeDragStart: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStarts.push(fn),
     screenToFlowCoordinate: (p: { x: number; y: number }) => ({ x: p.x - 10, y: p.y - 20 }),
-    fitView: async () => true,
+    fitView: async () => (store.fitAt.push(store.layouts), true),
     setCenter: async () => true,
   };
   return { ...(await orig<typeof import('@vue-flow/core')>()), useVueFlow: () => vf };
@@ -1068,6 +1068,23 @@ describe('useMapCanvas: edit mode does not lay out again for what a card says', 
       await settle();
     }
     expect(store.layouts).toBe(layouts); // typing: nothing yet
+    await new Promise((r) => setTimeout(r, 300));
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
+  });
+
+  it('Fit pressed before that look at the sizes does the look first, and frames the cards where they will be (a card added a moment ago was framed in its old place)', async () => {
+    const { canvas } = await openOverlay();
+    store.fitAt.length = 0;
+    const layouts = store.layouts;
+    store.tall.set(container().id, 320);
+    code.value = 'OP-grown';
+    await settle(); // the sizes are looked at in 150 ms, and the cards laid out again if one changed
+    expect(store.layouts).toBe(layouts);
+    await canvas.fit();
+    expect(store.layouts, 'the layout the new size causes has been done').toBe(layouts + 1);
+    expect(store.fitAt, 'the viewport is fitted once, after it').toEqual([layouts + 1]);
+    // And nothing is left to move the cards afterwards.
     await new Promise((r) => setTimeout(r, 300));
     await settle();
     expect(store.layouts).toBe(layouts + 1);

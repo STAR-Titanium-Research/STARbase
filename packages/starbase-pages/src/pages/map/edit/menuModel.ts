@@ -1,13 +1,16 @@
-// What the Add menu offers and what a choice does (spec E8), without Vue or the DOM. The menu is a search box over sections:
-// Templates (stream E fills the list), then, by what it is for,
+// What the palette and the add search offer, and what a choice does (redesign R1, R2), without Vue or the DOM. ONE catalog feeds both
+// surfaces: New sample, Existing sample…, an operation per manufacturing method (grouped by process category) and a test per test type.
+// (Templates and "From database…" join it in slices 4 and 3.) Nothing is nested. Opened at a socket the catalog is FILTERED to what can
+// legally be connected there:
 //
-//   from a sample's output, or unconnected   Operations (by process category → method), Tests (by test type); unconnected also Samples
+//   unconnected (palette, Shift+A)           the whole catalog
+//   from a sample's output                   operations and tests
 //   from an operation's output               New sample / Same sample (in place) / Existing sample…
 //   from a free input                        New sample / Existing sample…  (a sample's input: the operations that could make it)
 //
-// `rootEntries` lists them, `filterEntries` narrows them to a query, `actionsFor` turns a choice into the reducer actions it stands
-// for (applied as one undoable step), and `placeMenu` keeps the menu inside the window. Entries that cannot be chosen are listed
-// greyed with the reason, so the person sees why instead of wondering where the entry went.
+// `catalogEntries` and `rootEntries` list them, `searchEntries` narrows and ranks them for a query (recents first), `actionsFor` turns a
+// choice into the reducer actions it stands for (applied as one undoable step), and `placeMenu` keeps a box inside the window. Entries
+// that cannot be chosen are listed greyed with the reason, so the person sees why instead of wondering where the entry went.
 
 import { processLabel, type DraftBody, type DraftKey } from '@d1/ui';
 import type { ProcessCategory } from '../model/types';
@@ -16,20 +19,9 @@ import { CATEGORIES } from './catalog';
 import { inputSampleOf, itemOf, nextKey, wireProblem, type DraftAction, type Pos, type WireEnd } from './draft';
 import { grown, resolveEnd, type SocketRef } from './socketRefs';
 
-/** A saved template of an operation or a test (stream E): what the menu needs of it. */
-export interface TemplateEntry {
-	id: string;
-	name: string;
-	collection: 'manufacturing_operations' | 'test_sessions';
-	values: Record<string, unknown>;
-	/** Greyed in the list, with the reason (a tool or edge it points at is depleted or retired). */
-	disabled?: string;
-}
-
 export type MenuChoice =
 	| { kind: 'operation'; methodId: string; category: ProcessCategory }
 	| { kind: 'test'; testType: string }
-	| { kind: 'template'; template: TemplateEntry }
 	| { kind: 'newSample' }
 	/** The operation's output is the sample it took in: the work is done in place. */
 	| { kind: 'sameSample' }
@@ -49,6 +41,8 @@ export interface MenuEntry {
 	section: string;
 	label: string;
 	detail?: string;
+	/** More words a search matches (a test type's value, a process category's key). Never shown. */
+	keys?: string;
 	choice: MenuChoice;
 	/** Why it cannot be chosen now. */
 	disabled?: string;
@@ -84,32 +78,34 @@ function operationEntries(methods: readonly MethodEntry[]): MenuEntry[] {
 	const out: MenuEntry[] = [];
 	for (const c of [...CATEGORIES, null] as ProcessCategory[]) {
 		for (const m of methods.filter((x) => x.category === c)) {
-			out.push({ id: `op:${m.id}`, section: categoryLabel(c), label: m.name, detail: m.code || undefined, choice: { kind: 'operation', methodId: m.id, category: m.category } });
+			out.push({ id: `op:${m.id}`, section: categoryLabel(c), label: m.name, detail: m.code || undefined, keys: c ?? undefined, choice: { kind: 'operation', methodId: m.id, category: m.category } });
 		}
 	}
 	return out;
 }
 
 const testEntries = (types: readonly TestTypeEntry[]): MenuEntry[] =>
-	types.map((t) => ({ id: `test:${t.value}`, section: 'Tests', label: t.name, choice: { kind: 'test', testType: t.value } }));
-
-const templateEntries = (templates: readonly TemplateEntry[]): MenuEntry[] =>
-	templates.map((t) => ({
-		id: `tpl:${t.id}`,
-		section: 'Templates',
-		label: t.name,
-		detail: t.collection === 'test_sessions' ? 'Test' : 'Operation',
-		choice: { kind: 'template', template: t },
-		...(t.disabled ? { disabled: t.disabled } : {}),
-	}));
+	types.map((t) => ({ id: `test:${t.value}`, section: 'Tests', label: t.name, keys: t.value, choice: { kind: 'test', testType: t.value } }));
 
 export interface MenuCatalog {
 	methods: readonly MethodEntry[];
 	testTypes: readonly TestTypeEntry[];
-	templates?: readonly TemplateEntry[];
 }
 
-/** The entries of the menu when nothing has been typed. A socket's menu ends with Connect to… (a test has no output to connect). */
+/** The whole catalog (the palette's list, and what an unconnected add search offers): samples, then operations by category, then tests. */
+export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
+	return [
+		{ id: 'sample:new', section: 'Samples', label: 'New sample', detail: 'a blank card', choice: { kind: 'newSample' } },
+		{ id: 'sample:pick', section: 'Samples', label: 'Existing sample…', detail: 'pick from the Samples list', choice: { kind: 'pickSamples' } },
+		...operationEntries(cat.methods),
+		...testEntries(cat.testTypes),
+	];
+}
+
+/** The operations of the catalog alone (what "Insert before / after" offers: a test has no output to carry on from). */
+export const operationOnlyEntries = (cat: MenuCatalog): MenuEntry[] => operationEntries(cat.methods);
+
+/** The entries when nothing has been typed. A socket's list ends with Connect to… (a test has no output to connect). */
 export function rootEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[] {
 	const entries = baseEntries(body, f, cat);
 	if (f.side === null || (f.side === 'out' && f.card === 'test')) return entries;
@@ -138,14 +134,11 @@ function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[]
 		out.push({ id: 'sample:existing', section: 'Sample', label: 'Existing sample…', detail: 'search the samples', choice: { kind: 'existingSample' } });
 		return out;
 	}
-	// From a sample's output, a sample's input, or unconnected: the containers that can be made.
-	const containers = [...templateEntries(cat.templates ?? []), ...operationEntries(cat.methods)];
-	if (f.side !== 'in') containers.push(...testEntries(cat.testTypes));
-	out.push(...containers);
-	if (f.side === null) {
-		out.push({ id: 'sample:new', section: 'Samples', label: 'New sample', detail: 'a blank card', choice: { kind: 'newSample' } });
-		out.push({ id: 'sample:pick', section: 'Samples', label: 'Pick samples…', detail: 'from the Samples list', choice: { kind: 'pickSamples' } });
-	}
+	// Unconnected: the whole catalog.
+	if (f.side === null) return catalogEntries(cat);
+	// From a sample's output, or a sample's input: the containers that can be made (a test has no output, so it cannot make a sample).
+	out.push(...operationEntries(cat.methods));
+	if (f.side !== 'in') out.push(...testEntries(cat.testTypes));
 	return out;
 }
 
@@ -167,14 +160,40 @@ export function canvasSampleEntries(body: DraftBody, end: WireEnd | null, codeOf
 	return out;
 }
 
-/** Entries whose label, detail or section contains every word of the query, in any case. */
-export function filterEntries(entries: readonly MenuEntry[], query: string): MenuEntry[] {
+/** The section the recents are listed under. */
+export const RECENT = 'Recent';
+
+/**
+ * What a query finds: the entries whose label, detail (a method's code), section (its category) or keys (a test type's value) contain every
+ * word of it, in any case. Best first: a label that starts with the first word, then one with a word that does, then one that contains it,
+ * then the rest; within those, what was chosen lately comes first. With nothing typed the recents are moved to the top as their own group
+ * (an entry is listed once, never in both places).
+ */
+export function searchEntries(entries: readonly MenuEntry[], query: string, recent: readonly string[] = []): MenuEntry[] {
 	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-	if (!words.length) return [...entries];
-	return entries.filter((e) => {
-		const hay = `${e.label} ${e.detail ?? ''} ${e.section}`.toLowerCase();
-		return words.every((w) => hay.includes(w));
-	});
+	const recency = (e: MenuEntry): number => {
+		const i = recent.indexOf(e.id);
+		return i < 0 ? Number.POSITIVE_INFINITY : i;
+	};
+	if (!words.length) {
+		const hot = entries.filter((e) => !e.disabled && recency(e) < Number.POSITIVE_INFINITY).sort((a, b) => recency(a) - recency(b));
+		if (!hot.length) return [...entries];
+		return [...hot.map((e) => ({ ...e, section: RECENT })), ...entries.filter((e) => !hot.includes(e))];
+	}
+	const rank = (e: MenuEntry): number => {
+		const label = e.label.toLowerCase();
+		if (label.startsWith(words[0])) return 0;
+		if (label.split(/[\s\-/]+/).some((w) => w.startsWith(words[0]))) return 1;
+		return label.includes(words[0]) ? 2 : 3;
+	};
+	return entries
+		.map((e, i) => ({ e, i }))
+		.filter(({ e }) => {
+			const hay = `${e.label} ${e.detail ?? ''} ${e.section} ${e.keys ?? ''}`.toLowerCase();
+			return words.every((w) => hay.includes(w));
+		})
+		.sort((a, b) => rank(a.e) - rank(b.e) || recency(a.e) - recency(b.e) || a.i - b.i)
+		.map(({ e }) => e);
 }
 
 /** The next entry that can be chosen from `from` (-1: none yet), in `dir`; wraps; -1 when none can. */
@@ -234,10 +253,6 @@ export function actionsFor(t: ChoiceTarget, choice: MenuChoice): DraftAction[] {
 			return container('operation', { from: 'template', values: operationValues(choice.methodId, choice.category) });
 		case 'test':
 			return container('test', { from: 'blank', testType: choice.testType });
-		case 'template': {
-			const kind = choice.template.collection === 'test_sessions' ? 'test' : 'operation';
-			return container(kind, { from: 'template', values: choice.template.values });
-		}
 		case 'newSample':
 			if (side === null) return [{ type: 'addSample', at }];
 			if (side === 'out' && t.card === 'operation' && end) return [{ type: 'addSample', from: end, at }];

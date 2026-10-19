@@ -83,6 +83,15 @@ describe('FieldForm', () => {
 		expect(text(row(html, 'co_owners'))).toContain('Not set');
 	});
 
+	it('a field it cannot draw says when it opens, instead of offering Open in Data Studio, when the form is given an externalHint (a new item of a draft)', async () => {
+		const html = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { sample_code: 'PS-007' }, externalHint: 'Opens in Data Studio after Create' });
+		const code = row(html, 'sample_code');
+		expect(text(code)).toContain('PS-007');
+		expect(text(code)).toContain('Opens in Data Studio after Create');
+		expect(code).not.toContain('<button');
+		expect(text(code)).not.toContain('Open in Data Studio');
+	});
+
 	it('applies conditions live: a machining operation shows Tooling and Cutting, not Sintering', async () => {
 		const machining = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'machining', nc_program_text: '' } });
 		const headings = [...machining.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1]);

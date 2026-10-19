@@ -247,7 +247,7 @@ function reaches(body: DraftBody, extra: DraftWire, start: DraftKey, goal: Draft
 }
 
 /** An operation's wire back to the sample it took in (in place): not an edge of the flow, or every pass would be a cycle. */
-function backEdge(body: DraftBody, w: DraftWire): boolean {
+export function backEdge(body: DraftBody, w: DraftWire): boolean {
 	const from = itemOf(body, w.from.key);
 	const to = itemOf(body, w.to.key);
 	return from?.kind === 'operation' && to?.kind === 'sample' && inputSampleOf(body, { key: from.key, row: w.from.row ?? 0 }) === to.key;

@@ -69,6 +69,13 @@
 	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, var(--d1-surface));
 }
 .d1-process-map .node.draft.planned:not(.rec)::after { content: 'Draft · planned'; }
+/* Planned or done at Create (R9): a new item that is done is drawn solid, one that is planned stays ghosted (dashed, see-through until
+   hovered or selected), the same look the records have once they exist. */
+.d1-process-map .node.draft:not(.planned) { border-style: solid; }
+.d1-process-map .node.draft:not(.planned):not(.rec)::after { content: 'Draft · done'; }
+.d1-process-map .node.draft.planned { opacity: 0.8; }
+.d1-process-map .node.draft.planned:hover,
+.d1-process-map .node.draft.planned.focal { opacity: 1; }
 
 /* A planned record the draft deletes at Create (R4): struck through, with a "Will be deleted" pill. The pill's selector is as specific as
    the "Planned" one above and comes after it. */
@@ -192,4 +199,21 @@
 	font-variant-numeric: tabular-nums;
 }
 .d1-process-map .node .chk.warn { background: color-mix(in srgb, var(--theme--background), var(--theme--warning) 12%); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
+/* The Planned / Done chip of a new operation or test (R9): a small button in the title bar; Done is filled, Planned is an outline. */
+.d1-process-map .node .wchip {
+	flex: none;
+	padding: 0 8px;
+	border: 1px dashed var(--d1-line);
+	border-radius: 99px;
+	background: var(--d1-surface);
+	color: var(--d1-dim);
+	font: inherit;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	line-height: 18px;
+	cursor: pointer;
+}
+.d1-process-map .node .wchip.done { border-style: solid; border-color: var(--d1-ok, var(--theme--success)); background: color-mix(in srgb, var(--d1-ok, var(--theme--success)) 14%, var(--d1-surface)); color: var(--d1-ok, var(--theme--success)); }
+.d1-process-map .node .wchip:hover,
+.d1-process-map .node .wchip:focus-visible { border-color: var(--d1-accent, var(--theme--primary)); outline: none; }
 .d1-process-map .orow.addrow { cursor: pointer; }

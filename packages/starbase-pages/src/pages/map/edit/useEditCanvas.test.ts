@@ -76,7 +76,7 @@ beforeEach(() => void vi.stubGlobal('window', undefined));
 afterEach(() => void vi.unstubAllGlobals());
 
 describe('a click on a socket', () => {
-	it('opens the Add menu at the socket, naming the card it is on', async () => {
+	it('opens the add search at the socket, naming the card it is on', async () => {
 		const { ec, opened } = await setup(twoCards());
 		down(SAMPLE_OUT, { x: 300, y: 200 }, ec);
 		fire('pointermove', { clientX: 301, clientY: 201 });
@@ -195,7 +195,7 @@ describe('a drag from a socket', () => {
 		expect(edit.body.value.wires).toHaveLength(1);
 	});
 
-	it('opens the Add menu where it is dropped on empty canvas, in the map\'s own coordinates', async () => {
+	it('opens the add search where it is dropped on empty canvas, in the map\'s own coordinates', async () => {
 		const { ec, opened } = await setup(twoCards(), [target]);
 		down(SAMPLE_OUT, { x: 300, y: 200 }, ec);
 		fire('pointermove', { clientX: 650, clientY: 420 });

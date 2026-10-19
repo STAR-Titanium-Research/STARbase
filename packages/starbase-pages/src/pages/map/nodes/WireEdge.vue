@@ -37,6 +37,11 @@ const bezier = computed(() =>
 const path = computed(() => bezier.value[0]);
 /** Edit mode: the wire the person clicked, to be taken off with Delete; a wire of done records wears a lock and says why. */
 const selected = computed(() => !!edit?.editing.value && edit.selectedWire.value === props.id);
+/** An entry dragged from the palette is over this wire: green when it would be inserted here, red when it is refused (a done wire among them). */
+const dropMark = computed(() => {
+	const d = edit?.dropWire?.value;
+	return d && d.id === props.id ? (d.ok ? 'drop-ok' : 'drop-bad') : null;
+});
 const lock = computed(() => (selected.value ? (edit?.wireLock(props.id) ?? null) : null));
 const wire = computed(() => props.data.wire);
 // The tooltip text, one line per fact; the page reads it from the hovered path (el.dataset.tip).
@@ -46,7 +51,7 @@ const colour = computed(() => (wire.value.flow === 'stock' ? 'var(--k-material)'
 </script>
 
 <template>
-	<g class="d1-wire" :class="{ sel: selected }" :style="{ '--k': colour }">
+	<g class="d1-wire" :class="[{ sel: selected }, dropMark]" :style="{ '--k': colour }">
 		<path class="wire" :class="[`flow-${wire.flow}`, { stackable: wire.stackable }]" :d="path" />
 		<path v-if="wire.stackable" class="core" :d="path" />
 		<path class="hit" :d="path" :data-tip="tip" @mouseenter="on.enter" @mouseleave="on.leave" @click="on.click" />
@@ -65,6 +70,8 @@ const colour = computed(() => (wire.value.flow === 'stock' ? 'var(--k-material)'
 .core { fill: none; stroke: var(--d1-surface, var(--theme--background)); stroke-width: 1.4px; pointer-events: none; }
 .hit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }
 .sel .wire { stroke: var(--d1-accent, var(--theme--primary)); stroke-width: 4px; stroke-dasharray: 7 5; }
+.drop-ok .wire { stroke: var(--d1-ok); stroke-width: 5px; }
+.drop-bad .wire { stroke: var(--d1-bad); stroke-width: 5px; stroke-dasharray: 6 5; }
 .lock rect { fill: var(--d1-surface); stroke: var(--d1-bad); stroke-width: 1.6px; }
 .lock path { stroke: var(--d1-bad); stroke-width: 1.6px; }
 </style>

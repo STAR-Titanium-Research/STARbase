@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import type { DraftBody } from '@d1/ui';
-import AddMenu from './AddMenu.vue';
+import AddSearch from './AddSearch.vue';
 import { apply, emptyBody, type DraftAction } from './draft';
 
 const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('i', { class: 'v-icon' }, p.name) });
@@ -15,14 +15,14 @@ const methods = [
 const testTypes = [{ value: 'tensile', name: 'Tensile' }];
 
 async function render(props: Record<string, unknown>): Promise<string> {
-	const app = createSSRApp({ render: () => h(AddMenu as never, props) });
+	const app = createSSRApp({ render: () => h(AddSearch as never, props) });
 	app.component('v-icon', VIcon);
 	return renderToString(app);
 }
 const base = { body: run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]), methods, testTypes };
 const text = (html: string) => html.replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-describe('AddMenu', () => {
+describe('AddSearch', () => {
 	it('opened on a sample\'s output is a dialog with a search box and the methods and tests by section', async () => {
 		const html = await render({ ...base, target: { sock: { kind: 'sample', id: 'draft:n1', side: 'out' }, at: { x: 10, y: 20 } } });
 		expect(html).toContain('role="dialog"');
@@ -30,7 +30,7 @@ describe('AddMenu', () => {
 		expect(html).toContain('role="listbox"');
 		const t = text(html);
 		for (const word of ['What happens to this sample?', 'Machining', 'Turning', 'MC', 'FAST sintering', 'Tests', 'Tensile']) expect(t).toContain(word);
-		expect(t).not.toContain('Pick samples');
+		expect(t).not.toContain('Existing sample');
 	});
 
 	it('has one status region, always mounted: empty while there are entries', async () => {
@@ -45,9 +45,9 @@ describe('AddMenu', () => {
 		expect(html).toMatch(/aria-activedescendant="[^"]*-opt-0"/);
 	});
 
-	it('unconnected also offers the samples', async () => {
+	it('unconnected is the whole catalog: the samples first, then the operations by category, then the tests', async () => {
 		const t = text(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } }));
-		expect(t).toContain('Pick samples…');
+		expect(t).toContain('Existing sample…');
 		expect(t).toContain('New sample');
 	});
 
@@ -61,10 +61,25 @@ describe('AddMenu', () => {
 		expect(t).not.toContain('Turning');
 	});
 
-	it('shows the templates it is given first', async () => {
-		const templates = [{ id: 't', name: 'Rough turn', collection: 'manufacturing_operations' as const, values: {} }];
-		const t = text(await render({ ...base, templates, target: { sock: null, at: { x: 0, y: 0 } } }));
-		expect(t.indexOf('Templates')).toBeLessThan(t.indexOf('Machining'));
-		expect(t).toContain('Rough turn');
+	it('is aria-modal, so the shell Ctrl/⌘+K does not open the Finder over it', async () => {
+		expect(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } })).toContain('aria-modal="true"');
+	});
+
+	it('lists what was added lately first, as its own group, each entry once', async () => {
+		const html = await render({ ...base, recents: ['test:tensile', 'op:mf'], target: { sock: null, at: { x: 0, y: 0 } } });
+		const t = text(html);
+		expect(t.indexOf('Recent')).toBeLessThan(t.indexOf('Samples'));
+		expect(t.indexOf('Tensile')).toBeLessThan(t.indexOf('FAST sintering'));
+		expect(t.indexOf('FAST sintering')).toBeLessThan(t.indexOf('Machining'));
+		expect(t.match(/Tensile/g)).toHaveLength(1);
+		expect(html).toMatch(/id="[^"]*-opt-0"[^>]*aria-selected="true"[^>]*>\s*<span class="lab"[^>]*>Tensile/);
+	});
+
+	it('opened to insert before a card lists the operations only, with its own title', async () => {
+		const t = text(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 }, insert: { where: 'before', nodeId: 's:n1', what: 'S-0412-A' } } }));
+		expect(t).toContain('Insert before S-0412-A');
+		expect(t).toContain('Turning');
+		expect(t).not.toContain('Tensile');
+		expect(t).not.toContain('New sample');
 	});
 });

@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import { D1, STAR, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
+import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addFromLid, buildTurningWithNewSample, card, cards, boxOf, canvasOf, centreOf, chooseFromSocketMenu, clickEmpty, clickWire, dragBetween, dragCard, createButton, duplicateMany, flowPos, flowPositions, openNewDraft, pickSamples, settledOverlaps, sockOf, dragFrom, draftIdOf, driftedWires, wireEndOffsets, emptySpot, overlaps, pressCreate, readDraft, sampleIdOf, fit, distinctRecords, makePlanned, makeTechSituation, relativeLayout, secondMember, savedDraft, selectCard, startEditingMapOf, viewportSettled, wireBetween,
 	type Ref,
@@ -34,12 +34,12 @@ test.beforeAll(async ({ playwright }) => {
 	test.skip(!stackAvailable(), 'the local stack is not up: run `bash scripts/dev/local-stack.sh up`');
 	admin = await apiAs(playwright, 'admin');
 	member = await apiAs(playwright, 'member');
-	const me = await (await member.get(`${D1}/users/me?fields=id`)).json();
+	const me = await (await getRetrying(member, `${D1}/users/me?fields=id`)).json();
 	memberPerson = (await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`))[0].person_id;
 });
 
 async function deleteDrafts(api: APIRequestContext): Promise<void> {
-	const r = await api.get(`${D1}/d1-build/drafts`);
+	const r = await getRetrying(api, `${D1}/d1-build/drafts`);
 	if (!r.ok()) return;
 	for (const d of (await r.json()).data as { id: string }[]) await api.delete(`${D1}/d1-build/drafts/${d.id}`);
 }
@@ -188,7 +188,7 @@ test.describe('as a Lab Member', () => {
 		await expect(input).toHaveCount(1);
 		await dragFrom(page, input, await emptySpot(page));
 		await expect(wire).toHaveCount(0);
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		const body = await savedDraft(page, member, (b) => b.wires.length === 1, 'the dragged wire removed');
 		expect(body.items, 'the cards stay').toHaveLength(3);
 		expect(body.wires[0].to.key, 'the other wire, into the operation, is the one left').not.toBe(body.items.find((i) => i.kind === 'sample' && !i.existing)!.key);
@@ -197,7 +197,7 @@ test.describe('as a Lab Member', () => {
 		await savedDraft(page, member, (b) => b.wires.length === 2, 'undo put the wire back');
 	});
 
-	test('dragging from a FREE socket onto empty canvas opens the Add menu and removes no wire; a sample that has its maker offers no free input (R4, R5)', async ({ page }) => {
+	test('dragging from a FREE socket onto empty canvas opens the add search and removes no wire; a sample that has its maker offers no free input (R4, R5)', async ({ page }) => {
 		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
 		await savedDraft(page, member, (b) => b.wires.length === 2, 'both wires saved');
 		const operation = card(page, 'CNC Turning, Operation');
@@ -206,15 +206,15 @@ test.describe('as a Lab Member', () => {
 		const freeIn = canvasOf(page).locator('.free[data-sock$="|in|add"]');
 		await expect(freeIn).toHaveCount(1);
 		await dragFrom(page, freeIn, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await expect(page.locator('.pm-addsearch')).toBeVisible();
 		await page.keyboard.press('Escape');
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		await expect(wireBetween(page, 's:', 'op:draft:')).toHaveCount(1);
 		expect((await readDraft(member, draftIdOf(page))).wires, 'no wire was taken').toHaveLength(2);
 		// The same for the free output (nothing to take there either) ...
 		const freeOut = canvasOf(page).locator('.free[data-sock$="|out|add"]');
 		await dragFrom(page, freeOut, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toBeVisible();
+		await expect(page.locator('.pm-addsearch')).toBeVisible();
 		await page.keyboard.press('Escape');
 		expect((await readDraft(member, draftIdOf(page))).wires, 'still both wires').toHaveLength(2);
 		// ... and a sample an operation makes has no free input to offer: it has its maker.
@@ -240,7 +240,7 @@ test.describe('as a Lab Member', () => {
 		const input = canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|in"]:not(.free)');
 		await expect(input).toHaveCount(1);
 		await dragFrom(page, input, await emptySpot(page));
-		await expect(page.locator('.pm-addmenu')).toHaveCount(0);
+		await expect(page.locator('.pm-addsearch')).toHaveCount(0);
 		await expect(page.locator('.pm-banner[role="alert"]')).toHaveText(/2 wires/);
 		expect((await readDraft(member, draftIdOf(page))).wires, 'neither wire was taken').toHaveLength(2);
 
@@ -376,8 +376,8 @@ test.describe('as a Lab Member', () => {
 		const cut = card(page, /, Operation$/);
 		// A loose new sample (from the lid's Add), the second piece's output.
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addmenu').getByRole('option', { name: /^New sample/ }).click();
-		await expect(page.locator('.pm-addmenu')).toBeHidden();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
+		await expect(page.locator('.pm-addsearch')).toBeHidden();
 		await savedDraft(page, member, (b) => b.items.length === 4, 'the loose sample');
 		await fit(page);
 		await selectCard(page, cut);
@@ -424,7 +424,7 @@ test.describe('as a Lab Member', () => {
 		expect(await settledOverlaps(page), 'after redo').toEqual([]);
 	});
 
-	test('two cards added one after the other to a blank canvas never land on each other (R6; they did in 6 of 10 runs: the Add menu gives both the place it was opened at)', async ({ page }) => {
+	test('two cards added one after the other to a blank canvas never land on each other (R6; they did in 6 of 10 runs: the add search gives both the place it was opened at)', async ({ page }) => {
 		for (let run = 1; run <= 5; run++) {
 			await openNewDraft(page);
 			await addFromLid(page, /^New sample/);

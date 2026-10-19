@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext, type Locator, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
-import { D1, STAR, listRecords } from './localStack';
+import { D1, STAR, getRetrying, listRecords } from './localStack';
 
 // What a person does on the process map's edit mode (`/map?edit=...`), as helpers for the specs that run against the LOCAL STACK
 // (tests/ui/specs/edit-mode*.spec.ts). Everything here goes through the page the way a person would (clicks, keys, drags) except
@@ -23,7 +23,7 @@ export const draftIdOf = (page: Page): string => {
 
 /** The saved body of the draft the page has open, read as `api`'s account (what a reload would show). */
 export async function readDraft(api: APIRequestContext, id: string): Promise<DraftBody> {
-	const r = await api.get(`${D1}/d1-build/drafts/${id}`);
+	const r = await getRetrying(api, `${D1}/d1-build/drafts/${id}`);
 	expect(r.ok(), `GET draft ${id}: ${r.status()}`).toBeTruthy();
 	return (await r.json()).data.body as DraftBody;
 }
@@ -112,6 +112,8 @@ export async function inView(page: Page, l: Locator): Promise<boolean> {
 }
 /** Fits the map when `l` is not all in view (the map keeps its viewport when something is added, so new cards can be off screen). */
 export async function reach(page: Page, l: Locator): Promise<void> {
+	// Cards glide to their places after a change (and a late size check can lay them out again): look once they rest, or a card that is on screen mid-glide is off it a moment later.
+	await settledOverlaps(page);
 	if (!(await inView(page, l))) await fit(page);
 	expect(await inView(page, l), `${l} is in view after Fit`).toBe(true);
 }
@@ -147,8 +149,8 @@ export async function pickSamples(page: Page, codes: string[]): Promise<void> {
 /** Opens a socket's add menu from the keyboard (Enter on the socket) and chooses one entry of it. */
 export async function chooseFromSocketMenu(page: Page, socket: Locator, entry: RegExp): Promise<void> {
 	await socket.press('Enter');
-	await page.locator('.pm-addmenu').getByRole('option', { name: entry }).click();
-	await expect(page.locator('.pm-addmenu')).toBeHidden();
+	await page.locator('.pm-addsearch').getByRole('option', { name: entry }).click();
+	await expect(page.locator('.pm-addsearch')).toBeHidden();
 }
 
 export const sockOf = (page: Page, sock: string): Locator => canvasOf(page).locator(`[data-sock="${sock}"]`);
@@ -268,8 +270,8 @@ export async function settledOverlaps(page: Page): Promise<string[]> {
 /** The lid's Add button, then one entry of its menu. */
 export async function addFromLid(page: Page, entry: RegExp): Promise<void> {
 	await page.getByRole('button', { name: /^Add\b/ }).first().click();
-	await page.locator('.pm-addmenu').getByRole('option', { name: entry }).click();
-	await expect(page.locator('.pm-addmenu')).toBeHidden();
+	await page.locator('.pm-addsearch').getByRole('option', { name: entry }).click();
+	await expect(page.locator('.pm-addsearch')).toBeHidden();
 }
 /** Duplicate ×N of the selected card (Ctrl+Shift+D asks how many). */
 export async function duplicateMany(page: Page, n: number): Promise<void> {
@@ -366,7 +368,7 @@ export async function makePlanned(api: APIRequestContext, root: APIRequestContex
  */
 export async function makeTechSituation(admin: APIRequestContext, member: APIRequestContext, note: (r: Ref) => void): Promise<{ operationId: string; sampleId: string; ownerPersonId: string }> {
 	const personOf = async (api: APIRequestContext): Promise<string> => {
-		const me = await (await api.get(`${D1}/users/me?fields=id`)).json();
+		const me = await (await getRetrying(api, `${D1}/users/me?fields=id`)).json();
 		return (await listRecords<{ person_id: string }>(admin, 'people', `filter[user_id][_eq]=${me.data.id}&fields=person_id`))[0].person_id;
 	};
 	const [memberPerson, adminPerson] = [await personOf(member), await personOf(admin)];
@@ -418,4 +420,65 @@ export async function startEditingMapOf(page: Page, collection: string, id: stri
 	await page.waitForURL(DRAFT_URL);
 	await expect(page.getByRole('toolbar', { name: 'Edit mode' })).toBeVisible();
 	return draftIdOf(page);
+}
+
+// ---- the palette and the add search (slice 2a) -------------------------------------------------------------------------------------
+
+/** The palette dock (an `aside` named "Palette"). */
+export const paletteOf = (page: Page): Locator => page.getByRole('complementary', { name: 'Palette' });
+/** One entry of the palette by its label (the entry's own button). */
+export const paletteEntry = (page: Page, label: string | RegExp): Locator => paletteOf(page).locator('.pe').filter({ hasText: label });
+/** The add search (Shift+A, Ctrl/⌘+K, a socket, Insert before / after): a dialog with a combobox and a listbox of options. */
+export const addSearch = (page: Page): Locator => page.locator('.pm-addsearch');
+/** The labels of the add search's options, in order. */
+export const searchOptions = async (page: Page): Promise<string[]> => addSearch(page).locator('[role="option"] .lab').allTextContents();
+/** The add search opened with the keyboard at the canvas (the pointer rests over it first, so it opens there). */
+export async function openAddSearch(page: Page, keys: 'Shift+A' | 'Control+k' = 'Shift+A'): Promise<void> {
+	const b = await boxOf(canvasOf(page));
+	await page.mouse.move(b.x + b.width * 0.55, b.y + b.height * 0.55);
+	await page.keyboard.press(keys);
+	await expect(addSearch(page)).toBeVisible();
+}
+/** Where the drawn wire passes at half its length, in page coordinates: a point a drop is certain to land on the wire at. */
+export async function wireMidpoint(wire: Locator): Promise<{ x: number; y: number }> {
+	return wire.locator('path.wire').evaluate((p) => {
+		const path = p as SVGPathElement;
+		const pt = path.getPointAtLength(path.getTotalLength() / 2);
+		const out = new DOMPoint(pt.x, pt.y).matrixTransform(path.getScreenCTM()!);
+		return { x: out.x, y: out.y };
+	});
+}
+
+/** Where a drag ends: a point, a locator (its middle) or a function that finds the point once the map has stopped moving. */
+export type DropTarget = { x: number; y: number } | Locator | (() => Promise<{ x: number; y: number }>);
+async function resolveTarget(t: DropTarget): Promise<{ x: number; y: number }> {
+	if (typeof t === 'function') return t();
+	if ('boundingBox' in t) return centreOf(await boxOf(t));
+	return t;
+}
+
+/**
+ * Starts dragging a palette entry and moves the pointer to `to` WITHOUT letting go: the page marks what is under it. Finish with `page.mouse.up()`.
+ * The map is let to settle first (the viewport after a Fit, the cards gliding to their places), and `to` is found after that: a point taken
+ * while a card was still moving is not where the card is a moment later.
+ */
+export async function holdEntryOver(page: Page, entry: Locator, to: DropTarget): Promise<void> {
+	await viewportSettled(page);
+	await settledOverlaps(page);
+	const target = await resolveTarget(to);
+	const from = centreOf(await boxOf(entry));
+	await page.mouse.move(from.x, from.y);
+	await page.mouse.down();
+	await page.mouse.move(from.x + 8, from.y + 4);
+	await page.mouse.move(target.x, target.y, { steps: 14 });
+}
+/** Drags a palette entry onto a point, a locator or a wire (`() => wireMidpoint(wire)`) and lets go. */
+export async function dragEntryTo(page: Page, entry: Locator, to: DropTarget): Promise<void> {
+	await holdEntryOver(page, entry, to);
+	await page.mouse.up();
+}
+/** The middle of the canvas panel (a blank canvas has nothing else there). */
+export async function canvasMiddle(page: Page): Promise<{ x: number; y: number }> {
+	const b = await boxOf(canvasOf(page));
+	return { x: b.x + b.width * 0.5, y: b.y + b.height * 0.5 };
 }

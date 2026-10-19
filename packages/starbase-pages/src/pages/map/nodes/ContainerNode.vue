@@ -77,6 +77,9 @@ const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
+/** Planned or done at Create (R9): a new operation or test wears a chip that says which, and flips it. */
+const work = computed(() => (edit?.editing.value ? (edit.work?.(props.data) ?? null) : null));
+const flip = stopping(() => work.value?.toggle());
 
 // The two stacks are centred on each other, so a cut's one input sits level with the middle of its pieces
 // and rows in place (same count each side) line up straight across.
@@ -156,6 +159,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
+			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
