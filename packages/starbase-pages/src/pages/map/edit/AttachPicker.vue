@@ -131,7 +131,7 @@ const day = (d: string | null): string => d ?? 'no date';
 				<span class="hint">{{ heading }}</span>
 				<button type="button" class="x" aria-label="Close" @click="emit('close')"><v-icon name="close" small /></button>
 			</div>
-			<p class="what">Recorded operations that have no input sample yet. Choosing one makes the sample an input of it; nothing else about it changes.</p>
+			<p class="what">Recorded operations that have no input sample yet. Choosing one makes the sample an input of it. Its code and step number then follow that sample.</p>
 			<input
 				ref="input"
 				v-model="query"

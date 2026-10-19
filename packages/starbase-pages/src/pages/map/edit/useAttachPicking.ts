@@ -72,6 +72,7 @@ export function useAttachPicking(o: {
 	const site = computed<AttachSite>(() => ({
 		body: edit.body.value,
 		onCanvas: onCanvas.value,
+		target: target.value?.sock?.kind === 'sample' ? target.value.sock.id : undefined,
 		samplePlanned: sampleNode.value?.type === 'record' && !!sampleNode.value.planned,
 		ancestors: sampleNode.value ? ancestorSamples(o.map.graph.value, sampleNode.value.id) : new Set<string>(),
 	}));

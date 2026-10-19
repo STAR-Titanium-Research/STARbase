@@ -82,6 +82,11 @@ describe('why a row is greyed', () => {
 		expect(orphanReason(row(), site({ ancestors: new Set(['s1']) }))).toBeNull();
 	});
 
+	it('is greyed when it made the very sample it would be attached to', () => {
+		expect(orphanReason(row(), site({ target: 's9' }))).toMatch(/AA-0009: a sample cannot be an input of the operation that made it/);
+		expect(orphanReason(row(), site({ target: 's1' }))).toBeNull();
+	});
+
 	it('says on the canvas before anything else', () => {
 		expect(orphanReason(row({ workState: 'done' }), site({ onCanvas: new Set(['op-1']), samplePlanned: true }))).toBe(ON_CANVAS);
 	});

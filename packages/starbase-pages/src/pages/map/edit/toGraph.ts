@@ -215,6 +215,7 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 			...(loaded ?? stubOperation(id, ctx)),
 			sampleId: input,
 			outputSampleId: output ?? loaded?.outputSampleId ?? null,
+			attaching: true,
 		};
 		if (at >= 0) operations[at] = record;
 		else operations.push(record);

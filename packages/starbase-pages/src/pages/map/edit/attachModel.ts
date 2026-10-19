@@ -98,6 +98,8 @@ export interface AttachSite {
 	samplePlanned?: boolean;
 	/** The ids of the samples the target comes from, as far as the map has loaded them (not the target itself): an operation that makes one of them would close a circle. */
 	ancestors?: ReadonlySet<string>;
+	/** The record id of the sample the operation would take in; undefined when it floats. */
+	target?: string;
 }
 
 /** Why this operation cannot be attached here, in the words of the lab, or null when it can. */
@@ -107,6 +109,7 @@ export function orphanReason(row: OrphanRow, site: AttachSite): string | null {
 	}
 	if (site.onCanvas.has(row.id)) return ON_CANVAS;
 	if (row.workState === 'done' && site.samplePlanned) return SAMPLE_STILL_PLANNED;
+	if (row.output && site.target && row.output.id === site.target) return `It makes ${row.output.code}: a sample cannot be an input of the operation that made it.`;
 	if (row.output && site.ancestors?.has(row.output.id)) return `It makes ${row.output.code}, which this sample comes from: that would run in a circle.`;
 	return null;
 }

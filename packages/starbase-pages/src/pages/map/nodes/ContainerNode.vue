@@ -63,7 +63,7 @@ const canFold = computed(() => !props.data.bundled && props.data.rows.length > F
 // side with nothing wired has none drawn, so edit mode draws a free one, a button, on the rail in its place (a blank operation is
 // one row with a free input). Which row a socket is comes from the model (model/railSockets), not from the rail.
 const edit = useMapEdit();
-const editable = computed(() => !!edit?.editing.value && !!props.data.draft && !props.data.collapsed);
+const editable = computed(() => !!edit?.editing.value && !!(props.data.draft || props.data.attaching) && !props.data.collapsed);
 /** The edit controls of one row's `side`: where a wire starts or ends on the draft. */
 const rowRef = (recordId: string, side: EndSide): SocketRef => ({ kind: 'row', id: rowRecordId(props.data, recordId, side), side });
 const owners = computed(() => socketOwners(props.data));

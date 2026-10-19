@@ -31,8 +31,8 @@ export interface RailSocketModel {
 	add?: true;
 }
 
-/** Whether this container's `side` can take a wire in edit mode at all (a test has no output). */
-const wirable = (node: ContainerNode, side: RailSide): boolean => !(node.kind === 'test' && side === 'out');
+/** Whether this container's `side` can take a wire in edit mode at all (a test has no output; an operation the draft attaches keeps the sample it made). */
+const wirable = (node: ContainerNode, side: RailSide): boolean => !(node.kind === 'test' && side === 'out') && !(node.attaching && side === 'out');
 
 /** A container whose rows can grow by a connection: a new operation (a draft of its own), one row per record, not a deck of passes. */
 const growable = (node: ContainerNode): boolean => node.kind === 'operation' && !!node.draft && !node.stacked && !node.collapsed;

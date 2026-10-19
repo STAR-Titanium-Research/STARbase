@@ -61,6 +61,8 @@ export interface OpRow {
   plannedDate?: string | null;
   /** A draft item (edit mode), drawn dashed with a "Draft" tint; never loaded, only made by toGraph. */
   draft?: true;
+  /** A recorded operation the draft attaches (it is given an input at Create): drawn as the record it is, its input socket the draft's to wire; only made by toGraph. */
+  attaching?: true;
   /** A planned record the draft deletes at Create (edit mode R4): drawn struck through with "will be deleted"; only made by toGraph. */
   removing?: true;
 }
@@ -253,6 +255,8 @@ export type ContainerNode = {
   planned?: true;
   /** Every row is a draft item: drawn dashed with a "Draft" tint. */
   draft?: true;
+  /** Every row is a recorded operation the draft attaches (slice 3): its input is the draft's to wire, its output is the record's own. */
+  attaching?: true;
   /** Every row is a planned record the draft deletes at Create: drawn struck through with a "Will be deleted" badge. */
   removing?: true;
 };

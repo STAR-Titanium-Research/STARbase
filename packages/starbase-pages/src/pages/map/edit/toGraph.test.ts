@@ -264,6 +264,9 @@ describe('toGraph', () => {
 			expect(wire(g, 's:s1:out:0', 'op:orph:in:0')).toBeDefined();
 			expect(g.wires.some((w) => w.from === 'op:orph:out:0' && w.to.startsWith('s:made:in'))).toBe(true);
 			expect(container(g, 'op:orph').planned).toBeFalsy();
+			// the card knows it is the draft's to wire (its input) and not to build from (its output)
+			expect(container(g, 'op:orph').attaching).toBe(true);
+			expect(container(g, 'op:orph').draft).toBeUndefined();
 		});
 
 		it('a planned one is drawn planned (ghosted)', () => {
