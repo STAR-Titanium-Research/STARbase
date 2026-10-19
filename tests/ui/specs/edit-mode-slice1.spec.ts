@@ -197,7 +197,7 @@ test.describe('as a Lab Member', () => {
 		await savedDraft(page, member, (b) => b.wires.length === 2, 'undo put the wire back');
 	});
 
-	test('dragging from a FREE socket onto empty canvas opens the Add menu and removes no wire; a sample that has its maker offers no free input (R4, R5)', async ({ page }) => {
+	test('dragging from a FREE socket onto empty canvas opens the add search and removes no wire; a sample that has its maker offers no free input (R4, R5)', async ({ page }) => {
 		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
 		await savedDraft(page, member, (b) => b.wires.length === 2, 'both wires saved');
 		const operation = card(page, 'CNC Turning, Operation');
@@ -424,7 +424,7 @@ test.describe('as a Lab Member', () => {
 		expect(await settledOverlaps(page), 'after redo').toEqual([]);
 	});
 
-	test('two cards added one after the other to a blank canvas never land on each other (R6; they did in 6 of 10 runs: the Add menu gives both the place it was opened at)', async ({ page }) => {
+	test('two cards added one after the other to a blank canvas never land on each other (R6; they did in 6 of 10 runs: the add search gives both the place it was opened at)', async ({ page }) => {
 		for (let run = 1; run <= 5; run++) {
 			await openNewDraft(page);
 			await addFromLid(page, /^New sample/);

@@ -26,7 +26,7 @@ async function setup(editing = true, body?: DraftBody, person: string | null = '
 	return { edit, menu, picked, connect, insert };
 }
 
-describe('the Add menu\'s state', () => {
+describe('the add search\'s state', () => {
 	it('opens unconnected at a point on the canvas, and places a card there in the map\'s own coordinates', async () => {
 		const { menu } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
@@ -110,7 +110,7 @@ describe('the Add menu\'s state', () => {
 	});
 });
 
-describe('the Add menu on a free socket that adds a row (R5)', () => {
+describe('the add search on a free socket that adds a row (R5)', () => {
 	const run = (actions: DraftAction[]): DraftBody => actions.reduce((b, a) => apply(b, a), emptyBody());
 	const body = () =>
 		run([

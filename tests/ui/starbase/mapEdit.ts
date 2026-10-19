@@ -437,13 +437,6 @@ export async function openAddSearch(page: Page, keys: 'Shift+A' | 'Control+k' = 
 	await page.keyboard.press(keys);
 	await expect(addSearch(page)).toBeVisible();
 }
-/** Chooses a socket's add search entry: Enter on the socket opens it, then the option is clicked. */
-export async function searchFromSocket(page: Page, socket: Locator, entry: RegExp): Promise<void> {
-	await socket.press('Enter');
-	await addSearch(page).getByRole('option', { name: entry }).click();
-	await expect(addSearch(page)).toBeHidden();
-}
-
 /** Where the drawn wire passes at half its length, in page coordinates: a point a drop is certain to land on the wire at. */
 export async function wireMidpoint(wire: Locator): Promise<{ x: number; y: number }> {
 	return wire.locator('path.wire').evaluate((p) => {

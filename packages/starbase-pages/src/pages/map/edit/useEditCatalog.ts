@@ -1,5 +1,5 @@
 // The reference data edit mode reads through the host's API (as the signed-in user, so Directus permissions decide what is
-// offered): the methods and test types of the Add menu, the field definitions of the three collections a draft holds, the
+// offered): the methods and test types of the add search, the field definitions of the three collections a draft holds, the
 // existing records of a draft (version and fields, for stale checks and for building from them), the samples picked from
 // the index, and the codes of the materials the sample codes are made of. Everything is read once and kept; a read that
 // fails leaves what is known and the menu shows less, nothing is blocked.

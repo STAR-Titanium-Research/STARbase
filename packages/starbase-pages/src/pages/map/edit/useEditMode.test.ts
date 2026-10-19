@@ -417,7 +417,7 @@ describe('useEditMode: the draft on the map', () => {
 		expect(edit.selectedItem.value?.kind).toBe('sample');
 	});
 
-	it('reads the methods for the Add menu once edit mode is on', async () => {
+	it('reads the methods for the add search once edit mode is on', async () => {
 		const { edit, s } = setup({ edit: 'new' });
 		await flush();
 		expect(edit.catalog.methods.value.map((m) => m.name)).toEqual(['FAST sintering', 'Heat treatment', 'Turning']);

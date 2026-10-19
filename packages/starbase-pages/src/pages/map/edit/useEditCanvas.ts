@@ -5,9 +5,9 @@
 // wired on that side). Nothing about them is in the draft. A wire connected to the free socket of an operation that has a wire on every
 // row adds the row it stands for, in the same step (`connectActions`).
 //
-// A click on a socket (a pointer that did not move) opens the Add menu there. A drag draws a wire preview that follows the pointer
+// A click on a socket (a pointer that did not move) opens the add search there. A drag draws a wire preview that follows the pointer
 // and marks the socket it is over green when the draft takes the wire and red when it does not (with the reducer's reason as a
-// tooltip); dropped on a socket that fits it makes the wire, dropped on empty canvas it opens the Add menu at that point, and
+// tooltip); dropped on a socket that fits it makes the wire, dropped on empty canvas it opens the add search at that point, and
 // anywhere else it does nothing. (A wire's end dragged off an input that has one and dropped on empty canvas takes the wire off.) No gesture needs dragging: Enter on a focused socket opens its menu too, and C its "Connect to…" (E21).
 
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';

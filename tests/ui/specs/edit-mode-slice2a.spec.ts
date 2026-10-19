@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
-	paletteEntry, paletteOf, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, searchFromSocket, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
+	paletteEntry, paletteOf, pickSamples, pressCreate, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
 	type DraftBody, type Ref,
 } from '../starbase/mapEdit';
 
@@ -383,6 +383,31 @@ test.describe('as a Lab Member', () => {
 		await page.keyboard.press('Enter');
 		await expect(card(page, 'Heat Treatment, Operation')).toBeVisible();
 		await savedDraft(page, member, (b) => operations(b).length === 2 && b.items.length === 5, 'a heat treatment after the turning');
+		expect(await settledOverlaps(page)).toEqual([]);
+	});
+
+	test('the card\'s right-click menu offers Insert before / after, and "Add an earlier step…" on a done sample (R2, R3)', async ({ page }) => {
+		const bar2 = await sampleIdOf(member, 'LOCAL-BAR-2');
+		await startEditingMapOf(page, 'physical_samples', bar2);
+		const done = card(page, 'LOCAL-BAR-2, Sample');
+		await reach(page, done);
+		await done.locator('.code').first().click({ button: 'right' });
+		const menu = page.getByRole('menu', { name: 'Highlight' });
+		await expect(menu.getByRole('menuitem', { name: /^Insert after/ })).toBeVisible();
+		await expect(menu.getByRole('menuitem', { name: /^Insert before/ })).toHaveCount(0);
+		await menu.getByRole('menuitem', { name: /^Add an earlier step/ }).click();
+		await expect(page.getByRole('dialog', { name: 'Add an earlier step to LOCAL-BAR-2' })).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(addSearch(page)).toBeHidden();
+		// "After" a done sample is an ordinary operation it feeds.
+		await done.locator('.code').first().click({ button: 'right' });
+		await menu.getByRole('menuitem', { name: /^Insert after/ }).click();
+		await expect(page.getByRole('dialog', { name: 'Insert after LOCAL-BAR-2' })).toBeVisible();
+		await page.keyboard.type('milling');
+		await page.keyboard.press('Enter');
+		await expect(card(page, 'CNC Milling, Operation')).toBeVisible();
+		const body = await savedDraft(page, member, (b) => operations(b).length === 1, 'the milling after the done sample');
+		expect(body.wires, 'fed by the done sample (which joined the draft), nothing else rewired').toHaveLength(1);
 		expect(await settledOverlaps(page)).toEqual([]);
 	});
 

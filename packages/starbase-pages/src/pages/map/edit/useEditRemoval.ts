@@ -155,7 +155,7 @@ export function useEditRemoval(o: { edit: EditMode; map: ProcessMap; canvasEl: R
 
 	/**
 	 * A wire end dragged off its WIRED input socket (`socketId`: the Handle's id) and dropped on empty canvas: the one wire drawn on that
-	 * socket goes, by the same rules as Delete on it (a done wire says why and stays). True when the drop was dealt with, so the Add menu does
+	 * socket goes, by the same rules as Delete on it (a done wire says why and stays). True when the drop was dealt with, so the add search does
 	 * not open; false when there is nothing to take (an output, a socket nothing is drawn on). A socket several wires end on (a test of two
 	 * samples) cannot tell which was grabbed: none goes, and the person is told to click the one they mean.
 	 */
