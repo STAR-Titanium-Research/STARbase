@@ -67,7 +67,7 @@ let counter = 0;
  * An operation with NO input sample (CNC Turning, machining), made by `api`'s account, which owns it, and the sample it made. A planned one
  * makes a planned sample; a done one an active sample and says who did it and when.
  */
-async function makeOrphan(state: 'planned' | 'done', api: APIRequestContext = member, person: string = memberPerson): Promise<Orphan> {
+async function makeOrphan(state: 'planned' | 'done', api: APIRequestContext = member, person: string = memberPerson, projectId?: string): Promise<Orphan> {
 	const [input] = await listRecords<{ material_id: string; project_id: string }>(admin, 'physical_samples', 'filter[sample_code][_eq]=LOCAL-RAW-1&fields=material_id,project_id');
 	const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
 	const sampleCode = `LOCAL-ORPH-${Date.now().toString(36)}${(counter += 1)}`.toUpperCase();
@@ -79,7 +79,7 @@ async function makeOrphan(state: 'planned' | 'done', api: APIRequestContext = me
 	noteMade({ collection: 'physical_samples', id: sampleId });
 	const op = await api.post(`${D1}/items/manufacturing_operations`, {
 		data: {
-			output_sample_id: sampleId, method_id: method.method_id, work_state: state, process_category: 'machining',
+			output_sample_id: sampleId, method_id: method.method_id, work_state: state, process_category: 'machining', ...(projectId ? { project_id: projectId } : {}),
 			...(state === 'done' ? { operation_date: '2026-09-01', done_by_person_id: person, done_at: '2026-09-01T10:00:00Z' } : { planned_date: '2026-11-01' }),
 		},
 	});
@@ -153,6 +153,7 @@ test.describe('as a Lab Member', () => {
 		await expect(sampleCard(page, orphan.sampleId)).toBeVisible();
 		await expect(wireBetween(page, `s:${rawId}:out`, `op:${orphan.operationId}:in`)).toHaveCount(1);
 		expect(await borderOf(opCard(page, orphan.operationId)), 'planned is ghosted').toBe('dashed');
+		await expect(opCard(page, orphan.operationId).locator('.apill')).toHaveText('Attach');
 		await expect(createButton(page)).toBeEnabled();
 		await expect(createButton(page)).toHaveText('Attach 1 operation');
 		await shot(page, 'planned-attached-on-canvas');
@@ -440,6 +441,36 @@ test.describe('who can see what', () => {
 		await expect(option(page, mine.operationId), 'the first member\'s operation is not listed').toHaveCount(0);
 		await picker(page).getByRole('combobox').fill(mine.sampleCode);
 		await expect(picker(page).getByRole('status')).toContainText('No operation without an input sample matches');
+	});
+});
+
+test.describe('who may change what', () => {
+	test('a member who may read an operation (as an investigator of its project) but not change it is refused at Create with a visible message, and nothing is written', async ({ page, playwright }) => {
+		const [project] = await listRecords<{ project_id: string }>(admin, 'projects', 'filter[project_code][_eq]=LOCAL-PROJ&fields=project_id');
+		const orphan = await makeOrphan('planned', member, memberPerson, project.project_id);
+		const other = await secondMember(playwright, admin, noteUser);
+		const userId = users[users.length - 1].userId;
+		const made = await admin.post(`${D1}/items/project_investigators`, { data: { project_id: project.project_id, user_id: userId } });
+		expect(made.ok(), await made.text()).toBeTruthy();
+		// Read through the project, but the access rules let only the owner (or an owner of the sample it acts on) change an operation.
+		expect((await other.api.get(`${D1}/items/manufacturing_operations/${orphan.operationId}`)).ok(), 'the investigator can read it').toBeTruthy();
+		expect((await other.api.patch(`${D1}/items/manufacturing_operations/${orphan.operationId}`, { data: { outcome_notes: 'x' } })).ok(), 'but not change it').toBeFalsy();
+
+		await page.goto(`${STAR}/signin`, { waitUntil: 'domcontentloaded' });
+		await page.locator('input[type="email"]').fill(other.email);
+		await page.locator('input[type="password"]').fill(other.password);
+		await page.getByRole('button', { name: /^sign in$/i }).click();
+		await page.waitForURL((u) => !u.pathname.startsWith('/signin'), { timeout: 30_000 });
+		const before = await operationRow(member, orphan.operationId);
+		await attachTo(page, 'LOCAL-RAW-1', orphan);
+		await expect(createButton(page)).toBeEnabled();
+		const { status, body } = await pressCreate(page, noteMade);
+		expect(status, JSON.stringify(body)).toBeGreaterThanOrEqual(400);
+		await shot(page, 'refused-may-read-not-change');
+		// Said where the person looks (the Create bar or Checks), in words, not as a bare status.
+		await expect(page.locator('.pm-create')).toContainText('You are not allowed to write that record.');
+		expect(await operationRow(member, orphan.operationId), 'nothing was written').toEqual(before);
+		expect(await lineageOf(member, orphan.sampleId)).toEqual([]);
 	});
 });
 

@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 12 minutes, 68 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 14 minutes, 79 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts, 11 of edit-mode-slice3.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -108,6 +108,20 @@ sideways swipe carries an entry; after Insert from a card's right-click menu foc
 offered no Insert, I and Shift+I give the lock reason with no search, and a drop on it is refused and not remembered as a recent. The rules of
 insert (a recorded or struck-through operation, a cut, a stack of passes, after a pass) are unit tests (`insertModel.test.ts`). `getRetrying`
 (`starbase/localStack.ts`) repeats an idempotent API read when the connection is reset (the local Directus drops a socket now and then).
+
+`specs/edit-mode-slice3.spec.ts` is slice 3 of the redesign (R8 attach from the database: recorded operations with no input sample), as the Lab Member. The
+orphan operations (an operation needs an input or an output sample, so one with no input has made a sample) are made through the REST API, planned and
+done, and removed afterwards (a done one goes back to planned first). It drives: a planned orphan found in **From database…** (the add search on a sample's
+output socket, searched by the code of the sample it made), picked, drawn wired and ghosted with the sample it made, Create ("Attach 1 operation") and the
+operation, the sample it made and `sample_genealogy` read back through REST (only `sample_id`, `version` and the step number, code and sort key the database
+derives from the new sample move; the lineage row is the one the trigger writes; no sample is made; the draft is gone); a done one, solid and still done;
+undo and redo of the attach, its wire removed (the operation stays, Create is refused with the check) and Delete (the record is not touched); a row greyed on
+the canvas, already attached in this draft, done work on a planned sample, one that made the sample's ancestor and the sample's own maker; an operation that
+got an input, was edited or was deleted after the pick (Create is refused with the check and writes nothing); the palette entry (floating, wired by hand) and
+a drop on a sample's output; the entry's absence from an operation's output and a new sample's input; and a second Lab Member (made by the admin and removed) who
+does not see the first member's orphan, in the list and through the API; and an investigator of the operation's project (can read it, may not change it) who is
+refused at Create with "You are not allowed to write that record." under the Create button and nothing written. `SLICE3_SHOTS=<dir>` saves screenshots of the picker and the canvas. Creates no records
+that outlive the test.
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

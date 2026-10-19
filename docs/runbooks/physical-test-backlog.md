@@ -1443,6 +1443,39 @@ touch confirm:
   swipe, and a mouse or pen drag is unchanged. Switching to another app or window mid-drag (or locking the screen) lets the drag go
   with nothing dropped. Since: edit-mode redesign slice 2a (PR pending); the scroll and the let-go: slice 2c fixes.
 
+#### Process map edit mode redesign, slice 3 attach from the database (`pm-redesign/3-attach`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+"From database…" lists the recorded operations that have no input sample and attaches one to a sample's output. It is unit-tested and was driven in
+a real browser on the local stack by `tests/ui/specs/edit-mode-slice3.spec.ts` (orphan operations made through the API, one extra Lab Member). What only
+live data and the real accounts confirm:
+
+- [ ] **PM10-1 — The orphan operations of live data.** On live, open `/map?edit=new`, pick a sample and open **From database…** from its output
+  socket (also from the palette and Shift+A). Expect the list to hold exactly the operations with no input sample that your account may read
+  (ask an admin for the count: `SELECT count(*) FROM manufacturing_operations WHERE sample_id IS NULL`, and compare as yourself and as an admin: a
+  Lab Member sees fewer, never more). Each row shows a code (or "Operation on <sample>" when it has no pass code), the method, Planned or Done, the
+  day, the owner and the sample it made. Typing a method name, part of a code and part of the code of the sample it made each narrow the list; **Show
+  more** pages on without repeating a row; the list does not take more than a moment on the real table. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-2 — Attach a real orphan to a real sample, read it back.** Pick an orphan that is **done** and one that is **planned** (separately), attach
+  each to a real active sample whose history you know, press Create ("Attach 1 operation"). Read the operation, the sample it made and `sample_genealogy`
+  as an admin. Expect: `sample_id` is the sample you chose, `version` up by one, `work_state`, dates, method, owner and output unchanged; **its step number
+  and pass code now follow the new sample** (a code that was typed, or an operation imported from an experiment sheet, keeps its code: say which you
+  saw); one new genealogy row (output sample as child, your sample as parent; `cut_from`, `sintered_from` or `derived_from` by the method); the sample it
+  made has the same fields as before; no new sample anywhere. The map of the output sample now shows the new input. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-3 — Who may attach.** Attaching updates the operation, which the access rules allow its **owner** (or an owner or co-owner of the sample it
+  acts on: an orphan has none). As a Lab Member who can **read** an orphan only through a project or campaign (PI or investigator, campaign owner) and
+  does not own it, pick it and Create. Expect a refusal in words under the Create button (the local stack shows "You are not allowed to write that record."), the operation unchanged, and the
+  draft kept. As a Lab Viewer the Edit toggle is not there. As an admin it works. The page does not say at the pick that the operation is read-only for you (open question: grey such rows). Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-4 — Greyed rows on a real map.** Open the map of the sample an orphan made (the orphan is drawn as its maker) and open **From database…** from a
+  sample's output: that orphan is greyed "Already on the canvas." On a **planned** sample every **done** orphan is greyed "Its sample is still planned;
+  mark the operation that makes it done first." and a planned one is not. Attach an orphan, open the picker again from another sample: it is greyed
+  "Already attached in this draft." An orphan that made a sample the target comes from (as far as the loaded lineage goes) is greyed as a circle. Greyed rows
+  cannot be chosen by click or Enter. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-5 — Changed, gone or given an input while the draft is open.** Attach a real orphan in a draft and leave it open; as another account (or in
+  Data Studio) (a) give that operation an input, (b) edit it (any field), (c) delete it, one case per draft. Reload the draft and press Create. Expect
+  (a) a blocking check "It got an input in the meantime, so it cannot be attached any more.", (b) "Changed since you added it. Your edits were made against
+  an older version, so review it first.", (c) "This record no longer exists, or you can no longer see it."; nothing is written in any case and the draft is
+  kept. Since: edit-mode redesign slice 3 (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from

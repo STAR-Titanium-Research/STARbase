@@ -158,6 +158,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
+			<span v-if="data.attaching && edit?.editing.value" class="apill" title="A recorded operation: Create gives it the sample wired to its input and changes nothing else about it.">Attach</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
 			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
@@ -254,7 +255,8 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 }
 .m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .deck { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--k) 22%, var(--d1-surface)); font-variant-numeric: tabular-nums; }
-.m + .xbtn, .deck + .xbtn { margin-left: auto; }
+.apill { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--d1-accent, var(--theme--primary)); color: var(--d1-accent, var(--theme--primary)); }
+.m + .xbtn, .deck + .xbtn, .apill + .xbtn { margin-left: auto; }
 .m + .chk { margin-left: auto; }
 
 /* The step's own name: the full operation code wraps rather than running out of the card. */
