@@ -32,7 +32,7 @@ async function setup(body: DraftBody, selectedId: string | null, over: { canvasE
 	});
 	const surface = useEditSurface({
 		edit,
-		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
+		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, inHistory: (id: string) => !!over.loaded?.samples.some((s) => s.id === id), nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
 		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
 		canvasEl: ref(over.canvasEl ?? null),
 		blockedBy: over.blockedBy,
@@ -160,16 +160,36 @@ describe('Delete on the canvas (R4)', () => {
 		expect(surface.mapEdit.selectedWire.value).toBeNull();
 	});
 
-	it('a wire end dragged off its input and dropped on empty canvas takes the draft\'s wire, as one step; an output or a free input has none to take', async () => {
+	it('a wire end dragged off its input takes that one wire, as one step; a free socket, an output, or a socket nothing ends on has none to take', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
-		const { edit, surface } = await setup(body, null);
-		expect(surface.dropWireAt({ kind: 'sample', id: 'draft:n1', side: 'out' })).toBe(false);
-		expect(surface.dropWireAt({ kind: 'sample', id: 'draft:n1', side: 'in' })).toBe(false);
-		expect(surface.dropWireAt({ kind: 'row', id: 'draft:n3', side: 'in' })).toBe(true);
+		const { edit, surface, graph } = await setup(body, null);
+		const into = graph.value.wires.find((w) => w.to.startsWith('op:draft:n3'))!;
+		const rowIn = { kind: 'row', id: 'draft:n3', side: 'in' } as const;
+		expect(surface.dropWireAt(rowIn, null), 'a free socket (a button, no socket id)').toBe(false);
+		expect(surface.dropWireAt({ kind: 'sample', id: 'draft:n1', side: 'out' }, into.from), 'an output').toBe(false);
+		expect(surface.dropWireAt(rowIn, 'op:draft:n3:in:99'), 'a socket nothing is drawn on').toBe(false);
+		expect(edit.body.value.wires).toHaveLength(1);
+		expect(surface.dropWireAt(rowIn, into.to)).toBe(true);
 		expect(edit.body.value.wires).toEqual([]);
-		expect(surface.dropWireAt({ kind: 'row', id: 'draft:n3', side: 'in' })).toBe(false);
+		expect(surface.dropWireAt(rowIn, into.to), 'nothing left to take').toBe(false);
 		edit.undo();
 		expect(edit.body.value.wires).toHaveLength(1);
+	});
+
+	it('an input with two wires (a test of two samples) loses neither to a drag: the wire is picked by clicking it, and the reason is said', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, from: { key: 'n1' } },
+		]);
+		const withSecond = run([{ type: 'wire', from: { key: 'n2' }, to: { key: 'n3' } }], body);
+		const { edit, surface, graph } = await setup(withSecond, null);
+		const into = graph.value.wires.filter((w) => w.to.startsWith('test:draft:n3'));
+		expect(into).toHaveLength(2);
+		const testIn = { kind: 'row', id: 'draft:n3', side: 'in' } as const;
+		expect(surface.dropWireAt(testIn, into[0].to)).toBe(true); // handled: the menu does not open
+		expect(edit.body.value.wires, 'neither wire went').toHaveLength(2);
+		expect(surface.problem.value).toMatch(/2 wires/);
 	});
 
 	it('the locks the cards wear: a done record says why, a card of the draft has none', async () => {

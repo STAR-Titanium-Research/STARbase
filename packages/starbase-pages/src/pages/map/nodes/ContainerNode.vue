@@ -6,7 +6,7 @@ import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode } from '../model/types';
 import { railSockets, socketOwners, SHOWN_WHEN_FOLDED, type RailSocketModel } from '../model/railSockets';
 import { isBundleSocket } from '../model/sockets';
-import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSocketBinder } from './actions';
+import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 import HiddenPill from './HiddenPill.vue';
@@ -20,10 +20,11 @@ import SlotRow from './SlotRow.vue';
 // socket id is drawn once (a cut's shared input once; the folded rows' bundle sockets last, fat). Folding is
 // the model's (`bundled`, rows from index 2 on share `:b` sockets); the rail's "+N more" / "fold" asks the
 // page through `toggleRows`.
-const props = defineProps<{ id: string; data: ContainerNode; selected?: boolean }>();
+const props = defineProps<{ id: string; data: ContainerNode }>();
 defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
 const { direction, moreOpen } = useMapView();
+const selected = useSelected(() => props.id);
 
 /** More rows than this fold by default; an unfolded container with more offers "fold". */
 const FOLD_ABOVE = 3;
@@ -75,14 +76,14 @@ const freeProps = (recordId: string | null, side: EndSide, add?: true) => (edit 
 const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
-const lock = computed(() => (props.selected && edit?.editing.value ? edit.lockOf(props.data) : null));
+const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 
 // The two stacks are centred on each other, so a cut's one input sits level with the middle of its pieces
 // and rows in place (same count each side) line up straight across.
 const wired = computed(() => (editable.value ? edit?.wiredSockets(props.data) : undefined));
 const rail = computed(() => {
-	const ins = railSockets(props.data, 'in', { editable: editable.value, selected: !!props.selected, wired: wired.value });
-	const outs = railSockets(props.data, 'out', { editable: editable.value, selected: !!props.selected, wired: wired.value });
+	const ins = railSockets(props.data, 'in', { editable: editable.value, selected: selected.value, wired: wired.value });
+	const outs = railSockets(props.data, 'out', { editable: editable.value, selected: selected.value, wired: wired.value });
 	// The rail is as tall as it gets while the card is selected (the free sockets are there), so selecting a card never changes its size.
 	const most = (side: 'in' | 'out') => railSockets(props.data, side, { editable: editable.value, selected: true, wired: wired.value }).length;
 	const tall = Math.max(ins.length, outs.length, most('in'), most('out'), 1);

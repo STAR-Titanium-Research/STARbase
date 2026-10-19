@@ -1372,6 +1372,14 @@ own answers. Run these on the slice-0 stack.
   the rail's Back to planned works; as someone else it shows the server's refusal. (h) Sign in as a Lab Viewer: no Edit toggle,
   no My drafts, and `/map?edit=new` says "Your account may not build processes." Since: edit-mode redesign slice 1 (PR pending).
 
+The slice 1 behaviours above were also driven in a real browser on the local stack (real Postgres, Directus and the repo's extensions) by
+`tests/ui/specs/edit-mode-slice1.spec.ts` and `edit-mode.spec.ts` (slice 1c, 2026-10-18): PM6-1, PM6-2, PM6-3, PM6-6, PM6-7 and PM6-8 in
+full; PM6-4 for a wired input dragged off, a free one, and one with two wires (not "drop a wire end on a card that does not fit"); PM6-5
+for the join and the refusal on a cut of three (not the refusals on a test or a card with no input); PM6-9 (a), (c), (d) and the page's
+message for a Lab Viewer in (h). They stay unticked: this list is for what live data, real pointers on a real history and the real accounts
+confirm. Not run anywhere yet: PM6-9 (b), (e), (f), (g) beyond the second Lab Member's refusal, and the Lab Viewer's missing Edit toggle and
+My drafts in (h) (a known failure of `edit-mode.spec.ts`), a phone, and Tidy on a map of hundreds of cards.
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from

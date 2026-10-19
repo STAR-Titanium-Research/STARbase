@@ -300,6 +300,24 @@ describe('useDraft: undo and redo', () => {
 		expect(fresh.draft.canUndo.value).toBe(true);
 	});
 
+	it('a layout\'s write (merge, keepFuture) changes the present and leaves what Redo has', async () => {
+		const { draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample', at: { x: 1, y: 1 } });
+		draft.apply({ type: 'addSample', at: { x: 2, y: 2 } });
+		draft.undo();
+		expect(draft.canRedo.value).toBe(true);
+		draft.apply({ type: 'move', key: 'n1', x: 500, y: 5 }, { merge: true, keepFuture: true });
+		expect(draft.body.value.positions.n1).toEqual({ x: 500, y: 5 });
+		expect(draft.canRedo.value, 'Redo is still there').toBe(true);
+		draft.redo();
+		expect(draft.body.value.items).toHaveLength(2);
+		// A person's own change (no keepFuture) does end Redo.
+		draft.undo();
+		draft.apply({ type: 'move', key: 'n1', x: 7, y: 7 }, { merge: true });
+		expect(draft.canRedo.value).toBe(false);
+	});
+
 	it('applyAll does several actions as one undoable step, and nothing when none of them changes anything', async () => {
 		const { s, draft } = make();
 		await draft.start();

@@ -18,8 +18,9 @@ let listeners: Record<string, Listener[]>;
 const fire = (type: string, e: Record<string, unknown>) => [...(listeners[type] ?? [])].forEach((l) => l({ preventDefault() {}, stopPropagation() {}, ...e }));
 
 /** A socket element at (x, y): `data-sock`, a rectangle, and the card it sits on. */
-const socketEl = (sock: SocketRef, x: number, y: number, node = 'card:1') => ({
-	dataset: { sock: encodeSocket(sock) },
+const socketEl = (sock: SocketRef, x: number, y: number, node = 'card:1', own: { handleId?: string; free?: boolean } = {}) => ({
+	dataset: { sock: encodeSocket(sock), ...(own.handleId ? { handleid: own.handleId } : {}) },
+	classList: { contains: (c: string) => c === 'free' && !!own.free },
 	getBoundingClientRect: () => ({ left: x - 6, top: y - 6, width: 12, height: 12 }),
 	closest: (sel: string) => (sel === '.vue-flow__node' ? { dataset: { id: node } } : null),
 });
@@ -43,7 +44,7 @@ function setupDom(sockets: ReturnType<typeof socketEl>[], over: { empty?: boolea
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
-async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef) => boolean) {
+async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef, socketId: string | null) => boolean) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -60,8 +61,8 @@ async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [
 	return { edit, ec, opened, connecting, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
 }
 
-const down = (sock: SocketRef, at: { x: number; y: number }, ec: { mapEdit: { socketDown: (s: SocketRef, e: PointerEvent) => void } }) => {
-	const el = socketEl(sock, at.x, at.y);
+const down = (sock: SocketRef, at: { x: number; y: number }, ec: { mapEdit: { socketDown: (s: SocketRef, e: PointerEvent) => void } }, own: { handleId?: string; free?: boolean } = {}) => {
+	const el = socketEl(sock, at.x, at.y, 'card:1', own);
 	ec.mapEdit.socketDown(sock, { currentTarget: el, button: 0, pointerType: 'mouse', clientX: at.x, clientY: at.y } as unknown as PointerEvent);
 };
 
@@ -202,22 +203,33 @@ describe('a drag from a socket', () => {
 		expect(opened).toEqual([{ sock: SAMPLE_OUT, at: { x: 650, y: 420 }, flow: { x: 640, y: 400 }, anchor: 'card:1' }]);
 	});
 
-	it('an input dragged off its wire and dropped on empty canvas takes the wire instead of opening the menu (R4)', async () => {
-		const taken: SocketRef[] = [];
-		const { ec, opened } = await setup(twoCards(), [target], {}, (s) => (taken.push(s), true));
-		down(ROW_IN, { x: 300, y: 200 }, ec);
+	it('a wired input dragged off and dropped on empty canvas takes the wire instead of opening the menu, and says which socket was grabbed (R4)', async () => {
+		const taken: [SocketRef, string | null][] = [];
+		const { ec, opened } = await setup(twoCards(), [target], {}, (s, id) => (taken.push([s, id]), true));
+		down(ROW_IN, { x: 300, y: 200 }, ec, { handleId: 'op:draft:n3:in:0' });
 		fire('pointermove', { clientX: 650, clientY: 420 });
 		fire('pointerup', { clientX: 650, clientY: 420 });
-		expect(taken).toEqual([ROW_IN]);
+		expect(taken).toEqual([[ROW_IN, 'op:draft:n3:in:0']]);
 		expect(opened).toHaveLength(0);
 	});
 
 	it('a socket with no wire to take opens the menu as before', async () => {
 		const { ec, opened } = await setup(twoCards(), [target], {}, () => false);
-		down(ROW_IN, { x: 300, y: 200 }, ec);
+		down(ROW_IN, { x: 300, y: 200 }, ec, { handleId: 'op:draft:n3:in:0' });
 		fire('pointermove', { clientX: 650, clientY: 420 });
 		fire('pointerup', { clientX: 650, clientY: 420 });
 		expect(opened).toHaveLength(1);
+	});
+
+	it('a FREE socket never takes a wire: it carries the reference of the wired socket of its row, but nothing is wired to it (R4)', async () => {
+		const asked: unknown[] = [];
+		const { ec, opened } = await setup(twoCards(), [target], {}, (...a) => (asked.push(a), true));
+		down(ROW_IN, { x: 300, y: 200 }, ec, { free: true });
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(asked).toEqual([]);
+		expect(opened).toHaveLength(1);
+		expect(opened[0].sock).toEqual(ROW_IN);
 	});
 
 	it('does nothing when it is dropped on a card that is not a socket', async () => {
@@ -402,8 +414,9 @@ describe('where the draft keeps its cards', () => {
 
 	it('says which cards are the draft\'s own for Tidy: new items, and samples picked from the index, nothing of the loaded history', async () => {
 		const { edit } = await setup(run([{ type: 'addSample' }, { type: 'addExistingSamples', samples: [{ id: 'picked', version: 1 }, { id: 'old', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
-		edit.catalog.samples.set('picked', { id: 'picked', code: 'P', nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
-		const hooks = canvasEditOf(edit);
+		// Both are in the catalog (a sample is read when the draft first builds from it), but only 'old' is part of what the map loaded.
+		for (const id of ['picked', 'old']) edit.catalog.samples.set(id, { id, code: id, nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
+		const hooks = canvasEditOf(edit, (id) => id === 'old');
 		const rec = (id: string, extra: Record<string, unknown> = {}) => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [], ...extra }) as MapNode;
 		expect(hooks.owned?.(rec('draft:n1', { draft: true }))).toBe(true);
 		expect(hooks.owned?.(rec('picked'))).toBe(true);

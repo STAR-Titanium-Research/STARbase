@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { DraftBody } from '@d1/ui';
 import { buildGraph } from '../model/buildGraph';
 import { groupBatches } from '../model/groupBatches';
-import { mkData, mkOp, mkSample, mkTest } from '../model/fixtures';
+import { mkData, mkLineage, mkOp, mkSample, mkTest } from '../model/fixtures';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, RecordNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { undo, redo, createHistory, push } from './history';
 import {
 	ALREADY_GOING, DONE_HANGS, DONE_LOCK, DONE_WIRE, NOT_REMOVABLE, SAVED_WIRE,
-	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireEnd, unwireVerdict,
+	dissolveVerdict, doneHangsOff, removeActions, removeVerdict, unwireActions, unwireVerdict,
 } from './removal';
 import { toGraph } from './toGraph';
 
@@ -70,18 +70,60 @@ describe('removing a card', () => {
 		expect(removeVerdict(after, graphOf(history(), after), box(graphOf(history(), after), 'op:o2'), inHistory([]))).toEqual({ ok: false, reason: ALREADY_GOING, locked: false });
 	});
 
-	it('a planned sample with a planned test on it can be deleted (what hangs off it is planned: the server says to remove that too)', () => {
+	it('a planned sample goes with the planned operation that makes it (d1-build refuses the sample alone: the maker hangs off it)', () => {
 		const g = graphOf(history(), emptyBody());
-		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'sample', id: 's3' }] });
+		// s3 is made by the planned o2 (and has a planned test on it, which the server says to remove too).
+		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 's3' }, { kind: 'operation', id: 'o2' }],
+		});
 	});
 
-	it('a planned sample with only planned work after it can be deleted', () => {
+	it('a planned sample with only planned work after it can be deleted, with its maker; a planned test alone is just the test', () => {
 		const data = mkData({ samples: [mkSample('s1'), mkSample('s3', { status: 'planned' })], operations: [mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', workState: 'planned' })] });
 		const g = graphOf(data, emptyBody());
-		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'sample', id: 's3' }] });
+		expect(removeVerdict(emptyBody(), g, sample(g, 's3'), inHistory(['s3']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 's3' }, { kind: 'operation', id: 'o2' }],
+		});
 		const t = mkData({ samples: [mkSample('s1')], tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], workState: 'planned' })] });
 		const gt = graphOf(t, emptyBody());
 		expect(removeVerdict(emptyBody(), gt, box(gt, 'test:t1'), inHistory([]))).toEqual({ ok: true, keys: [], existing: [{ kind: 'test', id: 't1' }] });
+	});
+
+	it('only the piece of a batch that makes the sample goes with it, not the rows that make others', () => {
+		const data = mkData({
+			samples: [mkSample('s1'), mkSample('p1', { status: 'planned' }), mkSample('p2', { status: 'planned' })],
+			operations: [
+				mkOp({ id: 'b1', sampleId: 's1', outputSampleId: 'p1', workState: 'planned', batchId: 'B', methodName: 'Cut' }),
+				mkOp({ id: 'b2', sampleId: 's1', outputSampleId: 'p2', workState: 'planned', batchId: 'B', methodName: 'Cut' }),
+			],
+		});
+		const g = graphOf(data, emptyBody());
+		expect(removeVerdict(emptyBody(), g, sample(g, 'p2'), inHistory(['p1', 'p2']))).toEqual({
+			ok: true,
+			keys: [],
+			existing: [{ kind: 'sample', id: 'p2' }, { kind: 'operation', id: 'b2' }],
+		});
+	});
+
+	it('a planned sample a DONE sample was made from (lineage with no operation) is locked: the server refuses it whatever the state of the child', () => {
+		const data = mkData({
+			samples: [mkSample('p', { status: 'planned' }), mkSample('c', { status: 'active' })],
+			lineage: [mkLineage('p', 'c')],
+		});
+		const g = graphOf(data, emptyBody());
+		expect(doneHangsOff(g, sample(g, 'p'))).toBe(true);
+		expect(removeVerdict(emptyBody(), g, sample(g, 'p'), inHistory(['p']))).toEqual({ ok: false, reason: DONE_HANGS, locked: true });
+	});
+
+	it('a planned pass in place on a done sample is not locked by the sample it works on', () => {
+		const data = mkData({ samples: [mkSample('s1', { status: 'active' })], operations: [mkOp({ id: 'o9', sampleId: 's1', outputSampleId: 's1', workState: 'planned', methodName: 'Polish' })] });
+		const g = graphOf(data, emptyBody());
+		expect(doneHangsOff(g, box(g, 'op:o9'))).toBe(false);
+		expect(removeVerdict(emptyBody(), g, box(g, 'op:o9'), inHistory([]))).toEqual({ ok: true, keys: [], existing: [{ kind: 'operation', id: 'o9' }] });
 	});
 
 	it('a planned record something done hangs off is locked', () => {
@@ -114,7 +156,7 @@ describe('removing a card', () => {
 		expect(removeVerdict(body, g, box(g, 'op:fast'), inHistory(['s1', 'made']))).toEqual({ ok: true, keys: ['n2'], existing: [] });
 	});
 
-	it('a stack made of a recorded planned pass and a draft pass removes both: the draft one vanishes, the record is deleted at Create', () => {
+	it('a stack made of a recorded planned pass and a draft pass: the first Delete takes the draft pass only, a second takes the recorded one (deleted at Create)', () => {
 		const data = mkData({
 			samples: [mkSample('s1')],
 			operations: [mkOp({ id: 'a', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', workState: 'planned', date: '2026-09-01T09:00:00Z' })],
@@ -123,7 +165,23 @@ describe('removing a card', () => {
 		const g = graphOf(data, body);
 		const stack = g.nodes.find((n): n is ContainerNode => n.type === 'container' && !!n.stacked);
 		expect(stack).toBeDefined();
-		expect(removeVerdict(body, g, stack, inHistory(['s1']))).toEqual({ ok: true, keys: ['n2'], existing: [{ kind: 'operation', id: 'a' }] });
+		const first = removeVerdict(body, g, stack, inHistory(['s1']));
+		expect(first).toEqual({ ok: true, keys: ['n2'], existing: [] });
+		// What is left is the recorded pass alone, which the next Delete deletes.
+		const after = removeActions(body, first as never).reduce((b, a) => apply(b, a), body);
+		const g2 = graphOf(data, after);
+		expect(removeVerdict(after, g2, box(g2, 'op:a'), inHistory(['s1']))).toEqual({ ok: true, keys: [], existing: [{ kind: 'operation', id: 'a' }] });
+	});
+
+	it('a stack of a draft pass and DONE recorded passes: the draft pass goes, nothing done is touched', () => {
+		const data = mkData({
+			samples: [mkSample('s1')],
+			operations: [mkOp({ id: 'a', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: '2026-09-01T09:00:00Z' })],
+		});
+		const body = run([{ type: 'addPass', sample: { id: 's1', version: 1 }, values: { method_id: 'turn', equipment_id: 'lathe' }, workState: 'planned' }]);
+		const g = graphOf(data, body);
+		const stack = g.nodes.find((n): n is ContainerNode => n.type === 'container' && !!n.stacked);
+		if (stack) expect(removeVerdict(body, g, stack, inHistory(['s1']))).toEqual({ ok: true, keys: ['n2'], existing: [] });
 	});
 
 	it('cards that are not samples, operations or tests are not removable, and nothing selected is nothing', () => {
@@ -162,22 +220,6 @@ describe('removing a wire', () => {
 		const g = graphOf(null, body);
 		const into = g.wires.find((w) => w.to.includes('draft:n3'))!;
 		const v = unwireVerdict(body, g, into.id);
-		expect(v.ok).toBe(true);
-		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
-	});
-
-	it('the wire into an input socket goes (a wire end dragged off its socket), for a sample made by an operation too', () => {
-		const body = built();
-		expect(unwireEnd(body, { key: 'n2', row: 0 })).toEqual({ ok: true, wires: [{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }], rows: [] });
-		expect(unwireEnd(body, { key: 'n4' })).toEqual({ ok: true, wires: [{ from: { key: 'n2', row: 0 }, to: { key: 'n4' } }], rows: [] });
-		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
-		expect(unwireEnd(emptyBody(), { key: 'zz' })).toMatchObject({ ok: false });
-	});
-
-	it('the way back into a sample an operation works on in place is not a wire to drag off', () => {
-		const body = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: {} }]);
-		expect(unwireEnd(body, { key: 'n1' })).toMatchObject({ ok: false });
-		const v = unwireEnd(body, { key: 'n2', row: 0 });
 		expect(v.ok).toBe(true);
 		if (v.ok) expect(unwireActions(v).reduce((b, a) => apply(b, a), body).wires).toEqual([]);
 	});
@@ -310,10 +352,16 @@ describe('a wire taken off a piece of a cut', () => {
 			{ type: 'addSample', from: { key: 'n2', row: 0 } },
 			{ type: 'addSample', from: { key: 'n2', row: 1 } },
 		]);
+	/** What taking off the drawn wire that ends on a socket (the card's id as a prefix: `s:draft:n6:in`) does. */
+	const into = (body: DraftBody, socket: string) => {
+		const g = graphOf(null, body);
+		const wire = g.wires.find((w) => w.to.startsWith(socket));
+		return wire ? unwireVerdict(body, g, wire.id) : ({ ok: false, reason: 'no such wire', locked: false } as const);
+	};
 
 	it('takes the piece with it: a socket nothing leaves is not kept', () => {
 		const body = cut();
-		const v = unwireEnd(body, { key: 'n6' });
+		const v = into(body, 's:draft:n6:in');
 		expect(v).toMatchObject({ ok: true, rows: [{ key: 'n2', row: 1 }] });
 		if (!v.ok) return;
 		const after = unwireActions(v).reduce((b, a) => apply(b, a), body);
@@ -331,13 +379,52 @@ describe('a wire taken off a piece of a cut', () => {
 
 	it('never takes the last piece, and an operation of one piece keeps its row', () => {
 		const body = cut();
-		const both = unwireEnd(unwireActions(unwireEnd(body, { key: 'n6' }) as never).reduce((b, a) => apply(b, a), body), { key: 'n5' });
-		expect(both).toMatchObject({ ok: true, rows: [] });
+		const first = into(body, 's:draft:n6:in');
+		const afterFirst = unwireActions(first as never).reduce((b, a) => apply(b, a), body);
+		expect(into(afterFirst, 's:draft:n5:in')).toMatchObject({ ok: true, rows: [] });
 		const single = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
-		expect(unwireEnd(single, { key: 'n4' })).toMatchObject({ ok: true, rows: [] });
+		expect(into(single, 's:draft:n4:in')).toMatchObject({ ok: true, rows: [] });
 	});
 
 	it('an input wire taken off does not take the piece: it still has its output', () => {
-		expect(unwireEnd(cut(), { key: 'n2', row: 1 })).toMatchObject({ ok: true, rows: [] });
+		expect(into(cut(), 'batch:draft:n2:in')).toMatchObject({ ok: true, rows: [] });
+	});
+
+	/** n1 feeds row 0 of the operation; n2 is a second sample of its own, the input of row 1 (one more sample in a batch); each row makes a sample. */
+	const batch = () =>
+		run([
+			{ type: 'addSample' },
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addOutputRow', key: 'n3', share: false },
+			{ type: 'wire', from: { key: 'n2' }, to: { key: 'n3', row: 1 } },
+			{ type: 'addSample', from: { key: 'n3', row: 0 } },
+			{ type: 'addSample', from: { key: 'n3', row: 1 } },
+		]);
+
+	it('a row that has an input sample of its own is kept when its output goes: it carries on as an operation on that sample (finding 5)', () => {
+		const body = batch();
+		expect(body.wires).toContainEqual({ from: { key: 'n2' }, to: { key: 'n3', row: 1 } });
+		const v = into(body, 's:draft:n7:in');
+		expect(v).toMatchObject({ ok: true, rows: [] });
+		if (!v.ok) return;
+		const after = unwireActions(v).reduce((b, a) => apply(b, a), body);
+		expect((after.items.find((i) => i.key === 'n3') as { rows: unknown[] }).rows).toHaveLength(2);
+		expect(after.wires, 'its own input sample is still wired to it').toContainEqual({ from: { key: 'n2' }, to: { key: 'n3', row: 1 } });
+	});
+
+	it('taking away the sample a piece of a cut made takes the piece too; the row of a batch with an input of its own stays (finding 9)', () => {
+		const c = cut();
+		const g = graphOf(null, c);
+		const v = removeVerdict(c, g, sample(g, 'draft:n6'), inHistory([]));
+		expect(v).toEqual({ ok: true, keys: ['n6'], existing: [] });
+		const acts = removeActions(c, v as never);
+		expect(acts).toEqual([{ type: 'remove', key: 'n6' }, { type: 'removeRow', key: 'n2', row: 1 }]);
+		const after = acts.reduce((b, a) => apply(b, a), c);
+		expect((after.items.find((i) => i.key === 'n2') as { rows: unknown[] }).rows).toHaveLength(1);
+		const b = batch();
+		const gb = graphOf(null, b);
+		const vb = removeVerdict(b, gb, sample(gb, 'draft:n7'), inHistory([]));
+		expect(removeActions(b, vb as never)).toEqual([{ type: 'remove', key: 'n7' }]);
 	});
 });

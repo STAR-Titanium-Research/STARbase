@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 2 minutes, 9 tests
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 6 minutes, 37 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -58,6 +58,23 @@ output sample's status planned, owner set). Each bug of the audit (spec §3 item
 that reproduces today is a `test.fail()` that names its item; the slice that fixes it removes the mark. Records the tests Create are deleted
 again afterwards, so the suite can be re-run. The config passes `/opt/pw-browsers/chromium` to Playwright when it exists (the cloud
 container's one Chromium; never `playwright install` there).
+
+`specs/edit-mode-slice1.spec.ts` is slice 1 of the redesign (R4 removal, R5 derived sockets, R6 layout, R10 Mark done, plain fixes, the
+`d1-build` side of `test_category` and `material_id`) driven the same way, with the helpers of `starbase/mapEdit.ts` (open a draft, pick samples,
+the socket menu, drags with a guard that the pointer is on the card it means, the saved draft read back from `d1-build`, card and wire
+geometry). As the Lab Member (and the Lab Admin for seeding what the member may not make): Delete, X and Backspace on a new card and a wire, with
+undo and redo; a planned operation and its planned output made through the API, struck through, deleted at Create and gone from the database
+and the map, also by Delete on the output sample; done records locked with their reason and nothing sent; a wired input dragged off, a free
+socket that never takes a wire, an input with two wires that loses neither to a drag; Dissolve and its refusal on a cut of three; derived
+sockets, their absence from a sample something makes, the cards keeping their size and every wire staying on its socket through five
+selections, a reload drawing the same canvas; a second piece added by connecting to the free output; no two cards overlapping after Add,
+Duplicate x4, three picked samples, undo and redo, and two Adds in a row; a dragged card keeping its place through a reload, Undo of a drag
+and of a Delete, Tidy leaving recorded cards where they are and one Ctrl+Z putting the draft's back; one card dragged without the selected
+one following; Mark done by the owner and by a member who may edit the operation but not its output sample (R10, system rights), Back to
+planned by the owner and its refusal to a second Lab Member (made by the admin and removed afterwards); and a Create with a test and an operation
+read back for `test_category` and the inherited `material_id`. Everything a test makes is removed afterwards (a done operation is sent back to
+planned by the admin first, a second member is deleted with their People row). One test is a known failure that says so: Back to planned by an
+operation's owner who cannot edit its output sample is refused (a design gap, reported with the slice).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

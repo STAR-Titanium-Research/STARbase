@@ -62,7 +62,7 @@ const edit = useEditMode({
 	hint: (h) => map.hintMerge(h),
 });
 const map = useProcessMap(host.api, route, router, edit.overlay);
-const canvas = useMapCanvas(map, canvasEditOf(edit));
+const canvas = useMapCanvas(map, canvasEditOf(edit, map.inHistory));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
 /** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */
@@ -98,7 +98,7 @@ const labelSocket = computed(() => socketLabeller(map.graph.value?.wires ?? [], 
 const view: MapView = {
 	direction: map.dir,
 	moreOpen: map.moreOpen,
-	selectedRef: map.selectedRefKey,
+	selectedRef: map.selectedRefKey, selectedId: map.selectedId,
 	hiddenSides: map.hiddenSides,
 	socketLabel: (socket, side) => labelSocket.value(socket, side),
 	expanded: map.expandedIds,
@@ -334,7 +334,7 @@ const tipHint = computed(() => {
 							<VueFlow
 								:node-types="canvas.nodeTypes"
 								:edge-types="canvas.edgeTypes"
-								:nodes-draggable="true"
+								:nodes-draggable="true" :delete-key-code="null"
 								:nodes-focusable="true"
 								:edges-focusable="false"
 								:nodes-connectable="false"

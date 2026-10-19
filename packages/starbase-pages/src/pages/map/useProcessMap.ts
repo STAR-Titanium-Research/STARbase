@@ -466,6 +466,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     { immediate: true },
   );
 
+  /** True when the sample is part of what the map loaded (a draft can also hold samples picked from the index, which are not). */
+  const inHistory = (id: string): boolean => !!data.value?.samples.some((x) => x.id === id);
+
   return {
     status,
     error,
@@ -530,5 +533,6 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, 
     hiddenSides,
     card,
     reload: load,
+    inHistory,
   };
 }

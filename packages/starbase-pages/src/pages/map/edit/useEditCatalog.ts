@@ -77,34 +77,45 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 		return pages.flatMap((p) => (p.data?.data ?? []) as Row[]);
 	}
 
-	/** Records being read, and records whose read failed: neither is asked for again on every change of the draft (`forgetFailed` allows a retry). */
-	const readingRecords = new Set<string>();
+	/** Records being read (with the read that has them), and records whose read failed: neither is asked for again on every change of the draft. */
+	const readingRecords = new Map<string, Promise<void>>();
 	const failedRecords = new Set<string>();
 	const forgetFailed = (): void => failedRecords.clear();
 
-	/** Reads the existing records of a draft (version and fields): what its checks and its stale warnings are made of. */
-	async function loadRecords(want: Record<CheckCollection, string[]>): Promise<void> {
+	/**
+	 * Reads the existing records of a draft (version and fields): what its checks and its stale warnings are made of. A record that is being
+	 * read is waited for, not skipped (a caller that needs the answer, like a delete that needs the version, gets it); `retry` asks again for
+	 * one whose read failed, which the draft's own reads leave alone.
+	 */
+	async function loadRecords(want: Record<CheckCollection, string[]>, opts: { retry?: boolean } = {}): Promise<void> {
 		await Promise.all(
 			COLLECTIONS.map(async (c) => {
+				if (opts.retry) for (const id of want[c]) failedRecords.delete(recordKey(c, id));
+				const waiting = want[c].map((id) => readingRecords.get(recordKey(c, id))).filter((r): r is Promise<void> => !!r);
 				const ids = want[c].filter((id) => ![records.has(recordKey(c, id)), readingRecords.has(recordKey(c, id)), failedRecords.has(recordKey(c, id))].some(Boolean));
-				if (!ids.length) return;
-				for (const id of ids) readingRecords.add(recordKey(c, id));
-				try {
-					const rows = await readRows(c, ids, ['*']);
-					const seen = new Set<string>();
-					for (const row of rows) {
-						const id = String(row[KEY_FIELD[c]]);
-						seen.add(id);
-						records.set(recordKey(c, id), loadedRecordOf(row));
-					}
-					// Asked for and not answered: gone, or not readable by this person.
-					for (const id of ids) if (!seen.has(id)) records.set(recordKey(c, id), null);
-				} catch {
-					/* unknown: the server's check tells */
-					for (const id of ids) failedRecords.add(recordKey(c, id));
-				} finally {
-					for (const id of ids) readingRecords.delete(recordKey(c, id));
+				if (ids.length) {
+					const read = (async () => {
+						try {
+							const rows = await readRows(c, ids, ['*']);
+							const seen = new Set<string>();
+							for (const row of rows) {
+								const id = String(row[KEY_FIELD[c]]);
+								seen.add(id);
+								records.set(recordKey(c, id), loadedRecordOf(row));
+							}
+							// Asked for and not answered: gone, or not readable by this person.
+							for (const id of ids) if (!seen.has(id)) records.set(recordKey(c, id), null);
+						} catch {
+							/* unknown: the server's check tells */
+							for (const id of ids) failedRecords.add(recordKey(c, id));
+						} finally {
+							for (const id of ids) readingRecords.delete(recordKey(c, id));
+						}
+					})();
+					for (const id of ids) readingRecords.set(recordKey(c, id), read);
+					waiting.push(read);
 				}
+				await Promise.all(waiting);
 			}),
 		);
 	}

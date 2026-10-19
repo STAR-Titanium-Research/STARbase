@@ -30,22 +30,26 @@ type Canvas = ReturnType<typeof useMapCanvas>;
 export const CLICK_SLOP = 4;
 
 /** What the canvas asks of the draft: where its cards are, and being told when one is moved or the layout was redone. */
-export function canvasEditOf(edit: EditMode): CanvasEdit {
+export function canvasEditOf(edit: EditMode, inHistory: (sampleId: string) => boolean = () => false): CanvasEdit {
 	const keyOf = (n: MapNode): DraftKey | undefined => draftKeysOfNode(edit.body.value, n)[0];
 	return {
 		active: () => edit.drafted.value,
 		positionOf: (n) => (edit.editing.value ? (edit.body.value.positions[keyOf(n) ?? ''] ?? undefined) : undefined),
-		moved: (n, at) => {
+		moved: (n, at, from) => {
 			const key = keyOf(n);
-			if (key) edit.apply({ type: 'move', key, x: at.x, y: at.y });
+			if (!key) return;
+			// A card the draft kept no place for: where it was taken from is kept in the step before, so Undo of this drag can bring it back.
+			if (from && !edit.body.value.positions[key]) edit.apply({ type: 'move', key, x: from.x, y: from.y }, { merge: true });
+			edit.apply({ type: 'move', key, x: at.x, y: at.y });
 		},
-		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
+		owned: (n) => !!n.type && (('draft' in n && !!n.draft) || (n.type === 'record' && n.kind === 'sample' && !inHistory(n.ref.id) && edit.catalog.samples.has(n.ref.id) && draftKeyOfNode(edit.body.value, n) !== null)),
 		settled: (cards) => {
 			const moves = cards.flatMap(({ node, at }) => {
 				const key = keyOf(node);
 				return key ? [{ type: 'move' as const, key, x: at.x, y: at.y }] : [];
 			});
-			if (moves.length) edit.apply(moves, { merge: true });
+			// A layout's write is nobody's step: it joins the step that added the card, and Redo is left as it was.
+			if (moves.length) edit.apply(moves, { merge: true, keepFuture: true });
 		},
 		relaid: (cards) => {
 			const moves = cards.flatMap(({ node, at }) => {
@@ -77,8 +81,11 @@ export function useEditCanvas(o: {
 	canvasEl: Ref<HTMLElement | null>;
 	openMenu: (t: MenuTarget) => void;
 	openConnect?: (t: MenuTarget) => void;
-	/** A wire end dragged off its socket and dropped on empty canvas: takes the wire (true) instead of opening the menu. */
-	dropWire?: (sock: SocketRef) => boolean;
+	/**
+	 * A wire end dragged off a WIRED socket and dropped on empty canvas: takes the wire (true) instead of opening the menu. `socketId` is the id
+	 * of the socket grabbed (the Handle's), which is how the wire is told from the others. Never asked for a free socket.
+	 */
+	dropWire?: (sock: SocketRef, socketId: string) => boolean;
 }) {
 	const { edit, map, canvas, canvasEl } = o;
 
@@ -166,6 +173,9 @@ export function useEditCanvas(o: {
 	function socketDown(sock: SocketRef, e: PointerEvent): void {
 		if (!edit.editing.value || (e.pointerType === 'mouse' && e.button !== 0) || stop) return;
 		const el = e.currentTarget as HTMLElement;
+		// A free socket is a button with nothing wired to it, though its reference is the wired socket's of the same row; a wired one is a Handle.
+		const free = !!el.classList?.contains('free');
+		const socketId = free ? null : (el.dataset.handleid ?? null);
 		const rect = el.getBoundingClientRect();
 		const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 		const anchor = (el.closest('.vue-flow__node') as HTMLElement | null)?.dataset.id;
@@ -207,8 +217,8 @@ export function useEditCanvas(o: {
 			if (v?.ok) void connect(v, anchor);
 			else if (v) say(v.reason ?? 'That does not fit.', relative(ev.clientX, ev.clientY));
 			else if (onEmptyCanvas(ev.clientX, ev.clientY)) {
-				// An input that has a wire, dragged off and let go on empty canvas, takes the wire off (R4); a free one opens the menu.
-				if (o.dropWire?.(sock)) return;
+				// A wired input, dragged off and let go on empty canvas, takes the wire off (R4); a free socket, or one with no wire, opens the menu.
+				if (socketId && o.dropWire?.(sock, socketId)) return;
 				o.openMenu({ sock, at: { x: ev.clientX, y: ev.clientY }, flow: canvas.toFlow(ev.clientX, ev.clientY), anchor });
 			}
 		};

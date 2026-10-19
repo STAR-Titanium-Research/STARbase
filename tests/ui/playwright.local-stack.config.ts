@@ -16,7 +16,7 @@ const chromium = [process.env.D1_CHROMIUM, '/opt/pw-browsers/chromium'].find((p)
 
 export default defineConfig({
 	testDir: './specs',
-	testMatch: ['edit-mode.spec.ts'],
+	testMatch: ['edit-mode.spec.ts', 'edit-mode-slice1.spec.ts'],
 	fullyParallel: false,
 	workers: 1,
 	retries: 0,

@@ -66,7 +66,7 @@ async function render(component: Component, props: Record<string, unknown>, e?: 
 	const app = createSSRApp(component, props);
 	app.component('v-icon', VIcon);
 	app.provide(MAP_ACTIONS, noop);
-	app.provide(MAP_VIEW, { direction: ref<'RIGHT' | 'DOWN'>('RIGHT'), moreOpen: ref(new Set<string>()), selectedRef: ref(null) });
+	app.provide(MAP_VIEW, { direction: ref<'RIGHT' | 'DOWN'>('RIGHT'), moreOpen: ref(new Set<string>()), selectedRef: ref(null), selectedId: ref(props.selected ? (props.id as string) : null) });
 	if (e) app.provide(MAP_EDIT, e);
 	return renderToString(app);
 }
@@ -102,10 +102,22 @@ describe('a sample card in edit mode', () => {
 		expect(freeButtons(idle)).toHaveLength(1);
 		expect(idle).toContain('Free output of');
 		expect(socks(idle).sort()).toEqual(['sample|draft:n4|in', 'sample|draft:n4|out']);
-		// Selected: a free input beside the wired one too.
+		// Selected: still no free input, whatever the selection. An operation makes it already, and a sample has one maker.
 		const picked = await render(RecordNode, { id: made.id, data: made, selected: true }, e);
-		expect(freeButtons(picked)).toHaveLength(2);
-		expect(socks(picked).filter((s) => s.endsWith('|in'))).toHaveLength(2);
+		expect(freeButtons(picked)).toHaveLength(1);
+		expect(freeButtons(picked)[0]).toContain('Free output');
+		expect(socks(picked).filter((s) => s.endsWith('|in'))).toHaveLength(1);
+	});
+
+	it('has no free input once an operation makes it, selected or not (the input is a socket already, a place to drop; a sample has one maker)', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
+		const made = samples(body).find((s) => s.ref.id === 'draft:n4')!;
+		const e = edit({ wiredSockets: wiredBy(body) });
+		for (const selected of [false, true]) {
+			const html = await render(RecordNode, { id: made.id, data: made, selected }, e);
+			expect(freeButtons(html).filter((b) => b.includes('Free input'))).toHaveLength(0);
+			expect(socks(html).filter((x) => x.endsWith('|in'))).toEqual(['sample|draft:n4|in']);
+		}
 	});
 
 	it('a sample with a wire out keeps its socket and a free one beside it only while selected', async () => {
@@ -179,15 +191,17 @@ describe('a container in edit mode', () => {
 		expect(html).not.toMatch(/data-id="op:draft:n3:out:0"/);
 	});
 
-	it('draws one free output for a cut whose pieces have no wire yet, not one per piece', async () => {
+	it('gives each row of a cut its own socket, a free one for each piece that has no wire yet', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 3, from: { key: 'n1' } }]);
 		const [c] = containers(body);
 		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ wiredSockets: wiredBy(body) }));
-		expect(socks(html).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out']);
-		expect(freeButtons(html)).toHaveLength(1);
+		expect(socks(html).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out', 'row|draft:n4|out', 'row|draft:n5|out']);
+		expect(freeButtons(html).filter((b) => b.includes(' out '))).toHaveLength(3);
+		// Nothing is wired out of the pieces, so the card does not claim to make samples: Create writes them as operations that make none (in place).
+		expect(html.match(/class="sum"[^>]*>([^<]*)/)?.[1]).toMatch(/in place/);
 	});
 
-	it('once a piece is wired its socket stays; the free one for the next piece shows while the card is selected', async () => {
+	it('once a piece is wired its socket stays; the pieces that have none keep theirs, and the selected card has one more that adds a piece', async () => {
 		const body = run([
 			{ type: 'addSample' },
 			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, rows: 3, from: { key: 'n1' } },
@@ -196,10 +210,10 @@ describe('a container in edit mode', () => {
 		const [c] = containers(body);
 		const e = edit({ wiredSockets: wiredBy(body) });
 		const idle = await render(ContainerNode, { id: c.id, data: c, selected: false }, e);
-		expect(freeButtons(idle).filter((b) => b.includes(' out '))).toHaveLength(0);
-		expect(socks(idle).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out']);
+		expect(socks(idle).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out', 'row|draft:n4|out', 'row|draft:n5|out']);
+		expect(freeButtons(idle).filter((b) => b.includes(' out '))).toHaveLength(2); // the pieces with no wire
 		const picked = await render(ContainerNode, { id: c.id, data: c, selected: true }, e);
-		expect(socks(picked).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out', 'row|draft:n4|out']);
+		expect(socks(picked).filter((s) => s.endsWith('|out'))).toEqual(['row|draft:n3|out', 'row|draft:n4|out', 'row|draft:n5|out']);
 	});
 
 	it('has no ＋ output row: a connection to the free socket adds the piece', async () => {

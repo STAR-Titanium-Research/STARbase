@@ -71,6 +71,33 @@ describe('useEditCatalog', () => {
 		expect(asked).toBe(2);
 	});
 
+	it('a caller that finds the record being read waits for that read: it has the answer when its own call returns (a delete needs the version)', async () => {
+		const server = fakeServer();
+		const catalog = useEditCatalog(server.api, async () => []);
+		const want = { physical_samples: [], manufacturing_operations: ['o1'], test_sessions: [] };
+		const first = catalog.loadRecords(want); // the draft's own read, on its way
+		await catalog.loadRecords(want);
+		expect(catalog.records.has('manufacturing_operations:o1'), 'read by the time the second call returns').toBe(true);
+		await first;
+	});
+
+	it('retry asks again for a record whose read failed (a delete must not stay stuck on one failure)', async () => {
+		const server = fakeServer();
+		let failing = true;
+		let asked = 0;
+		const api = { ...server.api, get: async (...a: Parameters<HostApi['get']>) => (asked++, failing ? Promise.reject(httpError(500)) : server.api.get(...a)) } as unknown as HostApi;
+		const catalog = useEditCatalog(api, async () => []);
+		const want = { physical_samples: [], manufacturing_operations: ['o1'], test_sessions: [] };
+		await catalog.loadRecords(want);
+		expect(catalog.records.has('manufacturing_operations:o1')).toBe(false);
+		failing = false;
+		await catalog.loadRecords(want);
+		expect(asked, 'the draft\'s own reads leave the failed one alone').toBe(1);
+		await catalog.loadRecords(want, { retry: true });
+		expect(asked).toBe(2);
+		expect(catalog.records.has('manufacturing_operations:o1')).toBe(true);
+	});
+
 	it('does not ask for a record that is already being read', async () => {
 		const server = fakeServer();
 		let asked = 0;
