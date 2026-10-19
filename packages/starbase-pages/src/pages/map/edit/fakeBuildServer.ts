@@ -45,6 +45,9 @@ export function fakeServer() {
 		/** What Back to planned answers: a body, or an error to throw. */
 		plannedAnswer: null as unknown,
 		bodies: [] as unknown[],
+		/** Records the caller may read but not change (`GET /permissions/me/...` says update access is false), and a failing answer. */
+		readOnly: [] as string[],
+		permissionError: false,
 		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
 			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
 		},
@@ -62,6 +65,12 @@ export function fakeServer() {
 				const d = drafts.get(idOf(path));
 				if (!d) throw httpError(404);
 				return { data: { data: d } };
+			}
+			if (path.startsWith('/permissions/me/')) {
+				// What the caller may do with one record (Directus: `data.update.access`): everything unless a test says `readOnly` for that record.
+				const id = decodeURIComponent(path.split('/')[4] ?? '');
+				if (s.permissionError) throw httpError(500);
+				return { data: { data: { update: { access: !s.readOnly.includes(id) }, delete: { access: !s.readOnly.includes(id) }, share: { access: false } } } };
 			}
 			if (path === '/items/manufacturing_methods') return { data: { data: FAKE_METHODS } };
 			if (path === '/items/projects') return { data: { data: s.projects } };

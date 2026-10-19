@@ -481,6 +481,20 @@ describe('From database… (slice 3)', () => {
 		expect(edit.body.value.items).toEqual([]);
 	});
 
+	it('an operation the caller can see but not change is refused at the pick, in words; when that cannot be asked the pick goes on (Create asks the database)', async () => {
+		const { surface, edit, server } = await open();
+		const row = (await surface.attaching.search('')).rows[0];
+		server.s.readOnly = ['a'];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.problem.value).toBe('You can see this operation but not change it.');
+		expect(surface.attaching.target.value, 'the picker stays open').not.toBeNull();
+		expect(edit.body.value.items).toEqual([]);
+		server.s.readOnly = [];
+		server.s.permissionError = true;
+		await surface.attaching.pick(row);
+		expect(edit.body.value.items.some((i) => i.attach)).toBe(true);
+	});
+
 	it('an operation that is gone, or that the caller cannot read, is refused at the pick', async () => {
 		const { surface, edit, server } = await open();
 		const row = (await surface.attaching.search('')).rows[0];

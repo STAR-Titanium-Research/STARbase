@@ -14,6 +14,7 @@ import type { EditMode } from './useEditMode';
 
 export const GONE = 'That operation is gone, or you can no longer see it.';
 export const GOT_INPUT = 'It got an input in the meantime, so it cannot be attached any more.';
+export const READ_ONLY = 'You can see this operation but not change it.';
 export const READ_FAILED = 'Could not read that operation. Try again.';
 
 /** The record ids of the samples that lead into `start` on the drawn map (the start itself left out): what it was made from, as far as the map has loaded. */
@@ -104,6 +105,11 @@ export function useAttachPicking(o: {
 			}
 			if (got.hasInput) {
 				problem.value = GOT_INPUT;
+				return;
+			}
+			// Seeing an operation is not changing it (an investigator reads what only its owner may edit): refused here, not first at Create.
+			if ((await edit.catalog.mayUpdate('manufacturing_operations', row.id)) === false) {
+				problem.value = READ_ONLY;
 				return;
 			}
 			const workState = got.op.workState === 'planned' ? 'planned' : 'done';

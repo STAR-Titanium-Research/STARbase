@@ -205,6 +205,20 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	}
 
 	/**
+	 * May the caller change this record? Directus answers from the real permission rules (`GET /permissions/me/<collection>/<id>`: `update.access`).
+	 * null when it could not be asked: the caller is then not refused here, Create asks the database.
+	 */
+	async function mayUpdate(collection: CheckCollection, id: string): Promise<boolean | null> {
+		try {
+			const res = await api.get(`/permissions/me/${collection}/${encodeURIComponent(id)}`);
+			const access = res.data?.data?.update?.access;
+			return typeof access === 'boolean' ? access : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
 	 * Which of the samples these operations made already come from another sample: a genealogy row with it as the child, or another operation that
 	 * makes it from an input. Read as the caller (what they cannot read they cannot see; Create asks the database); a failed read leaves the rows as they are.
 	 */
@@ -275,7 +289,7 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 
 	return {
 		methods, testTypes, rawFields, checkFields, loading, records, samples, operations, materials, methodById,
-		ensure, loadRecords, loadSamples, loadOperations, searchOrphans, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
+		ensure, loadRecords, loadSamples, loadOperations, searchOrphans, mayUpdate, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};
 }
