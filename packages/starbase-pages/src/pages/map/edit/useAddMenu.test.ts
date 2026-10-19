@@ -240,10 +240,4 @@ describe('the add search remembers what was added, and does a choice wherever it
 		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'after', nodeId: 's:x', what: 'S-1' } }, turning);
 		expect(menu.recents.value).toEqual(['op:m-turn']);
 	});
-
-	it('an earlier step goes to the insert too', async () => {
-		const { menu, insert } = await setup();
-		await menu.applyAt({ sock: null, at: { x: 5, y: 5 }, insert: { where: 'before', nodeId: 's:x', what: 'S-1', earlier: true } }, { kind: 'earlierStep' });
-		expect(insert).toHaveBeenCalled();
-	});
 });

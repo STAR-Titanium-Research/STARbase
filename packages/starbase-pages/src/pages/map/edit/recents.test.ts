@@ -57,7 +57,7 @@ describe('which choice is remembered as what', () => {
 		expect(recentIdOf({ kind: 'operation', methodId: 'm1', category: null })).toBe('op:m1');
 		expect(recentIdOf({ kind: 'test', testType: 'xrd' })).toBe('test:xrd');
 		expect(recentIdOf({ kind: 'newSample' })).toBe('sample:new');
-		for (const kind of ['sameSample', 'existingSample', 'pickSamples', 'connectTo', 'earlierStep'] as const) expect(recentIdOf({ kind })).toBeNull();
+		for (const kind of ['sameSample', 'existingSample', 'pickSamples', 'connectTo'] as const) expect(recentIdOf({ kind })).toBeNull();
 		expect(recentIdOf({ kind: 'wireSample', key: 'n1' })).toBeNull();
 	});
 });

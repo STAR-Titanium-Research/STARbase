@@ -1409,7 +1409,7 @@ lists and the accounts of the real lab.
 
 #### Process map edit mode redesign, slice 2a adding (`pm-redesign/2a-adding`; plan `2026-10-18-process-map-edit-redesign.md`)
 
-The palette, the add search, the drops, insert and the earlier step are unit-tested and were driven in a real browser on the local stack by
+The palette, the add search, the drops and insert (with its refusal before a recorded sample) are unit-tested and were driven in a real browser on the local stack by
 `tests/ui/specs/edit-mode-slice2a.spec.ts` (a seeded family of four samples, eight methods). What only live data, other browsers and real
 touch confirm:
 
@@ -1424,12 +1424,14 @@ touch confirm:
   red, the reason "Done records' wires can't be removed from the map" follows the pointer, nothing changes), (e) onto a wire of a
   planned record that exists (refused: remove the planned record instead). No two cards overlap after any of them. Since: edit-mode
   redesign slice 2a (PR pending).
-- [ ] **PM8-3 — Add an earlier step on a real done sample.** Open the map of a real done sample, select it, Shift+I (or right-click >
-  Add an earlier step…), Enter. Three new cards appear beside it and are wired to nothing of the real history. Fill in the new sample,
-  choose a method for the operation, Create. Expect: the done sample, its maker and its lineage rows are unchanged (same `version` and
-  `date_updated`; `sample_genealogy` has no new row naming it), the new operation is planned and its output sample planned. Note on
-  the map how the unwired chain reads next to the real family: if it looks like it should be joined, that is the open question of
-  spec R3. Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-3 — Insert before a real recorded sample is refused.** Open the map of a real done sample (and, separately, a real planned
+  sample that is saved), select it, press Shift+I. Expect: the banner says "Its history is recorded and can't change from the map. Start
+  from a new sample instead.", no add search opens, no card is added, Undo stays disabled and Create stays disabled ("Add an operation,
+  test or new sample to create"). Right-click it: **Insert before…** is shown greyed out and hovering it shows the same reason; **Insert
+  after…** still opens the search. Select a new sample and Shift+I opens the search as before. Expect the done sample, its maker and its
+  lineage rows unchanged (same `version` and `date_updated`; `sample_genealogy` has no new row naming it). There is no "Add an earlier
+  step" any more: a missing earlier step is recorded by asking an admin to fix the lineage. Since: edit-mode redesign slice 2a (PR pending),
+  rewritten for the R3 decision (refusal).
 - [ ] **PM8-4 — Ctrl/⌘+K in each browser.** On Windows (Chrome, Edge, Firefox) and macOS (Safari, Chrome, Firefox) press Ctrl/⌘+K in edit
   mode with the pointer over the canvas: the add search opens at the pointer, the browser's own search bar and STARbase's Finder do not.
   With the focus in the draft's name field, in a form field of the rail, or with a dialog open, the same keys do not open the add

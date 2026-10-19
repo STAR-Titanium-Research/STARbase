@@ -166,7 +166,6 @@ test.describe('as a Lab Member', () => {
 		const menu = page.getByRole('menu', { name: 'Highlight' });
 		await expect(menu.getByRole('menuitem', { name: /^Remove/ })).toBeVisible();
 		await expect(menu.getByRole('menuitem', { name: /^Insert/ })).toHaveCount(0);
-		await expect(menu.getByRole('menuitem', { name: /^Add an earlier step/ })).toHaveCount(0);
 		await page.keyboard.press('Escape');
 
 		// The keys say the reason where the canvas says its problems, and open nothing.

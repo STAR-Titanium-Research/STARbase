@@ -11,9 +11,10 @@ const props = defineProps<{
 	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
 	canRemove?: boolean;
 	canDissolve?: boolean;
-	/** Edit mode, a sample or a container: Insert before / after it (the add search); a done sample's "before" is "Add an earlier step". */
+	/** Edit mode, a sample or a container: Insert before / after it (the add search). */
 	canInsert?: boolean;
-	earlier?: boolean;
+	/** Why "Insert before" is refused for this card (a recorded sample): it is shown disabled with this as its title. */
+	insertBeforeRefusal?: string | null;
 }>();
 const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
 
@@ -63,9 +64,9 @@ onBeforeUnmount(() => {
 		<template v-if="canRemove || canDissolve || canInsert">
 			<div class="hd">Edit</div>
 			<template v-if="canInsert">
-				<button type="button" role="menuitem" class="it" @click="emit('insert', 'before'), emit('close')">
+				<button type="button" role="menuitem" class="it" :disabled="!!insertBeforeRefusal" :aria-disabled="!!insertBeforeRefusal" :title="insertBeforeRefusal || undefined" @click="emit('insert', 'before'), emit('close')">
 					<v-icon name="keyboard_double_arrow_left" x-small />
-					<span>{{ earlier ? 'Add an earlier step…' : 'Insert before…' }}</span>
+					<span>Insert before…</span>
 					<kbd>Shift+I</kbd>
 				</button>
 				<button type="button" role="menuitem" class="it" @click="emit('insert', 'after'), emit('close')">
@@ -103,6 +104,8 @@ onBeforeUnmount(() => {
 .hd { padding: 6px 10px 4px; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--d1-dim); }
 .it { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--theme--foreground); font: inherit; text-align: left; cursor: pointer; }
 .it:hover, .it:focus-visible { background: var(--d1-tint); outline: none; }
+.it:disabled { opacity: 0.5; cursor: not-allowed; }
+.it:disabled:hover { background: none; }
 .it[aria-checked='true'] { font-weight: 600; }
 .ck { margin-left: auto; color: var(--d1-accent, var(--theme--primary)); }
 kbd { margin-left: auto; padding: 0 5px; border: 1px solid var(--d1-line); border-radius: 4px; font: inherit; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }

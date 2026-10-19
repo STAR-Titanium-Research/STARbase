@@ -10,8 +10,8 @@
 //   before a sample    one that something makes: X goes on that wire; one nothing makes: X makes it (and gets a new input sample)
 //   after a sample     its one outgoing wire when it has exactly one, else X is fed by it (a new branch)
 //   before / after a container   on its one input / output wire; with none, a new sample and X are added next to it
-//   an earlier step    a DONE sample is never given a parent: a new planned sample -> operation -> new sample chain starts upstream of it,
-//                      unwired to it. The done record's lineage is untouched (R3).
+//   before a RECORDED sample (done, or planned and saved)   refused up front (BEFORE_RECORDED): its history is recorded and a record's parentage is
+//                      never changed from the map (R3). There is no "earlier step" action: it built a chain nothing connected to the sample.
 //
 // A wire of records that are done (or saved) is never touched: the answer is the lock reason of removal.ts (R4).
 
@@ -34,6 +34,8 @@ export const SAMPLE_BETWEEN = 'A sample goes between operations. Drop an operati
 export const SEVERAL_WIRES = 'Several wires meet here. Drop it on the wire you mean.';
 export const STACKED = 'This is a stack of passes on one sample. Unstack it first, then insert on the pass you mean.';
 export const TEST_AFTER = 'A test has nothing coming out of it, so nothing can come after it.';
+/** "Insert before" a sample that already exists as a record (done, or planned and saved): its lineage can't be changed from the map (R3). */
+export const BEFORE_RECORDED = "Its history is recorded and can't change from the map. Start from a new sample instead.";
 
 type Wire = { from: WireEnd; to: WireEnd };
 type Step = (c: { body: DraftBody; made: DraftKey[] }) => DraftAction;
@@ -130,15 +132,6 @@ export function insertOnWire(body: DraftBody, graph: ProcessGraph, wireId: strin
 	return v.ok ? insertOnDraftWires(body, v.wires, choice, at) : fail(v.reason, v.locked);
 }
 
-/** What R3 adds to a done sample: a chain that starts upstream (a new planned sample, an operation of no method yet, the sample it makes), joined to nothing. */
-export function earlierStep(body: DraftBody, at?: Pos): InsertVerdict {
-	return plan(body, [
-		() => ({ type: 'addSample', at }),
-		({ made }) => ({ type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: made[0] } }),
-		({ made }) => ({ type: 'addSample', from: { key: made[1], row: 0 } }),
-	]);
-}
-
 /** The drawn wires on one side of a card. */
 const wiresOn = (graph: ProcessGraph, node: MapNode, side: 'in' | 'out') => graph.wires.filter((w) => nodeOfSocket(side === 'in' ? w.to : w.from) === node.id);
 
@@ -161,20 +154,27 @@ export function insertRefusal(body: DraftBody, node: MapNode): { reason: string;
 }
 
 /**
+ * Why "Insert before" is refused for this card, or null: a sample that already exists as a record (done, or planned and saved) is never given a
+ * maker from the map (R3). A new sample, a container, a junction are not asked about here.
+ */
+export function insertBeforeRefusal(node: MapNode | undefined): string | null {
+	return node && node.type === 'record' && node.kind === 'sample' && !node.draft ? BEFORE_RECORDED : null;
+}
+
+/**
  * Insert before or after a drawn card, without dragging. A sample of the loaded history must already be an item of the draft (the page adds
- * it first). `choice` is an operation (or a new sample for a container's side), or `earlierStep` for a done sample.
+ * it first), unless it is a recorded sample asked about "before", which is refused before anything is read. `choice` is an operation (or a
+ * new sample for a container's side).
  */
 export function insertAround(o: { body: DraftBody; graph: ProcessGraph; node: MapNode; where: 'before' | 'after'; choice: MenuChoice; at?: Pos }): InsertVerdict {
 	const { body, graph, node, where, choice, at } = o;
 	if (node.type === 'record' && node.kind === 'sample') {
-		// The earlier step does not touch the done sample, so it does not even need to be part of the draft.
-		if (choice.kind === 'earlierStep') return where === 'before' && !node.draft && !node.planned ? earlierStep(body, at) : fail(NO_FIT);
-		const item = sampleItemOf(body, node.ref.id);
-		if (!item) return fail('That sample is not part of the draft yet.');
+		// A recorded sample is never given a parent, whatever is chosen, so "before" is refused before it matters whether it is in the draft.
 		const no = insertRefusal(body, node);
 		if (no) return fail(no.reason, no.locked);
-		// A done sample is never given a parent, whatever is chosen: the earlier step is the only way before it.
-		if (where === 'before' && !node.draft && !node.planned) return fail(DONE_WIRE, true);
+		if (where === 'before' && insertBeforeRefusal(node)) return fail(BEFORE_RECORDED, true);
+		const item = sampleItemOf(body, node.ref.id);
+		if (!item) return fail('That sample is not part of the draft yet.');
 		const wires = wiresOn(graph, node, where === 'before' ? 'in' : 'out');
 		if (wires.length > 1 && where === 'before') return fail(SEVERAL_WIRES);
 		// After it, its one outgoing wire is where the operation goes. When that wire is not the draft's to change (done, or saved) the operation

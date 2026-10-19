@@ -356,7 +356,7 @@ const tipHint = computed(() => {
 									:can-remove="edit.editing.value"
 									:can-dissolve="edit.editing.value && build.canDissolve.value"
 									:can-insert="edit.editing.value && build.canInsertSelected()"
-									:earlier="build.selectedIsDoneSample()"
+									:insert-before-refusal="build.selectedInsertBeforeRefusal()"
 									@pick="map.setChainDir"
 									@remove="build.removeSelected"
 									@dissolve="build.dissolveSelected"

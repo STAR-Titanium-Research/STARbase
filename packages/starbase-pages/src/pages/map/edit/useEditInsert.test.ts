@@ -8,13 +8,14 @@ import { nodeOfSocket } from '../model/sockets';
 import type { MapNode, ProcessData } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
+import { BEFORE_RECORDED } from './insertModel';
 import { ALREADY_GOING, DONE_WIRE } from './removal';
 import { toGraph } from './toGraph';
 import { useAddMenu } from './useAddMenu';
 import { useEditInsert } from './useEditInsert';
 import { useEditMode } from './useEditMode';
 
-// Insert before / after the selected card, a drop on a wire and "Add an earlier step", with the page's pieces faked.
+// Insert before / after the selected card and a drop on a wire, with the page's pieces faked.
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 const turning = { kind: 'operation', methodId: 'mt', category: 'machining' } as const;
@@ -74,7 +75,6 @@ describe('Insert before and after the selected card', () => {
 		const { insert, menu } = await setup(chain(), { selected: 's:draft:n4' });
 		expect(insert.openFor('before')).toBe(true);
 		expect(menu.target.value).toMatchObject({ sock: null, anchor: 's:draft:n4', insert: { where: 'before', nodeId: 's:draft:n4' } });
-		expect(menu.target.value?.insert?.earlier).toBeUndefined();
 	});
 
 	it('does nothing (the key is the browser\'s) when nothing, or something that cannot be inserted around, is selected', async () => {
@@ -95,16 +95,34 @@ describe('Insert before and after the selected card', () => {
 		expect(edit.body.value).toEqual(before);
 	});
 
-	it('before a DONE sample, the search is the earlier step alone; choosing it adds three new cards and does not even add the done sample to the draft', async () => {
-		const { insert, menu, edit, sampleActions } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
-		insert.openFor('before');
-		expect(menu.target.value?.insert).toMatchObject({ where: 'before', earlier: true, nodeId: 's:s2' });
-		await menu.choose({ kind: 'earlierStep' });
+	it('before a DONE sample is refused up front: the reason is said, no search opens, the draft is untouched and there is no undo step', async () => {
+		const { insert, menu, edit, said, sampleActions } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
+		expect(insert.openFor('before')).toBe(true);
+		expect(said).toEqual([{ text: BEFORE_RECORDED, at: undefined }]);
+		expect(menu.target.value).toBeNull();
 		expect(sampleActions).not.toHaveBeenCalled();
-		expect(edit.body.value.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'sample']);
-		expect(edit.body.value.items.every((i) => !i.existing)).toBe(true);
-		edit.undo();
 		expect(edit.body.value.items).toEqual([]);
+		expect(edit.draft.canUndo.value).toBe(false);
+		// The menu is told why, to show "Insert before…" disabled; after is still offered.
+		expect(insert.canInsert(insert.selected())).toBe(true);
+		expect(insert.beforeRefusal(insert.selected())).toBe(BEFORE_RECORDED);
+	});
+
+	it('before a planned sample that is saved is refused the same way', async () => {
+		const data = mkData({ samples: [mkSample('s4', { status: 'planned' })] });
+		const { insert, menu, edit, said } = await setup(emptyBody(), { loaded: data, selected: 's:s4' });
+		expect(insert.openFor('before')).toBe(true);
+		expect(said.map((s) => s.text)).toEqual([BEFORE_RECORDED]);
+		expect(menu.target.value).toBeNull();
+		expect(edit.draft.canUndo.value).toBe(false);
+	});
+
+	it('before a new sample still opens the search, and a new card has no refusal', async () => {
+		const { insert, menu, said } = await setup(chain(), { selected: 's:draft:n4' });
+		expect(insert.beforeRefusal(insert.selected())).toBeNull();
+		expect(insert.openFor('before')).toBe(true);
+		expect(said).toEqual([]);
+		expect(menu.target.value?.insert).toMatchObject({ where: 'before' });
 	});
 
 	it('after a done sample: a new operation it feeds; the sample joins the draft with the operation as one step', async () => {
@@ -117,13 +135,13 @@ describe('Insert before and after the selected card', () => {
 		expect(edit.body.value.items).toEqual([]);
 	});
 
-	it('an operation before a done sample is refused whole, with the lock reason said, and the draft is as it was', async () => {
+	it('an operation chosen from a stale search before a done sample is refused whole, with the reason said, and the draft is as it was', async () => {
 		const { insert, menu, edit, said } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
 		const before = edit.body.value;
 		// Not offered by the search, but a stale search might still ask.
 		menu.open({ sock: null, at: { x: 1, y: 1 }, insert: { where: 'before', nodeId: 's:s2', what: 's2' } });
 		await menu.choose(turning);
-		expect(said.map((s) => s.text)).toEqual([DONE_WIRE]);
+		expect(said.map((s) => s.text)).toEqual([BEFORE_RECORDED]);
 		expect(insert.canInsert(undefined)).toBe(false);
 		expect(edit.body.value.items.filter((i) => i.kind === 'operation')).toEqual([]);
 		expect(edit.body.value.wires).toEqual(before.wires);
@@ -151,7 +169,7 @@ describe('Insert before and after the selected card', () => {
 		expect(insert.openFor('before')).toBe(true);
 		expect(said.map((s) => s.text)).toEqual([DONE_WIRE, DONE_WIRE]);
 		expect(menu.target.value).toBeNull();
-		// A done sample is still asked about (its "before" is the earlier step), and so is a new card.
+		// A done sample is still asked about (its "before" is refused, its "after" is not), and so is a new card.
 		expect(insert.canInsert(graph.value.nodes.find((n) => n.id === 's:s2'))).toBe(true);
 	});
 

@@ -31,8 +31,6 @@ export type MenuChoice =
 	| { kind: 'pickSamples' }
 	/** "Connect to…": the sockets this one can be wired to, by code (E21). */
 	| { kind: 'connectTo' }
-	/** "Add an earlier step" on a done sample (R3): a new planned chain upstream; the done record is not changed. */
-	| { kind: 'earlierStep' }
 	/** A sample that is in the draft, wired to the socket the menu is for. */
 	| { kind: 'wireSample'; key: DraftKey }
 	/** A sample found in the database: the page adds it to the draft (with its version), then it is a `wireSample`. */
@@ -106,15 +104,6 @@ export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
 
 /** The operations of the catalog alone (what "Insert before / after" offers: a test has no output to carry on from). */
 export const operationOnlyEntries = (cat: MenuCatalog): MenuEntry[] => operationEntries(cat.methods);
-
-/** What "Insert before" offers for a done sample: its parentage is never rewritten, so one step that starts a new planned chain upstream (R3). */
-export const EARLIER_STEP: MenuEntry = {
-	id: 'earlier',
-	section: 'Done sample',
-	label: 'Add an earlier step',
-	detail: 'a new planned sample and operation upstream. The done record is not changed.',
-	choice: { kind: 'earlierStep' },
-};
 
 /** The entries when nothing has been typed. A socket's list ends with Connect to… (a test has no output to connect). */
 export function rootEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[] {

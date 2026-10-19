@@ -58,7 +58,7 @@ export function useAddMenu(o: {
 		// What was added lately is noted only once the choice did something: a refused drop or insert, or one that changed nothing, is no "recent".
 		const recent = recentIdOf(choice);
 		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
-		if (t.insert || choice.kind === 'earlierStep') return void ((await o.insert?.(t, choice)) !== false && note());
+		if (t.insert) return void ((await o.insert?.(t, choice)) !== false && note());
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		// The samples it adds and the choice made on them are one undo step.
 		let folded = false;
