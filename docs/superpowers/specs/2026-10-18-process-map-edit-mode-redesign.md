@@ -29,7 +29,7 @@ the keyboard**, and **removal that works**.
 | R5 | **Sockets are derived.** A card or container shows a socket for each wire it has plus one free one. A spare that nothing uses disappears when the next one is connected or the selection leaves it. Nothing about sockets is stored in the draft. Replaces the ＋ output / ＋ pass rows as the way to add them (E9): connecting to the free socket does it. |
 | R6 | **Layout.** A new node is placed in the nearest free slot beside what it was attached to and never overlaps another node. Positions the person dragged are kept and never re-flowed. **Tidy** is an explicit, undoable button that re-lays out the draft's own items. Replaces automatic re-layout on every change. |
 | R7 | **Templates.** A template is an operation or test method plus its filled-in fields (machine, tool, operator, settings, notes), never sample links or dates. "Save as template" on any container (private, account role or everyone, E11's scopes). Templates appear in the palette and add search like any other item and drop in as a prefilled container the person can edit. No built-in starter set; templates are made by people. Duplicate ×N (E10) stays for the same operation on many samples. |
-| R8 | **Attach from the database** (as scoped by the maintainer on 2026-10-19, built in slice 3). "From database…" (palette, add search, or a drop on a sample's output) searches the **recorded operations that have no input sample**, planned or done, and attaches the one chosen to the sample whose output socket it was opened on: that sample becomes the operation's input. Create writes `operation.sample_id` and nothing else (the database derives the operation's step number, code and the lineage row from it; no sample is made or changed). An operation that cannot go there is listed greyed with the reason: already on the canvas, already attached in this draft, done work on a planned sample, or it made a sample this one comes from. Replaces E8's canvas-only "Existing…". **Out of scope, on purpose:** attaching tests onto a sample, a sample as an operation's output, and joining another process tree (a record from another process). See 2.2. |
+| R8 | **Attach from the database** (as scoped by the maintainer on 2026-10-19, built in slice 3). "From database…" (palette, add search, or a drop on a sample's output) searches the **recorded operations that have no input sample**, planned or done, and attaches the one chosen to the sample whose output socket it was opened on: that sample becomes the operation's input. Create writes `operation.sample_id` (and any edits the person made to the operation in the side panel, under the version check); the database then derives the operation's step number and code, who may read it, and the lineage row from the new input. No sample is made or changed. An operation that cannot go there is listed greyed with the reason: already on the canvas, already attached in this draft, done work on a planned sample, or it made a sample this one comes from. Replaces E8's canvas-only "Existing…". **Out of scope, on purpose:** attaching tests onto a sample, a sample as an operation's output, and joining another process tree (a record from another process). See 2.2. |
 | R9 | **Planned or done at Create.** Each new operation or test has a Planned / Done toggle. Done asks for the date (default today) and Create writes it done in one step, outputs active (ADR-0019 amendment). |
 | R10 | **Mark done by whoever may edit the operation** (ADR-0019 amendment): the status flip of its output samples uses system rights after the operation update succeeds. |
 | R11 | **Who may build.** `d1-build` answers 403 to an account that may not create operations, and the page hides edit mode for it. Create refuses with a clear message when the caller has no researcher People row (ADR-0018 amendment). |
@@ -94,10 +94,17 @@ the keyboard**, and **removal that works**.
   A row says its code, method, planned or done, day, owner and the sample it made.
 - **Greyed, with the reason** (`attachModel.ts`): "Already on the canvas." (the loaded map or the draft holds it), "Already attached in this draft.",
   the server's words "Its sample is still planned; mark the operation that makes it done first." (a done operation on a planned sample), "It makes S,
-  which this sample comes from: that would run in a circle." (as far as the map has loaded the lineage), and "a sample cannot be an input of the
-  operation that made it". A greyed row cannot be chosen.
-- **At the pick** the operation is read again (fresh): its version is what the draft attaches against; one that has an input by now, or is gone, is refused
-  in the picker with that reason and nothing joins the draft. Create re-checks (d1-build): changed since (`STALE_VERSION`), gone (`GONE`) and got an
+  which this sample comes from: that would run in a circle." (as far as the map has loaded the lineage), "a sample cannot be an input of the
+  operation that made it", and "It made S, which already comes from another sample: attaching would give it a second origin." (a genealogy row, or another
+  operation that makes it from an input: joining two processes is out of scope, see R8). A greyed row cannot be chosen.
+- **What d1-build refuses at Create, whatever the page showed** (`NOT_ATTACHABLE`, blocking, nothing written): the sample it is attached to is the one it
+  made; the sample it made is already upstream of the input in the lineage (read as ids by a depth-bounded recursive query over `sample_genealogy`, also
+  through the draft's new operations and other attached operations, so a loop closes nowhere); the sample it made already has another origin (a lineage row or
+  another maker from a different input, or two attached operations of the draft making it from different inputs). A sample's code is named in these only
+  when the caller can read it, else "the sample it made". The page shows the first as a client check too.
+- **At the pick** the operation is read again (fresh): its version is what the draft attaches against; one that has an input by now, or is gone, or that the
+  caller can see but not change (`GET /permissions/me/manufacturing_operations/<id>`, `update.access`: an investigator reads what only its owner edits), is
+  refused in the picker with that reason ("You can see this operation but not change it.") and nothing joins the draft. Create asks the database again. Create re-checks (d1-build): changed since (`STALE_VERSION`), gone (`GONE`) and got an
   input meanwhile (`NOT_ATTACHABLE`) are blocking checks, shown in Checks, and nothing is written.
 - **On the canvas** the operation is drawn as the record it is (planned ghosted, done solid, an **Attach** pill on its header), wired from the sample, with
   **the sample it made** drawn after it. That sample is the one that exists: attaching never makes a sample. The operation's output socket is not the draft's
@@ -105,9 +112,11 @@ the keyboard**, and **removal that works**.
   draft: undo and redo take it off and put it back, its wire can be removed (the operation stays on the canvas, attached to nothing, and Create refuses),
   and Delete takes the loose or wired operation off the draft, never deleting the record. A done operation can be attached; it is never removed from the
   map as a record (R4).
-- **At Create** the summary reads "Attach 1 operation" (counts with the other records). It writes one update per operation: `sample_id`, under the version
-  check. The database then derives from it, not Create: the operation's step number and code (they follow the sample it is now on: migration 157), and the
-  lineage row (output sample from input sample; the genealogy trigger). The picker says so ("Its code and step number then follow that sample.").
+- **At Create** the summary reads "Attach 1 operation" (counts with the other records). It writes one update per operation, under the version check: `sample_id`
+  and any edits made to the operation in the rail (its fields are the person's to change, `output_sample_id` and `work_state` never are). The database then
+  derives from it, not Create: the operation's step number and code (they follow the sample it is now on: migration 157), who may read it (the readers table
+  follows its sample), and the lineage row (output sample from input sample; the genealogy trigger). The picker says so ("Its code and step number then follow
+  that sample."), and the Attach pill's tooltip lists all of it.
 
 ## 4. Delivery
 

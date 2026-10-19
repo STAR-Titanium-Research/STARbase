@@ -158,7 +158,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ kindLine }}</span>
-			<span v-if="data.attaching && edit?.editing.value" class="apill" title="A recorded operation: Create gives it the sample wired to its input and changes nothing else about it.">Attach</span>
+			<span v-if="data.attaching && edit?.editing.value" class="apill" title="A recorded operation: Create gives it the sample wired to its input, and writes any edits you make to it in the side panel. The database then renumbers and re-codes it and updates who may read it, and adds the lineage.">Attach</span>
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
 			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
