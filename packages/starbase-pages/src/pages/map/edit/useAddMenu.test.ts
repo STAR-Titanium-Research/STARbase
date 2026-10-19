@@ -177,6 +177,22 @@ describe('the add search remembers what was added, and does a choice wherever it
 		expect(other.menu.recents.value).toEqual([]);
 	});
 
+	it('reads the recents at once, and again when the person becomes known a moment after the page opened', async () => {
+		store.set('d1.map.add.recent.v1.late', JSON.stringify(['op:m-turn']));
+		const { nextTick, ref } = await import('vue');
+		const server = fakeServer();
+		const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
+		server.s.seed('d');
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace: vi.fn() }, isPhone: ref(false), focus: () => null });
+		await settle();
+		const who = ref<string | null>(null);
+		const menu = useAddMenu({ edit, canvas: { toFlow: (x, y) => ({ x, y }) }, canvasEl: ref(null), ensureSample: async () => true, pickSamples: () => undefined, connect: () => undefined, person: () => who.value });
+		expect(menu.recents.value).toEqual([]);
+		who.value = 'late';
+		await nextTick();
+		expect(menu.recents.value).toEqual(['op:m-turn']);
+	});
+
 	it('Same sample, a wire and the picker are not remembered', async () => {
 		const { menu } = await setup();
 		menu.open({ sock: null, at: { x: 1, y: 1 } });
