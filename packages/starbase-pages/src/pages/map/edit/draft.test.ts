@@ -115,6 +115,14 @@ describe('addContainer', () => {
 		expect((b.items[0] as DraftOperation).workState).toBe('done');
 	});
 
+	it('new from and duplicate leave the identity of one run behind: a FAST run number is unique with its machine, so a copy would be refused at Create', () => {
+		const record = {
+			method_id: 'm', equipment_id: 'e', process_category: 'sintering', sintering_run_number: 412, sintering_max_temp_celsius: 1450, source_system: 'crawler', source_recipe_id: 'r', fast_recipe_id: 'r2',
+			owner: 'user-9', gcode_file: 'f', machining_legacy_machining_uid: 'u', status: 'analysed', summary_stats: { n: 1 }, data_file_uri: 's3://x', test_code_number: 3, test_code_subject_id: 'sample-uuid',
+		};
+		expect(newFromValues(record)).toEqual({ method_id: 'm', equipment_id: 'e', process_category: 'sintering', sintering_max_temp_celsius: 1450 });
+	});
+
 	it('new from copies an existing record without its date, sample, notes and code', () => {
 		const record = {
 			operation_id: 'op-1', method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2, operation_date: '2026-01-02', sample_id: 's', output_sample_id: 'o',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftItem, DraftOperation, DraftTest, TemplateRecord } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
+import { OPERATION_DEFS, TEST_DEFS } from './templateFields.fixtures';
 import { SCOPES, canChange, scopeLabel, templateCollectionOf, templateEntries, templateEntry, templateProblem, templateValuesOf, templatesOf, warnOf, type TemplateItem } from './templates';
 
 const methods: MethodEntry[] = [
@@ -19,8 +20,8 @@ const rec = (over: Partial<TemplateRecord> = {}): TemplateRecord => ({
 });
 const item = (r: TemplateRecord = rec(), over: Partial<TemplateItem> = {}): TemplateItem => ({ rec: r, mine: true, ...over });
 
-/** The columns of an operation, as Directus's field definitions say (a real column has a `schema`). */
-const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'insert_edge_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'outcome_notes', 'project_id', 'machining_cutting_speed_m_per_min', 'owner_person_id', 'sample_id'].map((field) => ({ field, type: 'string', schema: {}, meta: {} }));
+const defs = OPERATION_DEFS;
+const tdefs = TEST_DEFS;
 
 describe('what a template saves', () => {
 	it('keeps the method, machine, tool, edge, operator and settings', () => {
@@ -48,7 +49,6 @@ describe('what a template saves', () => {
 		expect(templateValuesOf(op({ method_id: 'mt' }), undefined, defs, { notes: true })).toEqual({ method_id: 'mt' });
 		// A test keeps its own `notes`.
 		const t = test({ test_type: 'tensile', notes: 'jaws 4' });
-		const tdefs = [...defs, { field: 'test_type', type: 'string', schema: {}, meta: {} }];
 		expect(templateValuesOf(t, undefined, tdefs)).toEqual({ test_type: 'tensile' });
 		expect(templateValuesOf(t, undefined, tdefs, { notes: true })).toEqual({ test_type: 'tensile', notes: 'jaws 4' });
 	});
@@ -65,7 +65,7 @@ describe('what a template saves', () => {
 	});
 
 	it('keeps a test\'s type and settings but not the edge the server refuses on a test', () => {
-		const v = templateValuesOf(test({ test_type: 'tensile', equipment_id: 'e1', insert_edge_id: 'edge1' }), undefined, [...defs, { field: 'test_type', type: 'string', schema: {}, meta: {} }]);
+		const v = templateValuesOf(test({ test_type: 'tensile', equipment_id: 'e1', insert_edge_id: 'edge1' }), undefined, tdefs);
 		expect(v).toEqual({ test_type: 'tensile', equipment_id: 'e1' });
 	});
 });

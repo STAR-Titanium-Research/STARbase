@@ -9,8 +9,8 @@
 import type { DraftItem, FieldDef as DirectusField, TemplateRecord } from '@d1/ui';
 import type { ProcessCategory } from '../model/types';
 import { writableValues, type MethodEntry, type TestTypeEntry } from './catalog';
-import { newFromValues } from './draft';
 import { gearIn, type GearField } from './gearStatus';
+import { allowedForTemplate } from './templateFields';
 import type { MenuEntry } from './menuModel';
 
 export type TemplateScope = TemplateRecord['scope'];
@@ -55,21 +55,33 @@ export function templatesOf(rows: unknown): TemplateRecord[] {
 
 // ---- what a template saves ---------------------------------------------------------------------------------------------
 
-/**
- * Left out of a template on top of what "new from" leaves out (`newFromValues`: the date, the sample, the codes, the owner, the notes, the
- * record's bookkeeping): the project and campaign (the draft's top bar chooses them), the outcome and the files of one particular run.
- */
-const NOT_IN_A_TEMPLATE = new Set(['project_id', 'campaign_id', 'outcome_notes', 'force_file_id', 'file_storage_pointer', 'nc_program_file_uri', 'recorded_at']);
-
 /** The field a container keeps its notes in. */
 const NOTES_FIELD = { operation: 'outcome_notes', test: 'notes' } as const;
 
 const blank = (v: unknown): boolean => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
+/** The collection's kind of draft item. */
+const kindOfCollection = (collection: TemplateCollection): 'operation' | 'test' => (collection === 'manufacturing_operations' ? 'operation' : 'test');
+
 /**
- * What a container's template holds: its fields as they will stand (the loaded record of one that exists, then the draft's changes), without the
- * fields the server refuses in a draft, the ones that are only true of this run (see above) and anything blank. the notes (an operation's `outcome_notes`, a test's `notes`) stay only when
- * `opts.notes` is ticked. `defs` are the collection's field definitions: only real columns are kept (the server refuses a name that is not one).
+ * What a template may hold of `values` (templateFields.ts: an allow-list of the setup and the form's process settings, with a deny-list behind
+ * it), real columns only, nothing blank. The notes are not setup: they stay only when `notes` says so (the person ticked them, or the template
+ * already held them). Used when a template is made and again when one is used, so a template made before a column changed, or by an older
+ * version of this list, cannot put a stale or run-specific field into a draft.
+ */
+export function cleanTemplateValues(collection: TemplateCollection, values: Record<string, unknown>, defs: readonly DirectusField[], opts: { notes?: boolean } = {}): Record<string, unknown> {
+	const kind = kindOfCollection(collection);
+	const writable = writableValues(kind, values, defs);
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(allowedForTemplate(kind, writable, defs))) if (!blank(v)) out[k] = v;
+	const notes = NOTES_FIELD[kind];
+	if (opts.notes && !blank(writable[notes])) out[notes] = writable[notes];
+	return out;
+}
+
+/**
+ * What a container's template holds: its fields as they will stand (the loaded record of one that exists, then the draft's changes), cleaned as
+ * above. The notes (an operation's `outcome_notes`, a test's `notes`) stay only when `opts.notes` is ticked.
  */
 export function templateValuesOf(item: DraftItem, loaded: Record<string, unknown> | undefined, defs: readonly DirectusField[], opts: { notes?: boolean } = {}): Record<string, unknown> {
 	const own: Record<string, unknown> = { ...(loaded ?? {}) };
@@ -78,13 +90,7 @@ export function templateValuesOf(item: DraftItem, loaded: Record<string, unknown
 		if (v === null) delete own[k];
 		else if (v !== undefined) own[k] = v;
 	}
-	const writable = writableValues(item.kind, own, defs);
-	const out: Record<string, unknown> = {};
-	for (const [k, v] of Object.entries(newFromValues(writable))) if (!NOT_IN_A_TEMPLATE.has(k) && !blank(v)) out[k] = v;
-	// The notes of an operation are `outcome_notes`, a test's are `notes`: left out unless the person ticked them.
-	const notes = NOTES_FIELD[item.kind as 'operation' | 'test'];
-	if (opts.notes && notes && !blank(writable[notes])) out[notes] = writable[notes];
-	return out;
+	return cleanTemplateValues(item.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', own, defs, opts);
 }
 
 /** Why a container cannot be saved as a template, or null: the server wants the method of an operation and the type of a test. */

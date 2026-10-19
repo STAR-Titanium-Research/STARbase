@@ -3,14 +3,13 @@ import { reactive, ref } from 'vue';
 import type { ContainerNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
+import { OPERATION_DEFS, TEST_DEFS } from './templateFields.fixtures';
 import { useGearStatus } from './useGearStatus';
 import { useTemplateUi } from './useTemplateUi';
 import { useTemplates } from './useTemplates';
 
 const run = (actions: DraftAction[]) => actions.reduce((b, a) => apply(b, a), emptyBody());
 
-const col = (field: string, label: string) => ({ field, type: 'string', schema: {}, meta: {} , label });
-const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'outcome_notes', 'machining_feed_mm_per_rev', 'test_type'].map((f) => col(f, f));
 const labels = { method_id: 'Method', equipment_id: 'Machine', tool_id: 'Tool', operator_person_id: 'Operator', machining_feed_mm_per_rev: 'Feed' } as Record<string, string>;
 
 /** A draft with one new Turning operation (n2, row n3) that has a machine, a tool, an operator, a date and notes, selected on the canvas. */
@@ -31,7 +30,7 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 		templates,
 		catalog: {
 			checkFields: ref({ manufacturing_operations: Object.entries(labels).map(([field, label]) => ({ field, label, required: false })) }),
-			rawFields: ref({ manufacturing_operations: defs, test_sessions: defs }),
+			rawFields: ref({ manufacturing_operations: OPERATION_DEFS, test_sessions: TEST_DEFS }),
 			methodById: ref(new Map([['m-turn', { id: 'm-turn', name: 'CNC Turning', code: 'MC', category: 'machining' as const }]])),
 			testTypes: ref([]),
 			records: reactive(new Map()),
