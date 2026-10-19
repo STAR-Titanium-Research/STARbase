@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
-import { D1, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
+import { D1, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
 	paletteEntry, paletteOf, pickSamples, pressCreate, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
@@ -30,7 +30,7 @@ test.beforeAll(async ({ playwright }) => {
 });
 
 async function deleteDrafts(api: APIRequestContext): Promise<void> {
-	const r = await api.get(`${D1}/d1-build/drafts`);
+	const r = await getRetrying(api, `${D1}/d1-build/drafts`);
 	if (!r.ok()) return;
 	for (const d of (await r.json()).data as { id: string }[]) await api.delete(`${D1}/d1-build/drafts/${d.id}`);
 }
