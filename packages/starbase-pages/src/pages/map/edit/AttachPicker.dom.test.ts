@@ -86,6 +86,19 @@ describe('the From database picker', () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
+	it('Enter on the Show more or Close button is that button\'s own, not a pick of the highlighted row', async () => {
+		const onPick = vi.fn();
+		const onClose = vi.fn();
+		const el = mount({ search: async () => ({ rows: [row('a'), row('b')], more: true }), onPick, onClose });
+		await settle();
+		el.querySelector<HTMLElement>('.more')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+		el.querySelector<HTMLElement>('.x')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+		expect(onPick).not.toHaveBeenCalled();
+		// ... while Enter in the search box still picks
+		el.querySelector<HTMLElement>('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+		expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+	});
+
 	it('asks again for what is typed, a moment after the last key, from the first page', async () => {
 		vi.useFakeTimers();
 		const search = vi.fn(async (q: string) => ({ rows: q ? [row('z')] : [row('a')], more: false }));

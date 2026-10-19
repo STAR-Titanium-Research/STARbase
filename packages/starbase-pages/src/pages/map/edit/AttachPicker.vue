@@ -114,7 +114,8 @@ function onKey(e: KeyboardEvent): void {
 		e.preventDefault();
 		move(e.key === 'ArrowDown' ? 1 : -1);
 	} else if (e.key === 'Enter') {
-		if (e.isComposing) return;
+		// Enter on a button of the dialog (Show more, Close) is that button's own click, not a pick of the highlighted row.
+		if (e.isComposing || (e.target as HTMLElement | null)?.closest?.('button:not([role="option"])')) return;
 		e.preventDefault();
 		choose(active.value >= 0 ? active.value : firstChoosable());
 	} else if (e.key === 'Tab') {
