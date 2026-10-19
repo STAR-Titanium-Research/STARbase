@@ -47,9 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 10 minutes, 49 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 12 of edit-mode-slice2b.spec.ts)
-
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 15 minutes on a busy machine, 52 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 12 minutes, 68 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -102,6 +100,14 @@ search and the palette, after a reload; Shift+I and I and the card's menu insert
 seed sample LOCAL-BAR-2 makes a new planned chain wired to nothing of the history, and after a Create (the sample and the operation filled
 in) the done sample, its maker and its lineage read back through REST are exactly as before. Makes only planned records and removes them
 afterwards, like the other two files.
+
+`specs/edit-mode-slice2c.spec.ts` holds the fixes of the Opus review of slice 2a: a palette drag is let go on window blur, on a mouse move
+with no button down and on a hidden page, and the next drag still works; with a touch screen (a second browser context with `hasTouch`,
+touches sent through CDP `Input.dispatchTouchEvent`) a swipe up scrolls the palette list and carries nothing, a long press or a clearly
+sideways swipe carries an entry; after Insert from a card's right-click menu focus is on a card (Esc and a choice); a done operation is
+offered no Insert, I and Shift+I give the lock reason with no search, and a drop on it is refused and not remembered as a recent. The rules of
+insert (a recorded or struck-through operation, a cut, a stack of passes, after a pass) are unit tests (`insertModel.test.ts`). `getRetrying`
+(`starbase/localStack.ts`) repeats an idempotent API read when the connection is reset (the local Directus drops a socket now and then).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 
