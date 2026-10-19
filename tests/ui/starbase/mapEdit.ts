@@ -396,7 +396,7 @@ export async function secondMember(
 	playwright: PlaywrightWorkerArgs['playwright'],
 	admin: APIRequestContext,
 	note: (u: { userId: string; personId: string | null }) => void,
-): Promise<{ api: APIRequestContext; personId: string }> {
+): Promise<{ api: APIRequestContext; personId: string; email: string; password: string }> {
 	const suffix = Math.random().toString(36).slice(2, 8);
 	const email = `local-member-2-${suffix}@example.com`;
 	const password = `Mb2-${Math.random().toString(36).slice(2)}-Zq9!`;
@@ -410,7 +410,7 @@ export async function secondMember(
 	expect(login.ok(), 'second member login').toBeTruthy();
 	const token = (await login.json()).data.access_token as string;
 	await anon.dispose();
-	return { api: await playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${token}` } }), personId: person.person_id };
+	return { api: await playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${token}` } }), personId: person.person_id, email, password };
 }
 
 /** Opens the Process map of a record and chooses Edit (the draft is made from what the map shows). Returns the draft's id. */

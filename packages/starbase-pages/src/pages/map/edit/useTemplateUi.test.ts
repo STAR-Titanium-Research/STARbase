@@ -10,7 +10,7 @@ import { useTemplates } from './useTemplates';
 const run = (actions: DraftAction[]) => actions.reduce((b, a) => apply(b, a), emptyBody());
 
 const col = (field: string, label: string) => ({ field, type: 'string', schema: {}, meta: {} , label });
-const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'test_type'].map((f) => col(f, f));
+const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'outcome_notes', 'machining_feed_mm_per_rev', 'test_type'].map((f) => col(f, f));
 const labels = { method_id: 'Method', equipment_id: 'Machine', tool_id: 'Tool', operator_person_id: 'Operator', machining_feed_mm_per_rev: 'Feed' } as Record<string, string>;
 
 /** A draft with one new Turning operation (n2, row n3) that has a machine, a tool, an operator, a date and notes, selected on the canvas. */
@@ -20,7 +20,7 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 	const body = ref(
 		run([
 			{ type: 'addSample' },
-			{ type: 'addContainer', kind: 'operation', source: { from: 'template', values: over.values ?? { method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', tool_id: 'tool1', operator_person_id: 'p1', machining_feed_mm_per_rev: 0.2, planned_date: '2026-11-02', notes: 'hold 2 min' } }, from: { key: 'n1' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'template', values: over.values ?? { method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', tool_id: 'tool1', operator_person_id: 'p1', machining_feed_mm_per_rev: 0.2, planned_date: '2026-11-02', outcome_notes: 'hold 2 min' } }, from: { key: 'n1' } },
 		]),
 	);
 	const node = { id: 'c1', type: 'container', kind: 'operation', title: 'Turning', group: { id: 'g1', kind: 'operation', rowIds: ['draft:n3'], batch: null } } as unknown as ContainerNode;
@@ -64,7 +64,7 @@ describe('Save as template', () => {
 		const s = x.ui.saving.value!;
 		expect(s).toMatchObject({ what: 'operation', collection: 'manufacturing_operations', name: 'CNC Turning', problem: null, hasNotes: true });
 		expect(s.values).toEqual({ method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', tool_id: 'tool1', operator_person_id: 'p1', machining_feed_mm_per_rev: 0.2 });
-		expect(s.valuesWithNotes).toEqual({ ...s.values, notes: 'hold 2 min' });
+		expect(s.valuesWithNotes).toEqual({ ...s.values, outcome_notes: 'hold 2 min' });
 		expect(s.labels).toEqual(['Method', 'Machine', 'Tool', 'Operator', 'Feed']);
 	});
 
@@ -74,7 +74,7 @@ describe('Save as template', () => {
 		await x.ui.save({ name: 'Roughing', scope: 'private', notes: false });
 		expect(x.s.templates).toHaveLength(1);
 		expect(x.s.templates[0]).toMatchObject({ name: 'Roughing', scope: 'private', collection: 'manufacturing_operations' });
-		expect(x.s.templates[0].values).not.toHaveProperty('notes');
+		expect(x.s.templates[0].values).not.toHaveProperty('outcome_notes');
 		expect(x.s.templates[0].values).not.toHaveProperty('planned_date');
 		expect(x.ui.saving.value).toBeNull();
 		expect(x.ui.notice.value).toBe('Saved the template Roughing.');
@@ -82,7 +82,7 @@ describe('Save as template', () => {
 
 		await x.ui.openSelected();
 		await x.ui.save({ name: 'With notes', scope: 'global', notes: true });
-		expect(x.s.templates[1]).toMatchObject({ name: 'With notes', scope: 'global', values: { notes: 'hold 2 min' } });
+		expect(x.s.templates[1]).toMatchObject({ name: 'With notes', scope: 'global', values: { outcome_notes: 'hold 2 min' } });
 	});
 
 	it('stays open and says what the server said when it is refused', async () => {

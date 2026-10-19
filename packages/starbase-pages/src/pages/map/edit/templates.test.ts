@@ -20,7 +20,7 @@ const rec = (over: Partial<TemplateRecord> = {}): TemplateRecord => ({
 const item = (r: TemplateRecord = rec(), over: Partial<TemplateItem> = {}): TemplateItem => ({ rec: r, mine: true, ...over });
 
 /** The columns of an operation, as Directus's field definitions say (a real column has a `schema`). */
-const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'insert_edge_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'project_id', 'machining_cutting_speed_m_per_min', 'owner_person_id', 'sample_id'].map((field) => ({ field, type: 'string', schema: {}, meta: {} }));
+const defs = ['method_id', 'process_category', 'equipment_id', 'tool_id', 'insert_edge_id', 'operator_person_id', 'planned_date', 'operation_date', 'notes', 'outcome_notes', 'project_id', 'machining_cutting_speed_m_per_min', 'owner_person_id', 'sample_id'].map((field) => ({ field, type: 'string', schema: {}, meta: {} }));
 
 describe('what a template saves', () => {
 	it('keeps the method, machine, tool, edge, operator and settings', () => {
@@ -34,7 +34,7 @@ describe('what a template saves', () => {
 
 	it('never keeps the dates, the sample, the owner, the project, the work state or blanks', () => {
 		const v = templateValuesOf(
-			op({ method_id: 'mt', planned_date: '2026-11-01', operation_date: '2026-10-01', sample_id: 's1', owner_person_id: 'p9', project_id: 'proj1', equipment_id: '', tool_id: null, notes: 'run 7' }),
+			op({ method_id: 'mt', planned_date: '2026-11-01', operation_date: '2026-10-01', sample_id: 's1', owner_person_id: 'p9', project_id: 'proj1', equipment_id: '', tool_id: null, outcome_notes: 'run 7', notes: 'x' }),
 			undefined,
 			defs,
 		);
@@ -42,10 +42,15 @@ describe('what a template saves', () => {
 	});
 
 	it('leaves the notes out unless they are ticked, then keeps them', () => {
-		const it = op({ method_id: 'mt', notes: 'hold for 2 min' });
+		const it = op({ method_id: 'mt', outcome_notes: 'hold for 2 min' });
 		expect(templateValuesOf(it, undefined, defs)).toEqual({ method_id: 'mt' });
-		expect(templateValuesOf(it, undefined, defs, { notes: true })).toEqual({ method_id: 'mt', notes: 'hold for 2 min' });
+		expect(templateValuesOf(it, undefined, defs, { notes: true })).toEqual({ method_id: 'mt', outcome_notes: 'hold for 2 min' });
 		expect(templateValuesOf(op({ method_id: 'mt' }), undefined, defs, { notes: true })).toEqual({ method_id: 'mt' });
+		// A test keeps its own `notes`.
+		const t = test({ test_type: 'tensile', notes: 'jaws 4' });
+		const tdefs = [...defs, { field: 'test_type', type: 'string', schema: {}, meta: {} }];
+		expect(templateValuesOf(t, undefined, tdefs)).toEqual({ test_type: 'tensile' });
+		expect(templateValuesOf(t, undefined, tdefs, { notes: true })).toEqual({ test_type: 'tensile', notes: 'jaws 4' });
 	});
 
 	it('reads a record that exists as it stands: the loaded fields, then the changes (a null change clears)', () => {

@@ -61,11 +61,14 @@ export function templatesOf(rows: unknown): TemplateRecord[] {
  */
 const NOT_IN_A_TEMPLATE = new Set(['project_id', 'campaign_id', 'outcome_notes', 'force_file_id', 'file_storage_pointer', 'nc_program_file_uri', 'recorded_at']);
 
+/** The field a container keeps its notes in. */
+const NOTES_FIELD = { operation: 'outcome_notes', test: 'notes' } as const;
+
 const blank = (v: unknown): boolean => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
 /**
  * What a container's template holds: its fields as they will stand (the loaded record of one that exists, then the draft's changes), without the
- * fields the server refuses in a draft, the ones that are only true of this run (see above) and anything blank. `notes` stays only when
+ * fields the server refuses in a draft, the ones that are only true of this run (see above) and anything blank. the notes (an operation's `outcome_notes`, a test's `notes`) stay only when
  * `opts.notes` is ticked. `defs` are the collection's field definitions: only real columns are kept (the server refuses a name that is not one).
  */
 export function templateValuesOf(item: DraftItem, loaded: Record<string, unknown> | undefined, defs: readonly DirectusField[], opts: { notes?: boolean } = {}): Record<string, unknown> {
@@ -78,7 +81,9 @@ export function templateValuesOf(item: DraftItem, loaded: Record<string, unknown
 	const writable = writableValues(item.kind, own, defs);
 	const out: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(newFromValues(writable))) if (!NOT_IN_A_TEMPLATE.has(k) && !blank(v)) out[k] = v;
-	if (opts.notes && !blank(writable.notes)) out.notes = writable.notes;
+	// The notes of an operation are `outcome_notes`, a test's are `notes`: left out unless the person ticked them.
+	const notes = NOTES_FIELD[item.kind as 'operation' | 'test'];
+	if (opts.notes && notes && !blank(writable[notes])) out[notes] = writable[notes];
 	return out;
 }
 

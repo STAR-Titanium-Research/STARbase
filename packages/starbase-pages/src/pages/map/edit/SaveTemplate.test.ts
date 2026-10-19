@@ -76,7 +76,7 @@ describe('TemplateManage', () => {
 		expect(text(await manage())).toContain('Select the operation to take the settings from.');
 		expect(text(await manage({ selectedKind: 'test' }))).toContain('Select an operation: this template is for operations.');
 		const html = await manage({ selectedKind: 'test' });
-		expect(html).toMatch(/<button class="v-button" disabled[^>]*>Replace with/);
+		expect(html).toMatch(/<button[^>]*class="btn"[^>]*disabled[^>]*>Replace with/);
 		expect(text(await manage({ info: info({ collection: 'test_sessions' }) }))).toContain('Select the test to take the settings from.');
 	});
 });

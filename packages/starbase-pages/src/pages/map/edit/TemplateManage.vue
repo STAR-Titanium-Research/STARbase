@@ -32,7 +32,7 @@ function renameNow() {
 	<div class="pm-tm" role="group" :aria-label="`Manage the template ${info.name}`" @keydown.esc.stop="emit('close')">
 		<form class="rn" @submit.prevent="renameNow">
 			<input v-model="name" type="text" maxlength="140" autocomplete="off" spellcheck="false" aria-label="Template name" />
-			<v-button small secondary :disabled="!renameOk" @click="renameNow">Rename</v-button>
+			<button type="button" class="btn" :disabled="!renameOk" @click="renameNow">Rename</button>
 		</form>
 		<fieldset class="scope">
 			<legend>Who can use it</legend>
@@ -42,16 +42,16 @@ function renameNow() {
 			</label>
 		</fieldset>
 		<div v-if="confirm === null" class="acts">
-			<v-button small secondary :disabled="!kindOk || busy" :title="replaceWhy" @click="confirm = 'replace'">Replace with the selected card's settings</v-button>
-			<v-button small secondary :disabled="busy" @click="confirm = 'delete'">Delete</v-button>
+			<button type="button" class="btn" :disabled="!kindOk || busy" :title="replaceWhy" @click="confirm = 'replace'">Replace with the selected card's settings</button>
+			<button type="button" class="btn" :disabled="busy" @click="confirm = 'delete'">Delete</button>
 			<p v-if="replaceWhy" class="why">{{ replaceWhy }}</p>
 		</div>
 		<div v-else class="acts ask" role="alert">
 			<p v-if="confirm === 'replace'">Replace the settings of <strong>{{ info.name }}</strong> with those of {{ selectedTitle || 'the selected card' }}? What was made from it is not changed.</p>
 			<p v-else>Delete <strong>{{ info.name }}</strong>? What was made from it is not changed.</p>
 			<div class="btns">
-				<v-button small secondary @click="confirm = null">Cancel</v-button>
-				<v-button small :disabled="busy" @click="(confirm === 'replace' ? emit('replace') : emit('delete')), (confirm = null)">{{ confirm === 'replace' ? 'Replace' : 'Delete' }}</v-button>
+				<button type="button" class="btn" @click="confirm = null">Cancel</button>
+				<button type="button" class="btn primary" :disabled="busy" @click="(confirm === 'replace' ? emit('replace') : emit('delete')), (confirm = null)">{{ confirm === 'replace' ? 'Replace' : 'Delete' }}</button>
 			</div>
 		</div>
 	</div>
@@ -68,8 +68,18 @@ function renameNow() {
 .scope { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; }
 .scope legend { padding: 0 0 2px; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }
 .opt { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.acts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.acts { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+/* Plain buttons: the replace label is long and wraps inside the dock, which a fixed-height v-button would clip. */
+.btn {
+	padding: 5px 10px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface, var(--theme--background)); color: inherit;
+	font: inherit; line-height: 1.3; text-align: left; cursor: pointer;
+}
+.btn:hover:not(:disabled), .btn:focus-visible { background: var(--d1-tint); outline: none; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.primary { background: var(--d1-accent, var(--theme--primary)); border-color: transparent; color: var(--d1-on-accent, var(--theme--primary-foreground, #fff)); text-align: center; }
+.rn .btn { flex: none; }
 .ask p, .why { margin: 0; line-height: 1.35; }
 .why { color: var(--d1-dim); font-size: var(--fs-xs, 11px); }
 .btns { display: flex; gap: 6px; }
+.btns .btn { flex: 1; text-align: center; }
 </style>
