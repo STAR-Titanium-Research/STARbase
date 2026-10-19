@@ -23,6 +23,7 @@ import type { EditMode } from './useEditMode';
 import { useEditKeys } from './useEditKeys';
 import { useEditRemoval } from './useEditRemoval';
 import { useSamplePicking } from './useSamplePicking';
+import { workChipOf } from './workChip';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
 type ProcessMap = ReturnType<typeof useProcessMap>;
@@ -169,7 +170,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	return {
 		...build,
 		/** What the cards read: the canvas's, and the wire selection and locks of removal. */
-		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock } as MapEdit,
+		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, work: (node) => workChipOf(edit, node) } as MapEdit,
 		menu,
 		picking,
 		pickerOpen,

@@ -77,6 +77,8 @@ export interface MapEdit {
 	lockOf(node: MapNode): string | null;
 	/** The same for a wire (done wiring). */
 	wireLock(id: string): string | null;
+	/** The Planned / Done chip of a new operation or test (R9): its state and what pressing it does; null on any other card. */
+	work?(node: MapNode): { state: 'planned' | 'done'; label: string; toggle(): void } | null;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');

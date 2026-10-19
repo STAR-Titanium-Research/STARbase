@@ -316,6 +316,52 @@ describe('useEditMode: changing the draft', () => {
 	});
 });
 
+describe('useEditMode: planned or done at Create (R9)', () => {
+	async function withOperation() {
+		const s = setup({ edit: 'new' });
+		await flush();
+		s.edit.apply({ type: 'addSample' });
+		s.edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' }, from: { key: 'n1' } });
+		return s;
+	}
+	const op = (e: ReturnType<typeof setup>['edit']) => e.body.value.items.find((i) => i.kind === 'operation')!;
+
+	it('Done is one undo step: the state and the date (today); one Undo puts both back', async () => {
+		const { edit } = await withOperation();
+		const key = op(edit).key;
+		expect(op(edit)).toMatchObject({ workState: 'planned' });
+		edit.setWorkState(key, 'done');
+		expect(op(edit)).toMatchObject({ workState: 'done' });
+		expect(typeof op(edit).values.operation_date).toBe('string');
+		expect(String(op(edit).values.operation_date).slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
+		edit.undo();
+		expect(op(edit)).toMatchObject({ workState: 'planned' });
+		expect(op(edit).values.operation_date).toBeUndefined();
+		expect(op(edit).values.method_id).toBe('m-turn');
+		edit.redo();
+		expect(op(edit)).toMatchObject({ workState: 'done' });
+	});
+
+	it('does nothing, and makes no step, for the state it already has or for a sample', async () => {
+		const { edit } = await withOperation();
+		const before = edit.body.value;
+		edit.setWorkState(op(edit).key, 'planned');
+		edit.setWorkState('n1', 'done');
+		expect(edit.body.value).toBe(before);
+	});
+
+	it('a stack of items toggles together as one step', async () => {
+		const { edit } = await withOperation();
+		edit.apply({ type: 'duplicate', key: op(edit).key });
+		const keys = edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => i.key);
+		expect(keys).toHaveLength(2);
+		edit.setWorkState(keys, 'done');
+		expect(edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => (i as { workState: string }).workState)).toEqual(['done', 'done']);
+		edit.undo();
+		expect(edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => (i as { workState: string }).workState)).toEqual(['planned', 'planned']);
+	});
+});
+
 describe('useEditMode: a new draft (fix 9)', () => {
 	it('shows in My drafts at once, before any list is read again', async () => {
 		const { edit, s } = setup({ edit: 'new' });

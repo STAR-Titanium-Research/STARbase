@@ -12,12 +12,13 @@ import type { MapNode, ProcessData } from '../model/types';
 import type { MergeHint } from '../useMapExpand';
 import type { MapOverlay, MapRoute, MapRouter } from '../useProcessMap';
 import { blocking } from './checks';
-import type { DraftAction } from './draft';
+import type { DraftAction, WorkState } from './draft';
 import { draftKeyOfNode, isDraftNode } from './socketRefs';
 import { defaultName, isoDay, summaryText } from './summary';
 import { toGraph, type ToGraphCtx } from './toGraph';
 import { useDraft, type DraftApi } from './useDraft';
 import { useEditCatalog, type EditCatalog } from './useEditCatalog';
+import { workStateActions } from './workState';
 
 export interface EditModeOptions {
 	api: HostApi;
@@ -253,6 +254,17 @@ export function useEditMode(o: EditModeOptions) {
 		apply({ type: 'setValues', key, values }, { merge });
 		typing = { key, fields, at: now };
 	}
+	/**
+	 * Planned or done at Create for new operations or tests (R9): the state, and for Done the date it happened, as ONE undoable step whether the
+	 * rail's toggle or the card's chip asks. Several keys (a stack of passes) are one step too.
+	 */
+	function setWorkState(keys: DraftKey | DraftKey[], state: WorkState): void {
+		const actions = (Array.isArray(keys) ? keys : [keys]).flatMap((k) => {
+			const item = draft.body.value.items.find((i) => i.key === k);
+			return item ? workStateActions(item, state) : [];
+		});
+		if (actions.length) apply(actions);
+	}
 	function undo(): void {
 		if (!editing.value) return;
 		typing = null;
@@ -339,7 +351,7 @@ export function useEditMode(o: EditModeOptions) {
 		// the lid
 		startEditing, openDraft, done, discardDraft,
 		// changing
-		apply, setValues, undo, redo, writeQuery,
+		apply, setValues, setWorkState, undo, redo, writeQuery,
 		refreshDrafts: draft.refresh,
 	};
 	return api;
