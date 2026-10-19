@@ -22,9 +22,8 @@ export type WorkState = 'planned' | 'done';
 /** A new operation or test starts planned: laying out work is the common case, and planned records need only their structure (E5). */
 export const DEFAULT_WORK_STATE: WorkState = 'planned';
 
-/** Gap between cards of a column the draft places itself (a picked column of samples, a copy next to its original). */
+/** Gap between cards of a column the draft places itself (a picked column of samples). */
 export const COLUMN_GAP = 140;
-export const COPY_OFFSET = 48;
 
 export type ContainerSource =
 	/** A blank operation of one method, or a blank test of one test type. */
@@ -41,7 +40,14 @@ export type DraftAction =
 	| { type: 'addExisting'; kind: 'operation' | 'test'; record: { id: string; version: number }; workState: WorkState; at?: Pos }
 	| { type: 'addContainer'; kind: 'operation' | 'test'; source: ContainerSource; workState?: WorkState; rows?: number; at?: Pos; from?: WireEnd }
 	| { type: 'attach'; operation: { id: string; version: number }; workState: WorkState; values?: Record<string, unknown>; at?: Pos; from?: WireEnd }
-	| { type: 'addOutputRow'; key: DraftKey }
+	/**
+	 * One more row of a new operation: a cut piece, or one more sample in a batch. `share` (default true) gives it the first row's input
+	 * sample (every piece of a cut has the one sample in); `false` leaves its input free (a batch over several samples). The page does
+	 * this when a wire is connected to a free socket that stands for a new row: nothing about sockets is kept in the draft.
+	 */
+	| { type: 'addOutputRow'; key: DraftKey; share?: boolean }
+	/** Takes a row of a new operation away again (with its wires); the rows after it move up. Never the last row. */
+	| { type: 'removeRow'; key: DraftKey; row: number }
 	| {
 			type: 'addPass';
 			/** The sample the pass is done on: one already in the draft, or an existing one (added to the draft). */
@@ -293,8 +299,12 @@ export const canWire = (body: DraftBody, from: WireEnd, to: WireEnd): boolean =>
 
 // ---- values ------------------------------------------------------------------------------------
 
-/** What "new from" leaves behind: when it happened, which sample, notes, codes and the record's own bookkeeping. */
+/** Ownership is the copier's: d1-owner-default sets it at Create, and a copy of a team-owned record that carried the team would be refused. */
+export const OWNER_FIELDS: readonly string[] = ['owner_person_id', 'owner_team_id'];
+
+/** What "new from" leaves behind: when it happened, which sample, notes, codes, who owns it and the record's own bookkeeping. */
 const NEW_FROM_DROPS = new Set([
+	...OWNER_FIELDS,
 	'operation_id', 'session_id', 'sample_id', 'output_sample_id', 'operation_date', 'session_date', 'planned_date', 'manufactured_date',
 	'done_at', 'done_by_person_id', 'work_state', 'notes', 'sample_code', 'pass_code', 'test_code', 'operation_sequence', 'batch_id',
 	'source_run_uid', 'current_status', 'date_created', 'date_updated', 'user_created', 'user_updated', 'created_at', 'updated_at',
@@ -400,32 +410,31 @@ const columnAt = (at: Pos | undefined, i: number): Pos | undefined => (at ? { x:
 
 function duplicateItem(w: Work, source: DraftItem, n: number, record?: Record<string, unknown>) {
 	const base = source.existing ? newFromValues({ ...(record ?? {}), ...source.values }) : source.values;
-	const origin = w.body.positions[source.key];
-	const spot = (i: number): Pos | undefined => (origin ? { x: origin.x + (i + 1) * COPY_OFFSET, y: origin.y + (i + 1) * COPY_OFFSET } : undefined);
+	// A copy keeps no place of its own (no `at` below): the layout puts it in the nearest free slot beside the original (R6), never on top of it.
 	// Wires are read from the body as it was, so the copies of one action all see the original's.
 	const before = w.body;
 	let index = indexAfter(before, source.key) ?? w.body.items.length;
 	for (let i = 0; i < n; i += 1) {
 		if (source.kind === 'sample') {
-			newSample(w, base, spot(i), index);
+			newSample(w, base, undefined, index);
 		} else if (source.kind === 'test') {
 			const copy: DraftTest = { key: takeKeys(w, 1)[0], kind: 'test', workState: source.workState, values: { ...base } };
-			put(w, copy, spot(i), index);
+			put(w, copy, undefined, index);
 			for (const s of subjectsOf(before, source.key)) addWire(w, { key: s }, { key: copy.key });
 		} else if (isInPlace(before, source)) {
 			// A pass: copies chain after the original on its sample, in order (sample → copy → sample).
 			const sample = inputSampleOf(before, { key: source.key, row: 0 });
 			if (sample) {
 				const back = wiresOutOf(before, source.key, 0).some((x) => x.to.key === sample);
-				const op = newOperation(w, { values: base, workState: source.workState, at: spot(i), index });
+				const op = newOperation(w, { values: base, workState: source.workState, index });
 				addWire(w, { key: sample }, { key: op.key, row: 0 });
 				if (back) addWire(w, { key: op.key, row: 0 }, { key: sample });
 			} else {
-				newOperation(w, { values: base, workState: source.workState, at: spot(i), index });
+				newOperation(w, { values: base, workState: source.workState, index });
 			}
 		} else {
 			// Anything else keeps the same input wires and gets open outputs of its own.
-			const op = newOperation(w, { values: base, workState: source.workState, rows: source.rows.length, at: spot(i), index });
+			const op = newOperation(w, { values: base, workState: source.workState, rows: source.rows.length, index });
 			source.rows.forEach((_, row) => {
 				const sample = inputSampleOf(before, { key: source.key, row });
 				if (sample) addWire(w, { key: sample }, { key: op.key, row });
@@ -517,8 +526,26 @@ export function apply(body: DraftBody, action: DraftAction): DraftBody {
 			const next: DraftOperation = { ...op, rows: [...op.rows, { key: rowKey }] };
 			w.body.items[w.body.items.indexOf(op)] = next;
 			// Every record of a cut has the one sample as its input: the new row takes it too.
-			const first = wireInto(body, op.key, 0);
+			const first = action.share === false ? undefined : wireInto(body, op.key, 0);
 			if (first) w.body.wires.push({ from: { ...first.from }, to: { key: op.key, row: next.rows.length - 1 } });
+			return w.body;
+		}
+		case 'removeRow': {
+			const op = itemOf(body, action.key);
+			if (op?.kind !== 'operation' || op.existing || op.rows.length < 2 || action.row < 0 || action.row >= op.rows.length) return body;
+			const w = copyBody(body);
+			w.body.items[w.body.items.indexOf(op)] = { ...op, rows: op.rows.filter((_, i) => i !== action.row) };
+			// The wires of the row go; those of the rows after it keep their sockets, which are one row nearer now.
+			const shift = (e: WireEnd): WireEnd | null => {
+				if (e.key !== op.key) return e;
+				const row = e.row ?? 0;
+				return row === action.row ? null : { key: e.key, row: row > action.row ? row - 1 : row };
+			};
+			w.body.wires = body.wires.flatMap((x) => {
+				const from = shift(x.from);
+				const to = shift(x.to);
+				return from && to ? [{ from, to }] : [];
+			});
 			return w.body;
 		}
 		case 'addPass': {

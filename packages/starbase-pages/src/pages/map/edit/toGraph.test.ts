@@ -111,9 +111,10 @@ describe('toGraph', () => {
 		expect(toGraph(null, done, ctx).samples.find((s) => s.id === 'draft:n4')?.status).toBeNull();
 	});
 
-	it('a pass appended in place to a stack of passes joins the stack, drawn through buildGraph', () => {
+	it('a pass appended in place to a stack of passes of the same work state joins the stack, drawn through buildGraph', () => {
+		// Planned recorded passes: a planned draft pass stacks with them (a done stack and a planned pass stay apart, groupBatches).
 		const pass = (id: string, day: number) =>
-			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z` });
+			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, workState: 'planned' });
 		const loaded = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2)] });
 		const body = run([
 			{ type: 'addPass', sample: { id: 's1', version: 4 }, values: { method_id: 'turn', equipment_id: 'lathe', operation_date: '2026-09-09', notes: 'drop me' }, workState: 'planned' },
@@ -124,9 +125,19 @@ describe('toGraph', () => {
 		const g = draw(data);
 		const stack = container(g, 'stack:a,b,draft:n3');
 		expect(stack).toMatchObject({ stacked: true, title: '3 passes' });
-		// The recorded passes are done, the new one is planned and a draft: the stack is neither.
-		expect(stack.planned).toBeUndefined();
+		// Recorded passes and a draft one: a mixed stack is neither flag as a whole.
+		expect(stack.draft).toBeUndefined();
 		expect(g.nodes.filter((n) => n.type === 'container')).toHaveLength(1);
+	});
+
+	it('a planned pass appended to done passes is a container of its own', () => {
+		const pass = (id: string, day: number) =>
+			mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z` });
+		const loaded = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2)] });
+		const body = run([{ type: 'addPass', sample: { id: 's1', version: 4 }, values: { method_id: 'turn', equipment_id: 'lathe' }, workState: 'planned' }]);
+		const g = draw(toGraph(loaded, body, ctx));
+		expect(container(g, 'stack:a,b').planned).toBeUndefined();
+		expect(container(g, 'op:draft:n3')).toMatchObject({ draft: true, planned: true });
 	});
 
 	it('duplicate x N of an in-place pass makes a stack of N + 1 once drawn', () => {
@@ -181,7 +192,7 @@ describe('toGraph', () => {
 	});
 
 	it('an undated draft pass goes after the undated recorded passes on its sample', () => {
-		const recorded = mkOp({ id: 'rec', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: null, sequence: null });
+		const recorded = mkOp({ id: 'rec', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: null, sequence: null, workState: 'planned' });
 		const body = run([{ type: 'addPass', sample: { id: 's1', version: 1 }, values: { method_id: 'turn', equipment_id: 'lathe' } }]);
 		const data = toGraph(mkData({ samples: [mkSample('s1')], operations: [recorded] }), body, ctx);
 		const g = draw(data);
@@ -242,6 +253,49 @@ describe('toGraph', () => {
 		expect(toGraph(null, body, { ...ctx, label: (c, id) => (c === 'physical_samples' ? `L-${id}` : undefined) }).samples[0].code).toBe('L-far');
 		expect(toGraph(null, body, ctx).samples[0]).toMatchObject({ id: 'far', code: 'far' });
 		expect(toGraph(null, body, ctx).samples[0].draft).toBeUndefined();
+	});
+
+	describe('a planned record the draft deletes', () => {
+		const loaded = () =>
+			mkData({
+				samples: [mkSample('s1'), mkSample('s2', { status: 'planned' }), mkSample('s3', { status: 'planned' })],
+				operations: [
+					mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', methodName: 'Cut', workState: 'planned' }),
+					mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', methodName: 'Cut', workState: 'planned' }),
+				],
+				tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], workState: 'planned' })],
+			});
+		const removed = (kind: 'operation' | 'test' | 'sample', id: string) => {
+			const add: DraftAction =
+				kind === 'sample' ? { type: 'addExistingSamples', samples: [{ id, version: 1 }] } : { type: 'addExisting', kind, record: { id, version: 1 }, workState: 'planned' };
+			return run([add, { type: 'remove', key: 'n1', deleteRecord: true }]);
+		};
+
+		it('is marked removing, with the planned sample its operation made', () => {
+			const data = toGraph(loaded(), removed('operation', 'o1'), ctx);
+			expect(data.operations.find((o) => o.id === 'o1')?.removing).toBe(true);
+			expect(data.operations.find((o) => o.id === 'o2')?.removing).toBeUndefined();
+			expect(data.samples.find((x) => x.id === 's2')?.removing).toBe(true);
+			expect(data.samples.find((x) => x.id === 's3')?.removing).toBeUndefined();
+			const g = draw(data);
+			expect(container(g, 'op:o1').removing).toBe(true);
+			expect(container(g, 'op:o2').removing).toBeUndefined();
+			expect(record(g, 's:s2').removing).toBe(true);
+			expect(record(g, 's:s1').removing).toBeUndefined();
+		});
+
+		it('a test and a sample are marked the same way, and the loaded data is not touched', () => {
+			const base = loaded();
+			expect(toGraph(base, removed('test', 't1'), ctx).tests[0].removing).toBe(true);
+			expect(record(draw(toGraph(base, removed('sample', 's3'), ctx)), 's:s3').removing).toBe(true);
+			expect(base.tests[0].removing).toBeUndefined();
+			expect(base.samples[2].removing).toBeUndefined();
+		});
+
+		it('a record that is only in the draft, not removed, is not marked', () => {
+			const body = run([{ type: 'addExisting', kind: 'operation', record: { id: 'o1', version: 1 }, workState: 'planned' }]);
+			expect(toGraph(loaded(), body, ctx).operations.some((o) => o.removing)).toBe(false);
+		});
 	});
 
 	it('relations of the form become refs the Inside tray reads', () => {

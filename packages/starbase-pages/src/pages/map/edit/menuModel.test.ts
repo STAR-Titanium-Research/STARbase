@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftBody, DraftOperation } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { apply, emptyBody, itemOf, type DraftAction } from './draft';
+import { grown } from './socketRefs';
 import { actionsFor, canvasSampleEntries, filterEntries, firstChoosable, menuFor, moveActive, placeMenu, rootEntries, sampleLabel, type MenuCatalog, type MenuChoice, type MenuEntry, type TemplateEntry } from './menuModel';
 import type { SocketRef } from './socketRefs';
 
@@ -38,6 +39,16 @@ describe('what the menu is for', () => {
 		expect(menuFor(b, sock('sample', 'draft:n1', 'out'))).toEqual({ side: 'out', card: 'sample', end: { key: 'n1' } });
 		expect(menuFor(b, sock('row', 'draft:n3', 'out'))).toEqual({ side: 'out', card: 'operation', end: { key: 'n2', row: 0 } });
 		expect(menuFor(b, sock('row', 'draft:n4', 'in'))).toEqual({ side: 'in', card: 'test', end: { key: 'n4' } });
+	});
+
+	it('reads a free socket that adds a row as the draft with the row: its end is the new row, which shares the input', () => {
+		const b = body();
+		const f = menuFor(b, { kind: 'row', id: 'draft:n3', side: 'out', add: true });
+		expect(f).toEqual({ side: 'out', card: 'operation', end: { key: 'n2', row: 1 } });
+		// The entries are asked about that draft: "Same sample" is on (the new row has the input), where for a row with none it is greyed.
+		const grownBody = grown(b, { kind: 'row', id: 'draft:n3', side: 'out', add: true })!.body;
+		const same = rootEntries(grownBody, f, { methods: [], testTypes: [] }).find((e) => e.id === 'sample:same');
+		expect(same?.disabled).toBeUndefined();
 	});
 
 	it('counts a sample of the loaded history as a sample card, with no end until the draft holds it', () => {

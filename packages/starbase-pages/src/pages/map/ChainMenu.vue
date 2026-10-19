@@ -4,8 +4,15 @@ import type { ChainDir } from './model/hoverFocus';
 
 // A card's right-click menu: which way the selected card's chain is lit on the map. Placed at the pointer
 // (canvas coordinates) by the page; Escape, a click elsewhere or a scroll closes it.
-const props = defineProps<{ x: number; y: number; dir: ChainDir }>();
-const emit = defineEmits<{ pick: [dir: ChainDir]; close: [] }>();
+const props = defineProps<{
+	x: number;
+	y: number;
+	dir: ChainDir;
+	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
+	canRemove?: boolean;
+	canDissolve?: boolean;
+}>();
+const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: [] }>();
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -50,6 +57,19 @@ onBeforeUnmount(() => {
 			<span>{{ o.label }}</span>
 			<v-icon v-if="o.dir === props.dir" class="ck" name="check" x-small />
 		</button>
+		<template v-if="canRemove || canDissolve">
+			<div class="hd">Edit</div>
+			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove')">
+				<v-icon name="delete" x-small />
+				<span>Remove</span>
+				<kbd>Delete</kbd>
+			</button>
+			<button v-if="canDissolve" type="button" role="menuitem" class="it" @click="emit('dissolve')">
+				<v-icon name="call_merge" x-small />
+				<span>Dissolve</span>
+				<kbd>Ctrl/⌘+Delete</kbd>
+			</button>
+		</template>
 	</div>
 </template>
 
@@ -70,4 +90,5 @@ onBeforeUnmount(() => {
 .it:hover, .it:focus-visible { background: var(--d1-tint); outline: none; }
 .it[aria-checked='true'] { font-weight: 600; }
 .ck { margin-left: auto; color: var(--d1-accent, var(--theme--primary)); }
+kbd { margin-left: auto; padding: 0 5px; border: 1px solid var(--d1-line); border-radius: 4px; font: inherit; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 </style>

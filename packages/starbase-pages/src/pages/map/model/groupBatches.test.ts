@@ -357,3 +357,38 @@ describe('groupBatches: stacks of passes on one sample', () => {
     expect(ids).toEqual(['a', 'b', 'c', 'd']);
   });
 });
+
+describe('groupBatches: planned and done work stay apart', () => {
+  const day = (d: number) => `2026-09-${String(d).padStart(2, '0')}T09:00:00Z`;
+  const pass = (id: string, d: number, p: Partial<OpRow> = {}) =>
+    op({ id, sampleId: 's', outputSampleId: 's', methodId: 'turn', equipmentId: 'lathe', category: 'machining', date: day(d), ...p });
+  const stacks = (gs: Group[]) => gs.filter((g) => g.stack).map((g) => g.rowIds);
+  const planned = { workState: 'planned' as const };
+
+  it('a planned pass beside done passes is its own container, so Mark done can be offered for it', () => {
+    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, planned)];
+    const gs = groupBatches(rows, [], { probable: true, stack: true });
+    expect(stacks(gs)).toEqual([['a', 'b']]);
+    expect(gs.find((g) => g.rowIds.includes('c'))).toMatchObject({ id: 'op:c', rowIds: ['c'] });
+    expect(gs.find((g) => g.rowIds.includes('c'))?.stack).toBeUndefined();
+  });
+
+  it('planned passes stack with each other, apart from the done ones before and after', () => {
+    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, planned), pass('d', 4, planned), pass('e', 5), pass('f', 6)];
+    expect(stacks(groupBatches(rows, [], { probable: true, stack: true }))).toEqual([['a', 'b'], ['c', 'd'], ['e', 'f']]);
+  });
+
+  it('a stack of all planned passes is still one stack', () => {
+    const rows = [pass('a', 1, planned), pass('b', 2, planned)];
+    expect(stacks(groupBatches(rows, [], { probable: true, stack: true }))).toEqual([['a', 'b']]);
+  });
+
+  it('probable batches do not mix a planned row with done ones (a cut into pieces, or several samples together)', () => {
+    const cut = (id: string, p: Partial<OpRow> = {}) => op({ id, sampleId: 's', outputSampleId: `${id}-piece`, methodId: 'saw', equipmentId: 'saw1', category: 'machining', date: DAY, ...p });
+    const multi = (gs: Group[]) => gs.filter((g) => g.rowIds.length > 1).map((g) => g.rowIds);
+    expect(multi(groupBatches([cut('a'), cut('b'), cut('c', planned)], [], { probable: true }))).toEqual([['a', 'b']]);
+    expect(multi(groupBatches([cut('a', planned), cut('b', planned), cut('c')], [], { probable: true }))).toEqual([['a', 'b']]);
+    const prep = (id: string, p: Partial<OpRow> = {}) => op({ id, sampleId: `in-${id}`, methodId: 'polish', equipmentId: 'p1', category: 'sample_prep', date: DAY, ...p });
+    expect(multi(groupBatches([prep('a'), prep('b'), prep('c', planned)], [], { probable: true }))).toEqual([['a', 'b']]);
+  });
+});

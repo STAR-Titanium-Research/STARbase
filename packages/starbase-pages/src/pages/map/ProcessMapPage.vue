@@ -16,7 +16,7 @@ import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './
 import { socketLabeller } from './nodes/a11y';
 import EditOverlays from './edit/EditOverlays.vue';
 import { canvasEditOf } from './edit/useEditCanvas';
-import { UNAVAILABLE, provideEditMode, useEditMode } from './edit/useEditMode';
+import { isNotice, provideEditMode, useEditMode } from './edit/useEditMode';
 import { useEditSide } from './edit/useEditSide';
 import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
@@ -62,7 +62,7 @@ const edit = useEditMode({
 	hint: (h) => map.hintMerge(h),
 });
 const map = useProcessMap(host.api, route, router, edit.overlay);
-const canvas = useMapCanvas(map, canvasEditOf(edit));
+const canvas = useMapCanvas(map, canvasEditOf(edit, map.inHistory));
 provideEditMode(edit);
 const canvasEl = ref<HTMLElement | null>(null);
 /** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */
@@ -98,7 +98,7 @@ const labelSocket = computed(() => socketLabeller(map.graph.value?.wires ?? [], 
 const view: MapView = {
 	direction: map.dir,
 	moreOpen: map.moreOpen,
-	selectedRef: map.selectedRefKey,
+	selectedRef: map.selectedRefKey, selectedId: map.selectedId,
 	hiddenSides: map.hiddenSides,
 	socketLabel: (socket, side) => labelSocket.value(socket, side),
 	expanded: map.expandedIds,
@@ -198,11 +198,12 @@ const railProps = computed(() => ({
 	reach: map.reach.value,
 	drawnReach: map.effectiveReach.value,
 	canMarkDone: markDone.canMarkDone.value,
+	canMarkPlanned: markDone.canMarkPlanned.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
-const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show };
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show, markPlanned: markDone.markPlanned };
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
@@ -211,7 +212,7 @@ const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind 
 // Not on touch: a long press there is the hover card (useLongPress).
 const chainMenu = ref<{ x: number; y: number } | null>(null);
 const MENU_W = 200;
-const MENU_H = 150;
+const MENU_H = 240;
 function onContextMenu(e: MouseEvent) {
 	input.onContextMenu(e);
 	if (pointerKind.touch || !canvasEl.value) return;
@@ -226,6 +227,15 @@ function onContextMenu(e: MouseEvent) {
 function pickChain(d: ChainDir) {
 	map.setChainDir(d);
 	chainMenu.value = null;
+}
+/** Remove and Dissolve from the card's menu (edit mode): the card was selected when the menu opened. */
+function menuRemove() {
+	chainMenu.value = null;
+	build.removeSelected();
+}
+function menuDissolve() {
+	chainMenu.value = null;
+	build.dissolveSelected();
 }
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
@@ -256,7 +266,7 @@ const tipHint = computed(() => {
 			<Section v-else-if="map.status.value === 'empty'" title="Process map" class="d1-process-map">
 				<div class="pm-empty">
 					<h2>Pick a record to map</h2>
-					<p v-if="edit.failed.value" class="pm-note" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</p>
+					<p v-if="edit.failed.value" class="pm-note" :role="isNotice(edit.failed.value) ? 'status' : 'alert'">{{ edit.failed.value }}</p>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
 					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">
@@ -318,12 +328,13 @@ const tipHint = computed(() => {
 							@pointerup.capture="input.onPointerEnd"
 							@pointercancel.capture="input.onPointerEnd"
 							@click.capture="input.onClickCapture"
+							@click="build.onCanvasClick"
 							@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
 						>
 							<VueFlow
 								:node-types="canvas.nodeTypes"
 								:edge-types="canvas.edgeTypes"
-								:nodes-draggable="true"
+								:nodes-draggable="true" :delete-key-code="null"
 								:nodes-focusable="true"
 								:edges-focusable="false"
 								:nodes-connectable="false"
@@ -345,7 +356,18 @@ const tipHint = computed(() => {
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
-							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
+							<ChainMenu
+								v-if="chainMenu"
+								:x="chainMenu.x"
+								:y="chainMenu.y"
+								:dir="map.chainDir.value"
+								:can-remove="edit.editing.value"
+								:can-dissolve="edit.editing.value && build.canDissolve.value"
+								@pick="pickChain"
+								@remove="menuRemove"
+								@dissolve="menuDissolve"
+								@close="chainMenu = null"
+							/>
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>

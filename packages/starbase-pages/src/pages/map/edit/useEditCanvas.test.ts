@@ -7,6 +7,7 @@ import { fakeServer, settle } from './fakeBuildServer';
 import type { MenuTarget } from './menuTarget';
 import { encodeSocket, type SocketRef } from './socketRefs';
 import { CLICK_SLOP, canvasEditOf, useEditCanvas } from './useEditCanvas';
+import { dropVerdict } from './wireDrop';
 import { useEditMode } from './useEditMode';
 
 // The pointer on sockets, in a node environment: window, document and the canvas element are small stand-ins that record what is
@@ -17,8 +18,9 @@ let listeners: Record<string, Listener[]>;
 const fire = (type: string, e: Record<string, unknown>) => [...(listeners[type] ?? [])].forEach((l) => l({ preventDefault() {}, stopPropagation() {}, ...e }));
 
 /** A socket element at (x, y): `data-sock`, a rectangle, and the card it sits on. */
-const socketEl = (sock: SocketRef, x: number, y: number, node = 'card:1') => ({
-	dataset: { sock: encodeSocket(sock) },
+const socketEl = (sock: SocketRef, x: number, y: number, node = 'card:1', own: { handleId?: string; free?: boolean } = {}) => ({
+	dataset: { sock: encodeSocket(sock), ...(own.handleId ? { handleid: own.handleId } : {}) },
+	classList: { contains: (c: string) => c === 'free' && !!own.free },
 	getBoundingClientRect: () => ({ left: x - 6, top: y - 6, width: 12, height: 12 }),
 	closest: (sel: string) => (sel === '.vue-flow__node' ? { dataset: { id: node } } : null),
 });
@@ -42,7 +44,7 @@ function setupDom(sockets: ReturnType<typeof socketEl>[], over: { empty?: boolea
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
-async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}) {
+async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef, socketId: string | null) => boolean) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -55,12 +57,12 @@ async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [
 	const map = { graph: reactive({ value: { nodes } }), clearHover: vi.fn() } as never;
 	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 10, y: y - 20 }), remeasure: async () => undefined } as never;
 	const connecting: MenuTarget[] = [];
-	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t) });
+	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t), dropWire });
 	return { edit, ec, opened, connecting, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
 }
 
-const down = (sock: SocketRef, at: { x: number; y: number }, ec: { mapEdit: { socketDown: (s: SocketRef, e: PointerEvent) => void } }) => {
-	const el = socketEl(sock, at.x, at.y);
+const down = (sock: SocketRef, at: { x: number; y: number }, ec: { mapEdit: { socketDown: (s: SocketRef, e: PointerEvent) => void } }, own: { handleId?: string; free?: boolean } = {}) => {
+	const el = socketEl(sock, at.x, at.y, 'card:1', own);
 	ec.mapEdit.socketDown(sock, { currentTarget: el, button: 0, pointerType: 'mouse', clientX: at.x, clientY: at.y } as unknown as PointerEvent);
 };
 
@@ -201,6 +203,35 @@ describe('a drag from a socket', () => {
 		expect(opened).toEqual([{ sock: SAMPLE_OUT, at: { x: 650, y: 420 }, flow: { x: 640, y: 400 }, anchor: 'card:1' }]);
 	});
 
+	it('a wired input dragged off and dropped on empty canvas takes the wire instead of opening the menu, and says which socket was grabbed (R4)', async () => {
+		const taken: [SocketRef, string | null][] = [];
+		const { ec, opened } = await setup(twoCards(), [target], {}, (s, id) => (taken.push([s, id]), true));
+		down(ROW_IN, { x: 300, y: 200 }, ec, { handleId: 'op:draft:n3:in:0' });
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(taken).toEqual([[ROW_IN, 'op:draft:n3:in:0']]);
+		expect(opened).toHaveLength(0);
+	});
+
+	it('a socket with no wire to take opens the menu as before', async () => {
+		const { ec, opened } = await setup(twoCards(), [target], {}, () => false);
+		down(ROW_IN, { x: 300, y: 200 }, ec, { handleId: 'op:draft:n3:in:0' });
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(opened).toHaveLength(1);
+	});
+
+	it('a FREE socket never takes a wire: it carries the reference of the wired socket of its row, but nothing is wired to it (R4)', async () => {
+		const asked: unknown[] = [];
+		const { ec, opened } = await setup(twoCards(), [target], {}, (...a) => (asked.push(a), true));
+		down(ROW_IN, { x: 300, y: 200 }, ec, { free: true });
+		fire('pointermove', { clientX: 650, clientY: 420 });
+		fire('pointerup', { clientX: 650, clientY: 420 });
+		expect(asked).toEqual([]);
+		expect(opened).toHaveLength(1);
+		expect(opened[0].sock).toEqual(ROW_IN);
+	});
+
 	it('does nothing when it is dropped on a card that is not a socket', async () => {
 		const { ec, opened, edit } = await setup(twoCards(), [target], { empty: false });
 		down(SAMPLE_OUT, { x: 300, y: 200 }, ec);
@@ -306,16 +337,55 @@ describe('badges and ＋ output', () => {
 		expect(ec.mapEdit.badge(card)).toMatchObject({ level: 'warn', text: expect.stringMatching(/Changed since you added it/) });
 	});
 
-	it('offer ＋ output on a new operation that is not a stack, and add the row', async () => {
-		const { ec, edit, map } = await setup(twoCards());
+	it('lists the sockets of a card that have a wire, from the drawn graph', async () => {
+		const { ec, map } = await setup(twoCards());
+		(map as unknown as { graph: { value: { nodes: MapNode[]; wires: unknown[] } } }).graph.value.wires = [
+			{ id: 'w1', from: 's:a:out:0', to: 'op:b:in:0' },
+			{ id: 'w2', from: 'op:b:out:0', to: 's:c:in:0' },
+		];
 		const op = container('draft:n3');
-		(map as unknown as { graph: { value: { nodes: MapNode[] } } }).graph.value.nodes.push(op);
-		expect(ec.mapEdit.canAddRow(op)).toBe(true);
-		expect(ec.mapEdit.canAddRow(container('draft:n3', { stacked: true }))).toBe(false);
-		expect(ec.mapEdit.canAddRow(container('recorded'))).toBe(false);
-		ec.mapEdit.addRow(op.id);
-		const item = edit.body.value.items.find((i) => i.key === 'n2');
-		expect(item?.kind === 'operation' && item.rows).toHaveLength(2);
+		const wired = ec.mapEdit.wiredSockets({ ...op, id: 'op:b' });
+		expect([...wired].sort()).toEqual(['op:b:in:0', 'op:b:out:0']);
+		expect([...ec.mapEdit.wiredSockets({ ...op, id: 'op:z' })]).toEqual([]);
+	});
+
+	it('a connection to a free socket that stands for a new row adds the row and wires it, as one undoable step', async () => {
+		// n1 sample → n2 (row n3) → n4 sample; every row has its wire: the free sockets add rows.
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+			{ type: 'addSample' },
+		]);
+		const { ec, edit } = await setup(body);
+		const v = dropVerdict(edit.body.value, { kind: 'row', id: 'draft:n3', side: 'out', add: true }, { kind: 'sample', id: 'draft:n5', side: 'in' });
+		expect(v.ok).toBe(true);
+		expect(await ec.connect(v)).toBe(true);
+		const op = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(op?.kind === 'operation' && op.rows).toHaveLength(2);
+		// The new piece shares the one sample going in, and makes the sample it was wired to.
+		expect(edit.body.value.wires).toContainEqual({ from: { key: 'n1' }, to: { key: 'n2', row: 1 } });
+		expect(edit.body.value.wires).toContainEqual({ from: { key: 'n2', row: 1 }, to: { key: 'n5' } });
+		edit.undo();
+		const back = edit.body.value.items.find((i) => i.key === 'n2');
+		expect(back?.kind === 'operation' && back.rows).toHaveLength(1);
+		expect(edit.body.value.wires).toHaveLength(2);
+	});
+
+	it('a connection to a free input that adds a row gives the new row its own sample, not the first row\'s', async () => {
+		const body = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } },
+			{ type: 'addSample' },
+		]);
+		const { ec, edit } = await setup(body);
+		const v = dropVerdict(edit.body.value, { kind: 'sample', id: 'draft:n4', side: 'out' }, { kind: 'row', id: 'draft:n3', side: 'in', add: true });
+		expect(v.ok).toBe(true);
+		expect(await ec.connect(v)).toBe(true);
+		expect(edit.body.value.wires).toEqual([
+			{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } },
+			{ from: { key: 'n4' }, to: { key: 'n2', row: 1 } },
+		]);
 	});
 });
 
@@ -327,6 +397,34 @@ describe('where the draft keeps its cards', () => {
 		const hooks = canvasEditOf(edit);
 		expect(hooks.positionOf(card)).toEqual({ x: 40, y: 50 });
 		expect(hooks.positionOf({ ...card, ref: { ...card.ref, id: 'draft:n9' } })).toBeUndefined();
+	});
+
+	it('a card moved off its place to clear another keeps the new place in the step that added the card: undo takes both', async () => {
+		const { edit } = await setup(emptyBody());
+		const hooks = canvasEditOf(edit);
+		edit.apply({ type: 'addSample', at: { x: 10, y: 10 } });
+		hooks.settled?.([{ node: card, at: { x: 400, y: 10 } }]);
+		expect(edit.body.value.positions.n1).toEqual({ x: 400, y: 10 });
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+		expect(edit.body.value.positions).toEqual({});
+		edit.redo();
+		expect(edit.body.value.positions.n1).toEqual({ x: 400, y: 10 });
+	});
+
+	it('says which cards are the draft\'s own for Tidy: new items, and samples picked from the index, nothing of the loaded history', async () => {
+		const { edit } = await setup(run([{ type: 'addSample' }, { type: 'addExistingSamples', samples: [{ id: 'picked', version: 1 }, { id: 'old', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		// Both are in the catalog (a sample is read when the draft first builds from it), but only 'old' is part of what the map loaded.
+		for (const id of ['picked', 'old']) edit.catalog.samples.set(id, { id, code: id, nickname: null, form: null, status: null, projectId: null, materialRef: null, facts: {} });
+		const hooks = canvasEditOf(edit, (id) => id === 'old');
+		const rec = (id: string, extra: Record<string, unknown> = {}) => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: id }, ins: [], outs: [], ...extra }) as MapNode;
+		expect(hooks.owned?.(rec('draft:n1', { draft: true }))).toBe(true);
+		expect(hooks.owned?.(rec('picked'))).toBe(true);
+		expect(hooks.owned?.(rec('old'))).toBe(false); // in the draft because it was built from, but part of the history
+		expect(hooks.owned?.(rec('elsewhere'))).toBe(false);
+		const box = { id: 'op:draft:n5', type: 'container', draft: true } as unknown as MapNode;
+		expect(hooks.owned?.(box)).toBe(true);
+		expect(hooks.owned?.({ id: 'op:o1', type: 'container' } as unknown as MapNode)).toBe(false);
 	});
 
 	it('keeps a card that is dropped, and every card after a re-layout as one undoable step', async () => {

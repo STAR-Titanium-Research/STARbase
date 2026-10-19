@@ -35,6 +35,47 @@ of bug that schema-level checks miss — e.g. a conditional panel that is wired 
 | `22-inbox` | The Inbox (found files; spec `2026-10-15-found-files-inbox-design.md`) in STARbase, against a stand-in d1-inbox (`tests/ui/starbase/stubInbox.ts`, the same in-memory fake the vitest page tests use, answered through Playwright routes): the sidebar entry under Home with the count of new files (older ones left out) in the expanded sidebar and the rail, Home's Inbox panel, the `/inbox` page (rows with the reason "short ID `…` in the file name", what the crawler read from an SEM image, a thumbnail for the two images the crawler stored a picture for (and no `/assets/` request: Directus cannot serve a pointer row), a surface-scan row whose button reads "Add a surface scan", is off and says "Surface scans can be added soon", documents collapsed under Other files with "Linking reads this file once to fingerprint it"), the full view of a picture (a click opens a dialog with the reduced-size preview, a spinner and the blurred thumbnail meanwhile, Retry after a failure, Esc / click outside / Close, focus back on the thumbnail, Tab kept inside, phone width), a thumbnail that fails leaving the icon, Link with Undo and the badge following, the record picker (Change), Accept all opening on a dry run (count, where files go, what is left) with one Undo per batch, focus moving to the next row after a Link and the one status region, Recently linked grouped by batch, tabs and filters in the URL, Dismiss and Restore, Ignore this folder (the confirm, the notice with Remove rule, the Ignored folders section with its add field and its refusals, a Lab Viewer who cannot remove, phone width), Rescan my folder and its 429 message, Settings' auto-link switch (off by default, consent text, on only through the confirm, Recently auto-linked with Undo), the Inbox crawler tab on `/crawler`, and no Inbox entry or panel when the server has no d1-inbox (404). Needs only STARbase from `vite preview` (production CSP), no Directus and no backend: `npm run build -w starbase-web && STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web`, then `cd tests/ui && npx playwright test specs/22-inbox.spec.ts` (`INBOX_SHOTS=<dir>` also saves screenshots). |
 | `22-surface-scan` | Surface scans on inserts and edges (STARbase): the Surface scans panel with thumbnails, the 3D viewer drawn on the GPU from a made-up height grid (software WebGL in headless Chromium: the surface is on screen, the vertical-exaggeration slider and Colour by height change the picture, a drag and the wheel orbit and zoom, Reset view restores it, the legend gives the range in micrometres), an edge page that also lists its insert's scans, Render again on a failed render (the stand-in finishes a queued render by itself), the Add a surface scan dialog with its lab-wide warning and its create, and the page without WebGL. Needs only STARbase from `vite preview` (production CSP): d1-server is the stand-in `tests/ui/starbase/stubD1.ts` (+ `stubScans.ts`, `syntheticScan.ts`), no Directus, no real scan. Run: `npm run build -w starbase-web && STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web`, then `cd tests/ui && npx playwright test specs/22-surface-scan.spec.ts`. |
 
+## Process map edit mode against the local stack (spec `edit-mode`)
+
+`specs/edit-mode.spec.ts` drives `/map?edit=new` in a real browser against a **real local stack** that needs no Docker and no copy of
+live: `scripts/dev/local-stack.sh` starts Postgres 16 (pgvector) with every migration, Directus 11 (from npm) with the repo's hook and
+endpoint extensions (`d1-build`, `d1-owner-default`, `d1-access-guard`, ...) and the Lab Member / Lab Viewer permissions of
+`scripts/access_rules.json`, and STARbase's vite dev server, with a small seeded family and three logins (admin, Lab Member, Lab Viewer).
+The script's header says what it disables (Redis, MinIO, workers, Data Studio) and why. It is the check of the process map edit mode
+redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), instead of the fake build server of the unit tests.
+
+```bash
+bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
+bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 6 minutes, 37 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts)
+cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
+bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
+```
+
+What it asserts: as the Lab Member, pick a seeded sample, add a CNC Turning operation from its socket menu, wire a new output sample,
+press Create, then read the operation and the sample back through Directus's REST API (method, input sample, `work_state` planned, the
+output sample's status planned, owner set). Each bug of the audit (spec §3 items 1 to 4) and of R11 (the server half, slice 1a, is probed: the two viewer tests are known failures only until it lands; the page half, a sidebar link a Lab Viewer should not see, is a known failure)
+that reproduces today is a `test.fail()` that names its item; the slice that fixes it removes the mark. Records the tests Create are deleted
+again afterwards, so the suite can be re-run. The config passes `/opt/pw-browsers/chromium` to Playwright when it exists (the cloud
+container's one Chromium; never `playwright install` there).
+
+`specs/edit-mode-slice1.spec.ts` is slice 1 of the redesign (R4 removal, R5 derived sockets, R6 layout, R10 Mark done, plain fixes, the
+`d1-build` side of `test_category` and `material_id`) driven the same way, with the helpers of `starbase/mapEdit.ts` (open a draft, pick samples,
+the socket menu, drags with a guard that the pointer is on the card it means, the saved draft read back from `d1-build`, card and wire
+geometry). As the Lab Member (and the Lab Admin for seeding what the member may not make): Delete, X and Backspace on a new card and a wire, with
+undo and redo; a planned operation and its planned output made through the API, struck through, deleted at Create and gone from the database
+and the map, also by Delete on the output sample; done records locked with their reason and nothing sent; a wired input dragged off, a free
+socket that never takes a wire, an input with two wires that loses neither to a drag; Dissolve and its refusal on a cut of three; derived
+sockets, their absence from a sample something makes, the cards keeping their size and every wire staying on its socket through five
+selections, a reload drawing the same canvas; a second piece added by connecting to the free output; no two cards overlapping after Add,
+Duplicate x4, three picked samples, undo and redo, and two Adds in a row; a dragged card keeping its place through a reload, Undo of a drag
+and of a Delete, Tidy leaving recorded cards where they are and one Ctrl+Z putting the draft's back; one card dragged without the selected
+one following; Mark done by the owner and by a member who may edit the operation but not its output sample (R10, system rights), Back to
+planned by the owner and its refusal to a second Lab Member (made by the admin and removed afterwards); and a Create with a test and an operation
+read back for `test_category` and the inherited `material_id`. Everything a test makes is removed afterwards (a done operation is sent back to
+planned by the admin first, a second member is deleted with their People row). One test is a known failure that says so: Back to planned by an
+operation's owner who cannot edit its output sample is refused (a design gap, reported with the slice).
+
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 
 Needs the `d1-starbase` preview and STARbase served by `vite preview` (the production CSP). Specs 11 and 13

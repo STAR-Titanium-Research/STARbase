@@ -31,6 +31,10 @@ export function fakeServer() {
 		/** What Create and Mark done answer: a body, or an error to throw. */
 		createAnswer: { data: { created: { n1: { collection: 'physical_samples', id: 'new1', code: '1-Ti64-MC' } }, sampleIds: ['new1'] } } as unknown,
 		markAnswer: null as unknown,
+		/** Rows `GET /items/manufacturing_operations` and `/items/test_sessions` answer (what an existing record's read returns). */
+		rows: {} as Record<string, Record<string, unknown>[]>,
+		/** What Back to planned answers: a body, or an error to throw. */
+		plannedAnswer: null as unknown,
 		bodies: [] as unknown[],
 		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
 			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
@@ -60,6 +64,12 @@ export function fakeServer() {
 				if (code) rows = rows.filter((r) => r.sample_code.toLowerCase().includes(code.toLowerCase()));
 				return { data: { data: rows } };
 			}
+			if (path === '/items/manufacturing_operations' || path === '/items/test_sessions') {
+				const filter = typeof config?.params?.filter === 'string' ? JSON.parse(config.params.filter) : {};
+				const key = path === '/items/test_sessions' ? 'session_id' : 'operation_id';
+				const ids: string[] | undefined = filter?.[key]?._in;
+				return { data: { data: (s.rows[path.slice('/items/'.length)] ?? []).filter((r) => !ids || ids.includes(String(r[key]))) } };
+			}
 			return { data: { data: [] } };
 		},
 		post: async (path: string, body?: { name: string; body: DraftBody } | Record<string, unknown>) => {
@@ -82,6 +92,11 @@ export function fakeServer() {
 				s.bodies.push(body);
 				if (s.markAnswer instanceof Error) throw s.markAnswer;
 				return { data: s.markAnswer ?? { data: { ids: (body as { ids?: string[] } | undefined)?.ids ?? [], work_state: 'done' } } };
+			}
+			if (path === '/d1-build/mark-planned') {
+				s.bodies.push(body);
+				if (s.plannedAnswer instanceof Error) throw s.plannedAnswer;
+				return { data: s.plannedAnswer ?? { data: { ids: (body as { ids?: string[] } | undefined)?.ids ?? [], work_state: 'planned' } } };
 			}
 			throw httpError(404);
 		},

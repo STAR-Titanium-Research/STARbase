@@ -220,7 +220,34 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 		else operations.push(record);
 	}
 
+	markRemoving(body, samples, operations, tests);
+
 	return { ...base, samples, operations, tests, ...(data ? {} : { focus: focusOf(samples, base) }) };
+}
+
+/**
+ * Existing planned records the draft deletes at Create (`remove`) are drawn struck through: their records are marked `removing`, in
+ * place in the lists. The planned output of a removed operation goes with it (d1-build deletes it too), so it is marked as well.
+ */
+function markRemoving(body: DraftBody, samples: SampleRec[], operations: OpRow[], tests: TestRow[]): void {
+	const mark = <T extends { id: string; removing?: true }>(list: T[], id: string): T | undefined => {
+		const at = list.findIndex((r) => r.id === id);
+		if (at < 0) return undefined;
+		list[at] = { ...list[at], removing: true };
+		return list[at];
+	};
+	for (const item of body.items) {
+		if (!item.remove || !item.existing) continue;
+		const id = item.existing.id;
+		if (item.kind === 'sample') mark(samples, id);
+		else if (item.kind === 'test') mark(tests, id);
+		else {
+			const op = mark(operations, id);
+			const out = op?.outputSampleId;
+			const made = out ? samples.find((s) => s.id === out) : undefined;
+			if (made && made.status === 'planned') mark(samples, made.id);
+		}
+	}
 }
 
 function stubOperation(id: string, ctx: ToGraphCtx): OpRow {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import CreateBar from './edit/CreateBar.vue';
 import EditLid from './edit/EditLid.vue';
-import { UNAVAILABLE, type EditMode } from './edit/useEditMode';
+import { isNotice, type EditMode } from './edit/useEditMode';
 import type { EditSide } from './edit/useEditSide';
 import type { useMapCanvas } from './useMapCanvas';
 import type { useMapExport } from './useMapExport';
@@ -29,11 +29,17 @@ defineProps<{
 		:saving="edit.draft.saving.value"
 		:save-error="edit.draft.saveError.value"
 		:notice="edit.draft.notice.value"
+		:can-remove="side.build.canRemove.value"
+		:can-dissolve="side.build.canDissolve.value"
+		:can-tidy="canvas.canTidy.value"
 		@undo="side.build.undo()"
 		@redo="side.build.redo()"
 		@rename="edit.draft.rename"
 		@add="side.build.addUnconnected"
 		@pick="side.build.pickerOpen.value = true"
+		@remove="side.build.removeSelected()"
+		@dissolve="side.build.dissolveSelected()"
+		@tidy="canvas.tidy()"
 		@open="edit.openDraft"
 		@dismiss-notice="edit.draft.notice.value = ''"
 	>
@@ -42,7 +48,7 @@ defineProps<{
 		</template>
 	</EditLid>
 	<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
-	<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': edit.failed.value !== UNAVAILABLE }" :role="edit.failed.value === UNAVAILABLE ? 'status' : 'alert'">{{ edit.failed.value }}</div>
+	<div v-if="edit.failed.value" class="pm-banner" :class="{ 'pm-bad': !isNotice(edit.failed.value) }" :role="isNotice(edit.failed.value) ? 'status' : 'alert'">{{ edit.failed.value }}</div>
 	<div v-if="side.markDone.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
 		<span>{{ side.markDone.error.value }}</span>
 		<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="side.markDone.error.value = ''"><v-icon name="close" x-small /></button>

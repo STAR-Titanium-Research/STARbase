@@ -23,7 +23,7 @@ Glossary: `CONTEXT.md` → "Building on the process map".
 | C — map edit model: draft, history, checks, toGraph, useDraft, work state on the map | agent worktree | `pm-edit/c-model` | reviewed, fixed, **merged** (2026-10-15) |
 | D1 — canvas, page wiring, menus, picker, keys | agent worktree | `pm-edit/d1-canvas` → `claude/keen-brahmagupta-nmo9oy-canvas` | built, reviewed, all findings fixed; part 4 PR open (2026-10-17) |
 | D2 — rail/chrome components, My drafts, nav entry | agent worktree | `pm-edit/d2-rail` | reviewed, fixed, **merged** (2026-10-15) |
-| E — attach, new from, ＋ pass, templates, delete planned (needs D) | agent worktree | `pm-edit/e-extras` | not started |
+| E — attach, new from, ＋ pass, templates, delete planned (needs D) | — | — | **superseded** by the [2026-10-18 redesign plan](./2026-10-18-process-map-edit-redesign.md) (slices 1–4) |
 | PRs | coordinator | #305 (1/4), #306 (2/4), #304 (3/4), canvas (4/4) | 1–3 **merged**; 4 open (2026-10-17) |
 
 ## Global constraints

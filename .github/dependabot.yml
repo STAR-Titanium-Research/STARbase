@@ -27,8 +27,13 @@ updates:
     # @directus/extensions-sdk pins vue exactly. A newer vue in the workspaces installs a second
     # copy beside the SDK's, and vue-router's types then reject app.use(router) (#140). Move vue
     # when the SDK does.
+    # Same for vue-router: the SDK peers 4.6.3 exactly (Directus ships router 4), so a router 5 bump
+    # installs a nested copy in every workspace and useRoute() returns undefined across packages
+    # (the CI failure of 2026-10-19). Move the router when the SDK does.
     ignore:
       - dependency-name: vue
+      - dependency-name: vue-router
+        update-types: ["version-update:semver-major"]
     groups:
       npm-workspace:
         update-types: [minor, patch]

@@ -41,6 +41,8 @@ export interface MapView {
 	direction: Ref<Dir>;
 	moreOpen: Ref<ReadonlySet<string>>;
 	selectedRef: Ref<string | null>;
+	/** The id of the card selected in the rail. Selection is the page's, never Vue Flow's: Vue Flow drags every card it holds as selected along with the one grabbed. */
+	selectedId?: Ref<string | null>;
 	hiddenSides?: Ref<ReadonlyMap<string, ReadonlySet<'in' | 'out'>>>;
 	/** What a socket connects, for its aria-label (spec D23): "Input: S-0412-A · Sample". The page builds it from the wires. */
 	socketLabel?: (socket: string, side: 'in' | 'out') => string;
@@ -66,9 +68,15 @@ export interface MapEdit {
 	socketClick(sock: SocketRef, e: MouseEvent): void;
 	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
 	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
-	/** ＋ output on a new operation: one more output row (E9). Whether the card offers it: `canAddRow`. */
-	addRow(nodeId: string): void;
-	canAddRow(node: MapNode): boolean;
+	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */
+	wiredSockets(node: MapNode): ReadonlySet<string>;
+	/** The wire the person selected to remove (a click on it), or null. */
+	selectedWire: Ref<string | null>;
+	selectWire(id: string): void;
+	/** Why the card cannot be removed (a done record: "Done records can't be removed from the map"), or null when it can. The selected card wears a lock. */
+	lockOf(node: MapNode): string | null;
+	/** The same for a wire (done wiring). */
+	wireLock(id: string): string | null;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
@@ -87,6 +95,12 @@ export const useMapActions = (): MapActions => inject(MAP_ACTIONS, NOOP);
 
 export function useMapView(): MapView {
 	return inject(MAP_VIEW, () => ({ direction: ref<Dir>('RIGHT'), moreOpen: ref<ReadonlySet<string>>(new Set()), selectedRef: ref<string | null>(null) }), true);
+}
+
+/** Is card `id` the one selected (focal, wearing its free sockets and its lock)? */
+export function useSelected(id: () => string): ComputedRef<boolean> {
+	const view = useMapView();
+	return computed(() => view.selectedId?.value === id());
 }
 
 /** The sides of node `id` that have records the person may not read. */
@@ -157,12 +171,20 @@ export const recordHandlers = (a: MapActions, r: () => Key) => ({
 	key: activating(() => a.select(refKey(r()))),
 });
 
-/** A wire's hit path: hover reports the wire; Ctrl/⌘+click selects and centres its origin. */
-export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: string }) => ({
+/**
+ * A wire's hit path: hover reports the wire; Ctrl/⌘+click selects and centres its origin; while a draft can be changed a plain click
+ * selects the wire itself, so Delete takes it (R4).
+ */
+export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: string }, edit?: Pick<MapEdit, 'editing' | 'selectWire'> | null) => ({
 	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(wire().id, e.currentTarget as HTMLElement),
 	leave: () => a.hover(null),
 	click: (e: Ev) => {
-		if (!(e.ctrlKey || e.metaKey)) return;
+		if (!(e.ctrlKey || e.metaKey)) {
+			if (!edit?.editing.value) return;
+			e.stopPropagation();
+			edit.selectWire(wire().id);
+			return;
+		}
 		e.stopPropagation();
 		a.select(wire().origin, { centre: true });
 	},

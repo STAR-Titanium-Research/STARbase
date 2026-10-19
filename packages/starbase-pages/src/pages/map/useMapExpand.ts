@@ -72,6 +72,10 @@ interface Opened {
   families?: string[];
 }
 
+/** A card made of edit-mode draft items (`draft:<key>` ids): nothing to expand, open or map until Create makes it a record. */
+const isDraftCard = (n: MapNode): boolean =>
+  n.type === 'record' ? n.ref.id.startsWith('draft:') : n.type === 'container' ? n.group.rowIds.some((r) => r.startsWith('draft:')) : false;
+
 export function useMapExpand(deps: ExpandDeps) {
   const { api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding } = deps;
 
@@ -341,6 +345,8 @@ export function useMapExpand(deps: ExpandDeps) {
     notice.value = '';
     if (id.startsWith('more:')) return loadMore(id.slice('more:'.length));
     const node = nodeById.value.get(id);
+    // A card of an edit-mode draft is not a record yet: there is no family, fan or step beyond it to load.
+    if (node && isDraftCard(node)) return;
     if (node?.type === 'container' && node.collapsed) {
       const rowId = node.group.rowIds[0];
       const row = node.kind === 'operation' ? d.operations.find((o) => o.id === rowId) : d.tests.find((t) => t.id === rowId);

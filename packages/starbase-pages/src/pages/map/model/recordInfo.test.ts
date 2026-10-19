@@ -158,6 +158,12 @@ describe('recordInfo: where Open record goes (I4)', () => {
     expect(openPath(recordInfo(d, g, 's:p')!)).toBe('/home/samples/p');
   });
 
+  it('a draft card has no record page to open', () => {
+    const info = recordInfo(d, g, 's:p')!;
+    expect(openPath({ ...info, ref: { ...info.ref, id: 'draft:n3' } })).toBeNull();
+    expect(openPath({ ...info, ref: { ...info.ref, id: 'draft:n3' }, open: '/somewhere' })).toBeNull();
+  });
+
   it('Force data whose operation is not on the map has nowhere to open', () => {
     const lone = buildGraph(d, groupsOf(d, false), { slots: (row, kind) => (kind === 'operation' ? [{ field: 'force_file_id', role: 'Force data', ref: { ...forceFile, id: 'elsewhere.mat' }, major: false }] : []) });
     expect(openPath(recordInfo(d, lone, 'force_file:elsewhere.mat')!)).toBeNull();

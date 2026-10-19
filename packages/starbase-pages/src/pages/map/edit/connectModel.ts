@@ -46,6 +46,7 @@ function candidates(body: DraftBody, side: 'in' | 'out', names: ConnectNames): C
 /** The sockets `from` can be wired to, in the order of the draft. */
 export function connectTargets(body: DraftBody, from: SocketRef, names: ConnectNames): ConnectEntry[] {
 	const side = from.side === 'out' ? 'in' : 'out';
+	// The sockets of the card it is on (its other rows) are not offered; a socket that adds a row is asked about as it is: dropVerdict reads it.
 	return candidates(body, side, names).filter((c) => !(c.sock.kind === from.kind && c.sock.id === from.id) && dropVerdict(body, from, c.sock).ok);
 }
 

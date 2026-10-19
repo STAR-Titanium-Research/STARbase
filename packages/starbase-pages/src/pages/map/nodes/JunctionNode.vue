@@ -2,15 +2,16 @@
 import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import type { JunctionNode } from '../model/types';
-import { useMapView, useSocketProps } from './actions';
+import { useMapView, useSelected, useSocketProps } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, LINEAGE_LABEL, kindVar } from './kinds';
 
 // Lineage with no operation behind it (spec D10): a small dashed card, the type as a pill, one input
 // socket and an output per child with its fraction.
-const props = defineProps<{ id: string; data: JunctionNode; selected?: boolean }>();
+const props = defineProps<{ id: string; data: JunctionNode }>();
 defineOptions({ inheritAttrs: false });
 const { direction } = useMapView();
+const selected = useSelected(() => props.id);
 const sockProps = useSocketProps();
 
 const style = KINDS.junction;
