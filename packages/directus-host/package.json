@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@d1/ui": "*",
-    "vue": "^3.5.13",
+    "vue": "^3.5.43",
     "vue-router": "^4.6.3"
   },
   "devDependencies": {
