@@ -15,7 +15,7 @@
 | 1b — correctness, client: remove, derived sockets, layout, plain fixes (needs 0 for its browser check) | agent worktree | `pm-redesign/1b-canvas` (+ `1c-verify`: browser specs and the fixes they and the Opus review found) | built, reviewed, merged into the working branch; slice 1 PR up (2026-10-19) |
 | 2 — adding: palette, add search, drops, insert before, planned/done toggle, project/campaign | agent worktree | `pm-redesign/2-adding` | not started (needs 1) |
 | 3 — attach from the database | agent worktree | `pm-redesign/3-attach` | not started (needs 2) |
-| 4 — templates | agent worktree | `pm-redesign/4-templates` | not started (needs 2) |
+| 4 — templates | agent worktree | `pm-redesign/4-templates` | built, unit and browser-tested on the local stack, awaiting review (2026-10-19) |
 
 ## Global constraints
 

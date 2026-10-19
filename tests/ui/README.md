@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 12 minutes, 68 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 16 minutes, 77 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts, 9 of edit-mode-slice4.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -108,6 +108,20 @@ sideways swipe carries an entry; after Insert from a card's right-click menu foc
 offered no Insert, I and Shift+I give the lock reason with no search, and a drop on it is refused and not remembered as a recent. The rules of
 insert (a recorded or struck-through operation, a cut, a stack of passes, after a pass) are unit tests (`insertModel.test.ts`). `getRetrying`
 (`starbase/localStack.ts`) repeats an idempotent API read when the connection is reset (the local Directus drops a socket now and then).
+
+`specs/edit-mode-slice4.spec.ts` is slice 4 of the redesign (R7 templates), as the Lab Member, with a second Lab Member (made through the admin API,
+signed in in a second browser context), the administrator and the Lab Viewer where a test says so. It builds a CNC Turning, fills the machine,
+tool and operator in the rail's pickers (and a planned date and notes that must NOT travel), saves it as a private template from the rail and
+checks what d1-build stored (`GET /d1-build/templates`: the filled fields, never a date, notes, sample, owner or project), that the Templates
+group is first in the palette and in Shift+A (found by name and by method), drops it on the empty canvas, a free socket and a wire (and Enter on
+its entry), wires a sample into the dropped card and Creates, and reads the operation back over REST (the prefilled fields were written, the
+template is untouched). Other tests: the notes only when ticked and a test template; "Save as template" from the right-click menu of a recorded
+(done) container; the three scopes as two Lab Members and an administrator see them and may change them (403 and 404 over REST), and in the
+second member's own browser (no ⋯ controls); the Lab Viewer's 403 from `/d1-build/templates` and its missing edit mode; rename, who can use it,
+replace with the selected card's settings and delete without changing a card made from the template; a template that changed elsewhere (409:
+plain words, the list reloads, the second try works); and a template that names a retired tool, greyed with the reason in the palette and the add
+search with a warning in Checks. It makes a tool and templates (all named "PM4 ...") and removes them, the records it Creates and the second
+member afterwards. The pickers' options are found by typing, so the spec needs a seeded machine "Haas VF-2" (the reference data has one).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

@@ -28,7 +28,7 @@ the keyboard**, and **removal that works**.
 | R4 | **Removal.** Delete or X removes the selected node or wire. New and planned items can be removed; a planned record that already exists is shown struck through as "will be deleted" and deleted at Create (E18, ADR-0019 §6). A done record shows a lock and the reason and cannot be removed. Dragging a wire off its socket removes it, with the same rule. **Dissolve** (Ctrl/⌘+Delete) removes a container and wires its input to its output. Undo covers all of it. |
 | R5 | **Sockets are derived.** A card or container shows a socket for each wire it has plus one free one. A spare that nothing uses disappears when the next one is connected or the selection leaves it. Nothing about sockets is stored in the draft. Replaces the ＋ output / ＋ pass rows as the way to add them (E9): connecting to the free socket does it. |
 | R6 | **Layout.** A new node is placed in the nearest free slot beside what it was attached to and never overlaps another node. Positions the person dragged are kept and never re-flowed. **Tidy** is an explicit, undoable button that re-lays out the draft's own items. Replaces automatic re-layout on every change. |
-| R7 | **Templates.** A template is an operation or test method plus its filled-in fields (machine, tool, operator, settings, notes), never sample links or dates. "Save as template" on any container (private, account role or everyone, E11's scopes). Templates appear in the palette and add search like any other item and drop in as a prefilled container the person can edit. No built-in starter set; templates are made by people. Duplicate ×N (E10) stays for the same operation on many samples. |
+| R7 | **Templates.** A template is an operation or test method plus its filled-in fields (machine, tool, operator, settings, notes), never sample links or dates. "Save as template" on any container (private, account role or everyone, E11's scopes). Templates appear in the palette and add search like any other item and drop in as a prefilled container the person can edit. No built-in starter set; templates are made by people. Duplicate ×N (E10) stays for the same operation on many samples. **Built in slice 4** (§2.2). |
 | R8 | **Attach from the database.** "From database…" (palette, add search, or a socket's menu) searches every record that can legally attach where it is opened: operations that take the sample as input, tests run on it, samples as an operation's output. Joining a record from another process joins the two processes on the map and asks one-line confirmation. A record already attached on that socket is greyed with the reason. Replaces E8's canvas-only "Existing…". |
 | R9 | **Planned or done at Create.** Each new operation or test has a Planned / Done toggle. Done asks for the date (default today) and Create writes it done in one step, outputs active (ADR-0019 amendment). |
 | R10 | **Mark done by whoever may edit the operation** (ADR-0019 amendment): the status flip of its output samples uses system rights after the operation update succeeds. |
@@ -54,6 +54,33 @@ the keyboard**, and **removal that works**.
   operation that makes it with a new input sample; "after" a sample or a container with nothing leaving it adds the operation fed by it (a
   branch). A planned sample that already exists cannot be given a maker (the draft and d1-build refuse it: "already exists with its own
   history"), so for it "before" is refused with that reason rather than offered.
+
+### 2.2 Details as built in slice 4 (R7)
+
+- **What a template holds.** The container's fields as they stand (a recorded operation or test is read first), minus what only that run
+  was: the wiring and work state (the server refuses them in a draft), the dates, codes, owner and `notes`/`outcome_notes` (an operation's
+  notes are `outcome_notes`, a test's are `notes`), the project and campaign (the draft's top bar chooses those) and the files of one
+  run. Machine, tool, cutting edge, operator and the typed settings stay. Only real columns travel (d1-build refuses anything else), so a
+  many-to-many such as additional operators is not in a template. The notes are kept only when the person ticks "Keep the notes too" in the
+  dialog. An operation needs its method and a test its type before it can be saved.
+- **Making one.** **Save as template** on any container: the rail's Template section (shown for every selected operation or test, new or
+  recorded) and the card's right-click menu. The dialog asks for a name (started with the method or test type) and who can use it: **Only me**,
+  **My account role**, **Everyone** (the three saved-view scopes: `private`, `role` with the maker's own role, `global`), and lists what it
+  keeps. The palette opens and says it saved.
+- **Using one.** A **Templates** group is the first of the palette (above the recents, the samples and the categories) and of the add search,
+  found by name, method or "template"; a template is the same choice as the method or test it is made of, so every rule about where it fits
+  (empty canvas, free socket, wire, Insert before / after, Enter on its entry) applies unchanged. What is made is a plain new container with
+  the template's values, editable, and keeps nothing of the template: changing or deleting the template never changes it.
+- **Managing.** The ⋯ on a template the person made (or any, for an administrator) opens, inside the palette: rename, who can use it, **Replace
+  with the selected card's settings** (an operation card for an operation template, a test for a test; asks once more), delete (asks once
+  more). Each says what it did or why not in plain words; a stale version (409) reloads the list and says to try again; 403 says only the
+  maker or an administrator can change it.
+- **Retired and used-up gear.** A template that names a machine or tool with `is_active` false, or a cutting edge with `is_used` true, is
+  greyed with the reason under it in the palette and the add search (it can still be chosen), and any new card that names such gear (from a
+  template or typed) has the same warning in Checks. A warning only: Create is not blocked. Reading the state is best effort: gear the person
+  may not read is not warned about.
+- **Not there.** The empty "Templates" placeholder of the old Add menu stays gone: no templates, no group. A Lab Viewer, who may not build,
+  gets 403 from `/d1-build/templates` and sees no edit mode.
 
 ## 3. Plain fixes found by the audit (no decision needed)
 

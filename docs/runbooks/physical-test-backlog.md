@@ -1441,6 +1441,37 @@ touch confirm:
   swipe, and a mouse or pen drag is unchanged. Switching to another app or window mid-drag (or locking the screen) lets the drag go
   with nothing dropped. Since: edit-mode redesign slice 2a (PR pending); the scroll and the let-go: slice 2c fixes.
 
+#### Process map edit mode redesign, slice 4 templates (`pm-redesign/4-templates`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+Templates (R7) are unit-tested and were driven in a real browser on the local stack by `tests/ui/specs/edit-mode-slice4.spec.ts` (one seeded
+machine, a tool made for the run, two Lab Members, an administrator and a Lab Viewer; the three scopes; rename, who can use it, replace, delete;
+a stale version; a retired tool). What only live data, live roles and real people confirm:
+
+- [ ] **PM9-1 — A template on real tools, edges, operators and lists.** On live, build an operation of each process category you use, fill in
+  the machine, the tool, the cutting edge, the operator, the additional operators, the typed settings and anything that is a list or a choice
+  on that method's form, and **Save as template** (card right-click menu and the rail's Template section). The dialog's "Keeps" line must name
+  what you filled in and never the sample, the dates or Done. Drop the template on an empty canvas: every field you filled is on the new card
+  (open "all fields"), the date and the sample are not, and Create writes them (read the operation in Data Studio). Note every field that did
+  NOT come back: a field of a many-to-many (for example additional operators) is left out of a template by design (only real columns travel),
+  so say which ones you missed. Do the same for a test of each type you use. Since: edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-2 — Sharing with a real account role.** As a Lab Member save one template for **My account role** and one for **Everyone**.
+  Sign in as another Lab Member: both are in the palette (Templates first) and in Shift+A, and neither has the ⋯ controls. Sign in as an
+  administrator (another role): only the one for everyone is listed; the administrator can still rename and delete the role one if they
+  reach it by id (`GET /d1-build/templates/<id>`). If your accounts use nested roles (a child of Lab Member), check a member of the child role
+  sees the role template. A Lab Viewer gets 403 from `/d1-build/templates` and no edit mode. Since: edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-3 — Retired and used-up gear.** Retire a tool (Tools list, `is_active` off) or mark an edge used that a saved template names. Open
+  `/map?edit=new`: the template is greyed with "The tool … is retired." / "The cutting edge … is used up." under it in the palette and the
+  add search, it can still be chosen, and the card made from it has the same warning in Checks (a warning only, Create is not blocked). Turn the
+  tool back on, reload: no warning. Check that a machine set inactive in Equipment does the same. Since: edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-4 — Many templates.** With about 100 templates visible (a few people, all three scopes): the palette's Templates group scrolls inside
+  the dock without pushing the canvas, typing narrows by name and by method, the add search lists them first and finds one by name in a keystroke
+  or two, and opening the palette or the page does not wait on the template list (the list is read once when edit mode starts). Since:
+  edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-5 — Replace, rename and delete on real shared templates.** Replace a role template with the settings of a card on the map (confirm
+  twice-asked), rename it, change its scope to Everyone and back, delete it: each says what it did, another member's open palette keeps listing
+  the old one until their page reads again, and renaming it from there answers "changed since you opened it" and reloads. What was made
+  from the template (cards already on a draft, records already created) is unchanged by every one of these. Since: edit-mode redesign slice 4 (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from

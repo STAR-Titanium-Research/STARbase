@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from '@
 import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, signInWith, stackAvailable } from '../starbase/localStack';
 import {
 	addSearch, boxOf, canvasMiddle, card, cards, centreOf, canvasOf, createButton, dragBetween, dragEntryTo, emptySpot, fit, openAddSearch, openNewDraft, paletteEntry, paletteOf, pickSamples, pressCreate,
-	readDraft, draftIdOf, sampleIdOf, savedDraft, searchOptions, secondMember, selectCard, sockOf, startEditingMapOf, distinctRecords,
+	readDraft, draftIdOf, sampleIdOf, savedDraft, searchOptions, secondMember, selectCard, sockOf, startEditingMapOf, distinctRecords, chooseFromSocketMenu, wireBetween, wireMidpoint, settledOverlaps,
 	type DraftBody, type Ref,
 } from '../starbase/mapEdit';
 
@@ -127,6 +127,10 @@ async function selectOperation(page: Page): Promise<void> {
 const cardOfRow = (page: Page, rowKey: string): Locator => cards(page).filter({ has: page.locator(`[data-sock="row|draft:${rowKey}|in"]`) });
 
 const FIELDS = ['equipment_id', 'tool_id', 'operator_person_id'] as const;
+/** The add search from the one new operation's free output socket, then "New sample". */
+async function openAddSearchOnRow(page: Page): Promise<void> {
+	await chooseFromSocketMenu(page, canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|out"]').first(), /^New sample/);
+}
 const dialogOf = (page: Page): Locator => page.getByRole('dialog', { name: /as a template$/ });
 /** The rail's Save as template… button, the dialog, a name and a scope; returns what the server answered. */
 async function saveAsTemplate(page: Page, name: string, scope: RegExp = /^Only me/, opts: { notes?: boolean; opened?: boolean } = {}): Promise<Template> {
@@ -226,6 +230,7 @@ test.describe('as a Lab Member', () => {
 		// Wire a sample into it and Create: the operation is written with the prefilled fields.
 		await pickSamples(page, ['LOCAL-RAW-1']);
 		await fit(page);
+		await settledOverlaps(page); // (the cards glide to their places after the pick: sockets are measured once they rest)
 		const rowKey = dropped.rows?.[0]?.key;
 		expect(rowKey, 'the dropped operation has its row').toBeTruthy();
 		const source = sockOf(page, `sample|${raw1}|out`).first();
@@ -287,6 +292,36 @@ test.describe('as a Lab Member', () => {
 		// The record it was made from is untouched.
 		const op = (await listRecords<{ version: number; work_state: string }>(admin, 'manufacturing_operations', 'filter[pass_code][_eq]=LOCAL-BAR-1-T1&fields=version,work_state'))[0];
 		expect(op.work_state).toBe('done');
+	});
+
+	test('a template drops on a free socket (connected there) and on a wire (inserted between), and Enter on its entry adds it (R2 with R7)', async ({ page }) => {
+		const haas = await machineId('Haas VF-2');
+		const [method] = await listRecords<{ method_id: string }>(admin, 'manufacturing_methods', 'filter[method_code][_eq]=MC&fields=method_id');
+		const made1 = await member.post(`${D1}/d1-build/templates`, { data: { name: nm('Drops'), collection: 'manufacturing_operations', values: { method_id: method.method_id, equipment_id: haas, process_category: 'machining' } } });
+		expect(made1.status()).toBe(201);
+		const raw1 = await sampleIdOf(member, 'LOCAL-RAW-1');
+		await openNewDraft(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		const withHaas = (b: DraftBody) => b.items.filter((i) => i.kind === 'operation' && i.values.equipment_id === haas).length;
+
+		// On the sample's free output socket: the operation is made from the template and wired to the sample.
+		await dragEntryTo(page, paletteEntry(page, nm('Drops')), sockOf(page, `sample|${raw1}|out`).first());
+		let body = await savedDraft(page, member, (b) => withHaas(b) === 1 && b.wires.length === 1, 'the template dropped on a socket');
+		expect(body.wires[0].from.key).toBe(body.items.find((i) => i.kind === 'sample')!.key);
+		// A new sample out of it, so there is a wire between an operation and a sample.
+		await openAddSearchOnRow(page);
+		body = await savedDraft(page, member, (b) => b.items.length === 3 && b.wires.length === 2, 'a new sample out of the operation');
+
+		// On that wire: inserted between its two ends (a new sample and the template's operation).
+		await fit(page);
+		await dragEntryTo(page, paletteEntry(page, nm('Drops')), () => wireMidpoint(wireBetween(page, 'op:draft:', 's:draft:')));
+		body = await savedDraft(page, member, (b) => withHaas(b) === 2 && b.items.length === 5, 'the template dropped on the wire');
+		expect(body.wires.length).toBeGreaterThanOrEqual(4);
+
+		// Enter on the entry adds one next to the selected card.
+		await paletteEntry(page, nm('Drops')).focus();
+		await page.keyboard.press('Enter');
+		await savedDraft(page, member, (b) => withHaas(b) === 3, 'Enter on the template entry');
 	});
 
 	// ---- the scopes ----------------------------------------------------------------------------------------------------------
