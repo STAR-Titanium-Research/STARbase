@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useEditRail } from './edit/railContext';
 import type { ChainDir } from './model/hoverFocus';
 
 // A card's right-click menu: which way the selected card's chain is lit on the map. Placed at the pointer
@@ -8,8 +9,6 @@ const props = defineProps<{
 	x: number;
 	y: number;
 	dir: ChainDir;
-	/** Edit mode, an operation or a test: Save as template… (R7). */
-	canTemplate?: boolean;
 	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
 	canRemove?: boolean;
 	canDissolve?: boolean;
@@ -17,7 +16,10 @@ const props = defineProps<{
 	canInsert?: boolean;
 	earlier?: boolean;
 }>();
-const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after']; template: [] }>();
+const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
+// Edit mode, an operation or a test: Save as template… (R7). It reads and acts through the rail's context (the page provides it), so the page binds nothing for it.
+const rail = useEditRail();
+const canTemplate = computed(() => !!props.canRemove && !!rail?.saveTemplate?.can.value);
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -76,7 +78,7 @@ onBeforeUnmount(() => {
 					<kbd>I</kbd>
 				</button>
 			</template>
-			<button v-if="canTemplate" type="button" role="menuitem" class="it" @click="emit('template'), emit('close')">
+			<button v-if="canTemplate" type="button" role="menuitem" class="it" @click="rail?.saveTemplate?.open(), emit('close')">
 				<v-icon name="bookmark_add" x-small />
 				<span>Save as template…</span>
 			</button>

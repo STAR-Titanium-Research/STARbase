@@ -2,7 +2,7 @@
 // Create and what follows (useCreate), Mark done (useMarkDone), and what the rail's edit sections ask of the page (provided to them).
 // Mark done is here too because it works in view mode and on a phone.
 
-import { provide, type Ref } from 'vue';
+import { provide, watch, type Ref } from 'vue';
 import { dataStudioRoute, type ExplorerHost, type FormField } from '@d1/ui';
 import { MAP_EDIT } from '../nodes/actions';
 import type { useMapCanvas } from '../useMapCanvas';
@@ -13,11 +13,21 @@ import { useCreate } from './useCreate';
 import type { EditMode } from './useEditMode';
 import { useEditSurface } from './useEditSurface';
 import { useMarkDone } from './useMarkDone';
+import { useTemplates } from './useTemplates';
+import { cleanTemplateValues } from './templates';
 
-export function useEditSide(o: { host: Pick<ExplorerHost, 'openDataStudio' | 'user'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
+export function useEditSide(o: { host: Pick<ExplorerHost, 'api' | 'openDataStudio' | 'user' | 'isAdmin'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
 	const { host, edit } = o;
 	const markDone = useMarkDone({ edit, map: o.map });
-	const build = useEditSurface({ ...o, blockedBy: () => markDone.open.value || !!o.finderOpen?.(), person: () => host.user.value?.id });
+	// The templates (R7): read when building starts; a template is cleaned again against the form's fields when it is used.
+	const templates = useTemplates({
+		api: host.api,
+		gear: edit.catalog.gear,
+		me: () => ({ id: host.user.value?.id, admin: host.isAdmin.value }),
+		clean: (collection, values) => cleanTemplateValues(collection, values, edit.catalog.rawFields.value[collection === 'test_sessions' ? 'test_sessions' : 'manufacturing_operations'] ?? [], { notes: true }),
+	});
+	watch(() => edit.editing.value, (on) => on && void templates.ensure(), { immediate: true });
+	const build = useEditSurface({ ...o, templates, blockedBy: () => markDone.open.value || !!o.finderOpen?.(), person: () => host.user.value?.id });
 	provide(MAP_EDIT, build.mapEdit);
 	const create = useCreate({ edit, map: o.map, select: build.selectKey });
 	provide(EDIT_RAIL_KEY, {

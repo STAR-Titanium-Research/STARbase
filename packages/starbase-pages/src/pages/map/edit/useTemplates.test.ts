@@ -80,6 +80,22 @@ describe('reading the templates', () => {
 	});
 });
 
+describe('using a template', () => {
+	it('lists its values cleaned again by the page (a column that is gone, a field the draft now refuses), while the stored template is untouched', async () => {
+		const f = fakeServer();
+		const t = useTemplates({
+			api: f.api,
+			gear: useGearStatus(f.api),
+			me: () => ({ id: 'u1' }),
+			clean: (_c, v) => Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'dropped_in_a_migration' && k !== 'sintering_run_number')),
+		});
+		f.s.templates.push({ id: 't1', name: 'Old', scope: 'private', role_id: null, collection: 'manufacturing_operations', values: { method_id: 'm', dropped_in_a_migration: 1, sintering_run_number: 4, equipment_id: 'e' }, user_id: 'u1', updated_at: 'now', version: 1 } as never);
+		await t.ensure();
+		expect(t.items.value[0].rec.values).toEqual({ method_id: 'm', equipment_id: 'e' });
+		expect(t.rows.value[0].values).toHaveProperty('sintering_run_number');
+	});
+});
+
 describe('making, changing and deleting', () => {
 	it('creates a template with a name, a scope and the values, and lists it by name', async () => {
 		const x = setup();

@@ -19,7 +19,6 @@ import { toGraph, type ToGraphCtx } from './toGraph';
 import { useDraft, type DraftApi } from './useDraft';
 import { chooseCampaign, chooseProject } from './projectCampaign';
 import { useEditCatalog, type EditCatalog } from './useEditCatalog';
-import { useTemplates } from './useTemplates';
 import { useProjectChoices } from './useProjectChoices';
 import { workStateActions } from './workState';
 
@@ -36,8 +35,6 @@ export interface EditModeOptions {
 	focusCode?: () => string | undefined;
 	/** The card the rail shows, to tell which draft item is selected. */
 	selected?: () => MapNode | undefined;
-	/** Who is building, for the templates they may change (their own; an administrator's all). */
-	me?: () => { id?: string | null; admin?: boolean };
 	/** Tells the canvas what kind of change a draft action made, so only the new cards are laid out (the map's hintMerge). */
 	hint?: (h: MergeHint) => void;
 }
@@ -63,7 +60,6 @@ export const isEmptyBody = (b: DraftBody): boolean => b.items.length === 0;
 
 export function useEditMode(o: EditModeOptions) {
 	const catalog = useEditCatalog(o.api, o.fieldsFor);
-	const templates = useTemplates({ api: o.api, gear: catalog.gear, me: () => o.me?.() ?? {} });
 	const draft = useDraft({
 		api: o.api,
 		ctx: () => catalog.ctx(),
@@ -302,12 +298,6 @@ export function useEditMode(o: EditModeOptions) {
 		(on) => on && void catalog.ensure(),
 		{ immediate: true },
 	);
-	// The templates are read when building starts (R7).
-	watch(
-		() => editing.value,
-		(on) => on && void templates.ensure(),
-		{ immediate: true },
-	);
 	const unreadable = new Set<string>();
 	watch(
 		() => draft.draftId.value,
@@ -331,8 +321,6 @@ export function useEditMode(o: EditModeOptions) {
 					.catch(() => unknown.forEach((id) => unreadable.add(id)));
 			}
 			void catalog.loadRecords({ ...want, physical_samples: [] });
-			// The machine, tool or edge a new card names (typed, or brought by a template): Checks warns when it is retired or used up.
-			void catalog.gear.ensure(items.filter((i) => !i.existing).map((i) => i.values));
 			void catalog.ensureMaterials(items.map((i) => i.values.material_id).filter((v): v is string => typeof v === 'string'));
 		},
 		{ immediate: true },
@@ -367,7 +355,6 @@ export function useEditMode(o: EditModeOptions) {
 
 	const api = {
 		catalog,
-		templates,
 		draft: draft as DraftApi,
 		overlay,
 		// state

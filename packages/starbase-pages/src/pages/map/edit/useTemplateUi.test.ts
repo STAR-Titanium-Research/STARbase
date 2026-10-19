@@ -26,8 +26,8 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 	const selectedId = ref<string | null>(over.select === false ? null : 'c1');
 	const edit = {
 		editing: ref(true),
+		drafted: ref(true),
 		body,
-		templates,
 		catalog: {
 			checkFields: ref({ manufacturing_operations: Object.entries(labels).map(([field, label]) => ({ field, label, required: false })) }),
 			rawFields: ref({ manufacturing_operations: OPERATION_DEFS, test_sessions: TEST_DEFS }),
@@ -35,11 +35,12 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 			testTypes: ref([]),
 			records: reactive(new Map()),
 			loadRecords: async () => undefined,
+			gear: { ensure: async () => undefined },
 		},
 	};
 	const map = { graph: ref({ nodes: [node], wires: [], hidden: [], truncated: false }), selectedId };
 	let opened = 0;
-	const ui = useTemplateUi({ edit: edit as never, map: map as never, openPalette: () => void (opened += 1) });
+	const ui = useTemplateUi({ edit: edit as never, templates, map: map as never, openPalette: () => void (opened += 1) });
 	return { ...f, edit, map, ui, templates, selectedId, opened: () => opened };
 }
 

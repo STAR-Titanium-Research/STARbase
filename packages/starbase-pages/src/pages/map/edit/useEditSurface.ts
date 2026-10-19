@@ -29,13 +29,14 @@ import { useEditKeys } from './useEditKeys';
 import { useEditRemoval } from './useEditRemoval';
 import { usePalette } from './usePalette';
 import { useTemplateUi } from './useTemplateUi';
+import type { Templates } from './useTemplates';
 import { useSamplePicking } from './useSamplePicking';
 import { workChipOf } from './workChip';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
-export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; /** Something else the page has open over the map (the Mark done dialog, the Finder): the keys leave it alone. */ blockedBy?: () => boolean; /** Who is building: the palette's folded state and the recents are theirs. */ person?: () => string | null | undefined }) {
+export function useEditSurface(o: { edit: EditMode; /** The templates this person may use (R7). */ templates: Templates; map: ProcessMap; canvas: Canvas; canvasEl: Ref<HTMLElement | null>; /** Something else the page has open over the map (the Mark done dialog, the Finder): the keys leave it alone. */ blockedBy?: () => boolean; /** Who is building: the palette's folded state and the recents are theirs. */ person?: () => string | null | undefined }) {
 	const { edit, canvasEl } = o;
 
 	/** The sample picker over the canvas (E7) and the fly-in of what it picks. */
@@ -79,9 +80,9 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 	const nameOf = (n: MapNode): string => (n.type === 'record' ? n.ref.code || 'this sample' : n.type === 'container' ? n.title || n.method || 'this step' : 'this card');
 	const insert = useEditInsert({ edit, map: o.map, canvasEl, sampleActions: build.sampleActions, open: menu.open, nameOf, say: (text, at) => (at ? build.say(text, at) : void (build.problem.value = text)) });
 	late.insert = insert.choose;
-	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, templates: () => edit.templates.items.value, recents: menu.recents, person: () => o.person?.() });
+	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, templates: () => o.templates.items.value, recents: menu.recents, person: () => o.person?.() });
 	// Save as template, and what the palette does to a template (R7).
-	const templateUi = useTemplateUi({ edit, map: o.map, openPalette: () => palette.fold(false) });
+	const templateUi = useTemplateUi({ edit, templates: o.templates, map: o.map, openPalette: () => palette.fold(false) });
 	const dragging = useAddDrag({
 		body: () => edit.body.value,
 		editing: () => edit.editing.value,
@@ -233,6 +234,7 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		menu,
 		palette,
 		templateUi,
+		templates: o.templates,
 		paletteProps,
 		paletteEvents,
 		dragging,

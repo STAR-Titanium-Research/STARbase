@@ -3,7 +3,7 @@
 // The selected container can be one of the draft or a recorded operation or test of the map: a recorded one is read first (it is not in the
 // draft), and what is saved is what it stands as. The values come from `templateValuesOf`; the server is `useTemplates`.
 
-import { computed, ref, shallowRef, type ComputedRef } from 'vue';
+import { computed, ref, shallowRef, watch, type ComputedRef } from 'vue';
 import type { DraftItem } from '@d1/ui';
 import type { ContainerNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
@@ -11,6 +11,7 @@ import { recordKey, type CheckCollection } from './checks';
 import { draftKeysOfNode } from './socketRefs';
 import { templateCollectionOf, templateProblem, templateValuesOf, type TemplateCollection, type TemplateScope } from './templates';
 import type { EditMode } from './useEditMode';
+import type { Templates } from './useTemplates';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
@@ -44,11 +45,18 @@ interface Taken {
 
 const RECORDED_READ = 'Could not read that record. Try again in a moment.';
 
-export function useTemplateUi(o: { edit: EditMode; map: ProcessMap; /** Opens the palette: a template just saved is in it. */ openPalette: () => void }) {
-	const { edit, map } = o;
+export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: ProcessMap; /** Opens the palette: a template just saved is in it. */ openPalette: () => void }) {
+	const { edit, map, templates } = o;
 	const saving = shallowRef<SaveState | null>(null);
-	/** A line the palette says after a change ("Saved the template Roughing."); the templates' own failures are `edit.templates.error`. */
+	/** A line the palette says after a change ("Saved the template Roughing."); the templates' own failures are `templates.error`. */
 	const notice = ref('');
+
+	// The machine, tool or edge a new card names (typed, or brought by a template): Checks warns when it is retired or used up.
+	watch(
+		() => edit.body.value.items,
+		(items) => void (edit.drafted.value && edit.catalog.gear.ensure(items.filter((i) => !i.existing).map((i) => i.values))),
+		{ immediate: true },
+	);
 
 	/** The container the person has selected on the map (a draft's or a recorded one), or null. */
 	const selectedContainer: ComputedRef<ContainerNode | null> = computed(() => {
@@ -124,7 +132,7 @@ export function useTemplateUi(o: { edit: EditMode; map: ProcessMap; /** Opens th
 		const s = saving.value;
 		if (!s || s.busy) return;
 		saving.value = { ...s, busy: true, error: '' };
-		const r = await edit.templates.create({ name: v.name, scope: v.scope, collection: s.collection, values: v.notes ? s.valuesWithNotes : s.values });
+		const r = await templates.create({ name: v.name, scope: v.scope, collection: s.collection, values: v.notes ? s.valuesWithNotes : s.values });
 		if (!saving.value) return;
 		if (r.ok) {
 			saving.value = null;
@@ -137,45 +145,45 @@ export function useTemplateUi(o: { edit: EditMode; map: ProcessMap; /** Opens th
 	/** Said when something worked, cleared when something else is done. */
 	const say = (text: string): void => void (notice.value = text);
 	async function rename(id: string, name: string): Promise<boolean> {
-		const r = await edit.templates.rename(id, name);
+		const r = await templates.rename(id, name);
 		if (r.ok) say(`Renamed the template ${name}.`);
 		return r.ok;
 	}
 	async function setScope(id: string, scope: TemplateScope): Promise<boolean> {
-		const r = await edit.templates.setScope(id, scope);
+		const r = await templates.setScope(id, scope);
 		if (r.ok) say('Changed who can use the template.');
 		return r.ok;
 	}
 	async function remove(id: string): Promise<boolean> {
-		const name = edit.templates.rows.value.find((t) => t.id === id)?.name ?? 'the template';
-		const r = await edit.templates.remove(id);
+		const name = templates.rows.value.find((t) => t.id === id)?.name ?? 'the template';
+		const r = await templates.remove(id);
 		if (r.ok) say(`Deleted the template ${name}. What was made from it is unchanged.`);
 		return r.ok;
 	}
 	/** "Replace with the selected card's settings": the template takes the values of the selected container of the same kind. */
 	async function replace(id: string): Promise<boolean> {
-		const t = edit.templates.rows.value.find((x) => x.id === id);
+		const t = templates.rows.value.find((x) => x.id === id);
 		const node = selectedContainer.value;
 		if (!t || !node) return false;
 		if ((node.kind === 'operation') !== (t.collection === 'manufacturing_operations')) {
-			edit.templates.error.value = `Select ${t.collection === 'manufacturing_operations' ? 'an operation' : 'a test'} to replace this template with.`;
+			templates.error.value = `Select ${t.collection === 'manufacturing_operations' ? 'an operation' : 'a test'} to replace this template with.`;
 			return false;
 		}
 		const taken = await take(draftItemOfNode(node), node);
 		if (!taken || taken.problem) {
-			edit.templates.error.value = taken?.problem ?? 'That card cannot be saved as a template.';
+			templates.error.value = taken?.problem ?? 'That card cannot be saved as a template.';
 			return false;
 		}
-		const r = await edit.templates.replaceValues(id, taken.values);
+		const r = await templates.replaceValues(id, taken.values);
 		if (r.ok) say(`Replaced the settings of ${t.name} with those of ${node.title || 'the selected card'}.`);
 		return r.ok;
 	}
 
 	/** What the palette draws and does for templates, to bind in one go. */
 	const paletteProps = computed(() => ({
-		templateNotice: edit.templates.error.value || notice.value,
-		templateFailed: !!edit.templates.error.value,
-		templateBusy: edit.templates.busy.value,
+		templateNotice: templates.error.value || notice.value,
+		templateFailed: !!templates.error.value,
+		templateBusy: templates.busy.value,
 		/** The kind of the selected container (or null): the palette offers Replace only for a template of that kind. */
 		selectedKind: selectedKind.value,
 		selectedTitle: selectedContainer.value?.title ?? '',
@@ -186,7 +194,7 @@ export function useTemplateUi(o: { edit: EditMode; map: ProcessMap; /** Opens th
 		'template-replace': (id: string) => void replace(id),
 		'template-delete': (id: string) => void remove(id),
 		'template-dismiss': () => {
-			edit.templates.dismiss();
+			templates.dismiss();
 			notice.value = '';
 		},
 	};

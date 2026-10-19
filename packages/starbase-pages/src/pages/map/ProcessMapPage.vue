@@ -61,7 +61,6 @@ const edit = useEditMode({
 	focusCode: () => map.data.value?.focus.code || undefined,
 	selected: () => map.graph.value?.nodes.find((n) => n.id === map.selectedId.value),
 	hint: (h) => map.hintMerge(h),
-	me: () => ({ id: host.user.value?.id, admin: host.isAdmin.value }),
 });
 const map = useProcessMap(host.api, route, router, edit.overlay);
 const canvas = useMapCanvas(map, canvasEditOf(edit, map.inHistory));
@@ -358,12 +357,10 @@ const tipHint = computed(() => {
 									:can-dissolve="edit.editing.value && build.canDissolve.value"
 									:can-insert="edit.editing.value && build.canInsertSelected()"
 									:earlier="build.selectedIsDoneSample()"
-									:can-template="build.templateUi.canSaveSelected.value"
 									@pick="map.setChainDir"
 									@remove="build.removeSelected"
 									@dissolve="build.dissolveSelected"
 									@insert="build.insertSelected"
-									@template="build.templateUi.openSelected"
 									@close="chainMenu = null"
 								/>
 							</div>

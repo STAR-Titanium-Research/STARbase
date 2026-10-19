@@ -28,7 +28,13 @@ export function failureText(e: unknown, what: string): string {
 	return errorText(e, `The server refused to ${what}.`);
 }
 
-export function useTemplates(o: { api: HostApi; gear: Pick<GearStatus, 'ensure' | 'problem'>; me: () => { id?: string | null; admin?: boolean } }) {
+export function useTemplates(o: {
+	api: HostApi;
+	gear: Pick<GearStatus, 'ensure' | 'problem'>;
+	me: () => { id?: string | null; admin?: boolean };
+	/** Cleans a template's values when it is used (against the form's current fields): a column that is gone or a field the draft now refuses never reaches a draft. */
+	clean?: (collection: TemplateCollection, values: Record<string, unknown>) => Record<string, unknown>;
+}) {
 	const rows = shallowRef<TemplateRecord[]>([]);
 	const loaded = ref(false);
 	/** d1-build said 403: this account may not build, so no templates (and no group in the palette). */
@@ -39,7 +45,8 @@ export function useTemplates(o: { api: HostApi; gear: Pick<GearStatus, 'ensure' 
 
 	/** The list for the palette and the add search: with who may change each and what is wrong with the gear it names. */
 	const items = computed<TemplateItem[]>(() =>
-		rows.value.map((rec) => {
+		rows.value.map((raw) => {
+			const rec = o.clean ? { ...raw, values: o.clean(raw.collection, raw.values) } : raw;
 			const warn = warnOf(rec.values, o.gear.problem);
 			return { rec, mine: canChange(rec, o.me()), ...(warn ? { warn } : {}) };
 		}),
