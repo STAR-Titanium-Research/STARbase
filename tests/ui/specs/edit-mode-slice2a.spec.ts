@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, apiAs, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addSearch, boxOf, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, centreOf, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, holdEntryOver, openAddSearch, openNewDraft,
+	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
 	paletteEntry, paletteOf, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, searchFromSocket, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
 	type DraftBody, type Ref,
 } from '../starbase/mapEdit';
@@ -65,7 +65,7 @@ test.describe('as a Lab Member', () => {
 		await expect(paletteEntry(page, 'New sample')).toBeVisible();
 		await expect(paletteEntry(page, 'Existing sample…')).toBeVisible();
 		await expect(paletteEntry(page, /^CNC Turning/)).toBeVisible();
-		await expect(paletteEntry(page, /^Tensile/)).toBeVisible();
+		await expect(paletteEntry(page, /Tensile/)).toBeVisible();
 
 		// A search matches the method name, its code, its category and a test type; "MC" is CNC Turning's code.
 		await palette.getByRole('searchbox', { name: 'Search the palette' }).fill('mc');
@@ -91,7 +91,9 @@ test.describe('as a Lab Member', () => {
 	// ---- R2: drops -------------------------------------------------------------------------------------------------------------------
 	test('dragging an operation and a test from the palette onto the empty canvas makes floating cards where the pointer let go; undo takes them back (R2)', async ({ page }) => {
 		await openNewDraft(page);
-		const where = await canvasMiddle(page);
+		await pickSamples(page, ['LOCAL-RAW-1']);
+		await settledOverlaps(page);
+		const where = await emptySpot(page);
 		await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), where);
 		const operation = card(page, 'CNC Turning, Operation');
 		await expect(operation).toBeVisible();
@@ -99,22 +101,27 @@ test.describe('as a Lab Member', () => {
 		expect(body.wires, 'a floating card has no wire').toEqual([]);
 		expect(operations(body)[0].values.method_id, 'the method of the entry').toBeTruthy();
 		expect(operations(body)[0].workState, 'a new operation is planned').toBe('planned');
-		// It lands where the pointer was (the layout may step it aside from another card, not from an empty canvas).
+		// It lands where the pointer was (the layout may step it aside from another card, not from a clear spot of the canvas).
+		await settledOverlaps(page);
 		const box = (await operation.boundingBox())!;
 		expect(Math.abs(box.x - where.x), 'x of the card against where it was dropped').toBeLessThan(40);
 		expect(Math.abs(box.y - where.y), 'y of the card against where it was dropped').toBeLessThan(40);
 
-		// A second one dropped on the very same spot does not land on the first.
-		await dragEntryTo(page, paletteEntry(page, /^Tensile/), where);
-		await expect(card(page, /^Tensile.*, Test$/)).toBeVisible();
-		body = await savedDraft(page, member, (b) => b.items.length === 2, 'the floating test');
+		// Let go over a card and nothing is added: it says where an entry can go instead.
+		await dragEntryTo(page, paletteEntry(page, /Tensile/), () => operation.boundingBox().then((b) => ({ x: b!.x + b!.width / 2, y: b!.y + b!.height / 2 })));
+		await expect(page.locator('.pm-wirepreview .tip')).toContainText('Drop it on the empty canvas, on a free socket or on a wire.');
+		await expect(cards(page)).toHaveCount(3); // the picked sample, its material, the operation
+		// A test dropped on a clear spot next to it is a second floating card, clear of the first.
+		await dragEntryTo(page, paletteEntry(page, /Tensile/), { x: where.x - 330, y: where.y });
+		await expect(card(page, /Tensile.*, Test$/)).toBeVisible();
+		body = await savedDraft(page, member, (b) => b.items.length === 3, 'the floating test');
 		expect(body.wires).toEqual([]);
 		expect(await settledOverlaps(page), 'no two cards overlap after the second drop').toEqual([]);
 
 		await page.keyboard.press('Control+z');
 		await page.keyboard.press('Control+z');
-		await expect(cards(page)).toHaveCount(0);
-		await savedDraft(page, member, (b) => b.items.length === 0, 'both drops undone');
+		await expect(operation).toHaveCount(0);
+		await savedDraft(page, member, (b) => b.items.length === 1, 'both drops undone: only the picked sample is left');
 	});
 
 	test('a new sample dragged onto the empty canvas is a free card; Existing sample… opens the picker (R2)', async ({ page }) => {
@@ -133,14 +140,15 @@ test.describe('as a Lab Member', () => {
 		const id = await sampleIdOf(member, 'LOCAL-RAW-1');
 		await pickSamples(page, ['LOCAL-RAW-1']);
 		const free = sockOf(page, `sample|${id}|out`).first();
-		await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), centreOf(await boxOf(free)));
+		await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), free);
 		await expect(card(page, 'CNC Turning, Operation')).toBeVisible();
 		let body = await savedDraft(page, member, (b) => b.items.length === 2 && b.wires.length === 1, 'the operation wired from the sample');
+		await fit(page); // the map keeps its viewport when a card is added: the operation may be off the screen
 		expect(body.wires[0].from.key).toBe(body.items.find((i) => i.existing)!.key);
 
 		// The operation's own output takes a sample, not another operation: refused with the reason.
 		const out = canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|out"]').first();
-		await holdEntryOver(page, paletteEntry(page, /^CNC Turning/), centreOf(await boxOf(out)));
+		await holdEntryOver(page, paletteEntry(page, /^CNC Turning/), out);
 		await expect(out).toHaveClass(/drop-bad/);
 		await expect(page.locator('.pm-chip')).toContainText('output takes a sample');
 		await page.mouse.up();
@@ -149,7 +157,7 @@ test.describe('as a Lab Member', () => {
 		expect(body.items, 'the refused drop changed nothing').toHaveLength(2);
 
 		// A new sample fits it, and is what the operation makes.
-		await dragEntryTo(page, paletteEntry(page, 'New sample'), centreOf(await boxOf(out)));
+		await dragEntryTo(page, paletteEntry(page, 'New sample'), out);
 		await expect(card(page, 'New sample, Sample')).toBeVisible();
 		body = await savedDraft(page, member, (b) => b.items.length === 3 && b.wires.length === 2, 'the new sample made by the operation');
 		expect(await settledOverlaps(page)).toEqual([]);
@@ -158,13 +166,12 @@ test.describe('as a Lab Member', () => {
 	test('dropping on a wire inserts between its two ends as one undo step; undo restores exactly what was there (R2)', async ({ page }) => {
 		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
 		const before = await savedDraft(page, member, (b) => b.items.length === 3 && b.wires.length === 2, 'sample, operation, new sample');
-		await page.getByRole('button', { name: /^Fit$/ }).click();
+		await fit(page);
 		const wire = wireBetween(page, 'op:draft:', 's:draft:');
 		await expect(wire).toHaveCount(1);
-		const mid = await wireMidpoint(wire);
-
+		
 		// While dragging, the wire is marked green: it takes the entry.
-		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), mid);
+		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), () => wireMidpoint(wire));
 		await expect(page.locator('.d1-wire.drop-ok')).toHaveCount(1);
 		await expect(page.locator('.pm-chip')).toContainText('Insert between the two ends');
 		await page.mouse.up();
@@ -191,10 +198,10 @@ test.describe('as a Lab Member', () => {
 
 	test('dropping on the wire from a sample to its operation puts the new operation in front of it (R2)', async ({ page }) => {
 		await buildTurningWithNewSample(page, member, 'LOCAL-RAW-1');
-		await page.getByRole('button', { name: /^Fit$/ }).click();
+		await fit(page);
 		const wire = wireBetween(page, 's:', 'op:draft:');
 		await expect(wire).toHaveCount(1);
-		await dragEntryTo(page, paletteEntry(page, /^Heat Treatment/), await wireMidpoint(wire));
+		await dragEntryTo(page, paletteEntry(page, /^Heat Treatment/), () => wireMidpoint(wire));
 		await expect(card(page, 'Heat Treatment, Operation')).toBeVisible();
 		const body = await savedDraft(page, member, (b) => b.items.length === 5, 'heat treatment and its new sample in front of the turning');
 		const heat = operations(body).find((o) => o.key !== operations(body)[0].key)!;
@@ -210,16 +217,15 @@ test.describe('as a Lab Member', () => {
 	test('a wire of done records refuses the drop with its reason and the wire shows red; nothing changes (R2, R4)', async ({ page }) => {
 		const bar2 = await sampleIdOf(member, 'LOCAL-BAR-2');
 		await startEditingMapOf(page, 'physical_samples', bar2);
-		await page.getByRole('button', { name: /^Fit$/ }).click();
+		await fit(page);
 		const done = wireBetween(page, 's:', 'op:');
 		await expect(done.first()).toBeVisible();
-		const mid = await wireMidpoint(done.first());
 		const before = await readDraft(member, draftIdOf(page));
-		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), mid);
+		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), () => wireMidpoint(done.first()));
 		await expect(page.locator('.d1-wire.drop-bad')).toHaveCount(1);
-		await expect(page.locator('.pm-chip')).toContainText("Done records' wires can't be changed from the map");
+		await expect(page.locator('.pm-chip')).toContainText("Done records' wires can't be removed from the map");
 		await page.mouse.up();
-		await expect(page.locator('.pm-wirepreview .tip')).toContainText("Done records' wires can't be changed from the map");
+		await expect(page.locator('.pm-wirepreview .tip')).toContainText("Done records' wires can't be removed from the map");
 		await expect(cards(page).filter({ hasText: /CNC Milling/ })).toHaveCount(0);
 		expect(await readDraft(member, draftIdOf(page)), 'the draft is as it was').toEqual(before);
 	});
@@ -245,7 +251,7 @@ test.describe('as a Lab Member', () => {
 		await openAddSearch(page, 'Shift+A');
 		await expect(page.getByRole('dialog')).toHaveCount(1);
 		await page.keyboard.type('tens');
-		expect((await searchOptions(page))[0]).toBe('Tensile');
+		expect((await searchOptions(page))[0]).toBe('Destructive — Tensile');
 		// Esc closes it and nothing was added.
 		await page.keyboard.press('Escape');
 		await expect(addSearch(page)).toBeHidden();
@@ -285,7 +291,7 @@ test.describe('as a Lab Member', () => {
 		await sockOf(page, `sample|${id}|out`).first().press('Enter');
 		let options = await searchOptions(page);
 		expect(options).toContain('CNC Turning');
-		expect(options).toContain('Tensile');
+		expect(options).toContain('Destructive — Tensile');
 		expect(options).not.toContain('New sample');
 		expect(options).not.toContain('Existing sample…');
 		await page.keyboard.type('turn');
@@ -299,11 +305,11 @@ test.describe('as a Lab Member', () => {
 		options = await searchOptions(page);
 		expect(options).toEqual(expect.arrayContaining(['New sample', 'Same sample', 'Existing sample…']));
 		expect(options).not.toContain('CNC Turning');
-		expect(options).not.toContain('Tensile');
+		expect(options).not.toContain('Destructive — Tensile');
 		await page.keyboard.press('Escape');
 
 		// A free input of a new operation: samples that could feed it.
-		await dragEntryTo(page, paletteEntry(page, /^CNC Milling/), await emptySpot(page));
+		await dragEntryTo(page, paletteEntry(page, /^CNC Milling/), () => emptySpot(page));
 		const input = canvasOf(page).locator('.free[data-sock^="row|draft:"][data-sock$="|in"]').first();
 		await input.press('Enter');
 		options = await searchOptions(page);
@@ -318,12 +324,12 @@ test.describe('as a Lab Member', () => {
 		expect((await searchOptions(page))[0], 'nothing added yet: the catalog starts with the samples').toBe('New sample');
 		await page.keyboard.type('tensile');
 		await page.keyboard.press('Enter');
-		await expect(card(page, /^Tensile.*, Test$/)).toBeVisible();
+		await expect(card(page, /Tensile.*, Test$/)).toBeVisible();
 
 		await openAddSearch(page);
-		expect((await searchOptions(page))[0]).toBe('Tensile');
+		expect((await searchOptions(page))[0]).toBe('Destructive — Tensile');
 		await expect(addSearch(page).locator('.sec').first()).toHaveText('Recent');
-		expect((await searchOptions(page)).filter((o) => o === 'Tensile'), 'listed once, not in two places').toHaveLength(1);
+		expect((await searchOptions(page)).filter((o) => o === 'Destructive — Tensile'), 'listed once, not in two places').toHaveLength(1);
 		await page.keyboard.press('Escape');
 		await expect(paletteOf(page).locator('.sec').first()).toHaveText('Recent');
 		await expect(paletteOf(page).locator('.pe').first()).toContainText('Tensile');
@@ -343,7 +349,7 @@ test.describe('as a Lab Member', () => {
 		await expect(page.getByRole('dialog', { name: 'Insert before New sample' })).toBeVisible();
 		const options = await searchOptions(page);
 		expect(options).toContain('CNC Turning');
-		expect(options, 'only operations can go before a sample').not.toContain('Tensile');
+		expect(options, 'only operations can go before a sample').not.toContain('Destructive — Tensile');
 		expect(options).not.toContain('New sample');
 		await page.keyboard.type('milling');
 		await page.keyboard.press('Enter');
@@ -383,8 +389,8 @@ test.describe('as a Lab Member', () => {
 	test('"Add an earlier step" on the done sample LOCAL-BAR-2 creates a new planned chain upstream and changes nothing about any done record (R3)', async ({ page }) => {
 		const bar2 = await sampleIdOf(member, 'LOCAL-BAR-2');
 		const snapshot = async () => ({
-			sample: await readRecord<Record<string, unknown>>(admin, 'physical_samples', bar2, 'sample_id,sample_code,current_status,version,date_updated,owner_person_id'),
-			maker: await listRecords<Record<string, unknown>>(admin, 'manufacturing_operations', `filter[output_sample_id][_eq]=${bar2}&fields=operation_id,sample_id,output_sample_id,work_state,version,date_updated&sort=operation_id`),
+			sample: await readRecord<Record<string, unknown>>(admin, 'physical_samples', bar2, 'sample_id,sample_code,current_status,version,updated_at,owner_person_id'),
+			maker: await listRecords<Record<string, unknown>>(admin, 'manufacturing_operations', `filter[output_sample_id][_eq]=${bar2}&fields=operation_id,sample_id,output_sample_id,work_state,version,updated_at&sort=operation_id`),
 			asParent: await listRecords<Record<string, unknown>>(admin, 'sample_genealogy', `filter[parent_sample_id][_eq]=${bar2}&fields=parent_sample_id,child_sample_id`),
 			asChild: await listRecords<Record<string, unknown>>(admin, 'sample_genealogy', `filter[child_sample_id][_eq]=${bar2}&fields=parent_sample_id,child_sample_id&sort=parent_sample_id`),
 		});
@@ -415,8 +421,8 @@ test.describe('as a Lab Member', () => {
 		await page.getByLabel(/^Geometry/).selectOption({ label: 'Cylinder' });
 		await page.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
 		await page.getByRole('option', { name: /CNC Turning/ }).click();
-		await selectCard(page, cards(page).filter({ hasText: /Operation$/ }).and(page.getByRole('group', { name: /Operation$/ })).first());
-		await page.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
+		await selectCard(page, canvasOf(page).locator('.vue-flow__node[data-id^="op:draft:"]'));
+		await page.getByPlaceholder(/^Search methods/).fill('Turning');
 		await page.getByRole('option', { name: /CNC Turning/ }).click();
 		await expect(createButton(page)).toHaveText('Create 1 operation, 2 samples');
 		await expect(createButton(page)).toBeEnabled();

@@ -4,7 +4,7 @@ import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { catalogEntries, type MenuEntry } from './menuModel';
 import { encodeSocket, type SocketRef } from './socketRefs';
-import { DRAG_SLOP, draggable, useAddDrag } from './useAddDrag';
+import { DRAG_SLOP, NOT_HERE, draggable, useAddDrag } from './useAddDrag';
 
 // An entry of the palette carried over the canvas, in a node environment: window, document and the canvas element are small stand-ins.
 
@@ -116,16 +116,18 @@ describe('letting go on the empty canvas', () => {
 		expect(t.drag.consumeClick()).toBe(false);
 	});
 
-	it('on a card, or outside the canvas, does nothing', () => {
+	it('on a card says where it can go instead, and drops nothing; outside the canvas it does nothing at all', () => {
 		const onCard = setup({ under: 'card' });
 		onCard.down(turning);
 		onCard.move(400, 300);
-		expect(onCard.drag.drag.value).toMatchObject({ over: 'none', ok: null });
+		expect(onCard.drag.drag.value).toMatchObject({ over: 'none', ok: false, reason: NOT_HERE });
 		onCard.up(400, 300);
 		expect(onCard.applyAt).not.toHaveBeenCalled();
+		expect(onCard.say).toHaveBeenCalledWith(NOT_HERE, { x: 300, y: 250 });
 		const outside = setup({ inCanvas: false });
 		outside.down(turning);
 		outside.move(400, 300);
+		expect(outside.drag.drag.value).toMatchObject({ over: 'none', ok: null });
 		outside.up(400, 300);
 		expect(outside.applyAt).not.toHaveBeenCalled();
 		expect(outside.say).not.toHaveBeenCalled();

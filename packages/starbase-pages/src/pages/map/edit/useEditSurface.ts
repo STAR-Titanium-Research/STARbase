@@ -88,6 +88,9 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		dropOnWire: insert.dropOnWire,
 		say: build.say,
 	});
+	/** What the palette draws and does, for the page to bind in one go. */
+	const paletteProps = computed(() => ({ entries: palette.entries.value, grouped: palette.grouped.value, folded: palette.folded.value, drag: dragging.drag.value, consumeClick: dragging.consumeClick }));
+	const paletteEvents = { toggle: () => palette.toggle(), add: (e: MenuEntry) => paletteAdd(e), drag: dragging.start };
 	/**
 	 * Enter or a click on a palette entry (no dragging needed): "Existing sample…" opens the picker; anything else is added next to the selected card,
 	 * else at the middle of the canvas, and the layout keeps it clear of every other card.
@@ -223,6 +226,8 @@ export function useEditSurface(o: { edit: EditMode; map: ProcessMap; canvas: Can
 		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, dropWire: dragging.dropWire } as MapEdit,
 		menu,
 		palette,
+		paletteProps,
+		paletteEvents,
 		dragging,
 		paletteAdd,
 		insertSelected: insert.openFor,

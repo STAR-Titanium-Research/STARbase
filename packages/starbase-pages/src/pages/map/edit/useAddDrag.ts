@@ -17,6 +17,9 @@ import { encodeSocket, nearestSocket, type SocketRef } from './socketRefs';
 
 type Canvas = ReturnType<typeof useMapCanvas>;
 
+/** What is said when an entry is let go over a card, a control or the minimap. */
+export const NOT_HERE = 'Drop it on the empty canvas, on a free socket or on a wire.';
+
 /** A pointer that moves less than this many pixels between going down and up on an entry is a click (it adds the entry at the keyboard's place). */
 export const DRAG_SLOP = 5;
 
@@ -58,9 +61,10 @@ export function useAddDrag(o: {
 	let swallow = false;
 
 	type Hit = Pick<PaletteDrag, 'over' | 'ok' | 'reason'> & { sock?: SocketRef; wire?: string };
-	function hitAt(choice: MenuChoice, spots: ReturnType<typeof socketSpots>, x: number, y: number): Hit {
+	function hitAt(choice: MenuChoice, x: number, y: number): Hit {
 		if (!overCanvas(o.canvasEl.value, x, y)) return { over: 'none', ok: null, reason: null };
-		const spot = nearestSocket(spots, x, y);
+		// The sockets are read where they are NOW: the cards glide to their places after a change, and a map can be zoomed with the wheel mid-drag.
+		const spot = nearestSocket(socketSpots(o.canvasEl.value), x, y);
 		if (spot) {
 			const v = socketVerdict(o.body(), spot.sock, choice);
 			return { over: 'socket', ok: v.ok, reason: v.ok ? null : (v.reason ?? null), sock: spot.sock };
@@ -70,7 +74,8 @@ export function useAddDrag(o: {
 			const refused = o.wireVerdict(wire, choice);
 			return { over: 'wire', ok: !refused, reason: refused?.reason ?? null, wire };
 		}
-		return onEmptyCanvas(o.canvasEl.value, x, y) ? { over: 'canvas', ok: true, reason: null } : { over: 'none', ok: null, reason: null };
+		// On a card (not one of its sockets), a control or the minimap: nowhere an entry can go. Said, so a drop there is not a silent nothing.
+		return onEmptyCanvas(o.canvasEl.value, x, y) ? { over: 'canvas', ok: true, reason: null } : { over: 'none', ok: false, reason: NOT_HERE };
 	}
 	const relative = (x: number, y: number) => {
 		const r = o.canvasEl.value?.getBoundingClientRect();
@@ -82,7 +87,6 @@ export function useAddDrag(o: {
 		if (!o.editing() || !draggable(entry) || (e.pointerType === 'mouse' && e.button !== 0) || stop) return;
 		const choice = entry.choice;
 		const down = { x: e.clientX, y: e.clientY };
-		const spots = socketSpots(o.canvasEl.value);
 		const before = document.body.style.userSelect;
 		let moved = false;
 		let last: Hit = { over: 'none', ok: null, reason: null };
@@ -93,7 +97,7 @@ export function useAddDrag(o: {
 				moved = true;
 				document.body.style.userSelect = 'none';
 			}
-			last = hitAt(choice, spots, ev.clientX, ev.clientY);
+			last = hitAt(choice, ev.clientX, ev.clientY);
 			o.drop.value = last.sock && last.ok !== null ? { sock: encodeSocket(last.sock), ok: !!last.ok } : null;
 			dropWire.value = last.wire ? { id: last.wire, ok: !!last.ok } : null;
 			drag.value = { entry, x: ev.clientX, y: ev.clientY, over: last.over, ok: last.ok, reason: last.reason };
@@ -110,14 +114,14 @@ export function useAddDrag(o: {
 			stop = null;
 		};
 		const onUp = (ev: PointerEvent) => {
-			const hit = moved ? hitAt(choice, spots, ev.clientX, ev.clientY) : null;
+			const hit = moved ? hitAt(choice, ev.clientX, ev.clientY) : null;
 			finish();
 			if (!hit) return; // a click: the entry's own click handler adds it
 			swallow = true;
 			setTimeout(() => void (swallow = false), 0);
 			const at = { x: ev.clientX, y: ev.clientY };
-			if (hit.over === 'none') return;
 			if (hit.ok === false) return o.say(hit.reason ?? 'That does not fit there.', relative(at.x, at.y));
+			if (hit.over === 'none') return;
 			const flow = o.canvas.toFlow(at.x, at.y);
 			if (hit.over === 'socket' && hit.sock) void o.applyAt({ sock: hit.sock, at, anchor: nodeIdOfSocket(o.canvasEl.value, hit.sock) }, choice);
 			else if (hit.over === 'wire' && hit.wire) o.dropOnWire(hit.wire, choice, flow, relative(at.x, at.y));

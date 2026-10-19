@@ -322,18 +322,7 @@ const tipHint = computed(() => {
 						<MapStrip :edit="edit" :side="side" :map="map" :canvas="canvas" :map-export="mapExport" />
 
 						<div class="pm-row">
-							<Palette
-								v-if="edit.editing.value"
-								v-model:query="build.palette.query.value"
-								:entries="build.palette.entries.value"
-								:grouped="build.palette.grouped.value"
-								:folded="build.palette.folded.value"
-								:drag="build.dragging.drag.value"
-								:consume-click="build.dragging.consumeClick"
-								@toggle="build.palette.toggle()"
-								@add="build.paletteAdd"
-								@drag="build.dragging.start"
-							/>
+							<Palette v-if="edit.editing.value" v-bind="build.paletteProps.value" v-model:query="build.palette.query.value" v-on="build.paletteEvents" />
 							<div
 								ref="canvasEl"
 								class="pm-canvas"

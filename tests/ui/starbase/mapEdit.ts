@@ -454,16 +454,31 @@ export async function wireMidpoint(wire: Locator): Promise<{ x: number; y: numbe
 	});
 }
 
-/** Starts dragging a palette entry and moves the pointer to `to` WITHOUT letting go: the page marks what is under it. Finish with `page.mouse.up()`. */
-export async function holdEntryOver(page: Page, entry: Locator, to: { x: number; y: number }): Promise<void> {
+/** Where a drag ends: a point, a locator (its middle) or a function that finds the point once the map has stopped moving. */
+export type DropTarget = { x: number; y: number } | Locator | (() => Promise<{ x: number; y: number }>);
+async function resolveTarget(t: DropTarget): Promise<{ x: number; y: number }> {
+	if (typeof t === 'function') return t();
+	if ('boundingBox' in t) return centreOf(await boxOf(t));
+	return t;
+}
+
+/**
+ * Starts dragging a palette entry and moves the pointer to `to` WITHOUT letting go: the page marks what is under it. Finish with `page.mouse.up()`.
+ * The map is let to settle first (the viewport after a Fit, the cards gliding to their places), and `to` is found after that: a point taken
+ * while a card was still moving is not where the card is a moment later.
+ */
+export async function holdEntryOver(page: Page, entry: Locator, to: DropTarget): Promise<void> {
+	await viewportSettled(page);
+	await settledOverlaps(page);
+	const target = await resolveTarget(to);
 	const from = centreOf(await boxOf(entry));
 	await page.mouse.move(from.x, from.y);
 	await page.mouse.down();
 	await page.mouse.move(from.x + 8, from.y + 4);
-	await page.mouse.move(to.x, to.y, { steps: 14 });
+	await page.mouse.move(target.x, target.y, { steps: 14 });
 }
-/** Drags a palette entry onto a point of the page and lets go. */
-export async function dragEntryTo(page: Page, entry: Locator, to: { x: number; y: number }): Promise<void> {
+/** Drags a palette entry onto a point, a locator or a wire (`() => wireMidpoint(wire)`) and lets go. */
+export async function dragEntryTo(page: Page, entry: Locator, to: DropTarget): Promise<void> {
 	await holdEntryOver(page, entry, to);
 	await page.mouse.up();
 }

@@ -3,7 +3,7 @@
 // loaded history that the search was opened on is added to the draft first. `applyAt` is the same step for the palette: a drop on a socket
 // and Enter on an entry do what a choice in the search does.
 
-import { ref, shallowRef, type Ref } from 'vue';
+import { ref, shallowRef, watch, type Ref } from 'vue';
 import type { useMapCanvas } from '../useMapCanvas';
 import { actionsFor, menuFor, type MenuChoice } from './menuModel';
 import type { MenuTarget } from './menuTarget';
@@ -28,8 +28,9 @@ export function useAddMenu(o: {
 	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<void> | void;
 }) {
 	const target = shallowRef<MenuTarget | null>(null);
-	/** What this person added lately (entry ids, newest first). */
+	/** What this person added lately (entry ids, newest first). Read when the person is known (a moment after the page opens), and again on every open. */
 	const recents = ref<string[]>([]);
+	watch(() => o.person?.(), (p) => void (recents.value = readRecents(p)), { immediate: true });
 
 	/** The canvas's own rectangle, to keep an unconnected search's card on the canvas. */
 	const canvasRect = () => o.canvasEl.value?.getBoundingClientRect();

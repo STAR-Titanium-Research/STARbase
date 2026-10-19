@@ -1394,7 +1394,7 @@ touch confirm:
 - [ ] **PM7-2 — Drops on a real draft.** Pick a real family's sample, build an operation from its output, then drag a method from the
   palette (a) onto empty canvas (a floating card where you let go), (b) onto a free socket (connected), (c) onto a wire the draft made
   (the card goes between, one Ctrl+Z puts it all back), (d) onto a wire between two done records of the real history (the wire shows
-  red, the reason "Done records' wires can't be changed from the map" follows the pointer, nothing changes), (e) onto a wire of a
+  red, the reason "Done records' wires can't be removed from the map" follows the pointer, nothing changes), (e) onto a wire of a
   planned record that exists (refused: remove the planned record instead). No two cards overlap after any of them. Since: edit-mode
   redesign slice 2a (PR pending).
 - [ ] **PM7-3 — Add an earlier step on a real done sample.** Open the map of a real done sample, select it, Shift+I (or right-click >
