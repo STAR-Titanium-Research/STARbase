@@ -343,3 +343,65 @@ describe('blocking the keys', () => {
 		expect(surface.blocked.value).toBe(true);
 	});
 });
+
+describe('the palette\'s Enter (R1)', () => {
+	const turning = { id: 'op:mt', section: 'Machining', label: 'Turning', choice: { kind: 'operation', methodId: 'mt', category: 'machining' } } as const;
+
+	it('adds the entry at the middle of the canvas when nothing is selected, as one undo step', async () => {
+		const { edit, surface } = await setup(emptyBody(), null);
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items.map((i) => i.kind)).toEqual(['operation']);
+		expect(edit.body.value.items[0].values.method_id).toBe('mt');
+		expect(edit.body.value.positions.n1).toEqual({ x: 0, y: 0 });
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+	});
+
+	it('adds it next to the selected card (no place of its own: the layout puts it beside the card, clear of every other)', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addSample' }]), 'draft:n1');
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items).toHaveLength(2);
+		expect(edit.body.value.positions.n2).toBeUndefined();
+		expect(edit.body.value.wires, 'floating: nothing is wired').toEqual([]);
+	});
+
+	it('Existing sample… opens the picker', async () => {
+		const { surface } = await setup(emptyBody(), null);
+		surface.paletteAdd({ id: 'sample:pick', section: 'Samples', label: 'Existing sample…', choice: { kind: 'pickSamples' } });
+		expect(surface.pickerOpen.value).toBe(true);
+	});
+
+	it('does nothing when the draft cannot be changed', async () => {
+		const { edit, surface } = await setup(emptyBody(), null);
+		edit.draft.forget();
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items).toEqual([]);
+	});
+});
+
+describe('the add search at the keyboard and insert', () => {
+	it('Shift+A with no focus opens the unconnected search at the pointer', async () => {
+		const { surface } = await setup(emptyBody(), null);
+		surface.addUnconnected({ x: 300, y: 200 });
+		expect(surface.menu.target.value).toMatchObject({ sock: null, at: { x: 300, y: 200 } });
+	});
+
+	it('insert before the selected card opens the search as an insert; nothing selected leaves the key to the browser', async () => {
+		const { surface, select } = await setup(run([{ type: 'addSample' }]), 'draft:n1');
+		expect(surface.insertSelected('after')).toBe(true);
+		expect(surface.menu.target.value?.insert).toMatchObject({ where: 'after', nodeId: 's:draft:n1' });
+		surface.menu.close();
+		select(null);
+		expect(surface.insertSelected('before')).toBe(false);
+		expect(surface.menu.target.value).toBeNull();
+	});
+
+	it('an open insert search blocks the other keys', async () => {
+		const { surface } = await setup(run([{ type: 'addSample' }]), 'draft:n1');
+		surface.insertSelected('after');
+		expect(surface.blocked.value).toBe(true);
+	});
+});

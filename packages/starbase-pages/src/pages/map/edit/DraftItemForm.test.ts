@@ -53,6 +53,20 @@ const operation = (values: Record<string, unknown> = {}, over: Partial<DraftItem
 	({ key: 'n2', kind: 'operation', workState: 'planned', values, rows: [{ key: 'n3' }], ...over }) as DraftItem;
 const sample = (values: Record<string, unknown> = {}, over: Partial<DraftItem> = {}): DraftItem => ({ key: 'n1', kind: 'sample', values, ...over }) as DraftItem;
 
+describe('DraftItemForm: a field it cannot draw (fix 12)', () => {
+	const WITH_FILES = [...SAMPLE_DEFS, def('linked_files', { interface: 'files', special: ['alias', 'o2m'], sort: 5 })];
+	it('on a new item says it opens in Data Studio after Create, with no button', async () => {
+		const r = row(await render({ item: sample(), fieldDefs: WITH_FILES }), 'linked_files');
+		expect(text(r)).toContain('Opens in Data Studio after Create');
+		expect(r).not.toContain('<button');
+	});
+	it('on a record that exists keeps the Open in Data Studio button', async () => {
+		const r = row(await render({ item: sample({}, { existing: { id: 's1', version: 1 } }), fieldDefs: WITH_FILES, current: { sample_code: 'PS-1' } }), 'linked_files');
+		expect(text(r)).toContain('Open in Data Studio');
+		expect(r).toContain('<button');
+	});
+});
+
 describe('DraftItemForm', () => {
 	it('draws the form of the item\'s collection', async () => {
 		const html = await render({ item: operation({ process_category: 'machining' }), fieldDefs: OPERATION_DEFS });

@@ -243,6 +243,12 @@ The type-to-search list that opens at the pointer (Shift+A or Ctrl/⌘+K) and of
 offers, filtered to what fits where it was opened.
 _Avoid_: command palette, add menu
 
+**Insert**:
+To put an operation between the two ends of a **wire** (drop it on the wire), or before or after the
+selected card (I and Shift+I). One undoable step, and never on a wire of done records. A done sample
+is never given a new parent: **Add an earlier step** starts a new planned chain upstream of it instead.
+_Avoid_: splice, re-parent
+
 **Remove** / **Delete** / **Dissolve**:
 **Remove** takes a new or planned card, container or wire off the canvas; a planned record that was
 already created is deleted when the draft is created. **Delete** is the key that removes the selection.

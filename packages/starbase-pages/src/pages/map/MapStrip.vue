@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import CreateBar from './edit/CreateBar.vue';
+import DraftScope from './edit/DraftScope.vue';
 import EditLid from './edit/EditLid.vue';
 import { isNotice, type EditMode } from './edit/useEditMode';
 import type { EditSide } from './edit/useEditSide';
@@ -41,8 +42,20 @@ defineProps<{
 		@dissolve="side.build.dissolveSelected()"
 		@tidy="canvas.tidy()"
 		@open="edit.openDraft"
+		@menu="edit.refreshDrafts()"
 		@dismiss-notice="edit.draft.notice.value = ''"
 	>
+		<template #scope>
+			<DraftScope
+				:projects="edit.choices.projects.value"
+				:campaigns="edit.choices.campaigns.value"
+				:project-id="edit.body.value.projectId"
+				:campaign-id="edit.body.value.campaignId"
+				:note="edit.choices.error.value"
+				@project="edit.setProject"
+				@campaign="edit.setCampaign"
+			/>
+		</template>
 		<template #create>
 			<CreateBar :summary="edit.summary.value" :missing="edit.missing.value" :creating="side.create.creating.value" :error="side.create.error.value" :empty="side.create.empty.value" @create="side.create.create" />
 		</template>

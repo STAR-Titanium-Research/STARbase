@@ -3,7 +3,7 @@ import type { DraftBody, DraftOperation } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { apply, emptyBody, itemOf, type DraftAction } from './draft';
 import { grown } from './socketRefs';
-import { actionsFor, canvasSampleEntries, filterEntries, firstChoosable, menuFor, moveActive, placeMenu, rootEntries, sampleLabel, type MenuCatalog, type MenuChoice, type MenuEntry, type TemplateEntry } from './menuModel';
+import { actionsFor, canvasSampleEntries, catalogEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuCatalog, type MenuChoice, type MenuEntry } from './menuModel';
 import type { SocketRef } from './socketRefs';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
@@ -17,7 +17,6 @@ const methods: MethodEntry[] = [
 const testTypes: TestTypeEntry[] = [{ value: 'tensile', name: 'Tensile' }, { value: 'xrd', name: 'XRD' }];
 const catalog: MenuCatalog = { methods, testTypes };
 
-const tpl = (over: Partial<TemplateEntry> = {}): TemplateEntry => ({ id: 't1', name: 'Rough turn', collection: 'manufacturing_operations', values: { method_id: 'mt', feed_rate: 0.2 }, ...over });
 const sock = (kind: 'sample' | 'row', id: string, side: 'in' | 'out'): SocketRef => ({ kind, id, side });
 
 /** n1 a sample, n2 a blank operation (row n3) fed by it, n4 a test, n5 another sample. */
@@ -57,18 +56,24 @@ describe('what the menu is for', () => {
 });
 
 describe('the entries', () => {
-	it('from a sample output: templates, operations by category (the lab\'s order, no category last), then the tests', () => {
+	it('from a sample output: operations by category (the lab\'s order, no category last), then the tests', () => {
 		const b = body();
-		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n1', 'out')), { ...catalog, templates: [tpl()] });
-		expect(sections(es)).toEqual(['Templates', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
-		expect(labels(es)).toEqual(['Rough turn', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
+		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n1', 'out')), catalog);
+		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+		expect(labels(es)).toEqual(['Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
 		expect(es.find((e) => e.label === 'Turning')?.detail).toBe('MC');
 	});
 
-	it('unconnected: the same, and the samples', () => {
+	it('unconnected: the whole catalog, one flat list: the samples, the operations by category, the tests', () => {
 		const es = rootEntries(body(), menuFor(body(), null), catalog);
-		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Tests', 'Samples']);
-		expect(labels(es).slice(-2)).toEqual(['New sample', 'Pick samples…']);
+		expect(es).toEqual(catalogEntries(catalog));
+		expect(sections(es)).toEqual(['Samples', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
+		expect(labels(es).slice(0, 2)).toEqual(['New sample', 'Existing sample…']);
+		expect(es[1].choice).toEqual({ kind: 'pickSamples' });
+	});
+
+	it('the operations alone (insert before and after) have no samples and no tests', () => {
+		expect(sections(operationOnlyEntries(catalog))).toEqual(['Machining', 'FAST sintering', 'Other methods']);
 	});
 
 	it('from an operation output: New sample, Same sample, Existing sample…', () => {
@@ -102,11 +107,6 @@ describe('the entries', () => {
 		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Wire']);
 	});
 
-	it('lists a template that cannot be used greyed, with its reason', () => {
-		const es = rootEntries(body(), menuFor(body(), null), { ...catalog, templates: [tpl({ disabled: 'Its tool is retired.' })] });
-		expect(es[0]).toMatchObject({ section: 'Templates', label: 'Rough turn', detail: 'Operation', disabled: 'Its tool is retired.' });
-	});
-
 	it('lists the samples on the canvas an output could go to, the others greyed with the draft\'s reason', () => {
 		const b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample' }, { type: 'addExistingSamples', samples: [{ id: 'old', version: 2 }] }]);
 		const es = canvasSampleEntries(b, { key: 'n2', row: 0 }, (key) => `card ${key}`);
@@ -119,16 +119,56 @@ describe('the entries', () => {
 	});
 });
 
-describe('narrowing the list', () => {
+describe('searching the list', () => {
 	const es = rootEntries(body(), menuFor(body(), null), catalog);
 
-	it('keeps the entries that have every word, in the label, the detail or the section', () => {
-		expect(labels(filterEntries(es, 'mill'))).toEqual(['Milling']);
-		expect(labels(filterEntries(es, 'MF'))).toEqual(['FAST sintering']);
-		expect(labels(filterEntries(es, 'machining'))).toEqual(['Turning', 'Milling']);
-		expect(labels(filterEntries(es, 'tests ten'))).toEqual(['Tensile']);
-		expect(filterEntries(es, 'zzz')).toEqual([]);
-		expect(filterEntries(es, '  ')).toHaveLength(es.length);
+	it('keeps the entries that have every word, in the label, the detail, the section or the keys', () => {
+		expect(labels(searchEntries(es, 'mill'))).toEqual(['Milling']);
+		expect(labels(searchEntries(es, 'MF'))).toEqual(['FAST sintering']);
+		expect(labels(searchEntries(es, 'machining'))).toEqual(['Turning', 'Milling']);
+		expect(labels(searchEntries(es, 'tests ten'))).toEqual(['Tensile']);
+		expect(labels(searchEntries(es, 'sintering'))).toEqual(['FAST sintering']); // its category, its name
+		expect(searchEntries(es, 'zzz')).toEqual([]);
+		expect(searchEntries(es, '  ')).toHaveLength(es.length);
+	});
+
+	it('finds a test by its type value and a method by its category key even when the label says otherwise', () => {
+		const odd: MenuCatalog = { methods: [{ id: 'h', name: 'Furnace run', code: 'HT', category: 'heat_treatment' }], testTypes: [{ value: 'uts', name: 'Pull test' }] };
+		const list = catalogEntries(odd);
+		expect(labels(searchEntries(list, 'uts'))).toEqual(['Pull test']);
+		expect(labels(searchEntries(list, 'heat_treatment'))).toEqual(['Furnace run']);
+	});
+
+	it('ranks a label that starts with the word first, then a word that starts with it, then the rest', () => {
+		const list = catalogEntries({
+			methods: [
+				{ id: 'a', name: 'Wire turning', code: 'W1', category: 'machining' },
+				{ id: 'b', name: 'Turning', code: 'T1', category: 'machining' },
+				{ id: 'c', name: 'Mill', code: 'TURN', category: 'machining' },
+			],
+			testTypes: [],
+		});
+		expect(labels(searchEntries(list, 'turn'))).toEqual(['Turning', 'Wire turning', 'Mill']);
+	});
+
+	it('puts what was chosen lately first among equals, and the recents on top with nothing typed (each entry once)', () => {
+		const r = ['test:xrd', 'op:mm'];
+		expect(labels(searchEntries(es, 'mill', r))).toEqual(['Milling']);
+		expect(labels(searchEntries(es, 'machining', r))).toEqual(['Milling', 'Turning']);
+		const idle = searchEntries(es, '', r);
+		expect(idle.slice(0, 2).map((e) => [e.label, e.section])).toEqual([['XRD', 'Recent'], ['Milling', 'Recent']]);
+		expect(idle).toHaveLength(es.length);
+		expect(new Set(idle.map((e) => e.id)).size).toBe(idle.length);
+		expect(idle.filter((e) => e.label === 'Milling')).toHaveLength(1);
+	});
+
+	it('does not put an entry that cannot be chosen among the recents', () => {
+		const grey = es.map((e) => (e.id === 'op:mm' ? { ...e, disabled: 'no' } : e));
+		expect(searchEntries(grey, '', ['op:mm']).find((e) => e.id === 'op:mm')?.section).toBe('Machining');
+	});
+
+	it('an unknown recent is ignored', () => {
+		expect(searchEntries(es, '', ['op:gone'])).toEqual(es);
 	});
 });
 
@@ -193,13 +233,6 @@ describe('what a choice does', () => {
 		expect(b.wires.at(-1)?.from).toEqual({ key: 'n5' });
 		const before = body();
 		expect(actionsFor(target(before, sock('sample', 'draft:n5', 'in')), { kind: 'test', testType: 'xrd' })).toEqual([]);
-	});
-
-	it('a template makes a container with its saved values', () => {
-		const b = doIt(body(), null, { kind: 'template', template: tpl() });
-		expect(b.items.at(-1)).toMatchObject({ kind: 'operation', values: { method_id: 'mt', feed_rate: 0.2 } });
-		const t = doIt(body(), null, { kind: 'template', template: tpl({ collection: 'test_sessions', values: { test_type: 'xrd' } }) });
-		expect(t.items.at(-1)).toMatchObject({ kind: 'test', values: { test_type: 'xrd' } });
 	});
 
 	it('New sample unconnected is a blank card at the point; from an operation output it is what the operation makes', () => {

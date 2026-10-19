@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, provide, reactive } from 'vue';
 import '../components/tokens.css';
+import { EXTERNAL_HINT } from './externalHint';
 import FormNodeView from './FormNodeView.vue';
 import { effectiveValues, fieldViews, formTree, toFormFields, withValue } from './fieldModel';
 import type { FieldDef, FormField } from './fieldModel';
@@ -26,9 +27,12 @@ const props = withDefaults(
 		showMissing?: boolean;
 		/** What `$CURRENT_USER` and `$NOW` in a field's conditions mean; without it a rule using one never matches. */
 		context?: RuleContext;
+		/** Said in place of "Open in Data Studio" on a field it cannot draw, for a record that does not exist yet ("Opens in Data Studio after Create"). */
+		externalHint?: string;
 	}>(),
-	{ inherited: undefined, readonly: false, showMissing: false, context: undefined },
+	{ inherited: undefined, readonly: false, showMissing: false, context: undefined, externalHint: undefined },
 );
+provide(EXTERNAL_HINT, computed(() => props.externalHint ?? null));
 const emit = defineEmits<{
 	(e: 'update:modelValue', value: Values): void;
 	(e: 'openExternal', field: FormField): void;

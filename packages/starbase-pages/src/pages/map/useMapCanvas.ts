@@ -347,7 +347,7 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
       }
-      // Cards the person placed (dragged, or dropped from the Add menu) stay where the draft says, whatever ELK would do.
+      // Cards the person placed (dragged, or dropped from the add search) stay where the draft says, whatever ELK would do.
       const stored = new Set<string>();
       if (edit && !relaying) {
         positions = { ...positions };
@@ -485,8 +485,8 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
     if (!g || !map.focusNodeId.value) return fitIds(undefined, animate);
     return fitIds([...shownNodes(g, map.focusNodeId.value, 1)], animate);
   }
-  /** Fit everything drawn (the Fit button). */
-  const fit = () => fitIds(undefined);
+  /** Fit everything drawn (the Fit button): after the sizes that are about to be looked at have been, and the layout they cause, or the frame is of cards about to move. */
+  const fit = async () => { if (sizeTimer) { clearTimeout(sizeTimer); await checkSizes(); } await whenSettled(); return fitIds(undefined); };
 
   /** Re-layout (spec D18): every card back where ELK puts it, including the ones that were dragged. */
   async function relayout(): Promise<void> {

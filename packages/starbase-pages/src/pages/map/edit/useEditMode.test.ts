@@ -316,6 +316,133 @@ describe('useEditMode: changing the draft', () => {
 	});
 });
 
+describe('useEditMode: planned or done at Create (R9)', () => {
+	async function withOperation() {
+		const s = setup({ edit: 'new' });
+		await flush();
+		s.edit.apply({ type: 'addSample' });
+		s.edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' }, from: { key: 'n1' } });
+		return s;
+	}
+	const op = (e: ReturnType<typeof setup>['edit']) => e.body.value.items.find((i) => i.kind === 'operation')!;
+
+	it('Done is one undo step: the state and the date (today); one Undo puts both back', async () => {
+		const { edit } = await withOperation();
+		const key = op(edit).key;
+		expect(op(edit)).toMatchObject({ workState: 'planned' });
+		edit.setWorkState(key, 'done');
+		expect(op(edit)).toMatchObject({ workState: 'done' });
+		expect(typeof op(edit).values.operation_date).toBe('string');
+		expect(String(op(edit).values.operation_date).slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
+		edit.undo();
+		expect(op(edit)).toMatchObject({ workState: 'planned' });
+		expect(op(edit).values.operation_date).toBeUndefined();
+		expect(op(edit).values.method_id).toBe('m-turn');
+		edit.redo();
+		expect(op(edit)).toMatchObject({ workState: 'done' });
+	});
+
+	it('does nothing, and makes no step, for the state it already has or for a sample', async () => {
+		const { edit } = await withOperation();
+		const before = edit.body.value;
+		edit.setWorkState(op(edit).key, 'planned');
+		edit.setWorkState('n1', 'done');
+		expect(edit.body.value).toBe(before);
+	});
+
+	it('a stack of items toggles together as one step', async () => {
+		const { edit } = await withOperation();
+		edit.apply({ type: 'duplicate', key: op(edit).key });
+		const keys = edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => i.key);
+		expect(keys).toHaveLength(2);
+		edit.setWorkState(keys, 'done');
+		expect(edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => (i as { workState: string }).workState)).toEqual(['done', 'done']);
+		edit.undo();
+		expect(edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => (i as { workState: string }).workState)).toEqual(['planned', 'planned']);
+	});
+});
+
+describe('useEditMode: the draft\'s project and campaign (R12)', () => {
+	it('reads the projects and campaigns once editing starts, through the host API', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		expect(s.calls.filter((c) => c === 'GET /items/projects')).toHaveLength(1);
+		expect(edit.choices.projects.value.map((p) => p.value)).toEqual(['proj1', 'proj2']);
+		expect(edit.choices.campaigns.value.map((c) => c.projectId)).toEqual(['proj1', 'proj2']);
+	});
+
+	it('is pre-filled from the first sample added (the existing behaviour: the draft takes its project), and editable', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'setProject', projectId: 'proj1' });
+		edit.setCampaign('camp1');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+
+	it('changing the project clears a campaign that is not in it, as one undo step', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.setProject('proj1');
+		edit.setCampaign('camp1');
+		edit.setProject('proj2');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: null });
+		edit.undo();
+		expect(edit.body.value).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+
+	it('choosing a campaign with no project sets its project too', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.setCampaign('camp2');
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: 'camp2' });
+		edit.setCampaign(null);
+		expect(edit.body.value).toMatchObject({ projectId: 'proj2', campaignId: null });
+	});
+
+	it('is saved in the draft', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		edit.setProject('proj1');
+		edit.setCampaign('camp1');
+		await edit.draft.flush();
+		expect(s.drafts.get('d1')!.body).toMatchObject({ projectId: 'proj1', campaignId: 'camp1' });
+	});
+});
+
+describe('useEditMode: a new draft (fix 9)', () => {
+	it('shows in My drafts at once, before any list is read again', async () => {
+		const { edit, s } = setup({ edit: 'new' });
+		await flush();
+		expect(edit.draft.draftId.value).toBe('d1');
+		expect(edit.drafts.value.map((d) => d.id)).toEqual(['d1']);
+		expect(s.calls.filter((c) => c === 'GET /d1-build/drafts')).toHaveLength(1);
+	});
+
+	it('Build a process while the open draft is empty reuses it: no second draft on the server', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		expect(route.query.edit).toBe('d1');
+		// the sidebar link: /map?edit=new again, on the same page
+		route.query = { edit: 'new' };
+		await flush();
+		expect(s.drafts.size).toBe(1);
+		expect(route.query.edit).toBe('d1');
+		expect(edit.draft.draftId.value).toBe('d1');
+		expect(s.calls.filter((c) => c === 'POST /d1-build/drafts')).toHaveLength(1);
+	});
+
+	it('Build a process while the open draft has something in it starts another one, and keeps the first', async () => {
+		const { edit, route, s } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		await edit.draft.flush();
+		route.query = { edit: 'new' };
+		await flush();
+		expect(s.drafts.size).toBe(2);
+		expect(route.query.edit).toBe('d2');
+	});
+});
+
 describe('useEditMode: typing in a form', () => {
 	it('folds the changes of one item\'s values into one undo step, until something else changes', async () => {
 		const { edit } = setup({ edit: 'new' });
@@ -350,6 +477,37 @@ describe('useEditMode: typing in two fields of one item', () => {
 		expect(edit.body.value.items[0].values.notes).toBeUndefined();
 		expect(edit.body.value.items[0].values.form).toBe('disc');
 		edit.undo(); // the form
+		expect(edit.body.value.items[0].values.form).toBeUndefined();
+	});
+});
+
+describe('useEditMode: typing in two fields of one item, as the form hands the values over (fix 10)', () => {
+	it('the form sends every value the card has: a change to another field is its own undo step, and the same field keeps folding', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample', values: { form: 'disc', notes: 'x' } });
+		// Both fields are always in what the form sends; only the one that differs from the draft is the change.
+		edit.setValues('n1', { form: 'rod', notes: 'x' });
+		edit.setValues('n1', { form: 'rods', notes: 'x' });
+		edit.setValues('n1', { form: 'rods', notes: 'xy' });
+		edit.setValues('n1', { form: 'rods', notes: 'xyz' });
+		edit.undo(); // the notes, both keys of them
+		expect(edit.body.value.items[0].values).toEqual({ form: 'rods', notes: 'x' });
+		edit.undo(); // the form, not both
+		expect(edit.body.value.items[0].values).toEqual({ form: 'disc', notes: 'x' });
+		edit.redo();
+		edit.redo();
+		expect(edit.body.value.items[0].values).toEqual({ form: 'rods', notes: 'xyz' });
+	});
+
+	it('a value the form hands back unchanged is no step and does not end the one being typed', async () => {
+		const { edit } = setup({ edit: 'new' });
+		await flush();
+		edit.apply({ type: 'addSample' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'd' });
+		edit.setValues('n1', { form: 'di' });
+		edit.undo();
 		expect(edit.body.value.items[0].values.form).toBeUndefined();
 	});
 });
@@ -417,7 +575,7 @@ describe('useEditMode: the draft on the map', () => {
 		expect(edit.selectedItem.value?.kind).toBe('sample');
 	});
 
-	it('reads the methods for the Add menu once edit mode is on', async () => {
+	it('reads the methods for the add search once edit mode is on', async () => {
 		const { edit, s } = setup({ edit: 'new' });
 		await flush();
 		expect(edit.catalog.methods.value.map((m) => m.name)).toEqual(['FAST sintering', 'Heat treatment', 'Turning']);

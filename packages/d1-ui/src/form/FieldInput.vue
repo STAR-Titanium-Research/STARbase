@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
+import { EXTERNAL_HINT } from './externalHint';
 import ChoiceInput from './inputs/ChoiceInput.vue';
 import RecordPicker from './inputs/RecordPicker.vue';
 import { displayText } from './fieldModel';
@@ -40,6 +41,8 @@ const HTML_TYPE: Record<string, string> = { text: 'text', number: 'number', date
 const htmlType = computed(() => HTML_TYPE[props.field.kind] ?? 'text');
 const step = computed(() => (props.field.step ?? (props.field.integer ? 1 : 'any')));
 const external = computed(() => displayText(props.field, props.value));
+// A record that does not exist yet has nothing to open: say when it will (the form's `externalHint`).
+const hint = inject(EXTERNAL_HINT, null);
 
 // What is wrong with what the box holds (a typed draft, else the stored value).
 const problem = computed(() => (isNumber.value ? inputProblem(props.field, draft.value ?? inputText(props.field, props.value)) : null));
@@ -126,7 +129,8 @@ const shown = computed<FormField>(() => {
 		/>
 		<div v-else-if="field.kind === 'external'" class="external">
 			<span class="val" :class="{ none: !external }">{{ external || 'Not set' }}</span>
-			<button type="button" class="link" @click="emit('openExternal')">Open in Data Studio</button>
+			<span v-if="hint" class="later">{{ hint }}</span>
+			<button v-else type="button" class="link" @click="emit('openExternal')">Open in Data Studio</button>
 		</div>
 		<div v-else class="unit-wrap">
 			<input
@@ -173,4 +177,5 @@ const shown = computed<FormField>(() => {
 .val.none { color: var(--d1-dim); }
 .link { border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-accent, var(--theme--primary)); cursor: pointer; }
 .link:hover { text-decoration: underline; }
+.later { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 </style>

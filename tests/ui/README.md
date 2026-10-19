@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 6 minutes, 37 tests (9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 12 minutes, 68 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -75,6 +75,39 @@ planned by the owner and its refusal to a second Lab Member (made by the admin a
 read back for `test_category` and the inherited `material_id`. Everything a test makes is removed afterwards (a done operation is sent back to
 planned by the admin first, a second member is deleted with their People row). One test is a known failure that says so: Back to planned by an
 operation's owner who cannot edit its output sample is refused (a design gap, reported with the slice).
+
+`specs/edit-mode-slice2b.spec.ts` is slice 2b (R9 Planned / Done at Create, R12 the project and campaign chooser, plain fixes 9 to 12), as the Lab Member:
+a new operation made Done with a date and Created, read back for `work_state`, the date, `done_by_person_id`, `done_at` and its output sample `active`;
+a done operation and a planned test in one draft; a done test whose required-for-done fields on the page are compared with d1-build's own `/check`
+answer for the same saved draft; a done operation on a planned sample refused with the server's reason (and the same reason from the server); the
+toggle's one-step undo and redo from the rail and from the card's chip; the chooser (pre-filled from the first sample, campaigns limited to the project,
+a campaign cleared when the project changes, saved in the draft and kept over a reload, applied to every new record at Create, the new sample in the
+campaign); My drafts listing a new draft with the list request failing; Build a process reusing an empty open draft; per-field undo; the blank-canvas
+hint and the hidden Find / Reset / Clear; the "after Create" note on a new item's Data Studio field. The seed (`scripts/dev/local-stack.seed.sql`) has a
+second project and a campaign in each for it. To run beside another stack, give the script and the suite the same `D1_STACK_DIR` and the three
+`D1_STACK_PG_PORT`, `D1_STACK_DIRECTUS_PORT` and `D1_STACK_STARBASE_PORT` values (the Playwright helpers read the last two).
+
+`specs/edit-mode-slice2a.spec.ts` is slice 2a of the redesign (R1 palette and add search, R2 drops and insert, R3 the earlier step), with the
+helpers of `starbase/mapEdit.ts` for the palette (`paletteEntry`, `dragEntryTo`, `holdEntryOver`: they let the map settle and find their
+target afterwards, because a Fit or a card gliding moves it) and the add search (`addSearch`, `searchOptions`, `openAddSearch`). As the Lab
+Member: the palette lists the one catalog by category, narrows by name, code, category and test type, folds and stays folded after a reload;
+an entry dragged onto the empty canvas is a floating card where the pointer let go, over a card it is refused with where it can go, onto
+a free sample socket it connects and onto a socket it does not fit it is refused with the reason (and the socket shows red), onto a wire
+it is inserted between the ends as one undo step (the wire shows green while the pointer is over it) and onto a wire of done records it is
+refused with the lock reason; Enter on an entry adds it; Shift+A and Ctrl+K open the add search (Ctrl+K not the Finder), typing narrows it,
+Enter adds the top hit, Esc closes it; from a free socket it lists only what fits and connects; what was added lately is first, in the
+search and the palette, after a reload; Shift+I and I and the card's menu insert around a selected card; "Add an earlier step" on the done
+seed sample LOCAL-BAR-2 makes a new planned chain wired to nothing of the history, and after a Create (the sample and the operation filled
+in) the done sample, its maker and its lineage read back through REST are exactly as before. Makes only planned records and removes them
+afterwards, like the other two files.
+
+`specs/edit-mode-slice2c.spec.ts` holds the fixes of the Opus review of slice 2a: a palette drag is let go on window blur, on a mouse move
+with no button down and on a hidden page, and the next drag still works; with a touch screen (a second browser context with `hasTouch`,
+touches sent through CDP `Input.dispatchTouchEvent`) a swipe up scrolls the palette list and carries nothing, a long press or a clearly
+sideways swipe carries an entry; after Insert from a card's right-click menu focus is on a card (Esc and a choice); a done operation is
+offered no Insert, I and Shift+I give the lock reason with no search, and a drop on it is refused and not remembered as a recent. The rules of
+insert (a recorded or struck-through operation, a cut, a stack of passes, after a pass) are unit tests (`insertModel.test.ts`). `getRetrying`
+(`starbase/localStack.ts`) repeats an idempotent API read when the connection is reset (the local Directus drops a socket now and then).
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

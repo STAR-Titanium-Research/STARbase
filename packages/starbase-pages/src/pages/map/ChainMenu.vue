@@ -3,7 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { ChainDir } from './model/hoverFocus';
 
 // A card's right-click menu: which way the selected card's chain is lit on the map. Placed at the pointer
-// (canvas coordinates) by the page; Escape, a click elsewhere or a scroll closes it.
+// (canvas coordinates) by the page; Escape, a click elsewhere or a scroll closes it, and so does choosing anything in it (it emits close after the choice).
 const props = defineProps<{
 	x: number;
 	y: number;
@@ -11,8 +11,11 @@ const props = defineProps<{
 	/** Edit mode: Remove (and Dissolve, for a container) of the card the menu is for. Absent: view mode, the highlight only. */
 	canRemove?: boolean;
 	canDissolve?: boolean;
+	/** Edit mode, a sample or a container: Insert before / after it (the add search); a done sample's "before" is "Add an earlier step". */
+	canInsert?: boolean;
+	earlier?: boolean;
 }>();
-const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: [] }>();
+const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -51,20 +54,32 @@ onBeforeUnmount(() => {
 			role="menuitemradio"
 			:aria-checked="o.dir === props.dir"
 			class="it"
-			@click="emit('pick', o.dir)"
+			@click="emit('pick', o.dir), emit('close')"
 		>
 			<v-icon :name="o.icon" x-small />
 			<span>{{ o.label }}</span>
 			<v-icon v-if="o.dir === props.dir" class="ck" name="check" x-small />
 		</button>
-		<template v-if="canRemove || canDissolve">
+		<template v-if="canRemove || canDissolve || canInsert">
 			<div class="hd">Edit</div>
-			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove')">
+			<template v-if="canInsert">
+				<button type="button" role="menuitem" class="it" @click="emit('insert', 'before'), emit('close')">
+					<v-icon name="keyboard_double_arrow_left" x-small />
+					<span>{{ earlier ? 'Add an earlier step…' : 'Insert before…' }}</span>
+					<kbd>Shift+I</kbd>
+				</button>
+				<button type="button" role="menuitem" class="it" @click="emit('insert', 'after'), emit('close')">
+					<v-icon name="keyboard_double_arrow_right" x-small />
+					<span>Insert after…</span>
+					<kbd>I</kbd>
+				</button>
+			</template>
+			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove'), emit('close')">
 				<v-icon name="delete" x-small />
 				<span>Remove</span>
 				<kbd>Delete</kbd>
 			</button>
-			<button v-if="canDissolve" type="button" role="menuitem" class="it" @click="emit('dissolve')">
+			<button v-if="canDissolve" type="button" role="menuitem" class="it" @click="emit('dissolve'), emit('close')">
 				<v-icon name="call_merge" x-small />
 				<span>Dissolve</span>
 				<kbd>Ctrl/⌘+Delete</kbd>

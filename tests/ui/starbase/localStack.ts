@@ -46,16 +46,32 @@ export async function apiAs(playwright: PlaywrightWorkerArgs['playwright'], who:
 	return playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${token}` } });
 }
 
+/**
+ * A GET that is tried again (up to three times, a moment apart) when the connection is reset: the local stack's Directus drops a socket now and then
+ * under load, which is an infrastructure flake and not a result. Only idempotent reads go through here; a write is never repeated.
+ */
+export async function getRetrying(api: APIRequestContext, url: string, tries = 3): Promise<Awaited<ReturnType<APIRequestContext['get']>>> {
+	for (let i = 1; ; i++) {
+		try {
+			return await api.get(url);
+		} catch (e) {
+			const reset = /ECONNRESET|socket hang up|EPIPE|ECONNREFUSED/.test(String((e as Error)?.message ?? e));
+			if (!reset || i >= tries) throw e;
+			await new Promise((r) => setTimeout(r, 300 * i));
+		}
+	}
+}
+
 /** One record through the REST API, as whoever `api` is; a failed read fails the test with the server's answer. */
 export async function readRecord<T extends Record<string, unknown>>(api: APIRequestContext, collection: string, id: string, fields: string): Promise<T> {
-	const r = await api.get(`${D1}/items/${collection}/${id}?fields=${encodeURIComponent(fields)}`);
+	const r = await getRetrying(api, `${D1}/items/${collection}/${id}?fields=${encodeURIComponent(fields)}`);
 	expect(r.ok(), `GET ${collection}/${id}: ${r.status()} ${await r.text()}`).toBeTruthy();
 	return (await r.json()).data as T;
 }
 
 /** The rows of a list query (an admin's: sees every record). */
 export async function listRecords<T extends Record<string, unknown>>(api: APIRequestContext, collection: string, query: string): Promise<T[]> {
-	const r = await api.get(`${D1}/items/${collection}?${query}`);
+	const r = await getRetrying(api, `${D1}/items/${collection}?${query}`);
 	expect(r.ok(), `GET ${collection}?${query}: ${r.status()} ${await r.text()}`).toBeTruthy();
 	return (await r.json()).data as T[];
 }
