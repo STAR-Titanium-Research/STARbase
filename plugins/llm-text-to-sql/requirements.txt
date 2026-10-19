@@ -3,5 +3,5 @@ gunicorn==26.2.0
 requests==2.34.2
 pytest==9.1.1
 # --- job-specific ---
-sqlglot==30.22.0
+sqlglot==30.23.0
 psycopg[binary]==3.3.6
