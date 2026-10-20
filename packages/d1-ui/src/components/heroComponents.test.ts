@@ -29,9 +29,28 @@ describe('ProjectTimeline', () => {
 		expect(html).toContain('Planned operation');
 		expect(html).toContain('Planned test');
 		expect(html).toContain('Last operation <b>13 Oct 2026</b>');
-		expect(html).toContain('Undated: <b>6</b>');
+		// The count in the line, the codes in the tooltip and for screen readers.
+		expect(html).toContain('title="6">Undated: <b>1</b>');
+		expect(html).toContain('Campaigns without dates: 6');
 		expect(html).toContain('2026-W42');
 		expect(html).toContain('Timeline range');
+	});
+	it('adds the planned work and the dated campaigns to the screen-reader content and the svg label', async () => {
+		const html = await render(ProjectTimeline, timeline({
+			campaigns: [{ id: 'c2', code: '19', name: 'Interrupted cuts', status: 'on_hold', start: '2026-06-01', end: '2026-12-18' }],
+			plannedOps: [{ date: '2026-10-22', n: 2 }], plannedTests: [{ date: '2026-10-23', n: 1 }],
+		}));
+		expect(html).toContain('<caption>Planned work</caption>');
+		expect(html).toContain('<td>22 Oct 2026</td><td>Operations</td><td>2</td>');
+		expect(html).toContain('<caption>Campaigns with dates</caption>');
+		expect(html).toContain('<td>19</td><td>Interrupted cuts</td><td>On hold</td><td>1 Jun 2026</td><td>18 Dec 2026</td>');
+		expect(html).toContain('and planned work: 2 operations and 1 test on 2 dates');
+	});
+	it('has no weekly table without weeks, and no planned label without planned work', async () => {
+		const html = await render(ProjectTimeline, timeline({ ops: [], tests: [], plannedOps: [] }));
+		expect(html).not.toContain('<caption>Operations and tests per week</caption>');
+		expect(html).not.toContain('<caption>Planned work</caption>');
+		expect(html).not.toContain('planned work:');
 	});
 	it('has no planned keys when nothing is planned', async () => {
 		expect(await render(ProjectTimeline, timeline({ plannedOps: [] }))).not.toContain('Planned operation');
