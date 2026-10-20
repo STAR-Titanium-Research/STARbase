@@ -3,12 +3,11 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { AppLink, formatDate, recordRoute, useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import {
-	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, hasThumbnail, kindLabel, nameOf, needsReadNotice, ownerText,
-	primaryAction, sizeText, suggestionOf,
+	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, needsReadNotice, ownerText,
+	primaryAction, settingsOf, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
 import SemSettingsList from './SemSettingsList.vue';
-import { extractedView, settingRows } from './semSettings';
 import { ignoreTarget } from './ignoredFolders';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
 import PreviewDialog from './PreviewDialog.vue';
@@ -50,18 +49,15 @@ const action = computed(() => primaryAction(props.file));
 const read = computed(() => extractedText(props.file.extracted));
 // A row the crawler read with the settings reader carries `sources` or `flags`: its values are listed with their source and marks. An older row
 // (no sources, no flags) keeps the one line above.
-const settings = computed(() => {
-	const view = extractedView(props.file.extracted);
-	return Object.keys(view.sources).length || Object.keys(view.flags).length ? settingRows(view) : [];
-});
+const settings = computed(() => settingsOf(props.file));
 const copy = computed(() => duplicateText(props.file));
-const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
+const meta = computed(() => metaText(props.file));
 const reads = computed(() => needsReadNotice(props.file.kind));
 // "Ignore this folder": only on an open file whose folder sits below its owner's root (the root itself cannot be ignored)
 const ignorable = computed(() => !!props.canIgnore && (props.tab === 'new' || props.tab === 'older') && ignoreTarget(props.file) !== null);
 
 // The icon of its kind is what a row shows when it has no picture, while none is wanted yet, and when the picture fails to load.
-const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
+const icon = computed(() => kindIcon(props.file.kind));
 
 const linkedTo = computed(() => (props.file.linked_collection && props.file.linked_record_id ? recordRoute(props.file.linked_collection, props.file.linked_record_id) : null));
 const suggestedTo = computed(() => (props.file.suggested_collection && props.file.suggested_record_id ? recordRoute(props.file.suggested_collection, props.file.suggested_record_id) : null));
@@ -141,7 +137,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 				<span v-if="file.match_strength !== 'none' && suggestion" class="tag strength" :class="{ weak: suggestion.weak }">{{ STRENGTH_LABEL[file.match_strength] }}</span>
 			</div>
 			<div class="sub">
-				<span class="folder" :title="folder">{{ folder || 'Share root' }}</span>
+				<span class="folder" :title="folder">{{ folderText(file.rel_path) }}</span>
 				<button v-if="ignorable" type="button" class="lf-link quiet" :disabled="busy" data-test="ignore-folder" :aria-label="`Ignore the folder ${folder}`" @click="emit('ignore', $event.currentTarget as HTMLElement)">Ignore this folder</button>
 				<span v-if="meta" class="meta">{{ meta }}</span>
 				<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
@@ -177,6 +173,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 	</li>
 </template>
 
+<style scoped src="./inboxShared.css"></style>
 <style scoped>
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
@@ -186,19 +183,12 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 .thumb.pic:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .thumb.pic:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.shimmer {
-	display: block; width: 100%; height: 100%;
-	background: linear-gradient(90deg, var(--d1-line) 25%, color-mix(in srgb, var(--d1-line) 35%, var(--d1-tile)) 50%, var(--d1-line) 75%); background-size: 200% 100%;
-	animation: shimmer 1.4s linear infinite;
-}
-@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .name { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
 .name-btn { padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
 .name-btn:hover { text-decoration: underline; }
-.name-btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 4px; }
+.name-btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 8px; }
 .tag {
 	padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap;
 	color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent);

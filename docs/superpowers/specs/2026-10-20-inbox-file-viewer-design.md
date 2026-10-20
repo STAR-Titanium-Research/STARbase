@@ -33,7 +33,7 @@ files side by side and measure on them.
    `derived`). On an image with no known pixel size Measure is **disabled with the tooltip "no scale known for this image"**. A manual scale-bar
    entry is not built now.
 7. **Where settings live:** the right-rail settings (Fit/1:1, overlays, Compare mode, Preview mode, Layout, Density, Group by) are kept per person in
-   `localStorage` under `starbase.inbox.view` (wrapped in try/catch; the page works without it). Only the file and the compare partner are in the URL.
+   `localStorage` under `d1.list.inbox` (wrapped in try/catch; the page works without it). Only the file and the compare partner are in the URL.
 8. **Kinds without a picture** (documents, other files, images whose thumbnail is not made yet): the sheet shows the facts and the existing placeholder
    or the shimmer, never a broken image. The view box page for them shows the facts and "No preview yet".
 9. **Keyboard** (sheet and view box): `ArrowUp/ArrowDown` or `ArrowLeft/ArrowRight` previous/next, `Space` toggles the sheet peek in the list,

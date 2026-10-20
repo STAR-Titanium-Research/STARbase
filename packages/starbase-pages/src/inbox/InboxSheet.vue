@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { formatDate, useExplorerHost } from '@d1/ui';
+import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
-import { IMAGE_KINDS, extractedText, folderOf, hasThumbnail, kindLabel, nameOf, ownerText, sizeText, suggestionOf } from './inboxModel';
+import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, settingsOf, suggestionOf } from './inboxModel';
 import SemSettingsList from './SemSettingsList.vue';
-import { extractedView, settingRows } from './semSettings';
 import { sheetScaleBar } from './sheetScale';
 import { usePicture } from './usePicture';
 
@@ -31,16 +30,13 @@ const withPicture = computed(() => hasThumbnail(props.file));
 const { state, url, retry } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'preview', () => true, { priority: true });
 
 const name = computed(() => nameOf(props.file.rel_path));
-const folder = computed(() => folderOf(props.file.rel_path) || 'Share root');
-const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
+const folder = computed(() => folderText(props.file.rel_path));
+const meta = computed(() => metaText(props.file));
 const read = computed(() => extractedText(props.file.extracted));
 const suggestion = computed(() => suggestionOf(props.file));
-const settings = computed(() => {
-	const view = extractedView(props.file.extracted);
-	return Object.keys(view.sources).length || Object.keys(view.flags).length ? settingRows(view) : [];
-});
+const settings = computed(() => settingsOf(props.file));
 const bar = computed(() => sheetScaleBar(props.file.extracted));
-const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
+const icon = computed(() => kindIcon(props.file.kind));
 // What stands where the picture would be: an image whose thumbnail is not made yet says so; any other kind has no picture to wait for.
 const noPictureText = computed(() => (IMAGE_KINDS.includes(props.file.kind) ? 'The preview is not made yet.' : 'This kind of file has no preview.'));
 const openable = computed(() => withPicture.value && state.value !== 'failed');
@@ -51,7 +47,7 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 	<aside class="sheet" :aria-label="`Details of ${name}`" data-test="inbox-sheet" :data-row-id="file.candidate_id" :data-state="state">
 		<header class="top">
 			<h2 class="title" :title="file.rel_path" data-test="sheet-name">{{ name }}</h2>
-			<button type="button" class="x" aria-label="Close the sheet" data-test="sheet-close" @click="emit('close')"><v-icon name="close" small /></button>
+			<button type="button" class="icon-btn x" aria-label="Close the sheet" data-test="sheet-close" @click="emit('close')"><v-icon name="close" small /></button>
 		</header>
 
 		<div class="stage" data-test="sheet-stage">
@@ -96,6 +92,7 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 	</aside>
 </template>
 
+<style scoped src="./inboxShared.css"></style>
 <style scoped>
 .sheet {
 	box-sizing: border-box; flex: none; width: 340px; max-width: 100%; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
@@ -104,27 +101,16 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 }
 .top { display: flex; align-items: flex-start; gap: 8px; }
 .title { flex: 1 1 auto; min-width: 0; margin: 0; font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
-.x {
-	flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--d1-line); border-radius: 8px;
-	background: none; color: var(--d1-dim); cursor: pointer; font: inherit;
-}
-.x:hover { color: var(--theme--foreground); background: var(--d1-tile); }
-.x:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.x { border: 1px solid var(--d1-line); }
 .stage { border-radius: 8px; overflow: hidden; background: var(--d1-tile, var(--theme--background-subdued)); }
 .pic { position: relative; }
 .pic img { display: block; width: 100%; height: auto; }
-.bar { position: absolute; left: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 3px 6px 2px; border-radius: 6px; background: color-mix(in srgb, var(--theme--background) 80%, transparent); }
+.bar { position: absolute; left: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 3px 6px 2px; border-radius: 8px; background: color-mix(in srgb, var(--theme--background) 80%, transparent); }
 .bar .rule { display: block; height: 4px; border: 2px solid var(--theme--foreground); border-top: 0; }
 .bar .len { font-size: var(--fs-xs, 11px); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
 .blank { min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); text-align: center; }
 .blank.err { color: var(--theme--foreground); }
-.shimmer {
-	display: block; width: 100%; height: 160px;
-	background: linear-gradient(90deg, var(--d1-line) 25%, color-mix(in srgb, var(--d1-line) 35%, var(--d1-tile)) 50%, var(--d1-line) 75%); background-size: 200% 100%;
-	animation: sheet-shimmer 1.4s linear infinite;
-}
-@keyframes sheet-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
+.blank .shimmer { height: 160px; }
 .about { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .tag { padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap; color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent); }
 .folder { min-width: 0; overflow-wrap: anywhere; }

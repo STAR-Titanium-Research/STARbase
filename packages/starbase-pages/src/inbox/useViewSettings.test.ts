@@ -24,15 +24,15 @@ const throwing = (): Storage => {
 };
 
 describe('the Inbox view settings', () => {
-	it('uses the key starbase.inbox.view and defaults to the sheet, cards, normal and an open rail', () => {
-		expect(VIEW_KEY).toBe('starbase.inbox.view');
-		expect(DEFAULT_VIEW).toEqual({ preview: 'sheet', layout: 'cards', density: 'normal', railOpen: true });
+	it('uses the key d1.list.inbox and defaults to the sheet and an open rail', () => {
+		expect(VIEW_KEY).toBe('d1.list.inbox');
+		expect(DEFAULT_VIEW).toEqual({ preview: 'sheet', railOpen: true });
 		expect(readViewSettings(memory())).toEqual(DEFAULT_VIEW);
 	});
 
 	it('reads what was stored', () => {
-		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', layout: 'table', density: 'roomy', railOpen: false }) });
-		expect(readViewSettings(s)).toEqual({ preview: 'box', layout: 'table', density: 'roomy', railOpen: false });
+		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: false }) });
+		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false });
 	});
 
 	it('gives the defaults for invalid JSON, and for JSON that is not an object', () => {
@@ -40,7 +40,7 @@ describe('the Inbox view settings', () => {
 	});
 
 	it('checks each field on its own: a good one survives a bad one, an unknown value falls back', () => {
-		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', layout: 'grid', density: 7, railOpen: 'yes' }) });
+		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: 'yes' }) });
 		expect(readViewSettings(s)).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
 	});
 
@@ -51,11 +51,11 @@ describe('the Inbox view settings', () => {
 		expect(() => writeViewSettings(DEFAULT_VIEW, null)).not.toThrow();
 	});
 
-	it('writes the four fields under the key and reads them back', () => {
+	it('writes the two fields under the key and reads them back', () => {
 		const s = memory();
-		writeViewSettings({ preview: 'box', layout: 'cards', density: 'compact', railOpen: false }, s);
-		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual({ preview: 'box', layout: 'cards', density: 'compact', railOpen: false });
-		expect(readViewSettings(s)).toEqual({ preview: 'box', layout: 'cards', density: 'compact', railOpen: false });
+		writeViewSettings({ preview: 'box', railOpen: false }, s);
+		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual({ preview: 'box', railOpen: false });
+		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false });
 	});
 
 	it('useViewSettings starts from the stored value and saves each change; with blocked storage it still changes in memory', () => {

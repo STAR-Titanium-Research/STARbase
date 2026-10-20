@@ -74,7 +74,7 @@ const withThumb = (rel: string, over: Partial<FoundFile> = {}) => exactMatch({ r
 beforeEach(() => {
 	document.body.innerHTML = '';
 	// these tests are about the full preview window, which is what a click opens when the View rail's Preview is "View box" (the default is the sheet)
-	window.localStorage.setItem('starbase.inbox.view', JSON.stringify({ preview: 'box' }));
+	window.localStorage.setItem('d1.list.inbox', JSON.stringify({ preview: 'box' }));
 	observed.clear();
 	revoked = [];
 	vi.stubGlobal('IntersectionObserver', FakeIO);

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
-import { extractedText, folderOf, nameOf } from './inboxModel';
+import { extractedText, folderText, nameOf } from './inboxModel';
 import { usePicture } from './usePicture';
 
 // The full view of a found file's picture (spec 2026-10-15-found-files-inbox-design.md section 14): a modal with the reduced-size preview, a spinner
@@ -23,7 +23,7 @@ const host = useExplorerHost();
 const { state, url, retry } = usePicture(host.api, () => props.file.candidate_id, 'preview', () => true, { priority: true });
 
 const name = computed(() => nameOf(props.file.rel_path));
-const folder = computed(() => folderOf(props.file.rel_path) || 'Share root');
+const folder = computed(() => folderText(props.file.rel_path));
 const read = computed(() => extractedText(props.file.extracted));
 
 const box = ref<HTMLElement | null>(null);

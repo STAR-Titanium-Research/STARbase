@@ -193,10 +193,9 @@ const selected = computed(() => (selectedId.value ? allRows.value.find((f) => f.
 const sheetOn = computed(() => view.settings.preview === 'sheet');
 function select(f: FoundFile) {
 	selectedId.value = f.candidate_id;
-	// on a phone the sheet is a block under the list: bring it into view
+	// bring the sheet into view (it is a block under the list on a narrow page)
 	void nextTick(() => {
-		const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 700px)').matches;
-		if (narrow) root.value?.querySelector<HTMLElement>('[data-test="inbox-sheet"]')?.scrollIntoView?.({ block: 'nearest' });
+		root.value?.querySelector<HTMLElement>('[data-test="inbox-sheet"]')?.scrollIntoView?.({ block: 'nearest' });
 	});
 }
 const nameButton = (id: string) => root.value?.querySelector<HTMLElement>(`[data-row-id="${id}"] [data-test="row-name"]`) ?? null;

@@ -162,7 +162,7 @@ export type { PinRef, RecordLabel, ResolvedPin, SectionId, ShellLayout } from '.
 export { useSidebarData } from './nav/useSidebarData';
 export { usePinDrag } from './nav/usePinDrag';
 export { dropResult, moveAmongShown, sameOrder } from './nav/pinDrag';
-export { forgetListPrefs } from './index/listPrefs';
+export { browserStorage, forgetListPrefs } from './index/listPrefs';
 export { default as NavIcon } from './nav/NavIcon.vue';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';

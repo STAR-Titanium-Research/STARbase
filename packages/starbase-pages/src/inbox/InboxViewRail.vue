@@ -26,7 +26,7 @@ const summaryOf = (p: PreviewMode) => (p === 'sheet' ? 'Sheet' : 'View box');
 		<header class="lid">
 			<v-icon name="tune" small />
 			<h2 class="ttl">View</h2>
-			<button type="button" class="fold" aria-label="Collapse the View rail" aria-expanded="true" data-test="rail-collapse" @click="emit('update:open', false)"><v-icon name="chevron_right" small /></button>
+			<button type="button" class="icon-btn" aria-label="Collapse the View rail" aria-expanded="true" data-test="rail-collapse" @click="emit('update:open', false)"><v-icon name="chevron_right" small /></button>
 		</header>
 		<div class="body">
 			<section class="sec" data-test="rail-preview">
@@ -41,6 +41,7 @@ const summaryOf = (p: PreviewMode) => (p === 'sheet' ? 'Sheet' : 'View box');
 	</button>
 </template>
 
+<style scoped src="./inboxShared.css"></style>
 <style scoped>
 .rail {
 	box-sizing: border-box; flex: none; width: 220px; position: sticky; top: var(--d1-header-offset, 52px); align-self: flex-start;
@@ -48,11 +49,7 @@ const summaryOf = (p: PreviewMode) => (p === 'sheet' ? 'Sheet' : 'View box');
 }
 .lid { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 14px; background: var(--d1-tile); color: var(--d1-dim); }
 .ttl { flex: 1 1 auto; margin: 0; font-size: var(--fs-md, 13px); font-weight: 650; color: var(--theme--foreground); }
-.fold {
-	display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--d1-dim); cursor: pointer;
-}
-.fold:hover { color: var(--theme--foreground); }
-.fold:focus-visible, .tab:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.tab:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .body { display: flex; flex-direction: column; gap: 14px; padding: 12px 14px 14px; }
 .sec { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .lab { margin: 0; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--d1-dim); }
@@ -64,7 +61,7 @@ const summaryOf = (p: PreviewMode) => (p === 'sheet' ? 'Sheet' : 'View box');
 .tab span { writing-mode: vertical-rl; white-space: nowrap; }
 .tab:hover { color: var(--theme--foreground); }
 /* Narrow pages: the rail is a full-width card above the list, the tab a full-width row. */
-@container inbox-frame (max-width: 1000px) {
+@container inbox-frame (max-width: 1100px) {
 	.rail { width: 100%; position: static; order: -1; }
 	.tab { width: 100%; flex-direction: row; padding: 6px 10px; position: static; order: -1; }
 	.tab span { writing-mode: horizontal-tb; }
