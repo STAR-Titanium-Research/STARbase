@@ -51,6 +51,23 @@ export interface IndexDef {
 	selectAction?: SelectAction;
 	// A column holding a #rrggbb colour per row: the cards get a stripe and a swatch in it (accent.ts).
 	accentField?: string;
+	// The fields "Edit <field>…" in the With-selected menu may change on every ticked row (bulk actions, spec 4). Short on purpose:
+	// the server keeps its own allow-list per collection (core/extensions/d1-bulk-actions) and refuses any field not on it.
+	bulkFields?: BulkField[];
+	// A record type that has an owner and an access list (samples, operations, tests, campaigns; a project is not an index page):
+	// the ownership, access and restrict entries of the menu are offered only here.
+	ownable?: true;
+}
+
+// One field a bulk action may set. `enum` lists its values (the database's own CHECK values); `relation` names the table a link
+// points at (the picker reads its rows like a relation filter chip); `bool` is yes / no; `date` is a calendar day.
+export interface BulkField {
+	field: string;
+	// Sentence case, as the column head ("Status"); the menu and dialog lower-case it inside a sentence.
+	label: string;
+	kind: 'relation' | 'enum' | 'bool' | 'date';
+	relation?: { collection: string; display: string };
+	values?: string[];
 }
 
 export interface SelectAction {
@@ -112,7 +129,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['campaign_code', 'name'],
 		filters: [project, enumFilter('status', 'Status'), enumFilter('campaign_type', 'Type'), team, noOwner],
-		defaultSort: '-start_date', rowTarget: 'record',
+		defaultSort: '-start_date', rowTarget: 'record', ownable: true,
 	},
 	{
 		slug: 'samples', collection: 'physical_samples', title: 'Samples', group: 'records', primaryKey: 'sample_id',
@@ -127,6 +144,13 @@ export const INDEX_DEFS: IndexDef[] = [
 		filters: [project, enumFilter('current_status', 'Status'), material, team, noOwner],
 		defaultSort: '-created_at', rowTarget: 'record', hasShortId: true,
 		selectAction: { label: 'Print labels for selected', path: '/home/labels', param: 'ids' },
+		ownable: true,
+		// 'planned' is left out: it belongs to a sample a planned operation is going to make, and leaves it when that operation is done.
+		bulkFields: [
+			{ field: 'current_status', label: 'Status', kind: 'enum', values: ['active', 'consumed', 'destroyed', 'archived'] },
+			{ field: 'project_id', label: 'Project', kind: 'relation', relation: { collection: 'projects', display: 'project_code' } },
+			{ field: 'mounted', label: 'Mounted', kind: 'bool' },
+		],
 	},
 	{
 		slug: 'operations', collection: 'manufacturing_operations', title: 'Operations', group: 'records', primaryKey: 'operation_id',
@@ -139,7 +163,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
 		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce, team, noOwnerMachining],
-		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
+		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true, ownable: true,
 	},
 	{
 		slug: 'tests', collection: 'test_sessions', title: 'Tests', group: 'records', primaryKey: 'session_id',
@@ -151,7 +175,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['test_code', 'test_type', 'sample_id.sample_code'],
 		filters: [project, campaign, enumFilter('test_type', 'Type'), enumFilter('status', 'Status'), team],
-		defaultSort: '-session_date', rowTarget: 'record', hasShortId: true,
+		defaultSort: '-session_date', rowTarget: 'record', hasShortId: true, ownable: true,
 	},
 	{
 		slug: 'tools', collection: 'tools', title: 'Tools', group: 'inventory', primaryKey: 'tool_id',

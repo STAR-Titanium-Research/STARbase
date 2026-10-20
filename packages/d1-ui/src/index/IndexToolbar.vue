@@ -1,8 +1,11 @@
 <script setup lang="ts">
 // The top of an index page (IndexPage): the range, the page's buttons, the view switches, the saved-view chips and the
 // search and filter bar. It draws what IndexPage hands it and reports clicks; the state lives in useIndexPage. In picker
-// mode the buttons that navigate away (Pin, New, Data Studio, the select action) give way to the confirm button.
+// mode the buttons that navigate away (Pin, New, Data Studio, the With-selected menu) give way to the confirm button.
+import { ref } from 'vue';
 import { useExplorerHost } from '../host';
+import BulkMenu from '../bulk/BulkMenu.vue';
+import type { BulkEntry } from '../bulk/bulkModel';
 import PinToggle from '../components/PinToggle.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import type { PinRef } from '../nav/sidebarModel';
@@ -20,8 +23,9 @@ defineProps<{
 	/** Picker mode: the confirm button's text and how many rows it would add. */
 	pickText: string;
 	pickCount: number;
-	/** The def's select action ("Print labels for selected") and how many rows are ticked for it. */
+	/** How many rows are ticked, and the entries of the With-selected menu (none: no menu). */
 	pickedCount: number;
+	bulkEntries: BulkEntry[];
 	view: ListView;
 	density: Density;
 	sort: string;
@@ -36,7 +40,7 @@ defineProps<{
 }>();
 const emit = defineEmits<{
 	confirm: [];
-	run: [];
+	bulk: [entry: BulkEntry];
 	view: [value: ListView];
 	density: [value: Density];
 	sort: [value: string];
@@ -47,6 +51,9 @@ const emit = defineEmits<{
 }>();
 
 const host = useExplorerHost();
+// The page hands focus back here after a bulk dialog closes.
+const menu = ref<InstanceType<typeof BulkMenu> | null>(null);
+defineExpose({ focusMenu: () => menu.value?.focus() });
 const VIEW_OPTIONS = [
 	{ value: 'table', label: 'Table', icon: '☰' },
 	{ value: 'cards', label: 'Cards', icon: '▦' },
@@ -64,9 +71,7 @@ const DENSITY_OPTIONS = [
 		<span class="spacer" />
 		<PinToggle v-if="pinTarget && !pick" :target="pinTarget" :label="pinLabel" />
 		<button v-if="pick" type="button" class="btn pri" :disabled="!pickCount" @click="emit('confirm')">{{ pickText }}</button>
-		<button v-else-if="def.selectAction" type="button" class="btn" :disabled="!pickedCount" @click="emit('run')">
-			{{ def.selectAction.label }}{{ pickedCount ? ` (${pickedCount})` : '' }}
-		</button>
+		<BulkMenu v-else-if="bulkEntries.length" ref="menu" :entries="bulkEntries" :count="pickedCount" @choose="emit('bulk', $event)" />
 		<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="emit('view', $event as ListView)" />
 		<label v-if="view === 'cards'" class="sortsel">
 			<span>Sort by</span>

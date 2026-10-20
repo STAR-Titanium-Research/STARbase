@@ -1526,6 +1526,16 @@ live data and the real accounts confirm:
   an older version, so review it first.", (c) "This record no longer exists, or you can no longer see it."; nothing is written in any case and the draft is
   kept. Since: edit-mode redesign slice 3 (PR pending).
 
+#### Bulk actions, STARbase side (`feat/bulk-actions`, PR 1; spec `2026-10-20-bulk-actions-design.md`)
+Needs migration 204 and the `d1-bulk-actions` endpoint on the live stack, then `npm run build:starbase`. Use a copy of the data.
+
+- [ ] **BA1 — ticks and the With-selected menu on every list.** Open Samples, Operations, Tools and Equipment. Expect: a tick column on every list; with nothing ticked Samples, Operations, Tests and Campaigns show a disabled **With selected ▾** and Tools and Equipment show no menu; tick 4 samples and it reads **With 4 selected ▾**. The menu opens with the mouse and the keyboard (Enter or the down arrow, then the arrows, Escape closes and gives focus back to the button, a click elsewhere closes it). Samples: Print labels, Restrict…, Unrestrict…, Edit status…, Edit project…, Edit export control…. **Print labels** opens the labels page with the same 4 samples as before. A Lab Viewer sees only Print labels (Samples) and no menu elsewhere.
+- [ ] **BA2 — edit a field: preview, apply, undo toast.** Tick 38 samples across two pages (the tick survives the page change), **Edit status…**, choose Archived. Expect: the dialog says "Edit status for 38 samples"; the check runs by itself and says "N can be changed" (rows already archived are "need no change"), skipped rows (ones you may not edit) are folded under "Why are N skipped?" with their reasons; **Apply to N** is off at 0. Apply: the dialog closes, the list reloads with the new status, the ticks clear except the skipped rows, and a toast bottom right says "Set status to Archived on N samples" with a ring that empties over 60 s and **Undo**. Undo puts the old statuses back ("Undone"); a sample edited by someone else in between is left alone and listed under "left as they are". Let the ring run out instead: "Done", and the toast goes after a few seconds. A second action inside the 60 s gets its own toast and both can be undone.
+- [ ] **BA3 — link and yes / no fields; clear.** **Edit project…**: the picker lists the projects you can read; **Clear project instead** shows "will be emptied" and the preview counts; apply, then Undo restores each sample's own project. **Edit export control…**: Yes / No, no clear option. A role that cannot read projects: the dialog says the list could not be loaded and Apply stays off.
+- [ ] **BA4 — Restrict and Unrestrict as a member and as an administrator.** As a Lab Member tick samples you own, **Restrict…**: every row is skipped with "Only administrators can restrict records yet" and Apply is off. As an administrator the rows apply, the toast says "Restricted N samples", Undo works, and the Who has access dialog of one sample shows it restricted.
+- [ ] **BA5 — toast and dialog accessibility.** Screen reader on: the toast announces the result once, then "Done" or "Undone", and does not read the seconds. With the operating system set to reduce motion: the ring is full and still and "N s left to undo" is written under the result. Tab stays inside the dialog, Escape closes it, focus returns to the With-selected button (also after Apply, when the ticks have cleared and the button is disabled). Dark theme: ring, card and dialog are readable.
+- [ ] **BA6 — failure wording.** Stop Directus's endpoint (or cut the network) with the dialog open: the check says "The check failed: …Nothing has been changed. Close this and try again." Press Undo after the 60 s have passed (change the clock or wait): the toast keeps its card and shows the server's message in red instead of "Done" without a word.
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
@@ -2787,6 +2797,32 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   and a new deploy can start. (c) With the task stopped, the Deploy page says the agent is unreachable and offers the fix hint. Since: deploy button, stream A.
 - [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
   `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.
+
+### Bulk actions (2026-10-20, migration 204, `feat/bulk-actions`, d1-server)
+
+Server half of the bulk actions (docs/superpowers/specs/2026-10-20-bulk-actions-design.md). The `node --test` suite uses a fake knex and a fake
+`ItemsService`; what only a live Directus can show is below. Run on a copy of the stack (not live data), as an administrator, a Lab Member who owns the
+records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actions/<collection>/preview|apply`, bodies as in the endpoint's header.
+
+- [ ] **BULK1 — The preview writes nothing, with real hooks.** On 5 samples run `preview` for `edit_field` (`current_status` to `archived`), then compare:
+  `audit_logs`, `directus_activity`, `directus_revisions` and the samples' `updated_at` / `version` are unchanged, and no flow, `d1-project-inherit` or
+  `d1-campaign-inherit` action ran (watch the Directus log). Repeat for `project_id` on samples that have operations, and for `restrict`. The same ids then `apply`:
+  every record's status in the preview equals its outcome in the apply. Since: bulk actions, PR 1.
+- [ ] **BULK2 — `updateOne` with a transaction, `bypassEmitAction` and `autoPurgeCache: false`.** The code relies on Directus 11.17's `ItemsService.updateOne(id, data, { bypassEmitAction,
+  autoPurgeCache })` inside a caller-supplied knex transaction: filter hooks (d1-access-guard) still run and see the transaction, action events are only collected. Apply
+  `edit_field` `project_id` to samples that have operations: afterwards the operations' project follows (the action hooks ran once, after the commit, and not during a preview), the sample
+  list shows the new value without a cache clear in between when `CACHE_ENABLED=true`, and `audit_logs.actor` names the caller (not "public" or the system). Since: bulk actions, PR 1.
+- [ ] **BULK3 — d1-access-guard decides, its text is the reason.** As a Lab Member owner, `apply` `restrict` on 3 own samples: each is `skipped` with "Restricting a record is not available yet. Ask an
+  administrator." and nothing changed; as an administrator the same call is `applied`. `edit_field` `project_id` to a restricted project the member cannot read: 400 "does not exist, or you cannot see it" (no
+  hint that it exists). A sample inside a restricted campaign the member does not own, edited for `project_id`: `skipped` with the guard's sentence. Another person's unreadable sample in the id list: `skipped`, code `null`.
+  Since: bulk actions, PR 1.
+- [ ] **BULK4 — Undo and revert on real rows.** As the owner: `apply` `edit_field` `current_status`, then `undo` inside 60 s: every record is back, `bulk_actions.state = 'undone'`, a second row with `revert_of` exists.
+  After 60 s the owner's `undo` is 403 `UNDO_WINDOW_CLOSED`; an administrator's `undo` and `revert` work. Change one record by hand in Data Studio, then `revert`: that one is `changed_since`, the action is
+  `partly_reverted`. Share a restricted sample with someone (Who has access), then revert the restrict: `changed_since` (the snapshot holds the access list). Dates: a sample's `manufactured_date` edited and
+  undone comes back as the same day (no timezone shift; the code reads Directus' `YYYY-MM-DD`). Two `revert` calls at once: one answers 200, the other 409 `ALREADY_REVERTED` (row lock). Since: bulk actions, PR 1.
+- [ ] **BULK5 — Lab Viewer, caps and the journal.** A Lab Viewer token: `preview`, `apply`, `undo` and `revert` all 403 `READ_ONLY_ROLE`. 101 distinct ids: 400; the same id 150 times: one result.
+  `GET /d1-bulk-actions` as the owner lists only their actions, as an administrator every one, newest first; `GET /:id` of someone else's action is 404 for a member. Applying to 100 samples takes
+  how long on the real stack (one transaction per record): note it, the toast's 60 s starts when the answer arrives. Since: bulk actions, PR 1.
 
 ## Done
 

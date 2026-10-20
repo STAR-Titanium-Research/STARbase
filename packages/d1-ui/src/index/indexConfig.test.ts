@@ -162,3 +162,38 @@ describe('lookups', () => {
 		expect(indexDefBySlug('nope')).toBeUndefined();
 	});
 });
+
+describe('bulk actions in the defs', () => {
+	it('flags exactly the four ownable record types', () => {
+		expect(INDEX_DEFS.filter((d) => d.ownable).map((d) => d.collection).sort()).toEqual([
+			'campaigns', 'manufacturing_operations', 'physical_samples', 'test_sessions',
+		]);
+	});
+
+	it('describes every bulk field fully, once per field, on a real column or an existing one', () => {
+		for (const d of INDEX_DEFS) {
+			const fields = d.bulkFields ?? [];
+			expect(new Set(fields.map((f) => f.field)).size, d.slug).toBe(fields.length);
+			for (const f of fields) {
+				expect(['relation', 'enum', 'bool', 'date'], `${d.slug}.${f.field}`).toContain(f.kind);
+				expect(f.label, `${d.slug}.${f.field}`).toBeTruthy();
+				if (f.kind === 'relation') {
+					expect(f.relation?.collection, `${d.slug}.${f.field}`).toBeTruthy();
+					expect(f.relation?.display, `${d.slug}.${f.field}`).toBeTruthy();
+				} else {
+					expect(f.relation, `${d.slug}.${f.field}`).toBeUndefined();
+				}
+				if (f.kind === 'enum') expect(f.values?.length, `${d.slug}.${f.field}`).toBeGreaterThan(0);
+				else expect(f.values, `${d.slug}.${f.field}`).toBeUndefined();
+			}
+		}
+	});
+
+	it('gives the samples page its three safe fields, status without the planned value', () => {
+		const d = indexDefBySlug('samples')!;
+		expect(d.bulkFields!.map((f) => [f.field, f.kind])).toEqual([['current_status', 'enum'], ['project_id', 'relation'], ['mounted', 'bool']]);
+		expect(d.bulkFields![0].values).not.toContain('planned');
+		// A bulk link points at the same table as the page's own relation column.
+		expect(d.columns.find((c) => c.field === 'project_id')?.relation?.collection).toBe(d.bulkFields![1].relation!.collection);
+	});
+});
