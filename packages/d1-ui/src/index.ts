@@ -60,7 +60,7 @@ export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
 export { projectTimeline, RANGE_OPTIONS, dayLabel, emptyText as timelineEmptyText, niceStep } from './record/projectTimeline';
 export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
-export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, parseTimelineRange, TIMELINE_RANGE_KEY } from './record/projectHero';
+export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, parseTimelineRange, projectDatesText, TIMELINE_RANGE_KEY } from './record/projectHero';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {

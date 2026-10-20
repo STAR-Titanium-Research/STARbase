@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { campaignStatusParts, parseTimelineRange, plannedFromCounts, splitCampaigns, timelineCampaigns } from './projectHero';
+import { campaignStatusParts, parseTimelineRange, projectDatesText, plannedFromCounts, splitCampaigns, timelineCampaigns } from './projectHero';
 
 describe('splitCampaigns', () => {
 	it('puts planned, active and on hold first, keeps the given order inside a status, and folds the complete ones', () => {
@@ -58,5 +58,14 @@ describe('parseTimelineRange', () => {
 		expect(parseTimelineRange('all')).toBe('all');
 		expect(parseTimelineRange('1y')).toBe('all');
 		expect(parseTimelineRange(null)).toBe('all');
+	});
+});
+
+describe('projectDatesText', () => {
+	it('words each combination', () => {
+		expect(projectDatesText('2025-01-13', '2027-03-31')).toBe('13 Jan 2025 to 31 Mar 2027');
+		expect(projectDatesText('2024-06-01', null)).toBe('From 1 Jun 2024, no end date');
+		expect(projectDatesText(null, '2027-03-31')).toBe('Until 31 Mar 2027');
+		expect(projectDatesText(null, undefined)).toBe('No dates set');
 	});
 });
