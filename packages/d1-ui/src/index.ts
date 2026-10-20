@@ -56,7 +56,7 @@ export { campaignTypeLabel, operationCategoryFor } from './campaign/campaignType
 export {
 	DEFAULT_WEEKS, weeklyActivity, datesByKey,
 } from './activity';
-export type { WeeklyActivity } from './activity';
+export type { ActivityWindow, WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
@@ -84,6 +84,12 @@ export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
 export { default as AppLink } from './components/AppLink.vue';
 export { default as SegmentedControl } from './components/SegmentedControl.vue';
+export { default as ViewRail } from './components/ViewRail.vue';
+export { default as ViewRailSection } from './components/ViewRailSection.vue';
+export { default as RecordViewRail } from './components/RecordViewRail.vue';
+export { provideRecordView, useRecordView } from './composables/useRecordView';
+export { ACTIVITY_RANGES, activityPeriod, activityWindow } from './record/recordView';
+export type { ActivityRange, RecordView } from './record/recordView';
 export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';
@@ -92,6 +98,8 @@ export { default as HiddenLink } from './components/HiddenLink.vue';
 export { default as RecordLayout } from './components/RecordLayout.vue';
 export { default as PinToggle } from './components/PinToggle.vue';
 export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
+export { providePagePin, usePagePin } from './components/pagePin';
+export type { PinTarget } from './components/pagePin';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';

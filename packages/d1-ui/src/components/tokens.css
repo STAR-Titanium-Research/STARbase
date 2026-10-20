@@ -63,6 +63,16 @@
 	--d1-tint: color-mix(in srgb, var(--d1-accent) 10%, transparent);
 }
 
+/* Chart tokens: light, then dark (the scheme chooses, as for --d1-surface). */
+:root,
+:where(.d1-page, .d1-kit) {
+	--d1-series-1: light-dark(#2a78d6, #3987e5);
+	--d1-series-2: light-dark(#eb6834, #d95926);
+	--d1-series-3: light-dark(#1baf7a, #199e70);
+	--d1-grid: light-dark(#edf0f2, #2a313a);
+	--d1-axis: light-dark(#8b95a0, #6b7682);
+}
+
 /* The sidebar is dark in both themes (explorer-sidebar-b2 spec, decision 11), whatever the page
    follows. Provisional values until STARbase has a DESIGN.md; sub is 5.0:1 on the ground. The row
    menu is teleported to <body>, so it carries .d1-side-menu to get them too. */

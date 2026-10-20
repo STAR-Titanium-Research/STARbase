@@ -3,9 +3,9 @@ import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, DEFAULT_WEEKS, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, RecordViewRail, Section, Sparkline, activityPeriod, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin, provideRecordView,
 	mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
@@ -20,10 +20,12 @@ import UnassignedLists from './projects/UnassignedLists.vue';
 // here when it grows a project report.
 const props = defineProps<{ id: string }>();
 
+// The View rail's settings (panels, table density, empty sections, activity range), one set for every project page on this device.
+const view = provideRecordView('project');
 const {
 	project, loading, notVisible, error, investigators, counts, campaigns, looseSamples, looseOperations,
 	looseTests, activity, equipment, reload,
-} = useProjectData(toRef(props, 'id'));
+} = useProjectData(toRef(props, 'id'), toRef(view, 'range'));
 
 const editing = ref(false);
 // "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
@@ -45,15 +47,16 @@ const active = computed(() => project.value?.is_active !== false);
 const railFacts = computed(() => projectRailFacts(project.value, investigators.value.data, counts.value.data, counts.value.loading));
 
 // Operations and tests in the activity window: null while loading, 0 when there is nothing to draw
-// (then the panel is its lid only, and the contents list dims it, like the other empty panels).
+// (then the panel is its lid only, and the contents list dims it, like the other empty panels). Null
+// while it loads and when the read failed: the panel is drawn then, with its error, so it is not "empty".
 const activityCount = computed(() => {
 	const a = activity.value;
-	if (a.loading) return null;
+	if (a.loading || a.error) return null;
 	return a.data.data ? a.data.data.totalOps + a.data.data.totalTests : 0;
 });
 
-// "On this page": the panels in page order. A count is null while its read loads.
-const rows = (s: { loading: boolean; data: unknown[] }) => (s.loading ? null : Math.min(s.data.length, LIST_CAP));
+// "On this page": the panels in page order. A count is null while its read loads or when it failed.
+const rows = (s: { loading: boolean; error: string; data: unknown[] }) => (s.loading || s.error ? null : Math.min(s.data.length, LIST_CAP));
 const contents = computed<ContentsEntry[]>(() => projectContents({
 	hasDescription: !!project.value?.description,
 	campaigns: rows(campaigns.value),
@@ -61,12 +64,14 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 	operations: rows(looseOperations.value),
 	tests: rows(looseTests.value),
 	activity: activityCount.value,
-	equipment: equipment.value.loading ? null : equipment.value.data.length,
+	equipment: rows(equipment.value),
 }));
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
-const pin = computed(() => pinTargetForRecord('projects', props.id));
+const pin = computed(() => (project.value ? pinTargetForRecord('projects', props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
+providePagePin(pin);
 </script>
 
 <template>
@@ -86,8 +91,6 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 						<span>›</span>
 						<AppLink to="/home/projects">Projects</AppLink>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail kind="Project" :code="code" :title="project.project_name" :facts="railFacts" :contents="contents">
@@ -109,6 +112,8 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 						</RecordRail>
 					</template>
 
+					<template #view><RecordViewRail kind="project" range /></template>
+
 					<Section v-if="project.description" id="description" title="Description"><p class="description">{{ project.description }}</p></Section>
 
 					<CampaignCards :campaigns="campaigns" :project-id="id" />
@@ -123,7 +128,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 							title="Activity"
 							:count="activityCount"
 							:empty="!activity.loading && !activity.error && activityCount === 0"
-							:empty-text="`No operations or tests in the last ${DEFAULT_WEEKS} weeks.`"
+							:empty-text="`No operations or tests${activityPeriod(view.range)}.`"
 						>
 							<LoadState :loading="activity.loading" :error="activity.error">
 								<Sparkline
