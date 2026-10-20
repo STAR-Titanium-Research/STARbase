@@ -3,6 +3,7 @@
 // Statistics tab and its tests share one definition. Every figure works on the whole run or on a time
 // window (the shared zoom). A figure whose series is missing is left out, never shown as zero.
 
+import { fmtNum } from './chartMath';
 import type { Trace } from './fastCache';
 
 export interface TimeWindow { start: number; end: number; }
@@ -23,22 +24,27 @@ export interface StatOptions {
 
 export const HOLD_BAND_C = 10;
 export const COOL_END_C = 200;
-export const HOT_C = 1000;
+const HOT_C = 1000;
 const TEMP_KEYS = ['pyro_top', 'pyro_b', 'tc1', 'ptc_top'];
 const TRAVEL_KEYS = ['piston_rel', 'piston_abs'];
 /** The shrink rate is the slope over at least this long, so sensor noise does not read as a rate. */
 const RATE_SPAN_S = 30;
 /** The power is on above this share of the run's peak power. */
 const POWER_ON_SHARE = 0.02;
+/** The heating begins when the temperature has risen this far above where it started. */
+const HEAT_RISE_C = 20;
 
-function usable(trace: Trace, keys: string[]): Float64Array | null {
+/** The first of the series that has readings; `varying` also skips one that is flat or never above zero (a dead sensor). */
+function usable(trace: Trace, keys: string[], varying = false): Float64Array | null {
 	for (const k of keys) {
 		const v = trace.series[k]?.values;
-		if (v && v.some((x) => Number.isFinite(x))) return v;
+		if (!v) continue;
+		let lo = Infinity, hi = -Infinity;
+		for (let i = 0; i < v.length; i++) if (Number.isFinite(v[i])) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
+		if (hi >= lo && (!varying || (hi > 0 && hi > lo))) return v;
 	}
 	return null;
 }
-export const temperatureOf = (trace: Trace): Float64Array | null => usable(trace, TEMP_KEYS);
 
 function peak(vals: Float64Array): number {
 	let m = -Infinity;
@@ -70,6 +76,13 @@ function integrate(time: Float64Array, vals: Float64Array, a: number, b: number)
 	return sum;
 }
 
+/** Time-weighted mean of the values over [a,b], leaving out the gaps where a value is missing. */
+function meanOver(time: Float64Array, vals: Float64Array, a: number, b: number): number | null {
+	let sum = 0, span = 0;
+	eachSegment(time, vals, a, b, (t0, v0, t1, v1) => { sum += ((v0 + v1) / 2) * (t1 - t0); span += t1 - t0; });
+	return span > 0 ? sum / span : null;
+}
+
 /** Seconds within [a,b] for which the value (at the start of each step) satisfies the test. */
 function timeWhere(time: Float64Array, vals: Float64Array, test: (v: number) => boolean, a: number, b: number): number {
 	let sum = 0;
@@ -77,7 +90,17 @@ function timeWhere(time: Float64Array, vals: Float64Array, test: (v: number) => 
 	return sum;
 }
 
-export function findPhases(time: Float64Array, temp: Float64Array, target?: number | null): Phases | null {
+/** When the heating begins: the temperature first 20 degC above where it started, or the power first on, whichever is earlier. */
+function heatingStart(time: Float64Array, temp: Float64Array, power: Float64Array | null): number | null {
+	let start = Infinity;
+	const base = temp.find((v) => Number.isFinite(v));
+	if (base !== undefined) { const i = temp.findIndex((v) => v >= base + HEAT_RISE_C); if (i >= 0) start = time[i]; }
+	if (power) { const on = peak(power) * POWER_ON_SHARE; const i = power.findIndex((v) => v > on); if (i >= 0) start = Math.min(start, time[i]); }
+	return Number.isFinite(start) ? start : null;
+}
+
+/** `start` is when the heating begins (the pump-down before it belongs to no phase); the start of the trace when absent. */
+export function findPhases(time: Float64Array, temp: Float64Array, target?: number | null, start?: number | null): Phases | null {
 	const n = Math.min(time.length, temp.length);
 	if (n < 2) return null;
 	const top = peak(temp.subarray(0, n));
@@ -93,13 +116,12 @@ export function findPhases(time: Float64Array, temp: Float64Array, target?: numb
 	let cool = n - 1;
 	for (let i = last + 1; i < n; i++) if (Number.isFinite(temp[i]) && temp[i] < COOL_END_C) { cool = i; break; }
 	return {
-		heating: [time[0], time[first]], hold: [time[first], time[last]], cooling: [time[last], time[cool]], target: goal,
+		heating: [Math.min(start ?? time[0], time[first]), time[first]], hold: [time[first], time[last]], cooling: [time[last], time[cool]], target: goal,
 	};
 }
 
 const fixed = (v: number, dp: number) => v.toFixed(dp);
 const minutes = (s: number) => fixed(s / 60, 1);
-function digits(v: number): string { return fixed(v, Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2); }
 
 export function runStats(trace: Trace, opts: StatOptions = {}): RunStats {
 	const { time } = trace;
@@ -107,10 +129,10 @@ export function runStats(trace: Trace, opts: StatOptions = {}): RunStats {
 	const t0 = time[0], tEnd = time[time.length - 1];
 	const win: Span = [Math.max(t0, opts.window?.start ?? t0), Math.min(tEnd, opts.window?.end ?? tEnd)];
 	const zoomed = win[0] > t0 || win[1] < tEnd;
-	const temp = temperatureOf(trace);
+	const temp = usable(trace, TEMP_KEYS, true);
 	const power = usable(trace, ['sps_power']);
 	const travel = usable(trace, TRAVEL_KEYS);
-	const phases = temp ? findPhases(time, temp, opts.target) : null;
+	const phases = temp ? findPhases(time, temp, opts.target, heatingStart(time, temp, power)) : null;
 	const tiles: StatTile[] = [];
 	const add = (key: string, label: string, value: string, unit: string) => tiles.push({ key, label, value, unit });
 
@@ -121,7 +143,7 @@ export function runStats(trace: Trace, opts: StatOptions = {}): RunStats {
 		let first = 0;
 		while (first < temp.length && !Number.isFinite(temp[first])) first++;
 		const ramp = heat && first < temp.length ? meanRamp(time, temp, heat, time[first]) : null;
-		if (ramp !== null) add('ramp', 'Mean ramp', digits(ramp), '°C/min');
+		if (ramp !== null) add('ramp', 'Mean ramp', fmtNum(ramp), '°C/min');
 	}
 	let kwh: number | null = null;
 	if (power) {
@@ -130,16 +152,17 @@ export function runStats(trace: Trace, opts: StatOptions = {}): RunStats {
 		add('energy', zoomed ? 'Energy' : 'Total energy', fixed(kwh, 2), 'kWh');
 		add('poweron', 'Power on', minutes(timeWhere(time, power, (v) => v > on, win[0], win[1])), 'min');
 		const hold = phases ? overlap(phases.hold[0], phases.hold[1], win) : null;
-		if (hold) add('holdpower', zoomed ? 'Mean power' : 'Hold power', digits(integrate(time, power, hold[0], hold[1]) / (hold[1] - hold[0])), 'kW');
+		const holdKw = hold ? meanOver(time, power, hold[0], hold[1]) : null;
+		if (holdKw !== null) add('holdpower', 'Hold power', fmtNum(holdKw), 'kW');
 	}
 	if (travel) {
 		const moved = travelStats(time, travel, win);
 		if (moved) {
-			add('densification', 'Densification', digits(moved.net), 'mm');
-			add('shrink', 'Shrink rate', fixed(moved.rate, 2), 'mm/min');
+			add('densification', 'Densification', fmtNum(moved.net), 'mm');
+			add('shrink', 'Shrink rate', fmtNum(moved.rate), 'mm/min');
 		}
 	}
-	if (kwh !== null && opts.massG && opts.massG > 0) add('pergram', 'Per gram', digits((kwh * 1000) / opts.massG), 'Wh/g');
+	if (kwh !== null && opts.massG && opts.massG > 0) add('pergram', 'Per gram', fmtNum((kwh * 1000) / opts.massG), 'Wh/g');
 	return { phases, tiles };
 }
 
@@ -182,7 +205,7 @@ export function statsCsv(stats: RunStats, scope: string): string {
 	const rows = [['Figure', 'Value', 'Unit'], ['Scope', scope, '']];
 	if (stats.phases) {
 		for (const [name, span] of [['Heating', stats.phases.heating], ['Hold', stats.phases.hold], ['Cooling', stats.phases.cooling]] as const) {
-			rows.push([`${name} duration`, minutes(span[1] - span[0]), 'min']);
+			rows.push([`${name} duration (whole run)`, minutes(span[1] - span[0]), 'min']);
 		}
 	}
 	for (const t of stats.tiles) rows.push([t.label, t.value, t.unit]);

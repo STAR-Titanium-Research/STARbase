@@ -82,7 +82,7 @@ describe('runStats over a window', () => {
 		expect(tile(r, 'energy')).toMatchObject({ label: 'Energy', value: '1.00' });
 		expect(tile(r, 'holdpower')!.value).toBe('6.00');
 		// the ram has stopped by then, and the window holds none of the heating
-		expect(tile(r, 'densification')!.value).toBe('0.00');
+		expect(tile(r, 'densification')!.value).toBe('0');
 		expect(tile(r, 'ramp')).toBeUndefined();
 	});
 	it('keeps the phases of the whole run', () => {
@@ -91,6 +91,13 @@ describe('runStats over a window', () => {
 	it('treats a window that reaches past the trace as the whole run', () => {
 		const r = runStats(makeTrace(), { window: { start: -50, end: 99999 } });
 		expect(tile(r, 'duration')!.label).toBe('Run duration');
+	});
+	it('keeps the hold power label, and leaves gaps in the power out of its mean', () => {
+		const t = makeTrace();
+		const power = t.series.sps_power.values.map((v, i) => (i % 5 === 0 ? NaN : v));
+		t.series.sps_power = { ...t.series.sps_power, values: power };
+		const r = runStats(t, { target: 1350, window: { start: 800, end: 1400 } });
+		expect(tile(r, 'holdpower')).toMatchObject({ label: 'Hold power', value: '6.00' });
 	});
 });
 
@@ -113,10 +120,50 @@ describe('runStats with series missing', () => {
 	});
 });
 
+// 10 minutes of pump-down at 20 degC, then 100 degC/min up to 1350 degC, a 10 minute hold, then a cool-down.
+function pumpDownTrace(withPower: boolean): Trace {
+	const time = Float64Array.from({ length: 271 }, (_, i) => i * STEP);
+	const rampEnd = 600 + (1330 / 100) * 60;
+	const temp = time.map((t) => (t <= 600 ? 20 : t <= rampEnd ? 20 + ((t - 600) * 100) / 60 : t <= rampEnd + 600 ? 1350 : Math.max(100, 1350 - (t - rampEnd - 600))));
+	const mk = (key: string, values: Float64Array): Series => ({ key, label: key, unit: '', group: '', min: null, max: null, values });
+	const all = [mk('pyro_top', temp), ...(withPower ? [mk('sps_power', time.map((t) => (t >= 600 && t <= rampEnd + 600 ? 6 : 0)))] : [])];
+	return { time, n: time.length, series: Object.fromEntries(all.map((s) => [s.key, s])), order: all.map((s) => s.key) };
+}
+
+describe('heating start', () => {
+	it('begins where the temperature first rises 20 degC, not with the pump-down', () => {
+		const r = runStats(pumpDownTrace(false), { target: 1350 });
+		expect(r.phases!.heating[0]).toBe(620);
+		// the ramp reaches 1350 at 1398 s, the first sample in the band is 1400 s
+		expect(tile(r, 'ramp')).toMatchObject({ value: '99.7', unit: '°C/min' });
+	});
+	it('begins where the power comes on when that is earlier', () => {
+		expect(runStats(pumpDownTrace(true), { target: 1350 }).phases!.heating[0]).toBe(600);
+	});
+});
+
+describe('the temperature series', () => {
+	it('skips a dead (all zero) pyrometer and uses the next one', () => {
+		const t = makeTrace();
+		const dead = { ...t.series.pyro_top, key: 'pyro_top', values: new Float64Array(t.n) };
+		const tc = { ...t.series.pyro_top, key: 'tc1' };
+		const r = runStats({ ...t, series: { ...t.series, pyro_top: dead, tc1: tc } }, { target: 1350 });
+		expect(r.phases).not.toBeNull();
+		expect(tile(r, 'over')).toBeDefined();
+	});
+	it('has no temperature figures when every temperature series is flat', () => {
+		const t = makeTrace();
+		const flat = { ...t.series.pyro_top, values: new Float64Array(t.n).fill(25) };
+		const r = runStats({ ...t, series: { ...t.series, pyro_top: flat } });
+		expect(r.phases).toBeNull();
+		expect(tile(r, 'over')).toBeUndefined();
+	});
+});
+
 describe('statsCsv', () => {
 	it('lists the scope, the phase durations and the tiles', () => {
 		const csv = statsCsv(runStats(makeTrace(), { target: 1350 }), 'Whole run').split('\r\n');
-		expect(csv.slice(0, 6)).toEqual(['Figure,Value,Unit', 'Scope,Whole run,', 'Heating duration,13.3,min', 'Hold duration,10.2,min', 'Cooling duration,19.8,min', 'Run duration,45.0,min']);
+		expect(csv.slice(0, 6)).toEqual(['Figure,Value,Unit', 'Scope,Whole run,', 'Heating duration (whole run),13.3,min', 'Hold duration (whole run),10.2,min', 'Cooling duration (whole run),19.8,min', 'Run duration,45.0,min']);
 		expect(csv[csv.length - 1]).toBe('');
 	});
 	it('quotes a cell with a comma or a quote', () => {
