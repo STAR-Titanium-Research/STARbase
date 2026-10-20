@@ -2,16 +2,10 @@
 // localStorage, the key that toggles it, and where it turns into a popover. Pure, so the component
 // stays thin and the rules are tested without a DOM.
 
+import { browserStorage } from '../storage';
+
 /** Content width (px) below which the rail is a "View" button with a popover. */
 export const POPOVER_BELOW = 1100;
-
-function browserStorage(): Storage | null {
-	try {
-		return typeof window === 'undefined' ? null : window.localStorage;
-	} catch {
-		return null; // reading the property itself can throw when site data is blocked
-	}
-}
 
 /** Open or closed as last left on this device; `fallback` when nothing (or nothing readable) is stored. */
 export function readRailOpen(key: string, fallback: boolean, storage: Storage | null = browserStorage()): boolean {
@@ -55,11 +49,16 @@ export function isRailToggleKey(e: RailKeyEvent): boolean {
 	return !['INPUT', 'TEXTAREA', 'SELECT'].includes((t?.tagName ?? '').toUpperCase());
 }
 
-/** The width the rail is judged by: the nearest ancestor that is an inline-size container (the page's content), else the window. */
-export function contentWidth(el: Element): number {
+/** The nearest ancestor that is an inline-size container (the page's content), if any. */
+export function findContainer(el: Element): Element | null {
 	for (let p = el.parentElement; p; p = p.parentElement) {
 		const type = getComputedStyle(p).containerType;
-		if (type === 'inline-size' || type === 'size') return p.clientWidth;
+		if (type === 'inline-size' || type === 'size') return p;
 	}
-	return window.innerWidth;
+	return null;
+}
+
+/** The width the rail is judged by: that container's, else the window's. */
+export function contentWidth(el: Element): number {
+	return findContainer(el)?.clientWidth ?? window.innerWidth;
 }

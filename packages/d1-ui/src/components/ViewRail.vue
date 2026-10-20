@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue';
-import { POPOVER_BELOW, contentWidth, isRailToggleKey, readRailOpen, writeRailOpen } from './viewRail';
+import { POPOVER_BELOW, contentWidth, findContainer, isRailToggleKey, readRailOpen, writeRailOpen } from './viewRail';
 import './tokens.css';
 
 // The View rail: one small hanging card for HOW a page is shown (layout, density, sort, what to hide),
@@ -86,10 +86,8 @@ onMounted(() => {
 	measure();
 	if (typeof ResizeObserver !== 'undefined' && root.value) {
 		// The container itself is what changes size; the window is the fallback when there is none.
-		let p: HTMLElement | null = root.value.parentElement;
-		while (p && !['inline-size', 'size'].includes(getComputedStyle(p).containerType)) p = p.parentElement;
 		observer = new ResizeObserver(measure);
-		observer.observe(p ?? document.documentElement);
+		observer.observe(findContainer(root.value) ?? document.documentElement);
 	}
 });
 onBeforeUnmount(() => {

@@ -61,9 +61,12 @@ const view = useRecordView();
 /* The panels stack with the page frame's 16px gap. */
 .main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 /* A wrapper whose panels are all hidden (empty sections) is an empty element: it takes no gap. */
-.main > :empty { display: none; }
+.has-view .main > :empty { display: none; }
 .has-view { grid-template-columns: var(--d1-rail-width, 300px) minmax(0, 1fr) auto; }
-/* Two stacks: columns of at most two, each at least 360px, filled top to bottom. A panel never splits. */
+/* Two stacks: columns of at most two, each at least 360px, filled top to bottom. A panel never splits. CSS columns
+   rebalance by themselves as panels load and change height, which explicit stacks (alternating the slot's
+   sections by index) could not do without inspecting what the page puts in the slot: one component often
+   renders several panels. The cost is that a panel can move to the other column when another one grows. */
 .main.two-stacks { display: block; columns: 2 360px; column-gap: 16px; }
 .main.two-stacks > :deep(*) { break-inside: avoid; margin-bottom: 16px; }
 /* The View rail is a button here: a row of its own at the right, above the rail and the panels. */

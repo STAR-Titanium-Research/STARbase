@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRecordView } from '../composables/useRecordView';
-import { ACTIVITY_RANGES, isChanged, recordViewKey, viewSummary } from '../record/recordView';
+import { ACTIVITY_RANGES, DENSITY_OPTIONS, isChanged, recordViewKey, viewSummary } from '../record/recordView';
 import type { ActivityRange, EmptySections } from '../record/recordView';
 import type { Density } from '../index/listPrefs';
 import SegmentedControl from './SegmentedControl.vue';
@@ -23,7 +23,6 @@ const panels = computed({
 	set: (v) => { if (view) view.panels = v === '2' ? 2 : 1; },
 });
 const PANELS = [{ value: '1', label: '1 column' }, { value: '2', label: '2 columns' }] as const;
-const DENSITY = [{ value: 'compact', label: 'Compact' }, { value: 'normal', label: 'Normal' }, { value: 'roomy', label: 'Roomy' }] as const;
 const EMPTY = [{ value: 'show', label: 'Show' }, { value: 'hide', label: 'Hide' }] as const;
 </script>
 
@@ -33,7 +32,7 @@ const EMPTY = [{ value: 'show', label: 'Show' }, { value: 'hide', label: 'Hide' 
 			<SegmentedControl v-model="panels" :options="PANELS" label="Panels" />
 		</ViewRailSection>
 		<ViewRailSection label="Table density">
-			<SegmentedControl :model-value="view.density" :options="DENSITY" label="Table density" @update:model-value="view.density = $event as Density" />
+			<SegmentedControl :model-value="view.density" :options="DENSITY_OPTIONS" label="Table density" @update:model-value="view.density = $event as Density" />
 		</ViewRailSection>
 		<ViewRailSection label="Empty sections">
 			<SegmentedControl :model-value="view.empty" :options="EMPTY" label="Empty sections" @update:model-value="view.empty = $event as EmptySections" />

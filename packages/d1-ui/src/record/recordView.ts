@@ -6,6 +6,7 @@
 
 import type { ActivityWindow } from '../activity';
 import { DENSITIES } from '../index/listPrefs';
+import { browserStorage } from '../storage';
 import type { Density } from '../index/listPrefs';
 
 export type ActivityRange = '30d' | '6mo' | 'all';
@@ -42,14 +43,6 @@ export function activityPeriod(range: ActivityRange): string {
 
 export const recordViewKey = (kind: string): string => `d1.view.${kind}`;
 
-function browserStorage(): Storage | null {
-	try {
-		return typeof window === 'undefined' ? null : window.localStorage;
-	} catch {
-		return null; // reading the property itself can throw when site data is blocked
-	}
-}
-
 // The stored value is a JSON object; each field is checked on its own, so a good one survives a bad
 // one. Nothing stored, a broken value or blocked storage gives the default.
 export function readRecordView(kind: string, storage: Storage | null = browserStorage()): RecordView {
@@ -85,11 +78,15 @@ export function isChanged(view: RecordView): boolean {
 	return (Object.keys(DEFAULT_RECORD_VIEW) as (keyof RecordView)[]).some((k) => view[k] !== DEFAULT_RECORD_VIEW[k]);
 }
 
-const DENSITY_LABEL: Record<Density, string> = { compact: 'Compact', normal: 'Normal', roomy: 'Roomy' };
+export const DENSITY_OPTIONS: readonly { value: Density; label: string }[] = [
+	{ value: 'compact', label: 'Compact' },
+	{ value: 'normal', label: 'Normal' },
+	{ value: 'roomy', label: 'Roomy' },
+];
 
 /** The collapsed tab's text after "View": "1 column · Normal", with what is not the default added ("Empty hidden", "30 d"). */
 export function viewSummary(view: RecordView, withRange: boolean): string {
-	const parts = [view.panels === 2 ? '2 columns' : '1 column', DENSITY_LABEL[view.density]];
+	const parts = [view.panels === 2 ? '2 columns' : '1 column', DENSITY_OPTIONS.find((o) => o.value === view.density)!.label];
 	if (view.empty === 'hide') parts.push('Empty hidden');
 	if (withRange && view.range !== DEFAULT_RECORD_VIEW.range) parts.push(ACTIVITY_RANGES.find((r) => r.value === view.range)!.label);
 	return parts.join(' · ');
