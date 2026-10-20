@@ -68,27 +68,27 @@ if (!EMAIL || !PASS) {
 	// can be laid out off-screen depending on viewport/collapse state, and this test is about the
 	// Doctor, not the shell chrome.
 	await p.goto(`${BASE}plot`, { waitUntil: 'networkidle' });
-	await p.waitForSelector('.panel-ops', { timeout: 30000 });
+	await p.waitForSelector('section[aria-label="Operations"]', { timeout: 30000 });
 	await p.waitForTimeout(6000);
 
 	// ---- The "issues only" filter chip carries the flagged-operation count.
-	const filter = p.locator('.doc-filter');
+	const filter = p.locator('label.issues');
 	if (await filter.count() === 0) {
 		console.log('FAIL  the "Metadata issues only" filter did not render');
 		await p.screenshot({ path: 'tests/ui/metadata_doctor_fail.png', fullPage: true });
 		await b.close();
 		process.exit(1);
 	}
-	const flagged = parseInt((await filter.locator('.chip').innerText()).trim(), 10);
+	const flagged = parseInt((await filter.locator('.fp-chip').innerText()).trim(), 10);
 	console.log(`operations with at least one finding: ${flagged}`);
 	if (!(flagged > 0)) { console.log('FAIL  expected a non-zero flagged count'); ok = false; }
 
 	// ---- Open the Doctor panel and switch it to the whole-archive view.
-	await p.locator('.pt-add .pt-chip').click();
+	await p.locator('.pt-add > button').click();
 	await p.waitForTimeout(300);
 	await p.locator('.pt-menu button', { hasText: 'Metadata doctor' }).click();
 	await p.waitForTimeout(1200);
-	await p.locator('.doc-mode .segbtn', { hasText: 'All' }).click();
+	await p.locator('[aria-label="Scope"] button', { hasText: 'All' }).click();
 	await p.waitForTimeout(1200);
 
 	const groups = p.locator('.doc-group');
@@ -137,7 +137,7 @@ if (!EMAIL || !PASS) {
 	// ---- Per-operation view: pick an op from a conflict group and confirm its findings render.
 	await p.locator('.doc-group').filter({ hasText: 'conflict' }).first().locator('.doc-oprow').first().click();
 	await p.waitForTimeout(4000);
-	await p.locator('.doc-mode .segbtn', { hasText: 'This op' }).click();
+	await p.locator('[aria-label="Scope"] button', { hasText: 'This op' }).click();
 	await p.waitForTimeout(800);
 	const findings = await p.locator('.doc-find').count();
 	console.log(`findings on the selected operation: ${findings}`);
@@ -159,7 +159,7 @@ if (!EMAIL || !PASS) {
 	check('it moved to the Dismissed section', inDismissed, 1);
 
 	await p.goto(opUrl, { waitUntil: 'networkidle' });
-	await p.waitForSelector('.panel-ops', { timeout: 30000 });
+	await p.waitForSelector('section[aria-label="Operations"]', { timeout: 30000 });
 	await p.waitForTimeout(6000);
 	const persisted = await p.locator('.doc-dis-row', { hasText: firstTitle }).count();
 	check('the dismissal survived a reload', persisted, 1);

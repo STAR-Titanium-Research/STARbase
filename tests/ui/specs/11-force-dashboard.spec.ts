@@ -20,11 +20,11 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 
 	// Hero renders (compact badge banner). Generous timeout: this is usually the first test
 	// to hit Directus after a restart, and cold extension bundling can take >30s.
-	await expect(page.locator('.hero .hero-badge')).toHaveText(/Force Analysis/i, { timeout: 90_000 });
+	await expect(page.locator('.fd .bar')).toContainText(/\d+ ops?/i, { timeout: 90_000 });
 
 	// Samples + Operations panels populated.
-	const samples = page.locator('.panel-samples .rowcard');
-	const ops = page.locator('.panel-ops .rowcard');
+	const samples = page.locator('section[aria-label="Samples"] .fp-card');
+	const ops = page.locator('section[aria-label="Operations"] .fp-card');
 	await expect(samples.first()).toBeVisible({ timeout: 20_000 });
 	await expect(ops.first()).toBeVisible();
 
@@ -38,35 +38,35 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 	// filtered list must show exactly that many, the Operations chip must agree, and the
 	// "all" button that clears the filter must appear. (A bare "<= before" check also passes
 	// when nothing was filtered, or when the list was emptied.)
-	const pill = (await samples.first().locator('.pill').innerText()).trim();
+	const pill = (await samples.first().locator('.fp-chip.count').innerText()).trim();
 	const sampleOps = Number.parseInt(pill, 10);
 	expect(Number.isNaN(sampleOps), `unexpected op-count pill: "${pill}"`).toBe(false);
 	await samples.first().click();
 	await expect(samples.first()).toHaveClass(/active/);
 	await expect(ops).toHaveCount(sampleOps);
-	await expect(page.locator('.panel-ops .panel-head .chip')).toHaveText(String(sampleOps));
-	await expect(page.locator('.panel-ops .clearbtn')).toBeVisible();
+	await expect(page.locator('section[aria-label="Operations"] .fp-lid .fp-chip')).toHaveText(String(sampleOps));
+	await expect(page.getByRole('button', { name: 'Show all' })).toBeVisible();
 	expect(sampleOps).toBeLessThanOrEqual(opsBefore);
 
 	// Selecting an operation loads its detail (stat tiles) + charts + FRM.
 	await ops.first().click();
-	await expect(page.locator('.panel-ops .rowcard.active')).toBeVisible();
+	await expect(page.locator('section[aria-label="Operations"] .fp-card.active')).toBeVisible();
 
 	// This test exercises the STATIC view (force-metric stat tiles + FRM image + axis
 	// toggle). The connection-speed default or the large-map auto-route can open Lite/Full;
 	// the segmented selector's "Figure" is the prerendered PNG we want here.
-	const figureBtn = page.locator('.frm-col .segmode .segbtn', { hasText: 'Figure' });
+	const figureBtn = page.getByRole('group', { name: 'How the map is drawn' }).getByRole('button', { name: 'Figure' });
 	await expect(figureBtn).toBeVisible({ timeout: 20_000 });
 	await figureBtn.click();
 
 	// Operation info tiles.
-	// (Cut parameters is an .edit-grid of inputs: spiral feed/Ø, inner Ø, pulses/rev, sample rate, cut time.)
-	const cutFields = page.locator('.card.info-op .edit-grid', { hasText: 'Spiral feed' }).locator('input');
+	// (Cut parameters is a tab of one-line .fp-pg rows with inputs: spiral feed/Ø, inner Ø, pulses/rev, sample rate, cut time.)
+	const cutFields = page.locator('[role=tabpanel] .fp-pg').locator('input');
 	await expect(cutFields.first()).toBeVisible({ timeout: 20_000 });
 	expect(await cutFields.count()).toBeGreaterThanOrEqual(6);
 
 	// Three stacked signal charts (Force mode by default) each render an SVG.
-	const charts = page.locator('.charts-col .chart svg');
+	const charts = page.locator('[data-panel-id] .charts .chart svg');
 	await expect(charts).toHaveCount(3, { timeout: 20_000 });
 
 	// FRM fingerprint image loads (blob URL, natural size > 0).
@@ -77,13 +77,13 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 	const fxSrc = await frm.getAttribute('src');
 
 	// Toggle Force → FFT: charts re-render (still three SVGs), FFT button active.
-	await page.getByRole('button', { name: 'FFT', exact: true }).click();
+	await page.locator('.pmf-btn[data-mode="fft"]').click({ force: true });
 	await page.waitForTimeout(400);
-	await expect(page.locator('.graphs-head .tbtn', { hasText: 'FFT' })).toHaveClass(/on/);
+	await expect(page.locator('.pmf-active[data-mode="fft"]')).toHaveCount(1);
 	await expect(charts).toHaveCount(3);
 
 	// Toggle FRM axis Fz → Fx: image reloads (different blob src).
-	await page.locator('.frm-col .toggle .tbtn', { hasText: 'Fx' }).click();
+	await page.getByRole('group', { name: 'Channel' }).getByRole('button', { name: 'Fx' }).click();
 	await expect.poll(async () => frm.getAttribute('src'), { timeout: 20_000 }).not.toBe(fxSrc);
 	await expect.poll(async () => frm.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 20_000 })
 		.toBeGreaterThan(0);
@@ -114,7 +114,7 @@ test('force dashboard: F11 op — switch Figure ⇄ Lite back and forth without 
 
 	await page.goto(`${STAR_BASE}/plot/force?operation=${OP}`, { waitUntil: 'domcontentloaded' });
 
-	const seg = (label: string) => page.locator('.frm-col .segmode .segbtn', { hasText: label });
+	const seg = (label: string) => page.getByRole('group', { name: 'How the map is drawn' }).getByRole('button', { name: label });
 	const figureBtn = seg('Figure'), liteBtn = seg('Lite');
 	await expect(liteBtn).toBeVisible({ timeout: 30_000 });
 	test.skip(await liteBtn.isDisabled(), 'op has no live cache in this environment');
@@ -151,31 +151,31 @@ test('force dashboard: selecting an operation highlights its sample without filt
 	await signInStarbase(page, 'admin');
 	await page.goto(`${STAR_BASE}/plot/force`, { waitUntil: 'domcontentloaded' });
 
-	const samples = page.locator('.panel-samples .rowcard');
-	const ops = page.locator('.panel-ops .rowcard');
+	const samples = page.locator('section[aria-label="Samples"] .fp-card');
+	const ops = page.locator('section[aria-label="Operations"] .fp-card');
 	await expect(ops.first()).toBeVisible({ timeout: 20_000 });
 
 	const opsBefore = await ops.count();
 	test.skip(opsBefore < 2, 'need at least 2 unfiltered operations to prove nothing gets hidden');
 
 	// No sample filter active yet: nothing in the samples list is highlighted.
-	await expect(page.locator('.panel-samples .rowcard.active')).toHaveCount(0);
+	await expect(page.locator('section[aria-label="Samples"] .fp-card.active')).toHaveCount(0);
 
 	// Click an operation directly (without ever clicking a sample first).
 	await ops.first().click();
-	await expect(page.locator('.panel-ops .rowcard.active')).toBeVisible();
+	await expect(page.locator('section[aria-label="Operations"] .fp-card.active')).toBeVisible();
 
 	// The operations list must be UNCHANGED — selecting an op is not a filter.
 	expect(await ops.count()).toBe(opsBefore);
 
 	// Exactly one sample is now highlighted (the selected op's parent sample),
 	// but the "show all" clear button must NOT appear — there is no active filter.
-	await expect(page.locator('.panel-samples .rowcard.active')).toHaveCount(1);
-	await expect(page.locator('.panel-ops .clearbtn')).toHaveCount(0);
+	await expect(page.locator('section[aria-label="Samples"] .fp-card.active')).toHaveCount(1);
+	await expect(page.getByRole('button', { name: 'Show all' })).toHaveCount(0);
 
 	// Explicitly clicking a sample DOES activate filtering (the clear button appears).
 	await samples.first().click();
-	await expect(page.locator('.panel-ops .clearbtn')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Show all' })).toBeVisible();
 });
 
 test('force dashboard: Gridded in Full-res loads the interpolated-grid octree with a fidelity chip', async ({ page }) => {
@@ -191,16 +191,16 @@ test('force dashboard: Gridded in Full-res loads the interpolated-grid octree wi
 	await page.goto(`${STAR_BASE}/plot/force?operation=${OP}`, { waitUntil: 'domcontentloaded' });
 
 	// Enter Full (octree) via the segmented selector. Available once the raw octree is built.
-	const fullBtn = page.locator('.frm-col .segmode .segbtn', { hasText: 'Full' });
+	const fullBtn = page.getByRole('group', { name: 'How the map is drawn' }).getByRole('button', { name: 'Full' });
 	await expect(fullBtn).toBeVisible({ timeout: 30_000 });
 	await fullBtn.click();
 	await expect(page.locator('.frm-octree')).toHaveCount(1, { timeout: 20_000 });
 
 	// Turn on the Gridded sub-toggle (header, Full-only) -> the FRM swaps to the grid octree.
-	await page.locator('.frm-col .toggle .tbtn', { hasText: 'Gridded' }).click();
+	await page.getByRole('button', { name: /Gridded/ }).click();
 
 	// The fidelity chip renders (gridActive is data-driven, so this does not depend on WebGL).
-	const fid = page.locator('.frm-fid');
+	const fid = page.locator('.fp-badge', { hasText: /grid · fidelity/ });
 	await expect(fid).toBeVisible({ timeout: 20_000 });
 	await expect(fid).toHaveText(/fidelity ~\d+%|fidelity n\/a/);
 
