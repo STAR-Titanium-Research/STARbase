@@ -67,11 +67,19 @@ export function clock(seconds: number): string {
 }
 
 // Series 1-3 take the chart tokens, with the token's own value as the fallback (outside the kit's frame
-// they are not defined). Each series after the first also gets a dash pattern, so hue is never the only cue.
+// they are not defined). Each series after the first also gets a dash pattern, so hue is never the only cue;
+// colour and dash are paired so that no pair repeats for the first fifteen series.
 const SERIES_COLOURS = ['var(--d1-series-1, #2a78d6)', 'var(--d1-series-2, #eb6834)', 'var(--d1-series-3, #1baf7a)'];
-const SERIES_DASHES: Array<string | null> = [null, '6 3', '2 3', '8 3 2 3', '4 2', '1 3'];
+const SERIES_DASHES: Array<string | null> = [null, '6 3', '2 3', '8 3 2 3', '4 2'];
 export function seriesStyle(index: number): { color: string; dash: string | null } {
-	return { color: SERIES_COLOURS[index % SERIES_COLOURS.length], dash: SERIES_DASHES[index % SERIES_DASHES.length] };
+	return { color: SERIES_COLOURS[index % 3], dash: SERIES_DASHES[(index + Math.floor(index / 3)) % SERIES_DASHES.length] };
+}
+
+/** A number for a tick-less place (tooltip, tile, peak): three or so significant figures, a real minus sign. */
+export function fmtNum(v: number): string {
+	if (v === 0) return '0';
+	const a = Math.abs(v);
+	return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : a >= 0.1 ? 2 : 3).replace('-', '\u2212');
 }
 
 export type TileSpan = 'sm' | 'wide' | 'tall' | 'big';

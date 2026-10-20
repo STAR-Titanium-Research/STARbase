@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clock, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
+import { clock, fmtNum, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
 describe('niceStep', () => {
 	it('picks 1, 2, 2.5 or 5 times a power of ten, never below the rough step', () => {
@@ -87,7 +87,20 @@ describe('seriesStyle', () => {
 		expect(seriesStyle(2).color).toBe('var(--d1-series-3, #1baf7a)');
 		expect(seriesStyle(2).dash).not.toBe(seriesStyle(1).dash);
 		expect(seriesStyle(3).color).toBe(seriesStyle(0).color);
-		expect(seriesStyle(3).dash).not.toBeNull();
+	});
+	it('never repeats a colour and dash pair for the first fifteen series', () => {
+		const pairs = Array.from({ length: 15 }, (_, i) => `${seriesStyle(i).color}|${seriesStyle(i).dash}`);
+		expect(new Set(pairs).size).toBe(15);
+	});
+});
+
+describe('fmtNum', () => {
+	it('keeps three or so significant figures, with a real minus sign', () => {
+		expect(fmtNum(1362.4)).toBe('1362');
+		expect(fmtNum(30)).toBe('30.0');
+		expect(fmtNum(8.214)).toBe('8.21');
+		expect(fmtNum(0.031)).toBe('0.031');
+		expect(fmtNum(-4.5)).toBe('\u22124.50');
 	});
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtPeak, groupTitle, seedTiles, tilePeak, tileTitle, type TileSeries } from './fastTiles';
+import { groupTitle, seedTiles, tilePeak, tileTitle, type TileSeries } from './fastTiles';
 
 const s = (label: string, group: string, unit: string, ...values: number[]): TileSeries => ({ label, group, unit, values: Float64Array.from(values) });
 
@@ -56,13 +56,5 @@ describe('seedTiles', () => {
 	});
 	it('makes none for an empty catalog', () => {
 		expect(seedTiles([], 1)).toEqual([]);
-	});
-});
-
-describe('fmtPeak', () => {
-	it('keeps three or so significant figures', () => {
-		expect(fmtPeak(8.21)).toBe('8.2');
-		expect(fmtPeak(0.031)).toBe('0.031');
-		expect(fmtPeak(-4.5)).toBe('−4.5');
 	});
 });

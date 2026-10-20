@@ -1,6 +1,6 @@
 // What a plot tile says about itself: a title for what it shows and its peak. Pure, so the wording is tested.
 
-import { unitLabel, type TileSpan } from './chartMath';
+import { fmtNum, unitLabel, type TileSpan } from './chartMath';
 
 export interface TileSeries { label: string; unit: string; group: string; values: Float64Array; }
 /** A plot tile as saved with the page layout. */
@@ -37,15 +37,10 @@ export function tileTitle(series: TileSeries[]): string {
 	return groups.length <= 2 ? groups.join(' + ') : `${groups[0]} + ${groups.length - 1} more`;
 }
 
-export function fmtPeak(v: number): string {
-	const a = Math.abs(v);
-	return v.toFixed(a >= 100 ? 0 : a >= 1 ? 1 : a >= 0.1 ? 2 : 3).replace('-', '−');
-}
-
 /** The highest value of the tile's series, when they share one unit (a peak across units means nothing). */
 export function tilePeak(series: TileSeries[]): { value: string; unit: string } | null {
 	if (series.length === 0 || new Set(series.map((s) => s.unit)).size !== 1) return null;
 	let top = -Infinity;
 	for (const s of series) for (let i = 0; i < s.values.length; i++) if (s.values[i] > top) top = s.values[i];
-	return Number.isFinite(top) ? { value: fmtPeak(top), unit: unitLabel(series[0].unit) } : null;
+	return Number.isFinite(top) ? { value: fmtNum(top), unit: unitLabel(series[0].unit) } : null;
 }

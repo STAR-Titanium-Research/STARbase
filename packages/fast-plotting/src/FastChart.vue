@@ -12,7 +12,7 @@
  * given (`cursor`): the hovered chart also shows a tooltip, the others a dot on each line.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { clock, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
+import { clock, fmtNum, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
 interface S { key: string; label: string; unit: string; group: string; values: Float64Array; }
 const props = withDefaults(defineProps<{
@@ -148,15 +148,10 @@ const hover = computed(() => {
 	const x = g.sx(props.time[i]);
 	const rows = props.series.map((s, k) => {
 		const v = s.values[i];
-		return { key: s.key, label: s.label, value: Number.isFinite(v) ? fmtValue(v) : '—', cy: Number.isFinite(v) ? g.paths[k].sy(v) : null, ...seriesStyle(k) };
+		return { key: s.key, label: s.label, value: Number.isFinite(v) ? fmtNum(v) : '—', cy: Number.isFinite(v) ? g.paths[k].sy(v) : null, ...seriesStyle(k) };
 	});
 	return { x, clock: clock(props.time[i]), rows };
 });
-function fmtValue(v: number): string {
-	const a = Math.abs(v);
-	return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2).replace('-', '−');
-}
-
 // ---- x-zoom: wheel + rectangular selection (emits a shared window to the parent) ----
 function pxOf(ev: PointerEvent | WheelEvent): number {
 	const g = geom.value; if (!g) return 0;
