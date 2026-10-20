@@ -69,8 +69,8 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
-const pin = computed(() => pinTargetForRecord('projects', props.id));
-// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+const pin = computed(() => (project.value ? pinTargetForRecord('projects', props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
 providePagePin(pin);
 </script>
 
