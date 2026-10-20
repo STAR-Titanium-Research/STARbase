@@ -13,8 +13,8 @@ export type PageSize = (typeof PAGE_SIZES)[number];
 export interface ListPrefs {
 	view: ListView;
 	density: Density;
-	/** The shown columns' fields, in order (the def's first column always first); null = all of them, in the def's order. */
-	columns: string[] | null;
+	/** Hidden columns and column order; null = all shown, in the def's order. */
+	columns: ColumnPrefs | null;
 	pageSize: PageSize;
 	/** The filter field rows are grouped by (an enum or relation filter of the def); null = not grouped. */
 	groupBy: string | null;
@@ -32,12 +32,35 @@ export const listPrefsKey = (slug: string): string => `d1.list.${slug}`;
 /** The filters a list can be grouped by: the enum and relation ones (a bool, a flag or a team is not a value a row has). */
 export const groupFilters = (def: IndexDef) => def.filters.filter((f) => f.options.kind === 'enum' || f.options.kind === 'relation');
 
-/** The columns to keep from a stored list: the def's own, once each, the first one (the row's link) always and first; null when that is every column in the def's order. */
-export function validColumns(def: IndexDef, stored: unknown): string[] | null {
-	if (!Array.isArray(stored) || !def.columns.length) return null;
-	const [first, ...rest] = def.columns.map((c) => c.field);
-	const kept = [...new Set(stored.filter((f): f is string => typeof f === 'string' && rest.includes(f)))];
-	return kept.length === rest.length && kept.every((f, i) => f === rest[i]) ? null : [first, ...kept];
+/**
+ * The person's columns as stored: which are hidden and the order of them all, neither naming the def's first column
+ * (the row's link: always shown, always first). Storing what is hidden, not what is shown, means a column added to
+ * the list later shows for people who customised, at the end.
+ */
+export interface ColumnPrefs {
+	order: string[];
+	hidden: string[];
+}
+
+/**
+ * Stored columns checked against the def: unknown columns dropped, each once, columns the value does not name
+ * added to the end of the order (shown); null when that is the default (everything shown, in the def's order).
+ * The first shape, a list of the shown columns, is still read: what it leaves out is hidden.
+ */
+export function validColumns(def: IndexDef, stored: unknown): ColumnPrefs | null {
+	const rest = def.columns.slice(1).map((c) => c.field);
+	const known = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.filter((f): f is string => typeof f === 'string' && rest.includes(f)))] : []);
+	let order: string[];
+	let hidden: string[];
+	if (Array.isArray(stored)) {
+		order = known(stored);
+		hidden = rest.filter((f) => !order.includes(f));
+	} else if (stored && typeof stored === 'object') {
+		order = known((stored as ColumnPrefs).order);
+		hidden = known((stored as ColumnPrefs).hidden);
+	} else return null;
+	order = [...order, ...rest.filter((f) => !order.includes(f))];
+	return !hidden.length && order.every((f, i) => f === rest[i]) ? null : { order, hidden };
 }
 
 // The stored value is a JSON object; each field is checked on its own, so a good one survives a bad

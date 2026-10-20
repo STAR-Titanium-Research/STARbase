@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // The View rail's Columns control: a dropdown button ("9 of 13 shown ▾") whose popover has a search field, the
 // shown columns (drag a row, or Alt+↑ ↓ on its grip, to reorder; the first column, the code, is always on and
-// first) and the hidden ones as checkboxes, then Reset and Done. The caller owns the value (the shown columns'
-// fields in order, null = all in the def's order); this only reports the new one. The logic is columnPicker.ts.
+// first) and the hidden ones as checkboxes, then Reset and Done. The caller owns the value (ColumnPrefs, null = all
+// shown in the def's order); this only reports the new one. The logic is columnPicker.ts.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { columnsSummary, hiddenColumns, isFixedColumn, matchColumns, moveColumn, shownColumns, toggleColumn } from './columnPicker';
 import type { IndexDef } from './indexConfig';
+import type { ColumnPrefs } from './listPrefs';
 
-const props = defineProps<{ def: IndexDef; modelValue: string[] | null }>();
-const emit = defineEmits<{ 'update:modelValue': [value: string[] | null] }>();
+const props = defineProps<{ def: IndexDef; modelValue: ColumnPrefs | null }>();
+const emit = defineEmits<{ 'update:modelValue': [value: ColumnPrefs | null] }>();
 
 const root = ref<HTMLElement | null>(null);
 const searchBox = ref<HTMLInputElement | null>(null);
@@ -40,7 +41,7 @@ function onDocumentClick(e: MouseEvent): void {
 onMounted(() => document.addEventListener('click', onDocumentClick));
 onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
 
-const set = (value: string[] | null) => emit('update:modelValue', value);
+const set = (value: ColumnPrefs | null) => emit('update:modelValue', value);
 // The row moves to the other list when its box is ticked or unticked (it is drawn again there): its box keeps the keyboard.
 function toggle(field: string): void {
 	set(toggleColumn(props.def, props.modelValue, field));

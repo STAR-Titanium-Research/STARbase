@@ -35,8 +35,8 @@ describe('readListPrefs', () => {
 
 	it('round-trips what was written, per list', () => {
 		const s = fakeStorage();
-		const mine = { view: 'cards', density: 'roomy', columns: ['sample_code', 'form'], pageSize: 100, groupBy: 'current_status' } as const;
-		writeListPrefs('samples', { ...mine, columns: [...mine.columns] }, s);
+		const mine = { view: 'cards', density: 'roomy', columns: { order: [...FIELDS.slice(1)].reverse(), hidden: ['form'] }, pageSize: 100, groupBy: 'current_status' } as const;
+		writeListPrefs('samples', { ...mine, columns: { order: [...mine.columns.order], hidden: [...mine.columns.hidden] } }, s);
 		writeListPrefs('operations', { ...DEFAULT, view: 'list', density: 'compact' } as never, s);
 		expect(JSON.parse(s.getItem('d1.list.samples')!)).toEqual(mine);
 		expect(readListPrefs('samples', samples, s)).toEqual(mine);
@@ -66,8 +66,11 @@ describe('readListPrefs', () => {
 	});
 
 	it('checks columns and the group-by field against the def: unknown ones are dropped', () => {
-		const stored = JSON.stringify({ columns: ['sample_code', 'gone', 'form', 'form', 'nickname'], groupBy: 'current_status' });
-		expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': stored }))).toMatchObject({ columns: ['sample_code', 'form', 'nickname'], groupBy: 'current_status' });
+		const stored = JSON.stringify({ columns: { order: ['form', 'gone', 'form', 'nickname'], hidden: ['gone', 'nickname', 'sample_code'] }, groupBy: 'current_status' });
+		expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': stored }))).toMatchObject({
+			columns: { order: ['form', 'nickname', ...FIELDS.slice(1).filter((f) => f !== 'form' && f !== 'nickname')], hidden: ['nickname'] },
+			groupBy: 'current_status',
+		});
 		for (const groupBy of ['gone', 'no_owner', 'team', 'nickname']) {
 			expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': JSON.stringify({ groupBy }) })).groupBy, groupBy).toBeNull();
 		}
@@ -81,16 +84,31 @@ describe('readListPrefs', () => {
 });
 
 describe('validColumns', () => {
-	it('puts the first column (the row link) always first, and drops unknown and repeated ones', () => {
-		expect(validColumns(samples, ['form', 'sample_code', 'nope', 'form'])).toEqual(['sample_code', 'form']);
-		expect(validColumns(samples, [])).toEqual(['sample_code']);
+	const REST = FIELDS.slice(1);
+	it('keeps what is hidden and the order, never naming the first column, each column once and only the def\'s', () => {
+		expect(validColumns(samples, { order: ['form', 'sample_code', 'nope', 'form'], hidden: ['sample_code', 'nickname', 'nickname', 'nope'] })).toEqual({
+			order: ['form', ...REST.filter((f) => f !== 'form')],
+			hidden: ['nickname'],
+		});
 	});
-	it('is null for every column in the def order, or for something that is not a list', () => {
+	it('puts a column the value does not name (one added to the list later) at the end of the order, shown', () => {
+		const v = validColumns(samples, { order: REST.slice(0, 3), hidden: [REST[0]] })!;
+		expect(v.order).toEqual(REST);
+		expect(v.hidden).toEqual([REST[0]]);
+	});
+	it('is null when everything is shown in the def order, or for something that is not stored columns', () => {
+		expect(validColumns(samples, { order: REST, hidden: [] })).toBeNull();
+		expect(validColumns(samples, { order: REST.slice(0, 2), hidden: [] })).toBeNull();
+		expect(validColumns(samples, { order: [...REST].reverse(), hidden: [] })).toEqual({ order: [...REST].reverse(), hidden: [] });
+		for (const junk of ['form', undefined, null, 5, {}]) expect(validColumns(samples, junk), String(junk)).toBeNull();
+	});
+	it('reads the first shape, a list of the shown columns: what it leaves out is hidden', () => {
+		expect(validColumns(samples, ['sample_code', 'form', 'nickname'])).toEqual({
+			order: ['form', 'nickname', ...REST.filter((f) => f !== 'form' && f !== 'nickname')],
+			hidden: REST.filter((f) => f !== 'form' && f !== 'nickname'),
+		});
 		expect(validColumns(samples, FIELDS)).toBeNull();
-		expect(validColumns(samples, [...FIELDS].reverse())).toEqual([FIELDS[0], ...FIELDS.slice(1).reverse()]);
-		expect(validColumns(samples, 'form')).toBeNull();
-		expect(validColumns(samples, undefined)).toBeNull();
-		expect(validColumns(samples, [1, null])).toEqual(['sample_code']);
+		expect(validColumns(samples, [])).toEqual({ order: REST, hidden: REST });
 	});
 });
 

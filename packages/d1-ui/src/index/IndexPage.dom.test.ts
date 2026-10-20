@@ -222,16 +222,16 @@ describe('columns', () => {
 		await click($('input[aria-label="Show Nickname"]'));
 		expect(headings()).not.toContain('Nickname');
 		expect(trigger.textContent).toContain('7 of 8 shown');
-		expect(saved().columns).not.toContain('nickname');
-		expect(saved().columns[0]).toBe('sample_code');
-		// Hidden ones are checkboxes under "Hidden"; checking one shows it, at the end.
+		expect(saved().columns.hidden).toEqual(['nickname']);
+		expect(saved().columns.order).not.toContain('sample_code');
+		// Hidden ones are checkboxes under "Hidden"; checking one shows it again, where it was.
 		await click($('input[aria-label="Show Nickname"]'));
-		expect(headings().filter((h) => h !== 'Plots').at(-1)).toBe('Nickname');
+		expect(headings().slice(0, 3)).toEqual(['Code', 'Nickname', 'Material']);
 		// Alt+arrow on a grip moves a column.
 		const grip = $('[data-grip="material_id"]')!;
 		grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }));
 		await settle();
-		expect(headings().slice(0, 3)).toEqual(['Code', 'Material', 'Project']);
+		expect(headings().slice(0, 4)).toEqual(['Code', 'Material', 'Nickname', 'Project']);
 		await click([...$$('.d1-columns .foot button')].find((b) => b.textContent === 'Reset')!);
 		expect(headings().slice(0, 3)).toEqual(['Code', 'Nickname', 'Material']);
 		expect(saved().columns).toBeNull();
