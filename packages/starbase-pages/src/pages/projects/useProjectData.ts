@@ -44,6 +44,8 @@ export interface Activity {
 	tests: string[];
 	/** The read hit its row cap: the oldest records are missing. */
 	truncated: boolean;
+	/** One of the two reads failed while the other answered: a sentence for the page, '' when both worked. */
+	partialError: string;
 }
 
 export interface PlannedWork {
@@ -76,7 +78,7 @@ export function useProjectData(id: Ref<string>) {
 		looseSamples: [] as any[],
 		looseOperations: [] as any[],
 		looseTests: [] as any[],
-		activity: { ops: [], tests: [], truncated: false } as Activity,
+		activity: { ops: [], tests: [], truncated: false, partialError: '' } as Activity,
 		planned: { ops: [], tests: [] } as PlannedWork,
 		equipment: [] as EquipmentUse[],
 		access: null as AccessList | null,
@@ -252,7 +254,8 @@ export function useProjectData(id: Ref<string>) {
 			fill(activity, token, 'activity', async () => {
 				// The whole history, not 26 weeks: the timeline picks its range (30 d, 6 mo, All) from these dates.
 				const rows = await fetchActivityRows(getItems, projectId);
-				return { ops: rows.ops.map((r) => r.operation_date), tests: rows.tests.map((r) => r.session_date), truncated: rows.truncated };
+				const partialError = rows.failed.map((f) => `Could not load ${f.collection} activity: ${errorText(f.error)}`).join(' ');
+				return { ops: rows.ops.map((r) => r.operation_date), tests: rows.tests.map((r) => r.session_date), truncated: rows.truncated, partialError };
 			}),
 			fill(planned, token, 'planned work', async () => {
 				const [ops, tests] = await Promise.all([loadPlannedDates('manufacturing_operations', projectId), loadPlannedDates('test_sessions', projectId)]);

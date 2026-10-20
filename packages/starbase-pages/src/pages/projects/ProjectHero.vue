@@ -42,7 +42,8 @@ const firstLoad = computed(() => (props.activity.loading || props.planned.loadin
 				@edit="$emit('edit')" @access="$emit('access')"
 			/>
 			<div class="a-chart">
-				<LoadState :loading="firstLoad" :error="activity.error" loading-text="Loading activity…">
+				<!-- The timeline always shows: the project and campaign bars and the planned markers come from other sections, so a failed activity read is a note below it. -->
+				<LoadState :loading="firstLoad" loading-text="Loading activity…">
 					<ProjectTimeline
 						v-model:range="range"
 						:project="timelineProject"
@@ -54,6 +55,8 @@ const firstLoad = computed(() => (props.activity.loading || props.planned.loadin
 						:truncated="activity.data.truncated"
 					/>
 				</LoadState>
+				<p v-if="activity.error" class="d1-note warn" role="alert">{{ activity.error }}</p>
+				<p v-if="activity.data.partialError" class="d1-note warn" role="alert">{{ activity.data.partialError }}</p>
 				<p v-if="planned.error" class="d1-note warn" role="alert">{{ planned.error }}</p>
 			</div>
 			<ProjectAbout class="a-about" :start="project.start_date" :end="project.end_date" :document-number="project.document_number" :description="project.description" />
