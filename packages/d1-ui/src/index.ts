@@ -56,7 +56,7 @@ export { campaignTypeLabel, operationCategoryFor } from './campaign/campaignType
 export {
 	DEFAULT_WEEKS, weeklyActivity, datesByKey, windowStart,
 } from './activity';
-export type { WeeklyActivity } from './activity';
+export type { ActivityWindow, WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
 export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
 export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, readTimelineRange, writeTimelineRange, projectDatesText } from './record/projectHero';
@@ -86,6 +86,12 @@ export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
 export { default as AppLink } from './components/AppLink.vue';
 export { default as SegmentedControl } from './components/SegmentedControl.vue';
+export { default as ViewRail } from './components/ViewRail.vue';
+export { default as ViewRailSection } from './components/ViewRailSection.vue';
+export { default as RecordViewRail } from './components/RecordViewRail.vue';
+export { provideRecordView, useRecordView } from './composables/useRecordView';
+export { ACTIVITY_RANGES, activityPeriod, activityWindow } from './record/recordView';
+export type { ActivityRange, RecordView } from './record/recordView';
 export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';
@@ -94,6 +100,7 @@ export { default as HiddenLink } from './components/HiddenLink.vue';
 export { default as RecordLayout } from './components/RecordLayout.vue';
 export { default as PinToggle } from './components/PinToggle.vue';
 export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
+export { providePagePin, usePagePin } from './components/pagePin';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
@@ -166,7 +173,8 @@ export type { PinRef, RecordLabel, ResolvedPin, SectionId, ShellLayout } from '.
 export { useSidebarData } from './nav/useSidebarData';
 export { usePinDrag } from './nav/usePinDrag';
 export { dropResult, moveAmongShown, sameOrder } from './nav/pinDrag';
-export { browserStorage, forgetListPrefs } from './index/listPrefs';
+export { forgetListPrefs } from './index/listPrefs';
+export { browserStorage } from './storage';
 export { default as NavIcon } from './nav/NavIcon.vue';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';

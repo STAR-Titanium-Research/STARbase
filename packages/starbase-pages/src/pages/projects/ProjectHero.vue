@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { LoadState, ProjectTimeline, timelineCampaigns, type AccessList, type PinRef, type SectionState, type TimelineRange } from '@d1/ui';
+import { LoadState, ProjectTimeline, timelineCampaigns, type AccessList, type SectionState, type TimelineRange } from '@d1/ui';
 import ProjectHead from './ProjectHead.vue';
 import ProjectAbout from './ProjectAbout.vue';
 import ProjectTotals from './ProjectTotals.vue';
@@ -16,7 +16,6 @@ const props = defineProps<{
 	canUpdate: boolean | null;
 	studioTo: string;
 	mapTo: string;
-	pin: PinRef | null;
 	access: SectionState<AccessList | null>;
 	counts: SectionState<ProjectCounts>;
 	campaigns: SectionState<any[]>;
@@ -38,7 +37,7 @@ const firstLoad = computed(() => (props.activity.loading || props.planned.loadin
 		<section class="hero" aria-label="Project overview">
 			<ProjectHead
 				class="a-head"
-				:project="project" :can-update="canUpdate" :studio-to="studioTo" :map-to="mapTo" :pin="pin" :access="access.data"
+				:project="project" :can-update="canUpdate" :studio-to="studioTo" :map-to="mapTo" :access="access.data"
 				@edit="$emit('edit')" @access="$emit('access')"
 			/>
 			<div class="a-chart">

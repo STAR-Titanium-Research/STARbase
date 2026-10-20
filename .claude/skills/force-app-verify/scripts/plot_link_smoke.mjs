@@ -240,11 +240,11 @@ await page.keyboard.press('Escape'); await settle(300);
 
 // ---- E. Set crop start here -------------------------------------------------------------------
 console.log('\nE. map menu -> Set crop start here');
-const saveBtn = page.getByRole('button', { name: /^save changes$/i });
+const saveBtn = page.getByRole('button', { name: /^save (changes|\d+ changes?…)$/i });
 // The stub's metadata can already make "Save changes" appear, so the crop edit is proven by the
 // handle moving and by the dialog's "Crop window" row rather than by the button alone.
 const dialogHas = async (re) => {
-	if (!(await saveBtn.count())) return false;
+	if (!(await saveBtn.count()) || !(await saveBtn.first().isEnabled())) return false;
 	await saveBtn.first().click(); await settle(300);
 	const txt = (await page.locator('.changes-dialog').innerText().catch(() => '')) || '';
 	await page.getByRole('button', { name: /^cancel$/i }).click().catch(() => {}); await settle(200);

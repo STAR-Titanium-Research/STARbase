@@ -44,7 +44,7 @@ const PASS = process.env.FORCE_APP_PASSWORD || process.env.D1_ADMIN_PASSWORD || 
     await p.waitForTimeout(4000);
     const onPlot = /\/plot/.test(p.url());
     // The dashboard mounts a sample/operation list; assert the explorer chrome is present.
-    const explorer = await p.locator('.charts-col, .rowcard, .empty').count();
+    const explorer = await p.locator('[data-panel-id] .charts, .fp-lists .fp-card, .fp-empty').count();
     console.log('reached /plot:', onPlot, '| explorer nodes:', explorer);
     await p.screenshot({ path: 'tests/ui/force_app_plot.png', fullPage: true });
     ok = ok && navItems === 4 && onPlot && explorer > 0;

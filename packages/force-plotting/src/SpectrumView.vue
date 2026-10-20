@@ -3,17 +3,26 @@
 // filter-service (/spectrogram) and renders it three ways — a time × frequency heatmap
 // (spectrogram), recent spectra stacked with an offset (waterfall), or the time-averaged power
 // spectrum (power, dB). Mirrors the live recording views so plotting stays at feature parity.
+// The power spectrum follows the chart rules (DESIGN.md 5b): one dB axis, a log frequency axis with
+// decade labels and faint minor lines, and, with a filter chain on, the stop bands shaded and
+// labelled with the raw spectrum faint behind the filtered one.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { type FilterChain, fetchSpectrogram } from './filterChain';
+import { type FilterChain, chainActive, defaultChain, fetchSpectrogram } from './filterChain';
 import { debounce } from './debounce';
+import { axisLabels, firstDecade, labelsThatFit, logTicks, niceScale } from './chartAxis';
+import { fmtHz, stopBands } from './filterResponse';
+import { nearestIndex } from './hoverIndex';
+import { resolveColor } from './cssColor';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
 	cacheFileId: string | null | undefined;
 	chain: FilterChain;
 	axis: string;
 	mode: 'psd' | 'spectrogram' | 'waterfall';
 	color?: string;
-}>();
+	filterBands?: boolean;     // power spectrum: shade the chain's stop bands (default on)
+	rpm?: number | null;       // mean rotation speed; the notch harmonics are multiples of rpm / 60
+}>(), { filterBands: true });
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
@@ -21,8 +30,12 @@ let ro: ResizeObserver | null = null;
 const off = document.createElement('canvas');
 const offCtx = off.getContext('2d');
 
-type Grid = { f: number[]; t: number[]; S: number[][]; fmax: number };
+type Grid = { f: number[]; t: number[]; S: number[][]; fmax: number; ref_db?: number };
 const grid = ref<Grid | null>(null);
+// The unfiltered spectrum, loaded once per file and axis and only for the power view with a chain on.
+const rawGrid = ref<Grid | null>(null);
+let rawKey = '';
+let rawAbort: AbortController | null = null;
 const loading = ref(false);
 const err = ref<string | null>(null);
 let reqId = 0;
@@ -34,6 +47,7 @@ const hover = ref<{ x: number; y: number; text: string } | null>(null);
 let hoverRafId = 0;
 let pendingHoverEv: MouseEvent | null = null;
 function computeHover(ev: MouseEvent) {
+	setMargins();
 	const c = canvasEl.value, g = grid.value;
 	if (!c || !g || !g.f.length || !g.t.length) { hover.value = null; draw(); return; }
 	const r = c.getBoundingClientRect();
@@ -47,11 +61,9 @@ function computeHover(ev: MouseEvent) {
 		const db = g.S[fi]?.[ti];
 		hover.value = { x: px, y: py, text: `${g.t[ti].toFixed(1)}s · ${Math.round(g.f[fi])}Hz · ${db != null ? db.toFixed(1) : '?'}dB` };
 	} else if (props.mode === 'psd') {
-		const fi = Math.min(nF - 1, Math.max(0, Math.round(((px - ML) / plotW) * (nF - 1))));
-		const row = g.S[fi];
-		let db: number | null = null;
-		if (row) { let s = 0; for (let ti = 0; ti < nT; ti++) s += row[ti]; db = s / nT; }
-		hover.value = { x: px, y: py, text: `${Math.round(g.f[fi])}Hz${db != null ? ` · ${db.toFixed(1)}dB` : ''}` };
+		const fi = nearestIndex(g.f, psdFreqAt(g, (px - ML) / plotW), 0, nF - 1);
+		const db = psdOf(g)[fi] + psdOffset(g);
+		hover.value = { x: px, y: py, text: `${fmtHz(g.f[fi])}${db != null ? ` · ${db.toFixed(1)} dB` : ''}` };
 	} else {   // waterfall — no numeric y-axis (vertical offset encodes recency, not a value)
 		const fi = Math.min(nF - 1, Math.max(0, Math.round(((px - ML) / plotW) * (nF - 1))));
 		hover.value = { x: px, y: py, text: `${Math.round(g.f[fi])}Hz` };
@@ -67,6 +79,7 @@ function onHoverLeave() { hover.value = null; draw(); }
 function palette() {
 	const s = getComputedStyle(document.documentElement);
 	return {
+		grid: s.getPropertyValue('--d1-grid').trim(),
 		bg: s.getPropertyValue('--plot-bg').trim() || '#0b1020',
 		text: s.getPropertyValue('--text-dim').trim() || 'rgba(148,163,184,0.75)',
 		textFaint: s.getPropertyValue('--text-faint').trim() || 'rgba(226,232,240,0.55)',
@@ -81,17 +94,38 @@ let themeObserver: MutationObserver | null = null;
 let loadAbort: AbortController | null = null;
 async function load() {
 	loadAbort?.abort(); loadAbort = null;
-	if (!props.cacheFileId) { ++reqId; grid.value = null; loading.value = false; return; }
+	if (!props.cacheFileId) {
+		++reqId; grid.value = null; loading.value = false;
+		rawAbort?.abort(); rawKey = ''; rawGrid.value = null;
+		return;
+	}
 	const mine = ++reqId;
 	const ac = new AbortController(); loadAbort = ac;
 	loading.value = true; err.value = null;
 	try {
+		void loadRaw();   // in parallel; the filtered trace never waits for it
 		const g = await fetchSpectrogram(props.cacheFileId, props.chain, props.axis, ac.signal);
 		if (mine === reqId) { grid.value = g; }
 	} catch (e: any) {
 		if (mine === reqId && !ac.signal.aborted) { err.value = e?.message || 'spectrogram failed'; grid.value = null; }
 	} finally {
 		if (mine === reqId) { loading.value = false; draw(); }
+	}
+}
+
+// The raw spectrum for the faint line behind a filtered one. It does not depend on the chain, so it
+// loads once per file and axis; its failure costs only that line (and is retried on the next load).
+async function loadRaw() {
+	if (props.mode !== 'psd' || !chainActive(props.chain) || !props.cacheFileId) return;
+	const key = `${props.cacheFileId}|${props.axis}`;
+	if (key === rawKey) return;
+	rawAbort?.abort(); rawKey = key; rawGrid.value = null;
+	const ac = new AbortController(); rawAbort = ac;
+	try {
+		const raw = await fetchSpectrogram(props.cacheFileId, defaultChain(), props.axis, ac.signal);
+		if (rawKey === key) { rawGrid.value = raw; draw(); }
+	} catch {
+		if (rawKey === key && !ac.signal.aborted) rawKey = '';
 	}
 }
 
@@ -118,7 +152,12 @@ function resize() {
 // Plot-area margins for axis ticks — mirrors ForceChart.vue's ML/MR/MT/MB convention at a
 // smaller scale (this is a compact canvas panel, not a full chart). ML holds the y-axis
 // (Hz or dB) numbers, MB holds the x-axis (time or Hz) numbers.
-const ML = 32, MR = 6, MT = 4, MB = 14;
+let ML = 32, MR = 6, MT = 4, MB = 14;
+// The power spectrum has axis titles (a row above the plot, one below it) and wider tick labels.
+function setMargins() {
+	const psd = props.mode === 'psd';
+	ML = psd ? 50 : 32; MR = psd ? 12 : 6; MT = psd ? 22 : 4; MB = psd ? 34 : 14;
+}
 
 // A handful of evenly-spaced tick values — simpler than ForceChart's "nice round step" search,
 // which isn't worth importing here for 3-4 ticks over a small, fixed-shape panel.
@@ -175,7 +214,104 @@ function drawHover(W: number, H: number) {
 	ctx.globalAlpha = 1; ctx.fillStyle = pal.text; ctx.textAlign = 'left'; ctx.fillText(text, tx, ty);
 }
 
+// Time-averaged dB per frequency bin (what the power view plots), cached per grid.
+const psdCache = new WeakMap<Grid, number[]>();
+function psdOf(g: Grid): number[] {
+	let v = psdCache.get(g);
+	if (!v) {
+		const nT = g.t.length;
+		v = g.S.map((row) => { let s = 0; for (let ti = 0; ti < nT; ti++) s += row[ti]; return s / nT; });
+		psdCache.set(g, v);
+	}
+	return v;
+}
+// Each grid is in dB relative to its own peak, so a filtered grid is moved onto the raw one's scale
+// with the services' `ref_db` (filtered_db + filtered_ref - raw_ref); without it (an older service)
+// the filtered trace is drawn alone, relative to its own peak.
+function usableRaw(): Grid | null {
+	const r = rawGrid.value, g = grid.value;
+	return r && r.S.length && g && r.ref_db != null && g.ref_db != null && chainActive(props.chain) ? r : null;
+}
+function psdOffset(g: Grid): number {
+	const r = usableRaw();
+	return r && g !== r ? g.ref_db! - r.ref_db! : 0;
+}
+// Log frequency axis from the decade of the first non-zero bin (never below 1 Hz) to Nyquist.
+function psdFreqRange(g: Grid): [number, number] {
+	const lo = firstDecade(g.f);
+	return [lo, Math.max(lo * 10, g.f[g.f.length - 1] ?? g.fmax)];
+}
+function psdFreqAt(g: Grid, frac: number): number {
+	const [a, b] = psdFreqRange(g);
+	return 10 ** (Math.log10(a) + Math.min(1, Math.max(0, frac)) * (Math.log10(b) - Math.log10(a)));
+}
+
+// The power spectrum: dB against log frequency on one axis pair, stop bands under the lines.
+function drawPsd(g: Grid, W: number, H: number, plotW: number, plotH: number, stroke: string) {
+	if (!ctx) return;
+	const pal = palette();
+	const [xLo, xHi] = psdFreqRange(g);
+	const l0 = Math.log10(xLo), l1 = Math.log10(xHi);
+	const sx = (f: number) => ML + ((Math.log10(Math.max(f, xLo)) - l0) / (l1 - l0)) * plotW;
+	const yScale = niceScale(-80, 0, 5);
+	const sy = (db: number) => MT + plotH - ((Math.max(db, yScale.lo) - yScale.lo) / (yScale.hi - yScale.lo)) * plotH;
+	const gridCol = pal.grid || pal.text;
+	ctx.font = '11px system-ui'; ctx.lineWidth = 1;
+	// filter stop bands
+	if (props.filterBands && chainActive(props.chain)) {
+		const bands = stopBands(props.chain, { nyquist: xHi, rpm: props.rpm }).map((b) => {
+			const xa = b.f0 <= xLo ? ML : sx(b.f0), xb = Math.min(ML + plotW, sx(b.f1));
+			const tw = ctx!.measureText(b.label).width;
+			const tx = tw > ML + plotW - xa - 8 ? ML + plotW - 4 - tw : xa + 4;
+			return { xa, xb, label: b.label, tx, tw };
+		}).filter((b) => b.xb - b.xa >= 1);
+		const keep = labelsThatFit(bands.map((b) => ({ x0: b.tx, x1: b.tx + b.tw })));
+		bands.forEach((b, i) => {
+			ctx!.fillStyle = pal.text; ctx!.globalAlpha = 0.12; ctx!.fillRect(b.xa, MT, b.xb - b.xa, plotH);
+			if (keep[i]) { ctx!.globalAlpha = 1; ctx!.textAlign = 'left'; ctx!.fillText(b.label, b.tx, MT + 13); }
+		});
+		ctx.globalAlpha = 1;
+	}
+	// grid: faint 2-9 lines, then a line at every labelled tick
+	const lt = logTicks(xLo, xHi);
+	ctx.strokeStyle = gridCol;
+	ctx.globalAlpha = 0.12;
+	for (const f of lt.minor) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT); ctx.lineTo(x, MT + plotH); ctx.stroke(); }
+	ctx.globalAlpha = 0.25;
+	for (const f of lt.major) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT); ctx.lineTo(x, MT + plotH); ctx.stroke(); }
+	for (const v of yScale.ticks) { const y = sy(v); ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + plotW, y); ctx.stroke(); }
+	ctx.globalAlpha = 1;
+	// traces: raw faint behind, filtered (or the only one) solid
+	const trace = (db: number[], gf: number[], alpha: number, offset: number) => {
+		ctx!.strokeStyle = stroke; ctx!.globalAlpha = alpha; ctx!.lineWidth = 1.5; ctx!.beginPath();
+		let started = false;
+		for (let fi = 0; fi < gf.length; fi++) {
+			if (!(gf[fi] >= xLo)) continue;
+			const x = sx(gf[fi]), y = sy(db[fi] + offset);
+			started ? ctx!.lineTo(x, y) : ctx!.moveTo(x, y); started = true;
+		}
+		ctx!.stroke(); ctx!.globalAlpha = 1; ctx!.lineWidth = 1;
+	};
+	const raw = usableRaw();
+	if (raw) trace(psdOf(raw), raw.f, 0.35, 0);
+	trace(psdOf(g), g.f, 1, psdOffset(g));
+	// axes with 4px outward ticks, labels, titles
+	ctx.strokeStyle = pal.textFaint; ctx.fillStyle = pal.text; ctx.globalAlpha = 1;
+	ctx.beginPath(); ctx.moveTo(ML, MT); ctx.lineTo(ML, MT + plotH); ctx.lineTo(ML + plotW, MT + plotH); ctx.stroke();
+	ctx.textAlign = 'right';
+	const yl = axisLabels(yScale.ticks);
+	yScale.ticks.forEach((v, i) => { const y = sy(v); ctx!.beginPath(); ctx!.moveTo(ML - 4, y); ctx!.lineTo(ML, y); ctx!.stroke(); ctx!.fillText(yl[i], ML - 7, y + 4); });
+	ctx.textAlign = 'center';
+	for (const f of lt.major) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT + plotH); ctx.lineTo(x, MT + plotH + 4); ctx.stroke(); ctx.fillText(fmtHz(f, false), x, MT + plotH + 16); }
+	ctx.font = '600 11px system-ui';
+	ctx.fillText('Frequency (Hz)', ML + plotW / 2, H - 6);
+	ctx.textAlign = 'left'; ctx.fillText(raw ? 'Magnitude (dB re raw peak)' : 'Magnitude (dB re peak)', 4, 13);
+	ctx.font = '11px system-ui';
+	label(`${props.axis}${raw ? ' · filtered, raw faint' : ''}`, stroke, W - MR, 'right');
+}
+
 function draw() {
+	setMargins();
 	const c = canvasEl.value; if (!c || !ctx) return;
 	const W = c.clientWidth, H = c.clientHeight;
 	const pal = palette();
@@ -187,7 +323,7 @@ function draw() {
 	if (!g || !g.S.length || !g.t.length) return note('no spectrum');
 
 	const nF = g.f.length, nT = g.t.length;
-	const stroke = props.color || '#38bdf8';
+	const stroke = resolveColor(props.color) || '#38bdf8';
 	const plotW = Math.max(1, W - ML - MR), plotH = Math.max(1, H - MT - MB);
 	const fMax = g.f[nF - 1] ?? g.fmax;
 
@@ -210,18 +346,7 @@ function draw() {
 	}
 
 	if (props.mode === 'psd') {
-		// time-averaged spectrum (mean dB across time) → single line
-		ctx.strokeStyle = stroke; ctx.lineWidth = 1.3; ctx.beginPath();
-		for (let fi = 0; fi < nF; fi++) {
-			let s = 0; const row = g.S[fi]; for (let ti = 0; ti < nT; ti++) s += row[ti];
-			const db = s / nT;                     // -80..0
-			const x = ML + (fi / (nF - 1)) * plotW;
-			const y = MT + plotH - ((db + 80) / 80) * plotH;
-			fi ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-		}
-		ctx.stroke();
-		drawAxes(W, H, plotW, plotH, 0, fMax, -80, 0);
-		label(`${props.axis} power (dB) vs Hz`, stroke);
+		drawPsd(g, W, H, plotW, plotH, stroke);
 		drawHover(W, H);
 		return;
 	}
@@ -264,10 +389,10 @@ function note(msg: string) {
 	ctx.fillStyle = palette().text; ctx.font = '12px system-ui';
 	ctx.fillText(msg, 12, (canvasEl.value?.clientHeight || 40) / 2);
 }
-function label(text: string, col: string) {
+function label(text: string, col: string, x = ML + 4, align: CanvasTextAlign = 'left') {
 	if (!ctx) return;
-	ctx.fillStyle = col; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
-	ctx.fillText(text, ML + 4, MT + 12);
+	ctx.fillStyle = col; ctx.font = '11px system-ui'; ctx.textAlign = align;
+	ctx.fillText(text, x, align === 'right' ? 13 : MT + 12);
 	ctx.textAlign = 'left';
 }
 
@@ -276,6 +401,8 @@ function label(text: string, col: string) {
 // settle; a different file, axis or mode is a deliberate switch and loads at once.
 const baseKey = () => `${props.cacheFileId}|${props.axis}|${props.mode === 'spectrogram' ? 's' : props.mode}`;
 const key = () => `${baseKey()}|${JSON.stringify(props.chain)}`;
+// Bands and the notch's rotation frequency are drawn from props, not loaded: redraw only.
+watch(() => [props.filterBands, props.rpm, props.color], () => draw());
 const CHAIN_DEBOUNCE_MS = 400;
 const loadSoon = debounce(() => { void load(); }, CHAIN_DEBOUNCE_MS);
 let lastBase = baseKey();
@@ -291,7 +418,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
 	ro?.disconnect(); themeObserver?.disconnect();
-	loadSoon.cancel(); loadAbort?.abort(); loadAbort = null; ++reqId;   // nothing may land after unmount
+	loadSoon.cancel(); loadAbort?.abort(); loadAbort = null; rawAbort?.abort(); ++reqId;   // nothing may land after unmount
 });
 </script>
 

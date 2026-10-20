@@ -3,12 +3,13 @@
 // The row stays a table row (so the table is still announced as one); the first cell holds the real link or button, and
 // a click anywhere else on the row does the same for a mouse. In picker mode the first cell is text and a click ticks
 // the row. It draws what IndexPage hands it and reports clicks.
+import { computed } from 'vue';
 import DataTable from '../components/DataTable.vue';
 import { rowAccent } from './accent';
 import RowMapButton from './RowMapButton.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { cellText, plotCode, sortDirection, sortKey } from './indexView';
+import { cellText, groupRuns, plotCode, sortDirection, sortKey } from './indexView';
 import { PICK_ATTR } from './pickMode';
 import type { RowPlots } from './plotData';
 import type { Density } from './listPrefs';
@@ -37,6 +38,8 @@ const props = defineProps<{
 	sort: string;
 	sortable: (c: ColumnDef) => boolean;
 	rowHref: (row: Row) => string;
+	/** The group a row is under (the rail's Group by): a header row is drawn above each run of rows. */
+	groupOf?: ((row: Row) => string) | null;
 }>();
 const emit = defineEmits<{
 	open: [row: Row];
@@ -52,6 +55,9 @@ function ariaSort(c: ColumnDef): 'ascending' | 'descending' | undefined {
 	return d === 'asc' ? 'ascending' : d === 'desc' ? 'descending' : undefined;
 }
 const arrow = (c: ColumnDef) => (sortDirection(props.sort, sortKey(c)) === 'asc' ? '▲' : sortDirection(props.sort, sortKey(c)) === 'desc' ? '▼' : '');
+const colCount = computed(() => 1 + (props.showThumb ? 1 : 0) + props.def.columns.length + (props.hasPlots ? 1 : 0) + (props.hasMap ? 1 : 0));
+// One <tbody> per group, headed by a row header cell, so a screen reader announces the group.
+const runs = computed(() => groupRuns(props.rows, props.groupOf));
 const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.format === 'code' });
 </script>
 
@@ -73,19 +79,20 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 				<th v-if="hasMap" class="plots"><span class="sr-only">Process map</span></th>
 			</tr>
 		</thead>
-		<tbody>
-			<template v-if="loading && !rows.length">
-				<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
-					<td />
-					<td v-if="showThumb" class="thumb"><span class="bar" /></td>
-					<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
-					<td v-if="hasPlots" class="plots" />
-					<td v-if="hasMap" class="plots" />
-				</tr>
-			</template>
-			<template v-else>
+		<tbody v-if="loading && !rows.length">
+			<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
+				<td />
+				<td v-if="showThumb" class="thumb"><span class="bar" /></td>
+				<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
+				<td v-if="hasPlots" class="plots" />
+				<td v-if="hasMap" class="plots" />
+			</tr>
+		</tbody>
+		<template v-else>
+			<tbody v-for="(run, n) in runs" :key="n">
+				<tr v-if="run.label !== null" class="group"><th :colspan="colCount" scope="rowgroup">{{ run.label }}</th></tr>
 				<tr
-					v-for="row in rows"
+					v-for="row in run.rows"
 					:key="rowKey(row)"
 					class="row"
 					:class="{ on: pick && isPicked(row), taken: pick && isTaken(row) }"
@@ -132,8 +139,8 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 						<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 					</td>
 				</tr>
-			</template>
-		</tbody>
+			</tbody>
+		</template>
 	</DataTable>
 </template>
 
@@ -146,6 +153,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 .arrow { font-size: 9px; }
 th.num .sort { justify-content: flex-end; }
 
+.group th { padding-top: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 .row { cursor: pointer; }
 .row.on td { background: var(--d1-tint); }
 .row.taken { opacity: 0.55; cursor: default; }

@@ -8,7 +8,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { PageShell, PinToggle, SegmentedControl, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
+import { PageShell, SegmentedControl, canonicalPath, pinTargetForIndex, providePagePin, useExplorerHost } from '@d1/ui';
 import PersonEditDialog from './PersonEditDialog.vue';
 import InviteDialog from './InviteDialog.vue';
 import LinkLoginDialog from './LinkLoginDialog.vue';
@@ -28,8 +28,8 @@ const readOnly = computed(() => canViewAllAccess.value);
 const route = useRoute();
 const router = useRouter();
 const go = (to: string) => host.navigate(to);
-// The header's Pin toggle: this page (a bespoke page, not IndexPage, so it asks for its own).
-const pinTarget = computed(() => pinTargetForIndex(canonicalPath(route.path), null));
+// The Pin button after the title, in the host frame (DESIGN.md "Pin on the title"): this page (a bespoke page, not IndexPage) provides its own target.
+providePagePin(computed(() => pinTargetForIndex(canonicalPath(route.path), null)));
 
 // ---- the list state, in the URL ----
 const state = computed(() => parseListState(route.query));
@@ -272,7 +272,6 @@ function openLink(r: PeopleRow) {
 				<v-input v-if="!teamsView" class="search" :model-value="qText" placeholder="Search name / email…" :small="true" @update:model-value="onSearch">
 					<template #prepend><v-icon name="search" small /></template>
 				</v-input>
-				<PinToggle v-if="pinTarget" class="pin" :target="pinTarget" label="People" />
 				<v-button v-if="isAdmin && !readOnly && !teamsView" class="act" small @click="inviteFor = null"><v-icon name="mail" left small />Invite</v-button>
 				<v-button v-if="!teamsView && !readOnly" class="act" small :secondary="isAdmin" @click="openDialog(null)"><v-icon name="person_add" left small />Add person</v-button>
 			</div>
@@ -443,8 +442,7 @@ function openLink(r: PeopleRow) {
 
 /* Phone (< 768 px, spec 3.3): the header, the filters and the rows fit 375 px. */
 @media (max-width: 767px) {
-	/* People | Teams and Pin on the first line, the search across the next, Invite and Add person under it. */
-	.pin { order: 2; }
+	/* People | Teams on the first line, the search across the next, Invite and Add person under it. */
 	.bar .search { order: 3; flex: 1 1 100%; }
 	.act { order: 4; }
 	/* The chips wrap; Role, Team and Sort are one row of equal menus, not a full-width select each. */

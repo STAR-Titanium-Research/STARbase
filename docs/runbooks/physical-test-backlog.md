@@ -1599,6 +1599,33 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
   proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
   surface scans PR (pending).
 
+### Design system rollout: View rail, title pin, FAST plotter (PR #377)
+
+- [ ] **DSR1 — Title pin against the real pins endpoint.** Hover the title of an index page, a saved view and each record
+  kind (Sample, Project, Campaign, Operation, Test, Tooling): the pin appears only on hover or keyboard focus, is filled
+  when pinned, and pinning/unpinning updates the sidebar's Pinned list. On a "not found" record page no pin shows. On a
+  touch device the pin is always visible. Since: PR #377 (stream B).
+- [ ] **DSR2 — Record-page View rail with real records.** On a Sample and a Project: the rail opens, collapses, remembers
+  its state across reloads and across records of the same kind, and `\` toggles it (also with AltGr on a German keyboard).
+  Hide removes truly empty sections and "On this page" counts them; a section that failed to load stays listed. Table
+  density changes every table. Two columns with real long lists. At about 1280px the rail becomes a "View" button with a
+  popover. Since: PR #377 (stream B).
+- [ ] **DSR3 — Project activity range on a project with real history.** 30 d / 6 mo / All in the View rail and in the hero timeline's own control change each other and read nothing again;
+  "Last operation" and "Last test" stay the newest ever, whatever the range; "All" on a
+  project with more than 5000 operations shows the truncation note and no false zero weeks. Since: PR #377 (stream B).
+- [ ] **DSR4 — Index-page View rail with real data.** On Samples and Operations: the rail starts level with the table,
+  open at 1920 wide and collapsed at 1440; columns dropdown (hide, reorder, Reset) survives a reload; rows per page
+  25/50/100 and sort/group by change the query; Settings "Forget my list views" resets lists and record views.
+  Since: PR #377 (stream A).
+- [ ] **DSR5 — FAST statistics on real runs.** On runs with 10k+ samples, compare heating, hold and cooling durations,
+  total energy, hold power, densification and shrink rate with values worked out by hand from the CSV; check a run that
+  never reaches the recipe target (falls back to its peak) and a pyrometer that reads blank on the way up. Zoom window
+  (wheel and rectangle) stays responsive at about 20k samples with six tiles. Since: PR #377 (stream D).
+- [ ] **DSR6 — FAST page in the real shell.** No page scroll at 1920×1080, 1920×1200 and 1440×900; folded lists at about
+  1216px; worded badges match real `fast_run` states; Sample ↗, Open operation and recipe Open land on the right records;
+  a layout saved by the old page (`d1-fast-dashboard-v1`) still restores its tiles and run; unit strings print correctly
+  ("C" shown as "°C"). Since: PR #377 (stream D).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
@@ -2098,6 +2125,19 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   two NI-DAQ recordings ran to `done`; the tacho generator started on `cDAQ1/_ctr0`). With no
   counter given it answers 500, because the default is the name `STAR_DAQ`. The PC without the
   driver is still to do.
+
+### Shared force plotter: chart style, filters, FFT (PR #377)
+
+- [ ] **DSR-R1 — Filtered FFT on a real cut.** With the real filter service and a low-pass, high-pass and notch chain at
+  the measured rpm: the filtered spectrum is solid, the raw one faint and never above it in the passband, the shaded stop
+  bands line up with the real spectrum (notch harmonics at the cut's mean rpm), and "Filter bands" hides them. FFT zoom
+  (wheel, rectangle, Reset) works. Since: PR #377 (stream C).
+- [ ] **DSR-R2 — Filter preview against the service.** In the Signal filters tab, the preview curve for a chain matches
+  the attenuation the service applies (zero-phase: −6 dB at a cut-off); dragging a handle or using the arrow keys
+  updates the chain and the charts. Since: PR #377 (stream C).
+- [ ] **DSR-R3 — Stacked force charts at real sizes.** At 1920×1080 and 1440×900 on the packaged app and in STARbase:
+  axis titles, nice ticks, one shared time axis, hover tooltip on the hovered chart with dots on the others, and
+  "Save chart" exports what is on screen (including FFT). Since: PR #377 (stream C).
 
 ## C. d1-server and infrastructure
 

@@ -31,7 +31,7 @@ function fakeHost(): ExplorerHost {
 	return { api: { get }, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(null) } as unknown as ExplorerHost;
 }
 
-async function render(props: Record<string, unknown>, opts: { router?: boolean } = {}): Promise<string> {
+async function render(props: Record<string, unknown>, opts: { router?: boolean; path?: string } = {}): Promise<string> {
 	const host = fakeHost();
 	setExplorerHostFactory(() => host);
 	// The page waits for the sidebar's collections and views before it reads rows; a watcher never fires in a server render, so settle that first.
@@ -42,8 +42,8 @@ async function render(props: Record<string, unknown>, opts: { router?: boolean }
 	// The rows arrive from an async load that starts in setup: wait for it before each component renders.
 	app.mixin({ serverPrefetch: () => new Promise((r) => setTimeout(r, 15)) });
 	if (opts.router !== false) {
-		const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }] });
-		await router.push('/home/samples');
+		const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }, { path: '/:slug', component: { render: () => null } }] });
+		await router.push(opts.path ?? '/home/samples');
 		await router.isReady();
 		app.use(router);
 	}
@@ -70,6 +70,22 @@ describe('IndexPage, normal mode (unchanged)', () => {
 		expect(html).not.toContain('data-pick-key');
 		expect(html).not.toContain('picking');
 		expect(text(html)).not.toMatch(/Add (\d+ )?samples?/);
+	});
+
+	it('has the toolbar (search, filters) above the table only, and no view switches in it', async () => {
+		const html = await render({});
+		expect(html).toContain('class="index-grid"');
+		expect(html).toContain('aria-label="Search samples"');
+		for (const gone of ['aria-label="View"', 'aria-label="Row density"', 'aria-label="Sort by"', 'Showing ']) expect(html).not.toContain(gone);
+		// The page's buttons are on the breadcrumb line, before the grid.
+		expect(html.indexOf('Open in Data Studio')).toBeLessThan(html.indexOf('index-grid'));
+	});
+
+	it('reports what the title pin pins (the frame draws the button), and draws no Pin button itself', async () => {
+		const pins: unknown[] = [];
+		const html = await render({ onPin: (t: unknown) => pins.push(t) }, { path: '/samples' });
+		expect(pins).toEqual([{ kind: 'page', target: 'samples' }]);
+		expect(text(html)).not.toMatch(/\bPin\b/);
 	});
 
 	it('ticks on every list, not only those with a select action', async () => {
@@ -134,11 +150,10 @@ describe('IndexPage, picker mode', () => {
 		expect(html).toContain('picking');
 	});
 
-	it('keeps search, saved views, filters and the view switches', async () => {
+	it('keeps search, saved views and filters (the View rail is drawn once the page is measured, in a DOM)', async () => {
 		const html = await render({ pick: true }, { router: false });
 		expect(html).toContain('aria-label="Search samples"');
-		expect(html).toContain('aria-label="View"');
-		expect(html).toContain('aria-label="Row density"');
+		expect(html).toContain('aria-label="Filter by status"');
 	});
 
 	it('rows already taken are drawn but cannot be ticked', async () => {

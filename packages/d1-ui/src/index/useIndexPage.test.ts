@@ -532,3 +532,69 @@ describe('useIndexPage plots (the Force / FAST buttons)', () => {
 		expect(asked.some((p: string) => p.includes('force_analyses') || p.includes('no_owner'))).toBe(false);
 	});
 });
+
+describe('useIndexPage, the view settings', () => {
+	const view = (pageSize = 50, groupBy: string | null = null) => ({ pageSize: ref(pageSize), groupBy: ref<string | null>(groupBy) });
+
+	it('asks for the chosen number of rows', async () => {
+		const t = setup({ page: '2' });
+		useIndexPage(t.host, samples, t.route, t.router, view(25));
+		await flush();
+		expect(t.items()[0].params).toMatchObject({ limit: 25, page: 2 });
+	});
+
+	it('goes back to page 1 and reloads when the page size changes on a later page', async () => {
+		const t = setup({ page: '3' });
+		const v = view(50);
+		useIndexPage(t.host, samples, t.route, t.router, v);
+		await flush();
+		v.pageSize.value = 100;
+		await flush();
+		expect(t.route.query).toEqual({});
+		expect(t.items().at(-1)!.params).toMatchObject({ limit: 100, page: 1 });
+	});
+
+	it('reloads on page 1 when the page size changes there, without touching the URL', async () => {
+		const t = setup({});
+		const v = view(50);
+		useIndexPage(t.host, samples, t.route, t.router, v);
+		await flush();
+		const before = t.items().length;
+		v.pageSize.value = 25;
+		await flush();
+		expect(t.items()).toHaveLength(before + 1);
+		expect(t.items().at(-1)!.params.limit).toBe(25);
+		expect(t.pushed).toEqual([]);
+	});
+
+	it('sorts by the group field first, and keeps the URL sort after it', async () => {
+		const t = setup({ sort: 'nickname' });
+		const v = view(50, 'current_status');
+		const page = useIndexPage(t.host, samples, t.route, t.router, v);
+		await flush();
+		expect(t.items()[0].params.sort).toEqual(['current_status', 'nickname']);
+		expect(page.activeGroup.value).toBe('current_status');
+		v.groupBy.value = null;
+		await flush();
+		expect(t.items().at(-1)!.params.sort).toEqual(['nickname']);
+	});
+
+	it('keeps a shared ?page=3 link on a cold session, where the group stops being offered once the sidebar\'s collections arrive', async () => {
+		const t = setup({ page: '3' }, { collections: ['physical_samples'] });
+		const page = useIndexPage(t.host, samples, t.route, t.router, view(50, 'project_id'));
+		await flush();
+		expect(page.activeGroup.value).toBeNull();
+		expect(t.pushed).toEqual([]);
+		expect(t.route.query).toEqual({ page: '3' });
+		expect(t.items().at(-1)!.params).toMatchObject({ page: 3, sort: ['-created_at'] });
+	});
+
+	it('does not group by a relation whose collection the user cannot read', async () => {
+		const t = setup({}, { collections: ['physical_samples'] });
+		const page = useIndexPage(t.host, samples, t.route, t.router, view(50, 'project_id'));
+		await flush();
+		expect(page.groups.value.map((g) => g.value)).toEqual(['current_status']);
+		expect(page.activeGroup.value).toBeNull();
+		expect(t.items()[0].params.sort).toEqual(['-created_at']);
+	});
+});

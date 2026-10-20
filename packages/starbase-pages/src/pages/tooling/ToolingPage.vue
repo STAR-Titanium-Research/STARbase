@@ -3,9 +3,9 @@ import ExplorerView from '../../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, EditDrawer, HiddenLink, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail,
+	AppLink, EditDrawer, HiddenLink, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail,
 	boxDetailFacts, boxProjectHidden, boxRailFacts, dataStudioRoute, detailFacts, edgeDetailFacts, edgeLabel, edgeRailFacts, edgeUsageMismatch, findEdge, findInsert,
-	focusKindOf, focusRoute, indexRoute, insertDetailFacts, insertLabel, insertRailFacts, mapPath, mismatchText, openLink, pinTargetForRecord, toolingTitle,
+	focusKindOf, focusRoute, indexRoute, insertDetailFacts, insertLabel, insertRailFacts, mapPath, mismatchText, openLink, pinTargetForRecord, providePagePin, toolingTitle,
 	useCanUpdate, FOCUS_COLLECTION, FOCUS_KIND_LABEL, FOCUS_NOUN, type ContentsEntry, type ToolingFocus,
 } from '@d1/ui';
 import { useToolingData } from './useToolingData';
@@ -52,7 +52,9 @@ function onSelect(f: ToolingFocus) {
 
 const pageTitle = computed(() => toolingTitle(focus.value, model.value));
 const studioTo = computed(() => dataStudioRoute(collection.value, props.id));
-const pin = computed(() => pinTargetForRecord(collection.value, props.id));
+const pin = computed(() => (model.value && focus.value ? pinTargetForRecord(collection.value, props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
+providePagePin(pin);
 // The Process map, opened on this record. Only an insert edge can be a map focus (its used-in fan); tool boxes and cutting inserts cannot.
 const mapTo = computed(() => (focusKind.value === 'edge' ? mapPath('insert_edges', props.id) : null));
 
@@ -144,8 +146,6 @@ const contents = computed<ContentsEntry[]>(() => {
 							<RecordLink collection="insert_edges" :id="edge.id">Edge {{ edgeLabel(insert, edge) }}</RecordLink>
 						</template>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail :kind="FOCUS_KIND_LABEL[focusKind]" :code="code" :title="railTitle" :facts="railFacts" :contents="contents">

@@ -27,6 +27,24 @@ export function chainActive(c: FilterChain | null | undefined): boolean {
 	return !!c && (c.despike.on || c.detrend.on || c.highpass.on || c.lowpass.on || c.notch.on);
 }
 
+/** An independent copy: a working chain must never share objects with the saved one, or editing it edits the saved chain. */
+export function cloneChain(c: FilterChain | null | undefined): FilterChain {
+	return c ? JSON.parse(JSON.stringify(c)) : defaultChain();
+}
+
+/** How many stages are switched on: the badge of the Signal filters tab. */
+export function stagesOn(c: FilterChain | null | undefined): number {
+	return c ? [c.despike, c.detrend, c.highpass, c.lowpass, c.notch].filter((s) => s.on).length : 0;
+}
+
+/** Same stages, same settings. Compared field by field, so the key order of a chain built another way (a saved one) does not matter. */
+export function chainsEqual(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+	const ka = Object.keys(a), kb = Object.keys(b);
+	return ka.length === kb.length && ka.every((k) => chainsEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
 /** Why Bake / bake-clear can't run for this analysis row, or null when they can. A Force App cut
  *  over the recorder's .mat size limit is stored with directus_files_id NULL (#190); baking
  *  PATCHes status 'pending' and the orchestrator re-runs MATLAB on that archive .mat, which
@@ -78,9 +96,10 @@ export async function fetchFilteredFft(cacheFileId: string, chain: FilterChain, 
 	return res.json();
 }
 
-// STFT of one axis for the spectrogram / waterfall / power-spectrum views. S is [freq][time] in dB.
+// STFT of one axis for the spectrogram / waterfall / power-spectrum views. S is [freq][time] in dB relative to
+// the grid's own peak; ref_db is that peak in dB (absent on an older service), to compare two grids.
 export async function fetchSpectrogram(cacheFileId: string, chain: FilterChain, axis: string, signal?: AbortSignal):
-	Promise<{ f: number[]; t: number[]; S: number[][]; fmax: number }> {
+	Promise<{ f: number[]; t: number[]; S: number[][]; fmax: number; ref_db?: number }> {
 	const res = await authorizedFetch(`${useForceHost().filterUrl}/spectrogram`, {
 		method: 'POST',
 		signal,

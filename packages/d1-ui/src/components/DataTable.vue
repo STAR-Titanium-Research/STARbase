@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+import { useRecordView } from '../composables/useRecordView';
+
 // The one table of the Explorer pages. The caller writes the rows (<thead>, <tbody>) in the slot;
 // the look comes from here, so every list on every page has the same head, row height and hover.
 // Cell classes: `num` (right-aligned figures), `mono` (codes), `dim`, `actions` (right-aligned,
 // no wrap), `fit` (a column only as wide as its content) and `thumb` (a small picture column).
-defineProps<{
+// Density: the `density` prop when given (a list's own preference), else the one the record page's View rail
+// chose for every table in its panels (useRecordView), else normal.
+const props = defineProps<{
 	/** Rows 6px high instead of 7px: for long figure tables. */
 	dense?: boolean;
 	/** The table is only as wide as its content instead of the whole panel: a few narrow columns would otherwise sit far apart. */
@@ -13,11 +18,13 @@ defineProps<{
 	/** Row height and text size, the per-list preference: compact (3px rows, 12px text), normal (today), roomy (11px rows). */
 	density?: 'compact' | 'normal' | 'roomy';
 }>();
+const pageDensity = useRecordView();
+const chosen = computed(() => props.density ?? pageDensity?.density);
 </script>
 
 <template>
 	<div class="d1-table-wrap">
-		<table class="d1-table" :class="[{ dense, 'fit-content': fitContent, figures }, density && density !== 'normal' ? density : '']"><slot /></table>
+		<table class="d1-table" :class="[{ dense, 'fit-content': fitContent, figures }, chosen && chosen !== 'normal' ? chosen : '']"><slot /></table>
 	</div>
 </template>
 

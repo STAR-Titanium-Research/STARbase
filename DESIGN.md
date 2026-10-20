@@ -188,11 +188,12 @@ All in `@d1/ui` (`packages/d1-ui/src/components`, `.../nav`). Pages compose thes
 | `ExplorerNav`: `SidebarExpanded`, `SidebarRail`, `NavHoverMenu` | Pattern | The dark sidebar: Find, Home, Inbox, pins, five sections | expanded (224px), rail (60px icons, tooltips, 224px hover menus) |
 | `PlainFrame` (STARbase) | Template | Sticky page header: title, breadcrumb, actions | 44px, one row (PR 356); static on phones |
 
-**Proposed** (designs on the "STARbase list page layouts" canvas):
+**Added in PR #377** (designs on the "STARbase list page layouts" canvas):
+- `ViewRail` / `ViewRailSection` (kit), `RecordViewRail`, `IndexViewRail`, `TitlePin` (STARbase), `providePagePin`.
 - **View rail:** every index and record page puts its viewing settings in one small hanging card on the right, the
   mirror of `RecordRail` on the left. It shows only the settings that apply to that page. Rules in section 5.
 - **Pin on title hover:** the pin moves out of the header actions to a button beside the title, shown on hover or focus.
-- **Activity under the rail:** the record's activity chart moves from the main column to a card under the left rail (not the Project page, which has the hero timeline).
+- **Activity under the rail** (still Proposed): the record's activity chart moves from the main column to a card under the left rail (not the Project page, which has the hero timeline).
 
 ---
 
@@ -224,9 +225,11 @@ panels. The hero reacts to the page's own width:
 | 700–1499px | Head; timeline full width; about and totals side by side |
 | ≥ 1500px | Head; timeline in two thirds; about and totals stacked beside it |
 
-The full spec is `docs/superpowers/specs/2026-10-20-project-page-hero-design.md`.
+The View rail hangs at its right (Table density, Empty sections and Activity range; no Panels, the hero page lays its
+panels out itself), and its Activity range is the timeline's range. The Pin is the title pin in the header, not one in the
+hero. The full spec is `docs/superpowers/specs/2026-10-20-project-page-hero-design.md`.
 
-**The View rail (Proposed).** One right-hand card for *how* a page is shown, on index and record pages alike. It
+**The View rail.** One right-hand card for *how* a page is shown, on index and record pages alike. It
 is a hanging card like `RecordRail`: surface, 1px line, 12px radius, `--d1-shadow`, a 40px tile lid with a sliders
 icon, "View" and a collapse button; 220px wide, sticky at `--d1-header-offset`, only as tall as its content. It holds
 only the settings that apply to the page it is on, always in this order, and drops a section that has nothing in it:
@@ -237,16 +240,19 @@ only the settings that apply to the page it is on, always in this order, and dro
 | Layout | Table, cards or list (icon segmented control, labels in tooltips) | Panels: 1 column or 2 columns |
 | Density | Compact (30px rows), Normal (36px), Roomy (44px) | Table density, the same three steps, for every table in the panels |
 | Content | Sort (field + direction), Group by, Columns, Rows per page | Empty sections: Show or Hide (hidden ones are counted under "On this page") |
-| Page-specific | — | Only when the page has one: Units on a Sample (SI or as recorded), Activity range on a Project (30 d, 6 mo, All) |
+| Page-specific | — | Only when the page has one: Activity range on a Project (30 d, 6 mo, All). (Units on a Sample is not built: nothing converts units yet.) |
 | Footnote | — | "Saved for every sample page on this device." |
 
 - **Columns** is a dropdown, not a list of toggles: the button reads "9 of 13 shown ▾" and opens a popover with a
   search field, the shown columns (drag to reorder; the code column is always on) and the hidden ones as
   checkboxes, then Reset and Done.
+- **Rows per page** is a per-device preference like the rest of the rail, not part of the URL: a shared link keeps
+  the filters, the sort and the page number, but not the page size.
 - **Placement.** On index pages the rail starts level with the top of the table, not the filter row: the toolbar sits
   above the table only, and the rail's lid lines up with the table's header row. On record pages it starts level with
   the record rail and the first panel.
-- **Index pages split the controls in three.** Header: title (with the hover pin), breadcrumb, then page actions: bulk
+- **Index pages split the controls in three.** Header: title (with the hover pin), breadcrumb, then page actions (for
+  now on the breadcrumb line under the header, `IndexActions`, until `PlainFrame` offers pages an actions slot): bulk
   actions such as Print labels (disabled until rows are selected, then "Print labels (2)"), Open in Data Studio and the
   primary "New …". Toolbar above the table: search and one button per filter showing its value ("Status Active"),
   tinted when set; these choose *which* rows show and go in the URL. View rail: *how* rows look, remembered per page
@@ -277,13 +283,14 @@ There is no `--space-*` token yet. Use these values, and do not add odd ones (5p
 
 **Touch targets:** 44px for sidebar and phone controls. Desktop inline controls are 28 to 34px.
 
-## 5b. Plotters and charts (Proposed)
+## 5b. Plotters and charts
 
 One plotter component is shared by STARbase and the force app (`@d1/force-plotting`), and FAST follows the same
 layout (`@d1/fast-plotting`). Both fill the screen height with no page scroll at 1920×1080, 1920×1200 and 1440×900.
 
-**Force analysis: four columns.** `256px | 330px | 624px | 1fr` from 1800px (at 1440 the lists fold to a 44px tab:
-`44px | 300px | 520px | 1fr`).
+**Force analysis: four columns.** `256px | 330px | FRM | Signals` from 1500px of dashboard width (the FRM and Signals share a 12-column grid, 6/6 by
+default, so Add panel, drag and resize still work); below 1500px the lists fold to a 44px tab (`44px | 300px | …`),
+and below 900px everything stacks in one column.
 1. **Samples → Operations.** Two stacked panels. Pick a sample, then its operations, shown filtered by a
    "Sample … ×" chip, with search, "Show all" and "Metadata issues only". Operations carry worded badges
    ("FRM ready", "1 issue"), never bare coloured dots.
@@ -299,9 +306,11 @@ layout (`@d1/fast-plotting`). Both fill the screen height with no page scroll at
    chips, zoom tools and ⋯; then Fx, Fy and Fz as three panels that share the height and one time axis.
 - **Signal filters tab:** a gain (dB) against log-frequency preview of the combined response and each stage, with
   drag handles on cut-off and notch frequencies and a hover read-out; stage rows (type, frequency, order or Q, on);
-  "Preview on charts" draws the filtered line over the raw one in grey.
+  "Preview on the Lite map and FFT" shows the work chain on the Lite map's filtered pane and the FFT before Apply.
+  (A filtered overlay on the force traces themselves is not built.)
 - **FFT with filters on:** the spectrum shows the stop bands shaded and labelled, the raw spectrum faint and the
-  filtered one solid, on the spectrum's single dB axis. A "Filter bands" legend chip hides them.
+  filtered one solid, on one dB axis relative to the raw spectrum's peak (the filter service returns `ref_db` for
+  this). A "Filter bands" legend chip hides them.
 
 **FAST analysis: three columns.** `256px | 330px | 1fr` (`44px | 300px | 1fr` at 1440).
 1. **Samples → Runs**, as Force; runs carry "Trace complete", "Short run", "Importing…", "Import failed", "No trace".
@@ -310,10 +319,12 @@ layout (`@d1/fast-plotting`). Both fill the screen height with no page scroll at
    Statistics fills the rest of the column: a phase bar (heating, hold, cooling), nine tiles (run duration, time
    over 1000 °C, mean ramp, total energy, power-on time, hold power, densification, peak shrink rate, energy per
    gram), and a cumulative-energy chart that takes the remaining height. "Whole run | Zoom window" recalculates
-   for the zoomed range. Definitions: hold = within 10 °C of the target; cooling = end of hold to 200 °C;
-   energy per gram uses the recorded mass.
+   for the zoomed range. Definitions: heating starts when the temperature first rises 20 °C above its start or the
+   power first exceeds 2 % of its peak; hold = within 10 °C of the target (the run's peak if the recipe target is
+   missing or never reached); cooling = end of hold to 200 °C; energy per gram uses the recorded mass. Numbers print
+   as integers from 100, one decimal from 10, up to two below, without trailing zeros.
 3. **Plots.** A group (count "6 of 6", rectangle zoom, Reset zoom, Add plot, disabled at 6) of up to six tile panels
-   in a 2-wide grid filling the height. Each tile is titled by what it shows with its peak, and has pick series,
+   in a 2-wide grid filling the height (3 across once the plot area is 1300px or wider). Each tile is titled by what it shows with its peak, and has pick series,
    ≈ normalise, resize (small, wide, tall, big) and remove. Right-click opens the grouped, searchable series picker.
 
 **Chart rules (every plot):**
@@ -322,12 +333,13 @@ layout (`@d1/fast-plotting`). Both fill the screen height with no page scroll at
 - Nice tick steps (1, 2, 2.5, 5 × 10ⁿ), 5–6 per axis, the top tick above the data. Tick labels 11px, muted ink,
   tabular figures, real minus signs, 1k/10k on log axes.
 - Every axis has a title with its unit: "Force (N)", "Time (s)", "Radius (mm)", "Frequency (Hz)",
-  "Magnitude (dB re 1 N)". FAST tiles show the unit alone above the axis, since the tile names the quantity.
+  "Magnitude (dB re raw peak)". FAST tiles show the unit alone above the axis, since the tile names the quantity.
 - Stacked charts share the x axis: tick marks on each, labels and title only on the bottom one.
 - One y axis per chart, never two.
 - Series colours: Fx/slot 1 `#2a78d6` blue, Fy/slot 2 `#eb6834` orange, Fz/slot 3 `#1baf7a` teal (dark:
   `#3987e5`, `#d95926`, `#199e70`). A single series is blue. Two or more get a legend with line keys, and from the
-  third series also a dash pattern, so hue is never the only cue. Text never wears a series colour.
+  second series also a dash pattern (colour and dash pairs do not repeat within 15 series), so hue is never the only
+  cue. Tokens: `--d1-series-1/2/3`, `--d1-grid`, `--d1-axis` in `tokens.css`. Text never wears a series colour.
 - Lines 2px (dense force traces 1.5px), envelope bands at 10%, light chart background in both themes' panels.
 - Hover: one cursor across every chart of a group; the chart under the pointer shows a tooltip, the others a value
   dot with a surface ring; the x value shows on the axis.

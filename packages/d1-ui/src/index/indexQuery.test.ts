@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { INDEX_DEFS, indexDefBySlug } from './indexConfig';
 import type { IndexDef } from './indexConfig';
 import {
-	PAGE_SIZE, SHORT_ID_RE, bookmarkSort, buildItemsParams, dataStudioLink, nested, queryFromState, stateFromQuery, toggledBookmark,
+	SHORT_ID_RE, bookmarkSort, buildItemsParams, dataStudioLink, nested, queryFromState, stateFromQuery, toggledBookmark,
 } from './indexQuery';
 import type { IndexState } from './indexQuery';
 import type { Bookmark } from '../nav/navConfig';
@@ -73,8 +73,43 @@ describe('buildItemsParams', () => {
 
 	it('pages 50 at a time and counts the matches', () => {
 		const p = buildItemsParams(samples, state({ page: 3 }), null);
-		expect(p).toMatchObject({ limit: PAGE_SIZE, page: 3, meta: 'filter_count' });
-		expect(PAGE_SIZE).toBe(50);
+		expect(p).toMatchObject({ limit: 50, page: 3, meta: 'filter_count' });
+	});
+
+	it('takes the page size from the view (25, 50 or 100)', () => {
+		for (const pageSize of [25, 50, 100]) expect(buildItemsParams(samples, state({ page: 2 }), null, null, null, { pageSize })).toMatchObject({ limit: pageSize, page: 2 });
+	});
+
+	describe('grouped', () => {
+		const grouped = (groupBy: string | null, sort: string | null = null, readable: ReadonlySet<string> | null = null) =>
+			buildItemsParams(samples, state({ sort }), null, readable, null, { groupBy });
+
+		it('sorts by the group field first, then by the sort; a relation by what it shows', () => {
+			expect(grouped(null).sort).toEqual(['-created_at']);
+			expect(grouped('current_status').sort).toEqual(['current_status', '-created_at']);
+			expect(grouped('project_id', 'nickname').sort).toEqual(['project_id.project_code', 'nickname']);
+		});
+		it('lets a sort by the group field itself keep its direction, once', () => {
+			expect(grouped('current_status', '-current_status').sort).toEqual(['-current_status']);
+			expect(grouped('project_id', 'project_id.project_code').sort).toEqual(['project_id.project_code']);
+		});
+		it('is not grouped by a field that is not a group filter, or a relation the user cannot read', () => {
+			expect(grouped('nickname').sort).toEqual(['-created_at']);
+			expect(grouped('project_id', null, new Set(['materials'])).sort).toEqual(['-created_at']);
+		});
+		it('asks for and sorts by a relation group\'s fallback too (an uncoded campaign)', () => {
+			const tests = indexDefBySlug('tests')!;
+			const p = buildItemsParams(tests, state(), null, null, null, { groupBy: 'campaign_id' });
+			expect(p.sort).toEqual(['campaign_id.campaign_code', 'campaign_id.name', tests.defaultSort]);
+			expect(p.fields).toEqual(expect.arrayContaining(['campaign_id.campaign_code', 'campaign_id.name']));
+			expect((p.fields as string[]).filter((f) => f === 'campaign_id.campaign_code')).toHaveLength(1);
+		});
+		it('asks for the group field when no column does', () => {
+			const operations = indexDefBySlug('operations')!;
+			const f = operations.filters.find((x) => x.options.kind === 'enum' || x.options.kind === 'relation' )!;
+			const p = buildItemsParams(operations, state(), null, null, null, { groupBy: f.field });
+			expect(p.fields).toEqual(expect.arrayContaining([f.options.kind === 'relation' ? `${f.field}.${f.options.display}` : f.field]));
+		});
 	});
 
 	it('has no filter key when nothing applies', () => {
