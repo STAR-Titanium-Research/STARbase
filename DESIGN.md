@@ -95,7 +95,7 @@ The ladder is **ground → surface → tile**. Never put a tile colour on the gr
 | `--d1-accent` | `#18222f` | `#a8bed8` (primary lifted 65% toward the text) | Kit text, icons, borders and fills in the brand colour: record links, the kind pill, count chips, the current-page bar, active segment |
 | `--d1-on-accent` | `#ffffff` | `#0d1117` | Text or icon on a solid accent fill |
 | `--d1-tint` | accent at 10% | accent at 10% | Icon wells, soft accent backgrounds |
-| `--theme--secondary` | `#ff99dd` | `#ff99dd` | Sign-in wash only, plus the tests series in charts |
+| `--theme--secondary` | `#ff99dd` | `#ff99dd` | Sign-in wash only. Charts use `--d1-chart-2` for tests |
 
 Always write `var(--d1-accent, var(--theme--primary))`. Some kit components also render outside the page frame,
 where `--d1-accent` is not set.
