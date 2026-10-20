@@ -108,6 +108,6 @@ export const loadFieldOptions = (api: AccessApi, field: BulkField): Promise<Outc
 		const rel = field.relation;
 		const key = rel ? relationKey(rel.collection) : null;
 		if (!rel || !key) throw new Error('This field has no list to choose from.');
-		const res = await api.get(`/items/${rel.collection}`, { params: relationOptionParams(key, rel.display) });
-		return relationOptions(res.data?.data, key, rel.display);
+		const res = await api.get(`/items/${rel.collection}`, { params: relationOptionParams(key, rel.display, rel.fallback) });
+		return relationOptions(res.data?.data, key, rel.display, rel.fallback);
 	});

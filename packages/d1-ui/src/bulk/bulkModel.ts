@@ -111,6 +111,7 @@ export function valueText(def: IndexDef, field: BulkField, value: string | boole
 	if (field.kind === 'date') return formatDate(String(value));
 	if (field.kind === 'relation') return relationLabel ?? String(value);
 	if (def.collection === 'physical_samples' && field.field === 'current_status') return statusStyle('sample', String(value))?.label ?? humanise(String(value));
+	if (def.collection === 'test_sessions' && field.field === 'status') return statusStyle('test', String(value))?.label ?? humanise(String(value));
 	const choice = choiceKindFor(def.collection, field.field);
 	return choice ? choiceLabel(choice, value) : humanise(String(value));
 }

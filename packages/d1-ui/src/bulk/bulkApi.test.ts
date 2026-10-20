@@ -130,3 +130,14 @@ describe('loadFieldOptions', () => {
 		expect(out.ok).toBe(false);
 	});
 });
+
+describe('loadFieldOptions of a campaign link', () => {
+	const campaign = indexDefBySlug('operations')!.bulkFields!.find((f) => f.field === 'campaign_id')!;
+	it('asks for the name too and labels a campaign without a code by it', async () => {
+		const api = fakeApi({ get: async () => ({ data: { data: [{ campaign_id: 'c1', campaign_code: 'CMP-1', name: 'Alpha' }, { campaign_id: 'c2', campaign_code: null, name: 'Beta' }] } }) });
+		const out = await loadFieldOptions(api, campaign);
+		expect(api.get.mock.calls[0][0]).toBe('/items/campaigns');
+		expect((api.get.mock.calls[0][1] as any).params.fields).toEqual(['campaign_id', 'campaign_code', 'name']);
+		expect(out).toEqual({ ok: true, data: [{ value: 'c1', label: 'CMP-1' }, { value: 'c2', label: 'Beta' }] });
+	});
+});
