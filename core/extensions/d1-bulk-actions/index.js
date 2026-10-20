@@ -25,7 +25,7 @@
 // (a Lab Viewer, on preview too: there is nothing a viewer may preview); 400 INVALID_PAYLOAD (collection, kind, ids, field or value);
 // 400 NOT_APPLICABLE (the kind is not valid for that collection); 404 NOT_FOUND (an action you may not see); 403 FORBIDDEN (revert by a
 // non-administrator, undo by someone else); 403 UNDO_WINDOW_CLOSED; 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED (state undone or
-// reverted), NOTHING_TO_REVERT (no applied record left to revert).
+// reverted), NOTHING_TO_REVERT (the action applied nothing).
 //
 // How a request runs, per record (preview and apply run the SAME function; preview in a transaction that is always rolled back, so the
 // two cannot disagree):
@@ -609,7 +609,12 @@ export function mount(router, context, clock = () => new Date()) {
       const all = await lock('bulk_action_rows').where('action_id', actionId).select();
       const applied = all.filter((r) => r.outcome === 'applied');
       const todo = applied.filter((r) => r.revert_outcome !== 'reverted');
-      if (!todo.length) throw new HttpError(409, 'NOTHING_TO_REVERT', 'That bulk action has nothing left to revert.');
+      if (!applied.length) throw new HttpError(409, 'NOTHING_TO_REVERT', 'That bulk action has nothing left to revert.');
+      if (!todo.length) {
+        // every record is reverted but the state never got written (a crash after the records committed): put it right, then answer 409
+        await lock('bulk_actions').where('action_id', actionId).update({ state: mode === 'undo' ? 'undone' : 'reverted' });
+        return { healed: true };
+      }
 
       const ctx = { req, acc, cfg, kind, params };
       const outs = [];
@@ -641,6 +646,7 @@ export function mount(router, context, clock = () => new Date()) {
       await lock('bulk_actions').where('action_id', actionId).update({ state });
       return { state, revertId, outs, revertedNow };
     });
+    if (finished.healed) throw new HttpError(409, 'ALREADY_REVERTED', 'That bulk action has already been undone or reverted.');
     if (finished.revertedNow) await clearDataCache(req);
     res.json({
       state: finished.state,

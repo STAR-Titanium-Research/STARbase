@@ -804,3 +804,13 @@ test('an unexpected error answers 500 in the Directus shape without leaking the 
   assert.ok(broken.log.errors.some((m) => m.includes('secret host')));
   assert.ok(!JSON.stringify(r.body).includes('secret host'));
 });
+
+test('an action whose records are all reverted but whose state was never written (a crash) is put right by the next revert, which answers 409', async () => {
+  const h = setup();
+  const id = await ran(h, member(U.ann), 'physical_samples', editBody([S.one], 'current_status', 'archived'));
+  h.tables.bulk_action_rows.find((x) => x.action_id === id && x.record_id === S.one).revert_outcome = 'reverted';
+  const r = await revert(h, admin(U.admin), id);
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'ALREADY_REVERTED');
+  assert.equal(h.tables.bulk_actions.find((a) => a.action_id === id).state, 'reverted');
+});
