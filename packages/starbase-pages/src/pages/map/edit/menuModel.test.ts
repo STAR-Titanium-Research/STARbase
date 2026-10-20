@@ -384,6 +384,35 @@ describe('templates in the catalog', () => {
 		expect(labels(tpl(es))).toEqual(['Roughing pass']);
 	});
 
+	it('resolves the whole catalog in one order: templates, samples, From database…, then the categories as built', () => {
+		const es = catalogEntries(withTemplates);
+		expect(labels(es)).toEqual(['Pull to break', 'Roughing pass', 'New sample', 'Existing sample…', 'From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD']);
+		expect(sections(es)).toEqual(['Templates', 'Samples', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
+		expect(rootEntries(body(), menuFor(body(), null), withTemplates)).toEqual(es);
+	});
+
+	it('from a sample output: the templates, then From database…, then the categories (operations, then tests), then Connect to…', () => {
+		const b = body();
+		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'out')), withTemplates);
+		expect(labels(es)).toEqual(['Pull to break', 'Roughing pass', 'From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
+		expect(sections(es)).toEqual(['Templates', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+	});
+
+	it('from a sample input: the operation templates, then the operation categories only, with no From database… and no tests', () => {
+		const b = body();
+		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), withTemplates);
+		expect(labels(es)).toEqual(['Roughing pass', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Connect to…']);
+		expect(es.some((e) => e.label === 'From database…' || e.choice.kind === 'fromDatabase')).toBe(false);
+		expect(es.some((e) => e.section === 'Tests')).toBe(false);
+	});
+
+	it('an insert offers the operation templates and the methods, but neither From database… nor the samples nor the tests', () => {
+		const es = operationOnlyEntries(withTemplates);
+		expect(labels(es)).toEqual(['Roughing pass', 'Turning', 'Milling', 'FAST sintering', 'Mystery']);
+		expect(sections(es)).toEqual(['Templates', 'Machining', 'FAST sintering', 'Other methods']);
+		expect(es.some((e) => e.choice.kind === 'fromDatabase' || e.section === 'Samples' || e.section === 'Tests')).toBe(false);
+	});
+
 	it('finds one by its name or by the method or test type it is made of, ahead of the method itself', () => {
 		const es = catalogEntries(withTemplates);
 		expect(labels(searchEntries(es, 'rough'))).toEqual(['Roughing pass']);

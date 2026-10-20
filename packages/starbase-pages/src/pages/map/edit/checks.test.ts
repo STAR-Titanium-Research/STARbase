@@ -375,6 +375,36 @@ describe('gear a new card names (R7)', () => {
 		expect(checks(old, ctx)).toEqual([]);
 	});
 
+	describe('an attached operation', () => {
+		const gearOf: CheckCtx['gear'] = (field, id) => (field === 'equipment_id' && id === 'e-old' ? 'The machine Lathe is retired.' : field === 'tool_id' && id === 'old' ? 'The tool Holder 3 is retired.' : undefined);
+		const key = recordKey('manufacturing_operations', 'op-9');
+		const attached = (values?: Record<string, unknown>): DraftBody =>
+			run([
+				{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } },
+				{ type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } },
+				...(values ? [{ type: 'setValues', key: 'n2', values } as DraftAction] : []),
+			]);
+		const at = { ...ctx, gear: gearOf, records: { [key]: { version: 3, values: { method_id: 'mc', equipment_id: 'e-old', tool_id: 'old' } } } };
+
+		it('says nothing of the retired machine and tool its record already names, while the person has not touched them', () => {
+			expect(checks(attached(), at)).toEqual([]);
+		});
+
+		it('warns when the person picks a retired tool for it in the rail', () => {
+			expect(texts(checks(attached({ tool_id: 'old' }), at), 'n2')).toEqual(['warn:tool_id:The tool Holder 3 is retired.']);
+			expect(blocking(checks(attached({ tool_id: 'old' }), at))).toEqual([]);
+		});
+
+		it('does not warn for a pick that is fine, nor for the record\'s own old machine beside it', () => {
+			expect(checks(attached({ tool_id: 'good' }), at)).toEqual([]);
+		});
+	});
+
+	it('a new card is warned as before, from its values', () => {
+		const old = run([{ type: 'setValues', key: 'n2', values: { tool_id: 'old' } }], planned());
+		expect(texts(checks(old, withGear), 'n2')).toEqual(['warn:tool_id:The tool Holder 3 is retired.']);
+	});
+
 	it('warns for a new test too', () => {
 		const b = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }, { type: 'addContainer', kind: 'test', source: { from: 'template', values: { test_type: 'tensile', equipment_id: 'm', tool_id: 'old' } }, from: { key: 'n1' } }, { type: 'setValues', key: 'n2', values: { planned_date: '2026-11-01' } }]);
 		expect(texts(checks(b, withGear), 'n2')).toEqual(['warn:tool_id:The tool Holder 3 is retired.']);
