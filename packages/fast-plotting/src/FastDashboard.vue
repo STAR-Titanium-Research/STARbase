@@ -270,12 +270,11 @@ function seedDefaultTiles() {
 }
 
 // ---------------------------------------------------------------- plot tiles
-const PALETTE = ['#dc2626', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#475569', '#c026d3'];
 function tileSeries(t: Tile) {
 	const tr = trace.value; if (!tr) return [];
-	return t.series.filter((k) => tr.series[k]).map((k, i) => {
+	return t.series.filter((k) => tr.series[k]).map((k) => {
 		const s = tr.series[k];
-		return { key: k, label: s.label, unit: s.unit, group: s.group, color: PALETTE[i % PALETTE.length], values: s.values };
+		return { key: k, label: s.label, unit: s.unit, group: s.group, values: s.values };
 	});
 }
 function addTile() { if (tiles.value.length < 6) tiles.value.push({ id: tileSeq++, series: [], span: 'sm', normalise: false }); }
@@ -294,6 +293,8 @@ function toggleSeries(t: Tile, key: string) {
 const zoomStart = ref<number | null>(null);
 const zoomEnd = ref<number | null>(null);
 const rectZoomTool = ref(false);
+// the time under the pointer on any tile, drawn as the shared cursor on all of them
+const hoverT = ref<number | null>(null);
 const zoomed = computed(() => zoomStart.value != null || zoomEnd.value != null);
 function onChartZoom(v: { start: number; end: number } | null) {
 	if (!v) { zoomStart.value = null; zoomEnd.value = null; return; }
@@ -510,7 +511,7 @@ const recipe = computed(() => buildRecipe(detail.value));
 								</span>
 							</div>
 							<FastChart v-if="t.series.length" :time="trace.time" :series="tileSeries(t)" :normalise="t.normalise"
-								:view-start="zoomStart" :view-end="zoomEnd" :zoom-tool="rectZoomTool" @zoom="onChartZoom" />
+								:view-start="zoomStart" :view-end="zoomEnd" :zoom-tool="rectZoomTool" :cursor="hoverT" @zoom="onChartZoom" @hover="hoverT = $event" />
 							<div v-else class="tile-empty" @click.stop="openMenu($event, t)">＋ pick series</div>
 						</div>
 					</div>
