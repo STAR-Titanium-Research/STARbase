@@ -4,7 +4,7 @@
 // a file with no picture still shows its facts; the View rail's Preview setting decides what a click opens and is remembered.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, ref, type App } from 'vue';
-import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
+import { RouterView, createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { configureLinks, resetLinks, setExplorerHostFactory, starbaseLinks } from '@d1/ui';
 import { setPageFrame } from '../frame';
 import InboxView from './InboxView.vue';
@@ -28,16 +28,18 @@ function registerStubs(app: App) {
 
 let app: App | null = null;
 let fake: ReturnType<typeof createFakeInbox>;
+let router: Router;
+const BoxPage = defineComponent({ render: () => h('div', { 'data-test': 'box-page' }) });
 
-async function mount(files: FoundFile[], opts: FakeInboxOptions = {}) {
+async function mount(files: FoundFile[], opts: FakeInboxOptions = {}, at = '/inbox') {
 	fake = createFakeInbox({ files, ...opts });
 	setExplorerHostFactory(() => ({
 		api: fake.api, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true), canViewAllAccess: ref(false), user: ref({ id: 'u-me' }),
 	}));
 	configureLinks(starbaseLinks('https://d1.example'));
 	setPageFrame(defineComponent({ props: { title: String }, setup: (_p, { slots }) => () => h('div', [slots.default?.()]) }));
-	const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/inbox', component: InboxView }] });
-	await router.push('/inbox');
+	router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/inbox', component: InboxView }, { path: '/inbox/file/:candidateId', component: BoxPage }] });
+	await router.push(at);
 	app = createApp({ render: () => h('div', [h(RouterView)]) });
 	app.use(router);
 	registerStubs(app);
@@ -224,28 +226,41 @@ describe('the actions', () => {
 		await vi.waitFor(() => expect(document.querySelector('[data-test="link-search"]')).not.toBeNull());
 	});
 
-	it('Open in view box opens the full preview window for now', async () => {
-		await mount([withThumb(A)]);
+	it('Open in view box goes to the page of the file, carrying the filters', async () => {
+		const f = withThumb(A);
+		await mount([f], {}, '/inbox?strength=short_id&folder=sem');
 		thumbButton('3fa9c1d2_A1.tif').click();
 		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-image"]')).not.toBeNull());
 		(sheet()!.querySelector('[data-test="sheet-open-box"]') as HTMLElement).click();
-		await vi.waitFor(() => expect(document.querySelector('[data-test="preview-dialog"]')).not.toBeNull());
-		// Esc closes the window and not the sheet behind it
-		key('Escape');
-		await vi.waitFor(() => expect(document.querySelector('[data-test="preview-dialog"]')).toBeNull());
-		expect(sheet()).not.toBeNull();
+		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/inbox/file/${f.candidate_id}`));
+		expect(router.currentRoute.value.query).toEqual({ folder: 'sem', strength: 'short_id' });
+		expect(document.querySelector('[data-test="preview-dialog"]')).toBeNull();
+	});
+
+	it('Enter opens the page of the selected file; on another control it keeps its own meaning', async () => {
+		const f = withThumb(A);
+		await mount([f, withThumb('Users/ab1cd/sem/9ab3c4d5_B2.tif')]);
+		thumbButton('3fa9c1d2_A1.tif').click();
+		await vi.waitFor(() => expect(sheet()).not.toBeNull());
+		// Enter on a button of some other row (Link, Dismiss, ...) is that button's, not ours
+		const other = rowOf('9ab3c4d5_B2.tif').querySelector<HTMLElement>('.buttons button')!;
+		key('Enter', other);
+		expect(router.currentRoute.value.path).toBe('/inbox');
+		key('Enter');
+		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/inbox/file/${f.candidate_id}`));
 	});
 });
 
 describe('the View rail', () => {
-	it('Preview = View box opens the full window on a click and keeps the name a plain label; the choice is remembered', async () => {
-		await mount([withThumb(A)]);
+	it('Preview = View box opens the page of the file on a click on its picture or name, with no sheet; the choice is remembered', async () => {
+		const f = withThumb(A);
+		await mount([f]);
 		const box = [...document.querySelectorAll<HTMLElement>('[data-test="rail-preview"] [role="radio"]')].find((b) => b.textContent === 'View box')!;
 		box.click();
 		await vi.waitFor(() => expect(JSON.parse(window.localStorage.getItem(VIEW_KEY)!).preview).toBe('box'));
-		await vi.waitFor(() => expect(rowOf('3fa9c1d2_A1.tif').querySelector('[data-test="row-name"]')).toBeNull());
+		await vi.waitFor(() => expect(rowOf('3fa9c1d2_A1.tif').querySelector('.name')!.getAttribute('data-test')).toBe('row-name'));
 		thumbButton('3fa9c1d2_A1.tif').click();
-		await vi.waitFor(() => expect(document.querySelector('[data-test="preview-dialog"]')).not.toBeNull());
+		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/inbox/file/${f.candidate_id}`));
 		expect(sheet()).toBeNull();
 	});
 

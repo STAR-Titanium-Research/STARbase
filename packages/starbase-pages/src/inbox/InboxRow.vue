@@ -10,7 +10,6 @@ import { BATCH_KIND_TEXT } from './inboxBulk';
 import SemSettingsList from './SemSettingsList.vue';
 import { ignoreTarget } from './ignoredFolders';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
-import PreviewDialog from './PreviewDialog.vue';
 import { useInView, usePicture } from './usePicture';
 
 // One found file: its picture (when the crawler stored one: a button that opens the full view) or the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
@@ -24,7 +23,7 @@ const props = defineProps<{
 	showOwner: boolean;
 	/** Offer "Ignore this folder" beside the folder (the server has the route and the person may change rules). */
 	canIgnore?: boolean;
-	/** What a click on the picture or the name opens: the page's sheet (the row only says it was chosen) or, as before, the full preview window. */
+	/** What a click on the picture or the name opens: the page's sheet beside the list, or the file's own page (the row only says which was asked). */
 	preview?: 'sheet' | 'box';
 	/** This row is the one the sheet shows. */
 	selected?: boolean;
@@ -38,6 +37,8 @@ const emit = defineEmits<{
 	(e: 'restore'): void;
 	/** The picture or the name was clicked and Preview is Sheet: the page opens its sheet on this file. */
 	(e: 'select'): void;
+	/** The picture or the name was clicked and Preview is View box: the page opens the file's own page. */
+	(e: 'open'): void;
 	/** The button that was pressed, so the page can give focus back to it when the confirm is cancelled. */
 	(e: 'ignore', opener: HTMLElement): void;
 }>();
@@ -74,32 +75,23 @@ const withPicture = computed(() => hasThumbnail(props.file));
 const thumbButton = ref<HTMLElement | null>(null);
 const seen = useInView(thumbButton);
 const { state: thumbState, url: thumbUrl } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'thumb', () => seen.value);
-const previewOpen = ref(false);
-const toSheet = computed(() => props.preview === 'sheet');
-/** A click on the picture or the name: the sheet beside the list, or the full preview window. */
+/** A click on the picture or the name: the sheet beside the list, or the file's own page. */
 function chosen() {
-	if (toSheet.value) emit('select');
-	else previewOpen.value = true;
+	if (props.preview === 'box') emit('open');
+	else emit('select');
 }
-// A picture that failed to load is not mentioned: the row shows its icon, as if it had none. While its preview is open the button stays (focus returns
-// to it on close, and it cannot vanish under a person who clicked it while it still shimmered).
-const showButton = computed(() => withPicture.value && (thumbState.value !== 'failed' || previewOpen.value));
+// A picture that failed to load is not mentioned: the row shows its icon, as if it had none.
+const showButton = computed(() => withPicture.value && thumbState.value !== 'failed');
 const rowEl = ref<HTMLElement | null>(null);
 /** Where focus goes when the thumbnail button is gone (its picture failed): the row's first action button, if it has one. */
 function focusFallback() {
 	rowEl.value?.querySelector<HTMLElement>('.buttons button:not([disabled])')?.focus();
 }
-async function closePreview() {
-	previewOpen.value = false;
-	await nextTick();
-	if (thumbButton.value) thumbButton.value.focus();
-	else focusFallback();
-}
 // A thumbnail that has focus (tabbed to while it shimmered) and then fails is removed: hand the focus on rather than let it fall to <body>.
 watch(
 	thumbState,
 	async (s) => {
-		if (s !== 'failed' || previewOpen.value || !thumbButton.value || document.activeElement !== thumbButton.value) return;
+		if (s !== 'failed' || !thumbButton.value || document.activeElement !== thumbButton.value) return;
 		await nextTick();
 		if (!thumbButton.value) focusFallback();
 	},
@@ -127,12 +119,10 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			<span v-else class="shimmer" aria-hidden="true" />
 		</button>
 		<span v-else class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>
-		<PreviewDialog v-if="previewOpen" :file="file" :thumb-url="thumbUrl" @close="closePreview" />
 
 		<div class="main">
 			<div class="line">
-				<button v-if="toSheet" type="button" class="name name-btn" :title="file.rel_path" data-test="row-name" @click="chosen">{{ name }}</button>
-				<span v-else class="name" :title="file.rel_path">{{ name }}</span>
+				<button type="button" class="name name-btn" :title="file.rel_path" data-test="row-name" @click="chosen">{{ name }}</button>
 				<span class="tag" :class="`kind-${file.kind}`">{{ kindLabel(file.kind) }}</span>
 				<span v-if="file.match_strength !== 'none' && suggestion" class="tag strength" :class="{ weak: suggestion.weak }">{{ STRENGTH_LABEL[file.match_strength] }}</span>
 			</div>

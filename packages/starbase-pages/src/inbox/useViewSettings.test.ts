@@ -26,13 +26,13 @@ const throwing = (): Storage => {
 describe('the Inbox view settings', () => {
 	it('uses the key d1.list.inbox and defaults to the sheet and an open rail', () => {
 		expect(VIEW_KEY).toBe('d1.list.inbox');
-		expect(DEFAULT_VIEW).toEqual({ preview: 'sheet', railOpen: true });
+		expect(DEFAULT_VIEW).toEqual({ preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false });
 		expect(readViewSettings(memory())).toEqual(DEFAULT_VIEW);
 	});
 
 	it('reads what was stored', () => {
-		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: false }) });
-		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false });
+		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true }) });
+		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true });
 	});
 
 	it('gives the defaults for invalid JSON, and for JSON that is not an object', () => {
@@ -44,6 +44,13 @@ describe('the Inbox view settings', () => {
 		expect(readViewSettings(s)).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
 	});
 
+	it('falls back per field for the view box settings: an unknown zoom, a non-boolean overlay', () => {
+		const s = memory({ [VIEW_KEY]: JSON.stringify({ zoom: '2:1', scaleBar: 'on', contrast: 1, boxRailOpen: null, railOpen: false }) });
+		expect(readViewSettings(s)).toEqual({ ...DEFAULT_VIEW, railOpen: false });
+		const old = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: true }) }); // stored before the view box existed
+		expect(readViewSettings(old)).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
+	});
+
 	it('does not throw when storage is missing or throws on every call, and reads the defaults', () => {
 		expect(readViewSettings(null)).toEqual(DEFAULT_VIEW);
 		expect(readViewSettings(throwing())).toEqual(DEFAULT_VIEW);
@@ -51,20 +58,21 @@ describe('the Inbox view settings', () => {
 		expect(() => writeViewSettings(DEFAULT_VIEW, null)).not.toThrow();
 	});
 
-	it('writes the two fields under the key and reads them back', () => {
+	it('writes every field under the key and reads them back', () => {
 		const s = memory();
-		writeViewSettings({ preview: 'box', railOpen: false }, s);
-		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual({ preview: 'box', railOpen: false });
-		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false });
+		const v = { preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true } as const;
+		writeViewSettings(v, s);
+		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual(v);
+		expect(readViewSettings(s)).toEqual(v);
 	});
 
 	it('useViewSettings starts from the stored value and saves each change; with blocked storage it still changes in memory', () => {
 		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box' }) });
 		const v = useViewSettings(s);
 		expect(v.settings.preview).toBe('box');
-		v.set({ preview: 'sheet', railOpen: false });
-		expect(v.settings).toMatchObject({ preview: 'sheet', railOpen: false });
-		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toMatchObject({ preview: 'sheet', railOpen: false });
+		v.set({ preview: 'sheet', railOpen: false, zoom: 'actual' });
+		expect(v.settings).toMatchObject({ preview: 'sheet', railOpen: false, zoom: 'actual' });
+		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toMatchObject({ preview: 'sheet', railOpen: false, zoom: 'actual' });
 
 		const blocked = useViewSettings(throwing());
 		expect(blocked.settings).toEqual(DEFAULT_VIEW);

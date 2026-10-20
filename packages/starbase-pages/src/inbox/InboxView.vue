@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { LoadState, Section, formatDate, useExplorerHost, useInboxSummary } from '@d1/ui';
+import { LoadState, Section, formatDate, openLink, useExplorerHost, useInboxSummary } from '@d1/ui';
 import AcceptDialog from './AcceptDialog.vue';
 import AddScanDialog from './AddScanDialog.vue';
 import IgnoreFolderDialog from './IgnoreFolderDialog.vue';
@@ -12,7 +12,6 @@ import InboxSheet from './InboxSheet.vue';
 import InboxTabs from './InboxTabs.vue';
 import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
-import PreviewDialog from './PreviewDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
 import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
@@ -20,6 +19,7 @@ import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
 import { useViewSettings } from './useViewSettings';
+import { viewBoxPath } from './viewBoxModel';
 import '../labels/form.css';
 
 // The Inbox page (/inbox, spec section 10): the found files in the person's folder and their teams' folders, with tabs New, Older files,
@@ -211,25 +211,30 @@ watch(sheetOn, (on) => {
 	if (!on) selectedId.value = null;
 });
 
-// The old full preview window, reached from the sheet's "Open in view box" until the view box page exists.
-const boxFile = ref<FoundFile | null>(null);
-function closeBox() {
-	const id = boxFile.value?.candidate_id;
-	boxFile.value = null;
-	void nextTick(() => (id ? nameButton(id) : null)?.focus());
-}
+// The view box: the file's own page (/inbox/file/<id>), carrying the filters so its previous / next and Close stay in this list.
+const openBox = (f: FoundFile) => openLink(viewBoxPath(f.candidate_id, filters.value), router);
 
-const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open || boxFile.value !== null;
+const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open;
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
 function onKey(e: KeyboardEvent) {
 	if (!selectedId.value || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-	if (e.key !== 'Escape' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+	if (e.key !== 'Escape' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
 	if (anyDialogOpen()) return;
 	const t = e.target instanceof Element ? e.target : null;
 	if (e.key === 'Escape') {
 		if (t?.closest('input, textarea, select, [role="dialog"]')) return;
 		e.preventDefault();
 		void closeSheet();
+		return;
+	}
+	if (e.key === 'Enter') {
+		// Enter opens the selected file's page, but never takes the key from a control: a button or link answers Enter itself, except the selected row's own name and picture.
+		const own = t?.closest<HTMLElement>('[data-test="row-name"], [data-test="thumb"]');
+		const mine = own?.closest<HTMLElement>('[data-row-id]')?.dataset.rowId === selectedId.value;
+		if (t?.closest(`${TYPING}, button, a[href], summary`) && !mine) return;
+		if (!selected.value) return;
+		e.preventDefault();
+		openBox(selected.value);
 		return;
 	}
 	if (t?.closest(TYPING)) return;
@@ -323,6 +328,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 					:preview="view.settings.preview"
 					:selected="selectedId === f.candidate_id"
 					@select="select(f)"
+					@open="openBox(f)"
 					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
@@ -360,6 +366,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 							:preview="view.settings.preview"
 							:selected="selectedId === f.candidate_id"
 							@select="select(f)"
+							@open="openBox(f)"
 							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
@@ -386,11 +393,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			@link="openDialog(selected)"
 			@dismiss="dismissRow(selected)"
 			@restore="restoreRow(selected)"
-			@open-box="boxFile = selected"
+			@open-box="openBox(selected)"
 		/>
 		</div>
-
-		<PreviewDialog v-if="boxFile" :file="boxFile" :thumb-url="null" @close="closeBox" />
 
 		<LinkDialog v-model="dialogOpen" :file="dialogFile" :busy="dialogBusy" :error="dialogError" @choose="choose" />
 
