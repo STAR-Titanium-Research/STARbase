@@ -30,13 +30,11 @@ function parseAccessParams(cfg, kind, given) {
   return { ...target, role: given.role };
 }
 
-// The ids: a non-empty list of UUIDs, de-duplicated without regard to case, at most MAX_IDS.
+// The ids: a non-empty list of UUIDs, lower-cased and de-duplicated (the first one seen wins the place), at most MAX_IDS.
 function parseIds(raw) {
   if (!Array.isArray(raw) || raw.length === 0) throw new HttpError(400, 'INVALID_PAYLOAD', 'Pick at least one record.');
   if (!raw.every(isUuid)) throw new HttpError(400, 'INVALID_PAYLOAD', 'One of the record ids is not valid.');
-  const first = new Map();
-  for (const id of raw) if (!first.has(id.toLowerCase())) first.set(id.toLowerCase(), id);
-  const ids = [...first.values()];
+  const ids = [...new Set(raw.map((id) => id.toLowerCase()))]; // the readers tables and the snapshots hold lower-case UUIDs
   if (ids.length > MAX_IDS) throw new HttpError(400, 'INVALID_PAYLOAD', `Pick at most ${MAX_IDS} records at a time.`);
   return ids;
 }
