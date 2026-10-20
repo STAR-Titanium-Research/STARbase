@@ -80,7 +80,7 @@ export function mount(router, context, clock = () => new Date(), timers = {}) {
   const prepare = makeRequests({ database, ops, itemsFor });
   const journal = makeJournal({ database });
   const mailer = makeMailer({
-    context, ops, warn, clock, setTimer: timers.set ?? ((fn, ms) => setTimeout(fn, ms)), clearTimer: timers.clear ?? ((handle) => clearTimeout(handle)),
+    context, ops, warn, clock, setTimer: timers.set ?? ((fn, ms) => setTimeout(fn, ms)), clearTimer: timers.clear ?? ((handle) => clearTimeout(handle)), undoWindowMs: UNDO_WINDOW_MS,
   });
   const { inTransaction } = ops; // sets the actor first, so the audit trigger names the caller
 
