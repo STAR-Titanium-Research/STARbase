@@ -70,6 +70,6 @@ describe('sortFieldOptions', () => {
 	});
 	it('adds a current sort the page does not offer once, never twice', () => {
 		expect(sortFieldOptions(samples, '-nickname').filter((o) => o.value === 'nickname')).toHaveLength(1);
-		expect(sortFieldOptions(samples, 'weird')[0]).toEqual({ value: 'weird', label: 'Saved view order' });
+		expect(sortFieldOptions(samples, 'weird')[0]).toEqual({ value: 'weird', label: 'Saved view order', saved: true });
 	});
 });

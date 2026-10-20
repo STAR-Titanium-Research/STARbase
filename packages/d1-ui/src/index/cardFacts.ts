@@ -56,6 +56,8 @@ export function isPlainClick(e: { button: number; ctrlKey: boolean; metaKey: boo
 export interface SortOption {
 	value: string;
 	label: string;
+	/** A saved view's own sort, which is no column: it cannot be turned round. */
+	saved?: boolean;
 }
 
 // Every column the page can sort by, as a field (the rail's select; the direction is its own button), in
@@ -69,6 +71,6 @@ export function sortFieldOptions(def: IndexDef, current: string, sortable: (c: C
 	const own = splitSort(def.defaultSort).key;
 	if (!has(own)) out.unshift({ value: own, label: 'Default order' });
 	const now = splitSort(current).key;
-	if (!has(now)) out.unshift({ value: now, label: 'Saved view order' });
+	if (!has(now)) out.unshift({ value: now, label: 'Saved view order', saved: true });
 	return out;
 }

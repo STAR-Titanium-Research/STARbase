@@ -143,11 +143,15 @@ describe('the View rail summary', () => {
 		expect(viewSummary(tools, DEFAULT_LIST_PREFS, '-created_at')).toBe('Normal · Default order ↓');
 	});
 	it('marks a view that is not the default, and only then', () => {
-		expect(viewChanged(samples, DEFAULT_LIST_PREFS, samples.defaultSort)).toBe(false);
-		for (const over of [{ view: 'list' }, { density: 'roomy' }, { columns: ['sample_code'] }, { pageSize: 25 }, { groupBy: 'current_status' }]) {
-			expect(viewChanged(samples, { ...DEFAULT_LIST_PREFS, ...over } as never, samples.defaultSort), JSON.stringify(over)).toBe(true);
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, null, null)).toBe(false);
+		for (const over of [{ view: 'list' }, { density: 'roomy' }, { columns: ['sample_code'] }, { pageSize: 25 }]) {
+			expect(viewChanged(samples, { ...DEFAULT_LIST_PREFS, ...over } as never, null, null), JSON.stringify(over)).toBe(true);
 		}
-		expect(viewChanged(samples, DEFAULT_LIST_PREFS, 'nickname')).toBe(true);
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, null, 'nickname')).toBe(true);
+		// The grouping in use counts, not a stored one the list cannot offer; the URL's own default sort and a saved view's sort do not.
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, 'current_status', null)).toBe(true);
+		expect(viewChanged(samples, { ...DEFAULT_LIST_PREFS, groupBy: 'project_id' }, null, null)).toBe(false);
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, null, samples.defaultSort)).toBe(false);
 	});
 });
 

@@ -29,7 +29,7 @@ const settle = async () => {
 	await nextTick();
 };
 
-async function mount(width = 1600) {
+async function mount(width = 1600, path = '/home/samples') {
 	window.innerWidth = width;
 	itemCalls = [];
 	const get = vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
@@ -37,6 +37,7 @@ async function mount(width = 1600) {
 			itemCalls.push(config?.params ?? {});
 			return { data: { data: ROWS, meta: { filter_count: 153 } } };
 		}
+		if (path === '/presets/7') return { data: { data: { id: 7, bookmark: 'Heavy', collection: 'physical_samples', user: null, role: null, filter: null, search: null, layout_query: { tabular: { sort: ['-weight'] } } } } };
 		if (path === '/collections') return { data: { data: ['physical_samples', 'projects', 'materials'].map((c) => ({ collection: c, meta: { hidden: false } })) } };
 		return { data: { data: [] } };
 	});
@@ -44,7 +45,7 @@ async function mount(width = 1600) {
 	setExplorerHostFactory(() => fake);
 	await useExplorerNav(fake).refresh();
 	router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }, { path: '/:rest(.*)*', component: { render: () => null } }] });
-	await router.push('/home/samples');
+	await router.push(path);
 	await router.isReady();
 	const Page = defineComponent({ setup: () => () => h(IndexPage, { def: indexDefBySlug('samples')! }) });
 	app = createApp(Page);
@@ -158,6 +159,18 @@ describe('sort', () => {
 		expect(router.currentRoute.value.query.sort).toBe('nickname');
 		await click($$('[aria-label="Layout"] button')[1]);
 		expect(($('select[aria-label="Sort by"]') as HTMLSelectElement).value).toBe('nickname');
+	});
+});
+
+describe('sort of a saved view', () => {
+	it('cannot be turned round with the direction button, which says why, and is no change from the default', async () => {
+		await mount(1600, '/home/samples?bookmark=7');
+		const dir = $('.dir') as HTMLButtonElement;
+		expect(dir.disabled).toBe(true);
+		expect(dir.title).toBe('Sorted by the saved view');
+		expect(($('select[aria-label="Sort by"]') as HTMLSelectElement).value).toBe('weight');
+		expect($('.dot')).toBeNull();
+		expect(itemCalls.at(-1)?.sort).toEqual(['-weight']);
 	});
 });
 

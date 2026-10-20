@@ -293,8 +293,11 @@ export function viewSummary(def: IndexDef, prefs: ListPrefs, sort: string): stri
 	return `${DENSITY_LABEL[prefs.density]} · ${col?.label ?? 'Default order'} ${desc ? '↓' : '↑'}`;
 }
 
-/** The dot on the tab: the view is not the default (layout, density, columns, rows per page, grouping, or a sort other than the list's own). */
-export function viewChanged(def: IndexDef, prefs: ListPrefs, sort: string): boolean {
+/**
+ * The dot on the tab: the view is not the default (layout, density, columns, rows per page, the grouping in use, or
+ * a sort the person chose other than the list's own: `urlSort` is the URL's, so a saved view's own sort is no change).
+ */
+export function viewChanged(def: IndexDef, prefs: ListPrefs, groupBy: string | null, urlSort: string | null): boolean {
 	const d = DEFAULT_LIST_PREFS;
-	return prefs.view !== d.view || prefs.density !== d.density || prefs.columns !== d.columns || prefs.pageSize !== d.pageSize || prefs.groupBy !== d.groupBy || sort !== def.defaultSort;
+	return prefs.view !== d.view || prefs.density !== d.density || prefs.columns !== d.columns || prefs.pageSize !== d.pageSize || groupBy !== null || (urlSort !== null && urlSort !== def.defaultSort);
 }

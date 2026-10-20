@@ -22,9 +22,13 @@ const props = defineProps<{
 	storageKey: string;
 	defaultOpen: boolean;
 	prefs: ListPrefs;
+	/** The sort in force (the URL's, a saved view's or the list's own) and the URL's own, if any. */
 	sort: string;
+	urlSort: string | null;
 	sortFields: SortOption[];
 	groups: GroupChoice[];
+	/** The grouping in use (a stored one the list cannot offer is not). */
+	groupBy: string | null;
 	/** The count: the page, how many rows it has and the total (null until known). */
 	page: number;
 	shown: number;
@@ -50,13 +54,13 @@ const SIZES = PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }));
 
 const sorted = computed(() => splitSort(props.sort));
 const range = computed(() => rangeText(props.page, props.shown, props.total, props.prefs.pageSize));
-// A stored grouping the list cannot offer (a relation the person may not read) shows as None.
-const groupBy = computed(() => (props.groups.some((g) => g.value === props.prefs.groupBy) ? props.prefs.groupBy : null));
+// A saved view's own sort (no column) cannot be turned round: choose a column to leave it.
+const savedSort = computed(() => !!props.sortFields.find((o) => o.value === sorted.value.key)?.saved);
 const sortField = (key: string) => emit('sort', sorted.value.desc ? `-${key}` : key);
 </script>
 
 <template>
-	<ViewRail :storage-key="storageKey" :default-open="defaultOpen" :summary="viewSummary(def, prefs, sort)" :modified="viewChanged(def, prefs, sort)">
+	<ViewRail :storage-key="storageKey" :default-open="defaultOpen" :summary="viewSummary(def, prefs, sort)" :modified="viewChanged(def, prefs, groupBy, urlSort)">
 		<ViewRailSection v-if="range">
 			<div class="count">
 				<span class="range" role="status">{{ range }}</span>
@@ -80,8 +84,9 @@ const sortField = (key: string) => emit('sort', sorted.value.desc ? `-${key}` : 
 				<button
 					type="button"
 					class="dir"
+					:disabled="savedSort"
 					:aria-label="sorted.desc ? 'Descending' : 'Ascending'"
-					:title="sorted.desc ? 'Descending: click for ascending' : 'Ascending: click for descending'"
+					:title="savedSort ? 'Sorted by the saved view' : sorted.desc ? 'Descending: click for ascending' : 'Ascending: click for descending'"
 					@click="emit('sort', flipSort(sort))"
 				>{{ sorted.desc ? '↓' : '↑' }}</button>
 			</div>
@@ -110,8 +115,8 @@ const sortField = (key: string) => emit('sort', sorted.value.desc ? `-${key}` : 
 	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); color: var(--theme--foreground);
 	font: inherit; font-size: var(--fs-lg, 15px); line-height: 1; cursor: pointer;
 }
-.step:hover:not(:disabled), .dir:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.step:disabled { opacity: 0.4; cursor: default; }
+.step:hover:not(:disabled), .dir:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
+.step:disabled, .dir:disabled { opacity: 0.4; cursor: default; }
 .pair { display: flex; gap: 6px; }
 .pair .sel { flex: 1; min-width: 0; }
 .dir { flex: none; height: 30px; width: 30px; }
