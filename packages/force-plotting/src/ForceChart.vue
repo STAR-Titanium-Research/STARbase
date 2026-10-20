@@ -554,15 +554,15 @@ function onWheel(ev: WheelEvent) {
 			<rect v-if="crop.shadeL > 0" :x="ML" :y="MT_EFF" :width="crop.shadeL" :height="geom.Hh - MB - MT_EFF" class="fc-shade" />
 			<rect v-if="crop.shadeR > 0" :x="geom.W - MR - crop.shadeR" :y="MT_EFF" :width="crop.shadeR" :height="geom.Hh - MB - MT_EFF" class="fc-shade" />
 			<!-- envelope band at 10%; the analysed [cropStart,cropEnd] window overpaints a second 10% -->
-			<path v-if="kind === 'env'" :d="geom.area" :fill="stroke" fill-opacity="0.1" />
-			<path v-if="kind === 'env' && crop.cropArea" :d="crop.cropArea" :fill="stroke" fill-opacity="0.1" />
-			<path v-if="kind === 'env'" :d="geom.line" fill="none" :stroke="stroke" stroke-width="1.5" stroke-linejoin="round" />
-			<path v-if="kind === 'line'" :d="geom.line" fill="none" :stroke="stroke" stroke-width="1.5" :stroke-opacity="geom.overlayLine ? 0.35 : 1" />
-			<path v-if="geom.overlayLine" :d="geom.overlayLine" fill="none" :stroke="stroke" stroke-width="1.5" />
+			<path v-if="kind === 'env'" :d="geom.area" :style="{ fill: stroke }" fill-opacity="0.1" />
+			<path v-if="kind === 'env' && crop.cropArea" :d="crop.cropArea" :style="{ fill: stroke }" fill-opacity="0.1" />
+			<path v-if="kind === 'env'" :d="geom.line" fill="none" :style="{ stroke }" stroke-width="1.5" stroke-linejoin="round" />
+			<path v-if="kind === 'line'" :d="geom.line" fill="none" :style="{ stroke }" stroke-width="1.5" :stroke-opacity="geom.overlayLine ? 0.35 : 1" />
+			<path v-if="geom.overlayLine" :d="geom.overlayLine" fill="none" :style="{ stroke }" stroke-width="1.5" />
 			<!-- Comparison cuts, drawn over the primary envelope so the current cut stays the
 				 visual subject and the others read as reference traces. -->
 			<path v-for="c in geom.compareLines" :key="c.id" :d="c.d" fill="none"
-				:stroke="c.color" stroke-width="1.5" stroke-dasharray="4 2" opacity="0.85" />
+				:style="{ stroke: c.color }" stroke-width="1.5" stroke-dasharray="4 2" opacity="0.85" />
 			<line :x1="ML" :x2="ML" :y1="MT_EFF" :y2="geom.Hh - MB" class="fc-axis" stroke-width="1" />
 			<line :x1="ML" :x2="geom.W - MR" :y1="geom.Hh - MB" :y2="geom.Hh - MB" class="fc-axis" stroke-width="1" />
 			<g v-for="(t, i) in geom.yticks" :key="'y' + i">

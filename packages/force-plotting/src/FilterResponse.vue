@@ -158,7 +158,7 @@ const legend = computed(() => [{ id: 'combined', label: 'Combined' }, ...curves.
 			<span v-for="l in legend" :key="l.id" class="fresp-key-item">
 				<svg width="18" height="6" aria-hidden="true">
 					<line x1="0" x2="18" y1="3" y2="3" stroke-width="2" :class="l.id === 'combined' ? 'fresp-combined' : ''"
-						:stroke="l.id === 'combined' ? undefined : STAGE_COLOR[l.id as StageId]" :stroke-dasharray="l.id === 'combined' ? undefined : '4 3'" />
+						:style="l.id === 'combined' ? undefined : { stroke: STAGE_COLOR[l.id as StageId] }" :stroke-dasharray="l.id === 'combined' ? undefined : '4 3'" />
 				</svg>{{ l.label }}
 			</span>
 		</div>
@@ -167,7 +167,7 @@ const legend = computed(() => [{ id: 'combined', label: 'Combined' }, ...curves.
 			<line v-for="(x, i) in ticks.minor" :key="'m' + i" :x1="x" :x2="x" :y1="MT" :y2="MT + plotH" class="fr-grid minor" />
 			<line v-for="(t, i) in ticks.major" :key="'gx' + i" :x1="t.x" :x2="t.x" :y1="MT" :y2="MT + plotH" class="fr-grid" />
 			<line v-for="(v, i) in Y_TICKS" :key="'gy' + i" :x1="ML" :x2="ML + plotW" :y1="sy(v)" :y2="sy(v)" class="fr-grid" />
-			<path v-for="s in curves.stages" :key="s.id" :d="s.d" fill="none" :stroke="STAGE_COLOR[s.id]" stroke-width="1.5" stroke-dasharray="4 3" />
+			<path v-for="s in curves.stages" :key="s.id" :d="s.d" fill="none" :style="{ stroke: STAGE_COLOR[s.id] }" stroke-width="1.5" stroke-dasharray="4 3" />
 			<path :d="curves.combined" fill="none" class="fresp-combined" stroke-width="2" stroke-linejoin="round" />
 			<line :x1="ML" :x2="ML" :y1="MT" :y2="MT + plotH" class="fr-axis" />
 			<line :x1="ML" :x2="ML + plotW" :y1="MT + plotH" :y2="MT + plotH" class="fr-axis" />

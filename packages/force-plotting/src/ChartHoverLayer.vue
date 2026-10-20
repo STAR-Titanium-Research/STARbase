@@ -29,7 +29,7 @@ const tagW = computed(() => Math.max(28, (pt.value?.sub.length ?? 0) * 6.2 + 12)
 	<g v-if="part === 'svg' && pt">
 		<line :x1="pt.px" :x2="pt.px" :y1="top" :y2="bottom" class="hv-line" stroke-width="1" />
 		<circle :cx="pt.px" :cy="pt.py" r="4.5" class="hv-ring" />
-		<circle :cx="pt.px" :cy="pt.py" r="3" :fill="stroke" />
+		<circle :cx="pt.px" :cy="pt.py" r="3" :style="{ fill: stroke }" />
 		<g v-if="local?.hot.value" class="hv-tag">
 			<rect :x="pt.px - tagW / 2" :y="tagBelow ? bottom + 3 : bottom - 17" :width="tagW" height="14" rx="3" />
 			<text :x="pt.px" :y="tagBelow ? bottom + 13.5 : bottom - 6.5" text-anchor="middle">{{ pt.sub }}</text>
