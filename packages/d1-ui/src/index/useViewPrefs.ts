@@ -9,7 +9,7 @@ import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { ListPrefs } from './listPrefs';
 
 export function useViewPrefs(def: IndexDef) {
-	const prefs = reactive<ListPrefs>(readListPrefs(def.slug, undefined, def));
+	const prefs = reactive<ListPrefs>(readListPrefs(def.slug, def));
 	watch(prefs, () => writeListPrefs(def.slug, prefs));
 	// The table and the cards show the columns the person chose; what can be sorted by stays the def's own.
 	const viewDef = computed<IndexDef>(() => ({ ...def, columns: shownColumns(def, prefs.columns) }));

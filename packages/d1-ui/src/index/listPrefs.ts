@@ -41,9 +41,9 @@ export function validColumns(def: IndexDef, stored: unknown): string[] | null {
 }
 
 // The stored value is a JSON object; each field is checked on its own, so a good one survives a bad
-// one. Nothing stored, a broken value or blocked storage gives the default. With the list's def, columns
-// and the group-by field are also checked against it: one that is no longer there is dropped.
-export function readListPrefs(slug: string, storage: Storage | null = browserStorage(), def?: IndexDef): ListPrefs {
+// one. Nothing stored, a broken value or blocked storage gives the default. Columns and the group-by field
+// are checked against the list's def: one that is no longer there is dropped.
+export function readListPrefs(slug: string, def: IndexDef, storage: Storage | null = browserStorage()): ListPrefs {
 	const prefs: ListPrefs = { ...DEFAULT_LIST_PREFS };
 	try {
 		const raw = storage?.getItem(listPrefsKey(slug));
@@ -54,13 +54,8 @@ export function readListPrefs(slug: string, storage: Storage | null = browserSto
 			if (LIST_VIEWS.includes(view as ListView)) prefs.view = view as ListView;
 			if (DENSITIES.includes(density as Density)) prefs.density = density as Density;
 			if (PAGE_SIZES.includes(pageSize as PageSize)) prefs.pageSize = pageSize as PageSize;
-			if (def) {
-				prefs.columns = validColumns(def, columns);
-				if (typeof groupBy === 'string' && groupFilters(def).some((f) => f.field === groupBy)) prefs.groupBy = groupBy;
-			} else {
-				if (Array.isArray(columns) && columns.every((c) => typeof c === 'string')) prefs.columns = columns;
-				if (typeof groupBy === 'string' && groupBy) prefs.groupBy = groupBy;
-			}
+			prefs.columns = validColumns(def, columns);
+			if (typeof groupBy === 'string' && groupFilters(def).some((f) => f.field === groupBy)) prefs.groupBy = groupBy;
 		}
 	} catch {
 		// broken value or blocked storage: the default stands

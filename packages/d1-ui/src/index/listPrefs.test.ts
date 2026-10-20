@@ -29,8 +29,8 @@ describe('readListPrefs', () => {
 	const DEFAULT = { view: 'table', density: 'normal', columns: null, pageSize: 50, groupBy: null };
 
 	it('defaults to the table at normal density, 50 rows, every column, not grouped', () => {
-		expect(readListPrefs('samples', fakeStorage())).toEqual(DEFAULT);
-		expect(readListPrefs('samples', null)).toEqual(DEFAULT);
+		expect(readListPrefs('samples', samples, fakeStorage())).toEqual(DEFAULT);
+		expect(readListPrefs('samples', samples, null)).toEqual(DEFAULT);
 	});
 
 	it('round-trips what was written, per list', () => {
@@ -39,42 +39,42 @@ describe('readListPrefs', () => {
 		writeListPrefs('samples', { ...mine, columns: [...mine.columns] }, s);
 		writeListPrefs('operations', { ...DEFAULT, view: 'list', density: 'compact' } as never, s);
 		expect(JSON.parse(s.getItem('d1.list.samples')!)).toEqual(mine);
-		expect(readListPrefs('samples', s)).toEqual(mine);
-		expect(readListPrefs('operations', s)).toEqual({ ...DEFAULT, view: 'list', density: 'compact' });
-		expect(readListPrefs('tools', s)).toEqual(DEFAULT);
+		expect(readListPrefs('samples', samples, s)).toEqual(mine);
+		expect(readListPrefs('operations', samples, s)).toEqual({ ...DEFAULT, view: 'list', density: 'compact' });
+		expect(readListPrefs('tools', samples, s)).toEqual(DEFAULT);
 	});
 
 	it('reads the compact list layout', () => {
-		expect(readListPrefs('x', fakeStorage({ 'd1.list.x': '{"view":"list"}' })).view).toBe('list');
+		expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': '{"view":"list"}' })).view).toBe('list');
 	});
 
 	it('falls back to the default for junk', () => {
 		for (const raw of ['not json', 'null', '[]', '42', '"cards"', '{}']) {
-			expect(readListPrefs('x', fakeStorage({ 'd1.list.x': raw })), raw).toEqual(DEFAULT);
+			expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': raw })), raw).toEqual(DEFAULT);
 		}
 	});
 
 	it('keeps a valid half and defaults the other', () => {
-		expect(readListPrefs('x', fakeStorage({ 'd1.list.x': '{"view":"cards","density":"huge"}' }))).toEqual({ ...DEFAULT, view: 'cards' });
-		expect(readListPrefs('x', fakeStorage({ 'd1.list.x': '{"view":"grid","density":"roomy"}' }))).toEqual({ ...DEFAULT, density: 'roomy' });
-		expect(readListPrefs('x', fakeStorage({ 'd1.list.x': '{"pageSize":30,"columns":"all","groupBy":7}' }))).toEqual(DEFAULT);
-		expect(readListPrefs('x', fakeStorage({ 'd1.list.x': '{"pageSize":25}' })).pageSize).toBe(25);
+		expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': '{"view":"cards","density":"huge"}' }))).toEqual({ ...DEFAULT, view: 'cards' });
+		expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': '{"view":"grid","density":"roomy"}' }))).toEqual({ ...DEFAULT, density: 'roomy' });
+		expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': '{"pageSize":30,"columns":"all","groupBy":7}' }))).toEqual(DEFAULT);
+		expect(readListPrefs('x', samples, fakeStorage({ 'd1.list.x': '{"pageSize":25}' })).pageSize).toBe(25);
 	});
 
 	it('migrates a value stored before columns, page size and group-by existed', () => {
-		expect(readListPrefs('samples', fakeStorage({ 'd1.list.samples': '{"view":"cards","density":"roomy"}' }), samples)).toEqual({ ...DEFAULT, view: 'cards', density: 'roomy' });
+		expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': '{"view":"cards","density":"roomy"}' }))).toEqual({ ...DEFAULT, view: 'cards', density: 'roomy' });
 	});
 
 	it('checks columns and the group-by field against the def: unknown ones are dropped', () => {
 		const stored = JSON.stringify({ columns: ['sample_code', 'gone', 'form', 'form', 'nickname'], groupBy: 'current_status' });
-		expect(readListPrefs('samples', fakeStorage({ 'd1.list.samples': stored }), samples)).toMatchObject({ columns: ['sample_code', 'form', 'nickname'], groupBy: 'current_status' });
+		expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': stored }))).toMatchObject({ columns: ['sample_code', 'form', 'nickname'], groupBy: 'current_status' });
 		for (const groupBy of ['gone', 'no_owner', 'team', 'nickname']) {
-			expect(readListPrefs('samples', fakeStorage({ 'd1.list.samples': JSON.stringify({ groupBy }) }), samples).groupBy, groupBy).toBeNull();
+			expect(readListPrefs('samples', samples, fakeStorage({ 'd1.list.samples': JSON.stringify({ groupBy }) })).groupBy, groupBy).toBeNull();
 		}
 	});
 
 	it('does not throw when storage is blocked', () => {
-		expect(readListPrefs('x', throwing())).toEqual(DEFAULT);
+		expect(readListPrefs('x', samples, throwing())).toEqual(DEFAULT);
 		expect(() => writeListPrefs('x', DEFAULT as never, throwing())).not.toThrow();
 		expect(() => writeListPrefs('x', DEFAULT as never, null)).not.toThrow();
 	});
@@ -137,7 +137,7 @@ describe('forgetListPrefs', () => {
 		expect(storage.getItem('starbase.theme')).toBe('dark');
 		expect(storage.getItem('d1.listing')).toBe('keep');
 		expect(storage.getItem('other')).toBe('x');
-		expect(readListPrefs('samples', storage)).toMatchObject({ view: 'table', density: 'normal' });
+		expect(readListPrefs('samples', samples, storage)).toMatchObject({ view: 'table', density: 'normal' });
 	});
 	it('does nothing without storage, and survives storage that throws', () => {
 		expect(() => forgetListPrefs(null)).not.toThrow();
