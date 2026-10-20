@@ -21,8 +21,8 @@ files side by side and measure on them.
    **Preview** (what a click opens: Sheet or View box, default Sheet), **Compare** (tick a second row; "Compare two files"). It shows only settings that
    apply to the page. It is a page-local component (`InboxViewRail.vue`) that follows the proposed kit `ViewRail`; promoting it to `@d1/ui` is later.
 4. **The view box is a page**, route `/inbox/file/:candidateId` (optional query `?with=<candidateId>` for the compare partner). Layout = `RecordLayout`
-   shape: **left detail panel** (the `RecordRail` look: kind pill, "Found file" tag, file name in mono, folder, icon actions link / dismiss / copy path /
-   pin, the facts, "On this page"), **centre** the stage (file name, "n of m" within the current filtered list, prev/next, close back to `/inbox` with the
+   shape: **left detail panel** (the `RecordRail` look: kind pill, "Found file" tag, file name in mono, folder, icon actions link / dismiss / copy path
+   (a pin action needs a record reference; later), the facts, "On this page"), **centre** the stage (file name, "n of m" within the current filtered list, prev/next, close back to `/inbox` with the
    filters kept), **right** the View rail for the viewer: View (Fit / 1:1), Overlay (Scale bar, Measure, Contrast stretch), Compare (Off / Side by side),
    second-file picker, "Link zoom and pan", "Common scale".
 5. **Compare.** The second file is chosen by a tick in the list (pre-fills the picker) or by the picker in the right rail (search within the same folder, then
@@ -36,7 +36,7 @@ files side by side and measure on them.
    `localStorage` under `d1.list.inbox` (wrapped in try/catch; the page works without it). Only the file and the compare partner are in the URL.
 8. **Kinds without a picture** (documents, other files, images whose thumbnail is not made yet): the sheet shows the facts and the existing placeholder
    or the shimmer, never a broken image. The view box page for them shows the facts and "No preview yet".
-9. **Keyboard** (sheet and view box): `ArrowUp/ArrowDown` or `ArrowLeft/ArrowRight` previous/next, `Space` toggles the sheet peek in the list,
+9. **Keyboard** (sheet and view box): `ArrowUp/ArrowDown` or `ArrowLeft/ArrowRight` previous/next,
    `Enter` opens the view box, `M` Measure, `F` Fit, `C` Compare, `Esc` closes. Every control has a visible `:focus-visible` ring.
 10. **Nothing writes** except the existing link / dismiss actions, which keep their endpoints and their rules (an administrator can read but not change).
 

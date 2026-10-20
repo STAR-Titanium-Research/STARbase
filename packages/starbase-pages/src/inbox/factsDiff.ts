@@ -2,8 +2,7 @@
 // size. Each row has the two values as they are shown (the same words as the imaging settings list) and whether they differ. A value one file has and the
 // other does not counts as different; a row neither file has a value for is left out.
 import type { FoundFile } from './inboxApi';
-import { sizeText } from './inboxModel';
-import { extractedView, settingRows } from './semSettings';
+import { settingsOf, sizeText } from './inboxModel';
 
 export interface DiffRow {
 	key: string;
@@ -21,7 +20,8 @@ const KEYS = ['kv', 'working_distance_mm', 'magnification', 'spot', 'detector', 
 
 function valuesOf(f: Facts): Map<string, { label: string; text: string | null }> {
 	const out = new Map<string, { label: string; text: string | null }>();
-	for (const r of settingRows(extractedView(f.extracted))) out.set(r.key, { label: r.label, text: r.text });
+	// the same rows the sheet and the rail show (none for an older row that has no sources or flags)
+	for (const r of settingsOf(f)) out.set(r.key, { label: r.label, text: r.text });
 	out.set('size', { label: 'size', text: sizeText(f.size_bytes) || null });
 	return out;
 }

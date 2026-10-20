@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import { IMAGE_KINDS, hasThumbnail, kindIcon, nameOf } from './inboxModel';
+import ScaleBar from './ScaleBar.vue';
 import { formatLength, lineUm, measureScale, type MeasureLine, type Pt } from './measure';
 import { CONTRAST_FILTER, actualWidthPx, boxScaleBar, type ZoomMode } from './viewBoxModel';
 import { usePicture, type PictureState } from './usePicture';
@@ -23,12 +24,10 @@ const props = withDefaults(
 		measureOn?: boolean;
 		/** The line to draw on this picture, with its length. */
 		line?: MeasureLine | null;
-		/** A length measured in the other pane, shown here as a label only (Common scale makes it the same size here). */
-		echo?: number | null;
 		/** The prefix of this pane's data-test names: "box" for the single stage, "a" / "b" in Compare. */
 		side?: string;
 	}>(),
-	{ forcedWidth: null, measureOn: false, line: null, echo: null, side: 'box' },
+	{ forcedWidth: null, measureOn: false, line: null, side: 'box' },
 );
 const emit = defineEmits<{
 	/** The preview's state, so the page's View rail knows whether there is a picture to adjust. */
@@ -136,15 +135,11 @@ defineExpose({ setScroll });
 			<div v-if="state === 'ready' && url" ref="scroller" class="scroll" :data-test="`${side}-scroll`" @scroll.passive="onScroll">
 				<div class="pic" :class="{ sized }">
 					<img ref="img" :src="url" :alt="`Preview of ${name}`" :style="imgStyle" draggable="false" :data-test="`${side}-image`" @load="previewW = ($event.target as HTMLImageElement).naturalWidth || null" />
-					<div v-if="bar" class="bar" :style="{ width: `${bar.fraction * 100}%` }" :data-test="`${side}-scalebar`">
-						<span class="rule" aria-hidden="true" />
-						<span class="len">{{ bar.label }}</span>
-					</div>
+					<ScaleBar v-if="bar" :bar="bar" :data-test="`${side}-scalebar`" />
 					<svg v-if="line && line.um > 0" class="line" aria-hidden="true" :data-test="`${side}-line`">
 						<line :x1="pct(line.a.x)" :y1="pct(line.a.y)" :x2="pct(line.b.x)" :y2="pct(line.b.y)" />
 					</svg>
 					<span v-if="line && line.um > 0 && mid" class="pill" :style="{ left: pct(mid.x), top: pct(mid.y) }" :data-test="`${side}-measure`">{{ formatLength(line.um) }}</span>
-					<span v-else-if="echo !== null && echo > 0" class="pill echo" :data-test="`${side}-echo`">{{ formatLength(echo) }}</span>
 					<div
 						v-if="measureOn"
 						class="layer"
@@ -179,9 +174,6 @@ defineExpose({ setScroll });
 .pic img { display: block; max-width: 100%; max-height: min(72dvh, 820px); width: auto; height: auto; user-select: none; }
 .pic.sized { max-width: none; }
 .pic.sized img { max-width: none; max-height: none; }
-.bar { position: absolute; left: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 3px 6px 2px; border-radius: 8px; background: color-mix(in srgb, var(--theme--background) 80%, transparent); pointer-events: none; }
-.bar .rule { display: block; height: 4px; border: 2px solid var(--theme--foreground); border-top: 0; }
-.bar .len { font-size: var(--fs-xs, 11px); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
 /* The measure line: dashed, in the accent colour, over the picture; the layer under the pointer exists only while Measure is on. */
 .line { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .line line { stroke: var(--d1-accent, var(--theme--primary)); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
@@ -190,11 +182,6 @@ defineExpose({ setScroll });
 	font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; font-variant-numeric: tabular-nums;
 	color: var(--theme--foreground); background: color-mix(in srgb, var(--theme--background) 85%, transparent); border: 1px solid var(--d1-accent, var(--theme--primary));
 }
-.pill.echo { left: 8px; top: 8px; transform: none; border-style: dashed; }
 .layer { position: absolute; inset: 0; touch-action: none; pointer-events: none; }
 .layer.on { pointer-events: auto; cursor: crosshair; }
-.blank { min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); text-align: center; }
-.blank strong { font-size: var(--fs-md, 13px); color: var(--theme--foreground); }
-.blank.err { color: var(--theme--foreground); }
-.blank .shimmer { height: 320px; }
 </style>

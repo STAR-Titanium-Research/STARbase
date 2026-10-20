@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, settingsOf, suggestionOf } from './inboxModel';
+import ScaleBar from './ScaleBar.vue';
 import SemSettingsList from './SemSettingsList.vue';
 import { sheetScaleBar } from './sheetScale';
 import { usePicture } from './usePicture';
@@ -54,10 +55,7 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 			<template v-if="withPicture">
 				<div v-if="state === 'ready' && url" class="pic">
 					<img :src="url" :alt="`Preview of ${name}`" draggable="false" data-test="sheet-image" />
-					<div v-if="bar" class="bar" :style="{ width: `${bar.fraction * 100}%` }" data-test="sheet-scalebar">
-						<span class="rule" aria-hidden="true" />
-						<span class="len">{{ bar.label }}</span>
-					</div>
+					<ScaleBar v-if="bar" :bar="bar" data-test="sheet-scalebar" />
 				</div>
 				<div v-else-if="state === 'failed'" class="blank err" role="alert" data-test="sheet-error">
 					<span>The preview could not be loaded.</span>
@@ -102,15 +100,9 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 .top { display: flex; align-items: flex-start; gap: 8px; }
 .title { flex: 1 1 auto; min-width: 0; margin: 0; font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
 .x { border: 1px solid var(--d1-line); }
-.stage { border-radius: 8px; overflow: hidden; background: var(--d1-tile, var(--theme--background-subdued)); }
+.stage { --blank-h: 160px; border-radius: 8px; overflow: hidden; background: var(--d1-tile, var(--theme--background-subdued)); }
 .pic { position: relative; }
 .pic img { display: block; width: 100%; height: auto; }
-.bar { position: absolute; left: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 3px 6px 2px; border-radius: 8px; background: color-mix(in srgb, var(--theme--background) 80%, transparent); }
-.bar .rule { display: block; height: 4px; border: 2px solid var(--theme--foreground); border-top: 0; }
-.bar .len { font-size: var(--fs-xs, 11px); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
-.blank { min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); text-align: center; }
-.blank.err { color: var(--theme--foreground); }
-.blank .shimmer { height: 160px; }
 .about { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .tag { padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap; color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent); }
 .folder { min-width: 0; overflow-wrap: anywhere; }

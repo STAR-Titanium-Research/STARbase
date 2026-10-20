@@ -188,8 +188,18 @@ async function accept() {
 const view = useViewSettings();
 const selectedId = ref<string | null>(null);
 const allRows = computed(() => [...main.value.rows, ...other.value.rows]);
-// A file that leaves the list (linked, dismissed, ignored) takes the sheet with it.
 const selected = computed(() => (selectedId.value ? allRows.value.find((f) => f.candidate_id === selectedId.value) ?? null : null));
+// A file that leaves the list (linked, dismissed, ignored) hands the selection to its neighbour (the next row still there, else the one before), or clears it
+// when none is left, so the sheet and the arrow / Enter keys keep working.
+watch(allRows, (now, before) => {
+	const id = selectedId.value;
+	if (!id || now.some((f) => f.candidate_id === id)) return;
+	const here = new Set(now.map((f) => f.candidate_id));
+	const at = before.findIndex((f) => f.candidate_id === id);
+	const after = at < 0 ? [] : before.slice(at + 1).filter((f) => here.has(f.candidate_id));
+	const earlier = at < 0 ? [] : before.slice(0, at).filter((f) => here.has(f.candidate_id));
+	selectedId.value = (after[0] ?? earlier[earlier.length - 1])?.candidate_id ?? null;
+});
 const sheetOn = computed(() => view.settings.preview === 'sheet');
 function select(f: FoundFile) {
 	selectedId.value = f.candidate_id;

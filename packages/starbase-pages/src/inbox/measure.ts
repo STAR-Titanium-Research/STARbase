@@ -27,7 +27,7 @@ export interface MeasureScale {
 /** What Measure says when it cannot work (also the tooltip of its disabled switch). */
 export const NO_SCALE_REASON = 'no scale known for this image';
 
-const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+export const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 
 /** Measure needs BOTH the pixel size and the original's width (no fallback to the field width or to the preview's width): else null. */
 export function measureScale(extracted: Record<string, unknown> | null | undefined): MeasureScale | null {
@@ -35,6 +35,9 @@ export function measureScale(extracted: Record<string, unknown> | null | undefin
 	const w = extracted?.image_width_px;
 	return finitePositive(px) && finitePositive(w) ? { pixelSizeNm: px, originalWidthPx: w } : null;
 }
+
+/** The picture's full width in µm (pixel size x original width): the one rule the scale bar, Measure and Common scale all share. */
+export const scaleFieldUm = (s: MeasureScale): number => (s.pixelSizeNm * s.originalWidthPx) / 1000;
 
 /** Original pixels per preview pixel (original width / preview width); null when either is unknown. */
 export function previewRatio(originalWidthPx: number, previewWidthPx: number): number | null {

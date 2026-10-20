@@ -1,6 +1,6 @@
 /* The hanging right card of DESIGN.md sections 4 and 5 (the proposed kit ViewRail), shared by the Inbox list's View rail and the view box's: a 220px card under a
    40px lid (icon, title, collapse button), sections of a small label over a control and a hint, and the 36px vertical tab it folds to. Pulled in with
-   <style scoped src="./viewRail.css">; each rail adds its own narrow-page rules. */
+   <style scoped src="./viewRail.css">; it also holds the switch row (.check) and the narrow-page rules of both. */
 .rail {
 	box-sizing: border-box; flex: none; width: 220px; position: sticky; top: var(--d1-header-offset, 52px); align-self: flex-start;
 	border: 1px solid var(--d1-line); border-radius: var(--d1-radius, 12px); background: var(--d1-surface, var(--theme--background)); box-shadow: var(--d1-shadow); overflow: hidden;
@@ -18,3 +18,20 @@
 }
 .tab span { writing-mode: vertical-rl; white-space: nowrap; }
 .tab:hover { color: var(--theme--foreground); }
+.check { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--fs-md, 13px); cursor: pointer; }
+.check.off { color: var(--d1-dim); cursor: not-allowed; }
+.check input { margin: 0; width: 16px; height: 16px; accent-color: var(--d1-accent, var(--theme--primary)); }
+.check input:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+
+/* Narrow pages: the rail is a full-width card (above the Inbox list, under the view box's stage) and the tab a full-width row. The Inbox list's page is the
+   named container inbox-frame; the view box's is the unnamed container of RecordLayout. */
+@container inbox-frame (max-width: 1100px) {
+	.rail { width: 100%; position: static; order: -1; }
+	.tab { width: 100%; flex-direction: row; padding: 6px 10px; position: static; order: -1; }
+	.tab span { writing-mode: horizontal-tb; }
+}
+@container (max-width: 700px) {
+	.rail { width: 100%; position: static; }
+	.tab { width: 100%; flex-direction: row; padding: 6px 10px; position: static; }
+	.tab span { writing-mode: horizontal-tb; }
+}

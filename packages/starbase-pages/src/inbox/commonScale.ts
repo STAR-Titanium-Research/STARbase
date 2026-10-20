@@ -1,6 +1,6 @@
 // "Common scale" for Compare, as plain functions: both pictures drawn at the same micrometres per screen pixel, so a feature is the same size in both panes.
 // It needs both files to say their pixel size AND the original's width (the same two numbers Measure needs); otherwise it is off, with a reason.
-import { measureScale } from './measure';
+import { measureScale, scaleFieldUm } from './measure';
 
 /** Why Common scale cannot work, or null when it can. */
 export const COMMON_SCALE_REASON = 'needs the pixel size and width of both files';
@@ -8,7 +8,7 @@ export const COMMON_SCALE_REASON = 'needs the pixel size and width of both files
 /** A picture's full width in µm (pixel size x original width), or null when the file does not say both. */
 export function fieldUm(extracted: Record<string, unknown> | null | undefined): number | null {
 	const s = measureScale(extracted);
-	return s ? (s.pixelSizeNm * s.originalWidthPx) / 1000 : null;
+	return s ? scaleFieldUm(s) : null;
 }
 
 export const canCommonScale = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined): boolean => fieldUm(a) !== null && fieldUm(b) !== null;
@@ -34,8 +34,8 @@ export function commonScaleWidths(
 	const sa = measureScale(a);
 	const sb = measureScale(b);
 	if (!sa || !sb) return null;
-	const fa = (sa.pixelSizeNm * sa.originalWidthPx) / 1000;
-	const fb = (sb.pixelSizeNm * sb.originalWidthPx) / 1000;
+	const fa = scaleFieldUm(sa);
+	const fb = scaleFieldUm(sb);
 	let umPerPx: number;
 	if (zoom === 'actual') umPerPx = Math.min(sa.pixelSizeNm, sb.pixelSizeNm) / 1000;
 	else {

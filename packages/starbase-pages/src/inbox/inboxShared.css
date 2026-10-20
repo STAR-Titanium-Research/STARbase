@@ -1,4 +1,5 @@
-/* Styles the Inbox row, sheet and rail share: the loading shimmer and the 28px icon button. Pulled in with <style scoped src="./inboxShared.css">. */
+/* Styles the Inbox row, sheet, rail and view box share: the loading shimmer, the empty / failed / loading block of a picture (.blank; its height is
+   --blank-h, 320px unless the parent sets it) and the 28px icon button. Pulled in with <style scoped src="./inboxShared.css">. */
 .shimmer {
 	display: block; width: 100%; height: 100%;
 	background: linear-gradient(90deg, var(--d1-line) 25%, color-mix(in srgb, var(--d1-line) 35%, var(--d1-tile)) 50%, var(--d1-line) 75%); background-size: 200% 100%;
@@ -6,6 +7,11 @@
 }
 @keyframes inbox-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
+
+.blank { min-height: var(--blank-h, 320px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); text-align: center; }
+.blank strong { font-size: var(--fs-md, 13px); color: var(--theme--foreground); }
+.blank.err { color: var(--theme--foreground); }
+.blank .shimmer { height: var(--blank-h, 320px); }
 
 .icon-btn {
 	flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px;

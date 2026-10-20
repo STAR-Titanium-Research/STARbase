@@ -17,7 +17,7 @@ defineProps<{
 	contrast: boolean;
 	/** The preview is in: Fit / 1:1 and Contrast stretch have something to act on. */
 	hasPicture: boolean;
-	/** The file says its pixel size, so a scale bar can be drawn. */
+	/** The file says its pixel size and its width (the same two numbers Measure needs), so a scale bar can be drawn. */
 	hasScale: boolean;
 	open: boolean;
 	/** Measure is on, and whether it can work here (the file says its pixel size and its width), and whether a line is drawn. */
@@ -120,14 +120,4 @@ const checked = (e: Event) => (e.target as HTMLInputElement).checked;
 <style scoped src="./viewRail.css"></style>
 <style scoped>
 .sec { align-self: stretch; }
-.check { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--fs-md, 13px); cursor: pointer; }
-.check.off { color: var(--d1-dim); cursor: not-allowed; }
-.check input { margin: 0; width: 16px; height: 16px; accent-color: var(--d1-accent, var(--theme--primary)); }
-.check input:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
-/* Narrow pages: the rail is a full-width card under the stage, the tab a full-width row. */
-@container (max-width: 760px) {
-	.rail { width: 100%; position: static; }
-	.tab { width: 100%; flex-direction: row; padding: 6px 10px; position: static; }
-	.tab span { writing-mode: horizontal-tb; }
-}
 </style>

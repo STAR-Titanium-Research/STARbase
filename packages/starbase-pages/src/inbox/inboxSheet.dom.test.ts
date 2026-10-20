@@ -208,14 +208,32 @@ describe('a file with no picture', () => {
 });
 
 describe('the actions', () => {
-	it('Dismiss in the sheet dismisses the file, and the sheet goes with it', async () => {
-		await mount([withThumb(A), withThumb(B)]);
+	it('Dismiss in the sheet dismisses the file, and the sheet goes with it when no other file is left', async () => {
+		await mount([withThumb(A)]);
 		thumbButton('3fa9c1d2_A1.tif').click();
 		await vi.waitFor(() => expect(sheet()).not.toBeNull());
 		(sheet()!.querySelector('[data-test="sheet-dismiss"]') as HTMLElement).click();
 		await vi.waitFor(() => expect(fake.calls.some((c) => c.path === '/d1-inbox/dismiss')).toBe(true));
 		await vi.waitFor(() => expect(sheet()).toBeNull());
-		expect(rows()).toHaveLength(1);
+		expect(rows()).toHaveLength(0);
+	});
+
+	it('Dismiss in the sheet moves the selection to the next file, else the one before, so the keys keep working', async () => {
+		await mount([withThumb(A), withThumb(B), withThumb(C)]);
+		nameButton('9ab3c4d5_B2.tif').click();
+		await vi.waitFor(() => expect(sheetName()).toBe('9ab3c4d5_B2.tif'));
+		(sheet()!.querySelector('[data-test="sheet-dismiss"]') as HTMLElement).click();
+		await vi.waitFor(() => expect(sheetName()).toBe('5cd6e7f8_C3.tif'));
+		expect(rows()).toHaveLength(2);
+		expect(selectedRows()).toEqual(['5cd6e7f8_C3.tif']);
+		key('ArrowUp');
+		await vi.waitFor(() => expect(sheetName()).toBe('3fa9c1d2_A1.tif'));
+		// the last file of the list goes: the one before it is selected
+		key('ArrowDown');
+		await vi.waitFor(() => expect(sheetName()).toBe('5cd6e7f8_C3.tif'));
+		(sheet()!.querySelector('[data-test="sheet-dismiss"]') as HTMLElement).click();
+		await vi.waitFor(() => expect(sheetName()).toBe('3fa9c1d2_A1.tif'));
+		expect(selectedRows()).toEqual(['3fa9c1d2_A1.tif']);
 	});
 
 	it('Link to… opens the link dialog for that file', async () => {

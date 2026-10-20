@@ -2,6 +2,7 @@
 // person came from, the "n of m" text, how big the picture is drawn for Fit and 1:1, and the scale bar at either size.
 // Spec: docs/superpowers/specs/2026-10-20-inbox-file-viewer-design.md decisions 4, 8 and 9.
 import { filtersToQuery, type InboxFilters } from './inboxModel';
+import { finitePositive } from './measure';
 import { sheetScaleBar, type SheetBar } from './sheetScale';
 
 /** Fit draws the whole picture in the stage; 1:1 draws one picture pixel of the ORIGINAL per screen pixel (the preview is a reduced copy, so it is scaled up). */
@@ -55,8 +56,6 @@ export function neighbours(ids: readonly string[], id: string): Neighbours | nul
 
 /** "3 of 120"; `total` is the list's full size (the server's), which can be more than the files fetched. */
 export const positionText = (index: number, total: number): string => `${index + 1} of ${Math.max(total, index + 1)}`;
-
-const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 
 /**
  * The width, in screen pixels, the picture is drawn at for 1:1: the original's width (from the file: extracted.image_width_px), or the preview's own

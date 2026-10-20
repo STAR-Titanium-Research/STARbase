@@ -52,14 +52,3 @@ const summaryOf = (p: PreviewMode, compare: boolean) => `${p === 'sheet' ? 'Shee
 
 <style scoped src="./inboxShared.css"></style>
 <style scoped src="./viewRail.css"></style>
-<style scoped>
-.check { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--fs-md, 13px); cursor: pointer; }
-.check input { margin: 0; width: 16px; height: 16px; accent-color: var(--d1-accent, var(--theme--primary)); }
-.check input:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
-/* Narrow pages: the rail is a full-width card above the list, the tab a full-width row. */
-@container inbox-frame (max-width: 1100px) {
-	.rail { width: 100%; position: static; order: -1; }
-	.tab { width: 100%; flex-direction: row; padding: 6px 10px; position: static; order: -1; }
-	.tab span { writing-mode: horizontal-tb; }
-}
-</style>

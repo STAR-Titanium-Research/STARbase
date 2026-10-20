@@ -23,7 +23,6 @@ import {
 import type { ScanAddForm } from './inboxScan';
 import { canCommonScale } from './commonScale';
 import { measureScale, type MeasureLine } from './measure';
-import { sheetScaleBar } from './sheetScale';
 import type { PictureState } from './usePicture';
 import { createInbox, type Outcome } from './useInbox';
 import { useViewSettings, type CompareMode } from './useViewSettings';
@@ -57,6 +56,8 @@ async function reload(): Promise<void> {
 		const got = await locateFile(host.api, filters.value, props.candidateId, () => mine !== token);
 		if (mine !== token) return;
 		located.value = got;
+		extra.value = [];
+		exhausted.value = false;
 		status.value = got ? 'ready' : 'missing';
 	} catch (e) {
 		if (mine !== token) return;
@@ -103,7 +104,8 @@ const next = () => go(around.value?.next);
 const toList = () => openLink(closeTo.value, router);
 const pictureState = ref<PictureState>('idle');
 const hasPicture = computed(() => !!file.value && hasThumbnail(file.value) && pictureState.value !== 'failed');
-const hasScale = computed(() => !!file.value && sheetScaleBar(file.value.extracted) !== null);
+// The Scale bar switch and Measure agree: both need the pixel size and the original's width (measureScale).
+const hasScale = computed(() => !!file.value && !!measureScale(file.value.extracted));
 
 // ---- Compare: the partner is `?with=<candidateId>`; only a file in the list the person can already see is ever shown ----
 // The open file's own page reads the list as far as the file; a partner further down is looked for with the same filters. A partner that is in neither is
@@ -178,7 +180,8 @@ async function resolvePartner(): Promise<void> {
 		inbox.say({ tone: 'warn', text: 'Could not load the second file.' });
 	}
 }
-watch([partnerId, located], () => void resolvePartner(), { immediate: true });
+// The lookup waits for the list to be there; a reload or `leave()` swapping it for a new object must not run it again.
+watch([partnerId, () => !!located.value], () => void resolvePartner(), { immediate: true });
 const partnerFile = computed(() => (partner.value.state === 'ready' ? partner.value.file : null));
 /** The files the picker offers: pictures in the list, never the open file. */
 const candidates = computed(() => rows.value.filter((f) => f.candidate_id !== props.candidateId && IMAGE_KINDS.includes(f.kind)));
@@ -218,6 +221,7 @@ function leave(): void {
 	const to = around.value?.next ?? around.value?.prev ?? null;
 	const gone = props.candidateId;
 	if (located.value) located.value = { ...located.value, rows: located.value.rows.filter((f) => f.candidate_id !== gone), total: Math.max(0, located.value.total - 1) };
+	extra.value = extra.value.filter((f) => f.candidate_id !== gone);
 	if (to) go(to);
 	else void router.replace({ path: listBase(route.path), query: filtersToQuery(filters.value) });
 }
@@ -481,19 +485,19 @@ const whereFacts = computed<Fact[]>(() => {
 .status { display: flex; flex-direction: column; gap: 8px; }
 .status:empty { display: none; }
 .banner {
-	display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 8px 14px; border-radius: 10px; font-size: var(--fs-md, 13px);
+	display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 8px 14px; border-radius: 8px; font-size: var(--fs-md, 13px);
 	border: 1px solid color-mix(in srgb, var(--banner-ink) 40%, transparent); background: color-mix(in srgb, var(--banner-ink) 12%, transparent); color: var(--theme--foreground);
 	--banner-ink: var(--d1-ok);
 }
 .banner.warn { --banner-ink: var(--d1-warn); }
 .banner.bad { --banner-ink: var(--d1-bad); }
 .banner .close { margin-left: auto; color: var(--d1-dim); font-weight: 400; }
-/* The stage and its notes on the left, the viewer's View rail hanging on the right; under 760px of page the rail is a card under the stage. */
+/* The stage and its notes on the left, the viewer's View rail hanging on the right; under 700px of page the rail is a card under the stage. */
 .work { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
 .col { flex: 1 1 0; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .picture { min-width: 0; }
 .why { margin: 8px 0 0; font-size: var(--fs-sm, 12px); }
 .reason { color: var(--d1-dim); }
 .rec { color: var(--d1-accent, var(--theme--primary)); font-weight: 650; }
-@container (max-width: 760px) { .work { flex-direction: column; align-items: stretch; } }
+@container (max-width: 700px) { .work { flex-direction: column; align-items: stretch; } }
 </style>

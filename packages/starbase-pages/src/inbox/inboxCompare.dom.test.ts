@@ -340,19 +340,20 @@ describe('Link zoom and pan, and Common scale', () => {
 		radio('rail-zoom', '1:1').click();
 		await vi.waitFor(() => expect(q('[data-test="a-pane"]')!.dataset.zoom).toBe('actual'));
 		expect(q('[data-test="b-pane"]')!.dataset.zoom).toBe('actual');
-		// no per-pane zoom buttons while linked
+		// there is one zoom for both panes: no per-pane zoom buttons
 		expect(q('[data-test="a-zoom"]')).toBeNull();
 	});
 
-	it('unlinked, each pane has its own Fit / 1:1; the choice is remembered', async () => {
-		await mount([withThumb(A, { extracted: NO_SCALE }), withThumb(B)], atWith(0, 1)); // no shared scale: panes keep their own zoom
+	it('unlinked, the panes still share the rail Fit / 1:1 (there are no per-pane zoom buttons); the choice is remembered', async () => {
+		await mount([withThumb(A, { extracted: NO_SCALE }), withThumb(B)], atWith(0, 1)); // no shared scale
 		await vi.waitFor(() => expect(q('[data-test="b-pane"]')).not.toBeNull());
 		q<HTMLInputElement>('[data-test="toggle-link"]')!.click();
-		await vi.waitFor(() => expect(q('[data-test="a-zoom"]')).not.toBeNull());
-		expect(settings().linkZoom).toBe(false);
-		q('[data-test="b-zoom"]')!.click();
+		await vi.waitFor(() => expect(settings().linkZoom).toBe(false));
+		expect(q('[data-test="a-zoom"]')).toBeNull();
+		expect(q('[data-test="b-zoom"]')).toBeNull();
+		radio('rail-zoom', '1:1').click();
 		await vi.waitFor(() => expect(q('[data-test="b-pane"]')!.dataset.zoom).toBe('actual'));
-		expect(q('[data-test="a-pane"]')!.dataset.zoom).toBe('fit');
+		expect(q('[data-test="a-pane"]')!.dataset.zoom).toBe('actual');
 	});
 
 	it('Common scale is disabled, with a reason, when either file lacks its pixel size', async () => {
@@ -374,7 +375,7 @@ describe('Link zoom and pan, and Common scale', () => {
 		expect(settings().commonScale).toBe(false);
 	});
 
-	it('the measure line is drawn in the pane it was dragged in; its length shows in the other pane only with a common scale', async () => {
+	it('the measure line is drawn only in the pane it was dragged in', async () => {
 		fakeLayout();
 		await mount([withThumb(A), withThumb(B)], atWith(0, 1));
 		await vi.waitFor(() => expect(q('[data-test="b-image"]')).not.toBeNull());
@@ -384,11 +385,8 @@ describe('Link zoom and pan, and Common scale', () => {
 		await vi.waitFor(() => expect(text('[data-test="b-measure"]')).toBe('50 µm'));
 		expect(q('[data-test="b-line"]')).not.toBeNull();
 		expect(q('[data-test="a-line"]')).toBeNull();
-		await vi.waitFor(() => expect(text('[data-test="a-echo"]')).toBe('50 µm'));
-		// without a common scale only its own pane shows it
-		q<HTMLInputElement>('[data-test="toggle-common"]')!.click();
-		await vi.waitFor(() => expect(q('[data-test="a-echo"]')).toBeNull());
-		expect(text('[data-test="b-measure"]')).toBe('50 µm');
+		expect(q('[data-test="a-echo"]')).toBeNull();
+		expect(q('[data-test="a-measure"]')).toBeNull();
 	});
 
 	it('Measure is off in a pane whose file has no scale, but works in the other', async () => {

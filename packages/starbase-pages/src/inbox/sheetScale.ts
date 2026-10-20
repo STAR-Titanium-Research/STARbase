@@ -1,7 +1,8 @@
+import { measureScale, scaleFieldUm } from './measure';
 import { scaleBarText } from './semSettings';
 
 // The scale bar drawn over the picture in the sheet. The preview is a reduced copy, so the bar is sized as a share of the picture's width (which holds at
-// any size) rather than in screen pixels: the picture's width in µm is pixel size x original width, or the recorded field width when the original's width is not known.
+// any size) rather than in screen pixels: the picture's width in µm is pixel size x original width (measure.ts measureScale: the same two numbers Measure and Common scale need, no fallback).
 
 export interface SheetBar {
 	/** The bar's length as a share of the picture's width, 0 to 1. */
@@ -10,15 +11,10 @@ export interface SheetBar {
 	label: string;
 }
 
-const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
-
-/** The picture's full width in µm, or null when the file does not say enough. */
+/** The picture's full width in µm, or null when the file does not say both its pixel size and its width. */
 export function widthUm(extracted: Record<string, unknown>): number | null {
-	const px = extracted.pixel_size_nm;
-	if (!finitePositive(px)) return null;
-	const w = extracted.image_width_px;
-	if (finitePositive(w)) return (px * w) / 1000;
-	return finitePositive(extracted.hfw_um) ? extracted.hfw_um : null;
+	const s = measureScale(extracted);
+	return s ? scaleFieldUm(s) : null;
 }
 
 /** A round length (1, 2 or 5 x 10^n µm) that fills about `target` of the width, never more than `max` of it. */

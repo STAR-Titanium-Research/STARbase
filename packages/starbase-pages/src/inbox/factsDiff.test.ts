@@ -35,9 +35,11 @@ describe('the facts of two files', () => {
 		const b = sem({ spot: undefined, detector: undefined, mode: undefined, acquired_at: undefined, working_distance_mm: undefined });
 		const r = byKey(factsDiff(a, b));
 		expect(r.spot).toMatchObject({ a: '4', b: null, differs: true });
-		const none = factsDiff({ extracted: {}, size_bytes: null }, { extracted: { kv: 15 }, size_bytes: null });
+		const none = factsDiff({ extracted: {}, size_bytes: null }, { extracted: { kv: 15, sources: { kv: 'metadata' }, flags: {} }, size_bytes: null });
 		expect(none.map((x) => x.key)).toEqual(['kv']);
 		expect(none[0]).toMatchObject({ a: null, b: '15 kV', differs: true });
 		expect(factsDiff({ extracted: {}, size_bytes: null }, { extracted: {}, size_bytes: null })).toEqual([]);
+		// an older row (no sources, no flags) shows no settings in the sheet, so the diff shows none either
+		expect(factsDiff({ extracted: { kv: 15 }, size_bytes: null }, { extracted: { kv: 20 }, size_bytes: null })).toEqual([]);
 	});
 });

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { FoundFile } from './inboxApi';
-import { folderOf, nameOf } from './inboxModel';
+import { folderOf, folderText, nameOf } from './inboxModel';
 
 // The second-file picker of Compare (spec 2026-10-20-inbox-file-viewer-design.md decision 5), in the view box's right rail. It offers only files already in the list
 // the person came from (the open file is never offered), the files in the open file's own folder first, then the rest of the list; the search narrows both by name
@@ -52,11 +52,11 @@ const groups = computed(() => [
 		<p v-if="!groups.length" class="hint" data-test="picker-none">{{ needle ? 'No file in this list matches.' : 'There is no other picture in this list.' }}</p>
 		<template v-for="g in groups" :key="g.id">
 			<h4 class="grp">{{ g.title }}<span class="cnt">{{ g.total }}</span></h4>
-			<ul class="opts" role="listbox" :aria-label="g.title">
-				<li v-for="f in g.rows" :key="f.candidate_id" role="presentation">
-					<button type="button" role="option" class="opt" :aria-selected="selected?.candidate_id === f.candidate_id" :title="f.rel_path" :data-id="f.candidate_id" data-test="picker-option" @click="emit('pick', f.candidate_id)">
+			<ul class="opts" :aria-label="g.title">
+				<li v-for="f in g.rows" :key="f.candidate_id">
+					<button type="button" class="opt" :aria-pressed="selected?.candidate_id === f.candidate_id" :title="f.rel_path" :data-id="f.candidate_id" data-test="picker-option" @click="emit('pick', f.candidate_id)">
 						<span class="nm">{{ nameOf(f.rel_path) }}</span>
-						<span v-if="g.id === 'rest'" class="fd">{{ folderOf(f.rel_path) || 'Share root' }}</span>
+						<span v-if="g.id === 'rest'" class="fd">{{ folderText(f.rel_path) }}</span>
 					</button>
 				</li>
 			</ul>
@@ -82,10 +82,10 @@ const groups = computed(() => [
 .cnt { font-weight: 600; font-variant-numeric: tabular-nums; }
 .opts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; max-height: 180px; overflow: auto; border: 1px solid var(--d1-line); border-radius: 8px; }
 .opt { display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; padding: 4px 8px; border: 0; background: none; color: var(--theme--foreground); text-align: left; font: inherit; cursor: pointer; }
-.opt + .opt, li + li .opt { border-top: 1px solid var(--d1-line); }
+li + li .opt { border-top: 1px solid var(--d1-line); }
 .opt:hover { background: var(--d1-tile); }
 .opt:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -2px; }
-.opt[aria-selected="true"] { background: var(--d1-tint); }
+.opt[aria-pressed="true"] { background: var(--d1-tint); }
 .nm { max-width: 100%; font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm, 12px); font-weight: 650; overflow-wrap: anywhere; }
 .fd { max-width: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-dim); overflow-wrap: anywhere; }
 .hint { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }

@@ -8,18 +8,19 @@ describe('the sheet scale bar', () => {
 		expect(widthUm({ pixel_size_nm: 100, image_width_px: 1000 })).toBe(100);
 	});
 
-	it('falls back to the field width when the original width is not known', () => {
-		expect(widthUm({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBe(59.7);
+	it('does not fall back to the field width: it needs what Measure needs', () => {
+		expect(widthUm({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBeNull();
+		expect(sheetScaleBar({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBeNull();
 		expect(widthUm({ pixel_size_nm: 29.14 })).toBeNull();
 	});
 
 	it('draws a round length near a fifth of the picture', () => {
 		// 100 µm wide: a fifth is 22 µm, the round length not above it is 20 µm
 		expect(sheetScaleBar({ pixel_size_nm: 100, image_width_px: 1000 })).toEqual({ fraction: 0.2, label: '20 µm' });
-		// 59.7 µm wide: 13.1 wanted, 10 µm
-		const b = sheetScaleBar({ pixel_size_nm: 29.14, hfw_um: 59.7 })!;
+		// 59.7 µm wide (29.14 nm x 2049 px): 13.1 wanted, 10 µm
+		const b = sheetScaleBar({ pixel_size_nm: 29.14, image_width_px: 2049 })!;
 		expect(b.label).toBe('10 µm');
-		expect(b.fraction).toBeCloseTo(10 / 59.7, 6);
+		expect(b.fraction).toBeCloseTo(10 / 59.7186, 4);
 	});
 
 	it('uses nanometres under 1 µm and millimetres from 1000 µm', () => {
