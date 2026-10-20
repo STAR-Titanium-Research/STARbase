@@ -245,8 +245,8 @@ test('a Lab Viewer is refused on preview, apply, undo and revert (nothing to pre
   assert.deepEqual(list.body.actions, []);
 });
 
-test('the server knows exactly the three kinds of this release', () => {
-  assert.deepEqual(KINDS, ['restrict', 'unrestrict', 'edit_field']);
+test('the server knows exactly these kinds', () => {
+  assert.deepEqual(KINDS, ['restrict', 'unrestrict', 'edit_field', 'assign_team', 'change_owner', 'share_access', 'remove_access']);
 });
 
 // ---- validation -------------------------------------------------------------------------------------------
@@ -265,7 +265,7 @@ test('request validation: collection, kind, ids, field and value are 400s before
   await bad('nope', restrictBody([S.one]));
   await bad('physical_samples', { ids: [S.one] }); // no kind
   await bad('physical_samples', restrictBody([S.one], 'delete_everything'));
-  await bad('physical_samples', restrictBody([S.one], 'assign_team')); // later release
+  await bad('physical_samples', restrictBody([S.one], 'assign_team')); // no team_id
   await bad('physical_samples', restrictBody([]));
   await bad('physical_samples', { kind: 'restrict' });
   await bad('physical_samples', restrictBody(['not-a-uuid']));
