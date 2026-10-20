@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { AppLink, CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, providePagePin, thumbKind } from '@d1/ui';
-import type { CampaignStats, PinTarget } from '@d1/ui';
+import type { CampaignStats, PinRef } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import IndexThumb from './index/IndexThumb.vue';
 
@@ -17,7 +17,7 @@ const isCampaigns = computed(() => def.value?.collection === 'campaigns');
 // roomy row and on a card): the `thumb` slot is only filled for those, so other lists draw none.
 const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !== null);
 // What the title's Pin button pins: the page reports it (a saved view changes it), the frame under this route draws the button.
-const pin = ref<PinTarget | null>(null);
+const pin = ref<PinRef | null>(null);
 providePagePin(computed(() => (def.value ? pin.value : null)));
 </script>
 

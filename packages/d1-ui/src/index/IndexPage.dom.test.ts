@@ -83,7 +83,7 @@ describe('the View rail beside the table', () => {
 		expect($('.index-grid .card .lid')).toBeTruthy();
 		expect($('.tools .card')).toBeNull();
 		expect($('.main .card')).toBeNull();
-		expect($$('.card section').map((s) => s.getAttribute('aria-label') ?? '')).toEqual(['', 'Layout', 'Density', 'Sort', 'Group by', 'Columns', 'Rows per page']);
+		expect($$('.card .d1-view-section').map((s) => s.querySelector('.label')?.textContent ?? '')).toEqual(['', 'Layout', 'Density', 'Sort', 'Group by', 'Columns', 'Rows per page']);
 		expect($('.card .range')?.textContent).toBe('1–3 of 153');
 	});
 

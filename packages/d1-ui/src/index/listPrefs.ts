@@ -3,6 +3,7 @@
 // field. These are preferences of the person, not of the page, so they live in localStorage and stay out of
 // the URL (which carries only what is being looked at: the filters, the sort and the page).
 
+import { browserStorage } from '../storage';
 import type { IndexDef } from './indexConfig';
 
 export type ListView = 'table' | 'cards' | 'list';
@@ -37,14 +38,6 @@ export function validColumns(def: IndexDef, stored: unknown): string[] | null {
 	const [first, ...rest] = def.columns.map((c) => c.field);
 	const kept = [...new Set(stored.filter((f): f is string => typeof f === 'string' && rest.includes(f)))];
 	return kept.length === rest.length && kept.every((f, i) => f === rest[i]) ? null : [first, ...kept];
-}
-
-function browserStorage(): Storage | null {
-	try {
-		return typeof window === 'undefined' ? null : window.localStorage;
-	} catch {
-		return null; // reading the property itself can throw when site data is blocked
-	}
 }
 
 // The stored value is a JSON object; each field is checked on its own, so a good one survives a bad

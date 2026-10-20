@@ -28,7 +28,7 @@ import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
 import { pinTargetForIndex } from '../components/pinTarget';
-import type { PinTarget } from '../components/pagePin';
+import type { PinRef } from '../nav/sidebarModel';
 import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
 import CardGrid from './CardGrid.vue';
@@ -64,7 +64,7 @@ const props = defineProps<{
 	/** What the confirm button counts ("Add 3 samples"); the def's title by default. */
 	pickNouns?: PickNouns;
 }>();
-const emit = defineEmits<{ pick: [rows: PickedRow[]]; pin: [target: PinTarget | null] }>();
+const emit = defineEmits<{ pick: [rows: PickedRow[]]; pin: [target: PinRef | null] }>();
 
 const host: ExplorerHost = useExplorerHost();
 // Picker mode keeps the list's state in memory: the page it is opened over keeps its own address (and has no router to ask).

@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h, ref } from 'vue';
 import type { Ref } from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { providePagePin, usePagePin, type PinTarget } from './pagePin';
+import type { PinRef } from '../nav/sidebarModel';
+import { providePagePin, usePagePin } from './pagePin';
 
 // A page (provides) above its frame (injects), as in STARbase: page > ExplorerView > PlainFrame.
-let injected: Ref<PinTarget | null> | null = null;
+let injected: Ref<PinRef | null> | null = null;
 const Frame = defineComponent({
 	setup() {
 		const pin = usePagePin();
@@ -14,7 +15,7 @@ const Frame = defineComponent({
 	},
 });
 
-async function render(provided: Ref<PinTarget | null> | 'none') {
+async function render(provided: Ref<PinRef | null> | 'none') {
 	const Page = defineComponent({
 		setup() {
 			if (provided !== 'none') providePagePin(provided);
@@ -36,7 +37,7 @@ describe('usePagePin', () => {
 	});
 
 	it('is the page\'s own ref, so a target that changes (a saved view opens) reaches the frame', async () => {
-		const target = ref<PinTarget | null>({ kind: 'page', target: 'samples' });
+		const target = ref<PinRef | null>({ kind: 'page', target: 'samples' });
 		await render(target);
 		target.value = { kind: 'view', target: '4' };
 		expect(injected?.value).toEqual({ kind: 'view', target: '4' });
