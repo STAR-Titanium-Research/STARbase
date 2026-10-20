@@ -3,7 +3,7 @@
 // shown columns (drag a row, or Alt+↑ ↓ on its grip, to reorder; the first column, the code, is always on and
 // first) and the hidden ones as checkboxes, then Reset and Done. The caller owns the value (the shown columns'
 // fields in order, null = all in the def's order); this only reports the new one. The logic is columnPicker.ts.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { columnsSummary, hiddenColumns, isFixedColumn, matchColumns, moveColumn, shownColumns, toggleColumn } from './columnPicker';
 import type { IndexDef } from './indexConfig';
 
@@ -12,6 +12,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string[] | null] }>();
 
 const root = ref<HTMLElement | null>(null);
 const searchBox = ref<HTMLInputElement | null>(null);
+const trigger = ref<HTMLButtonElement | null>(null);
 const open = ref(false);
 const search = ref('');
 
@@ -28,16 +29,23 @@ async function toggleOpen(): Promise<void> {
 		searchBox.value?.focus();
 	}
 }
-const close = () => (open.value = false);
+// Esc and Done hand the keyboard back to the button that opened the popover; a click elsewhere does not move it.
+function close(refocus = false): void {
+	open.value = false;
+	if (refocus) trigger.value?.focus();
+}
 function onDocumentClick(e: MouseEvent): void {
 	if (open.value && root.value && !root.value.contains(e.target as Node)) close();
 }
 onMounted(() => document.addEventListener('click', onDocumentClick));
 onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
-watch(() => props.def.slug, close);
 
 const set = (value: string[] | null) => emit('update:modelValue', value);
-const toggle = (field: string) => set(toggleColumn(props.def, props.modelValue, field));
+// The row moves to the other list when its box is ticked or unticked (it is drawn again there): its box keeps the keyboard.
+function toggle(field: string): void {
+	set(toggleColumn(props.def, props.modelValue, field));
+	void nextTick(() => (root.value?.querySelector(`[data-check="${field}"]`) as HTMLElement | null)?.focus());
+}
 const moveTo = (field: string, index: number) => set(moveColumn(props.def, props.modelValue, field, index));
 function onGripKey(e: KeyboardEvent, field: string): void {
 	if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
@@ -60,10 +68,10 @@ function onDrop(target: string): void {
 
 <template>
 	<div ref="root" class="d1-columns">
-		<button type="button" class="trigger" aria-haspopup="dialog" :aria-expanded="open" @click="toggleOpen">
+		<button ref="trigger" type="button" class="trigger" aria-haspopup="dialog" :aria-expanded="open" @click="toggleOpen">
 			<span>{{ columnsSummary(def, modelValue) }}</span><span class="caret" aria-hidden="true">▾</span>
 		</button>
-		<div v-if="open" class="pop" role="dialog" aria-label="Columns" @keydown.esc.stop="close">
+		<div v-if="open" class="pop" role="dialog" aria-label="Columns" @keydown.esc.stop="close(true)">
 			<input ref="searchBox" v-model="search" type="search" class="find" placeholder="Find a column" aria-label="Find a column" />
 			<div class="scroll">
 				<template v-if="shownMatches.length">
@@ -80,7 +88,7 @@ function onDrop(target: string): void {
 							@drop.prevent="!isFixedColumn(def, c.field) && onDrop(c.field)"
 						>
 							<label>
-								<input type="checkbox" checked :disabled="isFixedColumn(def, c.field)" :aria-label="`Show ${c.label}`" @change="toggle(c.field)" />
+								<input type="checkbox" checked :disabled="isFixedColumn(def, c.field)" :data-check="c.field" :aria-label="`Show ${c.label}`" @change="toggle(c.field)" />
 								<span>{{ c.label }}</span>
 								<em v-if="isFixedColumn(def, c.field)">always</em>
 							</label>
@@ -101,7 +109,7 @@ function onDrop(target: string): void {
 					<ul>
 						<li v-for="c in hiddenMatches" :key="c.field">
 							<label>
-								<input type="checkbox" :aria-label="`Show ${c.label}`" @change="toggle(c.field)" />
+								<input type="checkbox" :data-check="c.field" :aria-label="`Show ${c.label}`" @change="toggle(c.field)" />
 								<span>{{ c.label }}</span>
 							</label>
 						</li>
@@ -111,7 +119,7 @@ function onDrop(target: string): void {
 			</div>
 			<div class="foot">
 				<button type="button" class="btn" @click="set(null)">Reset</button>
-				<button type="button" class="btn pri" @click="close">Done</button>
+				<button type="button" class="btn pri" @click="close(true)">Done</button>
 			</div>
 		</div>
 	</div>

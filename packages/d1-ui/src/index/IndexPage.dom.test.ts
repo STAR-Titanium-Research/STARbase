@@ -219,6 +219,24 @@ describe('columns', () => {
 		expect($('.d1-columns .pop')).toBeNull();
 	});
 
+	it('keeps the keyboard on a column\'s box as it moves between Shown and Hidden, and gives it back to the button on Esc and Done', async () => {
+		await mount(1600);
+		const trigger = $('.d1-columns .trigger')!;
+		await click(trigger);
+		await click($('input[aria-label="Show Nickname"]'));
+		expect(document.activeElement).toBe($('input[data-check="nickname"]'));
+		expect($('input[data-check="nickname"]')?.closest('ul')).toBe($$('.d1-columns ul')[1]);
+		await click($('input[data-check="nickname"]'));
+		expect(document.activeElement).toBe($('input[data-check="nickname"]'));
+		$('.d1-columns .pop')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+		await settle();
+		expect($('.d1-columns .pop')).toBeNull();
+		expect(document.activeElement).toBe(trigger);
+		await click(trigger);
+		await click([...$$('.d1-columns .foot button')].find((b) => b.textContent === 'Done')!);
+		expect(document.activeElement).toBe(trigger);
+	});
+
 	it('finds a column by its name', async () => {
 		await mount(1600);
 		await click($('.d1-columns .trigger'));
