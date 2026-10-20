@@ -825,3 +825,12 @@ def test_inbox_thumbnails_0_switches_the_entry_point_off(
     assert cli.main(["--once", "--root", world.root]) == 0
     assert world.one("SELECT count(*) FROM file_candidates")[0] == 1
     assert world.one("SELECT count(*) FROM file_thumbnails")[0] == expected
+
+
+def test_the_backfill_batch_and_budget_come_from_the_config():
+    # INBOX_THUMB_BATCH / INBOX_THUMB_BUDGET_S: the defaults stay 25 and 20 s, a Config can raise them
+    cfg = daemon.Config()
+    assert cfg.thumb_batch == daemon.THUMB_BATCH == 25
+    assert cfg.thumb_budget_s == daemon.THUMB_BUDGET_S == 20
+    cfg = daemon.Config(thumb_batch=150, thumb_budget_s=90.0)
+    assert (cfg.thumb_batch, cfg.thumb_budget_s) == (150, 90.0)

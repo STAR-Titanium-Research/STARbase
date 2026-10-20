@@ -10,6 +10,9 @@ Environment:
                                it on, a FEI TIFF that has a bar is read too, as a cross-check of its metadata.
     INBOX_OCR_DEVICE           auto|cpu|cuda for that OCR (default cpu; auto takes the GPU when onnxruntime has one).
     INBOX_THUMBNAILS           0 switches thumbnails off: none at registration, no backfill (default on).
+    INBOX_THUMB_BATCH          images the thumbnail backfill makes per tick at most (default 25).
+    INBOX_THUMB_BUDGET_S       seconds one tick's backfill may run (default 20; scan requests wait for it). The
+                               batch only helps when this allows it: about one picture a second.
     INBOX_TICK_S               seconds between claims of scan requests (default 30).
     INBOX_PRIVATE_SCHEMA       the schema holding the inbox tables (default d1_private; tests use another).
     STORAGE_NAME, ROOT_FOLDER  as for scripts/index_archive.py (defaults star, star_group1).
@@ -221,6 +224,13 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
             ocr=_ocr_on(),
             thumbnails=os.environ.get("INBOX_THUMBNAILS", "1").strip() != "0",
             tick_s=float(os.environ.get("INBOX_TICK_S", "30")),
+            thumb_batch=max(
+                1, int(os.environ.get("INBOX_THUMB_BATCH") or daemon.THUMB_BATCH)
+            ),
+            thumb_budget_s=max(
+                1.0,
+                float(os.environ.get("INBOX_THUMB_BUDGET_S") or daemon.THUMB_BUDGET_S),
+            ),
         ),
         stop=stop,
     )
