@@ -84,6 +84,16 @@ export function dayOf(value: string | Date | null | undefined): number | null {
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
+/**
+ * A planned date as the epoch ms of that calendar day. `planned_date` is a DATE column, but a grouped read can return it as `2026-10-20` or
+ * as a timestamp (`2026-10-20T00:00:00Z`): the first 10 characters are the day either way, so a zone west of UTC never shifts it back.
+ */
+export function plannedDayOf(value: string | null | undefined): number | null {
+	if (typeof value !== 'string') return null;
+	const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+	return m ? dayOf(`${m[1]}-${m[2]}-${m[3]}`) : dayOf(value);
+}
+
 /** "9 Oct 2026". */
 export function dayLabel(ms: number): string {
 	const d = new Date(ms);
@@ -130,7 +140,7 @@ const mondayOf = (ms: number): number => weekStart(new Date(ms)).getTime();
 function plannedDays(list: readonly PlannedInput[], kind: 'op' | 'test'): TimelineMarker[] {
 	const byDay = new Map<number, number>();
 	for (const p of list) {
-		const date = dayOf(p.date);
+		const date = plannedDayOf(p.date);
 		if (date === null) continue;
 		const n = Math.max(0, Math.floor(p.n));
 		if (n > 0) byDay.set(date, (byDay.get(date) ?? 0) + n);
@@ -171,8 +181,10 @@ export function timelineData(input: TimelineDataInput): Omit<TimelineModel, 'xTi
 	const testDays = days(input.tests);
 	const plannedOps = plannedDays(input.plannedOps, 'op');
 	const plannedTests = plannedDays(input.plannedTests, 'test');
-	const pStart = dayOf(input.project.start);
-	const pEnd = dayOf(input.project.end);
+	let pStart = dayOf(input.project.start);
+	let pEnd = dayOf(input.project.end);
+	// An end before the start is a typo, not an empty project: read it the way campaigns are (earlier date first).
+	if (pStart !== null && pEnd !== null && pEnd < pStart) [pStart, pEnd] = [pEnd, pStart];
 
 	let x0: number;
 	let x1: number;
@@ -180,7 +192,8 @@ export function timelineData(input: TimelineDataInput): Omit<TimelineModel, 'xTi
 		const records = [...opDays, ...testDays, ...plannedOps.map((p) => p.date), ...plannedTests.map((p) => p.date)];
 		// A record older than the project's recorded start still belongs on the chart, so the start is the earlier of the two.
 		const first = [...(pStart !== null ? [pStart] : []), ...(records.length ? [minOf(records)] : [])];
-		x0 = mondayOf(first.length ? minOf(first) : addDays(today, -30));
+		// Today is on the chart whatever the project's dates are (a project that starts in the future still shows it).
+		x0 = mondayOf(first.length ? minOf([...first, today]) : addDays(today, -30));
 		const later = Math.max(today, pEnd ?? 0, maxOf(records));
 		x1 = Math.max(later, x0 + DAY);
 		x1 += (x1 - x0) * 0.04;
@@ -188,6 +201,9 @@ export function timelineData(input: TimelineDataInput): Omit<TimelineModel, 'xTi
 		const n = RANGE_DAYS[input.range];
 		x0 = mondayOf(addDays(today, -n));
 		x1 = today + n * DAY * 0.25;
+		// Planned work up to one range-length ahead is shown too, with a little room so its marker is not cut by the edge.
+		const ahead = maxOf([...plannedOps, ...plannedTests].map((p) => p.date).filter((d) => d <= addDays(today, n)));
+		if (ahead > x1) x1 = ahead + Math.ceil(n * 0.03) * DAY;
 	}
 	const inRange = (ms: number) => ms >= x0 && ms <= x1;
 
