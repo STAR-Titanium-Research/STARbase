@@ -106,12 +106,14 @@ describe('the page', () => {
 		expect(text('[data-test="box-scalebar"]')).toContain('20 µm');
 		expect(text('[data-test="box-note"]')).toBe('Reduced-size preview. The original stays on the share.');
 		expect(q('#where')?.textContent).toContain('Users/ab1cd/sem/3fa9c1d2_A1.tif');
-		// right: the viewer's View rail: View and Overlay, and nothing that does not work yet
+		// right: the viewer's View rail: View, Overlay (with Measure) and Compare
 		expect(q('[data-test="box-rail"]')).not.toBeNull();
 		expect(radio('Fit').getAttribute('aria-checked')).toBe('true');
 		expect(q('[data-test="toggle-scalebar"]')).not.toBeNull();
 		expect(q('[data-test="toggle-contrast"]')).not.toBeNull();
-		expect(document.body.textContent).not.toMatch(/Measure|Compare/);
+		// Measure is there (this file says its scale) and Compare is Off: no second pane
+		expect(q<HTMLInputElement>('[data-test="toggle-measure"]')!.disabled).toBe(false);
+		expect(q('[data-test="compare-stage"]')).toBeNull();
 	});
 
 	it('shows "n of m" and previous / next within the list, and moving replaces the address so Back goes to the list', async () => {

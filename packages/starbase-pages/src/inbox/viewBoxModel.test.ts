@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FILTERS } from './inboxModel';
-import { actualWidthPx, boxScaleBar, listBase, listPath, neighbours, positionText, swapCandidate, viewBoxPath } from './viewBoxModel';
+import { actualWidthPx, boxScaleBar, listBase, listPath, neighbours, partnerOf, positionText, swapCandidate, viewBoxPath } from './viewBoxModel';
 
 describe('the view box addresses', () => {
 	it('carry the list filters and leave out the defaults', () => {
@@ -14,6 +14,23 @@ describe('the view box addresses', () => {
 		expect(swapCandidate('/home/inbox/file/a/', 'b c')).toBe('/home/inbox/file/b%20c');
 		expect(listBase('/inbox/file/a')).toBe('/inbox');
 		expect(listBase('/home/inbox/file/a')).toBe('/home/inbox');
+	});
+});
+
+describe('the compare partner in the address', () => {
+	it('is added as ?with= after the filters, and never names the file itself', () => {
+		expect(viewBoxPath('c1', DEFAULT_FILTERS, 'c2')).toBe('/inbox/file/c1?with=c2');
+		expect(viewBoxPath('c1', { ...DEFAULT_FILTERS, kind: 'sem_image' }, 'c 2')).toBe('/inbox/file/c1?kind=sem_image&with=c+2');
+		expect(viewBoxPath('c1', DEFAULT_FILTERS, 'c1')).toBe('/inbox/file/c1');
+		expect(viewBoxPath('c1', DEFAULT_FILTERS, null)).toBe('/inbox/file/c1');
+	});
+	it('is read from the query: the first value, nothing for an empty one or the open file', () => {
+		expect(partnerOf({ with: 'c2' }, 'c1')).toBe('c2');
+		expect(partnerOf({ with: ['c2', 'c3'] }, 'c1')).toBe('c2');
+		expect(partnerOf({ with: '' }, 'c1')).toBe('');
+		expect(partnerOf({ with: 'c1' }, 'c1')).toBe('');
+		expect(partnerOf({}, 'c1')).toBe('');
+		expect(partnerOf({ with: 5 }, 'c1')).toBe('');
 	});
 });
 

@@ -27,6 +27,12 @@ const props = defineProps<{
 	preview?: 'sheet' | 'box';
 	/** This row is the one the sheet shows. */
 	selected?: boolean;
+	/** "Compare two files" is on and this is a picture: the row has a tick box. */
+	comparable?: boolean;
+	/** The row is ticked for Compare. */
+	ticked?: boolean;
+	/** Two other rows are ticked already: this one cannot be (it can still be un-ticked). */
+	tickFull?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'link'): void;
@@ -39,6 +45,8 @@ const emit = defineEmits<{
 	(e: 'select'): void;
 	/** The picture or the name was clicked and Preview is View box: the page opens the file's own page. */
 	(e: 'open'): void;
+	/** The Compare tick box was changed. */
+	(e: 'tick', on: boolean): void;
 	/** The button that was pressed, so the page can give focus back to it when the confirm is cancelled. */
 	(e: 'ignore', opener: HTMLElement): void;
 }>();
@@ -103,6 +111,17 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 
 <template>
 	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak, selected }" :aria-current="selected ? 'true' : undefined" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+		<input
+			v-if="comparable"
+			type="checkbox"
+			class="tick"
+			:checked="ticked"
+			:disabled="busy || (tickFull && !ticked)"
+			:aria-label="`Compare ${name}`"
+			:title="tickFull && !ticked ? 'Two files are ticked already' : 'Tick two files to compare them'"
+			data-test="row-tick"
+			@change="emit('tick', ($event.target as HTMLInputElement).checked)"
+		/>
 		<button
 			v-if="showButton"
 			ref="thumbButton"
@@ -167,6 +186,9 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 <style scoped>
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
+.tick { flex: none; margin: 2px 0 0; width: 16px; height: 16px; align-self: center; accent-color: var(--d1-accent, var(--theme--primary)); cursor: pointer; }
+.tick:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.tick:disabled { cursor: not-allowed; }
 .row.selected { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: inset 3px 0 0 var(--d1-accent, var(--theme--primary)); }
 .thumb { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--d1-surface, var(--theme--background)); border: 1px solid var(--d1-line); color: var(--d1-dim); }
 .thumb.pic { padding: 0; font: inherit; cursor: zoom-in; position: relative; }

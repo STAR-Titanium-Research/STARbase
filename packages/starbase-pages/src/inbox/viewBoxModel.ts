@@ -20,7 +20,18 @@ const queryText = (f: InboxFilters): string => {
 export const listPath = (f: InboxFilters): string => `/inbox${queryText(f)}`;
 
 /** The view box page of one found file, carrying the list's filters so prev/next and Close stay in the same list. */
-export const viewBoxPath = (candidateId: string, f: InboxFilters): string => `/inbox/file/${encodeURIComponent(candidateId)}${queryText(f)}`;
+export function viewBoxPath(candidateId: string, f: InboxFilters, partnerId?: string | null): string {
+	const q = new URLSearchParams(filtersToQuery(f));
+	if (partnerId && partnerId !== candidateId) q.set('with', partnerId);
+	const text = q.toString();
+	return `/inbox/file/${encodeURIComponent(candidateId)}${text ? `?${text}` : ''}`;
+}
+
+/** The compare partner a page address names (`?with=<candidateId>`): the first value, or '' when there is none or it is the open file itself. */
+export function partnerOf(query: Record<string, unknown>, openId: string): string {
+	const v = Array.isArray(query.with) ? query.with[0] : query.with;
+	return typeof v === 'string' && v && v !== openId ? v : '';
+}
 
 /** The route path of the view box page with its file swapped (prev/next): "/inbox/file/a" -> "/inbox/file/b"; any prefix the host mounts the pages under stays. */
 export const swapCandidate = (path: string, candidateId: string): string => path.replace(/\/file\/[^/]*\/?$/, `/file/${encodeURIComponent(candidateId)}`);

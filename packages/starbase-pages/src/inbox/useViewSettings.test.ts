@@ -26,13 +26,16 @@ const throwing = (): Storage => {
 describe('the Inbox view settings', () => {
 	it('uses the key d1.list.inbox and defaults to the sheet and an open rail', () => {
 		expect(VIEW_KEY).toBe('d1.list.inbox');
-		expect(DEFAULT_VIEW).toEqual({ preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false });
+		expect(DEFAULT_VIEW).toEqual({
+			preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false, compareList: false, compare: 'off', linkZoom: true, commonScale: true,
+		});
 		expect(readViewSettings(memory())).toEqual(DEFAULT_VIEW);
 	});
 
 	it('reads what was stored', () => {
-		const s = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true }) });
-		expect(readViewSettings(s)).toEqual({ preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true });
+		const all = { preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false };
+		const s = memory({ [VIEW_KEY]: JSON.stringify(all) });
+		expect(readViewSettings(s)).toEqual(all);
 	});
 
 	it('gives the defaults for invalid JSON, and for JSON that is not an object', () => {
@@ -51,6 +54,23 @@ describe('the Inbox view settings', () => {
 		expect(readViewSettings(old)).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
 	});
 
+	it('falls back per field for the compare settings: an unknown mode, non-boolean switches; a good one survives', () => {
+		const s = memory({ [VIEW_KEY]: JSON.stringify({ compare: 'stacked', compareList: 'yes', linkZoom: 0, commonScale: null, preview: 'box' }) });
+		expect(readViewSettings(s)).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
+		const some = memory({ [VIEW_KEY]: JSON.stringify({ compare: 'side', linkZoom: false, commonScale: 'no' }) });
+		expect(readViewSettings(some)).toEqual({ ...DEFAULT_VIEW, compare: 'side', linkZoom: false });
+		// stored before Compare existed: the compare defaults (link and common scale on, compare off)
+		const old = memory({ [VIEW_KEY]: JSON.stringify({ preview: 'sheet', zoom: 'actual' }) });
+		expect(readViewSettings(old)).toMatchObject({ compare: 'off', compareList: false, linkZoom: true, commonScale: true, zoom: 'actual' });
+	});
+
+	it('saves a compare change through useViewSettings', () => {
+		const s = memory();
+		const v = useViewSettings(s);
+		v.set({ compare: 'side', linkZoom: false, compareList: true });
+		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toMatchObject({ compare: 'side', linkZoom: false, compareList: true, commonScale: true });
+	});
+
 	it('does not throw when storage is missing or throws on every call, and reads the defaults', () => {
 		expect(readViewSettings(null)).toEqual(DEFAULT_VIEW);
 		expect(readViewSettings(throwing())).toEqual(DEFAULT_VIEW);
@@ -60,7 +80,9 @@ describe('the Inbox view settings', () => {
 
 	it('writes every field under the key and reads them back', () => {
 		const s = memory();
-		const v = { preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true } as const;
+		const v = {
+			preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false,
+		} as const;
 		writeViewSettings(v, s);
 		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual(v);
 		expect(readViewSettings(s)).toEqual(v);

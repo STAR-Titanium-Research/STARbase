@@ -14,7 +14,7 @@ import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
-import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
+import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
@@ -211,8 +211,28 @@ watch(sheetOn, (on) => {
 	if (!on) selectedId.value = null;
 });
 
-// The view box: the file's own page (/inbox/file/<id>), carrying the filters so its previous / next and Close stay in this list.
-const openBox = (f: FoundFile) => openLink(viewBoxPath(f.candidate_id, filters.value), router);
+// ---- Compare: with "Compare two files" on, pictures can be ticked (at most two); opening one of a ticked pair opens the pair side by side ----
+// The ticks are this visit's own: not kept, not in the address. A file that leaves the list, or turning the option off, drops its tick.
+const compareOn = computed(() => view.settings.compareList);
+const ticked = ref<string[]>([]);
+const canTick = (f: FoundFile) => compareOn.value && IMAGE_KINDS.includes(f.kind);
+function tick(f: FoundFile, on: boolean) {
+	const id = f.candidate_id;
+	if (!on) ticked.value = ticked.value.filter((t) => t !== id);
+	else if (!ticked.value.includes(id) && ticked.value.length < 2) ticked.value = [...ticked.value, id];
+}
+watch([allRows, compareOn], () => {
+	const here = new Set(allRows.value.map((f) => f.candidate_id));
+	const keep = compareOn.value ? ticked.value.filter((id) => here.has(id)) : [];
+	if (keep.length !== ticked.value.length) ticked.value = keep;
+});
+/** The other file of a ticked pair, when `id` is one of the two. */
+const partnerOf = (id: string): string | null => (compareOn.value && ticked.value.length === 2 && ticked.value.includes(id) ? ticked.value.find((t) => t !== id) ?? null : null);
+const compareNote = computed(() => (ticked.value.length === 2 ? 'Two files ticked.' : ticked.value.length === 1 ? '1 of 2 files ticked.' : 'Tick two pictures to compare them.'));
+
+// The view box: the file's own page (/inbox/file/<id>), carrying the filters so its previous / next and Close stay in this list, and the compare partner when the file is one of a ticked pair.
+const openBox = (f: FoundFile) => openLink(viewBoxPath(f.candidate_id, filters.value, partnerOf(f.candidate_id)), router);
+const openPair = () => ticked.value.length === 2 && openLink(viewBoxPath(ticked.value[0], filters.value, ticked.value[1]), router);
 
 const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open;
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
@@ -305,6 +325,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			<p v-if="error" class="banner bad">{{ error }}</p>
 		</div>
 
+		<div v-if="compareOn" class="cmpbar" data-test="compare-bar">
+			<span class="hint" data-test="compare-note">{{ compareNote }}</span>
+			<v-button small :disabled="ticked.length !== 2" data-test="compare-open" @click="openPair()">Compare them</v-button>
+			<button v-if="ticked.length" type="button" class="lf-link" data-test="compare-clear" @click="ticked = []">Clear the ticks</button>
+		</div>
+
 		<div class="work">
 		<div class="listcol">
 		<LoadState v-if="loading && !main.rows.length" loading loading-text="Loading your Inbox…" />
@@ -327,8 +353,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 					:can-ignore="canIgnore"
 					:preview="view.settings.preview"
 					:selected="selectedId === f.candidate_id"
+					:comparable="canTick(f)"
+					:ticked="ticked.includes(f.candidate_id)"
+					:tick-full="ticked.length >= 2"
 					@select="select(f)"
 					@open="openBox(f)"
+					@tick="tick(f, $event)"
 					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
@@ -365,8 +395,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 							:can-ignore="canIgnore"
 							:preview="view.settings.preview"
 							:selected="selectedId === f.candidate_id"
+							:comparable="canTick(f)"
+							:ticked="ticked.includes(f.candidate_id)"
+							:tick-full="ticked.length >= 2"
 							@select="select(f)"
 							@open="openBox(f)"
+							@tick="tick(f, $event)"
 							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
@@ -405,7 +439,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>
-	<InboxViewRail :preview="view.settings.preview" :open="view.settings.railOpen" @update:preview="view.set({ preview: $event })" @update:open="view.set({ railOpen: $event })" />
+	<InboxViewRail
+		:preview="view.settings.preview"
+		:compare="view.settings.compareList"
+		:open="view.settings.railOpen"
+		@update:preview="view.set({ preview: $event })"
+		@update:compare="view.set({ compareList: $event })"
+		@update:open="view.set({ railOpen: $event })"
+	/>
 	</div>
 </template>
 
@@ -421,6 +462,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 .status { display: flex; flex-direction: column; gap: 8px; }
 .status:empty { display: none; }
 .status:focus { outline: none; }
+.cmpbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .accept { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .hint { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .banner {

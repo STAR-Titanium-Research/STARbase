@@ -8,19 +8,26 @@ import {
 import ExplorerView from '../ExplorerView.vue';
 import '../labels/form.css';
 import AddScanDialog from './AddScanDialog.vue';
+import CompareStage from './CompareStage.vue';
+import type { CompareMeasure, PartnerState } from './comparePartner';
+import FactsDiff from './FactsDiff.vue';
 import InboxFileRail from './InboxFileRail.vue';
 import LinkDialog from './LinkDialog.vue';
 import ViewBox from './ViewBox.vue';
 import ViewBoxRail from './ViewBoxRail.vue';
-import type { FoundFile } from './inboxApi';
-import { locateFile, type Located } from './inboxFileList';
-import { duplicateText, extractedText, filtersToQuery, hasThumbnail, nameOf, needsReadNotice, parseFilters, primaryAction, settingsOf, suggestionOf } from './inboxModel';
+import { loadFiles, type FoundFile } from './inboxApi';
+import { locateFile, LOCATE_PAGE, type Located } from './inboxFileList';
+import {
+	IMAGE_KINDS, duplicateText, extractedText, filtersToQuery, folderOf, hasThumbnail, listPlan, nameOf, needsReadNotice, parseFilters, primaryAction, settingsOf, suggestionOf,
+} from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
+import { canCommonScale } from './commonScale';
+import { measureScale, type MeasureLine } from './measure';
 import { sheetScaleBar } from './sheetScale';
 import type { PictureState } from './usePicture';
 import { createInbox, type Outcome } from './useInbox';
-import { useViewSettings } from './useViewSettings';
-import { listBase, listPath, neighbours, positionText, swapCandidate } from './viewBoxModel';
+import { useViewSettings, type CompareMode } from './useViewSettings';
+import { listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
 
 // The view box page (/inbox/file/:candidateId, spec 2026-10-20-inbox-file-viewer-design.md decisions 4, 8, 9 and 10): one found file on a RecordLayout page. Left,
 // its detail panel (InboxFileRail); centre, the stage with the preview (ViewBox) and where the file is; right, the viewer's View rail (ViewBoxRail).
@@ -97,6 +104,114 @@ const toList = () => openLink(closeTo.value, router);
 const pictureState = ref<PictureState>('idle');
 const hasPicture = computed(() => !!file.value && hasThumbnail(file.value) && pictureState.value !== 'failed');
 const hasScale = computed(() => !!file.value && sheetScaleBar(file.value.extracted) !== null);
+
+// ---- Compare: the partner is `?with=<candidateId>`; only a file in the list the person can already see is ever shown ----
+// The open file's own page reads the list as far as the file; a partner further down is looked for with the same filters. A partner that is in neither is
+// the lock card (the page cannot tell a file the person may not see from one that is not there, and never says which). Nothing is guessed.
+const partnerId = computed(() => partnerOf(route.query, props.candidateId));
+const compareOn = computed(() => view.settings.compare === 'side' || !!partnerId.value);
+const compareMode = computed<CompareMode>(() => (compareOn.value ? 'side' : 'off'));
+function setWith(id: string | null): void {
+	const query: Record<string, unknown> = { ...route.query };
+	if (id) query.with = id;
+	else delete query.with;
+	void router.replace({ path: route.path, query: query as typeof route.query });
+}
+/** More of the list than the page read to find the open file, for the picker's "Load more" (the open file's list part, from where the page stopped). */
+const extra = ref<FoundFile[]>([]);
+const exhausted = ref(false);
+const moreBusy = ref(false);
+const rows = computed<FoundFile[]>(() => {
+	const seen = new Set<string>();
+	return [...(located.value?.rows ?? []), ...extra.value].filter((f) => !seen.has(f.candidate_id) && !!seen.add(f.candidate_id));
+});
+const more = computed(() => !!located.value && !exhausted.value && rows.value.length < located.value.total);
+async function loadMore(): Promise<void> {
+	const l = located.value;
+	const base = l ? listPlan(filters.value)[l.part] : null;
+	if (!l || !base || moreBusy.value) return;
+	moreBusy.value = true;
+	try {
+		const page = await loadFiles(host.api, { ...base, limit: LOCATE_PAGE, offset: rows.value.length });
+		if (located.value === l) {
+			if (page.rows.length === 0) exhausted.value = true;
+			extra.value = [...extra.value, ...page.rows];
+		}
+	} catch {
+		inbox.say({ tone: 'warn', text: 'Could not load more of the list.' });
+	} finally {
+		moreBusy.value = false;
+	}
+}
+watch(filtersKey, () => {
+	extra.value = [];
+	exhausted.value = false;
+});
+
+const partner = ref<PartnerState>({ state: 'none' });
+let partnerToken = 0;
+async function resolvePartner(): Promise<void> {
+	const id = partnerId.value;
+	const mine = ++partnerToken;
+	if (!id) {
+		partner.value = { state: 'none' };
+		return;
+	}
+	const hit = rows.value.find((f) => f.candidate_id === id);
+	if (hit) {
+		partner.value = { state: 'ready', file: hit };
+		return;
+	}
+	partner.value = { state: 'loading' };
+	if (!located.value) return; // the list is still coming: this runs again when it is in
+	try {
+		const got = await locateFile(host.api, filters.value, id, () => mine !== partnerToken);
+		if (mine !== partnerToken) return;
+		const f = got?.rows.find((r) => r.candidate_id === id);
+		if (f) {
+			if (got!.part === located.value?.part) extra.value = [...extra.value, ...got!.rows];
+			partner.value = { state: 'ready', file: f };
+		} else partner.value = { state: 'locked' };
+	} catch {
+		if (mine !== partnerToken) return;
+		partner.value = { state: 'none' };
+		inbox.say({ tone: 'warn', text: 'Could not load the second file.' });
+	}
+}
+watch([partnerId, located], () => void resolvePartner(), { immediate: true });
+const partnerFile = computed(() => (partner.value.state === 'ready' ? partner.value.file : null));
+/** The files the picker offers: pictures in the list, never the open file. */
+const candidates = computed(() => rows.value.filter((f) => f.candidate_id !== props.candidateId && IMAGE_KINDS.includes(f.kind)));
+const folder = computed(() => (file.value ? folderOf(file.value.rel_path) : ''));
+const canCommon = computed(() => !!file.value && !!partnerFile.value && canCommonScale(file.value.extracted, partnerFile.value.extracted));
+function setCompare(mode: CompareMode): void {
+	view.set({ compare: mode });
+	if (mode === 'off') {
+		setWith(null);
+		if (measure.value?.side === 'b') measure.value = null;
+	}
+}
+const toggleCompare = () => setCompare(compareOn.value ? 'off' : 'side');
+function pickPartner(id: string): void {
+	view.set({ compare: 'side' });
+	setWith(id);
+}
+function clearPartner(): void {
+	view.set({ compare: 'side' }); // the second pane stays, empty, so a new pick is one click
+	setWith(null);
+	if (measure.value?.side === 'b') measure.value = null;
+}
+
+// ---- Measure: one line at a time, on a picture whose scale the file says ----
+const measureWanted = ref(false);
+const measure = ref<CompareMeasure | null>(null);
+const canMeasure = computed(() => !!file.value && hasPicture.value && (!!measureScale(file.value.extracted) || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
+const measureOn = computed(() => measureWanted.value && canMeasure.value);
+watch(() => props.candidateId, () => (measure.value = null));
+watch(partnerId, () => {
+	if (measure.value?.side === 'b') measure.value = null;
+});
+const singleLine = computed<MeasureLine | null>(() => measure.value?.line ?? null);
 
 /** A file left the list (linked, dismissed, restored): go on to the next one, else the one before, else back to the list. */
 function leave(): void {
@@ -181,7 +296,7 @@ async function copyPath(): Promise<void> {
 	}
 }
 
-// ---- the keys: left / right previous and next, F fits the picture, Esc closes ----
+// ---- the keys: left / right previous and next, F fits the picture, M measures, C compares, Esc closes ----
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
 function onKey(e: KeyboardEvent): void {
 	if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -201,6 +316,14 @@ function onKey(e: KeyboardEvent): void {
 		if (t?.closest(TYPING)) return;
 		e.preventDefault();
 		view.set({ zoom: 'fit' });
+	} else if (e.key === 'm' || e.key === 'M') {
+		if (t?.closest(TYPING) || !canMeasure.value) return;
+		e.preventDefault();
+		measureWanted.value = !measureWanted.value;
+	} else if (e.key === 'c' || e.key === 'C') {
+		if (t?.closest(TYPING)) return;
+		e.preventDefault();
+		toggleCompare();
 	}
 }
 
@@ -279,10 +402,31 @@ const whereFacts = computed<Fact[]>(() => {
 									:zoom="view.settings.zoom"
 									:scale-bar="view.settings.scaleBar"
 									:contrast="view.settings.contrast"
+									:measure-on="measureOn"
+									:line="singleLine"
+									:compare="compareOn"
 									@prev="prev"
 									@next="next"
 									@state="pictureState = $event"
-								/>
+									@measure="measure = $event ? { line: $event, side: 'a' } : null"
+								>
+									<template #stage>
+										<CompareStage
+											:file="file"
+											:partner="partner"
+											:zoom="view.settings.zoom"
+											:scale-bar="view.settings.scaleBar"
+											:contrast="view.settings.contrast"
+											:link-zoom="view.settings.linkZoom"
+											:common-scale="view.settings.commonScale"
+											:measure-on="measureOn"
+											:measure="measure"
+											@state="pictureState = $event"
+											@measure="measure = $event"
+										/>
+									</template>
+								</ViewBox>
+								<FactsDiff v-if="compareOn && partnerFile" :a="file" :b="partnerFile" />
 							</div>
 							<Section id="where" title="Where it is">
 								<FactList :facts="whereFacts" />
@@ -290,6 +434,19 @@ const whereFacts = computed<Fact[]>(() => {
 							</Section>
 						</div>
 						<ViewBoxRail
+							:measure="measureWanted"
+							:can-measure="canMeasure"
+							:has-line="!!measure"
+							:compare="compareMode"
+							:link-zoom="view.settings.linkZoom"
+							:common-scale="view.settings.commonScale"
+							:can-common="canCommon"
+							:candidates="candidates"
+							:folder="folder"
+							:partner="partnerFile"
+							:partner-locked="partner.state === 'locked'"
+							:more="more"
+							:more-busy="moreBusy"
 							:zoom="view.settings.zoom"
 							:scale-bar="view.settings.scaleBar"
 							:contrast="view.settings.contrast"
@@ -300,6 +457,14 @@ const whereFacts = computed<Fact[]>(() => {
 							@update:scale-bar="view.set({ scaleBar: $event })"
 							@update:contrast="view.set({ contrast: $event })"
 							@update:open="view.set({ boxRailOpen: $event })"
+							@update:measure="measureWanted = $event"
+							@update:compare="setCompare"
+							@update:link-zoom="view.set({ linkZoom: $event })"
+							@update:common-scale="view.set({ commonScale: $event })"
+							@clear-line="measure = null"
+							@pick="pickPartner"
+							@clear-partner="clearPartner"
+							@more="loadMore"
 						/>
 					</div>
 				</RecordLayout>
