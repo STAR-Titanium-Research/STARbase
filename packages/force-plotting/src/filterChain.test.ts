@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest';
 import { setForceHost, resetForceHost, type ForceHost } from './host';
-import { bakeBlockedReason, defaultChain, fetchFiltered, fetchSpectrogram, NO_MAT_BAKE_REASON } from './filterChain';
+import { bakeBlockedReason, chainsEqual, defaultChain, fetchFiltered, fetchSpectrogram, NO_MAT_BAKE_REASON, stagesOn } from './filterChain';
 
 function hostWith(over: Partial<ForceHost>): ForceHost {
 	return {
@@ -84,5 +84,24 @@ describe('bakeBlockedReason (#190: cut uploaded without an archive .mat)', () =>
 	it('does not block before a detail is loaded', () => {
 		expect(bakeBlockedReason(null)).toBeNull();
 		expect(bakeBlockedReason(undefined)).toBeNull();
+	});
+});
+
+describe('stagesOn / chainsEqual (the Signal filters tab badge and its unsaved-edit dot)', () => {
+	it('counts the stages that are switched on', () => {
+		const c = defaultChain();
+		expect(stagesOn(c)).toBe(0);
+		c.lowpass.on = true; c.notch.on = true;
+		expect(stagesOn(c)).toBe(2);
+		expect(stagesOn(null)).toBe(0);
+	});
+	it('compares settings, not key order', () => {
+		const a = defaultChain();
+		const b = { notch: { ...a.notch }, lowpass: { ...a.lowpass }, highpass: { ...a.highpass }, detrend: { ...a.detrend }, despike: { ...a.despike } };
+		expect(chainsEqual(a, b)).toBe(true);
+		b.notch.harmonics = [1, 2];
+		expect(chainsEqual(a, b)).toBe(false);
+		const c = defaultChain(); c.lowpass.cutoff_hz = 1500;
+		expect(chainsEqual(a, c)).toBe(false);
 	});
 });
