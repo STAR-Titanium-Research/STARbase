@@ -104,7 +104,7 @@ watch(() => props.folded, () => { open.value = false; });
 .fd-card:hover { background: var(--fd-tile); }
 .fd-card.active { background: var(--fd-tint); border-left-color: var(--fd-accent); }
 .fd-card .fd-code { font-size: var(--fs-md, 13px); overflow: hidden; text-overflow: ellipsis; }
-.fd-card .sub { grid-column: 1; font-size: var(--fs-sm, 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-card .sub { grid-column: 1; font-size: var(--fs-sm, 12px); overflow-wrap: anywhere; }
 .fd-card .count { grid-column: 2; grid-row: 1 / span 2; }
 .fd-card .badge { grid-column: 1; justify-self: start; margin-top: 3px; }
 
