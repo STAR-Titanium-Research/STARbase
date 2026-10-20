@@ -42,9 +42,27 @@ export function axisLabels(ticks: readonly number[]): string[] {
 	return tickLabels(ticks).map((s) => s.replace('-', '−'));
 }
 
-/** "10", "100", "1k", "2.5k", "10k". */
-export function fmtFreq(f: number): string {
-	return f >= 1000 ? `${Number((f / 1000).toPrecision(3))}k` : String(Number(f.toPrecision(3)));
+/** dB re 1 N of a magnitude in N (floored so a zero bin is not -Infinity). */
+export const toDb = (a: number) => 20 * Math.log10(Math.max(a, 1e-9));
+
+/** A spectrum {f, amp} with its amplitudes in dB. */
+export const dbSeries = (d: { f: ArrayLike<number>; amp: ArrayLike<number> }) => ({ f: d.f, amp: Array.from(d.amp, toDb) });
+
+/** Where a log frequency axis starts: the decade of the first non-zero bin, never below 1 Hz. */
+export function firstDecade(freqs: ArrayLike<number>): number {
+	for (let i = 0; i < freqs.length; i++) if (freqs[i] > 0) return Math.max(1, 10 ** Math.floor(Math.log10(freqs[i])));
+	return 1;
+}
+
+/** Which labels fit: of spans [x0, x1] (px), the leftmost is kept, then each one that starts at
+ *  least `gap` past the last kept. Flags come back in the order given. */
+export function labelsThatFit(spans: { x0: number; x1: number }[], gap = 4): boolean[] {
+	const keep = spans.map(() => false);
+	let end = -Infinity;
+	for (const i of spans.map((_, k) => k).sort((a, b) => spans[a].x0 - spans[b].x0)) {
+		if (spans[i].x0 >= end + gap) { keep[i] = true; end = spans[i].x1; }
+	}
+	return keep;
 }
 
 /** Ticks of a log axis over [x0, x1] (both above 0): `major` carry labels (the decades, or 1/2/5 of

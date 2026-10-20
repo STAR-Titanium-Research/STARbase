@@ -33,9 +33,10 @@ export function logFrequencies(fMin: number, nyquist: number, n = 240): number[]
 	return Array.from({ length: n }, (_, i) => 10 ** (a + ((b - a) * i) / (n - 1)));
 }
 
-/** "50 Hz", "2 kHz", "3.2 kHz". */
-export function fmtHz(f: number): string {
-	return f >= 1000 ? `${Number((f / 1000).toPrecision(3))} kHz` : `${Number(f.toPrecision(3))} Hz`;
+/** "50 Hz", "2 kHz", "3.2 kHz"; without the unit (axis ticks) "50", "2k", "3.2k". */
+export function fmtHz(f: number, unit = true): string {
+	const k = f >= 1000, n = Number((k ? f / 1000 : f).toPrecision(3));
+	return unit ? `${n} ${k ? 'kHz' : 'Hz'}` : `${n}${k ? 'k' : ''}`;
 }
 
 const toDb = (power: number) => Math.max(FLOOR_DB, 10 * Math.log10(Math.max(power, 1e-30)));

@@ -6,8 +6,8 @@ import { niceNum, type HoverSource } from './chartHover';
 import { createLongPress, isTouchContextMenu, TOUCH_MENU_OFFSET_PX } from './longPress';
 import { markInView, markTagText } from './chartMark';
 import { displayUnit, yAxisTitle, type ChartSnapshot } from './chartExport';
-import { axisLabels, fmtFreq, logTicks, niceScale, niceTicksIn } from './chartAxis';
-import { stopBands } from './filterResponse';
+import { axisLabels, dbSeries, firstDecade, labelsThatFit, logTicks, niceScale, niceTicksIn } from './chartAxis';
+import { fmtHz, stopBands } from './filterResponse';
 import { resolveColor } from './cssColor';
 import type { FilterChain } from './filterChain';
 
@@ -84,8 +84,6 @@ const MT_EFF = computed(() => (hasSecondX.value ? 36 : 20));
 const MB = computed(() => (props.xLabels ? 38 : 8));
 // A spectrum is plotted as dB re 1 N against log frequency; everything else linearly.
 const dbMode = computed(() => props.kind === 'line' && props.logY === true);
-const toDb = (a: number) => 20 * Math.log10(Math.max(a, 1e-9));
-const dbSeries = (d: { f: ArrayLike<number>; amp: ArrayLike<number> }) => ({ f: d.f, amp: Array.from(d.amp, toDb) });
 const plotData = computed(() => (dbMode.value && props.data?.f ? dbSeries(props.data) : props.data));
 const plotOverlay = computed(() => (dbMode.value && props.overlay ? dbSeries(props.overlay) : props.overlay));
 const hoverUnit = computed(() => (dbMode.value ? 'dB' : yLabelUnit.value));
@@ -139,14 +137,12 @@ const geom = computed(() => {
 	// Visible x-window (shared zoom). Snap the index range to the requested view
 	// so the y-axis auto-rescales to just the zoomed data, and the x-axis spans
 	// exactly the requested bounds (smooth, not sample-snapped).
-	// A spectrum spans its own decades (the shared zoom is a time window), from the decade of its
-	// first non-zero bin, never below 1 Hz.
+	// A spectrum's axis is logarithmic and starts at the decade of its first non-zero bin.
 	const logX = dbMode.value;
-	const dataX0 = xs[0], dataX1 = xs[xs.length - 1];
-	let x0 = props.viewStart != null && !logX ? Math.max(dataX0, props.viewStart) : dataX0;
-	let x1 = props.viewEnd != null && !logX ? Math.min(dataX1, props.viewEnd) : dataX1;
-	if (logX) x0 = Math.max(1, 10 ** Math.floor(Math.log10(xs.find((v) => v > 0) ?? 1)));
-	if (!(x1 > x0)) { x0 = dataX0; x1 = dataX1; }
+	const fullX0 = logX ? firstDecade(xs) : xs[0], dataX1 = xs[xs.length - 1];
+	let x0 = props.viewStart != null ? Math.max(fullX0, props.viewStart) : fullX0;
+	let x1 = props.viewEnd != null ? Math.min(dataX1, props.viewEnd) : dataX1;
+	if (!(x1 > x0)) { x0 = fullX0; x1 = dataX1; }
 	let iA = 0, iB = xs.length - 1;
 	while (iA < iB && xs[iA + 1] < x0) iA++;
 	while (iB > iA && xs[iB - 1] > x1) iB--;
@@ -230,7 +226,7 @@ const geom = computed(() => {
 	let xminor: number[] = [];
 	if (logX) {
 		const lt = logTicks(x0, x1);
-		xticks = lt.major.map((v) => ({ x: sx(v), label: fmtFreq(v) }));
+		xticks = lt.major.map((v) => ({ x: sx(v), label: fmtHz(v, false) }));
 		xminor = lt.minor.map(sx);
 	} else {
 		const tv = niceTicksIn(x0, x1, Math.max(4, Math.min(6, Math.round(plotW / 100))));
@@ -293,7 +289,7 @@ const geom = computed(() => {
 			if (path) compareLines.push({ id: c.id, label: c.label, color: c.color, d: path });
 		}
 	}
-	return { W, Hh, xs, x0, x1, iA, iB, lo, hi, sx, sy, xAt, areaPath, area, line, xticks, xminor, xticks2, yticks, zeroY, overlayLine, compareLines };
+	return { W, Hh, xs, x0, x1, fullX0, iA, iB, lo, hi, sx, sy, xAt, areaPath, area, line, xticks, xminor, xticks2, yticks, zeroY, overlayLine, compareLines };
 });
 
 // The filter chain's stop bands on a spectrum, as pixel spans with a label. Kept out of `geom` so
@@ -302,19 +298,16 @@ const bandRects = computed(() => {
 	const g = geom.value;
 	if (!g || !dbMode.value || !props.filterBands || !props.filterChain) return [];
 	const right = g.W - MR;
-	const out: { x: number; w: number; label: string; tx: number; anchor: 'start' | 'end' }[] = [];
-	let lastEnd = -Infinity;
+	const bands: { x: number; w: number; label: string; tx: number; anchor: 'start' | 'end' }[] = [];
 	for (const b of stopBands(props.filterChain, { nyquist: g.xs[g.xs.length - 1], rpm: props.rpm })) {
 		const xa = b.f0 <= g.x0 ? ML : g.sx(b.f0), xb = Math.min(right, g.sx(b.f1));
 		if (!(xb - xa >= 1) || xa >= right) continue;
 		const need = b.label.length * 5.8;
 		const anchor = need > right - xa - 6 ? 'end' : 'start', tx = anchor === 'end' ? right - 4 : xa + 4;
-		const left = anchor === 'end' ? tx - need : tx;
-		const keep = left > lastEnd + 4;
-		if (keep) lastEnd = left + need;
-		out.push({ x: xa, w: xb - xa, label: keep ? b.label : '', tx, anchor });
+		bands.push({ x: xa, w: xb - xa, label: b.label, tx, anchor });
 	}
-	return out;
+	const keep = labelsThatFit(bands.map((b) => ({ x0: b.anchor === 'end' ? b.tx - b.label.length * 5.8 : b.tx, x1: b.anchor === 'end' ? b.tx : b.tx + b.label.length * 5.8 })));
+	return bands.map((b, i) => (keep[i] ? b : { ...b, label: '' }));
 });
 
 // The crop window is dragged continuously; kept out of `geom` so a drag frame only redraws the
@@ -486,14 +479,11 @@ function pxOf(ev: PointerEvent | WheelEvent): number {
 	const r = svg.getBoundingClientRect();
 	return ((ev as any).clientX - r.left) * (g.W / r.width);
 }
-function fracToX(frac: number): number {
-	return geom.value!.xAt(frac);
-}
 const zoomRect = ref<{ x: number; w: number } | null>(null);
 let zoomDrag = false, zStartPx = 0;
 function onZoomDown(ev: PointerEvent) {
 	if (ev.button !== 0) return;   // right button opens the chart menu, it must not start a zoom box
-	if (!props.zoomTool || !geom.value || dbMode.value) return;   // the shared zoom is a time window
+	if (!props.zoomTool || !geom.value) return;
 	zoomDrag = true; zStartPx = pxOf(ev); zoomRect.value = { x: zStartPx, w: 0 };
 	(ev.currentTarget as Element).setPointerCapture(ev.pointerId); ev.stopPropagation();
 }
@@ -511,24 +501,26 @@ function onZoomUp(ev: PointerEvent) {
 	try { (ev.currentTarget as Element).releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
 	if (!g || !rsel || rsel.w < 6) return;
 	const clamp = (px: number) => (px - ML) / (g.W - ML - MR);
-	const s = fracToX(clamp(rsel.x)), e = fracToX(clamp(rsel.x + rsel.w));
+	const s = g.xAt(clamp(rsel.x)), e = g.xAt(clamp(rsel.x + rsel.w));
 	if (e > s) emit('zoom', { start: s, end: e });
 }
 function onWheel(ev: WheelEvent) {
 	const g = geom.value;
-	if (!g || dbMode.value) return;
+	if (!g) return;
 	ev.preventDefault();
+	// Zoom in the axis' own space: linear for time, log10 for a spectrum's frequency.
+	const u = (x: number) => (dbMode.value ? Math.log10(x) : x);
+	const inv = (v: number) => (dbMode.value ? 10 ** v : v);
 	const frac = (pxOf(ev) - ML) / (g.W - ML - MR);
-	const cursorX = fracToX(frac);
-	const dataSpan = g.xs[g.xs.length - 1] - g.xs[0];
+	const cursor = u(g.xAt(frac));
+	const dx0 = u(g.fullX0), dx1 = u(g.xs[g.xs.length - 1]), dataSpan = dx1 - dx0;
 	const f = ev.deltaY < 0 ? 1 / 1.3 : 1.3;
-	let span = Math.min(dataSpan, Math.max(dataSpan / 1000, (g.x1 - g.x0) * f));
-	let s = cursorX - Math.min(1, Math.max(0, frac)) * span, e = s + span;
-	const dx0 = g.xs[0], dx1 = g.xs[g.xs.length - 1];
+	const span = Math.min(dataSpan, Math.max(dataSpan / 1000, (u(g.x1) - u(g.x0)) * f));
+	let s = cursor - Math.min(1, Math.max(0, frac)) * span, e = s + span;
 	if (s < dx0) { e += dx0 - s; s = dx0; }
 	if (e > dx1) { s -= e - dx1; e = dx1; }
 	s = Math.max(dx0, s);
-	emit('zoom', (e - s >= dataSpan * 0.999) ? null : { start: s, end: e });
+	emit('zoom', (e - s >= dataSpan * 0.999) ? null : { start: inv(s), end: inv(e) });
 }
 </script>
 

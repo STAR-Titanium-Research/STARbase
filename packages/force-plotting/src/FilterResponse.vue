@@ -6,7 +6,7 @@
 // emit an updated chain, and a hover read-out gives the gain under the pointer.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { FilterChain } from './filterChain';
-import { axisLabels, fmtFreq, logTicks } from './chartAxis';
+import { axisLabels, logTicks } from './chartAxis';
 import { filterResponse, fmtHz, logFrequencies, type StageId } from './filterResponse';
 
 const props = withDefaults(defineProps<{
@@ -62,7 +62,7 @@ const curves = computed(() => {
 });
 const ticks = computed(() => {
 	const t = logTicks(xLo.value, xHi.value);
-	return { major: t.major.map((f) => ({ x: sx(f), label: fmtFreq(f) })), minor: t.minor.map(sx) };
+	return { major: t.major.map((f) => ({ x: sx(f), label: fmtHz(f, false) })), minor: t.minor.map(sx) };
 });
 const yLabels = axisLabels(Y_TICKS);
 

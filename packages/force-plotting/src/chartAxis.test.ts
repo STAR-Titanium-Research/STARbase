@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { axisLabels, fmtFreq, logTicks, niceScale, niceTicksIn } from './chartAxis';
+import { axisLabels, dbSeries, firstDecade, labelsThatFit, logTicks, niceScale, niceTicksIn, toDb } from './chartAxis';
+import { fmtHz } from './filterResponse';
 
 describe('niceScale', () => {
 	it('uses 1, 2, 2.5 or 5 x 10^n steps with five or six ticks and the top tick above the data', () => {
@@ -49,7 +50,26 @@ describe('axisLabels and fmtFreq', () => {
 		expect(axisLabels([-20, 0, 20])).toEqual(['−20', '0', '20']);
 	});
 	it('writes 1k and 10k on a frequency axis', () => {
-		expect([10, 100, 1000, 2500, 10000, 0.5].map(fmtFreq)).toEqual(['10', '100', '1k', '2.5k', '10k', '0.5']);
+		expect([10, 100, 1000, 2500, 10000, 0.5].map((f) => fmtHz(f, false))).toEqual(['10', '100', '1k', '2.5k', '10k', '0.5']);
+	});
+});
+
+describe('spectrum helpers', () => {
+	it('converts to dB re 1 N without -Infinity', () => {
+		expect(toDb(1)).toBe(0);
+		expect(toDb(0.1)).toBeCloseTo(-20);
+		expect(Number.isFinite(toDb(0))).toBe(true);
+		expect(dbSeries({ f: [1, 2], amp: [10, 1] })).toEqual({ f: [1, 2], amp: [20, 0] });
+	});
+	it('starts a log axis at the decade of the first non-zero bin, at least 1 Hz', () => {
+		expect(firstDecade([0, 6.4, 12.8])).toBe(1);
+		expect(firstDecade([0, 25, 50])).toBe(10);
+		expect(firstDecade([0, 0.5, 1])).toBe(1);
+		expect(firstDecade([])).toBe(1);
+	});
+	it('keeps the leftmost label and drops ones that would collide, whatever the input order', () => {
+		const spans = [{ x0: 100, x1: 160 }, { x0: 10, x1: 70 }, { x0: 120, x1: 180 }, { x0: 165, x1: 200 }];
+		expect(labelsThatFit(spans)).toEqual([true, true, false, true]);
 	});
 });
 

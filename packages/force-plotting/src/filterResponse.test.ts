@@ -102,7 +102,7 @@ describe('stopBands and helpers', () => {
 		expect(notchFrequencies(c, 1200, NY)).toEqual([20]);
 	});
 	it('formats frequencies', () => {
-		expect([50, 2000, 3200, 12800, 0.5].map(fmtHz)).toEqual(['50 Hz', '2 kHz', '3.2 kHz', '12.8 kHz', '0.5 Hz']);
+		expect([50, 2000, 3200, 12800, 0.5].map((f) => fmtHz(f))).toEqual(['50 Hz', '2 kHz', '3.2 kHz', '12.8 kHz', '0.5 Hz']);
 	});
 	it('spaces frequencies logarithmically including both ends', () => {
 		expect(logFrequencies(10, 10000, 4).map((x) => Math.round(x))).toEqual([10, 100, 1000, 10000]);

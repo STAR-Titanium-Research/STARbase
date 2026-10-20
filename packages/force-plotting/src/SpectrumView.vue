@@ -9,7 +9,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { type FilterChain, chainActive, defaultChain, fetchSpectrogram } from './filterChain';
 import { debounce } from './debounce';
-import { axisLabels, fmtFreq, logTicks, niceScale } from './chartAxis';
+import { axisLabels, firstDecade, labelsThatFit, logTicks, niceScale } from './chartAxis';
 import { fmtHz, stopBands } from './filterResponse';
 import { nearestIndex } from './hoverIndex';
 import { resolveColor } from './cssColor';
@@ -238,7 +238,7 @@ function psdOffset(g: Grid): number {
 }
 // Log frequency axis from the decade of the first non-zero bin (never below 1 Hz) to Nyquist.
 function psdFreqRange(g: Grid): [number, number] {
-	const lo = Math.max(1, 10 ** Math.floor(Math.log10(g.f.find((v) => v > 0) ?? 1)));
+	const lo = firstDecade(g.f);
 	return [lo, Math.max(lo * 10, g.f[g.f.length - 1] ?? g.fmax)];
 }
 function psdFreqAt(g: Grid, frac: number): number {
@@ -259,18 +259,17 @@ function drawPsd(g: Grid, W: number, H: number, plotW: number, plotH: number, st
 	ctx.font = '11px system-ui'; ctx.lineWidth = 1;
 	// filter stop bands
 	if (props.filterBands && chainActive(props.chain)) {
-		let lastEnd = -Infinity;
-		for (const b of stopBands(props.chain, { nyquist: xHi, rpm: props.rpm })) {
+		const bands = stopBands(props.chain, { nyquist: xHi, rpm: props.rpm }).map((b) => {
 			const xa = b.f0 <= xLo ? ML : sx(b.f0), xb = Math.min(ML + plotW, sx(b.f1));
-			if (!(xb - xa >= 1)) continue;
-			ctx.fillStyle = pal.text; ctx.globalAlpha = 0.12; ctx.fillRect(xa, MT, xb - xa, plotH);
-			const tw = ctx.measureText(b.label).width, atEnd = tw > ML + plotW - xa - 8;
-			const tx = atEnd ? ML + plotW - 4 - tw : xa + 4;
-			if (tx > lastEnd + 4) {
-				ctx.globalAlpha = 1; ctx.textAlign = 'left'; ctx.fillStyle = pal.text; ctx.fillText(b.label, tx, MT + 13);
-				lastEnd = tx + tw;
-			}
-		}
+			const tw = ctx!.measureText(b.label).width;
+			const tx = tw > ML + plotW - xa - 8 ? ML + plotW - 4 - tw : xa + 4;
+			return { xa, xb, label: b.label, tx, tw };
+		}).filter((b) => b.xb - b.xa >= 1);
+		const keep = labelsThatFit(bands.map((b) => ({ x0: b.tx, x1: b.tx + b.tw })));
+		bands.forEach((b, i) => {
+			ctx!.fillStyle = pal.text; ctx!.globalAlpha = 0.12; ctx!.fillRect(b.xa, MT, b.xb - b.xa, plotH);
+			if (keep[i]) { ctx!.globalAlpha = 1; ctx!.textAlign = 'left'; ctx!.fillText(b.label, b.tx, MT + 13); }
+		});
 		ctx.globalAlpha = 1;
 	}
 	// grid: faint 2-9 lines, then a line at every labelled tick
@@ -303,7 +302,7 @@ function drawPsd(g: Grid, W: number, H: number, plotW: number, plotH: number, st
 	const yl = axisLabels(yScale.ticks);
 	yScale.ticks.forEach((v, i) => { const y = sy(v); ctx!.beginPath(); ctx!.moveTo(ML - 4, y); ctx!.lineTo(ML, y); ctx!.stroke(); ctx!.fillText(yl[i], ML - 7, y + 4); });
 	ctx.textAlign = 'center';
-	for (const f of lt.major) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT + plotH); ctx.lineTo(x, MT + plotH + 4); ctx.stroke(); ctx.fillText(fmtFreq(f), x, MT + plotH + 16); }
+	for (const f of lt.major) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT + plotH); ctx.lineTo(x, MT + plotH + 4); ctx.stroke(); ctx.fillText(fmtHz(f, false), x, MT + plotH + 16); }
 	ctx.font = '600 11px system-ui';
 	ctx.fillText('Frequency (Hz)', ML + plotW / 2, H - 6);
 	ctx.textAlign = 'left'; ctx.fillText(raw ? 'Magnitude (dB re raw peak)' : 'Magnitude (dB re peak)', 4, 13);
