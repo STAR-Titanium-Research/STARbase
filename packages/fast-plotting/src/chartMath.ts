@@ -75,11 +75,11 @@ export function seriesStyle(index: number): { color: string; dash: string | null
 	return { color: SERIES_COLOURS[index % 3], dash: SERIES_DASHES[(index + Math.floor(index / 3)) % SERIES_DASHES.length] };
 }
 
-/** A number for a tick-less place (tooltip, tile, peak): three or so significant figures, a real minus sign. */
+/** A number for a tooltip, tile or peak: whole from 100, one decimal from 10, up to two below, no trailing zeros, a real minus sign. */
 export function fmtNum(v: number): string {
-	if (v === 0) return '0';
 	const a = Math.abs(v);
-	return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : a >= 0.1 ? 2 : 3).replace('-', '\u2212');
+	const text = v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
+	return (text.includes('.') ? text.replace(/\.?0+$/, '') : text).replace(/^-0$/, '0').replace('-', '\u2212');
 }
 
 export type TileSpan = 'sm' | 'wide' | 'tall' | 'big';

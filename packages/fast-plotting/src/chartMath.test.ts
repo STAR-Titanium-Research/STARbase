@@ -95,12 +95,20 @@ describe('seriesStyle', () => {
 });
 
 describe('fmtNum', () => {
-	it('keeps three or so significant figures, with a real minus sign', () => {
+	it('is whole from 100, one decimal from 10, up to two below, without trailing zeros', () => {
+		expect(fmtNum(1362)).toBe('1362');
 		expect(fmtNum(1362.4)).toBe('1362');
-		expect(fmtNum(30)).toBe('30.0');
-		expect(fmtNum(8.214)).toBe('8.21');
-		expect(fmtNum(0.031)).toBe('0.031');
-		expect(fmtNum(-4.5)).toBe('\u22124.50');
+		expect(fmtNum(30)).toBe('30');
+		expect(fmtNum(30.04)).toBe('30');
+		expect(fmtNum(11.84)).toBe('11.8');
+		expect(fmtNum(5.8)).toBe('5.8');
+		expect(fmtNum(8.18)).toBe('8.18');
+		expect(fmtNum(0.15)).toBe('0.15');
+		expect(fmtNum(0)).toBe('0');
+	});
+	it('uses a real minus sign and never prints minus zero', () => {
+		expect(fmtNum(-4.5)).toBe('\u22124.5');
+		expect(fmtNum(-0.001)).toBe('0');
 	});
 });
 

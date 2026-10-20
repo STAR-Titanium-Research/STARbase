@@ -66,8 +66,8 @@ describe('runStats over the whole run', () => {
 		expect(tile(r, 'holdpower')).toMatchObject({ value: '5.95', unit: 'kW' });
 	});
 	it('densification is the net ram travel and the shrink rate the fastest move', () => {
-		expect(tile(r, 'densification')).toMatchObject({ value: '8.00', unit: 'mm' });
-		expect(tile(r, 'shrink')).toMatchObject({ value: '0.60', unit: 'mm/min' });
+		expect(tile(r, 'densification')).toMatchObject({ value: '8', unit: 'mm' });
+		expect(tile(r, 'shrink')).toMatchObject({ value: '0.6', unit: 'mm/min' });
 	});
 	it('energy per gram uses the recorded mass', () => {
 		expect(tile(r, 'pergram')).toMatchObject({ value: ((KWH * 1000) / 12).toFixed(0), unit: 'Wh/g' });
@@ -80,7 +80,7 @@ describe('runStats over a window', () => {
 		const r = runStats(makeTrace(), { target: 1350, window: hold });
 		expect(tile(r, 'duration')).toMatchObject({ label: 'Window', value: '10.0' });
 		expect(tile(r, 'energy')).toMatchObject({ label: 'Energy', value: '1.00' });
-		expect(tile(r, 'holdpower')!.value).toBe('6.00');
+		expect(tile(r, 'holdpower')!.value).toBe('6');
 		// the ram has stopped by then, and the window holds none of the heating
 		expect(tile(r, 'densification')!.value).toBe('0');
 		expect(tile(r, 'ramp')).toBeUndefined();
@@ -97,7 +97,7 @@ describe('runStats over a window', () => {
 		const power = t.series.sps_power.values.map((v, i) => (i % 5 === 0 ? NaN : v));
 		t.series.sps_power = { ...t.series.sps_power, values: power };
 		const r = runStats(t, { target: 1350, window: { start: 800, end: 1400 } });
-		expect(tile(r, 'holdpower')).toMatchObject({ label: 'Hold power', value: '6.00' });
+		expect(tile(r, 'holdpower')).toMatchObject({ label: 'Hold power', value: '6' });
 	});
 });
 

@@ -30,7 +30,7 @@ describe('groupTitle', () => {
 describe('tilePeak', () => {
 	it('is the highest value over the series, with the unit as printed', () => {
 		expect(tilePeak([s('a', 'temp', 'C', 20, 1362.4, NaN), s('b', 'temp', 'C', 1340)])).toEqual({ value: '1362', unit: '°C' });
-		expect(tilePeak([s('a', 'force', 'kN', 5, 30)])).toEqual({ value: '30.0', unit: 'kN' });
+		expect(tilePeak([s('a', 'force', 'kN', 5, 30)])).toEqual({ value: '30', unit: 'kN' });
 	});
 	it('is absent for mixed units, no series or no finite values', () => {
 		expect(tilePeak([s('a', 'temp', 'C', 1), s('b', 'force', 'kN', 1)])).toBeNull();
