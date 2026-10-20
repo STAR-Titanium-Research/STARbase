@@ -23,7 +23,7 @@ export interface RecordView {
 	range: ActivityRange;
 }
 
-export const DEFAULT_RECORD_VIEW: Readonly<RecordView> = { panels: 1, density: 'normal', empty: 'show', range: '6mo' };
+export const DEFAULT_RECORD_VIEW: Readonly<RecordView> = { panels: 1, density: 'normal', empty: 'show', range: 'all' };
 
 export const ACTIVITY_RANGES: readonly { value: ActivityRange; label: string }[] = [
 	{ value: '30d', label: '30 d' },

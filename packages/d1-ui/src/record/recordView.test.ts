@@ -52,7 +52,7 @@ describe('isChanged and viewSummary', () => {
 		expect(isChanged({ ...DEFAULT_RECORD_VIEW })).toBe(false);
 		expect(isChanged({ ...DEFAULT_RECORD_VIEW, panels: 2 })).toBe(true);
 		expect(isChanged({ ...DEFAULT_RECORD_VIEW, empty: 'hide' })).toBe(true);
-		expect(isChanged({ ...DEFAULT_RECORD_VIEW, range: 'all' })).toBe(true);
+		expect(isChanged({ ...DEFAULT_RECORD_VIEW, range: '6mo' })).toBe(true);
 	});
 
 	it('names panels and density, then what is not the default', () => {
