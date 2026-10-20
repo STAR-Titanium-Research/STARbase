@@ -1667,7 +1667,8 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # campaign_sample_readers, operation_open_to_all) are derived caches written only by the recompute triggers: not audited either.
 # file_readers (migration 196) is the readers table of directus_files, derived and written only by its triggers: not audited either.
 # team_events (migration 181) is the history of a team, written only by the team triggers and the sharing code: it is a log, so not audited either.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','team_events','file_readers','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
+# bulk_actions and bulk_action_rows (migration 204) are the journal of bulk actions: append-only history of who changed which records (with each row's before and after), written only by the d1-bulk-actions endpoint. A log, so not audited itself.
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','team_events','bulk_actions','bulk_action_rows','file_readers','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
