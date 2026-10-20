@@ -2854,7 +2854,7 @@ records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actio
   Nothing is mailed by a revert. Since: bulk actions, PR 2.
 - [ ] **BULK10 — The summary mails with a real mail transport.** `assign_team` on 25 samples: the team's managers get ONE mail each, 62 s after the answer, listing 20 codes and "and 5 more" with links that
   open the records (STARBASE_URL or PUBLIC_URL set); the person who ran it gets none; `bulk_actions.mail_state` goes `pending` -> `sent`. `share_access` with a team: one mail per active member with an address; a login with
-  an empty address and an inactive person get none; a member with no login is mailed (their People address) with no links. Undo inside the window: no mail ever arrives and `mail_state = 'cancelled'`. A recipient who
+  an empty address, an inactive person, a member with no login and a member still waiting for approval on that record get none (a person shared with directly who has no login is mailed at their People address, with no links). Undo inside the window: no mail ever arrives and `mail_state = 'cancelled'`. A recipient who
   cannot read a record gets its code and no link. Since: bulk actions, PR 2.
 - [ ] **BULK11 — The mail survives a restart.** Apply a `change_owner`, restart the Directus container inside the 60 s window: the mail still goes out about when it was due (the startup sweep re-arms it, `mail_state`
   `pending` -> `sent`); undo after the restart (still inside the window) cancels it. Apply, restart AFTER the due time without the endpoint having sent it (stop Directus before the 62 s, start it later): the
