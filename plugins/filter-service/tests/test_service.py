@@ -291,7 +291,9 @@ def test_fft_overlay_is_rms_amplitude_in_newtons():
 # --- /spectrogram reference level ---------------------------------------------
 
 
-def test_spectrogram_reports_the_reference_level_so_grids_can_share_a_scale(monkeypatch):
+def test_spectrogram_reports_the_reference_level_so_grids_can_share_a_scale(
+    monkeypatch,
+):
     from fastapi.testclient import TestClient
 
     base = make_cache(n=16384)
@@ -309,7 +311,10 @@ def test_spectrogram_reports_the_reference_level_so_grids_can_share_a_scale(monk
     raw = c.post("/spectrogram", json={**body, "chain": {}}).json()
     hp = c.post(
         "/spectrogram",
-        json={**body, "chain": {"highpass": {"on": True, "cutoff_hz": 2000, "order": 4}}},
+        json={
+            **body,
+            "chain": {"highpass": {"on": True, "cutoff_hz": 2000, "order": 4}},
+        },
     ).json()
     # each grid is still relative to its own peak (0 dB) ...
     assert max(max(row) for row in raw["S"]) == pytest.approx(0.0, abs=0.1)
