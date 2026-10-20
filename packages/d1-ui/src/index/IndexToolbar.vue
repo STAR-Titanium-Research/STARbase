@@ -1,36 +1,14 @@
 <script setup lang="ts">
-// The top of an index page (IndexPage): the range, the page's buttons, the view switches, the saved-view chips and the
-// search and filter bar. It draws what IndexPage hands it and reports clicks; the state lives in useIndexPage. In picker
-// mode the buttons that navigate away (Pin, New, Data Studio, the With-selected menu) give way to the confirm button.
-import { ref } from 'vue';
-import { useExplorerHost } from '../host';
-import BulkMenu from '../bulk/BulkMenu.vue';
-import type { BulkEntry } from '../bulk/bulkModel';
-import PinToggle from '../components/PinToggle.vue';
-import SegmentedControl from '../components/SegmentedControl.vue';
-import type { PinRef } from '../nav/sidebarModel';
+// The toolbar of an index page (IndexPage), above the table only: the saved-view chips, the search box, one filter
+// per chip and "Clear filters". These choose WHICH rows show (they go in the URL); how rows look is the View rail's
+// (IndexViewRail) and the page's buttons are IndexActions'. It draws what IndexPage hands it and reports clicks;
+// the state lives in useIndexPage.
 import type { IndexDef } from './indexConfig';
 import { toggledBookmark } from './indexQuery';
 import type { ChipView } from './useIndexPage';
-import type { Density, ListView } from './listPrefs';
 
 defineProps<{
 	def: IndexDef;
-	pick?: boolean;
-	range: string;
-	pinTarget: PinRef | null;
-	pinLabel: string;
-	/** Picker mode: the confirm button's text and how many rows it would add. */
-	pickText: string;
-	pickCount: number;
-	/** How many rows are ticked, and the entries of the With-selected menu (none: no menu). */
-	pickedCount: number;
-	bulkEntries: BulkEntry[];
-	view: ListView;
-	density: Density;
-	sort: string;
-	sortChoices: { value: string; label: string }[];
-	dsLink: { to: string; note?: string | null };
 	bookmarks: { id: number; bookmark: string }[];
 	activeBookmark: number | null;
 	bookmarkUnavailable: boolean;
@@ -39,53 +17,14 @@ defineProps<{
 	hasFilters: boolean;
 }>();
 const emit = defineEmits<{
-	confirm: [];
-	bulk: [entry: BulkEntry];
-	view: [value: ListView];
-	density: [value: Density];
-	sort: [value: string];
 	bookmark: [id: number | null];
 	search: [text: string];
 	filter: [field: string, value: string];
 	clear: [];
 }>();
-
-const host = useExplorerHost();
-// The page hands focus back here after a bulk dialog closes.
-const menu = ref<InstanceType<typeof BulkMenu> | null>(null);
-defineExpose({ focusMenu: () => menu.value?.focus() });
-const VIEW_OPTIONS = [
-	{ value: 'table', label: 'Table', icon: '☰' },
-	{ value: 'cards', label: 'Cards', icon: '▦' },
-] as const;
-const DENSITY_OPTIONS = [
-	{ value: 'compact', label: 'Compact' },
-	{ value: 'normal', label: 'Normal' },
-	{ value: 'roomy', label: 'Roomy' },
-] as const;
 </script>
 
 <template>
-	<div class="head">
-		<span class="range" role="status">{{ range }}</span>
-		<span class="spacer" />
-		<PinToggle v-if="pinTarget && !pick" :target="pinTarget" :label="pinLabel" />
-		<button v-if="pick" type="button" class="btn pri" :disabled="!pickCount" @click="emit('confirm')">{{ pickText }}</button>
-		<BulkMenu v-else-if="bulkEntries.length" ref="menu" :entries="bulkEntries" :count="pickedCount" @choose="emit('bulk', $event)" />
-		<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="emit('view', $event as ListView)" />
-		<label v-if="view === 'cards'" class="sortsel">
-			<span>Sort by</span>
-			<select :value="sort" aria-label="Sort by" @change="emit('sort', ($event.target as HTMLSelectElement).value)">
-				<option v-for="o in sortChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
-			</select>
-		</label>
-		<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="emit('density', $event as Density)" />
-		<template v-if="!pick">
-			<button type="button" class="btn" :title="dsLink.note ?? undefined" @click="host.openDataStudio(dsLink.to)">Open in Data Studio</button>
-			<button v-if="!host.canViewAllAccess?.value" type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
-		</template>
-	</div>
-
 	<div v-if="bookmarks.length" class="chips" role="group" aria-label="Saved views">
 		<span class="lbl">Saved views</span>
 		<span v-for="b in bookmarks" :key="b.id" class="chip" :class="{ on: activeBookmark === b.id }">
@@ -131,20 +70,8 @@ const DENSITY_OPTIONS = [
 </template>
 
 <style scoped>
-.head, .filters, .chips { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.filters, .chips { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .filters { align-items: flex-end; }
-.spacer { flex: 1; }
-.range { font-size: var(--fs-md, 13px); color: var(--d1-dim); }
-
-.btn {
-	display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
-	border: 1px solid var(--d1-line); border-radius: 8px;
-	background: var(--d1-tile); color: var(--theme--foreground);
-	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; cursor: pointer;
-}
-.btn:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
-.btn:disabled { opacity: 0.45; cursor: default; }
-.btn.pri { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 .link {
 	border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600;
 	color: var(--d1-accent, var(--theme--primary)); cursor: pointer; text-decoration: underline;
@@ -178,10 +105,5 @@ const DENSITY_OPTIONS = [
 .flag:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .flag.on { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 
-.sortsel { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); }
-.sortsel select {
-	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
-	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
-}
 .d1-note.warn { color: var(--d1-warn); }
 </style>

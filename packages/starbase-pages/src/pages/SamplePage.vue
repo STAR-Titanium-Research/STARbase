@@ -4,10 +4,10 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AppLink, openLink, AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, RecordViewRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin, provideRecordView,
 	mapPath,
 } from '@d1/ui';
 import { dimsText } from '../geometry';
@@ -54,14 +54,15 @@ const details = computed(() => detailFacts(sampleDetailBase(sample.value), [], r
 const project = computed(() => sample.value?.project_id);
 const campaignRows = computed(() => sampleCampaigns(campaigns.value.data));
 
-// "On this page": the panels this sample has, in page order. A count is null while it loads, and for
+// "On this page": the panels this sample has, in page order. A count is null while it loads or when its read
+// failed (the panel is drawn then, with the error, so it is neither dimmed nor hidden as empty), and for
 // panels with no count of their own (the material and the life strip).
 const contents = computed<ContentsEntry[]>(() => [
 	{ id: 'details', title: 'Material and details', count: null },
 	{ id: 'life', title: 'Life of the sample', count: null },
-	{ id: 'operations', title: 'Operations', count: operations.value.loading ? null : Math.min(operations.value.data.length, LIST_CAP) },
-	{ id: 'tests', title: 'Tests', count: tests.value.loading ? null : Math.min(tests.value.data.length, LIST_CAP) },
-	{ id: 'files', title: 'Files', count: files.value.loading ? null : files.value.data.length },
+	{ id: 'operations', title: 'Operations', count: operations.value.loading || operations.value.error ? null : Math.min(operations.value.data.length, LIST_CAP) },
+	{ id: 'tests', title: 'Tests', count: tests.value.loading || tests.value.error ? null : Math.min(tests.value.data.length, LIST_CAP) },
+	{ id: 'files', title: 'Files', count: files.value.loading || files.value.error ? null : files.value.data.length },
 ]);
 
 // The report is an endpoint page (printable HTML), not an app route: open it in a new tab, same session.
@@ -71,7 +72,11 @@ const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(pr
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('physical_samples', props.id));
-const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
+const pin = computed(() => (sample.value ? pinTargetForRecord('physical_samples', props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
+providePagePin(pin);
+// The View rail's settings (panels, table density, empty sections), one set for every sample page on this device.
+provideRecordView('sample');
 </script>
 
 <template>
@@ -104,8 +109,6 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 						</template>
 					</template>
 
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
-
 					<template #rail>
 						<RecordRail :kind="sampleKind(sample)" :code="code" :title="sample.nickname" :facts="railFacts" :contents="contents">
 							<template #kind-icon><v-icon name="science" x-small /></template>
@@ -123,6 +126,8 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							<template #extra><SampleGeometry :dims="dims" /></template>
 						</RecordRail>
 					</template>
+
+					<template #view><RecordViewRail kind="sample" /></template>
 
 					<SampleDetails
 						:sample="sample"

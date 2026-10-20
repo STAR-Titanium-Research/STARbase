@@ -31,7 +31,19 @@ describe('buildChartSvg', () => {
 		const f = Array.from({ length: 40 }, (_, i) => i + 1);
 		const svg = buildChartSvg({ title: 'Fz · spectrum', kind: 'line', data: { f, amp: f.map((v) => 100 / v) }, xUnit: 'Hz', yUnit: 'N', logY: true });
 		expect(svg).toContain('Frequency (Hz)');
-		expect(svg).toContain('Amplitude (log scale) (N rms)');
+		expect(svg).toContain('Magnitude (dB re 1 N)');
+		expect(svg).not.toContain('N rms');
+	});
+	it('draws a logY spectrum in dB on decade ticks, as on screen', () => {
+		const f = Array.from({ length: 400 }, (_, i) => (i + 1) * 32);   // 32 Hz .. 12.8 kHz
+		const svg = buildChartSvg({ title: 'Fz', kind: 'line', data: { f, amp: f.map((v) => 100 / v) }, xUnit: 'Hz', yUnit: 'N', logY: true });
+		for (const t of ['>10<', '>100<', '>1k<', '>10k<', '\u221220<']) expect(svg).toContain(t);
+		expect(svg).not.toContain('NaN');
+	});
+	it('keeps a linear spectrum linear without logY', () => {
+		const f = Array.from({ length: 40 }, (_, i) => i + 1);
+		const svg = buildChartSvg({ title: 'Fz', kind: 'line', data: { f, amp: f.map((v) => 100 / v) }, xUnit: 'Hz', yUnit: 'N' });
+		expect(svg).toContain('Amplitude (N rms)');
 	});
 	it('escapes text from labels', () => {
 		const svg = buildChartSvg({

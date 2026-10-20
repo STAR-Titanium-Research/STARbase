@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRecordView } from '../composables/useRecordView';
 import { contentsModel, type ContentsEntry } from '../record/contents';
+import { withoutEmpty } from '../record/recordView';
 import { findScrollParent } from '../record/scrollParent';
 import { scrollToSection } from '../record/scrollTo';
 
 // "On this page": the page's sections with their counts. The section in view is marked, a click
 // scrolls to a section, and an empty section is listed dimmed. The model is record/contents.ts; this
-// renders it and feeds it the ids an IntersectionObserver reports.
+// renders it and feeds it the ids an IntersectionObserver reports. When the page's View rail hides empty
+// sections (useRecordView), they leave the list and a line says how many ("2 empty sections hidden").
 //
 // The observer's root is the scroller of the sections: the nearest scrolling ancestor that contains
 // them (the Data Studio scrolls inside its own container, not the window; null = the viewport). The
@@ -16,16 +19,19 @@ import { scrollToSection } from '../record/scrollTo';
 // none (tests, server).
 const props = defineProps<{ entries: ContentsEntry[] }>();
 
+const view = useRecordView();
+const listed = computed(() => withoutEmpty(props.entries, view?.empty === 'hide'));
+
 const root = ref<HTMLElement | null>(null);
 const inView = ref(new Set<string>());
 const atBottom = ref(false);
 const visible = computed(() => {
 	// A short last section can never reach the upper 60% where the page is scrolled to its end: at the
 	// bottom the last entry is the current one.
-	const last = props.entries[props.entries.length - 1];
+	const last = listed.value.shown[listed.value.shown.length - 1];
 	return atBottom.value && last ? new Set([last.id]) : inView.value;
 });
-const model = computed(() => contentsModel(props.entries, visible.value));
+const model = computed(() => contentsModel(listed.value.shown, visible.value));
 
 let observer: IntersectionObserver | null = null;
 let scroller: Element | null = null;
@@ -46,7 +52,7 @@ function listen(target: EventTarget | null) {
 
 function observe() {
 	if (typeof document === 'undefined' || typeof IntersectionObserver === 'undefined' || !root.value) return;
-	const els = props.entries.map((e) => document.getElementById(e.id)).filter((el): el is HTMLElement => !!el);
+	const els = listed.value.shown.map((e) => document.getElementById(e.id)).filter((el): el is HTMLElement => !!el);
 	// The scroller is found from a section, so with none in the document yet it is looked for again
 	// on the next call (the page adds its sections as the data arrives).
 	if (!resolved && els.length) {
@@ -77,7 +83,7 @@ onMounted(observe);
 // The page adds its sections as their data arrives (a v-if, a request): observe again when the list
 // or a count changes.
 watch(
-	() => props.entries.map((e) => `${e.id}:${e.count}`).join('|'),
+	() => listed.value.shown.map((e) => `${e.id}:${e.count}`).join('|'),
 	() => nextTick(observe),
 );
 onBeforeUnmount(() => {
@@ -107,6 +113,7 @@ function go(id: string, event: MouseEvent) {
 			<span class="title">{{ e.title }}</span>
 			<span v-if="e.count !== null" class="count">{{ e.count }}</span>
 		</a>
+		<p v-if="listed.hidden" class="hidden-note">{{ listed.hidden }} empty section{{ listed.hidden === 1 ? '' : 's' }} hidden</p>
 	</nav>
 </template>
 
@@ -134,4 +141,5 @@ h2 {
 .count { font-variant-numeric: tabular-nums; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .current { border-left-color: var(--d1-accent, var(--theme--primary)); font-weight: 650; }
 .empty { opacity: 0.55; }
+.hidden-note { margin: 0; padding: 3px 0 3px 10px; font-size: var(--fs-md, 13px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 </style>

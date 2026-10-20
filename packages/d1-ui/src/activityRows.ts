@@ -1,3 +1,4 @@
+import { DEFAULT_WEEKS, windowStart, type ActivityWindow } from './activity';
 import { anyProjectFilter, effectiveProjectId, effectiveProjectIdFields, projectScopeFilter } from './projectScope';
 
 // Reads the dates of the operations and tests inside the sparkline window, for one project or for
@@ -26,17 +27,19 @@ export interface ActivityRows {
 	failed: { collection: 'operations' | 'tests'; error: unknown }[];
 }
 
-export interface ActivityRowsOptions {
-	/** Only rows dated on or after this (an ISO string, `windowStart(weeks)`). Without it: the whole history (the Project page's timeline, range "All"), every dated row, newest first, up to the cap. */
-	since?: string | null;
-}
-
-export async function fetchActivityRows(getItems: GetItems, projectId?: string, options: ActivityRowsOptions = {}): Promise<ActivityRows> {
-	const lower = options.since ? { _gte: options.since } : { _nnull: true };
+export async function fetchActivityRows(
+	getItems: GetItems,
+	projectId?: string,
+	span: ActivityWindow = DEFAULT_WEEKS,
+	now: Date = new Date(),
+): Promise<ActivityRows> {
+	// "All" reads every dated row (newest first, up to the cap), so the oldest ones are what a busy project loses.
+	const inWindow = (dateField: string) =>
+		span === 'all' ? { [dateField]: { _nnull: true } } : { [dateField]: { _gte: windowStart(span, now) } };
 	const scope = projectId ? projectScopeFilter(projectId) : anyProjectFilter();
 	const read = async (collection: string, dateField: string) => {
 		const rows = await getItems(collection, {
-			filter: { _and: [scope, { [dateField]: lower }, { work_state: { _eq: 'done' } }] },
+			filter: { _and: [scope, inWindow(dateField), { work_state: { _eq: 'done' } }] },
 			fields: projectId ? [dateField] : [...effectiveProjectIdFields, dateField],
 			sort: [`-${dateField}`],
 			limit: ACTIVITY_ROW_CAP,
@@ -52,8 +55,20 @@ export async function fetchActivityRows(getItems: GetItems, projectId?: string, 
 	const failed: ActivityRows['failed'] = [];
 	if (opsRes.status === 'rejected') failed.push({ collection: 'operations', error: opsRes.reason });
 	if (testsRes.status === 'rejected') failed.push({ collection: 'tests', error: testsRes.reason });
+	// A capped series is known only back to its oldest row (it reads newest first). For "All" the chart starts at
+	// the later of the capped series' oldest dates, so no week before that shows a false zero for either series.
+	let from = 0;
+	if (span === 'all') {
+		for (const [series, dateField] of [[ops, 'operation_date'], [tests, 'session_date']] as const) {
+			if (!series.capped) continue;
+			const oldest = Math.min(...series.rows.map((r) => new Date(r[dateField]).getTime()).filter((t) => !Number.isNaN(t)));
+			if (Number.isFinite(oldest)) from = Math.max(from, oldest);
+		}
+	}
 	const flat = (rows: any[], dateField: string) =>
-		rows.map((r) => ({ project_id: (projectId ?? effectiveProjectId(r)) as string, [dateField]: r[dateField] }));
+		rows
+			.filter((r) => !from || !(new Date(r[dateField]).getTime() < from))
+			.map((r) => ({ project_id: (projectId ?? effectiveProjectId(r)) as string, [dateField]: r[dateField] }));
 	return {
 		ops: flat(ops.rows, 'operation_date') as ActivityRows['ops'],
 		tests: flat(tests.rows, 'session_date') as ActivityRows['tests'],

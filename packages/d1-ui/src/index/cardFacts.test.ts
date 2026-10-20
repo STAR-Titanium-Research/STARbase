@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { indexDefBySlug } from './indexConfig';
-import { cardFacts, cardHead, isPlainClick, sortOptions } from './cardFacts';
+import { cardFacts, cardHead, isPlainClick, sortFieldOptions } from './cardFacts';
 
 const samples = indexDefBySlug('samples')!;
 const operators = indexDefBySlug('machine-operators')!;
@@ -52,21 +52,24 @@ describe('isPlainClick', () => {
 	});
 });
 
-describe('sortOptions', () => {
-	it('offers each sortable column both ways, with a relation sorted by its display field', () => {
-		const opts = sortOptions(samples, '-created_at');
-		expect(opts.find((o) => o.value === 'material_id.alloy_code')?.label).toBe('Material, ascending');
-		expect(opts.find((o) => o.value === '-sample_code')?.label).toBe('Code, descending');
+describe('sortFieldOptions', () => {
+	it('offers each sortable column once, a relation sorted by its display field', () => {
+		const opts = sortFieldOptions(samples, '-created_at');
+		expect(opts.find((o) => o.value === 'material_id.alloy_code')?.label).toBe('Material');
+		expect(opts.find((o) => o.value === 'sample_code')?.label).toBe('Code');
+		expect(opts.some((o) => o.value.startsWith('-'))).toBe(false);
+		expect(opts.map((o) => o.value)).toEqual([...new Set(opts.map((o) => o.value))]);
 	});
 	it('leaves out a column that cannot be sorted', () => {
-		const opts = sortOptions(samples, '-created_at', (c) => !c.relation);
+		const opts = sortFieldOptions(samples, '-created_at', (c) => !c.relation);
 		expect(opts.some((o) => o.value.startsWith('material_id'))).toBe(false);
 	});
 	it('puts the default order first when no column carries it', () => {
-		expect(sortOptions(tools, '-created_at')[0]).toEqual({ value: '-created_at', label: 'Default order' });
+		expect(sortFieldOptions(tools, '-created_at')[0]).toEqual({ value: 'created_at', label: 'Default order' });
+		expect(sortFieldOptions(samples, '-created_at').some((o) => o.label === 'Default order')).toBe(false);
 	});
 	it('adds a current sort the page does not offer once, never twice', () => {
-		expect(sortOptions(samples, '-nickname').filter((o) => o.value === '-nickname')).toHaveLength(1);
-		expect(sortOptions(samples, 'weird')[0]).toEqual({ value: 'weird', label: 'Saved view order' });
+		expect(sortFieldOptions(samples, '-nickname').filter((o) => o.value === 'nickname')).toHaveLength(1);
+		expect(sortFieldOptions(samples, 'weird')[0]).toEqual({ value: 'weird', label: 'Saved view order', saved: true });
 	});
 });

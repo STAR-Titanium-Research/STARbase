@@ -259,8 +259,8 @@ export function useProjectData(id: Ref<string>) {
 				}),
 			),
 			fill(activity, token, 'activity', async () => {
-				// The whole history, not 26 weeks: the timeline picks its range (30 d, 6 mo, All) from these dates.
-				const rows = await fetchActivityRows(getItems, projectId);
+				// The whole history, not 26 weeks: the timeline picks its range (the View rail's Activity range: 30 d, 6 mo, All) from these dates.
+				const rows = await fetchActivityRows(getItems, projectId, 'all');
 				const partialError = rows.failed.map((f) => `Could not load ${f.collection} activity: ${errorText(f.error)}`).join(' ');
 				return { ops: rows.ops.map((r) => r.operation_date), tests: rows.tests.map((r) => r.session_date), truncated: rows.truncated, partialError };
 			}),

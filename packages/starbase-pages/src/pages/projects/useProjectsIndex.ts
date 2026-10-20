@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref } from 'vue';
 import {
-	CURRENT_USER, countsByKey, datesByKey, errorText, fetchActivityRows, useItems, useRequestGate, weeklyActivity, windowStart, DEFAULT_WEEKS,
+	CURRENT_USER, countsByKey, datesByKey, errorText, fetchActivityRows, useItems, useRequestGate, weeklyActivity, DEFAULT_WEEKS,
 	type ProjectRow, type WeeklyActivity,
 } from '@d1/ui';
 
@@ -113,7 +113,7 @@ export function useProjectsIndex() {
 			})(),
 			(async () => {
 				try {
-					const rows = await fetchActivityRows(getItems, undefined, { since: windowStart() });
+					const rows = await fetchActivityRows(getItems);
 					if (!gate.isCurrent(token)) return;
 					const ops = datesByKey(rows.ops, (r) => r.project_id, (r) => r.operation_date);
 					const tests = datesByKey(rows.tests, (r) => r.project_id, (r) => r.session_date);

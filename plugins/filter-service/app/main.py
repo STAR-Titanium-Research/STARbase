@@ -303,6 +303,9 @@ def _spectrogram_compute(c: Cache, chain: dict, axis: str) -> dict:
         "f": f_o.round(2).tolist(),
         "t": t_o.round(3).tolist(),
         "S": s_db.round(1).tolist(),
+        # S is relative to this grid's own peak; ref_db is that peak in dB re 1 N, so two grids (raw
+        # and filtered) can be put on one scale: S_a + ref_db_a - ref_db_b. Additive: S is unchanged.
+        "ref_db": round(20.0 * float(np.log10(mx)), 2),
         "fmax": float(f_o[-1]) if f_o.size else 0.0,
     }
 

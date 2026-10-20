@@ -3,6 +3,7 @@
 // Typing in the search box replaces the URL (debounced), clicks push a history entry, so reload and
 // Back reproduce the view. Host-neutral: the API, navigation and route come in as arguments.
 import { computed, getCurrentInstance, onBeforeUnmount, ref, watch } from 'vue';
+import type { Ref } from 'vue';
 import { choiceKindFor } from '../choiceLabels';
 import type { ExplorerHost } from '../host';
 import { errorText, isForbidden } from '../format';
@@ -11,6 +12,7 @@ import { useExplorerNav } from '../nav/useExplorerNav';
 import { bookmarkVisibleToUser } from '../nav/navConfig';
 import type { Bookmark } from '../nav/navConfig';
 import { TEAM_RECORDS_LIMIT, getTeamRecordIds, listTeams } from '../teams/teamsApi';
+import { groupChoices } from './groupBy';
 import { TEAM_FILTER_FIELD } from './indexConfig';
 import type { IndexDef } from './indexConfig';
 import { mergePlots, plotRequests } from './plotData';
@@ -22,6 +24,7 @@ import {
 	queryForState, relationKey, relationOptionParams, relationOptions, teamTruncatedNote, validSort, withChange, withSelected,
 } from './indexView';
 import type { ChipOption } from './indexView';
+import { DEFAULT_PAGE_SIZE } from './listPrefs';
 
 // The two things the composable needs of vue-router, so it does not depend on its route types.
 export interface RouteLike {
@@ -58,7 +61,19 @@ export function chipCacheFor(host: ExplorerHost): Map<string, ChipOption[]> {
 	return entry.map;
 }
 
-export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike, router: RouterLike) {
+// How the person looks at the list (View rail, kept per browser, not in the URL): they change what the query asks for.
+export interface ViewSettings {
+	pageSize: Ref<number>;
+	groupBy: Ref<string | null>;
+}
+
+export function useIndexPage(
+	host: ExplorerHost,
+	def: IndexDef,
+	route: RouteLike,
+	router: RouterLike,
+	view: ViewSettings = { pageSize: ref(DEFAULT_PAGE_SIZE), groupBy: ref(null) },
+) {
 	const { nav, visible, loading: navLoading, error: navError } = useExplorerNav(host);
 	const gate = useRequestGate();
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -103,6 +118,9 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	});
 	const bookmarkUnavailable = computed(() => settledBookmark.value !== null && settledBookmark.value === raw.value.bookmark && !bookmark.value);
 	const sort = computed(() => state.value.sort ?? bookmarkSort(bookmark.value) ?? def.defaultSort);
+	// The fields rows can be grouped by (a relation only when its collection is readable), and the one in use: a stored choice that is not offered is not applied.
+	const groups = computed(() => groupChoices(def, visible.value));
+	const activeGroup = computed(() => (groups.value.some((g) => g.value === view.groupBy.value) ? view.groupBy.value : null));
 
 	async function ensureBookmark(id: number | null): Promise<boolean> {
 		if (id === null || bookmarkById(id)) return true;
@@ -178,7 +196,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			teamNote.value = '';
 		}
 
-		const params = buildItemsParams(def, state.value, bookmark.value, visible.value, teamIds);
+		const params = buildItemsParams(def, state.value, bookmark.value, visible.value, teamIds, { pageSize: view.pageSize.value, groupBy: activeGroup.value });
 		params.fields = [...(params.fields as string[]), ...extraFields(def, visible.value).filter((f) => !(params.fields as string[]).includes(f))];
 		try {
 			const res = await host.api.get(`/items/${def.collection}`, { params });
@@ -240,6 +258,9 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		if (route.params.slug !== def.slug) return;
 		void load();
 	});
+	// A new page size or grouping starts again from page 1 (when that is another page, the URL change loads). Only the person's
+	// own change counts: `activeGroup` moving as the sidebar's collections arrive must not reset a shared ?page=3 link.
+	watch([view.pageSize, view.groupBy], () => (raw.value.page > 1 ? go({ page: 1 }) : void load()));
 	void load();
 	// (Not in a component only under test, where there is nothing to unmount.)
 	if (getCurrentInstance()) {
@@ -396,7 +417,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 
 	return {
 		rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote,
-		state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
+		state, sort, groups, activeGroup, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 		reload: load, rowKey, relationSortable,
 		setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 	};

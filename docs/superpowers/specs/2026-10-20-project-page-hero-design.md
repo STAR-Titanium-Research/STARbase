@@ -15,8 +15,8 @@ it, and how far it has got, readable on a 1440 × 900 screen without scrolling.
 `PageShell` (data page, fills the width) with, in order:
 
 1. **Hero**: one surface (12px radius, `--d1-line`, `--d1-shadow`, 16px padding, 16px row gap, 28px column gap).
-   - **Head** (full width): code (mono 700, `--fs-2xl`), name (`--fs-xl`, 650), the pin (`PinToggle`, shown on
-     hover or focus of the title), kind pill, status badge, "Export controlled" (danger tone) and "Restricted"
+   - **Head** (full width): code (mono 700, `--fs-2xl`), name (`--fs-xl`, 650), the pin (the host frame's title
+     pin, DESIGN.md "Pin on the title"; not drawn in the hero), kind pill, status badge, "Export controlled" (danger tone) and "Restricted"
      badges. Actions on the right: Edit, Process map, Open in Data Studio. Under it the **people row** (below).
    - **Timeline** (below).
    - **About**: dates, document number (mono), the description clamped to four lines with "Show more".
@@ -63,9 +63,10 @@ One SVG with one time axis, drawn from a pure model (`projectTimeline.ts` in the
 - **Today**: a solid line across the chart.
 - **Axes** per `DESIGN.md` 5b: solid 1px left and bottom axes, 4px outward ticks, solid gridlines at labelled
   ticks; month ticks at 1, 2, 3 or 6-month steps by span (weekly ticks for 30 days).
-- **Range**: 30 d, 6 mo or All (default All: the project's start, or the first record, to the later of its end,
-  today and the last planned date, plus 4%). The control is a `SegmentedControl` in the timeline's header,
-  remembered per device (`localStorage`, guarded). It moves into the View rail when that exists.
+- **Range**: 30 d, 6 mo or All (the View rail's default, 6 mo; All: the project's start, or the first record, to the later of its end,
+  today and the last planned date, plus 4%). The control is a `SegmentedControl` in the timeline's header and the
+  View rail's "Activity range" are one setting (`d1.view.project`, remembered per device, guarded); the page reads the whole
+  history once and the range only picks what is drawn, so changing it reads nothing again.
 - **Empty**: nothing in range → one line, "No operations or tests in the last 6 months." (`DESIGN.md`: an empty
   chart is a one-line panel).
 - Under the chart: "Last operation 9 Oct 2026 · Last test none · Undated: 6". A screen-reader-only table holds the

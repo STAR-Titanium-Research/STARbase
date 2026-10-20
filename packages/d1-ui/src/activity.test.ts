@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { binWeekly, datesByKey, isoWeek, isoWeekLabel, lastWeeks, weekStart, weeklyActivity, windowStart } from './activity';
+import { MIN_ALL_WEEKS, binWeekly, datesByKey, isoWeek, isoWeekLabel, lastWeeks, weekStart, weeklyActivity, windowStart, windowWeeks } from './activity';
 
 // Local-time constructors at noon, so the tests do not depend on the machine's time zone.
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h);
@@ -84,6 +84,30 @@ describe('weeklyActivity', () => {
 		const a = weeklyActivity([], [], 5, at(2026, 10, 7));
 		expect(a.ops).toEqual([0, 0, 0, 0, 0]);
 		expect(a.totalOps + a.totalTests).toBe(0);
+	});
+});
+
+describe('the "all" window', () => {
+	const now = at(2026, 10, 7);
+	it('reaches back to the week of the oldest date', () => {
+		// 2026-09-02 is a Wednesday in the week of Monday 2026-08-31; this week starts 2026-10-05: five Mondays later, so six bins.
+		expect(windowWeeks('all', [at(2026, 10, 1), at(2026, 9, 2)], now)).toBe(6);
+		const a = weeklyActivity([at(2026, 9, 2)], [at(2026, 10, 7)], 'all', now);
+		expect(a.weeks).toHaveLength(6);
+		expect(a.weeks[0].start).toBe('2026-08-31');
+		expect([a.totalOps, a.totalTests]).toEqual([1, 1]);
+	});
+	it('counts a fixed window as it is', () => {
+		expect(windowWeeks(26, [at(2020, 1, 1)], now)).toBe(26);
+	});
+	it('is never shorter than the shortest range, and ignores unusable dates', () => {
+		expect(windowWeeks('all', [], now)).toBe(MIN_ALL_WEEKS);
+		expect(windowWeeks('all', [at(2026, 10, 1)], now)).toBe(MIN_ALL_WEEKS);
+		expect(windowWeeks('all', [null, undefined, '', 'nonsense', at(2030, 1, 1)], now)).toBe(MIN_ALL_WEEKS);
+	});
+	it('counts whole weeks across a year boundary', () => {
+		// Monday 2025-12-29 to Monday 2026-10-05 is 40 weeks, so 41 bins.
+		expect(windowWeeks('all', [at(2025, 12, 31)], now)).toBe(41);
 	});
 });
 

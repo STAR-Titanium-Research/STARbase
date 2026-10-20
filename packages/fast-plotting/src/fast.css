@@ -1,0 +1,66 @@
+/* Look of the FAST analysis page (DESIGN.md section 5b): opaque panels with a lid, tiles, chips, buttons and
+   worded badges, all derived from the active theme so light and dark both work. The kit's own tokens
+   (--d1-*, set by its page frame) win when the page is inside one; the fallbacks are the kit's definitions,
+   because the plotter page is not always inside that frame. Unscoped, prefixed .fd-, shared by the page's
+   components. Type scale is the kit's (11 / 12 / 13 / 15 / 18 px), written var(--fs-sm, 12px). */
+.fd {
+	--fd-surface: var(--d1-surface, light-dark(var(--theme--form--field--input--background, var(--theme--background)), var(--theme--background-subdued)));
+	--fd-tile: var(--d1-tile, light-dark(var(--theme--background-subdued), var(--theme--background-normal)));
+	--fd-line: var(--d1-line, var(--theme--border-color-subdued));
+	--fd-dim: var(--d1-dim, color-mix(in srgb, var(--theme--foreground) 68%, var(--theme--background)));
+	--fd-accent: var(--d1-accent, light-dark(var(--theme--primary), color-mix(in srgb, var(--theme--primary) 35%, var(--theme--foreground))));
+	--fd-tint: color-mix(in srgb, var(--fd-accent) 12%, transparent);
+	--fd-shadow: var(--d1-shadow, 0 2px 6px rgba(0, 0, 0, 0.1));
+	--fd-mono: var(--theme--fonts--monospace--font-family, ui-monospace, Menlo, Consolas, monospace);
+	font-family: var(--theme--fonts--sans--font-family, system-ui, sans-serif);
+	font-size: var(--fs-md, 13px);
+	color: var(--theme--foreground);
+}
+
+.fd-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--fd-surface); border: 1px solid var(--fd-line); border-radius: 12px; box-shadow: var(--fd-shadow); }
+.fd-lid { flex: none; display: flex; align-items: center; gap: 8px; min-height: 40px; box-sizing: border-box; padding: 0 12px; background: var(--fd-tile); border-bottom: 1px solid var(--fd-line); font-size: var(--fs-md, 13px); font-weight: 700; }
+.fd-lid .grow { flex: 1 1 auto; }
+.fd-code { font-family: var(--fd-mono); font-weight: 650; }
+.fd-dim { color: var(--fd-dim); }
+.fd-chip { display: inline-block; padding: 0 8px; border-radius: 99px; background: var(--theme--background-normal); color: var(--fd-dim); font-size: var(--fs-xs, 11px); font-weight: 700; line-height: 18px; font-variant-numeric: tabular-nums; }
+.fd-empty { padding: 16px 12px; text-align: center; color: var(--fd-dim); font-size: var(--fs-sm, 12px); }
+.fd-spin { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--fd-dim); font-size: var(--fs-sm, 12px); }
+
+.fd-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap; cursor: pointer;
+	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 650; color: var(--theme--foreground); background: var(--fd-surface); border: 1px solid var(--theme--border-color); }
+.fd-btn:hover:not(:disabled) { background: var(--fd-tile); }
+.fd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.fd-btn.on { background: var(--fd-tint); border-color: var(--fd-accent); color: var(--fd-accent); }
+.fd-btn.icon { width: 28px; padding: 0; }
+.fd-btn:focus-visible, .fd-tab:focus-visible, .fd-ib:focus-visible, .fd-card:focus-visible, .fd-seg button:focus-visible { outline: 2px solid var(--fd-accent); outline-offset: 1px; }
+.fd-link { background: none; border: 0; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 650; color: var(--fd-accent); text-decoration: underline; cursor: pointer; }
+.fd-link:disabled { opacity: 0.5; cursor: not-allowed; text-decoration: none; }
+
+.fd-search { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 32px; padding: 0 10px; border: 1px solid var(--theme--border-color); border-radius: 8px; background: var(--theme--form--field--input--background, var(--theme--background)); color: var(--fd-dim); }
+.fd-search input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: var(--fs-md, 13px); color: var(--theme--foreground); }
+.fd-search:focus-within { border-color: var(--fd-accent); }
+
+/* a one-of-N switch (Whole run | Zoom window) */
+.fd-seg { display: inline-flex; border: 1px solid var(--theme--border-color); border-radius: 8px; overflow: hidden; }
+.fd-seg button { height: 26px; padding: 0 10px; border: 0; background: var(--fd-surface); font: inherit; font-size: var(--fs-sm, 12px); font-weight: 650; color: var(--theme--foreground); cursor: pointer; }
+.fd-seg button + button { border-left: 1px solid var(--theme--border-color); }
+.fd-seg button[aria-pressed='true'] { background: var(--theme--foreground); color: var(--theme--background); }
+.fd-seg button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* worded status, never a bare dot (tones as the kit's StatusBadge) */
+.fd-badge { display: inline-block; padding: 0 8px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 700; line-height: 18px; white-space: nowrap; color: var(--tone-fg); background: var(--tone-bg); }
+.fd-badge.green { --tone-fg: color-mix(in srgb, var(--theme--success) 50%, var(--theme--foreground)); --tone-bg: color-mix(in srgb, var(--theme--success) 18%, transparent); }
+.fd-badge.yellow { --tone-fg: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground)); --tone-bg: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
+.fd-badge.blue { --tone-fg: var(--fd-accent); --tone-bg: var(--fd-tint); }
+.fd-badge.red { --tone-fg: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground)); --tone-bg: color-mix(in srgb, var(--theme--danger) 14%, transparent); }
+.fd-badge.grey { --tone-fg: var(--fd-dim); --tone-bg: var(--theme--background-normal); }
+
+/* a figure with its label: the peaks and the statistics */
+.fd-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fd-fig { min-width: 0; padding: 6px 5px; border: 1px solid var(--fd-line); border-radius: 8px; background: var(--fd-tile); }
+.fd-fig .top { display: flex; align-items: baseline; gap: 3px; white-space: nowrap; }
+.fd-fig .val { font-size: var(--fs-lg, 15px); font-weight: 750; font-variant-numeric: tabular-nums; }
+.fd-fig .unit { font-size: var(--fs-xs, 11px); color: var(--fd-dim); overflow: hidden; text-overflow: ellipsis; }
+.fd-fig .lab { display: block; font-size: var(--fs-xs, 11px); color: var(--fd-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-fig.key { border-color: var(--theme--foreground); background: var(--fd-surface); }
+.fd-tag { display: inline-block; margin-left: 4px; padding: 0 6px; border: 1px dashed var(--theme--border-color); border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 400; color: var(--fd-dim); }

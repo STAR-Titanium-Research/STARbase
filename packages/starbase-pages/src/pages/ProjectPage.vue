@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
-import { computed, ref, toRef, watch } from 'vue';
+import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, Section, dataStudioRoute,
-	readTimelineRange, writeTimelineRange, pinTargetForRecord, mapPath, type TimelineRange,
+	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordViewRail, Section, dataStudioRoute,
+	pinTargetForRecord, providePagePin, provideRecordView, mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import ProjectHero from './projects/ProjectHero.vue';
@@ -17,6 +17,11 @@ import UnassignedLists from './projects/UnassignedLists.vue';
 // There is no "Report" action yet: d1-report has sample, operation and test reports only. Add one
 // here when it grows a project report.
 const props = defineProps<{ id: string }>();
+
+// The View rail's settings (table density, empty sections, activity range), one set for every project page on this device.
+// The rail's Activity range is the hero timeline's range (30 d, 6 mo, All): the timeline picks it from the whole history the
+// page reads once, so changing it reads nothing again.
+const view = provideRecordView('project');
 
 const {
 	project, loading, notVisible, error, counts, campaigns, looseSamples, looseOperations,
@@ -44,13 +49,11 @@ function onAccessChanged() {
 const code = computed(() => project.value?.project_code ?? 'Project');
 const studioTo = computed(() => dataStudioRoute('projects', props.id));
 
-// The timeline's range is remembered per device (and is "All", not saved, where storage is blocked).
-const range = ref<TimelineRange>(readTimelineRange());
-watch(range, (value) => writeTimelineRange(value));
-
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
-const pin = computed(() => pinTargetForRecord('projects', props.id));
+const pin = computed(() => (project.value ? pinTargetForRecord('projects', props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
+providePagePin(pin);
 </script>
 
 <template>
@@ -70,45 +73,47 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 
 			<template v-else-if="project">
 				<div class="project-page">
-					<ProjectHero
-						v-model:range="range"
-						:project="project"
-						:can-update="canUpdate"
-						:studio-to="studioTo"
-						:map-to="mapTo"
-						:pin="pin"
-						:access="access"
-						:counts="counts"
-						:campaigns="campaigns"
-						:activity="activity"
-						:planned="planned"
-						@edit="editing = true"
-						@access="accessOpen = true"
-					/>
+					<div class="project-main">
+						<ProjectHero
+							v-model:range="view.range"
+							:project="project"
+							:can-update="canUpdate"
+							:studio-to="studioTo"
+							:map-to="mapTo"
+							:access="access"
+							:counts="counts"
+							:campaigns="campaigns"
+							:activity="activity"
+							:planned="planned"
+							@edit="editing = true"
+							@access="accessOpen = true"
+						/>
 
-					<CampaignCards :campaigns="campaigns" :project-id="id" />
+						<CampaignCards :campaigns="campaigns" :project-id="id" />
 
-					<!-- Short lists side by side: stacked, three empty ones took a third of the screen. -->
-					<div class="d1-cols project-cols">
-						<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
+						<!-- Short lists side by side: stacked, three empty ones took a third of the screen. -->
+						<div class="d1-cols project-cols">
+							<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 
-						<Section
-							id="equipment"
-							title="Equipment used"
-							:count="equipment.loading ? null : equipment.data.length"
-							:empty="!equipment.loading && !equipment.error && !equipment.data.length"
-							empty-text="No equipment recorded on this project's operations."
-						>
-							<LoadState :loading="equipment.loading" :error="equipment.error">
-								<ul class="equipment">
-									<li v-for="e in equipment.data" :key="e.equipment_id">
-										<RecordLink collection="equipment" :id="e.equipment_id" class="e-name">{{ e.name }}</RecordLink>
-										<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
-									</li>
-								</ul>
-							</LoadState>
-						</Section>
+							<Section
+								id="equipment"
+								title="Equipment used"
+								:count="equipment.loading ? null : equipment.data.length"
+								:empty="!equipment.loading && !equipment.error && !equipment.data.length"
+								empty-text="No equipment recorded on this project's operations."
+							>
+								<LoadState :loading="equipment.loading" :error="equipment.error">
+									<ul class="equipment">
+										<li v-for="e in equipment.data" :key="e.equipment_id">
+											<RecordLink collection="equipment" :id="e.equipment_id" class="e-name">{{ e.name }}</RecordLink>
+											<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
+										</li>
+									</ul>
+								</LoadState>
+							</Section>
+						</div>
 					</div>
+					<RecordViewRail kind="project" range :panels="false" />
 				</div>
 
 				<AccessDialog v-model="accessOpen" collection="projects" :id="id" :title="`Project ${code}`" @changed="onAccessChanged" />
@@ -125,7 +130,14 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 </template>
 
 <style scoped>
-.project-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* The hero and the panels in the first column; the View rail hangs at the right (the mirror of the record rail the other record
+   pages have). Under 1100px of the page's own width the rail is a "View" button on a row of its own above them (ViewRail). */
+.project-page { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; min-width: 0; container-type: inline-size; }
+.project-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@container (max-width: 1099px) {
+	.project-page { grid-template-columns: minmax(0, 1fr); }
+	.project-page > :deep(.d1-view-rail) { order: -1; }
+}
 /* Side by side while there is room, but a section with nothing in it is only its lid, so it takes the
    whole row (its one line of text does not wrap in half a column). Dense: the sections after it fill
    the gap it leaves in the row above. */

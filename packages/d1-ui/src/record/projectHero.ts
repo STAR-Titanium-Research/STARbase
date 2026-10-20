@@ -3,7 +3,7 @@
 // their counts, and the remembered timeline range. No Vue, no host.
 
 import { dateRangeText, formatDate } from '../format';
-import { browserStorage } from '../index/listPrefs';
+import { browserStorage } from '../storage';
 import { statusStyle } from '../status';
 import type { PlannedInput, TimelineCampaignInput, TimelineRange } from './projectTimeline';
 
