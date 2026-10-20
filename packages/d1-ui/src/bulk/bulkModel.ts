@@ -40,6 +40,8 @@ export interface ApplyRow {
 export type RevertOutcome = 'reverted' | 'changed_since' | 'refused' | 'failed';
 export interface RevertRow {
 	id: string;
+	/** The record's code, when the endpoint says it (an undo or revert answer does). */
+	code?: string;
 	revert_outcome: RevertOutcome;
 	reason?: string;
 }

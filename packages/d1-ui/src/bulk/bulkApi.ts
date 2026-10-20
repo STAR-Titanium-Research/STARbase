@@ -41,7 +41,7 @@ const applyRow = (r: Record<string, unknown>): ApplyRow => ({
 	id: text(r.id), code: text(r.code) || text(r.id), outcome: oneOf(r.outcome, OUTCOMES, 'failed'), reason: optional(r.reason),
 });
 const revertRow = (r: Record<string, unknown>): RevertRow => ({
-	id: text(r.id), revert_outcome: oneOf(r.revert_outcome, REVERTS, 'failed'), reason: optional(r.reason),
+	id: text(r.id), ...(optional(r.code) ? { code: optional(r.code) } : {}), revert_outcome: oneOf(r.revert_outcome, REVERTS, 'failed'), reason: optional(r.reason),
 });
 
 /** The dry run: what apply would do to each row, without writing. (The counts are worked out from the rows.) */
@@ -64,9 +64,13 @@ export const applyBulk = (api: AccessApi, collection: string, kind: BulkKind, id
 
 export interface RevertAnswer {
 	state: string;
+	/** The journal line the revert itself was written as. */
+	revertActionId?: string;
 	results: RevertRow[];
 }
-const revertAnswer = (body: Record<string, unknown>): RevertAnswer => ({ state: text(body.state), results: list(body.results).map(revertRow) });
+const revertAnswer = (body: Record<string, unknown>): RevertAnswer => ({
+	state: text(body.state), ...(optional(body.revert_action_id) ? { revertActionId: optional(body.revert_action_id) } : {}), results: list(body.results).map(revertRow),
+});
 
 /** Takes an action back (its actor inside the 60-second window, or an administrator). A row changed since is left as it is. */
 export const undoBulk = (api: AccessApi, actionId: string): Promise<Outcome<RevertAnswer>> =>
@@ -76,30 +80,76 @@ export const undoBulk = (api: AccessApi, actionId: string): Promise<Outcome<Reve
 export const revertBulk = (api: AccessApi, actionId: string): Promise<Outcome<RevertAnswer>> =>
 	run(async () => revertAnswer((await api.post(`${actionBase(actionId)}/revert`)).data ?? {}));
 
-/** A journal line, as the list answers it. Unknown extra fields are left out. */
+/** A journal line, as the list and the detail answer it. Unknown extra fields are left out. */
 export interface BulkActionSummary {
 	action_id: string;
 	actor_user: string;
+	/** The actor's name ('' when the endpoint has none). */
+	actor_name: string;
 	collection: string;
 	kind: string;
+	/** The request's params: { team_id } | { person_id } | { person_id | team_id, role } | { field, value } | {}. */
+	params: Record<string, unknown>;
 	state: string;
 	created_at: string;
+	/** ISO time the 60-second undo window closed. */
+	undo_until: string;
+	/** The action this one reverts; null for an ordinary action. */
+	revert_of: string | null;
+	mail_state: string;
 	n_applied: number;
 	n_skipped: number;
 	n_failed: number;
 }
 
-/** The journal: everything for an administrator, the caller's own otherwise; newest first. */
-export const listBulk = (api: AccessApi, opts: { limit?: number; offset?: number } = {}): Promise<Outcome<BulkActionSummary[]>> =>
+const summary = (a: Record<string, unknown>): BulkActionSummary => ({
+	action_id: text(a.action_id), actor_user: text(a.actor_user), actor_name: text(a.actor_name), collection: text(a.collection), kind: text(a.kind),
+	params: isRecord(a.params) ? a.params : {}, state: text(a.state), created_at: text(a.created_at), undo_until: text(a.undo_until),
+	revert_of: optional(a.revert_of) ?? null, mail_state: text(a.mail_state), n_applied: count(a.n_applied), n_skipped: count(a.n_skipped), n_failed: count(a.n_failed),
+});
+
+export interface BulkListPage {
+	actions: BulkActionSummary[];
+	/** More lines follow this page. */
+	hasMore: boolean;
+}
+
+/** The journal: everything for an administrator, the caller's own otherwise; newest first, a page at a time. */
+export const listBulk = (api: AccessApi, opts: { limit?: number; offset?: number } = {}): Promise<Outcome<BulkListPage>> =>
 	run(async () => {
 		const params: Record<string, unknown> = {};
 		if (opts.limit) params.limit = opts.limit;
 		if (opts.offset) params.offset = opts.offset;
 		const body = (await api.get(BASE, { params })).data ?? {};
-		return list(body.actions).map((a) => ({
-			action_id: text(a.action_id), actor_user: text(a.actor_user), collection: text(a.collection), kind: text(a.kind), state: text(a.state),
-			created_at: text(a.created_at), n_applied: count(a.n_applied), n_skipped: count(a.n_skipped), n_failed: count(a.n_failed),
-		}));
+		return { actions: list(body.actions).map(summary), hasMore: body.has_more === true };
+	});
+
+/** One journal row of an action: what happened to a record, and what a later revert did to it. (The before and after snapshots are not carried.) */
+export interface BulkActionRow {
+	record_id: string;
+	record_code: string;
+	outcome: ApplyOutcome;
+	reason?: string;
+	/** Set once a revert (or undo) has dealt with the row; null before. */
+	revert_outcome: RevertOutcome | null;
+	revert_reason?: string;
+}
+
+const actionRow = (r: Record<string, unknown>): BulkActionRow => ({
+	record_id: text(r.record_id), record_code: text(r.record_code) || text(r.record_id), outcome: oneOf(r.outcome, OUTCOMES, 'failed'), reason: optional(r.reason),
+	revert_outcome: REVERTS.includes(r.revert_outcome as RevertOutcome) ? (r.revert_outcome as RevertOutcome) : null, revert_reason: optional(r.revert_reason),
+});
+
+export interface BulkDetail {
+	action: BulkActionSummary;
+	rows: BulkActionRow[];
+}
+
+/** One action with its rows (an administrator sees any; anyone else only their own). */
+export const getBulk = (api: AccessApi, actionId: string): Promise<Outcome<BulkDetail>> =>
+	run(async () => {
+		const body = (await api.get(actionBase(actionId))).data ?? {};
+		return { action: summary(isRecord(body.action) ? body.action : {}), rows: list(body.rows).map(actionRow) };
 	});
 
 /** The rows a link field can point at, read as the signed-in user like a relation filter chip (the first 200 by display). */
