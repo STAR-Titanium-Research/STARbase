@@ -54,7 +54,7 @@ export type { ElementRow } from './composition';
 // Campaigns, projects, activity
 export { campaignTypeLabel, operationCategoryFor } from './campaign/campaignType';
 export {
-	DEFAULT_WEEKS, weeklyActivity, datesByKey,
+	DEFAULT_WEEKS, weeklyActivity, datesByKey, windowStart,
 } from './activity';
 export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
