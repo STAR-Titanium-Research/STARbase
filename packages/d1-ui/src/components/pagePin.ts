@@ -8,18 +8,15 @@ import type { PinRef } from '../nav/sidebarModel';
 // (pinTargetForIndex / pinTargetForRecord), and the frame calls usePagePin() to draw the button.
 // A page with nothing to pin provides nothing, or a ref that holds null: no button.
 
-/** What a pin button pins: a page, a saved view or a record (the same shape the sidebar's pins have). */
-export type PinTarget = PinRef;
-
 const KEY = Symbol('d1-page-pin');
-const NOTHING = ref<PinTarget | null>(null);
+const NOTHING = ref<PinRef | null>(null);
 
 /** Called in a page's setup. The target may change (a saved view opens), so it is a ref. */
-export function providePagePin(target: Ref<PinTarget | null>): void {
+export function providePagePin(target: Ref<PinRef | null>): void {
 	provide(KEY, target);
 }
 
 /** Called by the frame: the target the page provided, or a ref holding null when no page did. */
-export function usePagePin(): Ref<PinTarget | null> {
-	return inject<Ref<PinTarget | null>>(KEY, NOTHING);
+export function usePagePin(): Ref<PinRef | null> {
+	return inject<Ref<PinRef | null>>(KEY, NOTHING);
 }

@@ -99,7 +99,6 @@ export { default as RecordLayout } from './components/RecordLayout.vue';
 export { default as PinToggle } from './components/PinToggle.vue';
 export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
 export { providePagePin, usePagePin } from './components/pagePin';
-export type { PinTarget } from './components/pagePin';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';

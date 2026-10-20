@@ -2,18 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSSRApp, defineComponent, h, ref } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { providePagePin, setExplorerHostFactory, usePins } from '@d1/ui';
-import type { ExplorerHost, PinTarget } from '@d1/ui';
+import type { ExplorerHost, PinRef } from '@d1/ui';
 import PlainFrame from './PlainFrame.vue';
 
 // The page title's pin button: drawn only when the page provided a target, and it says whether that target is pinned.
-const SAMPLE_PIN: PinTarget = { kind: 'record', target: 'physical_samples:00000000-0000-4000-8000-000000000001' };
+const SAMPLE_PIN: PinRef = { kind: 'record', target: 'physical_samples:00000000-0000-4000-8000-000000000001' };
 
-function host(pinned: PinTarget[]): ExplorerHost {
+function host(pinned: PinRef[]): ExplorerHost {
 	const get = vi.fn(async (path: string) => (path === '/d1-usage/nav' ? { data: { pins: pinned, prefs: {} } } : { data: { data: [] } }));
 	return { api: { get, post: vi.fn() }, navigate: vi.fn(), openDataStudio: vi.fn(), user: ref(null) } as unknown as ExplorerHost;
 }
 
-async function render(target: PinTarget | null | 'none', pinned: PinTarget[] = []): Promise<string> {
+async function render(target: PinRef | null | 'none', pinned: PinRef[] = []): Promise<string> {
 	const h0 = host(pinned);
 	setExplorerHostFactory(() => h0);
 	await usePins().refresh();

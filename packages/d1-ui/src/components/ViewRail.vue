@@ -140,7 +140,6 @@ onBeforeUnmount(() => {
 	width: 220px;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
 	background: var(--d1-surface, var(--theme--background));
 	border: 1px solid var(--d1-line, var(--theme--border-color-subdued));
 	border-radius: var(--d1-radius, 12px);
@@ -154,6 +153,8 @@ onBeforeUnmount(() => {
 	gap: 6px;
 	height: 40px;
 	padding: 0 6px 0 12px;
+	/* The card does not clip (a section's dropdown, the index page's Columns, hangs outside it), so the lid rounds its own top corners. */
+	border-radius: calc(var(--d1-radius, 12px) - 1px) calc(var(--d1-radius, 12px) - 1px) 0 0;
 	background: var(--d1-tile, var(--theme--background-subdued));
 	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
 }

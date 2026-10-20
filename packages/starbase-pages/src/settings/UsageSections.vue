@@ -3,7 +3,7 @@ import { nextTick, ref } from 'vue';
 import { Section, forgetListPrefs, useExplorerHost } from '@d1/ui';
 
 // Settings → Index pages and Frequently used: two one-button sections that forget things.
-// "Forget my list views" clears this browser's Table/Cards and density choices (they are per browser,
+// "Forget my list views" clears this browser's View rail choices on lists and record pages (they are per browser,
 // so nothing is sent). "Clear my history" is Home's own clear (POST /d1-usage/clear zeroes the usage
 // scores and leaves the pins), and asks first with Home's words, inline: the safe choice (Cancel) gets
 // the focus, and the button gets it back afterwards.
@@ -60,10 +60,10 @@ async function clearHistory(): Promise<void> {
 		<div class="st-row">
 			<div class="grow">
 				<p class="st-title">List views</p>
-				<p class="st-hint">Whether each list shows a table or cards, and how dense it is, is remembered in this browser.</p>
+				<p class="st-hint">How each list is shown (layout, density, columns, rows per page, grouping) and each record page's View rail are remembered in this browser.</p>
 			</div>
 			<button type="button" class="st-btn" @click="forgetViews">Forget my list views</button>
-			<span v-if="viewsForgotten" class="st-status" role="status">Done. Every list starts from the default.</span>
+			<span v-if="viewsForgotten" class="st-status" role="status">Done. Every list and record page starts from the default.</span>
 		</div>
 	</Section>
 

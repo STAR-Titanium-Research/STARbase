@@ -10,6 +10,8 @@ const props = defineProps<{
 	options: readonly { value: T; label: string; icon?: string }[];
 	/** The group's accessible name. */
 	label: string;
+	/** Draw only each option's icon (its label is the tooltip and the accessible name). */
+	iconOnly?: boolean;
 }>();
 const emit = defineEmits<{ 'update:modelValue': [value: T] }>();
 
@@ -37,10 +39,12 @@ function onKey(e: KeyboardEvent, i: number): void {
 			class="opt"
 			:class="{ on: o.value === modelValue }"
 			:aria-checked="o.value === modelValue"
+			:aria-label="iconOnly ? o.label : undefined"
+			:title="iconOnly ? o.label : undefined"
 			:tabindex="o.value === modelValue ? 0 : -1"
 			@click="emit('update:modelValue', o.value)"
 			@keydown="onKey($event, i)"
-		><span v-if="o.icon" class="ico" aria-hidden="true">{{ o.icon }}</span>{{ o.label }}</button>
+		><span v-if="o.icon" class="ico" aria-hidden="true">{{ o.icon }}</span><template v-if="!iconOnly">{{ o.label }}</template></button>
 	</span>
 </template>
 

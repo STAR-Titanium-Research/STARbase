@@ -70,6 +70,15 @@ describe('IndexPage, normal mode (unchanged)', () => {
 		expect(text(html)).not.toMatch(/Add (\d+ )?samples?/);
 	});
 
+	it('has the toolbar (search, filters) above the table only, and no view switches in it', async () => {
+		const html = await render({});
+		expect(html).toContain('class="index-grid"');
+		expect(html).toContain('aria-label="Search samples"');
+		for (const gone of ['aria-label="View"', 'aria-label="Row density"', 'aria-label="Sort by"', 'Showing ']) expect(html).not.toContain(gone);
+		// The page's buttons are on the breadcrumb line, before the grid.
+		expect(html.indexOf('Open in Data Studio')).toBeLessThan(html.indexOf('index-grid'));
+	});
+
 	it('reports what the title pin pins (the frame draws the button), and draws no Pin button itself', async () => {
 		const pins: unknown[] = [];
 		const html = await render({ onPin: (t: unknown) => pins.push(t) }, { path: '/samples' });
@@ -120,11 +129,10 @@ describe('IndexPage, picker mode', () => {
 		expect(html).toContain('picking');
 	});
 
-	it('keeps search, saved views, filters and the view switches', async () => {
+	it('keeps search, saved views and filters (the View rail is drawn once the page is measured, in a DOM)', async () => {
 		const html = await render({ pick: true }, { router: false });
 		expect(html).toContain('aria-label="Search samples"');
-		expect(html).toContain('aria-label="View"');
-		expect(html).toContain('aria-label="Row density"');
+		expect(html).toContain('aria-label="Filter by status"');
 	});
 
 	it('rows already taken are drawn but cannot be ticked', async () => {

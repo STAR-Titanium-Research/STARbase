@@ -223,6 +223,8 @@ only the settings that apply to the page it is on, always in this order, and dro
 - **Columns** is a dropdown, not a list of toggles: the button reads "9 of 13 shown ▾" and opens a popover with a
   search field, the shown columns (drag to reorder; the code column is always on) and the hidden ones as
   checkboxes, then Reset and Done.
+- **Rows per page** is a per-device preference like the rest of the rail, not part of the URL: a shared link keeps
+  the filters, the sort and the page number, but not the page size.
 - **Placement.** On index pages the rail starts level with the top of the table, not the filter row: the toolbar sits
   above the table only, and the rail's lid lines up with the table's header row. On record pages it starts level with
   the record rail and the first panel.

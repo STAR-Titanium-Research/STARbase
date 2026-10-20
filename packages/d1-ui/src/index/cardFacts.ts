@@ -3,7 +3,7 @@
 // choices the cards toolbar offers in place of the table's column headers. Pure, so it is all tested.
 
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { cellText, sortKey } from './indexView';
+import { cellText, sortKey, splitSort } from './indexView';
 
 type Row = Record<string, unknown>;
 
@@ -33,15 +33,15 @@ export function cardHead(def: IndexDef, row: Row): CardHead {
 }
 
 // The columns after the head, formatted like the table's cells; a column with nothing in it is left
-// out rather than shown as an empty label.
-export function cardFacts(def: IndexDef, row: Row): CardFact[] {
+// out rather than shown as an empty label. A card shows four; the compact list passes more.
+export function cardFacts(def: IndexDef, row: Row, max = MAX_CARD_FACTS): CardFact[] {
 	const skip = firstIsCode(def) && def.columns[1] ? 2 : 1;
 	const out: CardFact[] = [];
 	for (const c of def.columns.slice(skip)) {
 		const value = cellText(row, c, def);
 		if (value === '') continue;
 		out.push({ label: c.label, value });
-		if (out.length === MAX_CARD_FACTS) break;
+		if (out.length === max) break;
 	}
 	return out;
 }
@@ -56,21 +56,21 @@ export function isPlainClick(e: { button: number; ctrlKey: boolean; metaKey: boo
 export interface SortOption {
 	value: string;
 	label: string;
+	/** A saved view's own sort, which is no column: it cannot be turned round. */
+	saved?: boolean;
 }
 
-// Every column the page can sort by, both ways round, in the same keys the table's headers use. The
-// list's own default order (often by creation time, which is no column) comes first when no column
-// carries it; a current sort the options do not hold (a saved view's) is added so the select never
-// shows a choice that is not the real one.
-export function sortOptions(def: IndexDef, current: string, sortable: (c: ColumnDef) => boolean = () => true): SortOption[] {
+// Every column the page can sort by, as a field (the rail's select; the direction is its own button), in
+// the same keys the table's headers use. The list's own default order (often by creation time, which is no
+// column) comes first when no column carries it; a current sort the options do not hold (a saved view's)
+// is added so the select never shows a choice that is not the real one.
+export function sortFieldOptions(def: IndexDef, current: string, sortable: (c: ColumnDef) => boolean = () => true): SortOption[] {
 	const out: SortOption[] = [];
-	for (const c of def.columns) {
-		if (!sortable(c)) continue;
-		const key = sortKey(c);
-		out.push({ value: key, label: `${c.label}, ascending` }, { value: `-${key}`, label: `${c.label}, descending` });
-	}
-	const has = (v: string) => out.some((o) => o.value === v);
-	if (!has(def.defaultSort)) out.unshift({ value: def.defaultSort, label: 'Default order' });
-	if (!has(current)) out.unshift({ value: current, label: 'Saved view order' });
+	for (const c of def.columns) if (sortable(c)) out.push({ value: sortKey(c), label: c.label });
+	const has = (key: string) => out.some((o) => o.value === key);
+	const own = splitSort(def.defaultSort).key;
+	if (!has(own)) out.unshift({ value: own, label: 'Default order' });
+	const now = splitSort(current).key;
+	if (!has(now)) out.unshift({ value: now, label: 'Saved view order', saved: true });
 	return out;
 }
