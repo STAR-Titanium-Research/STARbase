@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AccessApi } from '../access/accessApi';
 import { indexDefBySlug } from '../index/indexConfig';
-import { applyBulk, listBulk, loadFieldOptions, previewBulk, revertBulk, undoBulk } from './bulkApi';
+import { applyBulk, getBulk, listBulk, loadFieldOptions, previewBulk, revertBulk, undoBulk } from './bulkApi';
 
 const fakeApi = (over: Partial<Record<'get' | 'post', (...a: any[]) => any>> = {}) => {
 	const api = { get: vi.fn(over.get ?? (async () => ({ data: {} }))), post: vi.fn(over.post ?? (async () => ({ data: {} }))), patch: vi.fn(), delete: vi.fn() };
@@ -103,12 +103,88 @@ describe('undoBulk and revertBulk', () => {
 	});
 });
 
+describe('revertBulk keeps the codes and the line it wrote', () => {
+	it('carries each row code and the revert action id when the endpoint sends them', async () => {
+		const api = fakeApi({ post: async () => ({ data: { state: 'reverted', revert_action_id: 'rev-1', results: [{ id: 'a', code: 'S-1', revert_outcome: 'reverted' }, { id: 'b', revert_outcome: 'refused', reason: 'No' }] } }) });
+		expect(await revertBulk(api, 'act-1')).toEqual({
+			ok: true,
+			data: { state: 'reverted', revertActionId: 'rev-1', results: [{ id: 'a', code: 'S-1', revert_outcome: 'reverted', reason: undefined }, { id: 'b', revert_outcome: 'refused', reason: 'No' }] },
+		});
+	});
+});
+
 describe('listBulk', () => {
-	it('reads the journal lines and tolerates missing fields', async () => {
-		const api = fakeApi({ get: async () => ({ data: { actions: [{ action_id: 'x', collection: 'physical_samples', kind: 'restrict', state: 'applied', n_applied: 3 }, 7] } }) });
-		const out = await listBulk(api, { limit: 20 });
-		expect(api.get).toHaveBeenCalledWith('/d1-bulk-actions', { params: { limit: 20 } });
-		expect(out).toMatchObject({ ok: true, data: [{ action_id: 'x', kind: 'restrict', n_applied: 3, n_skipped: 0, n_failed: 0, actor_user: '' }] });
+	it('reads the journal lines, keeps who, params, undo_until and revert_of, and tolerates missing fields', async () => {
+		const api = fakeApi({
+			get: async () => ({
+				data: {
+					actions: [
+						{ action_id: 'x', collection: 'physical_samples', kind: 'restrict', state: 'applied', n_applied: 3 },
+						{
+							action_id: 'y', actor_user: 'u1', actor_name: 'Ann Lee', collection: 'test_sessions', kind: 'edit_field', params: { field: 'status', value: 'failed' },
+							state: 'applied', created_at: '2026-10-20T10:00:00Z', undo_until: '2026-10-20T10:01:00Z', revert_of: 'x', mail_state: 'none', n_applied: 2, n_skipped: 1, n_failed: 0,
+						},
+						7,
+					],
+					limit: 20, offset: 0, has_more: true,
+				},
+			}),
+		});
+		const out = await listBulk(api, { limit: 20, offset: 40 });
+		expect(api.get).toHaveBeenCalledWith('/d1-bulk-actions', { params: { limit: 20, offset: 40 } });
+		expect(out).toMatchObject({ ok: true, data: { hasMore: true } });
+		const actions = (out as any).data.actions;
+		expect(actions).toHaveLength(2);
+		expect(actions[0]).toMatchObject({ action_id: 'x', kind: 'restrict', n_applied: 3, n_skipped: 0, n_failed: 0, actor_user: '', actor_name: '', params: {}, revert_of: null });
+		expect(actions[1]).toEqual({
+			action_id: 'y', actor_user: 'u1', actor_name: 'Ann Lee', collection: 'test_sessions', kind: 'edit_field', params: { field: 'status', value: 'failed' }, state: 'applied',
+			created_at: '2026-10-20T10:00:00Z', undo_until: '2026-10-20T10:01:00Z', revert_of: 'x', mail_state: 'none', n_applied: 2, n_skipped: 1, n_failed: 0,
+		});
+	});
+	it('says there is no next page unless the endpoint does', async () => {
+		const api = fakeApi({ get: async () => ({ data: { actions: [] } }) });
+		expect(await listBulk(api)).toEqual({ ok: true, data: { actions: [], hasMore: false } });
+		expect(api.get).toHaveBeenCalledWith('/d1-bulk-actions', { params: {} });
+	});
+	it("gives the endpoint's own message when it refuses", async () => {
+		const api = fakeApi({ get: async () => { throw failure(403, 'Forbidden'); } });
+		expect(await listBulk(api)).toEqual({ ok: false, message: 'Forbidden' });
+	});
+});
+
+describe('getBulk', () => {
+	it('reads the action with its rows and their revert outcomes, without the snapshots', async () => {
+		const api = fakeApi({
+			get: async () => ({
+				data: {
+					action: { action_id: 'a/1', kind: 'assign_team', collection: 'physical_samples', state: 'partly_reverted', n_applied: 2 },
+					rows: [
+						{ record_id: 's1', record_code: 'S-1', outcome: 'applied', reason: null, before: { owner: 1 }, after: { owner: 2 }, revert_outcome: 'reverted', revert_reason: null },
+						{ record_id: 's2', record_code: null, outcome: 'skipped', reason: 'You are not the owner', revert_outcome: null },
+						{ record_id: 's3', record_code: 'S-3', outcome: 'applied', revert_outcome: 'changed_since', revert_reason: 'Changed since this action ran, so it was left alone.' },
+						{ record_id: 's4', outcome: 'odd', revert_outcome: 'odd' },
+					],
+				},
+			}),
+		});
+		const out = await getBulk(api, 'a/1');
+		expect(api.get).toHaveBeenCalledWith('/d1-bulk-actions/a%2F1');
+		expect(out).toEqual({
+			ok: true,
+			data: {
+				action: expect.objectContaining({ action_id: 'a/1', state: 'partly_reverted', n_applied: 2 }),
+				rows: [
+					{ record_id: 's1', record_code: 'S-1', outcome: 'applied', reason: undefined, revert_outcome: 'reverted', revert_reason: undefined },
+					{ record_id: 's2', record_code: 's2', outcome: 'skipped', reason: 'You are not the owner', revert_outcome: null, revert_reason: undefined },
+					{ record_id: 's3', record_code: 'S-3', outcome: 'applied', reason: undefined, revert_outcome: 'changed_since', revert_reason: 'Changed since this action ran, so it was left alone.' },
+					{ record_id: 's4', record_code: 's4', outcome: 'failed', reason: undefined, revert_outcome: null, revert_reason: undefined },
+				],
+			},
+		});
+	});
+	it("gives the endpoint's message for an action that cannot be seen", async () => {
+		const api = fakeApi({ get: async () => { throw failure(404, 'That bulk action does not exist, or you cannot see it.'); } });
+		expect(await getBulk(api, 'x')).toEqual({ ok: false, message: 'That bulk action does not exist, or you cannot see it.' });
 	});
 });
 
@@ -128,5 +204,16 @@ describe('loadFieldOptions', () => {
 		const api = fakeApi();
 		const out = await loadFieldOptions(api, { field: 'current_status', label: 'Status', kind: 'enum', values: ['a'] });
 		expect(out.ok).toBe(false);
+	});
+});
+
+describe('loadFieldOptions of a campaign link', () => {
+	const campaign = indexDefBySlug('operations')!.bulkFields!.find((f) => f.field === 'campaign_id')!;
+	it('asks for the name too and labels a campaign without a code by it', async () => {
+		const api = fakeApi({ get: async () => ({ data: { data: [{ campaign_id: 'c1', campaign_code: 'CMP-1', name: 'Alpha' }, { campaign_id: 'c2', campaign_code: null, name: 'Beta' }] } }) });
+		const out = await loadFieldOptions(api, campaign);
+		expect(api.get.mock.calls[0][0]).toBe('/items/campaigns');
+		expect((api.get.mock.calls[0][1] as any).params.fields).toEqual(['campaign_id', 'campaign_code', 'name']);
+		expect(out).toEqual({ ok: true, data: [{ value: 'c1', label: 'CMP-1' }, { value: 'c2', label: 'Beta' }] });
 	});
 });

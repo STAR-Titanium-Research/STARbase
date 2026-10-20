@@ -23,8 +23,8 @@ describe('bulkEntries', () => {
 			['field:current_status', 'Edit status…'], ['field:project_id', 'Edit project…'], ['field:mounted', 'Edit mounted…'],
 		]);
 	});
-	it('offers an ownable page without bulk fields the access entries and the restrict pair, and no Print labels', () => {
-		expect(bulkEntries(tests).map((e) => e.id)).toEqual([...ACCESS_IDS, 'restrict', 'unrestrict']);
+	it('offers an ownable page the access entries, the restrict pair and its edits, and no Print labels', () => {
+		expect(bulkEntries(tests).map((e) => e.id)).toEqual([...ACCESS_IDS, 'restrict', 'unrestrict', 'field:status', 'field:project_id', 'field:campaign_id', 'field:planned_date']);
 	});
 	it('offers a plain page nothing at all', () => {
 		expect(bulkEntries(tools)).toEqual([]);
@@ -236,5 +236,27 @@ describe('the toast state machine', () => {
 		expect(dismissDelay(tickToast(fresh(), t0 + 60_000))).toBe(3000);
 		expect(dismissDelay(undoDone(fresh(), [], new Map()))).toBe(5000);
 		expect(dismissDelay(startToast('a', 'm', t0 - 1, [{ id: '1', code: 'A', reason: '' }], t0))).toBeNull();
+	});
+});
+
+describe('the new bulk fields', () => {
+	const operations = indexDefBySlug('operations')!;
+	const campaigns = indexDefBySlug('campaigns')!;
+	const fieldOf = (def: typeof samples, name: string) => bulkEntries(def).find((e) => e.id === `field:${name}`)!;
+	it('words a test status like the list chip, and a date like the list', () => {
+		expect(resultText(fieldOf(tests, 'status'), tests, 3, { value: 'pending_processing' })).toBe('Set status to Pending processing on 3 tests');
+		expect(enumChoices(tests, fieldOf(tests, 'status').field!).map((c) => c.label)).toEqual([
+			'Registered', 'Pending processing', 'Processing', 'Processed', 'Analysing', 'Analysed', 'Failed',
+		]);
+		expect(resultText(fieldOf(operations, 'planned_date'), operations, 2, { value: '2026-11-03' })).toBe('Set planned date to 3 Nov 2026 on 2 operations');
+		expect(resultText(fieldOf(campaigns, 'end_date'), campaigns, 1, { value: null })).toBe('Cleared end date on 1 campaign');
+	});
+	it('lets a date and a link be cleared, a status not', () => {
+		expect(canClear(fieldOf(operations, 'planned_date').field!)).toBe(true);
+		expect(canClear(fieldOf(tests, 'campaign_id').field!)).toBe(true);
+		expect(canClear(fieldOf(tests, 'status').field!)).toBe(false);
+	});
+	it('sends a date as the field and its day', () => {
+		expect(paramsFor(fieldOf(campaigns, 'start_date'), { value: '2026-10-01' })).toEqual({ field: 'start_date', value: '2026-10-01' });
 	});
 });

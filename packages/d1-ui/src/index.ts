@@ -182,6 +182,14 @@ export { default as IndexPage } from './index/IndexPage.vue';
 export type { PickedRow, PickNouns } from './index/pickMode';
 export { default as RowMapButton } from './index/RowMapButton.vue';
 export { MAP_ROW_COLLECTIONS, mapPath } from './mapLink';
+// The admin Home "Bulk actions" panel: its logic lives in the kit, the panel in starbase-pages/home.
+export { useAdminBulk } from './bulk/useAdminBulk';
+export type { AdminBulkState, DetailState, RevertDialog } from './bulk/useAdminBulk';
+export {
+	actorText, canRevert, countsText, detailLines, headline, kindLabel, linesById, revertConfirm, revertLines, revertSummary, stateBadge, whenText, whenTitle,
+} from './bulk/adminBulkModel';
+export type { DetailLine, RevertConfirm, RevertLine, Tagged as BulkTagged } from './bulk/adminBulkModel';
+export type { BulkActionRow, BulkActionSummary } from './bulk/bulkApi';
 
 // Generated form (STARbase's own form from Directus field definitions; ADR-0018)
 export { default as FieldForm } from './form/FieldForm.vue';
