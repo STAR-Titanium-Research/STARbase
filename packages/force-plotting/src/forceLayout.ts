@@ -7,10 +7,10 @@ export type RPanel = { i: string; type: RPanelType; x: number; y: number; w: num
 
 // Columns 1 and 2 are fixed; the rest is the panel grid (column 3 and 4 of the design: the FRM at the left of
 // it and Signals filling the right). The page reacts to its own width, not the viewport's (the host reserves
-// side chrome): from 1800px the lists are columns, below that they fold into a 44px tab, and under 900px
+// side chrome): from 1500px the lists are columns, below that they fold into a 44px tab, and under 900px
 // everything stacks and the page scrolls.
 export type LayoutMode = 'wide' | 'folded' | 'stacked';
-export function layoutMode(width: number): LayoutMode { return width < 900 ? 'stacked' : width < 1800 ? 'folded' : 'wide'; }
+export function layoutMode(width: number): LayoutMode { return width < 900 ? 'stacked' : width < 1500 ? 'folded' : 'wide'; }
 export function layoutColumns(mode: LayoutMode): string {
 	return mode === 'stacked' ? 'minmax(0, 1fr)' : mode === 'folded' ? '44px 300px minmax(0, 1fr)' : '256px 330px minmax(0, 1fr)';
 }

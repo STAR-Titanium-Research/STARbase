@@ -23,12 +23,17 @@ const TABS: Array<{ id: OpTab; name: string; icon: string }> = [
 	{ id: 'cutting', name: 'Cutting metrics', icon: 'speed' },
 ];
 
-const { detail, loadingDetail, opLabel, ready, sampleInfo, recordedText, machineText, openPanel, cutEdited, chainDirty, stagesOnCount,
+const { detail, loadingDetail, opLabel, ready, sampleInfo, fmtDate, recordedText, machineText, openPanel, cutEdited, chainDirty, stagesOnCount,
 	hasChanges, changeSummary, changesDialogOpen, openOpForm, openSampleForm } = useForceCtx();
 
 // the dot of a tab marks an unsaved edit: the cut fields and operation record, an unsaved filter chain
 const dotted = computed<Record<OpTab, boolean>>(() => ({ cut: !!cutEdited.value, display: false, filters: !!chainDirty.value, stats: false, cutting: false }));
 
+const sampleRows = computed(() => {
+	const s = sampleInfo.value;
+	return s ? ([['Material', s.material], ['Nickname', s.nickname], ['Form', s.form], ['Owner', s.owner], ['Made', s.manufactured ? fmtDate.value(s.manufactured) : ''], ['Operations', s.ops]] as Array<[string, any]>)
+		.filter(([, v]) => v != null && v !== '').map(([k, v]) => [k, String(v)]) : [];
+});
 const tablist = ref<HTMLElement | null>(null);
 function pick(id: OpTab) { openPanel.value = id; }
 function onTabKey(ev: KeyboardEvent) {
@@ -59,6 +64,10 @@ onMounted(listen); onActivated(listen); onDeactivated(unlisten); onBeforeUnmount
 			<div v-if="loadingDetail" class="fp-spin"><v-progress-circular indeterminate small /> loading…</div>
 			<template v-else>Select an operation</template>
 		</div>
+		<div v-if="!detail && !loadingDetail && sampleInfo" class="ident">
+			<div class="fp-pg"><span>Sample</span><span class="v"><span class="fp-code">{{ sampleInfo.sample_code }}</span><button class="fp-link" title="Open the sample record" @click="openSampleForm">Sample ↗</button></span></div>
+			<div v-for="r in sampleRows" :key="r[0]" class="fp-pg"><span>{{ r[0] }}</span><span class="v">{{ r[1] }}</span></div>
+		</div>
 		<template v-else>
 			<div class="ident">
 				<div class="fp-pg"><span>Sample</span><span class="v"><span class="fp-code">{{ sampleInfo?.sample_code || '—' }}</span><button v-if="sampleInfo?.id" class="fp-link" title="Open the sample record" @click="openSampleForm">Sample ↗</button></span></div>
@@ -73,14 +82,14 @@ onMounted(listen); onActivated(listen); onDeactivated(unlisten); onBeforeUnmount
 					<span v-if="dotted[t.id]" class="dot" title="Unsaved changes"></span>
 				</button>
 			</div>
-			<div :id="`fp-panel-${openPanel}`" class="body" role="tabpanel" :aria-labelledby="`fp-tab-${openPanel}`" tabindex="0">
+			<div :id="`fp-panel-${openPanel}`" class="body" role="tabpanel" :aria-labelledby="`fp-tab-${openPanel}`" tabindex="0" :inert="loadingDetail">
 				<ForceCutTab v-if="openPanel === 'cut'" />
 				<ForceDisplayTab v-else-if="openPanel === 'display'" />
 				<ForceFiltersTab v-else-if="openPanel === 'filters'" />
 				<ForceStatsTab v-else-if="openPanel === 'stats'" />
 				<ForceCuttingTab v-else-if="openPanel === 'cutting'" />
 			</div>
-			<footer class="foot">
+			<footer class="foot" :inert="loadingDetail">
 				<button class="fp-btn save" :class="{ primary: hasChanges }" :disabled="!hasChanges" :title="hasChanges ? 'Review and save the edits to the operation record and the crop' : 'Nothing to save'" @click="changesDialogOpen = true">
 					Save <template v-if="hasChanges && changeSummary.length">{{ changeSummary.length }} {{ changeSummary.length === 1 ? 'change' : 'changes' }}…</template><template v-else>changes</template>
 				</button>
@@ -96,7 +105,7 @@ onMounted(listen); onActivated(listen); onDeactivated(unlisten); onBeforeUnmount
 .code { font-size: var(--fs-md, 13px); overflow-wrap: anywhere; }
 .ident { flex: none; padding: 4px 12px 8px; }
 .ident .fp-pg:last-child { border-bottom: 0; }
-.body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 10px 12px 12px; }
+.body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 12px 12px; }
 .body:focus-visible { outline: 2px solid var(--fp-accent); outline-offset: -2px; }
 .foot { flex: none; display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--fp-line); background: var(--fp-tile); }
 .foot .save { flex: 1 1 auto; height: 32px; }

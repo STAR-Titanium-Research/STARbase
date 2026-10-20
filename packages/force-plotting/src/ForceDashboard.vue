@@ -1069,6 +1069,7 @@ onMounted(async () => {
 					'operation_id.operation_id', 'operation_id.pass_code', 'operation_id.operation_date',
 					'operation_id.sample_id.sample_id', 'operation_id.sample_id.sample_code',
 					'operation_id.sample_id.nickname', 'operation_id.sample_id.material_id.common_name',
+					'operation_id.sample_id.form', 'operation_id.sample_id.manufactured_date',
 					'operation_id.sample_id.owner_person_id.full_name',
 					// Metadata Doctor (metadataDoctor.ts) runs client-side over this whole list, so every
 					// value it compares has to be fetched here — the archive is ~190 rows and these are all
@@ -1153,7 +1154,7 @@ const samples = computed(() => {
 		let e = map.get(s.sample_id);
 		if (!e) {
 			e = { sample_id: s.sample_id, sample_code: s.sample_code, nickname: s.nickname,
-				material: s.material_id?.common_name, owner: s.owner_person_id?.full_name, ops: [] as any[] };
+				material: s.material_id?.common_name, owner: s.owner_person_id?.full_name, form: s.form, manufactured: s.manufactured_date, ops: [] as any[] };
 			map.set(s.sample_id, e);
 		}
 		e.ops.push(r);
@@ -1572,7 +1573,7 @@ const sampleInfo = computed(() => {
 	}
 	if (selectedSample.value) {
 		const s = selectedSample.value;
-		return { id: s.sample_id, sample_code: s.sample_code, material: s.material, nickname: s.nickname, owner: s.owner, ops: s.ops.length };
+		return { id: s.sample_id, sample_code: s.sample_code, material: s.material, nickname: s.nickname, form: s.form, owner: s.owner, manufactured: s.manufactured, ops: s.ops.length };
 	}
 	return null;
 });

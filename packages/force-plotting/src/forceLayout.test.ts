@@ -8,9 +8,9 @@ const OLD_DEFAULT = [
 ];
 
 describe('layoutMode / layoutColumns', () => {
-	it('is four columns from 1800px, lists folded to a 44px tab below, stacked under 900px', () => {
-		expect(layoutMode(1828)).toBe('wide'); expect(layoutMode(1800)).toBe('wide');
-		expect(layoutMode(1799)).toBe('folded'); expect(layoutMode(900)).toBe('folded');
+	it('is four columns from 1500px, lists folded to a 44px tab below, stacked under 900px', () => {
+		expect(layoutMode(1696)).toBe('wide'); expect(layoutMode(1500)).toBe('wide');
+		expect(layoutMode(1499)).toBe('folded'); expect(layoutMode(900)).toBe('folded');
 		expect(layoutMode(899)).toBe('stacked');
 		expect(layoutColumns('wide')).toBe('256px 330px minmax(0, 1fr)');
 		expect(layoutColumns('folded')).toBe('44px 300px minmax(0, 1fr)');
