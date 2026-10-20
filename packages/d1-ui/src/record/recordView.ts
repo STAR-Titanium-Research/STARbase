@@ -95,7 +95,11 @@ export function viewSummary(view: RecordView, withRange: boolean): string {
 	return parts.join(' · ');
 }
 
-/** "On this page" with empty sections hidden: the entries still shown and how many were left out. */
+/**
+ * "On this page" with empty sections hidden: the entries still shown and how many were left out. A count of 0
+ * is exactly an empty Section (nothing to show, and no error): a page gives null while a read loads or when it
+ * failed, so a panel that is drawn with its error stays in the list.
+ */
 export function withoutEmpty<T extends { count: number | null }>(entries: T[], hide: boolean): { shown: T[]; hidden: number } {
 	if (!hide) return { shown: entries, hidden: 0 };
 	const shown = entries.filter((e) => e.count !== 0);

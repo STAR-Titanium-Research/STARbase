@@ -54,14 +54,15 @@ const details = computed(() => detailFacts(sampleDetailBase(sample.value), [], r
 const project = computed(() => sample.value?.project_id);
 const campaignRows = computed(() => sampleCampaigns(campaigns.value.data));
 
-// "On this page": the panels this sample has, in page order. A count is null while it loads, and for
+// "On this page": the panels this sample has, in page order. A count is null while it loads or when its read
+// failed (the panel is drawn then, with the error, so it is neither dimmed nor hidden as empty), and for
 // panels with no count of their own (the material and the life strip).
 const contents = computed<ContentsEntry[]>(() => [
 	{ id: 'details', title: 'Material and details', count: null },
 	{ id: 'life', title: 'Life of the sample', count: null },
-	{ id: 'operations', title: 'Operations', count: operations.value.loading ? null : Math.min(operations.value.data.length, LIST_CAP) },
-	{ id: 'tests', title: 'Tests', count: tests.value.loading ? null : Math.min(tests.value.data.length, LIST_CAP) },
-	{ id: 'files', title: 'Files', count: files.value.loading ? null : files.value.data.length },
+	{ id: 'operations', title: 'Operations', count: operations.value.loading || operations.value.error ? null : Math.min(operations.value.data.length, LIST_CAP) },
+	{ id: 'tests', title: 'Tests', count: tests.value.loading || tests.value.error ? null : Math.min(tests.value.data.length, LIST_CAP) },
+	{ id: 'files', title: 'Files', count: files.value.loading || files.value.error ? null : files.value.data.length },
 ]);
 
 // The report is an endpoint page (printable HTML), not an app route: open it in a new tab, same session.

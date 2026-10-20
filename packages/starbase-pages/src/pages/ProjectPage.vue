@@ -47,15 +47,16 @@ const active = computed(() => project.value?.is_active !== false);
 const railFacts = computed(() => projectRailFacts(project.value, investigators.value.data, counts.value.data, counts.value.loading));
 
 // Operations and tests in the activity window: null while loading, 0 when there is nothing to draw
-// (then the panel is its lid only, and the contents list dims it, like the other empty panels).
+// (then the panel is its lid only, and the contents list dims it, like the other empty panels). Null
+// while it loads and when the read failed: the panel is drawn then, with its error, so it is not "empty".
 const activityCount = computed(() => {
 	const a = activity.value;
-	if (a.loading) return null;
+	if (a.loading || a.error) return null;
 	return a.data.data ? a.data.data.totalOps + a.data.data.totalTests : 0;
 });
 
-// "On this page": the panels in page order. A count is null while its read loads.
-const rows = (s: { loading: boolean; data: unknown[] }) => (s.loading ? null : Math.min(s.data.length, LIST_CAP));
+// "On this page": the panels in page order. A count is null while its read loads or when it failed.
+const rows = (s: { loading: boolean; error: string; data: unknown[] }) => (s.loading || s.error ? null : Math.min(s.data.length, LIST_CAP));
 const contents = computed<ContentsEntry[]>(() => projectContents({
 	hasDescription: !!project.value?.description,
 	campaigns: rows(campaigns.value),
@@ -63,7 +64,7 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 	operations: rows(looseOperations.value),
 	tests: rows(looseTests.value),
 	activity: activityCount.value,
-	equipment: equipment.value.loading ? null : equipment.value.data.length,
+	equipment: rows(equipment.value),
 }));
 
 // The Process map, opened on this record.
