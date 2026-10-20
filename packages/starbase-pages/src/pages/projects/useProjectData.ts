@@ -125,10 +125,17 @@ export function useProjectData(id: Ref<string>) {
 		return rows.map((c: any) => ({ ...c, stats: stats?.get(c.campaign_id) ?? null }));
 	}
 
-	async function readAccess(projectId: string): Promise<AccessList> {
-		const res = await loadAccess(host.api, 'projects', projectId);
-		if (!res.ok) throw new Error(res.message);
-		return res.data;
+	// "Who has access" is read on the first load and again after the dialog changed it, and the two can overlap. One sequence number
+	// is shared by both: the latest call wins, and an older answer that lands later changes nothing. A failed read keeps the last list.
+	let accessSeq = 0;
+	async function fillAccess(projectId: string, withLoading: boolean) {
+		const seq = ++accessSeq;
+		if (withLoading) access.value = { ...access.value, loading: true, error: '' };
+		const res = await loadAccess(host.api, 'projects', projectId).catch((e) => ({ ok: false as const, message: errorText(e) }));
+		if (seq !== accessSeq || id.value !== projectId) return;
+		access.value = res.ok
+			? { data: res.data, loading: false, error: '' }
+			: { ...access.value, loading: false, error: `Could not load who has access: ${res.message}` };
 	}
 
 	// The campaigns' total and how many each status has (for the totals line; the campaign list itself is capped), from one grouped read.
@@ -262,7 +269,7 @@ export function useProjectData(id: Ref<string>) {
 				return { ops, tests };
 			}),
 			fill(equipment, token, 'equipment', () => loadEquipment(projectId)),
-			fill(access, token, 'who has access', () => readAccess(projectId)),
+			fillAccess(projectId, true),
 		]);
 	}
 
@@ -275,16 +282,11 @@ export function useProjectData(id: Ref<string>) {
 		await readProject(projectId, () => id.value === projectId);
 	}
 
-	// After the dialog changed "Who has access": a plain read, kept only if the page is still on the same project. A failed read
-	// keeps the last list.
+	// After the dialog changed "Who has access": a plain read (no loading flag), kept only if it is the latest and the page is still on the same project.
 	async function reloadAccess() {
 		const projectId = id.value;
 		if (!projectId) return;
-		const res = await loadAccess(host.api, 'projects', projectId);
-		if (id.value !== projectId) return;
-		access.value = res.ok
-			? { data: res.data, loading: false, error: '' }
-			: { ...access.value, error: `Could not load who has access: ${res.message}` };
+		await fillAccess(projectId, false);
 	}
 
 	watch(id, load, { immediate: true });
