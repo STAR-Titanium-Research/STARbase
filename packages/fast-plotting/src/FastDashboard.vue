@@ -14,7 +14,7 @@ import { useFastHost } from './host';
 import { type SeriesMeta, type Trace, loadTrace } from './fastCache';
 import { dataQuality } from './fastMeta';
 import { type ListRun, sampleKeyOf } from './fastSamples';
-import { type Tile, seedTiles } from './fastTiles';
+import { type Tile, seedTiles, validTiles } from './fastTiles';
 
 const host = useFastHost();
 const api = host.api;
@@ -39,7 +39,8 @@ let freshTiles = true;
 let pendingSelect: string | null = null;
 try {
 	const v = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
-	if (Array.isArray(v.tiles) && v.tiles.length) { tiles.value = v.tiles; freshTiles = false; }
+	const saved = validTiles(v.tiles);
+	if (saved.length) { tiles.value = saved; freshTiles = false; }
 	if (typeof v.selectedId === 'string') pendingSelect = v.selectedId;
 	if (v.tab === 'stats' || v.tab === 'detail' || v.tab === 'recipe') tab.value = v.tab;
 } catch { /* nothing saved, or storage is blocked */ }
@@ -65,6 +66,7 @@ let ro: ResizeObserver | undefined;
 onMounted(() => { ro = new ResizeObserver(measure); if (layoutEl.value) ro.observe(layoutEl.value); measure(); window.addEventListener('resize', measure); });
 onBeforeUnmount(() => {
 	ro?.disconnect(); window.removeEventListener('resize', measure);
+	clearInterval(clockTimer);
 	opGen++; listGen++;   // an in-flight load must not write to a page that is gone
 });
 
@@ -180,10 +182,12 @@ const selectedRow = computed(() => rows.value.find((r) => r.id === selectedId.va
 // A row stuck at pending/processing for more than a short grace period almost always means the host FAST
 // importer (fast_orchestrator.py --daemon) isn't running: nothing will ever claim it. Say so instead of
 // leaving an indefinite "importing".
+const now = ref(Date.now());
+const clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15_000);
 const importStalled = computed(() => {
 	const fr = fastRun.value;
 	if (!fr || (fr.status !== 'pending' && fr.status !== 'processing') || !fr.updated_at) return false;
-	return Date.now() - new Date(fr.updated_at).getTime() > 30_000;
+	return now.value - new Date(fr.updated_at).getTime() > 30_000;
 });
 // what the plot area says while there is nothing to plot
 const plotMessage = computed(() => {

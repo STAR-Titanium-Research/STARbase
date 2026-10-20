@@ -7,6 +7,20 @@ export interface TileSeries { label: string; unit: string; group: string; values
 export interface Tile { id: number; series: string[]; span: TileSpan; normalise: boolean; }
 export const MAX_TILES = 6;
 
+const SPANS: TileSpan[] = ['sm', 'wide', 'tall', 'big'];
+/** The tiles of a saved layout, with anything malformed dropped (the storage is the user's, and old). */
+export function validTiles(saved: unknown): Tile[] {
+	if (!Array.isArray(saved)) return [];
+	const seen = new Set<number>();
+	const out: Tile[] = [];
+	for (const t of saved) {
+		if (!t || !Number.isInteger(t.id) || seen.has(t.id) || !SPANS.includes(t.span) || !Array.isArray(t.series)) continue;
+		seen.add(t.id);
+		out.push({ id: t.id, series: t.series.filter((k: unknown) => typeof k === 'string'), span: t.span, normalise: t.normalise === true });
+	}
+	return out.slice(0, MAX_TILES);
+}
+
 // On first open (no saved layout) the grid is six tiles, one per main series category present in the trace
 // (temperature, force, power, ...), so a run shows its whole picture at once instead of empty tiles.
 const SEED_GROUP_ORDER = ['temp', 'force', 'power', 'pressure', 'position', 'vacuum', 'speed', 'voltage', 'current', 'flow'];

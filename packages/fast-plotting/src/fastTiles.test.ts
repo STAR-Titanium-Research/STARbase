@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupTitle, seedTiles, tilePeak, tileTitle, type TileSeries } from './fastTiles';
+import { groupTitle, seedTiles, validTiles, tilePeak, tileTitle, type TileSeries } from './fastTiles';
 
 const s = (label: string, group: string, unit: string, ...values: number[]): TileSeries => ({ label, group, unit, values: Float64Array.from(values) });
 
@@ -56,5 +56,18 @@ describe('seedTiles', () => {
 	});
 	it('makes none for an empty catalog', () => {
 		expect(seedTiles([], 1)).toEqual([]);
+	});
+});
+
+describe('validTiles', () => {
+	it('keeps good tiles and drops malformed or repeated ones', () => {
+		const good = { id: 1, series: ['a', 'b'], span: 'wide', normalise: true };
+		const out = validTiles([good, { ...good }, { id: 'x', series: [], span: 'sm' }, { id: 2, series: [], span: 'huge' }, { id: 3, series: 'a', span: 'sm' }, null, { id: 4, series: ['k', 5], span: 'sm', normalise: 'yes' }]);
+		expect(out).toEqual([good, { id: 4, series: ['k'], span: 'sm', normalise: false }]);
+	});
+	it('is empty for anything that is not a list, and holds at most six', () => {
+		expect(validTiles({})).toEqual([]);
+		expect(validTiles(undefined)).toEqual([]);
+		expect(validTiles(Array.from({ length: 9 }, (_, i) => ({ id: i, series: [], span: 'sm' })))).toHaveLength(6);
 	});
 });
