@@ -22,14 +22,16 @@ const props = defineProps<{
 }>();
 
 const pt = computed(() => hoverPoint(props.geom, props.hover?.index.value, props.kind, props.data, props.yLabelUnit, props.xUnit));
+// A value outside the plot (a dB floor, a zoomed-out crop) keeps its dot on the plot edge.
+const dotY = computed(() => Math.min(props.bottom, Math.max(props.top, pt.value?.py ?? 0)));
 const tagW = computed(() => Math.max(28, (pt.value?.sub.length ?? 0) * 6.2 + 12));
 </script>
 
 <template>
 	<g v-if="part === 'svg' && pt">
 		<line :x1="pt.px" :x2="pt.px" :y1="top" :y2="bottom" class="hv-line" stroke-width="1" />
-		<circle :cx="pt.px" :cy="pt.py" r="4.5" class="hv-ring" />
-		<circle :cx="pt.px" :cy="pt.py" r="3" :style="{ fill: stroke }" />
+		<circle :cx="pt.px" :cy="dotY" r="4.5" class="hv-ring" />
+		<circle :cx="pt.px" :cy="dotY" r="3" :style="{ fill: stroke }" />
 		<g v-if="local?.hot.value" class="hv-tag">
 			<rect :x="pt.px - tagW / 2" :y="tagBelow ? bottom + 3 : bottom - 17" :width="tagW" height="14" rx="3" />
 			<text :x="pt.px" :y="tagBelow ? bottom + 13.5 : bottom - 6.5" text-anchor="middle">{{ pt.sub }}</text>
