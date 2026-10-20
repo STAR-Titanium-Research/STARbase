@@ -51,4 +51,36 @@ describe('fetchActivityRows', () => {
 		const getItems = vi.fn(async (c: string) => (c === 'manufacturing_operations' ? full : []));
 		expect((await fetchActivityRows(getItems, 'a', { since: windowStart(26, NOW) })).truncated).toBe(true);
 	});
+	it('reads done work only, in both collections', async () => {
+		const getItems = vi.fn().mockResolvedValue([]);
+		await fetchActivityRows(getItems, 'p1');
+		for (const call of getItems.mock.calls) expect(call[1].filter._and).toContainEqual({ work_state: { _eq: 'done' } });
+	});
+	it('keeps the tests when the operations read fails, and says which failed', async () => {
+		const boom = new Error('forbidden');
+		const getItems = vi.fn(async (c: string) => {
+			if (c === 'manufacturing_operations') throw boom;
+			return [{ session_date: '2026-10-03T00:00:00Z' }];
+		});
+		const rows = await fetchActivityRows(getItems, 'p1');
+		expect(rows.ops).toEqual([]);
+		expect(rows.tests).toEqual([{ project_id: 'p1', session_date: '2026-10-03T00:00:00Z' }]);
+		expect(rows.failed).toEqual([{ collection: 'operations', error: boom }]);
+	});
+	it('keeps the operations when the tests read fails', async () => {
+		const getItems = vi.fn(async (c: string) => {
+			if (c === 'test_sessions') throw new Error('nope');
+			return [{ operation_date: '2026-10-01T00:00:00Z' }];
+		});
+		const rows = await fetchActivityRows(getItems, 'p1');
+		expect(rows.ops).toHaveLength(1);
+		expect(rows.failed.map((f) => f.collection)).toEqual(['tests']);
+	});
+	it('throws when both reads fail', async () => {
+		const getItems = vi.fn().mockRejectedValue(new Error('down'));
+		await expect(fetchActivityRows(getItems, 'p1')).rejects.toThrow('down');
+	});
+	it('reports no failure when both answer', async () => {
+		expect((await fetchActivityRows(vi.fn().mockResolvedValue([]), 'p1')).failed).toEqual([]);
+	});
 });

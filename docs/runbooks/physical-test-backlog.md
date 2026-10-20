@@ -226,7 +226,8 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
 - [ ] **PP2 — Project page hero.** Open a project that has campaigns, planned operations and tests, and several
   people with access, in light and dark. Expect: the **timeline** shows the project bar and one bar per dated
   campaign, weekly bars for done operations and tests, and planned work as hollow circles (operations) and hollow
-  diamonds (tests) after **Today**. The range control (30 d, 6 mo, All) changes the chart, and the chosen range is
+  diamonds (tests) after **Today**; a planned operation's marker sits on its own planned date (check one west of UTC
+  if you can). If the activity read fails, the timeline still shows the bars and a note. The range control (30 d, 6 mo, All) changes the chart, and the chosen range is
   still set after a reload on the same device. A range with no work shows one line of text in place of the chart.
   The totals show "n planned" under each count. The people row shows six faces, then up to three fading ones, and
   its counts (PI, investigators, "more have access") match the list. **Who has access** opens the dialog.

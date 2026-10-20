@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayLabel, dayOf, emptyText, niceStep, projectTimeline, timelineData, timelineXTicks, weekLabel, yAxis, type TimelineInput } from './projectTimeline';
+import { dayLabel, dayOf, emptyText, plannedDayOf, niceStep, projectTimeline, timelineData, timelineXTicks, weekLabel, yAxis, type TimelineInput } from './projectTimeline';
 
 const DAY = 86_400_000;
 const TODAY = new Date(2026, 9, 16); // Friday 16 Oct 2026
@@ -149,6 +149,67 @@ describe('planned work', () => {
 			{ date: d('2026-10-22'), kind: 'test', n: 4 },
 		]);
 		expect(m.empty).toBe(false);
+	});
+});
+
+describe('planned work ahead on a short range', () => {
+	it('extends the domain to a planned date up to one range-length after today, with a little room', () => {
+		const m = projectTimeline(base({ range: '30d', plannedOps: [{ date: '2026-11-10', n: 2 }] })); // 25 days ahead
+		expect(m.domain[1]).toBe(d('2026-11-10') + DAY);
+		expect(m.planned).toEqual([{ date: d('2026-11-10'), kind: 'op', n: 2 }]);
+		expect(m.empty).toBe(false);
+	});
+	it('ignores a planned date farther ahead than one range-length', () => {
+		const m = projectTimeline(base({ range: '30d', plannedOps: [{ date: '2026-12-25', n: 1 }] }));
+		expect(m.domain[1]).toBe(TODAY.getTime() + 7.5 * DAY);
+		expect(m.planned).toEqual([]);
+		expect(m.empty).toBe(true);
+	});
+	it('keeps the quarter-range margin when the planned work is nearer than that', () => {
+		expect(projectTimeline(base({ range: '30d', plannedOps: [{ date: '2026-10-18', n: 1 }] })).domain[1]).toBe(TODAY.getTime() + 7.5 * DAY);
+	});
+	it('does the same for 6 months', () => {
+		const m = projectTimeline(base({ range: '6mo', plannedTests: [{ date: '2027-03-01', n: 1 }] }));
+		expect(m.planned).toHaveLength(1);
+		expect(m.domain[1]).toBeGreaterThan(d('2027-03-01'));
+	});
+});
+
+describe('today on range all', () => {
+	it('is inside the domain for a project that starts in the future', () => {
+		const m = projectTimeline(base({ project: { start: '2027-03-01', end: '2027-09-01' } }));
+		expect(m.domain[0]).toBeLessThanOrEqual(m.today);
+		expect(m.domain[1]).toBeGreaterThan(m.today);
+	});
+	it('keeps the project start as the left edge when it is in the past', () => {
+		expect(projectTimeline(base({ project: { start: '2026-01-05', end: '2026-12-31' } })).domain[0]).toBe(d('2026-01-05'));
+	});
+});
+
+describe('a project whose end is before its start', () => {
+	it('keeps its bar, earlier date first', () => {
+		const m = projectTimeline(base({ range: '30d', project: { start: '2026-10-20', end: '2026-10-01' } }));
+		expect(m.project).toEqual({ start: d('2026-10-01'), end: d('2026-10-20'), openEnd: false });
+	});
+	it('starts the all-range axis at the earlier date', () => {
+		const m = projectTimeline(base({ project: { start: '2026-12-01', end: '2026-02-02' } }));
+		expect(m.domain[0]).toBe(d('2026-02-02'));
+		expect(m.project).toEqual({ start: d('2026-02-02'), end: d('2026-12-01'), openEnd: false });
+	});
+});
+
+describe('planned dates as calendar days', () => {
+	it('reads a date and a UTC midnight timestamp as the same local day, in any time zone', () => {
+		expect(plannedDayOf('2026-10-20')).toBe(d('2026-10-20'));
+		expect(plannedDayOf('2026-10-20T00:00:00Z')).toBe(d('2026-10-20'));
+		expect(plannedDayOf('2026-10-20T00:00:00.000+00:00')).toBe(d('2026-10-20'));
+		expect(plannedDayOf('')).toBeNull();
+		expect(plannedDayOf(null)).toBeNull();
+		expect(plannedDayOf('soon')).toBeNull();
+	});
+	it('puts the marker on its own day and adds the two spellings of one day together', () => {
+		const m = projectTimeline(base({ range: '30d', plannedOps: [{ date: '2026-10-20T00:00:00Z', n: 1 }, { date: '2026-10-20', n: 2 }] }));
+		expect(m.planned).toEqual([{ date: d('2026-10-20'), kind: 'op', n: 3 }]);
 	});
 });
 
