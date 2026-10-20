@@ -24,14 +24,14 @@ const TABS: Array<{ id: OpTab; name: string; icon: string }> = [
 ];
 
 const { detail, loadingDetail, opLabel, ready, sampleInfo, fmtDate, recordedText, machineText, openPanel, cutEdited, chainDirty, stagesOnCount,
-	hasChanges, changeSummary, changesDialogOpen, openOpForm, openSampleForm } = useForceCtx();
+	hasChanges, changeSummary, changesDialogOpen, helpOpen, menu, openOpForm, openSampleForm } = useForceCtx();
 
 // the dot of a tab marks an unsaved edit: the cut fields and operation record, an unsaved filter chain
 const dotted = computed<Record<OpTab, boolean>>(() => ({ cut: !!cutEdited.value, display: false, filters: !!chainDirty.value, stats: false, cutting: false }));
 
 const sampleRows = computed(() => {
 	const s = sampleInfo.value;
-	return s ? ([['Material', s.material], ['Nickname', s.nickname], ['Form', s.form], ['Owner', s.owner], ['Made', s.manufactured ? fmtDate.value(s.manufactured) : ''], ['Operations', s.ops]] as Array<[string, any]>)
+	return s ? ([['Material', s.material], ['Nickname', s.nickname], ['Form', s.form], ['Owner', s.owner], ['Made', s.manufactured ? fmtDate(s.manufactured) : ''], ['Operations', s.ops]] as Array<[string, any]>)
 		.filter(([, v]) => v != null && v !== '').map(([k, v]) => [k, String(v)]) : [];
 });
 const tablist = ref<HTMLElement | null>(null);
@@ -45,6 +45,8 @@ function onTabKey(ev: KeyboardEvent) {
 	nextTick(() => tablist.value?.querySelectorAll<HTMLElement>('[role=tab]')[to]?.focus());
 }
 function onKey(ev: KeyboardEvent) {
+	// not while a dialog or menu has the keyboard, or something else already used the key
+	if (ev.defaultPrevented || changesDialogOpen.value || helpOpen.value || menu.value) return;
 	const to = tabForNumberKey(ev, TABS.length);
 	if (to !== null) pick(TABS[to].id);
 }

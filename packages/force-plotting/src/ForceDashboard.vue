@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onBeforeUnmount, provide, reactive, ref, shallowReactive, watch } from 'vue';
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onBeforeUnmount, provide, reactive, ref, watch } from 'vue';
 import { GridLayout, GridItem } from 'grid-layout-plus';
 import { useRoute, useRouter } from 'vue-router';
 import './force.css';
@@ -2442,8 +2442,8 @@ function fmtDateTime(v: string | null | undefined) {
 }
 
 // Everything the operation column's tabs, the Signals and FRM panels read or edit, in one bundle (forceCtx.ts).
-// Shallow, so a member that is a ref stays that ref (a child's v-model writes straight back to it).
-provide(FORCE_CTX, shallowReactive({
+// A plain object: a member that is a ref stays that ref (a child's v-model writes straight back to it).
+provide(FORCE_CTX, {
 	AXES, AXIS_COLOR, AXIS_MAP_STANDARD, CHART_MODES, DIFF_H, DIFF_W, STAT_AXES, activeStages, addCompare, addsInfoOverOp, appliedLight, applyFilter,
 	applyProfile, axis, axisMapSel, axisMapSubtype, bakeBlocked, bakeFilters, bakedChain, baking, buildOctree, buildingOctree, cacheMeanRpm,
 	captureOpen, chainDirty, changeSummary, changesDialogOpen, chartMode, chartsFor, chooseMode, clearCompare, clearFilter, cloudProps, colorDomainHi,
@@ -2454,15 +2454,15 @@ provide(FORCE_CTX, shallowReactive({
 	editOperatorName, editOutcomeNotes, editPpr, editRate, editRateKHz, editRpm, editVc, effectiveMode, fftChain, fftFiltered, filterBusy, filterErr,
 	filterFftOverlay, filterSkipped, filteredAuto, filteredCache, filteredColorScale, filteredSoloOn, fmtCutTime, fmtDate, fmtDelta, fmtOrDash, fmtPts,
 	fmtStat, frmBusy, frmCloudRef, frmLoadOverlay, frmLoading, frmMode, frmOctreeRef, frmStage, frmUrl, fullResPoints, gridActive, gridAvailable,
-	gridFidelityPct, gridFull, hasChanges, hoverIndex, hoverSource, hoverTime, isSpectral, linkMsg, liveAvailable, liveOn, loadingDetail, locked,
-	machineText, markTime, metaDirty, moreRows, near, numDiffers, numOrNull, octreeAvailable, octreeBudgetCap, octreeMinNodePx, octreeMsg, octreeOn,
+	gridFidelityPct, gridFull, hasChanges, helpOpen, hoverIndex, hoverSource, hoverTime, isSpectral, linkMsg, liveAvailable, liveOn, loadingDetail, locked,
+	machineText, markTime, menu, metaDirty, moreRows, near, numDiffers, numOrNull, octreeAvailable, octreeBudgetCap, octreeMinNodePx, octreeMsg, octreeOn,
 	octreeSampleCache, onAxisMapChange, onChartZoom, onClimits, onCloudLoaded, onCropEdit, opLabel, openChartMenu, openMenu, openOpForm, openPanel,
 	openPointMenu, openSampleForm, plotStride, pointSize, previewOn, processFullRes, profiles, radialFetchBusy, rawDecimatedCache, ready, recordedText,
 	rectZoomTool, removeCompare, renderMsg, renderPoints, rendererHistogram, rendering, resetLive, resetZoom, resolutionPct, sampleInfo, sampleOf,
 	saveCropAsOfficial, saveProfile, savedChain, seedCutFromDetail, seedMetaFromDetail, setAxis, sigStats, specChain, speedMode, srcCut, srcMeta,
 	stacked, stagesOnCount, statsBusy, statsCacheMb, statsCopied, statsCopyFailed, statsErr, toggleCompareRef, toggleItemAxis, workChain, zScale,
 	zSeries, zoomEnd, zoomStart, zoomed,
-}));
+});
 </script>
 
 <template>

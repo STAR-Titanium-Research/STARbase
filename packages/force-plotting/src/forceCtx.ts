@@ -1,20 +1,239 @@
 // The dashboard's state, shared with the panels and tabs it is split into (the operation column's tabs, the
 // Signals and FRM panels, the Metadata doctor). They all read and edit the same selection, cut parameters,
-// filter chain and crop, so instead of forty props each, ForceDashboard provides one reactive bundle of its
-// refs, computeds and functions and a panel takes what it uses:
+// filter chain and crop, so instead of forty props each, ForceDashboard provides one bundle of its refs,
+// computeds and functions and a panel takes what it uses:
 //
-//   const { detail, liveOn, editFeed } = useForceCtx();
+//   const { detail, liveOn, editFeed, openMenu } = useForceCtx();
 //
-// The members are refs (or functions), so `v-model="editFeed"` writes straight back to the dashboard's own
-// ref; in a script they need `.value`, in a template they unwrap.
+// The members are the dashboard's own refs (so `v-model="editFeed"` writes straight back to its ref; in a
+// script they need `.value`, in a template they unwrap) and its plain functions, which are called directly.
+// The interface below is what vue-tsc checks each panel against.
 
-import { inject, toRefs, type InjectionKey, type ToRefs } from 'vue';
+import { inject, type ComputedRef, type InjectionKey, type Ref, type WritableComputedRef } from 'vue';
+import type { HoverSource } from './chartHover';
+import type { ColorScale } from './colorScale';
+import type { AutoRange } from './autoColorScale';
+import type { ContextMenuItem } from './ContextMenu.vue';
+import type { PointMenuEvent } from './cloudPick';
+import type { ChartSnapshot } from './chartExport';
+import type { EnvelopeDiff } from './compare';
+import type { CuttingMetrics, Metric } from './cuttingMetrics';
+import type { FilterChain } from './filterChain';
+import type { FrmMode } from './frmMode';
+import type { Histogram } from './histogram';
+import type { Cache } from './liveCache';
+import type { LoadStage, StageInfo } from './loadStage';
+import type { SpeedMode } from './liveCloud';
+import type { SignalStats } from './signalStats';
+import type { OpTab } from './ForceOpColumn.vue';
+import type { RPanel } from './forceLayout';
 
-export type ForceCtx = Record<string, any>;
+/** What a Signals chart is given (ForceChart's props, spread with v-bind). */
+export type ChartProps = { key: string; title: string; kind: 'env' | 'line'; data: any; [prop: string]: any };
+
+export interface ForceCtx {
+	AXES: readonly ["Fx", "Fy", "Fz"];
+	AXIS_COLOR: Record<"Fx" | "Fy" | "Fz", string>;
+	AXIS_MAP_STANDARD: string;
+	CHART_MODES: ({ key: string; label: string; title?: undefined; } | { key: string; label: string; title: string; })[];
+	DIFF_H: number;
+	DIFF_W: number;
+	STAT_AXES: readonly ["Fx", "Fy", "Fz"];
+	activeStages: ComputedRef<number>;
+	addCompare: (row: any) => Promise<void>;
+	addsInfoOverOp: (captureVal: unknown, opVal: number | null | undefined) => boolean;
+	appliedLight: ComputedRef<boolean>;
+	applyFilter: () => Promise<void>;
+	applyProfile: (id: string) => void;
+	axis: Ref<"Fx" | "Fy" | "Fz">;
+	axisMapSel: Ref<string>;
+	axisMapSubtype: ComputedRef<any>;
+	bakeBlocked: ComputedRef<string | null>;
+	bakeFilters: () => Promise<void>;
+	bakedChain: ComputedRef<FilterChain | null>;
+	baking: Ref<boolean>;
+	buildOctree: () => Promise<void>;
+	buildingOctree: Ref<boolean>;
+	cacheMeanRpm: ComputedRef<number | null>;
+	captureOpen: Ref<boolean>;
+	chainDirty: ComputedRef<boolean>;
+	changeSummary: ComputedRef<{ label: string; from: string; to: string; }[]>;
+	changesDialogOpen: Ref<boolean>;
+	chartMode: Ref<"spectrogram" | "psd" | "waterfall" | "fft" | "force">;
+	chartsFor: (item: RPanel) => ChartProps[];
+	chooseMode: (m: FrmMode) => void;
+	clearCompare: () => void;
+	clearFilter: () => Promise<void>;
+	cloudProps: ComputedRef<any>;   // FrmCloud's props, spread with v-bind
+	colorDomainHi: ComputedRef<number>;
+	colorDomainLo: ComputedRef<number>;
+	colorHistogram: ComputedRef<Histogram | null>;
+	colorScale: Ref<ColorScale>;
+	compareBusy: Ref<boolean>;
+	compareCandidates: ComputedRef<any[]>;
+	compareItems: ComputedRef<any[]>;
+	compareOn: ComputedRef<boolean>;
+	compareOpen: Ref<boolean>;
+	comparePickerOpen: Ref<boolean>;
+	compareRefId: Ref<string | null>;
+	compareRefLabel: ComputedRef<any>;
+	compareView: { cx: number; cy: number; span: number; active: boolean; };
+	computeStats: () => Promise<void>;
+	copyStatsCsv: () => Promise<void>;
+	cropDirty: ComputedRef<boolean>;
+	cropSavePrompt: Ref<boolean>;
+	cropSavedMsg: Ref<string>;
+	cropSaving: Ref<boolean>;
+	cutEdited: ComputedRef<boolean>;
+	cutModified: ComputedRef<boolean>;
+	cutTip: (m: Metric | undefined, formula: string) => string;
+	cutVal: (m: Metric | undefined, digits?: number) => string;
+	cutting: ComputedRef<CuttingMetrics | null>;
+	cuttingMapText: ComputedRef<string>;
+	detail: Ref<any>;
+	diffOn: Ref<boolean>;
+	diffResult: ComputedRef<EnvelopeDiff | null>;
+	diffSpark: ComputedRef<{ d: string; zeroY: string; t0: number; t1: number; } | null>;
+	displayedPoints: Ref<number>;
+	downloadFrm: () => void;
+	downloadMsg: Ref<string | null>;
+	downloadStatsCsv: () => void;
+	editDiam: Ref<number>;
+	editFeed: Ref<number>;
+	editInnerDiam: Ref<number>;
+	editOpAxialDoc: Ref<number | null>;
+	editOpCoolant: Ref<boolean | null>;
+	editOpCuttingSpeed: Ref<number | null>;
+	editOpFeedMmPerRev: Ref<number | null>;
+	editOpNewEdge: Ref<boolean | null>;
+	editOpSubtype: Ref<string>;
+	editOpWorkpieceDiam: Ref<number | null>;
+	editOperatorName: Ref<string>;
+	editOutcomeNotes: Ref<string>;
+	editPpr: Ref<number>;
+	editRate: Ref<number>;
+	editRateKHz: Ref<number>;
+	editRpm: Ref<number>;
+	editVc: Ref<number>;
+	effectiveMode: ComputedRef<"spectrogram" | "psd" | "waterfall" | "fft" | "force">;
+	fftChain: ComputedRef<FilterChain | null>;
+	fftFiltered: (c: { kind: string; key: string; }) => boolean;
+	filterBusy: Ref<boolean>;
+	filterErr: Ref<string | null>;
+	filterFftOverlay: Ref<{ f: number[]; amp: number[]; } | null>;
+	filterSkipped: Ref<string[]>;
+	filteredAuto: Ref<{ cmin: number; cmax: number; } | null>;
+	filteredCache: Ref<Cache | null>;
+	filteredColorScale: ComputedRef<ColorScale>;
+	filteredSoloOn: ComputedRef<boolean>;
+	fmtCutTime: (d: any) => string;
+	fmtDate: (v: string) => string;
+	fmtDelta: (v: number) => string;
+	fmtOrDash: (v: unknown) => string;
+	fmtPts: (n: number | null) => string;
+	fmtStat: (v: number) => string;
+	frmBusy: ComputedRef<boolean>;
+	frmCloudRef: Ref<any>;
+	frmLoadOverlay: ComputedRef<LoadStage | null>;
+	frmLoading: Ref<boolean>;
+	frmMode: Ref<FrmMode>;
+	frmOctreeRef: Ref<any>;
+	frmStage: Ref<StageInfo | null>;
+	frmUrl: Ref<string | null>;
+	fullResPoints: ComputedRef<number | null>;
+	gridActive: ComputedRef<boolean>;
+	gridAvailable: ComputedRef<boolean>;
+	gridFidelityPct: ComputedRef<number | null>;
+	gridFull: Ref<boolean>;
+	hasChanges: ComputedRef<boolean>;
+	helpOpen: Ref<boolean>;
+	menu: Ref<{ x: number; y: number; items: ContextMenuItem[] } | null>;
+	hoverIndex: Ref<number | null>;
+	hoverSource: HoverSource;
+	hoverTime: ComputedRef<number | null>;
+	isSpectral: ComputedRef<boolean>;
+	linkMsg: Ref<string>;
+	liveAvailable: ComputedRef<boolean>;
+	liveOn: ComputedRef<boolean>;
+	loadingDetail: Ref<boolean>;
+	locked: Ref<boolean>;
+	machineText: ComputedRef<any>;
+	markTime: Ref<number | null>;
+	metaDirty: ComputedRef<boolean>;
+	moreRows: ComputedRef<[string, string][]>;
+	near: (a: number, b: number) => boolean;
+	numDiffers: (a: number | null, b: number | null) => boolean;
+	numOrNull: (v: unknown) => number | null;
+	octreeAvailable: ComputedRef<boolean>;
+	octreeBudgetCap: Ref<number>;
+	octreeMinNodePx: Ref<number>;
+	octreeMsg: Ref<string | null>;
+	octreeOn: ComputedRef<boolean>;
+	octreeSampleCache: ComputedRef<Cache | null>;
+	onAxisMapChange: () => void;
+	onChartZoom: (v: { start: number; end: number; } | null) => void;
+	onClimits: (v: AutoRange) => void;
+	onCloudLoaded: (meta: { csSec: number; ceSec: number; feed: number; diam: number; rpm: number; Fs: number; N: number; }) => void;
+	onCropEdit: (which: "end" | "start", v: number) => void;
+	opLabel: ComputedRef<any>;
+	openChartMenu: (e: { clientX: number; clientY: number; x: number | null; snapshot: () => ChartSnapshot; }) => void;
+	openMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
+	openOpForm: () => void;
+	openPanel: Ref<OpTab>;
+	openPointMenu: (e: PointMenuEvent) => void;
+	openSampleForm: () => void;
+	plotStride: Ref<number>;
+	pointSize: Ref<number>;
+	previewOn: Ref<boolean>;
+	processFullRes: () => Promise<void>;
+	profiles: Ref<any[]>;
+	radialFetchBusy: Ref<boolean>;
+	rawDecimatedCache: Ref<Cache | null>;
+	ready: ComputedRef<{ level: string; label: string; hint: string; } | null>;
+	recordedText: ComputedRef<string>;
+	rectZoomTool: Ref<boolean>;
+	removeCompare: (id: string) => void;
+	renderMsg: Ref<string | null>;
+	renderPoints: Ref<number>;
+	rendererHistogram: Ref<Histogram | null>;
+	rendering: Ref<boolean>;
+	resetLive: () => void;
+	resetZoom: () => void;
+	resolutionPct: ComputedRef<number | null>;
+	sampleInfo: ComputedRef<{ id: any; sample_code: any; material: any; nickname: any; form: any; owner: any; manufactured: any; ops: any; } | null>;
+	sampleOf: (r: any) => any;
+	saveCropAsOfficial: () => Promise<void>;
+	saveProfile: () => Promise<void>;
+	savedChain: ComputedRef<FilterChain | null>;
+	seedCutFromDetail: () => void;
+	seedMetaFromDetail: () => void;
+	setAxis: (a: "Fx" | "Fy" | "Fz") => void;
+	sigStats: Ref<SignalStats | null>;
+	specChain: ComputedRef<FilterChain>;
+	speedMode: Ref<SpeedMode>;
+	srcCut: { feed: number; diam: number; inner: number; ppr: number; rate: number; };
+	srcMeta: { subtype: string; sequence: number | null; newEdge: boolean | null; coolant: boolean | null; operator: string; cuttingSpeed: number | null; feedMmPerRev: number | null; axialDoc: number | null; workpieceDiam: number | null; outcomeNotes: string; passCode: string; };
+	stacked: ComputedRef<boolean>;
+	stagesOnCount: ComputedRef<number>;
+	statsBusy: Ref<boolean>;
+	statsCacheMb: ComputedRef<number | null>;
+	statsCopied: Ref<boolean>;
+	statsCopyFailed: Ref<boolean>;
+	statsErr: Ref<string | null>;
+	toggleCompareRef: (id: string) => void;
+	toggleItemAxis: (item: RPanel, a: "Fx" | "Fy" | "Fz") => void;
+	workChain: Ref<FilterChain>;
+	zScale: Ref<number>;
+	zSeries: Ref<"Fx" | "Fy" | "Fz" | "none">;
+	zoomEnd: Ref<number | null>;
+	zoomStart: Ref<number | null>;
+	zoomed: ComputedRef<boolean>;
+}
+
 export const FORCE_CTX: InjectionKey<ForceCtx> = Symbol('force-dashboard');
 
-export function useForceCtx(): ToRefs<ForceCtx> {
+export function useForceCtx(): ForceCtx {
 	const ctx = inject(FORCE_CTX);
 	if (!ctx) throw new Error('useForceCtx() needs a ForceDashboard above it');
-	return toRefs(ctx);
+	return ctx;
 }

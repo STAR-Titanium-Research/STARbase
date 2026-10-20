@@ -24,16 +24,16 @@ const { AXES, AXIS_COLOR, CHART_MODES, chartMode, effectiveMode, isSpectral, liv
 	compareOpen, compareItems, compareRefId, compareBusy, comparePickerOpen, compareCandidates, addCompare, removeCompare, clearCompare, toggleCompareRef, compareRefLabel,
 	diffOn, diffResult, diffSpark, DIFF_W, DIFF_H, fmtDelta, sampleOf, fmtDate, openMenu } = useForceCtx();
 
-const charts = computed(() => chartsFor.value(props.item));
+const charts = computed(() => chartsFor(props.item));
 const spectral = computed(() => ['fft', 'psd'].includes(chartMode.value));
 const filterBands = ref(true);   // "Filter bands" chip: the stop bands of the active chain on the spectra
-const selected = (a: string) => (props.item.channels || AXES.value).includes(a);
+const selected = (a: string) => ((props.item.channels || AXES) as readonly string[]).includes(a);
 
 function more(ev: MouseEvent) {
 	const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-	openMenu.value(r.left, r.bottom + 4, [
+	openMenu(r.left, r.bottom + 4, [
 		{ label: compareOpen.value ? 'Hide the compare bar' : 'Compare with other cuts…', disabled: effectiveMode.value !== 'force', hint: 'Only in Force mode', run: () => { compareOpen.value = !compareOpen.value; } },
-		{ label: 'Reset zoom', disabled: !zoomed.value, hint: 'Not zoomed', run: resetZoom.value },
+		{ label: 'Reset zoom', disabled: !zoomed.value, hint: 'Not zoomed', run: resetZoom },
 		{ label: 'Close panel', disabled: props.canClose === false, hint: 'The last panel stays', run: () => emit('close') },
 	]);
 }

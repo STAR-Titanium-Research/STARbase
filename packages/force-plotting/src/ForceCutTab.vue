@@ -5,6 +5,7 @@
  * specified (editable; saved together with the crop by "Save changes"). One-line label | value rows.
  */
 import FixedNumberInput from './FixedNumberInput.vue';
+import type { SpeedMode } from './liveCloud';
 import { fmtFixed } from './fixedNumber';
 import { useForceCtx } from './forceCtx';
 
@@ -12,7 +13,7 @@ const { detail, liveOn, editFeed, editDiam, editInnerDiam, editPpr, editRate, ed
 	speedMode, editRpm, editVc, resetLive, cutModified, seedCutFromDetail, seedMetaFromDetail, metaDirty,
 	editOpSubtype, editOpCuttingSpeed, editOpFeedMmPerRev, editOpAxialDoc, editOpWorkpieceDiam, editOperatorName, editOpNewEdge, editOpCoolant, editOutcomeNotes,
 	moreRows, captureOpen } = useForceCtx();
-const MODELS = [{ key: 'measured', label: 'Measured', title: 'The measured spindle speed (tacho)' }, { key: 'rpm', label: 'Const RPM', title: 'A constant spindle speed' }, { key: 'vc', label: 'Const Vc', title: 'A constant surface speed' }];
+const MODELS: Array<{ key: SpeedMode; label: string; title: string }> = [{ key: 'measured', label: 'Measured', title: 'The measured spindle speed (tacho)' }, { key: 'rpm', label: 'Const RPM', title: 'A constant spindle speed' }, { key: 'vc', label: 'Const Vc', title: 'A constant surface speed' }];
 </script>
 
 <template>
