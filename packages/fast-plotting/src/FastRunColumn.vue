@@ -117,7 +117,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					<div v-else class="fd-empty">No recipe is recorded for this run.</div>
 				</template>
 			</div>
-			<footer class="foot"><button class="fd-btn open" @click="emit('open-operation')">Open operation <v-icon name="open_in_new" x-small /></button></footer>
+			<footer class="foot"><button class="fd-btn open" title="Open the operation record" @click="emit('open-operation')">Open operation <v-icon name="open_in_new" x-small /></button></footer>
 		</template>
 	</section>
 </template>
