@@ -35,7 +35,8 @@ function showAll() { emit('update:sample', null); runRaw.value = ''; runQuery.va
 function pickRun(r: ListRun) { open.value = false; emit('select', r); }
 
 const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
-const meta = (r: ListRun) => [fmtDate(r.operation_date), r.sintering_max_temp_celsius ? `${Math.round(r.sintering_max_temp_celsius)} °C` : '', r.sintering_max_force_kn ? `${+Number(r.sintering_max_force_kn).toFixed(1)} kN` : '']
+// the sample's code too while runs of every sample are listed
+const meta = (r: ListRun) => [props.sample === null ? r.sample_id?.sample_code : '', fmtDate(r.operation_date), r.sintering_max_temp_celsius ? `${Math.round(r.sintering_max_temp_celsius)} °C` : '', r.sintering_max_force_kn ? `${+Number(r.sintering_max_force_kn).toFixed(1)} kN` : '']
 	.filter(Boolean).join(' · ');
 
 // folded: the tab opens the lists over the run column; Escape or a click elsewhere closes them
@@ -79,7 +80,7 @@ watch(() => props.folded, () => { open.value = false; });
 					<label class="fd-search"><v-icon name="search" x-small /><input v-model="runRaw" placeholder="Search code / recipe" aria-label="Search runs by code or recipe" /></label>
 				</div>
 				<div class="list">
-					<button v-for="r in runs" :key="r.id" v-memo="[r.id === selectedId]" class="fd-card" :class="{ active: r.id === selectedId }" :aria-current="r.id === selectedId || undefined" @click="pickRun(r)">
+					<button v-for="r in runs" :key="r.id" v-memo="[r.id === selectedId, sample === null]" class="fd-card" :class="{ active: r.id === selectedId }" :aria-current="r.id === selectedId || undefined" @click="pickRun(r)">
 						<span class="fd-code">{{ r.pass_code || '—' }}</span>
 						<span class="fd-dim sub">{{ meta(r) }}</span>
 						<span class="fd-badge badge" :class="r.quality.level" :title="r.quality.hint">{{ r.quality.label }}</span>
