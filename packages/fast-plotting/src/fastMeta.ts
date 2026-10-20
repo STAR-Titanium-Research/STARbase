@@ -56,15 +56,22 @@ const STAT_DEFS: Array<{
 	{ label: 'PTC top',    unit: '°C', sum: 'ptc_top_max_c' },
 	{ label: 'PTC bot',    unit: '°C', sum: 'ptc_bot_max_c' },
 	{ label: 'Dwell',      unit: 's',  sum: 'dwell_s', fmt: fmtDwell },
-	{ label: 'Ramp',       unit: '°C/min', sum: 'ramp_c_per_min' },
+	{ label: 'Ramp (10–90 %)', unit: '°C/min', sum: 'ramp_c_per_min' },
 	{ label: 'Mould Ø',    unit: 'mm', rec: 'sintering_mould_diameter_mm' },
 	{ label: 'Mass',       unit: 'g',  rec: 'sintering_mass_grams', dp: 2 },
 ];
 
-export function buildStats(detail: any, fastRun: any): Stat[] {
+// The six peak tiles of the run column, the measured cycle figures of the Operation detail tab, and the
+// two recorded figures that sit with the run's identity.
+export const PEAK_LABELS = ['Peak temp', 'Peak force', 'Peak power', 'Peak volts', 'PTC top', 'PTC bot'];
+export const CYCLE_LABELS = ['Dwell', 'Ramp (10–90 %)'];
+export const MOULD_LABELS = ['Mould Ø', 'Mass'];
+
+export function buildStats(detail: any, fastRun: any, only?: string[]): Stat[] {
 	const summary = fastRun?.summary || {};
 	const out: Stat[] = [];
 	for (const d of STAT_DEFS) {
+		if (only && !only.includes(d.label)) continue;
 		const rawMeasured = d.sum ? summary[d.sum] : undefined;
 		if (rawMeasured !== undefined && rawMeasured !== null && Number.isFinite(Number(rawMeasured))) {
 			const f = d.fmt ? d.fmt(Number(rawMeasured)) : { value: num(rawMeasured, d.dp ?? 1)!, unit: d.unit };
@@ -79,21 +86,22 @@ export function buildStats(detail: any, fastRun: any): Stat[] {
 	return out;
 }
 
-// Data-quality stoplight for an operation row. `fast_run` is the o2m array from the list
-// query (status + n_rows). Green = full trace, Yellow = short/partial, Blue = importing,
-// Red = none or failed.
-export type Quality = 'green' | 'yellow' | 'blue' | 'red';
+// Data quality of an operation's trace: a word for the badge (`label`), a tone (`level`) and a hint for
+// the tooltip. `fast_run` is the o2m array from the list query (status + n_rows). Green = full trace,
+// yellow = short/partial, blue = importing, red = import failed, grey = no trace.
+export type Quality = 'green' | 'yellow' | 'blue' | 'red' | 'grey';
 const SHORT_RUN_ROWS = 100;   // below this a trace is an aborted/partial run
 
-export function dataQuality(op: any): { level: Quality; label: string } {
+export function dataQuality(op: any): { level: Quality; label: string; hint: string } {
 	const fr = Array.isArray(op?.fast_run) ? op.fast_run[0] : null;
-	if (!fr) return { level: 'red', label: 'No trace data' };
+	if (!fr) return { level: 'grey', label: 'No trace', hint: 'No trace was imported for this run' };
 	if (fr.status === 'done') {
-		if ((fr.n_rows ?? 0) >= SHORT_RUN_ROWS) return { level: 'green', label: 'Trace complete' };
-		return { level: 'yellow', label: 'Trace short / partial run' };
+		if ((fr.n_rows ?? 0) >= SHORT_RUN_ROWS) return { level: 'green', label: 'Trace complete', hint: 'The full trace is imported' };
+		return { level: 'yellow', label: 'Short run', hint: 'A short trace: an aborted or partial run' };
 	}
-	if (fr.status === 'pending' || fr.status === 'processing') return { level: 'blue', label: 'Importing…' };
-	return { level: 'red', label: fr.status === 'error' ? 'Import failed' : 'No trace data' };
+	if (fr.status === 'pending' || fr.status === 'processing') return { level: 'blue', label: 'Importing…', hint: 'The trace is queued or being imported' };
+	if (fr.status === 'error') return { level: 'red', label: 'Import failed', hint: 'The trace import failed' };
+	return { level: 'grey', label: 'No trace', hint: 'No trace was imported for this run' };
 }
 
 export function buildRecipe(detail: any) {
@@ -115,4 +123,53 @@ export function buildRecipe(detail: any) {
 			r.hold_time_min ? `${num(r.hold_time_min, 0)} min` : null,
 		].filter(Boolean).join(' · '),
 	};
+}
+
+export function fmtDateTime(v: string | null | undefined): string {
+	if (!v) return '';
+	const d = new Date(v);
+	return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// What the run column always shows above its tabs: the sample, the material, when, on what, by whom.
+export interface RunHeader {
+	sampleCode: string | null; sampleId: string | null; material: string;
+	date: string; machine: string; operator: string; atmosphere: string;
+}
+
+export function buildHeader(detail: any): RunHeader {
+	const material = [detail?.material_id?.common_name || detail?.sintering_material_type_note, detail?.sample_id?.nickname]
+		.filter((v) => v && String(v).trim()).join(' · ');
+	return {
+		sampleCode: detail?.sample_id?.sample_code ?? null,
+		sampleId: detail?.sample_id?.sample_id ?? null,
+		material,
+		date: fmtDateTime(detail?.operation_date),
+		machine: detail?.equipment_id?.equipment_name ?? '',
+		operator: detail?.operator_name ?? '',
+		atmosphere: detail?.sintering_atmosphere ?? '',
+	};
+}
+
+// Rows of the Operation detail tab: what the header does not already show (batch, control, CoSHH, ...),
+// the measured cycle figures and the trace itself. `tag` says where a value comes from, when it is not
+// the operation record.
+export interface DetailRow { label: string; value: string; tag?: string; }
+const IN_HEADER = ['Sample', 'Date', 'Operator', 'Machine', 'Material', 'Atmosphere'];
+
+export function buildDetailRows(detail: any, fastRun: any): DetailRow[] {
+	const rows: DetailRow[] = buildOpMeta(detail)
+		.filter(([k]) => !IN_HEADER.includes(k))
+		.map(([label, value]) => ({ label, value, ...(label === 'CoSHH' ? { tag: 'QA log' } : {}) }));
+	for (const s of buildStats(detail, fastRun, CYCLE_LABELS)) {
+		if (s.source === 'measured') rows.push({ label: s.label, value: `${s.value} ${s.unit}`, tag: 'measured' });
+	}
+	const n = Number(fastRun?.n_rows), dur = Number(fastRun?.duration_s);
+	if (Number.isFinite(n) && n > 0) {
+		const every = n > 1 && Number.isFinite(dur) && dur > 0 ? ` · every ${+(dur / (n - 1)).toPrecision(2)} s` : '';
+		rows.push({ label: 'Trace', value: `${n.toLocaleString('en-GB')} rows${every}` });
+	}
+	const imported = fmtDateTime(fastRun?.updated_at);
+	if (imported && fastRun?.status === 'done') rows.push({ label: 'Imported', value: imported });
+	return rows;
 }

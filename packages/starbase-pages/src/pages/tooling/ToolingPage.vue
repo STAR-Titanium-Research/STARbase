@@ -52,8 +52,8 @@ function onSelect(f: ToolingFocus) {
 
 const pageTitle = computed(() => toolingTitle(focus.value, model.value));
 const studioTo = computed(() => dataStudioRoute(collection.value, props.id));
-const pin = computed(() => pinTargetForRecord(collection.value, props.id));
-// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+const pin = computed(() => (model.value && focus.value ? pinTargetForRecord(collection.value, props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
 providePagePin(pin);
 // The Process map, opened on this record. Only an insert edge can be a map focus (its used-in fan); tool boxes and cutting inserts cannot.
 const mapTo = computed(() => (focusKind.value === 'edge' ? mapPath('insert_edges', props.id) : null));

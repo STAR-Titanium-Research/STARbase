@@ -87,8 +87,8 @@ const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(pro
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('manufacturing_operations', props.id));
-const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.id));
-// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+const pin = computed(() => (op.value ? pinTargetForRecord('manufacturing_operations', props.id) : null));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title"), once the record has loaded.
 providePagePin(pin);
 </script>
 

@@ -31,6 +31,7 @@ import { activeFindings, diagnose, worstSeverity, type Finding } from './metadat
 import { computeSignalStats, resolveStatsWindow, type SignalStats } from './signalStats';
 import { statsCsvColumns } from './statsCsv';
 import { AXIS_MAPS, DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
+import { meanRpm } from './filterResponse';
 import { type FilterChain, bakeBlockedReason, chainActive, chainSummary, defaultChain, fetchFiltered, fetchFilteredFft } from './filterChain';
 import { useForceHost } from './host';
 import { saveChartImage, type ChartSnapshot } from './chartExport';
@@ -68,7 +69,8 @@ const isAdminRole = computed(() => {
 
 const AXES = VIEW_AXES;
 type Axis = ViewAxis;
-const AXIS_COLOR: Record<Axis, string> = { Fx: '#dc2626', Fy: '#16a34a', Fz: '#2563eb' };  // red / green / blue
+// DESIGN.md 5b series slots: blue / orange / teal (the --d1-series tokens, with their light values as fallback)
+const AXIS_COLOR: Record<Axis, string> = { Fx: 'var(--d1-series-1, #2a78d6)', Fy: 'var(--d1-series-2, #eb6834)', Fz: 'var(--d1-series-3, #1baf7a)' };
 
 const loading = ref(true);
 const rows = ref<any[]>([]);
@@ -1834,7 +1836,7 @@ const PEAK_FIELD: Record<string, string> = { Fx: 'peak_fx', Fy: 'peak_fy', Fz: '
 function buildChartsFor(item: RPanel) {
 	const d = detail.value;
 	const sel = (item.channels && item.channels.length ? item.channels : AXES) as readonly Axis[];
-	const secondXLabel = 'radial (mm)';
+	const secondXLabel = 'Radius (mm)';
 	const base = AXES.filter((a) => sel.includes(a)).map((a) => (
 		effectiveMode.value === 'force'
 			? { key: a, title: `${a} · force`, kind: 'env' as const, data: d?.series?.[a], color: AXIS_COLOR[a], xUnit: 's', yUnit: 'N',
@@ -1844,7 +1846,7 @@ function buildChartsFor(item: RPanel) {
 			: { key: a, title: `${a} · spectrum`, kind: 'line' as const, data: d?.fft?.[a], color: AXIS_COLOR[a], xUnit: 'Hz', yUnit: 'N', logY: true }
 	));
 	if (effectiveMode.value === 'force' && item.rpm) {
-		base.push({ key: 'RPM', title: 'RPM', kind: 'env', data: detail.value?.series?.RPM, color: '#a855f7', xUnit: 's', yUnit: 'rpm',
+		base.push({ key: 'RPM', title: 'RPM', kind: 'env', data: detail.value?.series?.RPM, color: 'var(--theme--foreground-subdued, #64748b)', xUnit: 's', yUnit: 'rpm',
 			cropStart: activeCrop.value?.start, cropEnd: activeCrop.value?.end,
 			secondXValues: radialValuesFor(detail.value?.series?.RPM?.t), secondXLabel } as any);
 	}
@@ -2078,6 +2080,15 @@ function axesFor(item: RPanel): Axis[] {
 	return AXES.filter((a) => sel.includes(a));
 }
 // Chain the spectral views reflect: the live-tuned/applied filter when present, else raw.
+// The rotation speed the filter service notches at: the mean of the cache's rpm channel (not the
+// editable plot-model rpm). cacheGet() is not reactive, so this reads cacheEpoch.
+const cacheMeanRpm = computed(() => {
+	void cacheEpoch.value;
+	const c = detail.value?.live_cache_file ? cacheGet(detail.value.live_cache_file) : null;
+	return c ? meanRpm(c.rpm) : null;
+});
+// The FFT chart whose trace is the filtered one (the filter panel's preview, on the active axis).
+const fftFiltered = (c: { kind: string; key: string }) => chartMode.value === 'fft' && filtersOpen.value && c.kind === 'line' && c.key === axis.value;
 const specChain = computed<FilterChain>(() => previewChain() ?? savedChain.value ?? defaultChain());
 function toggleItemAxis(item: RPanel, a: Axis) {
 	// Every mode (Force/FFT/Power/Spectrogram/Waterfall) draws one chart per selected axis,
@@ -2986,12 +2997,13 @@ function fmtDateTime(v: string | null | undefined) {
 							<div v-if="!detail" class="empty">Select an operation to view its signals</div>
 							<div v-else-if="isSpectral" class="charts-col">
 								<SpectrumView v-for="a in axesFor(item)" :key="a" :cache-file-id="detail.live_cache_file"
-									:chain="specChain" :axis="a" :mode="(chartMode as 'psd' | 'spectrogram' | 'waterfall')" :color="AXIS_COLOR[a]" />
+									:chain="specChain" :axis="a" :mode="(chartMode as 'psd' | 'spectrogram' | 'waterfall')" :color="AXIS_COLOR[a]" :rpm="cacheMeanRpm" />
 							</div>
 							<div v-else class="charts-col" :class="{ switching: loadingDetail }" :aria-busy="loadingDetail">
 								<ForceChart v-for="c in chartsFor(item)" v-bind="c" :key="c.key" :hover="hoverSource" @hover="hoverIndex = $event"
 									:crop-editable="c.kind === 'env'" :active="c.key === axis"
-									:overlay="(chartMode === 'fft' && filtersOpen && c.kind === 'line' && c.key === axis) ? filterFftOverlay : null"
+									:overlay="fftFiltered(c) ? filterFftOverlay : null"
+									:filter-chain="fftFiltered(c) && filterFftOverlay ? workChain : null" :rpm="cacheMeanRpm"
 									:view-start="zoomStart" :view-end="zoomEnd" :zoom-tool="rectZoomTool" @zoom="onChartZoom"
 									@update:crop-start="onCropEdit('start', $event)" @update:crop-end="onCropEdit('end', $event)"
 									:mark-x="c.kind === 'env' && chartMode === 'force' ? markTime : null" menu @chartmenu="openChartMenu" />

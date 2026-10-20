@@ -62,6 +62,14 @@ describe('isRailToggleKey', () => {
 		expect(isRailToggleKey({ key: '\\', target: { tagName: 'DIV', isContentEditable: true } })).toBe(false);
 	});
 
+	it('accepts the backslash typed with AltGr, which Windows reports as Ctrl+Alt', () => {
+		const altGr = (key: string) => key === 'AltGraph';
+		expect(isRailToggleKey({ key: '\\', ctrlKey: true, altKey: true, getModifierState: altGr })).toBe(true);
+		expect(isRailToggleKey({ key: '\\', altKey: true, getModifierState: altGr })).toBe(true);
+		expect(isRailToggleKey({ key: '\\', ctrlKey: true, altKey: true, getModifierState: () => false })).toBe(false);
+		expect(isRailToggleKey({ key: '\\', metaKey: true, getModifierState: altGr })).toBe(false);
+	});
+
 	it('leaves modified keys and handled events to others', () => {
 		expect(isRailToggleKey({ key: '\\', ctrlKey: true })).toBe(false);
 		expect(isRailToggleKey({ key: '\\', metaKey: true })).toBe(false);
@@ -102,8 +110,12 @@ describe('ViewRail', () => {
 		expect(html).not.toContain('panel choices');
 	});
 
-	it('marks a changed view with a dot on the tab, and an unchanged one without', async () => {
-		expect(await render({ modified: true })).toContain('class="dot"');
-		expect(await render({ modified: false })).not.toContain('class="dot"');
+	it('marks a changed view with a dot on the tab, named in the button\'s label, and an unchanged one without', async () => {
+		const changed = await render({ modified: true });
+		expect(changed).toContain('class="dot"');
+		expect(changed).toContain('(changed)"');
+		const same = await render({ modified: false });
+		expect(same).not.toContain('class="dot"');
+		expect(same).not.toContain('(changed)');
 	});
 });

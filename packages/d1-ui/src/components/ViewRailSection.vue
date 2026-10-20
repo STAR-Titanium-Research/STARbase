@@ -6,10 +6,10 @@ defineProps<{ label?: string }>();
 </script>
 
 <template>
-	<section class="d1-view-section" :aria-label="label">
+	<div class="d1-view-section">
 		<div v-if="label" class="label">{{ label }}</div>
 		<slot />
-	</section>
+	</div>
 </template>
 
 <style scoped>

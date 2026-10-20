@@ -42,8 +42,20 @@ export async function fetchActivityRows(
 		return { rows, capped: rows.length >= ACTIVITY_ROW_CAP };
 	};
 	const [ops, tests] = await Promise.all([read('manufacturing_operations', 'operation_date'), read('test_sessions', 'session_date')]);
+	// A capped series is known only back to its oldest row (it reads newest first). For "All" the chart starts at
+	// the later of the capped series' oldest dates, so no week before that shows a false zero for either series.
+	let from = 0;
+	if (span === 'all') {
+		for (const [series, dateField] of [[ops, 'operation_date'], [tests, 'session_date']] as const) {
+			if (!series.capped) continue;
+			const oldest = Math.min(...series.rows.map((r) => new Date(r[dateField]).getTime()).filter((t) => !Number.isNaN(t)));
+			if (Number.isFinite(oldest)) from = Math.max(from, oldest);
+		}
+	}
 	const flat = (rows: any[], dateField: string) =>
-		rows.map((r) => ({ project_id: effectiveProjectId(r) as string, [dateField]: r[dateField] }));
+		rows
+			.filter((r) => !from || !(new Date(r[dateField]).getTime() < from))
+			.map((r) => ({ project_id: effectiveProjectId(r) as string, [dateField]: r[dateField] }));
 	return {
 		ops: flat(ops.rows, 'operation_date') as ActivityRows['ops'],
 		tests: flat(tests.rows, 'session_date') as ActivityRows['tests'],

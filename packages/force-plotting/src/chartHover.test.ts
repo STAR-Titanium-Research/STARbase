@@ -33,7 +33,7 @@ describe('hoverPoint', () => {
 	});
 	it('reads a spectrum from amp, defaulting the x unit to Hz', () => {
 		const line = { amp: [0, 1.2345, 2, 3, 4, 5] };
-		expect(hoverPoint(geom, 1, 'line', line, 'N', undefined)).toEqual({ px: 30, py: 87.655, label: '1.23', sub: '1.00 Hz' });
+		expect(hoverPoint(geom, 1, 'line', line, 'N', undefined)).toEqual({ px: 30, py: 87.655, label: '1.23 N', sub: '1.00 Hz' });
 		expect(hoverPoint(geom, 1, 'line', line, 'N', 'Hz')?.sub).toBe('1.00 Hz');
 	});
 });
