@@ -25,14 +25,15 @@ export interface ActivityRows {
 export async function fetchActivityRows(
 	getItems: GetItems,
 	projectId?: string,
-	weeks: number = DEFAULT_WEEKS,
+	weeks: number | null = DEFAULT_WEEKS,
 	now: Date = new Date(),
 ): Promise<ActivityRows> {
-	const since = windowStart(weeks, now);
+	// `weeks = null` reads the whole history (the Project page's timeline, range "All"): every dated row, newest first, up to the cap.
+	const lower = weeks === null ? { _nnull: true } : { _gte: windowStart(weeks, now) };
 	const scope = projectId ? projectScopeFilter(projectId) : anyProjectFilter();
 	const read = async (collection: string, dateField: string) => {
 		const rows = await getItems(collection, {
-			filter: { _and: [scope, { [dateField]: { _gte: since } }] },
+			filter: { _and: [scope, { [dateField]: lower }] },
 			fields: [...effectiveProjectIdFields, dateField],
 			sort: [`-${dateField}`],
 			limit: ACTIVITY_ROW_CAP,

@@ -1,8 +1,8 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
-	DEFAULT_WEEKS, LIST_CAP, countsByKey, errorText, fetchActivityRows, isNotVisible, loadCampaignStats,
-	projectScopeFilter, sampleProjectScopeFilter, useItems, useRequestGate, useSections, weeklyActivity,
-	type CampaignProgress, type SectionState, type WeeklyActivity,
+	LIST_CAP, countsByKey, errorText, fetchActivityRows, isNotVisible, loadAccess, loadCampaignStats, plannedFromCounts,
+	projectScopeFilter, sampleProjectScopeFilter, useExplorerHost, useItems, useRequestGate, useSections,
+	type AccessList, type CampaignProgress, type PlannedInput, type SectionState,
 } from '@d1/ui';
 
 // Everything the Project page reads, as the signed-in user (so Directus permissions apply). Reads
@@ -17,16 +17,36 @@ const PROJECT_FIELDS = [
 	'principal_investigator_person.user_id',
 ];
 
+// null: the role cannot read that collection (shown as a dash, never a wrong 0). Samples, operations and tests are the
+// done ones (a sample that is not planned); `*Planned` are the planned ones.
 export interface ProjectCounts {
 	samples: number | null;
 	operations: number | null;
 	tests: number | null;
 	campaigns: number | null;
+	samplesPlanned: number | null;
+	operationsPlanned: number | null;
+	testsPlanned: number | null;
+	/** Campaigns by status ("1 active · 1 planned"); empty when that read failed. */
+	campaignStatuses: Record<string, number>;
 }
 
+const NO_COUNTS: ProjectCounts = {
+	samples: null, operations: null, tests: null, campaigns: null,
+	samplesPlanned: null, operationsPlanned: null, testsPlanned: null, campaignStatuses: {},
+};
+
+/** Dates of the done operations and tests over the project's whole history (the timeline picks its range from them). */
 export interface Activity {
-	data: WeeklyActivity | null;
+	ops: string[];
+	tests: string[];
+	/** The read hit its row cap: the oldest records are missing. */
 	truncated: boolean;
+}
+
+export interface PlannedWork {
+	ops: PlannedInput[];
+	tests: PlannedInput[];
 }
 
 export interface EquipmentUse {
@@ -37,6 +57,7 @@ export interface EquipmentUse {
 
 export function useProjectData(id: Ref<string>) {
 	const { getItems, getItem } = useItems();
+	const host = useExplorerHost();
 	const gate = useRequestGate();
 	const { section: block, fill } = useSections(gate);
 
@@ -45,16 +66,20 @@ export function useProjectData(id: Ref<string>) {
 	const notVisible = ref(false);
 	const error = ref('');
 
-	const investigators = block<string[]>([]);
-	const counts = block<ProjectCounts>({ samples: null, operations: null, tests: null, campaigns: null });
+	const counts = block<ProjectCounts>({ ...NO_COUNTS });
 	const campaigns = block<(any & { stats: CampaignProgress | null })[]>([]);
 	const looseSamples = block<any[]>([]);
 	const looseOperations = block<any[]>([]);
 	const looseTests = block<any[]>([]);
-	const activity = block<Activity>({ data: null, truncated: false });
+	const activity = block<Activity>({ ops: [], tests: [], truncated: false });
+	const planned = block<PlannedWork>({ ops: [], tests: [] });
 	const equipment = block<EquipmentUse[]>([]);
+	// "Who has access": its own fail-soft section. A failed read leaves `data` null and the hero shows the PI alone.
+	const access = block<AccessList | null>(null);
 
-	const all = [investigators, counts, campaigns, looseSamples, looseOperations, looseTests, activity, equipment] as Ref<SectionState<any>>[];
+	const all = [counts, campaigns, looseSamples, looseOperations, looseTests, activity, planned, equipment, access] as Ref<SectionState<any>>[];
+	const initial = (b: Ref<SectionState<any>>) =>
+		b === activity ? { ops: [], tests: [], truncated: false } : b === planned ? { ops: [], tests: [] } : b === counts ? { ...NO_COUNTS } : b === access ? null : [];
 
 	const count = async (collection: string, filter: Record<string, unknown>): Promise<number | null> => {
 		try {
@@ -82,6 +107,38 @@ export function useProjectData(id: Ref<string>) {
 		// read fails on its own: the cards then show no stats rather than no campaigns.
 		const stats = await loadCampaignStats(getItems, rows, inProject);
 		return rows.map((c: any) => ({ ...c, stats: stats?.get(c.campaign_id) ?? null }));
+	}
+
+	// "Who has access" has a gate of its own: reading it again after the dialog changed it must not cancel the page's other reads.
+	const accessGate = useRequestGate();
+	const { fill: fillAccess } = useSections(accessGate);
+	function loadAccessList(projectId: string) {
+		return fillAccess(access, accessGate.begin(), 'who has access', async () => {
+			const res = await loadAccess(host.api, 'projects', projectId);
+			if (!res.ok) throw new Error(res.message);
+			return res.data;
+		});
+	}
+
+	// How many campaigns each status has, for the totals line (the campaign list itself is capped).
+	async function campaignStatuses(filter: Record<string, unknown>): Promise<Record<string, number>> {
+		try {
+			const groups = await getItems('campaigns', { aggregate: { count: '*' }, groupBy: ['status'], filter, limit: -1 });
+			return Object.fromEntries(countsByKey(groups, 'status'));
+		} catch {
+			return {};
+		}
+	}
+
+	// Planned operations or tests per planned_date (a DATE column, so it can be grouped as it is). The timeline marks each day.
+	async function loadPlannedDates(collection: string, projectId: string): Promise<PlannedInput[]> {
+		const groups = await getItems(collection, {
+			aggregate: { count: '*' },
+			groupBy: ['planned_date'],
+			filter: { _and: [projectScopeFilter(projectId), { work_state: { _eq: 'planned' } }, { planned_date: { _nnull: true } }] },
+			limit: -1,
+		});
+		return plannedFromCounts(countsByKey(groups, 'planned_date'));
 	}
 
 	async function loadEquipment(projectId: string): Promise<EquipmentUse[]> {
@@ -112,7 +169,7 @@ export function useProjectData(id: Ref<string>) {
 		// Reloading the same project (after an edit) keeps what is on screen; another project starts clean.
 		if (project.value?.project_id !== projectId) {
 			project.value = null;
-			for (const b of all) b.value = { data: b === activity ? { data: null, truncated: false } : b === counts ? { samples: null, operations: null, tests: null, campaigns: null } : [], loading: false, error: '' };
+			for (const b of all) b.value = { data: initial(b), loading: false, error: '' };
 		}
 		if (!projectId) return;
 
@@ -132,27 +189,25 @@ export function useProjectData(id: Ref<string>) {
 
 		const byProject = { project_id: { _eq: projectId } };
 		await Promise.all([
-			fill(investigators, token, 'the investigators', async () => {
-				const rows = await getItems('project_investigators', {
-					filter: byProject,
-					fields: ['user_id.id', 'user_id.first_name', 'user_id.last_name'],
-					limit: -1,
-				});
-				return rows
-					.map((r: any) => [r.user_id?.first_name, r.user_id?.last_name].filter(Boolean).join(' '))
-					.filter(Boolean)
-					.sort((a: string, b: string) => a.localeCompare(b));
-			}),
 			fill(counts, token, 'the totals', async () => {
 				// "Belongs to the project" is one rule (projectScope.ts): own project_id, else the
 				// campaign's. Samples also count when they are in one of the project's campaigns.
-				const [samples, operations, tests, campaignCount] = await Promise.all([
-					count('physical_samples', sampleProjectScopeFilter(projectId)),
-					count('manufacturing_operations', projectScopeFilter(projectId)),
-					count('test_sessions', projectScopeFilter(projectId)),
+				// Operations and tests are counted by `work_state`; a sample is planned by `current_status`
+				// (migration 189), and the done figure leaves those out so "n planned" is not inside it.
+				const scope = projectScopeFilter(projectId);
+				const sampleScope = sampleProjectScopeFilter(projectId);
+				const state = (s: Record<string, unknown>, work: 'done' | 'planned') => ({ _and: [s, { work_state: { _eq: work } }] });
+				const [samples, operations, tests, campaignCount, samplesPlanned, operationsPlanned, testsPlanned, statuses] = await Promise.all([
+					count('physical_samples', { _and: [sampleScope, { current_status: { _neq: 'planned' } }] }),
+					count('manufacturing_operations', state(scope, 'done')),
+					count('test_sessions', state(scope, 'done')),
 					count('campaigns', byProject),
+					count('physical_samples', { _and: [sampleScope, { current_status: { _eq: 'planned' } }] }),
+					count('manufacturing_operations', state(scope, 'planned')),
+					count('test_sessions', state(scope, 'planned')),
+					campaignStatuses(byProject),
 				]);
-				return { samples, operations, tests, campaigns: campaignCount };
+				return { samples, operations, tests, campaigns: campaignCount, samplesPlanned, operationsPlanned, testsPlanned, campaignStatuses: statuses };
 			}),
 			fill(campaigns, token, 'campaigns', () => loadCampaigns(token, projectId)),
 			fill(looseSamples, token, 'samples outside campaigns', () =>
@@ -182,22 +237,34 @@ export function useProjectData(id: Ref<string>) {
 				}),
 			),
 			fill(activity, token, 'activity', async () => {
-				const rows = await fetchActivityRows(getItems, projectId);
-				return {
-					data: weeklyActivity(rows.ops.map((r) => r.operation_date), rows.tests.map((r) => r.session_date), DEFAULT_WEEKS),
-					truncated: rows.truncated,
-				};
+				// The whole history, not 26 weeks: the timeline picks its range (30 d, 6 mo, All) from these dates.
+				const rows = await fetchActivityRows(getItems, projectId, null);
+				return { ops: rows.ops.map((r) => r.operation_date), tests: rows.tests.map((r) => r.session_date), truncated: rows.truncated };
+			}),
+			fill(planned, token, 'planned work', async () => {
+				const [ops, tests] = await Promise.all([loadPlannedDates('manufacturing_operations', projectId), loadPlannedDates('test_sessions', projectId)]);
+				return { ops, tests };
 			}),
 			fill(equipment, token, 'equipment', () => loadEquipment(projectId)),
+			loadAccessList(projectId),
 		]);
 	}
 
+	async function reloadAccess() {
+		if (id.value) await loadAccessList(id.value);
+	}
+
 	watch(id, load, { immediate: true });
-	onBeforeUnmount(() => gate.cancel());
+	onBeforeUnmount(() => {
+		gate.cancel();
+		accessGate.cancel();
+	});
 
 	return {
 		project, loading, notVisible, error,
-		investigators, counts, campaigns, looseSamples, looseOperations, looseTests, activity, equipment,
+		counts, campaigns, looseSamples, looseOperations, looseTests, activity, planned, equipment, access,
 		reload: load,
+		/** Reads "Who has access" again, after the dialog changed it (nothing else on the page depends on it). */
+		reloadAccess,
 	};
 }
