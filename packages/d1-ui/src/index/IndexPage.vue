@@ -75,7 +75,7 @@ const router: RouterLike & { resolve(to: string): { href: string } } = memory
 	: (useRouter() as unknown as RouterLike & { resolve(to: string): { href: string } });
 
 // ---- how the list is shown (the View rail); a new page size or grouping reloads the page (useIndexPage) ----
-const { prefs, viewDef, grid, gridWidth } = useViewPrefs(props.def);
+const { prefs, key: prefsKey, viewDef, grid, gridWidth } = useViewPrefs(props.def, props.pick);
 
 const {
 	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote, state, sort, groups, activeGroup, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
@@ -224,7 +224,7 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 				v-if="gridWidth !== null"
 				class="rail"
 				:def="def"
-				:storage-key="`${listPrefsKey(def.slug)}.open`"
+				:storage-key="`${listPrefsKey(prefsKey)}.open`"
 				:default-open="railOpensByDefault(gridWidth)"
 				:prefs="prefs"
 				:sort="sort"

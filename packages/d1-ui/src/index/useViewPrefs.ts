@@ -8,9 +8,12 @@ import type { IndexDef } from './indexConfig';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { ListPrefs } from './listPrefs';
 
-export function useViewPrefs(def: IndexDef) {
-	const prefs = reactive<ListPrefs>(readListPrefs(def.slug, def));
-	watch(prefs, () => writeListPrefs(def.slug, prefs));
+// A picker (the sample picker over the process map) keeps its own settings and its own open/closed, under `<slug>.pick`,
+// so choosing columns there does not change the list page. `key` is what they are stored under (listPrefsKey).
+export function useViewPrefs(def: IndexDef, pick = false) {
+	const key = pick ? `${def.slug}.pick` : def.slug;
+	const prefs = reactive<ListPrefs>(readListPrefs(key, def));
+	watch(prefs, () => writeListPrefs(key, prefs));
 	// The table and the cards show the columns the person chose; what can be sorted by stays the def's own.
 	const viewDef = computed<IndexDef>(() => ({ ...def, columns: shownColumns(def, prefs.columns) }));
 
@@ -18,5 +21,5 @@ export function useViewPrefs(def: IndexDef) {
 	const grid = ref<HTMLElement | null>(null);
 	const gridWidth = ref<number | null>(null);
 	watch(grid, (el) => { if (el && gridWidth.value === null) gridWidth.value = el.clientWidth || window.innerWidth; }, { flush: 'post' });
-	return { prefs, viewDef, grid, gridWidth };
+	return { prefs, key, viewDef, grid, gridWidth };
 }

@@ -29,7 +29,7 @@ const settle = async () => {
 	await nextTick();
 };
 
-async function mount(width = 1600, path = '/home/samples') {
+async function mount(width = 1600, path = '/home/samples', props: Record<string, unknown> = {}) {
 	window.innerWidth = width;
 	itemCalls = [];
 	const get = vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
@@ -47,7 +47,7 @@ async function mount(width = 1600, path = '/home/samples') {
 	router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }, { path: '/:rest(.*)*', component: { render: () => null } }] });
 	await router.push(path);
 	await router.isReady();
-	const Page = defineComponent({ setup: () => () => h(IndexPage, { def: indexDefBySlug('samples')! }) });
+	const Page = defineComponent({ setup: () => () => h(IndexPage, { def: indexDefBySlug('samples')!, ...props }) });
 	app = createApp(Page);
 	app.component('v-icon', defineComponent({ props: { name: String }, setup: (p) => () => h('i', p.name) }));
 	app.component('router-link', defineComponent({ props: { to: [String, Object] }, setup: (p, { slots }) => () => h('a', { href: String(p.to) }, slots.default?.()) }));
@@ -108,6 +108,24 @@ describe('the View rail beside the table', () => {
 		localStorage.setItem('d1.list.samples.open', '0');
 		await mount(1600);
 		expect($('.tab')).toBeTruthy();
+	});
+});
+
+describe('a picker over another page', () => {
+	it('keeps its own settings and its own open/closed, and leaves the list page\'s alone', async () => {
+		localStorage.setItem('d1.list.samples', JSON.stringify({ view: 'cards', pageSize: 25 }));
+		localStorage.setItem('d1.list.samples.open', '1');
+		await mount(1600, '/home/samples', { pick: true });
+		// Not the list page's choices: a table of 50, the rail by the width.
+		expect($('table.d1-table')).toBeTruthy();
+		expect(itemCalls.at(-1)).toMatchObject({ limit: 50 });
+		await click($$('[aria-label="Layout"] button')[2]);
+		await click($$('[aria-label="Rows per page"] button')[2]);
+		await click($('.collapse'));
+		expect(JSON.parse(localStorage.getItem('d1.list.samples.pick')!)).toMatchObject({ view: 'list', pageSize: 100 });
+		expect(localStorage.getItem('d1.list.samples.pick.open')).toBe('0');
+		expect(JSON.parse(localStorage.getItem('d1.list.samples')!)).toMatchObject({ view: 'cards', pageSize: 25 });
+		expect(localStorage.getItem('d1.list.samples.open')).toBe('1');
 	});
 });
 
