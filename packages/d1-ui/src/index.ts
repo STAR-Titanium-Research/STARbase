@@ -111,8 +111,7 @@ export {
 	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
-export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
-export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
+export { dateRangeText } from './record/projectFacts';
 export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';

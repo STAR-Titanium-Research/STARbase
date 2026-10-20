@@ -1,6 +1,5 @@
 // What the Campaign page shows in its rail and "On this page" list, built from the records the page
-// already loads. Pure and tested here (the extension has no test runner); projectFacts.ts is the
-// Project page's twin.
+// already loads. Pure and tested here (the extension has no test runner); operationFacts.ts is its twin.
 //
 // Operations and tests link to their Explorer index filtered by this campaign (`f.campaign_id`): the
 // page reads exactly those rows (`campaign_id = this campaign`, as the signed-in user), so the number
