@@ -6,7 +6,8 @@ describe('what Measure needs', () => {
 		expect(measureScale({ pixel_size_nm: 971.354, image_width_px: 2048 })).toEqual({ pixelSizeNm: 971.354, originalWidthPx: 2048 });
 		expect(measureScale({ pixel_size_nm: 971.354 })).toBeNull();
 		expect(measureScale({ image_width_px: 2048 })).toBeNull();
-		expect(measureScale({ pixel_size_nm: 100, hfw_um: 50 })).toBeNull(); // the field width is not enough
+		expect(measureScale({ pixel_size_nm: 100, hfw_um: 51.2 })).toEqual({ pixelSizeNm: 100, originalWidthPx: 512 }); // the width follows from the field width and the pixel size
+		expect(measureScale({ hfw_um: 50 })).toBeNull(); // no pixel size: no scale
 		expect(measureScale({ pixel_size_nm: 0, image_width_px: 2048 })).toBeNull();
 		expect(measureScale({ pixel_size_nm: '100', image_width_px: 2048 })).toBeNull();
 		expect(measureScale({})).toBeNull();

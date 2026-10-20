@@ -8,7 +8,7 @@ describe('common scale', () => {
 	it('needs the pixel size and the width of both files', () => {
 		expect(fieldUm(A)).toBe(100);
 		expect(fieldUm({ pixel_size_nm: 100 })).toBeNull();
-		expect(fieldUm({ pixel_size_nm: 100, hfw_um: 50 })).toBeNull();
+		expect(fieldUm({ pixel_size_nm: 100, hfw_um: 50 })).toBe(50); // the field width itself, when the file gave no width
 		expect(canCommonScale(A, B)).toBe(true);
 		expect(canCommonScale(A, {})).toBe(false);
 		expect(canCommonScale(null, B)).toBe(false);

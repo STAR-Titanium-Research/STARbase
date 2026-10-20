@@ -8,10 +8,10 @@ describe('the sheet scale bar', () => {
 		expect(widthUm({ pixel_size_nm: 100, image_width_px: 1000 })).toBe(100);
 	});
 
-	it('does not fall back to the field width: it needs what Measure needs', () => {
-		expect(widthUm({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBeNull();
-		expect(sheetScaleBar({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBeNull();
-		expect(widthUm({ pixel_size_nm: 29.14 })).toBeNull();
+	it('derives the width from the field width and the pixel size when the file stored no width', () => {
+		expect(widthUm({ pixel_size_nm: 29.14, hfw_um: 59.7 })).toBeCloseTo(59.7, 6);
+		expect(sheetScaleBar({ pixel_size_nm: 29.14, hfw_um: 59.7 })).not.toBeNull();
+		expect(widthUm({ pixel_size_nm: 29.14 })).toBeNull(); // no field width and no width: no scale
 	});
 
 	it('draws a round length near a fifth of the picture', () => {

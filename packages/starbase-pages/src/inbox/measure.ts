@@ -32,8 +32,13 @@ export const finitePositive = (v: unknown): v is number => typeof v === 'number'
 /** Measure needs BOTH the pixel size and the original's width (no fallback to the field width or to the preview's width): else null. */
 export function measureScale(extracted: Record<string, unknown> | null | undefined): MeasureScale | null {
 	const px = extracted?.pixel_size_nm;
+	if (!finitePositive(px)) return null;
 	const w = extracted?.image_width_px;
-	return finitePositive(px) && finitePositive(w) ? { pixelSizeNm: px, originalWidthPx: w } : null;
+	if (finitePositive(w)) return { pixelSizeNm: px, originalWidthPx: w };
+	// A file whose metadata gave the field width and the pixel size (a FEI TIFF read before the width was stored) has its width in them:
+	// field width / pixel size (198.933 µm / 194.271 nm = 1024 px). Both must come from the file; nothing is taken from the preview.
+	const hfw = extracted?.hfw_um;
+	return finitePositive(hfw) ? { pixelSizeNm: px, originalWidthPx: (hfw * 1000) / px } : null;
 }
 
 /** The picture's full width in µm (pixel size x original width): the one rule the scale bar, Measure and Common scale all share. */
