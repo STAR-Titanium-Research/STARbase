@@ -100,7 +100,7 @@ describe('opening the dialog', () => {
 		const t = setup(async () => preview([['a', 'noop'], ['b', 'skip', 'You are not the owner']]));
 		t.bulk.open(entry('restrict'));
 		await flush();
-		expect(t.bulk.summary.value).toBe('None can be changed. 1 need no change. 1 will be skipped');
+		expect(t.bulk.summary.value).toBe('None can be changed. 1 needs no change. 1 will be skipped');
 		expect(t.bulk.ready.value).toBe(false);
 		t.stop();
 	});

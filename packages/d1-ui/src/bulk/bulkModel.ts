@@ -132,10 +132,16 @@ export function previewCounts(rows: readonly PreviewRow[]): PreviewCounts {
 /** "38 can be changed. 12 will be skipped" (a run of "no change" rows is said too). */
 export function previewSummary(counts: PreviewCounts): string {
 	const parts = [counts.ok > 0 ? `${counts.ok} can be changed` : 'None can be changed'];
-	if (counts.noop > 0) parts.push(`${counts.noop} need no change`);
+	if (counts.noop > 0) parts.push(`${counts.noop} ${counts.noop === 1 ? 'needs' : 'need'} no change`);
 	if (counts.skip > 0) parts.push(`${counts.skip} will be skipped`);
 	return parts.join('. ');
 }
+
+/** The line that folds the skipped rows in the dialog: "Why are 12 skipped?" */
+export const skippedQuestion = (n: number): string => (n === 1 ? 'Why is 1 skipped?' : `Why are ${n} skipped?`);
+
+/** The line that folds the rows an undo left alone in the toast: "1 left as it is", "3 left as they are". */
+export const leftAsTheyAre = (n: number): string => `${n} left as ${n === 1 ? 'it is' : 'they are'}`;
 
 /** The Apply button: "Apply to 38". Disabled at 0 (see canApply). */
 export const applyLabel = (ok: number): string => `Apply to ${ok}`;
@@ -298,7 +304,7 @@ export const notRevertedIds = (results: readonly RevertRow[]): string[] => resul
 /** What the toast's status region says, only when something changes: the result, then "Done" or "Undone". The ticking number is not part of it. */
 export function toastAnnouncement(t: ToastModel): string {
 	if (t.phase === 'done') return 'Done';
-	if (t.phase === 'undone') return t.undoSkipped.length ? `Undone. ${t.undoSkipped.length} left as they are` : 'Undone';
+	if (t.phase === 'undone') return t.undoSkipped.length ? `Undone. ${leftAsTheyAre(t.undoSkipped.length)}` : 'Undone';
 	return t.skipped.length ? `${t.message}. ${t.skipped.length} skipped` : t.message;
 }
 

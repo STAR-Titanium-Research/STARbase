@@ -10,7 +10,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import '../components/tokens.css';
 import type { IndexDef } from '../index/indexConfig';
 import BulkSkips from './BulkSkips.vue';
-import { applyLabel, canClear, dialogTitle, enumChoices, previewSkips } from './bulkModel';
+import { applyLabel, canClear, dialogTitle, enumChoices, previewSkips, skippedQuestion } from './bulkModel';
 import type { BulkState } from './useBulkActions';
 
 const props = defineProps<{
@@ -129,7 +129,7 @@ function onKeydown(e: KeyboardEvent): void {
 						</template>
 						<p v-else-if="field && !bulk.preview.error" class="hint">Choose a value to see what would change.</p>
 					</div>
-					<BulkSkips :summary="`Why are ${skips.length} skipped?`" :rows="skips" />
+					<BulkSkips :summary="skippedQuestion(skips.length)" :rows="skips" />
 					<p v-if="bulk.preview.error" class="err" role="alert">The check failed: {{ bulk.preview.error }} Nothing has been changed. Close this and try again.</p>
 					<p v-if="bulk.applyError" class="err" role="alert">The change failed: {{ bulk.applyError }} Check the list before you try again.</p>
 				</div>

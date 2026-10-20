@@ -63,7 +63,7 @@ describe('UndoToast', () => {
 		const t = undoDone(toast(), [{ id: 'x', revert_outcome: 'changed_since' }], new Map([['x', 'S-9']]));
 		const html = await render(t);
 		expect(text(html)).toContain('Undone');
-		expect(text(html)).toContain('1 left as they are');
+		expect(text(html)).toContain('1 left as it is');
 		expect(text(html)).toContain('S-9');
 		expect(text(html)).toContain('Changed since, so it was left as it is');
 	});
@@ -103,7 +103,7 @@ describe('BulkDialog', () => {
 		expect(text(html)).toContain('Archived');
 		expect(text(html)).toContain('1 can be changed. 1 will be skipped');
 		expect(text(html)).toContain('They may lose access.');
-		expect(text(html)).toContain('Why are 1 skipped?');
+		expect(text(html)).toContain('Why is 1 skipped?');
 		expect(html).toMatch(/<button[^>]*class="btn primary"[^>]*>Apply to 1<\/button>/);
 		expect(html).not.toMatch(/<button[^>]*class="btn primary"[^>]*disabled/);
 	});

@@ -3,8 +3,8 @@ import { indexDefBySlug } from '../index/indexConfig';
 import type { ApplyRow, PreviewRow, RevertRow } from './bulkModel';
 import {
 	BULK_UNDO_SECONDS, applyLabel, applySkips, beginUndo, bulkEntries, canApply, canClear, deadlineFor, dialogTitle, dismissDelay, enumChoices, groupSkips,
-	menuLabel, notRevertedIds, paramsFor, previewCounts, previewSkips, previewSummary, previewWarnings, recordsText, resultText, ringFraction, secondsLeft,
-	skipReasonText, startToast, tickToast, toastAnnouncement, undoDone, undoFailed, valueText,
+	leftAsTheyAre, menuLabel, notRevertedIds, paramsFor, previewCounts, previewSkips, previewSummary, previewWarnings, recordsText, resultText, ringFraction, secondsLeft,
+	skippedQuestion, skipReasonText, startToast, tickToast, toastAnnouncement, undoDone, undoFailed, valueText,
 } from './bulkModel';
 
 const samples = indexDefBySlug('samples')!;
@@ -82,9 +82,16 @@ describe('the dry run', () => {
 	it('counts and says it', () => {
 		const c = previewCounts(rows);
 		expect(c).toEqual({ ok: 3, noop: 1, skip: 3 });
-		expect(previewSummary(c)).toBe('3 can be changed. 1 need no change. 3 will be skipped');
+		expect(previewSummary(c)).toBe('3 can be changed. 1 needs no change. 3 will be skipped');
 		expect(previewSummary({ ok: 38, noop: 0, skip: 12 })).toBe('38 can be changed. 12 will be skipped');
 		expect(previewSummary({ ok: 0, noop: 0, skip: 4 })).toBe('None can be changed. 4 will be skipped');
+	});
+	it('is right about one: needs, is, it', () => {
+		expect(previewSummary({ ok: 1, noop: 1, skip: 1 })).toBe('1 can be changed. 1 needs no change. 1 will be skipped');
+		expect(skippedQuestion(1)).toBe('Why is 1 skipped?');
+		expect(skippedQuestion(12)).toBe('Why are 12 skipped?');
+		expect(leftAsTheyAre(1)).toBe('1 left as it is');
+		expect(leftAsTheyAre(3)).toBe('3 left as they are');
 	});
 	it('applies only when something would change', () => {
 		expect(canApply({ ok: 0, noop: 2, skip: 1 })).toBe(false);
@@ -205,6 +212,7 @@ describe('the toast state machine', () => {
 		]);
 		expect(notRevertedIds(results)).toEqual(['2', '3']);
 		expect(toastAnnouncement(t)).toBe('Undone. 2 left as they are');
+		expect(toastAnnouncement(undoDone(fresh(), [{ id: 'x', revert_outcome: 'failed' }], new Map()))).toBe('Undone. 1 left as it is');
 	});
 	it('keeps the toast and says why when an undo fails', () => {
 		const t = undoFailed(beginUndo(fresh()), 'The undo window has closed', t0 + 5000);

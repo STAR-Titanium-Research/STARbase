@@ -3,12 +3,12 @@
 // then "Done", or "Undone" if Undo was pressed. Rows the action skipped (or an undo left alone) are folded under "12 skipped".
 // Look: CreateToast's card. Layer: the toast band of DESIGN.md (1000), set by BulkToasts.
 //
-// Screen readers: the status region stays mounted and is filled one tick after the toast appears (a live region that arrives with its
-// text is often not announced); it says the result, then "Done" or "Undone", never the ticking seconds. The ring and the seconds are
+// Screen readers: the status region is mounted empty and filled a moment later (a live region that arrives with its text is often not
+// announced); it says the result, then "Done" or "Undone", never the ticking seconds. The ring and the seconds are
 // aria-hidden. Under prefers-reduced-motion the ring is drawn full and still, and the seconds left are shown as a number instead.
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import BulkSkips from './BulkSkips.vue';
-import { ringFraction, toastAnnouncement } from './bulkModel';
+import { leftAsTheyAre, ringFraction, toastAnnouncement } from './bulkModel';
 import type { ToastModel } from './bulkModel';
 
 const props = defineProps<{ toast: ToastModel }>();
@@ -20,12 +20,15 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const offset = computed(() => CIRCUMFERENCE * (1 - ringFraction(props.toast.left - 1)));
 
 const said = ref('');
-onMounted(() => void nextTick(() => (said.value = toastAnnouncement(props.toast))));
+// A moment after mounting, not on the next tick: screen readers pick up a region that changes after they have seen it empty.
+let fill: ReturnType<typeof setTimeout> | null = null;
+onMounted(() => (fill = setTimeout(() => (said.value = toastAnnouncement(props.toast)), 150)));
+onBeforeUnmount(() => fill && clearTimeout(fill));
 watch(() => toastAnnouncement(props.toast), (text) => (said.value = text));
 
 const headline = computed(() => (props.toast.phase === 'done' ? 'Done' : props.toast.phase === 'undone' ? 'Undone' : props.toast.message));
 const rows = computed(() => (props.toast.phase === 'undone' ? props.toast.undoSkipped : props.toast.skipped));
-const skipSummary = computed(() => (props.toast.phase === 'undone' ? `${rows.value.length} left as they are` : `${rows.value.length} skipped`));
+const skipSummary = computed(() => (props.toast.phase === 'undone' ? leftAsTheyAre(rows.value.length) : `${rows.value.length} skipped`));
 </script>
 
 <template>

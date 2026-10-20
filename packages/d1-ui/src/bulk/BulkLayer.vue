@@ -18,7 +18,7 @@ defineProps<{
 <template>
 	<BulkDialog :bulk="bulk" :def="def" :restore-focus="restoreFocus" />
 	<Teleport to="body">
-		<!-- Always mounted, so the status region inside each toast is already in the page when its toast appears. -->
+		<!-- Always mounted, so the stack itself is in the page before the first toast (each toast fills its own status region a moment after it appears). -->
 		<div class="d1-kit bulk-toasts">
 			<UndoToast v-for="t in bulk.toasts" :key="t.actionId" :toast="t" @undo="bulk.undo(t.actionId)" @dismiss="bulk.dismiss(t.actionId)" />
 		</div>
