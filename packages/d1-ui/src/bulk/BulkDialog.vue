@@ -1,13 +1,9 @@
 <script setup lang="ts">
-// The dialog of one bulk action (spec section 1), opened from the "With N selected" menu. Step 1: choose the target: an Edit entry asks
-// for the new value (BulkFieldTarget), Assign to team for a team (BulkTeamTarget), Change owner for a person, Share and Remove access for
-// a person or a team, and Share also for the access level (BulkPersonTarget); Restrict and Unrestrict need none. Step 2 happens by itself:
-// the dry run asks the server what each ticked row would do, and the dialog says "38 can be changed. 12 will be skipped" with the skipped
-// rows folded under their reasons, and the rows that carry a warning counted and listed before Apply. Step 3: Apply to 38 (disabled at 0).
-// State and requests live in useBulkActions; this draws them.
-//
-// Same conventions as AccessDialog: a backdrop (a click on it closes), Escape closes, Tab cycles inside, focus goes to the first
-// control on opening and is handed back (`restoreFocus`: the menu button) when it closes, however it closes. Errors are role="alert".
+// The dialog of one bulk action (spec section 1), opened from the "With N selected" menu. Step 1: the target (a value, a team, a person and
+// an access level, by kind; Restrict and Unrestrict need none). Step 2 runs by itself: the dry run says "38 can be changed. 12 will be skipped",
+// folds the skipped rows under their reasons, and counts and lists the rows that carry a warning before Apply. Step 3: Apply to 38 (off at 0).
+// State and requests live in useBulkActions; this draws them. Conventions as AccessDialog: a backdrop click and Escape close, Tab cycles inside,
+// focus goes to the first control on opening and back to the menu button (`restoreFocus`) on closing, errors are role="alert".
 import { computed, nextTick, ref, watch } from 'vue';
 import '../components/tokens.css';
 import type { IndexDef } from '../index/indexConfig';

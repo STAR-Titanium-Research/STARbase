@@ -56,9 +56,9 @@ export interface BulkEntry {
 }
 
 /**
- * The entries a list offers, in menu order: Print labels (the def's select action), then on the four ownable record types Assign to
- * team, Change owner, Share or change access, Remove access, Restrict and Unrestrict, then one "Edit <field>…" per bulk field. A Lab Viewer changes nothing (the server refuses even a preview), so a
- * viewer is offered only the entries that navigate. A list with no entries gets no menu.
+ * The entries a list offers, in menu order: Print labels (the def's select action), then on the four ownable record types Assign to team,
+ * Change owner, Share or change access, Remove access, Restrict and Unrestrict, then one "Edit <field>…" per bulk field. A Lab Viewer changes
+ * nothing (the server refuses even a preview), so a viewer is offered only the entries that navigate. A list with no entries gets no menu.
  */
 export function bulkEntries(def: IndexDef, opts: { viewer?: boolean } = {}): BulkEntry[] {
 	const out: BulkEntry[] = [];
