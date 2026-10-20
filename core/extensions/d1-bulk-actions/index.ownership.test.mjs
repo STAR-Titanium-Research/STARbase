@@ -764,6 +764,21 @@ test('change_owner mails the new owner once, a single record reads as the single
   assert.match(h.log.mail[0].text, /Open it here: https:\/\/lab\.example\//);
 });
 
+test('upper-case ids are stored lower-case, so the mail still links the record (the readers tables hold lower-case ids)', async () => {
+  const hex = 'abcdef00-0000-4000-8000-00000000000a'; // an id with letters in it, unlike the plain-digit ids above
+  const world = baseTables();
+  world.physical_samples.push(sample(hex, P.ann, { sample_code: 'SM-HEX' }));
+  world.sample_readers.push(...[U.ann, U.bob].map((user_id) => ({ record_id: hex, user_id })));
+  const h = setup({ tables: world });
+  const out = await ranOk(h, member(U.ann), ownerBody([hex.toUpperCase(), hex], P.bob));
+  assert.equal(out.counts.total, 1, 'the same id in two cases is one record');
+  assert.deepEqual(h.tables.bulk_action_rows.map((r) => r.record_id), [hex], 'stored as the readers tables hold it');
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 1);
+  assert.match(h.log.mail[0].text, new RegExp(`/samples/${hex}`));
+  assert.doesNotMatch(h.log.mail[0].text, /cannot open/i);
+});
+
 test('share_access with a person mails them; with a team mails each active member that has an address, never the actor', async () => {
   const h = setup();
   await ranOk(h, member(U.ann), shareBody([S.one, S.two], person(P.eve), 'edit'));
