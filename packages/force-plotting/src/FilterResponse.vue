@@ -85,6 +85,17 @@ const handles = computed<Handle[]>(() => {
 	}
 	return out;
 });
+// Pills above/below each handle; one that would run into the pill before it (the notch harmonics sit
+// close together on a log axis) is left out, its handle still readable by hovering.
+const pills = computed(() => {
+	let lastEnd = -Infinity;
+	return [...handles.value].sort((a, b) => a.x - b.x).filter((h) => {
+		const x = pillX(h.x, h.label);
+		if (x < lastEnd + 3) return false;
+		lastEnd = x + pillW(h.label);
+		return true;
+	}).map((h) => ({ key: h.key, label: h.label, x: pillX(h.x, h.label), y: h.stage === 'notch' ? h.y - 24 : h.y + 9 }));
+});
 // Cut-offs keep three significant figures; a notch moves its harmonic number (the service's rule is
 // harmonic x rotation frequency), to two decimals.
 function setFrequency(h: Handle, f: number) {
@@ -173,11 +184,11 @@ const legend = computed(() => [{ id: 'combined', label: 'Combined' }, ...curves.
 			<g v-if="hover && !dragging" pointer-events="none">
 				<line :x1="hover.x" :x2="hover.x" :y1="MT" :y2="MT + plotH" class="fr-cursor" />
 			</g>
+			<g v-for="p in pills" :key="'p' + p.key" pointer-events="none">
+				<rect :x="p.x" :y="p.y" :width="pillW(p.label)" height="14" rx="3" class="fr-pill" />
+				<text :x="p.x + pillW(p.label) / 2" :y="p.y + 10.5" text-anchor="middle" class="fr-pill-text">{{ p.label }}</text>
+			</g>
 			<g v-for="h in handles" :key="h.key">
-				<g pointer-events="none">
-					<rect :x="pillX(h.x, h.label)" :y="h.stage === 'notch' ? h.y - 24 : h.y - 28" :width="pillW(h.label)" height="14" rx="3" class="fr-pill" />
-					<text :x="pillX(h.x, h.label) + pillW(h.label) / 2" :y="(h.stage === 'notch' ? h.y - 24 : h.y - 28) + 10.5" text-anchor="middle" class="fr-pill-text">{{ h.label }}</text>
-				</g>
 				<circle :cx="h.x" :cy="h.y" r="5.5" class="fr-handle" :style="{ '--hc': STAGE_COLOR[h.stage] }" tabindex="0" role="slider"
 					:aria-label="`${h.stage} frequency`" :aria-valuenow="Math.round(h.f)" aria-valuemin="1" :aria-valuemax="Math.round(nyquist)"
 					@pointerdown="onDown(h, $event)" @keydown="onKey(h, $event)" />
