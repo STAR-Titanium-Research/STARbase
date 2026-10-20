@@ -8,14 +8,18 @@ import IgnoreFolderDialog from './IgnoreFolderDialog.vue';
 import IgnoredFolders from './IgnoredFolders.vue';
 import InboxFilters from './InboxFilters.vue';
 import InboxRow from './InboxRow.vue';
+import InboxSheet from './InboxSheet.vue';
 import InboxTabs from './InboxTabs.vue';
+import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
+import PreviewDialog from './PreviewDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
 import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
+import { useViewSettings } from './useViewSettings';
 import '../labels/form.css';
 
 // The Inbox page (/inbox, spec section 10): the found files in the person's folder and their teams' folders, with tabs New, Older files,
@@ -179,10 +183,72 @@ async function accept() {
 	const r = await inbox.confirmAccept();
 	if (r.ok) (region.value as HTMLElement | null)?.focus();
 }
+
+// ---- the sheet: what a click on a file opens (the View rail's Preview setting), the selected row, the keys ----
+const view = useViewSettings();
+const selectedId = ref<string | null>(null);
+const allRows = computed(() => [...main.value.rows, ...other.value.rows]);
+// A file that leaves the list (linked, dismissed, ignored) takes the sheet with it.
+const selected = computed(() => (selectedId.value ? allRows.value.find((f) => f.candidate_id === selectedId.value) ?? null : null));
+const sheetOn = computed(() => view.settings.preview === 'sheet');
+function select(f: FoundFile) {
+	selectedId.value = f.candidate_id;
+	// on a phone the sheet is a block under the list: bring it into view
+	void nextTick(() => {
+		const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 700px)').matches;
+		if (narrow) root.value?.querySelector<HTMLElement>('[data-test="inbox-sheet"]')?.scrollIntoView?.({ block: 'nearest' });
+	});
+}
+const nameButton = (id: string) => root.value?.querySelector<HTMLElement>(`[data-row-id="${id}"] [data-test="row-name"]`) ?? null;
+async function closeSheet() {
+	const id = selectedId.value;
+	selectedId.value = null;
+	await nextTick();
+	// the keyboard user keeps their place: focus goes back to the row that was open
+	if (id) (nameButton(id) ?? root.value?.querySelector<HTMLElement>(`[data-row-id="${id}"] button[data-test="thumb"]`))?.focus();
+}
+// Preview changed to View box while a sheet is open: the sheet goes away.
+watch(sheetOn, (on) => {
+	if (!on) selectedId.value = null;
+});
+
+// The old full preview window, reached from the sheet's "Open in view box" until the view box page exists.
+const boxFile = ref<FoundFile | null>(null);
+function closeBox() {
+	const id = boxFile.value?.candidate_id;
+	boxFile.value = null;
+	void nextTick(() => (id ? nameButton(id) : null)?.focus());
+}
+
+const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open || boxFile.value !== null;
+const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
+function onKey(e: KeyboardEvent) {
+	if (!selectedId.value || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+	if (e.key !== 'Escape' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+	if (anyDialogOpen()) return;
+	const t = e.target instanceof Element ? e.target : null;
+	if (e.key === 'Escape') {
+		if (t?.closest('input, textarea, select, [role="dialog"]')) return;
+		e.preventDefault();
+		void closeSheet();
+		return;
+	}
+	if (t?.closest(TYPING)) return;
+	const ids = rowEls().map((el) => el.dataset.rowId ?? '');
+	const at = ids.indexOf(selectedId.value);
+	const to = at < 0 ? -1 : at + (e.key === 'ArrowDown' ? 1 : -1);
+	if (to < 0 || to >= ids.length) return;
+	e.preventDefault();
+	selectedId.value = ids[to];
+	rowEls()[to]?.scrollIntoView?.({ block: 'nearest' });
+}
+onMounted(() => document.addEventListener('keydown', onKey));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-	<div ref="root" class="inbox">
+	<div ref="root" class="frame">
+	<div class="inbox">
 		<div class="head">
 			<p class="lead">
 				<template v-if="noFolder">{{ NO_FOLDER_TEXT }}</template>
@@ -235,6 +301,8 @@ async function accept() {
 			<p v-if="error" class="banner bad">{{ error }}</p>
 		</div>
 
+		<div class="work">
+		<div class="listcol">
 		<LoadState v-if="loading && !main.rows.length" loading loading-text="Loading your Inbox…" />
 		<p v-else-if="nothing" class="d1-note" data-test="empty">{{ EMPTY_TEXT[tab] }}</p>
 
@@ -253,6 +321,9 @@ async function accept() {
 					:busy="inbox.isBusy(f.candidate_id)"
 					:show-owner="showOwner"
 					:can-ignore="canIgnore"
+					:preview="view.settings.preview"
+					:selected="selectedId === f.candidate_id"
+					@select="select(f)"
 					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
@@ -287,6 +358,9 @@ async function accept() {
 							:busy="inbox.isBusy(f.candidate_id)"
 							:show-owner="showOwner"
 							:can-ignore="canIgnore"
+							:preview="view.settings.preview"
+							:selected="selectedId === f.candidate_id"
+							@select="select(f)"
 							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
@@ -300,6 +374,24 @@ async function accept() {
 				<button v-if="other.rows.length < other.total" type="button" class="lf-btn more" @click="inbox.loadMoreOther()">Show more ({{ other.total - other.rows.length }} left)</button>
 			</LoadState>
 		</Section>
+		</div>
+
+		<InboxSheet
+			v-if="selected && sheetOn"
+			:key="selected.candidate_id"
+			:file="selected"
+			:tab="tab"
+			:show-owner="showOwner"
+			:busy="inbox.isBusy(selected.candidate_id)"
+			@close="closeSheet()"
+			@link="openDialog(selected)"
+			@dismiss="dismissRow(selected)"
+			@restore="restoreRow(selected)"
+			@open-box="boxFile = selected"
+		/>
+		</div>
+
+		<PreviewDialog v-if="boxFile" :file="boxFile" :thumb-url="null" @close="closeBox" />
 
 		<LinkDialog v-model="dialogOpen" :file="dialogFile" :busy="dialogBusy" :error="dialogError" @choose="choose" />
 
@@ -309,10 +401,17 @@ async function accept() {
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>
+	<InboxViewRail :preview="view.settings.preview" :open="view.settings.railOpen" @update:preview="view.set({ preview: $event })" @update:open="view.set({ railOpen: $event })" />
+	</div>
 </template>
 
 <style scoped>
-.inbox { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.frame { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; min-width: 0; container: inbox-frame / inline-size; }
+.inbox { flex: 1 1 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.work { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
+.listcol { flex: 1 1 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* Narrow pages: the View rail goes above the list (its own CSS, which gives it the full width and order -1), and under 700px the sheet is a block under the list. */
+@container inbox-frame (max-width: 700px) { .work { flex-direction: column; align-items: stretch; } }
 .head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
 .lead { margin: 0; flex: 1 1 320px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); line-height: 1.5; }
 .status { display: flex; flex-direction: column; gap: 8px; }

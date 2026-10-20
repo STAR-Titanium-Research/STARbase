@@ -25,6 +25,10 @@ const props = defineProps<{
 	showOwner: boolean;
 	/** Offer "Ignore this folder" beside the folder (the server has the route and the person may change rules). */
 	canIgnore?: boolean;
+	/** What a click on the picture or the name opens: the page's sheet (the row only says it was chosen) or, as before, the full preview window. */
+	preview?: 'sheet' | 'box';
+	/** This row is the one the sheet shows. */
+	selected?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'link'): void;
@@ -33,6 +37,8 @@ const emit = defineEmits<{
 	(e: 'change'): void;
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
+	/** The picture or the name was clicked and Preview is Sheet: the page opens its sheet on this file. */
+	(e: 'select'): void;
 	/** The button that was pressed, so the page can give focus back to it when the confirm is cancelled. */
 	(e: 'ignore', opener: HTMLElement): void;
 }>();
@@ -73,6 +79,12 @@ const thumbButton = ref<HTMLElement | null>(null);
 const seen = useInView(thumbButton);
 const { state: thumbState, url: thumbUrl } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'thumb', () => seen.value);
 const previewOpen = ref(false);
+const toSheet = computed(() => props.preview === 'sheet');
+/** A click on the picture or the name: the sheet beside the list, or the full preview window. */
+function chosen() {
+	if (toSheet.value) emit('select');
+	else previewOpen.value = true;
+}
 // A picture that failed to load is not mentioned: the row shows its icon, as if it had none. While its preview is open the button stays (focus returns
 // to it on close, and it cannot vanish under a person who clicked it while it still shimmered).
 const showButton = computed(() => withPicture.value && (thumbState.value !== 'failed' || previewOpen.value));
@@ -102,7 +114,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 </script>
 
 <template>
-	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak, selected }" :aria-current="selected ? 'true' : undefined" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
 		<button
 			v-if="showButton"
 			ref="thumbButton"
@@ -112,7 +124,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			:aria-busy="thumbState === 'loading'"
 			:data-state="thumbState"
 			data-test="thumb"
-			@click="previewOpen = true"
+			@click="chosen"
 		>
 			<img v-if="thumbUrl" :src="thumbUrl" alt="" draggable="false" />
 			<v-icon v-else-if="thumbState === 'failed'" :name="icon" />
@@ -123,7 +135,8 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 
 		<div class="main">
 			<div class="line">
-				<span class="name" :title="file.rel_path">{{ name }}</span>
+				<button v-if="toSheet" type="button" class="name name-btn" :title="file.rel_path" data-test="row-name" @click="chosen">{{ name }}</button>
+				<span v-else class="name" :title="file.rel_path">{{ name }}</span>
 				<span class="tag" :class="`kind-${file.kind}`">{{ kindLabel(file.kind) }}</span>
 				<span v-if="file.match_strength !== 'none' && suggestion" class="tag strength" :class="{ weak: suggestion.weak }">{{ STRENGTH_LABEL[file.match_strength] }}</span>
 			</div>
@@ -167,6 +180,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 <style scoped>
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
+.row.selected { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: inset 3px 0 0 var(--d1-accent, var(--theme--primary)); }
 .thumb { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--d1-surface, var(--theme--background)); border: 1px solid var(--d1-line); color: var(--d1-dim); }
 .thumb.pic { padding: 0; font: inherit; cursor: zoom-in; position: relative; }
 .thumb.pic:hover { border-color: var(--d1-accent, var(--theme--primary)); }
@@ -182,6 +196,9 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .name { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
+.name-btn { padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.name-btn:hover { text-decoration: underline; }
+.name-btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 4px; }
 .tag {
 	padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap;
 	color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent);
