@@ -3,7 +3,9 @@
 // offscreen canvas. Styled like the FRM figure (frmExport.ts): light background, serif text, a
 // framed axis with "nice" ticks, and a title + subtitle, so a chart pasted into a report matches.
 import { niceTicks } from './frmExport';
-import { logTickLabels, tickLabels } from './tickLabels';
+import { tickLabels } from './tickLabels';
+import { axisLabels, dbSeries, firstDecade, logTicks, niceScale } from './chartAxis';
+import { fmtHz } from './filterResponse';
 import { downloadBlob } from './csvExport';
 
 /** Envelope series (`kind: 'env'`) carry `t/min/max`; spectra (`kind: 'line'`) carry `f/amp`. */
@@ -127,16 +129,19 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 		+ `<text x="${W / 2}" y="28" text-anchor="middle" font-size="20" font-weight="bold" fill="#000">${escapeXml(title)}</text>`
 		+ (o.subtitle ? `<text x="${W / 2}" y="49" text-anchor="middle" font-size="13" fill="#777">${escapeXml(o.subtitle)}</text>` : '');
 
-	const xsAll: ArrayLike<number> | undefined = o.kind === 'env' ? o.data?.t : o.data?.f;
+	// A spectrum with logY is what the screen draws: dB re 1 N against a log frequency axis.
+	const spec = o.kind === 'line' && o.logY === true && !!o.data?.f;
+	const data = spec ? dbSeries(o.data) : o.data;
+	const xsAll: ArrayLike<number> | undefined = o.kind === 'env' ? data?.t : data?.f;
 	if (!xsAll || xsAll.length < 2) {
 		return `${head}<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="16" fill="#777">no data</text></svg>`;
 	}
-	const dx0 = xsAll[0], dx1 = xsAll[xsAll.length - 1];
+	const dx0 = spec ? firstDecade(xsAll) : xsAll[0], dx1 = xsAll[xsAll.length - 1];
 	let x0 = o.viewStart != null ? Math.max(dx0, o.viewStart) : dx0;
 	let x1 = o.viewEnd != null ? Math.min(dx1, o.viewEnd) : dx1;
 	if (!(x1 > x0)) { x0 = dx0; x1 = dx1; }
 
-	const main = traceOf(o.kind, o.data, x0, x1, max) ?? { x: [], lo: [], hi: [] };
+	const main = traceOf(o.kind, data, x0, x1, max) ?? { x: [], lo: [], hi: [] };
 	const cmpTraces = cmp.map((c) => ({ c, tr: decimateTrace(c.data.t, c.data.min, c.data.max, x0, x1, max) }));
 	let lo = Infinity, hi = -Infinity;
 	for (let i = 0; i < main.x.length; i++) { if (main.lo[i] < lo) lo = main.lo[i]; if (main.hi[i] > hi) hi = main.hi[i]; }
@@ -147,7 +152,7 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 			if (m > hi) hi = m;
 		}
 	}
-	if (o.kind === 'line') lo = 0;
+	if (o.kind === 'line') lo = spec ? Math.max(lo, hi - 90) : 0;
 	if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
 	if (hi === lo) hi = lo + 1;
 	if (o.kind === 'env') {   // same "include 0 when cheap" rule as the on-screen chart
@@ -157,21 +162,14 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 
 	// y ticks first (they do not depend on the plot size): the left margin is sized from their
 	// labels so the rotated y title never touches them (the title sits at x = Y_TITLE_X).
-	const useLog = o.logY === true && o.kind === 'line' && hi > 0;
-	let logFloor = 0, L0 = 0, L1 = 0;
 	let yticks: number[];
-	if (useLog) {
-		let minPos = Infinity;
-		for (const v of main.hi) if (v > 0 && v < minPos) minPos = v;
-		logFloor = Math.max(isFinite(minPos) ? minPos : hi / 1e5, hi / 1e5);
-		L0 = Math.log10(logFloor); L1 = Math.log10(hi);
-		yticks = [];
-		for (let k = Math.ceil(L0); k <= Math.floor(L1); k++) yticks.push(10 ** k);
-		if (yticks.length < 2) yticks = [logFloor, hi];
+	if (spec) {
+		const sc = niceScale(lo, hi);
+		lo = sc.lo; hi = sc.hi; yticks = sc.ticks;
 	} else {
 		yticks = niceTicks(lo, hi, 5);
 	}
-	const yLabels = useLog ? logTickLabels(yticks) : tickLabels(yticks);
+	const yLabels = spec ? axisLabels(yticks) : tickLabels(yticks);
 	const yLabelW = Math.max(0, ...yLabels.map((s) => s.length)) * TICK_CHAR_W;
 	const mL = Math.max(78, Math.ceil(Y_TITLE_X + 6 + 8 + yLabelW + 9));
 
@@ -182,15 +180,12 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 	const mB = 62 + (legend.length ? 8 + legend.length * 18 : 0);
 	const ph = H - mT - mB;
 
-	const sx = (x: number) => mL + ((x - x0) / (x1 - x0)) * pw;
-	let sy: (y: number) => number;
-	if (useLog) {
-		const den = (L1 - L0) || 1;
-		sy = (y) => mT + (1 - (Math.log10(Math.max(y, logFloor)) - L0) / den) * ph;
-	} else {
-		sy = (y) => mT + (1 - (y - lo) / (hi - lo)) * ph;
-	}
-	const xticks = niceTicks(x0, x1, Math.max(4, Math.round(pw / 90))).filter((t) => t >= x0 - 1e-9 && t <= x1 + 1e-9);
+	const sx = spec ? (x: number) => mL + ((Math.log10(Math.max(x, x0)) - Math.log10(x0)) / (Math.log10(x1) - Math.log10(x0))) * pw
+		: (x: number) => mL + ((x - x0) / (x1 - x0)) * pw;
+	// samples below the bottom of a dB axis sit on it
+	const sy = (y: number) => mT + (1 - (Math.max(y, spec ? lo : -Infinity) - lo) / (hi - lo)) * ph;
+	const xticks = spec ? logTicks(x0, x1).major
+		: niceTicks(x0, x1, Math.max(4, Math.round(pw / 90))).filter((t) => t >= x0 - 1e-9 && t <= x1 + 1e-9);
 
 	const f1 = (v: number) => v.toFixed(1);
 	const out: string[] = [head];
@@ -243,7 +238,7 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 	out.push(`<rect x="${mL}" y="${mT}" width="${pw}" height="${ph}" fill="none" stroke="#000" stroke-width="1.2"/>`);
 	out.push('<g fill="#000" font-size="13" stroke="#000" stroke-width="1">');
 	// Labels are chosen from the tick step (tickLabels), so a narrow range still reads 12.30, 12.35...
-	const xLabels = tickLabels(xticks);
+	const xLabels = spec ? xticks.map((t) => fmtHz(t, false)) : tickLabels(xticks);
 	xticks.forEach((t, i) => {
 		out.push(`<line x1="${f1(sx(t))}" x2="${f1(sx(t))}" y1="${mT + ph}" y2="${mT + ph + 5}"/>`
 			+ `<text x="${f1(sx(t))}" y="${mT + ph + 20}" text-anchor="middle" stroke="none">${escapeXml(xLabels[i])}</text>`);
@@ -257,7 +252,7 @@ export function buildChartSvg(o: ChartSvgOpts): string {
 	// axis titles, with units
 	const xTitle = o.kind === 'env' ? 'Time' : 'Frequency';
 	const xLab = o.xUnit ? `${xTitle} (${o.xUnit})` : xTitle;
-	const yLab = yAxisTitle(o.kind, o.yUnit, useLog) || (o.kind === 'env' ? 'Force' : 'Amplitude');
+	const yLab = spec ? 'Magnitude (dB re 1 N)' : yAxisTitle(o.kind, o.yUnit) || (o.kind === 'env' ? 'Force' : 'Amplitude');
 	out.push(`<text x="${mL + pw / 2}" y="${mT + ph + 44}" text-anchor="middle" font-size="15" font-style="italic" fill="#000">${escapeXml(xLab)}</text>`);
 	out.push(`<text transform="translate(${Y_TITLE_X} ${mT + ph / 2}) rotate(-90)" text-anchor="middle" font-size="15" font-style="italic" fill="#000">${escapeXml(yLab)}</text>`);
 

@@ -37,7 +37,7 @@ export function niceNum(v: number): string {
 /**
  * Where the crosshair dot goes and what the tooltip says for sample `i`; null when there is no
  * hover or it lies outside the visible window [iA, iB]. `env` charts read the envelope's mid-line
- * (`min`/`max`); `line` charts (spectra) read `amp`.
+ * (`min`/`max`); `line` charts (spectra) read `amp` (dB on the dashboard's spectra).
  */
 export function hoverPoint(
 	g: HoverGeom | null,
@@ -54,5 +54,5 @@ export function hoverPoint(
 			label: `${mid.toFixed(2)} ${yLabelUnit}`.trim(), sub: `${niceNum(g.xs[i])} ${xUnit || ''}`.trim() };
 	}
 	return { px: g.sx(g.xs[i]), py: g.sy(data.amp[i]),
-		label: `${data.amp[i].toPrecision(3)}`, sub: `${niceNum(g.xs[i])} ${xUnit || 'Hz'}`.trim() };
+		label: `${data.amp[i].toPrecision(3)} ${yLabelUnit}`.trim(), sub: `${niceNum(g.xs[i])} ${xUnit || 'Hz'}`.trim() };
 }
