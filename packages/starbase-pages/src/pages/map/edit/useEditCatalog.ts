@@ -6,9 +6,10 @@
 
 import { computed, reactive, ref, shallowRef } from 'vue';
 import type { FieldDef as DirectusField, HostApi } from '@d1/ui';
-import type { SampleRec } from '../model/types';
+import type { OpRow, SampleRec } from '../model/types';
 import { chunkByBudget } from '../model/requests';
-import { SAMPLE_FIELDS, mapSample } from '../model/rows';
+import { OPERATION_FIELDS, SAMPLE_FIELDS, mapOperation, mapSample } from '../model/rows';
+import { collapseRelations, orphanParams, orphanRowOf, ORPHAN_PAGE, type OrphanRow } from './attachModel';
 import type { CheckCollection, CheckCtx, FieldDef, LoadedRecord } from './checks';
 import { collectionOf, recordKey } from './checks';
 import { useGearStatus } from './useGearStatus';
@@ -38,6 +39,8 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	const records = reactive(new Map<string, LoadedRecord | null>());
 	/** Existing samples of the draft that are not part of the loaded history (picked from the index), as the map draws them. */
 	const samples = reactive(new Map<string, SampleRec>());
+	/** Existing operations the draft attaches, as the map draws them (the loader did not read them: they have no input sample the family reaches), by id. */
+	const operations = reactive(new Map<string, OpRow>());
 	/** The alloy code and the name of a material, by id. */
 	const materials = reactive(new Map<string, { alloy: string | null; name: string | null }>());
 
@@ -173,6 +176,91 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 		return ((res.data?.data ?? []) as Row[]).map((r) => ({ id: String(r.sample_id), code: String(r.sample_code ?? 'Sample'), detail: [r.nickname, r.form].filter(Boolean).join(' · ') }));
 	}
 
+	type OperationRead = Map<string, { op: OpRow; version: number; values: Row; /** It has an input sample now: it cannot be attached. */ hasInput: boolean }>;
+	/**
+	 * Reads operations to attach: the card the map draws, the version (what the attach is checked against at Create) and the record with its
+	 * relations as ids, and the sample each one made (so the canvas can draw it). `fresh` asks again for ones already read: a pick reads the
+	 * record as it is NOW. Operations the caller cannot read, or that are gone, are missing from the answer. Throws when the read fails.
+	 */
+	async function loadOperations(ids: string[], opts: { fresh?: boolean } = {}): Promise<OperationRead> {
+		const out: OperationRead = new Map();
+		const want = [...new Set(ids)].filter((id) => id && (opts.fresh || !operations.has(id)));
+		if (want.length) {
+			const rows = await readRows('manufacturing_operations', want, ['*', ...OPERATION_FIELDS, 'version']);
+			const made: string[] = [];
+			for (const row of rows) {
+				const op = mapOperation(row);
+				const version = Number(row.version);
+				if (!Number.isFinite(version)) continue;
+				const values: Row = collapseRelations(row);
+				const hasInput = !!op.sampleId;
+				operations.set(op.id, op);
+				records.set(recordKey('manufacturing_operations', op.id), { version, values, hasInput });
+				out.set(op.id, { op, version, values, hasInput });
+				if (op.outputSampleId) made.push(op.outputSampleId);
+			}
+			// The sample it made is drawn too. A sample the caller cannot read stays a stub card ("another piece"); that is no reason to refuse.
+			await loadSamples(made.filter((id) => !samples.has(id))).catch(() => undefined);
+		}
+		for (const id of ids) {
+			const op = operations.get(id);
+			const rec = records.get(recordKey('manufacturing_operations', id));
+			if (op && rec && !out.has(id)) out.set(id, { op, version: rec.version, values: rec.values, hasInput: !!rec.hasInput });
+		}
+		return out;
+	}
+
+	/**
+	 * May the caller change this record? Directus answers from the real permission rules (`GET /permissions/me/<collection>/<id>`: `update.access`).
+	 * null when it could not be asked: the caller is then not refused here, Create asks the database.
+	 */
+	async function mayUpdate(collection: CheckCollection, id: string): Promise<boolean | null> {
+		try {
+			const res = await api.get(`/permissions/me/${collection}/${encodeURIComponent(id)}`);
+			const access = res.data?.data?.update?.access;
+			return typeof access === 'boolean' ? access : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Which of the samples these operations made already come from another sample: a genealogy row with it as the child, or another operation that
+	 * makes it from an input. Read as the caller (what they cannot read they cannot see; Create asks the database); a failed read leaves the rows as they are.
+	 */
+	async function addOrigins(rows: OrphanRow[]): Promise<void> {
+		const outs = [...new Set(rows.flatMap((r) => (r.output ? [r.output.id] : [])))];
+		if (!outs.length) return;
+		const found = new Map<string, Set<string>>();
+		const note = (child: unknown, parent: unknown) => {
+			if (typeof child !== 'string' || typeof parent !== 'string') return;
+			if (!found.has(child)) found.set(child, new Set());
+			found.get(child)!.add(parent);
+		};
+		try {
+			const [lineage, makers] = await Promise.all([
+				api.get('/items/sample_genealogy', { params: { filter: JSON.stringify({ child_sample_id: { _in: outs } }), fields: ['child_sample_id', 'parent_sample_id'], limit: -1 } }),
+				api.get('/items/manufacturing_operations', { params: { filter: JSON.stringify({ _and: [{ output_sample_id: { _in: outs } }, { sample_id: { _nnull: true } }] }), fields: ['output_sample_id', 'sample_id'], limit: -1 } }),
+			]);
+			for (const r of (lineage.data?.data ?? []) as Row[]) note(r.child_sample_id, r.parent_sample_id);
+			for (const r of (makers.data?.data ?? []) as Row[]) if (r.output_sample_id !== r.sample_id) note(r.output_sample_id, r.sample_id);
+		} catch {
+			return;
+		}
+		for (const r of rows) r.origins = r.output ? [...(found.get(r.output.id) ?? [])] : [];
+	}
+
+	/**
+	 * The recorded operations that have no input sample, for the picker: `query` narrows by pass code, method name and the code of the sample
+	 * each made, a page at a time (`offset`). Read as the signed-in user, so Directus decides which the caller sees. `more`: another page exists.
+	 */
+	async function searchOrphans(query: string, offset = 0): Promise<{ rows: OrphanRow[]; more: boolean }> {
+		const res = await api.get('/items/manufacturing_operations', { params: orphanParams(query, offset) });
+		const rows = ((res.data?.data ?? []) as Row[]).map(orphanRowOf).filter((r): r is OrphanRow => !!r).slice(0, ORPHAN_PAGE);
+		await addOrigins(rows);
+		return { rows, more: (res.data?.data ?? []).length > ORPHAN_PAGE };
+	}
+
 	const missingMaterials = new Set<string>();
 	/** Asks for the alloy code of these materials, once each (the sample code is made of it). */
 	async function ensureMaterials(ids: Iterable<string>): Promise<void> {
@@ -207,8 +295,8 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	}
 
 	return {
-		gear, methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
-		ensure, loadRecords, loadSamples, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
+		gear, methods, testTypes, rawFields, checkFields, loading, records, samples, operations, materials, methodById,
+		ensure, loadRecords, loadSamples, loadOperations, searchOrphans, mayUpdate, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};
 }

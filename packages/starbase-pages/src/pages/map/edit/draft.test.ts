@@ -160,6 +160,14 @@ describe('attach', () => {
 		expect(apply(b, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned' })).toBe(b);
 	});
 
+	it('an attached operation keeps the sample it made: nothing is wired out of it', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned', from: { key: 'n1' } }]);
+		expect(wireProblem(b, { key: 'n3', row: 0 }, { key: 'n2' })).toMatch(/keeps the sample it made/);
+		// not even back to the sample it took in (that would be "the sample carries on", which an existing record cannot be turned into)
+		expect(wireProblem(b, { key: 'n3', row: 0 }, { key: 'n1' })).toMatch(/keeps the sample it made/);
+		expect(apply(b, { type: 'wire', from: { key: 'n3', row: 0 }, to: { key: 'n2' } })).toBe(b);
+	});
+
 	it('an existing operation that is not being attached takes no wires', () => {
 		const b = run([{ type: 'addSample' }]);
 		const withExisting: DraftBody = {

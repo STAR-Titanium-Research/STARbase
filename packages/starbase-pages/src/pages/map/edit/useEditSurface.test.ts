@@ -407,3 +407,136 @@ describe('the add search at the keyboard and insert', () => {
 		expect(surface.blocked.value).toBe(true);
 	});
 });
+
+describe('From database… (slice 3)', () => {
+	const orphan = (id: string, over: Record<string, unknown> = {}) => ({
+		operation_id: id, pass_code: `CODE-${id}`, operation_sequence: 1, operation_date: null, planned_date: '2026-11-01', work_state: 'planned', version: 5, sample_id: null,
+		method_id: { method_id: 'm-turn', method_name: 'Turning' }, owner_person_id: { full_name: 'Ada' }, output_sample_id: 's2', ...over,
+	});
+	const at = { x: 300, y: 200 };
+	const loaded = () => mkData({ samples: [mkSample('s1'), mkSample('sp', { status: 'planned' })] });
+	const open = async (over: { rows?: Record<string, unknown>[]; sample?: string | null; body?: DraftBody } = {}) => {
+		const r = await setup(over.body ?? emptyBody(), null, { loaded: loaded() });
+		r.server.s.rows.manufacturing_operations = over.rows ?? [orphan('a'), orphan('b', { work_state: 'done', operation_date: '2026-09-01', planned_date: null })];
+		const sample = over.sample === undefined ? 's1' : over.sample;
+		await r.surface.menu.applyAt({ sock: sample === null ? null : { kind: 'sample', id: sample, side: 'out' }, at, anchor: 's:s1' }, { kind: 'fromDatabase' });
+		return r;
+	};
+
+	it('opens the picker for the socket, and lists the operations with no input sample', async () => {
+		const { surface, edit } = await open();
+		expect(surface.attaching.target.value).toMatchObject({ sock: { kind: 'sample', id: 's1', side: 'out' } });
+		expect(surface.attachHeading.value).toBe('Attach to S1');
+		expect(surface.blocked.value).toBe(true);
+		expect(edit.body.value.items).toEqual([]);
+		const found = await surface.attaching.search('');
+		expect(found.rows.map((r) => r.id)).toEqual(['a', 'b']);
+		expect(found.rows.every((r) => surface.attaching.reasonOf(r) === null)).toBe(true);
+	});
+
+	it('a pick attaches it to the sample (which joins the draft) at the version read now, as ONE undo step; the operation shows on the canvas wired', async () => {
+		const { surface, edit, graph } = await open();
+		const row = (await surface.attaching.search('')).rows[0];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.target.value).toBeNull();
+		const op = edit.body.value.items.find((i) => i.kind === 'operation');
+		expect(op).toMatchObject({ existing: { id: 'a', version: 5 }, attach: true, workState: 'planned' });
+		const sample = edit.body.value.items.find((i) => i.kind === 'sample');
+		expect(sample?.existing?.id).toBe('s1');
+		expect(edit.body.value.wires).toEqual([{ from: { key: sample!.key }, to: { key: op!.key, row: 0 } }]);
+		await settle();
+		expect(graph.value.nodes.some((n) => n.id === 'op:a')).toBe(true);
+		expect(graph.value.wires.some((w) => w.from === 's:s1:out:0' && w.to === 'op:a:in:0')).toBe(true);
+		expect(edit.summary.value).toMatch(/attach 1 operation/i);
+		edit.undo();
+		expect(edit.body.value.items).toEqual([]);
+		edit.redo();
+		expect(edit.body.value.items).toHaveLength(2);
+	});
+
+	it('an operation attached already is greyed with the reason; a second pick of it does nothing', async () => {
+		const { surface, edit } = await open();
+		const rows = (await surface.attaching.search('')).rows;
+		await surface.attaching.pick(rows[0]);
+		await surface.menu.applyAt({ sock: { kind: 'sample', id: 's1', side: 'out' }, at, anchor: 's:s1' }, { kind: 'fromDatabase' });
+		expect(surface.attaching.reasonOf(rows[0])).toBe('Already attached in this draft.');
+		expect(surface.attaching.reasonOf(rows[1])).toBeNull();
+		await surface.attaching.pick(rows[0]);
+		expect(surface.attaching.problem.value).toBe('Already attached in this draft.');
+		expect(edit.body.value.items.filter((i) => i.kind === 'operation')).toHaveLength(1);
+	});
+
+	it('done work cannot be attached to a sample that is still planned (greyed with the server\'s words), planned work can', async () => {
+		const { surface } = await open({ sample: 'sp' });
+		const rows = (await surface.attaching.search('')).rows;
+		expect(surface.attaching.reasonOf(rows[0])).toBeNull(); // planned
+		expect(surface.attaching.reasonOf(rows[1])).toBe('Its sample is still planned; mark the operation that makes it done first.'); // done
+	});
+
+	it('an operation that got an input since the list was read is refused at the pick, nothing is attached', async () => {
+		const { surface, edit, server } = await open();
+		const row = (await surface.attaching.search('')).rows[0];
+		server.s.rows.manufacturing_operations = [orphan('a', { sample_id: 's2', version: 6 })];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.problem.value).toMatch(/got an input in the meantime/);
+		expect(surface.attaching.target.value, 'the picker stays open to choose another').not.toBeNull();
+		expect(edit.body.value.items).toEqual([]);
+	});
+
+	it('an operation the caller can see but not change is refused at the pick, in words; when that cannot be asked the pick goes on (Create asks the database)', async () => {
+		const { surface, edit, server } = await open();
+		const row = (await surface.attaching.search('')).rows[0];
+		server.s.readOnly = ['a'];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.problem.value).toBe('You can see this operation but not change it.');
+		expect(surface.attaching.target.value, 'the picker stays open').not.toBeNull();
+		expect(edit.body.value.items).toEqual([]);
+		server.s.readOnly = [];
+		server.s.permissionError = true;
+		await surface.attaching.pick(row);
+		expect(edit.body.value.items.some((i) => i.kind === 'operation' && i.attach)).toBe(true);
+	});
+
+	it('an operation that is gone, or that the caller cannot read, is refused at the pick', async () => {
+		const { surface, edit, server } = await open();
+		const row = (await surface.attaching.search('')).rows[0];
+		server.s.rows.manufacturing_operations = [];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.problem.value).toMatch(/gone, or you can no longer see it/);
+		expect(edit.body.value.items).toEqual([]);
+	});
+
+	it('opened unconnected (the palette), the pick lands floating: attached to nothing yet, which Create refuses with a visible check', async () => {
+		const { surface, edit } = await open({ sample: null });
+		const row = (await surface.attaching.search('')).rows[0];
+		await surface.attaching.pick(row);
+		expect(edit.body.value.items).toHaveLength(1);
+		expect(edit.body.value.wires).toEqual([]);
+		await settle();
+		expect(edit.checks.value.some((c) => c.level === 'block' && /needs a sample/.test(c.text))).toBe(true);
+	});
+
+	it('the palette entry opens the picker, floating, beside the selected card', async () => {
+		const { surface } = await setup(emptyBody(), null);
+		surface.paletteAdd({ id: 'db:attach', section: 'From the database', label: 'From database…', choice: { kind: 'fromDatabase' } });
+		await settle();
+		expect(surface.attaching.target.value).toMatchObject({ sock: null });
+		expect(surface.attachHeading.value).toBe('Add to the canvas');
+	});
+
+	it('keeps the card it was opened from after it closes, so focus can go back to it', async () => {
+		const { surface } = await open();
+		expect(surface.attaching.anchor.value).toBe('s:s1');
+		const row = (await surface.attaching.search('')).rows[0];
+		await surface.attaching.pick(row);
+		expect(surface.attaching.target.value).toBeNull();
+		expect(surface.attaching.anchor.value).toBe('s:s1');
+	});
+
+	it('closing the picker changes nothing', async () => {
+		const { surface, edit } = await open();
+		surface.attaching.close();
+		expect(surface.attaching.target.value).toBeNull();
+		expect(edit.body.value.items).toEqual([]);
+	});
+});

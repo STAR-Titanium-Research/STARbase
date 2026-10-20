@@ -16,7 +16,7 @@ import { processLabel, type DraftBody, type DraftKey } from '@d1/ui';
 import type { ProcessCategory } from '../model/types';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { CATEGORIES } from './catalog';
-import { inputSampleOf, itemOf, nextKey, wireProblem, type DraftAction, type Pos, type WireEnd } from './draft';
+import { inputSampleOf, itemOf, nextKey, wireProblem, type DraftAction, type Pos, type WireEnd, type WorkState } from './draft';
 import { grown, resolveEnd, type SocketRef } from './socketRefs';
 import { templateEntries, type TemplateInfo, type TemplateItem } from './templates';
 
@@ -30,6 +30,13 @@ export type MenuChoice =
 	| { kind: 'existingSample' }
 	/** The sample picker, over the canvas. */
 	| { kind: 'pickSamples' }
+	/** "From database…": the picker of recorded operations that have no input sample yet (slice 3). */
+	| { kind: 'fromDatabase' }
+	/**
+	 * One of them, chosen in that picker, with the version it was read at: attached to the sample's output the menu is for, or left floating
+	 * (unconnected). The draft's `attach` action.
+	 */
+	| { kind: 'attachOperation'; id: string; version: number; workState: WorkState }
 	/** "Connect to…": the sockets this one can be wired to, by code (E21). */
 	| { kind: 'connectTo' }
 	/** A sample that is in the draft, wired to the socket the menu is for. */
@@ -105,12 +112,23 @@ export interface MenuCatalog {
 	templates?: readonly TemplateItem[];
 }
 
+/** "From database…": an action row (it opens a picker), not a thing that is dragged to a place. */
+export const FROM_DATABASE: MenuEntry = {
+	id: 'db:attach',
+	section: 'From the database',
+	label: 'From database…',
+	detail: 'an operation that has no input sample yet',
+	keys: 'attach existing recorded operation',
+	choice: { kind: 'fromDatabase' },
+};
+
 /** The whole catalog (the palette's list, and what an unconnected add search offers): templates, samples, then operations by category, then tests. */
 export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
 	return [
 		...templateEntries(cat.templates ?? [], cat),
 		{ id: 'sample:new', section: 'Samples', label: 'New sample', detail: 'a blank card', choice: { kind: 'newSample' } },
 		{ id: 'sample:pick', section: 'Samples', label: 'Existing sample…', detail: 'pick from the Samples list', choice: { kind: 'pickSamples' } },
+		FROM_DATABASE,
 		...operationEntries(cat.methods),
 		...testEntries(cat.testTypes),
 	];
@@ -152,6 +170,8 @@ function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[]
 	if (f.side === null) return catalogEntries(cat);
 	// From a sample's output, or a sample's input: the containers that can be made (a test has no output, so it cannot make a sample).
 	out.push(...templateEntries(cat.templates ?? [], cat, f.side === 'in' ? 'operation' : undefined));
+	// From a sample's output a recorded operation with no input can also be attached (a sample's input is made by an operation, which is another thing).
+	if (f.side === 'out') out.push(FROM_DATABASE);
 	out.push(...operationEntries(cat.methods));
 	if (f.side !== 'in') out.push(...testEntries(cat.testTypes));
 	return out;
@@ -278,6 +298,12 @@ export function actionsFor(t: ChoiceTarget, choice: MenuChoice): DraftAction[] {
 		case 'sameSample': {
 			const input = end && side === 'out' && t.card === 'operation' ? inputSampleOf(body, end) : null;
 			return end && input ? [{ type: 'wire', from: end, to: { key: input } }] : [];
+		}
+		case 'attachOperation': {
+			const operation = { id: choice.id, version: choice.version };
+			// From a sample's output it is wired to it (that sample is the operation's input); unconnected it stays where it is put.
+			if (side === 'out' && t.card === 'sample' && end) return [{ type: 'attach', operation, workState: choice.workState, from: end, at }];
+			return side === null ? [{ type: 'attach', operation, workState: choice.workState, at }] : [];
 		}
 		case 'wireSample':
 			if (!end || !itemOf(body, choice.key)) return [];

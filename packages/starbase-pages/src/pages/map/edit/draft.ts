@@ -272,6 +272,8 @@ export function wireProblem(body: DraftBody, from: WireEnd, to: WireEnd): string
 			if (wireInto(body, b.key, to.row ?? 0)) return 'That input already has a sample.';
 		} else if (b.existing) return 'A test that is already recorded keeps the samples it has.';
 	} else if (b.kind === 'sample') {
+		// An existing operation (attached, or only picked up) keeps the sample it made: Create writes its input only, so a wire out of it would be lost.
+		if (a.existing) return 'An existing operation keeps the sample it made: it cannot make another.';
 		if (wiresOutOf(body, a.key, fromRow).some((w) => itemOf(body, w.to.key)?.kind === 'sample')) return 'That output already goes to a sample.';
 		const input = inputSampleOf(body, { key: a.key, row: fromRow });
 		if (b.key !== input) {

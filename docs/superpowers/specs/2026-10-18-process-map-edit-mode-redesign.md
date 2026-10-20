@@ -29,7 +29,7 @@ the keyboard**, and **removal that works**.
 | R5 | **Sockets are derived.** A card or container shows a socket for each wire it has plus one free one. A spare that nothing uses disappears when the next one is connected or the selection leaves it. Nothing about sockets is stored in the draft. Replaces the ＋ output / ＋ pass rows as the way to add them (E9): connecting to the free socket does it. |
 | R6 | **Layout.** A new node is placed in the nearest free slot beside what it was attached to and never overlaps another node. Positions the person dragged are kept and never re-flowed. **Tidy** is an explicit, undoable button that re-lays out the draft's own items. Replaces automatic re-layout on every change. |
 | R7 | **Templates.** A template is an operation or test method plus its filled-in fields (machine, tool, operator, settings, notes), never sample links or dates. "Save as template" on any container (private, account role or everyone, E11's scopes). Templates appear in the palette and add search like any other item and drop in as a prefilled container the person can edit. No built-in starter set; templates are made by people. Duplicate ×N (E10) stays for the same operation on many samples. **Built in slice 4** (§2.2). |
-| R8 | **Attach from the database.** "From database…" (palette, add search, or a socket's menu) searches every record that can legally attach where it is opened: operations that take the sample as input, tests run on it, samples as an operation's output. Joining a record from another process joins the two processes on the map and asks one-line confirmation. A record already attached on that socket is greyed with the reason. Replaces E8's canvas-only "Existing…". |
+| R8 | **Attach from the database** (as scoped by the maintainer on 2026-10-19, built in slice 3). "From database…" (palette, add search, or a drop on a sample's output) searches the **recorded operations that have no input sample**, planned or done, and attaches the one chosen to the sample whose output socket it was opened on: that sample becomes the operation's input. Create writes `operation.sample_id` (and any edits the person made to the operation in the side panel, under the version check); the database then derives the operation's step number and code, who may read it, and the lineage row from the new input. No sample is made or changed. An operation that cannot go there is listed greyed with the reason: already on the canvas, already attached in this draft, done work on a planned sample, or it made a sample this one comes from. Replaces E8's canvas-only "Existing…". **Out of scope, on purpose:** attaching tests onto a sample, a sample as an operation's output, and joining another process tree (a record from another process). See 2.2. |
 | R9 | **Planned or done at Create.** Each new operation or test has a Planned / Done toggle. Done asks for the date (default today) and Create writes it done in one step, outputs active (ADR-0019 amendment). |
 | R10 | **Mark done by whoever may edit the operation** (ADR-0019 amendment): the status flip of its output samples uses system rights after the operation update succeeds. |
 | R11 | **Who may build.** `d1-build` answers 403 to an account that may not create operations, and the page hides edit mode for it. Create refuses with a clear message when the caller has no researcher People row (ADR-0018 amendment). |
@@ -38,7 +38,7 @@ the keyboard**, and **removal that works**.
 ### 2.1 Details as built in slice 2a (R1, R2, R3)
 
 - **One catalog.** New sample, Existing sample… (opens the sample picker; the lid's Pick samples stays), an operation per manufacturing method
-  by process category, a test per test type. Templates (slice 4) and "From database…" (slice 3) are not in it yet. Both surfaces are one flat
+  by process category, a test per test type. Templates (slice 4) are not in it yet; "From database…" (slice 3, 2.2) is. Both surfaces are one flat
   list: no category → method → blank menu. Opened at a socket the add search lists what can legally connect there (the old fit rules of
   `menuModel.ts`), ends with **Connect to…** and **Existing sample…** where that applies, and what is chosen is connected.
 - **Recents.** The last six things added (a method, a test type, a new sample), per person, in `localStorage`; first in the add search and the
@@ -115,6 +115,45 @@ the keyboard**, and **removal that works**.
 12. "Open in Data Studio" on a new item's field says it opens after Create instead of showing a banner.
 13. Back to planned has its button (owner rules unchanged).
 
+### 2.2 Details as built in slice 3 (R8)
+
+- **What can be attached.** A recorded operation with **no input sample** (`sample_id` null), planned or done. The database requires an input or an
+  output sample, so such an operation always made a sample whose input was never recorded; attaching records it. Nothing else is attachable:
+  tests onto a sample, a sample as an operation's output, and merging another process tree were considered and are **not built**.
+- **Where it is offered.** An action row, **From database…**, in the palette, in the unconnected add search, and in the add search opened on a **sample's
+  output** socket (not on an operation's output, a test, or a sample's input). The palette entry can be dragged: dropped on a sample's output it opens the
+  picker for that sample; on empty canvas it opens it unconnected. Opened unconnected (a click in the palette, Shift+A) a pick lands **floating**: it is
+  on the canvas with a free input, Create is refused ("needs a sample going in") until a sample's output is wired to that input by hand.
+- **The picker** (`AttachPicker.vue`): a dialog with a search box and a list, read through the host's API as the signed-in user, so it lists only
+  operations that account may read (a member does not see another member's operation that no project, campaign or sample of theirs exposes: ADR-0011).
+  Search matches every word in the pass code, the method name or the code of the sample the operation made; newest first, 20 at a time with Show more.
+  A row says its code, method, planned or done, day, owner and the sample it made.
+- **Greyed, with the reason** (`attachModel.ts`): "Already on the canvas." (the loaded map or the draft holds it), "Already attached in this draft.",
+  the server's words "Its sample is still planned; mark the operation that makes it done first." (a done operation on a planned sample), "It makes S,
+  which this sample comes from: that would run in a circle." (as far as the map has loaded the lineage), "a sample cannot be an input of the
+  operation that made it", and "It made S, which already comes from another sample: attaching would give it a second origin." (a genealogy row, or another
+  operation that makes it from an input: joining two processes is out of scope, see R8). A greyed row cannot be chosen.
+- **What d1-build refuses at Create, whatever the page showed** (`NOT_ATTACHABLE`, blocking, nothing written): the sample it is attached to is the one it
+  made; the sample it made is already upstream of the input in the lineage (read as ids by a depth-bounded recursive query over `sample_genealogy`, also
+  through the draft's new operations and other attached operations, so a loop closes nowhere); the sample it made already has another origin (a lineage row or
+  another maker from a different input, or two attached operations of the draft making it from different inputs). A sample's code is named in these only
+  when the caller can read it, else "the sample it made". The page shows the first as a client check too.
+- **At the pick** the operation is read again (fresh): its version is what the draft attaches against; one that has an input by now, or is gone, or that the
+  caller can see but not change (`GET /permissions/me/manufacturing_operations/<id>`, `update.access`: an investigator reads what only its owner edits), is
+  refused in the picker with that reason ("You can see this operation but not change it.") and nothing joins the draft. Create asks the database again. Create re-checks (d1-build): changed since (`STALE_VERSION`), gone (`GONE`) and got an
+  input meanwhile (`NOT_ATTACHABLE`) are blocking checks, shown in Checks, and nothing is written.
+- **On the canvas** the operation is drawn as the record it is (planned ghosted, done solid, an **Attach** pill on its header), wired from the sample, with
+  **the sample it made** drawn after it. That sample is the one that exists: attaching never makes a sample. The operation's output socket is not the draft's
+  to build from (a wire out of an existing operation is refused in the draft and by d1-build, since Create writes only its input). The attach is part of the
+  draft: undo and redo take it off and put it back, its wire can be removed (the operation stays on the canvas, attached to nothing, and Create refuses),
+  and Delete takes the loose or wired operation off the draft, never deleting the record. A done operation can be attached; it is never removed from the
+  map as a record (R4).
+- **At Create** the summary reads "Attach 1 operation" (counts with the other records). It writes one update per operation, under the version check: `sample_id`
+  and any edits made to the operation in the rail (its fields are the person's to change, `output_sample_id` and `work_state` never are). The database then
+  derives from it, not Create: the operation's step number and code (they follow the sample it is now on: migration 157), who may read it (the readers table
+  follows its sample), and the lineage row (output sample from input sample; the genealogy trigger). The picker says so ("Its code and step number then follow
+  that sample."), and the Attach pill's tooltip lists all of it.
+
 ## 4. Delivery
 
 Four slices, each its own PR, each verified in a real browser against a **real local stack** (Postgres 16 with the
@@ -125,9 +164,10 @@ first edit mode shipped that way.
 0. **Harness.** A script that brings the local stack up and a Playwright suite that drives edit mode against it.
 1. **Correctness:** R4 removal, R5 derived sockets, R6 layout, R10 and R11 and the `d1-build` side of plain fixes 7–8, plain fixes 1–6 and 13.
 2. **Adding:** R1 palette and add search, R2 drops and insert, R3, R9, R12, plain fixes 9–12.
-3. **Attach from the database:** R8.
+3. **Attach from the database:** R8, narrowed to operations with no input sample (2.2).
 4. **Templates:** R7.
 
 ## 5. Out of scope
 
-Rewriting a done record's lineage from the map; built-in template lists; the phone build experience (E20 stands).
+Rewriting a done record's lineage from the map; built-in template lists; the phone build experience (E20 stands); attaching tests onto a sample, a sample as an
+operation's output, and joining another process tree (R8 is operations with no input sample only: maintainer, 2026-10-19).

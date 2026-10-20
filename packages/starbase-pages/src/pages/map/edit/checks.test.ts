@@ -252,6 +252,14 @@ describe('existing records (E13)', () => {
 	const attached = (): DraftBody => run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } }]);
 	const key = recordKey('manufacturing_operations', 'op-9');
 
+	it('an attached operation wired to the sample it made blocks, by the record\'s own output; any other sample is fine', () => {
+		const onto = (id: string) => run([{ type: 'addExistingSamples', samples: [{ id, version: 1 }] }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } }]);
+		const records = (output: string): CheckCtx['records'] => ({ [key]: { version: 3, values: { method_id: 'mc', equipment_id: 'e', output_sample_id: output } } });
+		expect(texts(blocking(checks(onto('S-OUT'), { ...ctx, records: records('s-out') })), 'n2')).toEqual(['block:-:The sample this operation made cannot be an input of it. Take the wire off.']);
+		expect(blocking(checks(onto('other'), { ...ctx, records: records('s-out') }))).toEqual([]);
+		expect(blocking(checks(onto('s-out'), { ...ctx, records: {} }))).toEqual([]);
+	});
+
 	it('records that were not read yet say nothing', () => {
 		expect(blocking(checks(attached(), { ...ctx, records: {} }))).toEqual([]);
 	});

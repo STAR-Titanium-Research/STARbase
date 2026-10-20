@@ -22,6 +22,8 @@ export function useAddMenu(o: {
 	pickSamples: () => void;
 	/** "Connect to…" for the socket the search was opened on. */
 	connect: (t: MenuTarget) => void;
+	/** "From database…": the picker of recorded operations with no input sample, for the target it was chosen at (the choice it returns comes back through `applyAt`). */
+	attach?: (t: MenuTarget) => void;
 	/** Who is building (the recents are theirs). */
 	person?: () => string | null | undefined;
 	/** A choice made in an "Insert before / after" search: the page decides what it does (insertModel.ts). */
@@ -55,6 +57,7 @@ export function useAddMenu(o: {
 	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<void> {
 		if (choice.kind === 'pickSamples') return o.pickSamples();
 		if (choice.kind === 'connectTo') return void o.connect(t);
+		if (choice.kind === 'fromDatabase') return void o.attach?.(t);
 		// What was added lately is noted only once the choice did something: a refused drop or insert, or one that changed nothing, is no "recent".
 		const recent = recentIdOf(choice);
 		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
