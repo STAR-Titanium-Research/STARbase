@@ -865,3 +865,32 @@ test('undo of a field edit the actor can no longer read is refused, not failed',
   assert.equal(r.body.results[0].revert_outcome, 'refused');
   assert.equal(row(h.tables, 'physical_samples', S.one).mounted, false);
 });
+
+test('an action is not undoable or revertable while its apply is running (counts null): 409 STILL_APPLYING; they are written when it finishes', async () => {
+  let counts;
+  const tables = baseTables();
+  const h = setup({ tables, canRead: () => { counts ??= tables.bulk_actions.map((a) => a.n_applied); return true; } });
+  const id = await ran(h, member(U.ann), 'physical_samples', editBody([S.one, S.two], 'current_status', 'archived'));
+  assert.deepEqual(counts, [null], 'the action row exists, with no counts, while records are being applied');
+  assert.equal(h.tables.bulk_actions.find((a) => a.action_id === id).n_applied, 2);
+
+  h.tables.bulk_actions.find((a) => a.action_id === id).n_applied = null; // as if the apply were still running
+  const u = await undo(h, member(U.ann), id);
+  assert.equal(u.status, 409);
+  assert.equal(errorOf(u).extensions.code, 'STILL_APPLYING');
+  assert.equal(errorOf(u).message, 'That bulk action is still being applied. Try again in a moment.');
+  assert.equal(errorOf(await revert(h, admin(U.admin), id)).extensions.code, 'STILL_APPLYING');
+  assert.equal(row(h.tables, 'physical_samples', S.one).current_status, 'archived', 'nothing was reverted');
+});
+
+test('a database error while checking one record fails that record only: the rest are applied and the counts are written', async () => {
+  const h = setup({ canRead: (user, collection, id) => { if (id === S.two) throw new Error('connection reset: secret host'); return true; } });
+  const r = await apply(h, member(U.ann), 'physical_samples', editBody([S.one, S.two, S.three], 'current_status', 'archived'));
+  assert.equal(r.status, 200);
+  const res = byId(r.body.results);
+  assert.deepEqual([res[S.one].outcome, res[S.two].outcome, res[S.three].outcome], ['applied', 'failed', 'applied']);
+  assert.equal(res[S.two].reason, 'Something went wrong changing this record.');
+  assert.ok(h.log.errors.some((m) => m.includes('secret host')));
+  const action = h.tables.bulk_actions.find((a) => a.action_id === r.body.action_id);
+  assert.deepEqual([action.n_applied, action.n_failed], [2, 1]);
+});

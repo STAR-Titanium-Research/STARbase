@@ -22,7 +22,7 @@
 //
 // Errors (the Directus shape, source 'd1-bulk-actions'): 401; 403 READ_ONLY_ROLE (a Lab Viewer, on preview too); 400 INVALID_PAYLOAD,
 // NOT_APPLICABLE; 404 NOT_FOUND (an action you may not see); 403 FORBIDDEN (revert by a non-administrator), UNDO_WINDOW_CLOSED;
-// 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED, NOTHING_TO_REVERT.
+// 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED, NOTHING_TO_REVERT, STILL_APPLYING (an action's counts stay null until its apply has finished).
 //
 // Per record, preview and apply run the SAME function; a preview runs in a transaction that is always rolled back, so the two cannot disagree:
 //   1. a record the caller cannot read (ItemsService.readOne as the caller) is skipped as "not found", with no code, never revealed;
@@ -335,11 +335,11 @@ export function mount(router, context, clock = () => new Date()) {
   async function runOne(ctx, id, { commit, journal = null }) {
     const { req, acc, cfg, kind, params, fieldDef, plan } = ctx;
     const result = { id, code: null, outcome: 'skipped', reason: null, before: null, after: null, events: [] };
-    if (!(await readable(ctx, id))) {
-      result.reason = NOT_FOUND_REASON;
-      return result;
-    }
     try {
+      if (!(await readable(ctx, id))) {
+        result.reason = NOT_FOUND_REASON;
+        return result;
+      }
       await inTransaction(acc, async (trx) => {
         await lockRecord(trx, cfg, id); // the snapshot and the write see the same row
         result.code = firstOf(await readRecord(trx, req, cfg, id, cfg.code, true), cfg.code); // the label, as the caller
@@ -463,35 +463,40 @@ export function mount(router, context, clock = () => new Date()) {
   router.post('/:collection/apply', route(async ({ req, res, acc }) => {
     const ctx = await prepare(req, acc);
     const started = clock();
-    // The action row first, so every record's journal row (written in that record's own transaction) has a parent.
+    // The action row first, so every record's journal row (written in that record's own transaction) has a parent. Its counts stay null until
+    // the loop is over: undo and revert refuse an action that is still being applied (STILL_APPLYING).
     const actionId = await insertAction(database, acc, {
       collection: ctx.cfg.collection, kind: ctx.kind, params: ctx.params, created_at: started, undo_until: new Date(started.getTime() + UNDO_WINDOW_MS),
-      n_applied: 0, n_skipped: 0, n_failed: 0,
+      n_applied: null, n_skipped: null, n_failed: null,
     });
 
     const results = [];
     const counts = { total: ctx.ids.length, applied: 0, noop: 0, skipped: 0, failed: 0 };
     const unjournaled = [];
-    for (const id of ctx.ids) {
-      const r = await runOne(ctx, id, { commit: true, journal: { action_id: actionId } });
-      counts[r.outcome] += 1;
-      if (r.outcome === 'applied') emitAfterCommit(r.events);
-      else {
-        unjournaled.push({
-          action_id: actionId, record_id: String(id), record_code: r.code, outcome: r.outcome, reason: r.reason ?? null,
-          before: null, after: null, // snapshots are kept only for records that were changed
-        });
+    let undoUntil;
+    try {
+      for (const id of ctx.ids) {
+        const r = await runOne(ctx, id, { commit: true, journal: { action_id: actionId } });
+        counts[r.outcome] += 1;
+        if (r.outcome === 'applied') emitAfterCommit(r.events);
+        else {
+          unjournaled.push({
+            action_id: actionId, record_id: String(id), record_code: r.code, outcome: r.outcome, reason: r.reason ?? null,
+            before: null, after: null, // snapshots are kept only for records that were changed
+          });
+        }
+        results.push({ id: r.id, code: r.code, outcome: r.outcome, ...(r.reason ? { reason: r.reason } : {}) });
       }
-      results.push({ id: r.id, code: r.code, outcome: r.outcome, ...(r.reason ? { reason: r.reason } : {}) });
-    }
-    // The window starts when the answer is ready, not when the work began (up to 100 records take a while).
-    const undoUntil = new Date(clock().getTime() + UNDO_WINDOW_MS);
-    await database.transaction(async (trx) => {
-      if (unjournaled.length) await trx('bulk_action_rows').insert(unjournaled);
-      await trx('bulk_actions').where('action_id', actionId).update({
-        n_applied: counts.applied, n_skipped: counts.skipped + counts.noop, n_failed: counts.failed, undo_until: undoUntil,
+    } finally {
+      // Whatever happened, the counts are written so the action can be reverted. The window starts when the work is done (up to 100 records take a while).
+      undoUntil = new Date(clock().getTime() + UNDO_WINDOW_MS);
+      await database.transaction(async (trx) => {
+        if (unjournaled.length) await trx('bulk_action_rows').insert(unjournaled);
+        await trx('bulk_actions').where('action_id', actionId).update({
+          n_applied: counts.applied, n_skipped: counts.skipped + counts.noop, n_failed: counts.failed, undo_until: undoUntil,
+        });
       });
-    });
+    }
     if (counts.applied) await clearDataCache(req);
     res.json({ action_id: actionId, undo_until: undoUntil.toISOString(), results, counts });
   }));
@@ -521,12 +526,12 @@ export function mount(router, context, clock = () => new Date()) {
     // what happened to this record, written to its journal row: inside the record's transaction when it commits, else on its own below
     const finish = (db) => db('bulk_action_rows').where({ action_id: row.action_id, record_id: row.record_id }).update({ revert_outcome: out.revert_outcome, revert_reason: out.reason });
     let journaled = false;
-    if (kind === 'edit_field' && !fieldDef) {
-      refuse('That field can no longer be edited in bulk.');
-    } else if (!(await readable({ req, cfg }, row.record_id))) {
-      refuse(NOT_FOUND_REASON);
-    } else {
-      try {
+    try {
+      if (kind === 'edit_field' && !fieldDef) {
+        refuse('That field can no longer be edited in bulk.');
+      } else if (!(await readable({ req, cfg }, row.record_id))) {
+        refuse(NOT_FOUND_REASON);
+      } else {
         await inTransaction(acc, async (trx) => {
           await lockRecord(trx, cfg, row.record_id); // compared and written under the row lock
           const current = await snapshot(trx, req, cfg, row.record_id, kind, params);
@@ -549,11 +554,11 @@ export function mount(router, context, clock = () => new Date()) {
           await finish(trx);
         });
         journaled = true; // the outcome committed with the record
-      } catch (err) {
-        // a refusal or a failure rolled the record's transaction back
-        const c = classify(err);
-        Object.assign(out, { revert_outcome: c.outcome === 'skipped' ? 'refused' : 'failed', reason: c.reason });
       }
+    } catch (err) {
+      // a refusal or a failure rolled the record's transaction back
+      const c = classify(err);
+      Object.assign(out, { revert_outcome: c.outcome === 'skipped' ? 'refused' : 'failed', reason: c.reason });
     }
     if (!journaled) {
       try {
@@ -574,6 +579,7 @@ export function mount(router, context, clock = () => new Date()) {
     const finished = await database.transaction(async (lock) => {
       // The action row is locked for the whole run: a second undo or revert waits, then finds the state changed (409).
       const action = await visibleAction(lock, c, true);
+      if (action.n_applied === null || action.n_applied === undefined) throw new HttpError(409, 'STILL_APPLYING', 'That bulk action is still being applied. Try again in a moment.');
       if (!isBlank(action.revert_of)) throw new HttpError(409, 'CANNOT_REVERT_A_REVERT', 'A revert cannot be reverted. Run the action again instead.');
       const now = clock();
       if (mode === 'undo' && !admin && !(now.getTime() < new Date(action.undo_until).getTime())) {
