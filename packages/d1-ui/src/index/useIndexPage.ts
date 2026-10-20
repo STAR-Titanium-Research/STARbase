@@ -258,8 +258,9 @@ export function useIndexPage(
 		if (route.params.slug !== def.slug) return;
 		void load();
 	});
-	// A new page size or grouping starts again from page 1 (when that is another page, the URL change loads).
-	watch([view.pageSize, activeGroup], () => (raw.value.page > 1 ? go({ page: 1 }) : void load()));
+	// A new page size or grouping starts again from page 1 (when that is another page, the URL change loads). Only the person's
+	// own change counts: `activeGroup` moving as the sidebar's collections arrive must not reset a shared ?page=3 link.
+	watch([view.pageSize, view.groupBy], () => (raw.value.page > 1 ? go({ page: 1 }) : void load()));
 	void load();
 	// (Not in a component only under test, where there is nothing to unmount.)
 	if (getCurrentInstance()) {

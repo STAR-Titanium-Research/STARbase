@@ -579,6 +579,16 @@ describe('useIndexPage, the view settings', () => {
 		expect(t.items().at(-1)!.params.sort).toEqual(['nickname']);
 	});
 
+	it('keeps a shared ?page=3 link on a cold session, where the group stops being offered once the sidebar\'s collections arrive', async () => {
+		const t = setup({ page: '3' }, { collections: ['physical_samples'] });
+		const page = useIndexPage(t.host, samples, t.route, t.router, view(50, 'project_id'));
+		await flush();
+		expect(page.activeGroup.value).toBeNull();
+		expect(t.pushed).toEqual([]);
+		expect(t.route.query).toEqual({ page: '3' });
+		expect(t.items().at(-1)!.params).toMatchObject({ page: 3, sort: ['-created_at'] });
+	});
+
 	it('does not group by a relation whose collection the user cannot read', async () => {
 		const t = setup({}, { collections: ['physical_samples'] });
 		const page = useIndexPage(t.host, samples, t.route, t.router, view(50, 'project_id'));
