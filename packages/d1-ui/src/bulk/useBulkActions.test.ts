@@ -29,7 +29,7 @@ function setup(post: Post, picked = ['a', 'b', 'c'], get?: (path: string) => Pro
 	const sel = ref(picked);
 	const changed: string[][] = [];
 	const scope = effectScope();
-	const bulk = scope.run(() => useBulkActions({ api, def: samples, picked: sel, onChanged: (keep) => changed.push(keep), now: () => Date.now() }))!;
+	const bulk = scope.run(() => useBulkActions({ api, def: samples, picked: sel, onChanged: (keep) => { sel.value = keep; changed.push(keep); }, now: () => Date.now() }))!;
 	return { api, bulk, changed, sel, stop: () => scope.stop() };
 }
 
@@ -252,6 +252,39 @@ describe('the toast', () => {
 		expect(t.bulk.toasts.value).toHaveLength(1);
 		t.bulk.dismiss('act-1');
 		expect(t.bulk.toasts.value).toHaveLength(0);
+		t.stop();
+	});
+
+	it('an undo keeps the rows ticked since the apply: only the rows put back leave the selection', async () => {
+		const ten = Array.from({ length: 10 }, (_, i) => `r${i}`);
+		const more = ['x1', 'x2', 'x3', 'x4', 'x5'];
+		const t = setup(async (path) => {
+			if (path.endsWith('/preview')) return preview(ten.map((id) => [id, 'ok']));
+			if (path.endsWith('/apply')) return applied(ten.map((id) => [id, 'applied']));
+			return { data: { state: 'undone', results: ten.map((id) => ({ id, revert_outcome: 'reverted' })) } };
+		}, ten);
+		t.bulk.open(entry('restrict'));
+		await flush();
+		await t.bulk.apply();
+		expect(t.sel.value).toEqual([]);
+		t.sel.value = more; // five more rows ticked while the toast was up
+		await t.bulk.undo('act-1');
+		expect(t.sel.value).toEqual(more);
+		t.stop();
+	});
+
+	it('an undo that could not put a row back keeps it ticked beside the rows ticked since', async () => {
+		const t = setup(async (path) => {
+			if (path.endsWith('/preview')) return preview([['a', 'ok'], ['b', 'ok']]);
+			if (path.endsWith('/apply')) return applied([['a', 'applied'], ['b', 'applied']]);
+			return { data: { state: 'partly_reverted', results: [{ id: 'a', revert_outcome: 'reverted' }, { id: 'b', revert_outcome: 'changed_since' }] } };
+		}, ['a', 'b']);
+		t.bulk.open(entry('restrict'));
+		await flush();
+		await t.bulk.apply();
+		t.sel.value = ['x1', 'a']; // 'a' ticked again: it is put back, so it leaves
+		await t.bulk.undo('act-1');
+		expect(t.sel.value).toEqual(['x1', 'b']);
 		t.stop();
 	});
 
