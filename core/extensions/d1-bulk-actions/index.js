@@ -42,7 +42,10 @@
 // bulk_actions row (revert_of, mail_state 'none', undo_until = created_at so it can never be undone); the original becomes undone, reverted
 // or partly_reverted (an administrator can revert a partly_reverted action again to retry the rest).
 
-import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest } from '../d1-record-access/index.js';
+import {
+  COLLECTIONS, HttpError as AccessError, PERSON_COLUMNS, READ_ONLY_ROLE_MESSAGE, escapeHtml, isLabViewer, isWriteRequest, mailContent, makeAccessOps, recipientAddress,
+  recordLink, roleLabel, withTimeout,
+} from '../d1-record-access/index.js';
 import { accountAdmin } from '../d1-people-admin/index.js';
 
 const SOURCE = 'd1-bulk-actions';
@@ -52,9 +55,16 @@ const MAX_IDS = 100;
 const UNDO_WINDOW_MS = 60_000;
 const LIST_DEFAULT = 50;
 const LIST_MAX = 200;
+const MAIL_TIMEOUT_MS = 10_000;
+const MAIL_GRACE_MS = 2_000; // the summary mail is due this long after the undo window closes
+const MAIL_LIST_MAX = 20; // codes listed in one summary mail, then "and N more"
 
-// The kinds this release implements (the others are in the journal's CHECK already, for the next ones).
-export const KINDS = ['restrict', 'unrestrict', 'edit_field'];
+// The ownership and access kinds run through d1-record-access's extracted bodies; the others update the record as the caller.
+export const ACCESS_KINDS = ['assign_team', 'change_owner', 'share_access', 'remove_access'];
+export const KINDS = ['restrict', 'unrestrict', 'edit_field', ...ACCESS_KINDS];
+// The kinds that tell someone (a summary email, held until the undo window closes); remove access, restrict and edit a field mail nobody.
+export const MAILING_KINDS = ['assign_team', 'change_owner', 'share_access'];
+const isAccessKind = (kind) => ACCESS_KINDS.includes(kind);
 
 // The fields a bulk edit may set, per collection: { field: { kind, label, clearable, values?, relation? } }. The server's own allow-list, mirrored by
 // `bulkFields` of the index pages (packages/d1-ui/src/index/indexConfig.ts); the value is validated against the kind, then Directus's permissions
@@ -89,6 +99,23 @@ export const BULK_FIELDS = {
 const NOT_FOUND_REASON = 'That record does not exist, or you cannot see it.';
 const NO_PERMISSION_REASON = 'You do not have permission to change this record.';
 const FAILED_REASON = 'Something went wrong changing this record.';
+const NOT_OWNER_REASON = 'You are not the owner of this record.';
+const OWNER_REMOVE_REASON = 'That person is the owner of this record, so their access cannot be removed. Change the owner instead.';
+const NOT_OWNABLE_REASON = 'A team cannot own this kind of record.';
+const NO_MANAGER_REASON = 'That team has no manager to look after the record — add a manager first'; // d1-record-access's TEAM_HAS_NO_MANAGER wording
+// what an undo or revert says when the rules no longer allow putting a record back (Rulings O4 and O5)
+const REVERT_NOT_MANAGER = 'You can no longer manage this record, so it cannot be handed back. Ask an administrator to revert it.';
+const REVERT_NO_MANAGER = 'The team that owned this record has no manager now, so it cannot be handed back.';
+const REVERT_NO_OWNER = 'This record had no owner, so the owner cannot be put back automatically.';
+const REVERT_MISMATCH = 'The record could not be put back exactly as it was, so it was left alone.';
+
+// Preview warnings (Ruling O5): plain words, the same for every record they apply to (the dialog lists each distinct one once).
+export const WARN_TEAM_MANAGERS_LOSE = 'The managers of the team that owns it now do not keep their access.';
+export const WARN_YOU_LOSE_MANAGE = 'You will no longer be able to manage this record yourself, so an undo may be refused.';
+export const warnBlocked = (name, blocked) =>
+  blocked?.reason === 'no_login'
+    ? `${name} has no D1 login yet, so they cannot open this record.`
+    : `${name} cannot open this record yet: something it sits under is hidden from them.`;
 
 class HttpError extends Error {
   constructor(status, code, message, extensions = {}) {
@@ -101,6 +128,8 @@ class HttpError extends Error {
 
 // Thrown inside a row's transaction to roll it back on purpose (a preview, a record that is skipped, already as asked, or failed).
 class Rollback extends Error {}
+// Thrown when an undo or revert of an access change did not end exactly where it began: that record's transaction is rolled back.
+class Mismatch extends Error {}
 
 const isBlank = (v) => v === undefined || v === null || v === '';
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -119,6 +148,7 @@ const firstOf = (row, fields) => {
 const isForbidden = (e) => e?.status === 403 || e?.code === 'FORBIDDEN';
 const isCollection = (name) => typeof name === 'string' && hasOwn(COLLECTIONS, name);
 const ownable = (cfg) => cfg.ownerTeam === true; // samples, operations, tests, campaigns (not projects)
+const ROLE_RANK = { view: 1, edit: 2, investigator: 2 };
 
 // ---- pure helpers (exported for the tests) ---------------------------------------------------------------
 
@@ -172,6 +202,7 @@ export function checkValue(def, value) {
 // What a kind does to one record: the update payload and the snapshot keys it cares about.
 //   { payload, noop(before) }  noop: is the record already as asked?
 export function planFor(kind, params, fieldDef) {
+  if (isAccessKind(kind)) return { access: true }; // runs through runAccess (it decides noop itself)
   if (kind === 'restrict' || kind === 'unrestrict') {
     const want = kind === 'restrict';
     return { payload: { restricted: want }, noop: (before) => before.restricted === want };
@@ -181,6 +212,57 @@ export function planFor(kind, params, fieldDef) {
   return { payload: { [field]: value }, noop: (before) => before[field] === value };
 }
 
+// ---- the summary email (pure) --------------------------------------------------------------------------------
+
+const oneLine = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').trim();
+
+// One mail to one recipient listing what an action gave them: { subject, text, html }. `items`: [{ code, link, blocked }] in the order to list; `blocked`
+// means the recipient cannot read that record yet (no link is shown, as in the single-record mail; `blockedReason` 'parent' or 'no_login' words it). `mode`: 'team_owner' (a team
+// was made the owner; the mail goes to its managers, `teamName`), 'owner' (the recipient was made the owner) or 'share' (the recipient was given access;
+// `role` is the level in words, `teamName` when it comes through a team). One record reads exactly as the single-record mail of d1-record-access
+// (mailContent); more list the first MAIL_LIST_MAX codes, then "and N more". Every interpolated value is HTML-escaped.
+export function summaryContent({ adder, kind, items, mode, role = null, teamName = null, blockedReason = null }) {
+  if (items.length === 1) {
+    const [only] = items;
+    return mailContent({
+      adder, role, kind, code: only.code, title: null, link: only.blocked ? null : only.link, transfer: mode === 'owner', blockedReason: only.blocked ? blockedReason : null,
+      via: mode === 'share' ? teamName : null, ownerTeam: mode === 'team_owner' ? teamName : null,
+    });
+  }
+  const who = oneLine(adder) || 'Someone';
+  const team = oneLine(teamName);
+  const what = `${items.length} ${oneLine(kind)}s`;
+  const phrase = mode === 'team_owner' ? `made the team ${team} the owner of ${what}` : mode === 'owner' ? `made you the owner of ${what}` : `gave you access to ${what}${team ? ` via ${team}` : ''}`;
+  const listed = items.slice(0, MAIL_LIST_MAX);
+  const more = items.length - listed.length;
+  const roleLine = oneLine(role);
+  const manager = mode === 'team_owner' ? `As a manager of ${team} you can share them, transfer them and delete them.` : null;
+  const wait = items.some((i) => i.blocked)
+    ? 'You cannot open some of them yet. You will be able to once you have a D1 login and access to what they sit under.'
+    : null;
+  const text = [
+    `${who} ${phrase}.`,
+    manager,
+    mode === 'share' && roleLine ? `Your role: ${roleLine}.` : null,
+    '',
+    ...listed.map((i) => `- ${oneLine(i.code)}${i.link && !i.blocked ? `: ${i.link}` : ''}`),
+    more > 0 ? `- and ${more} more` : null,
+    wait ? '' : null,
+    wait,
+    '',
+    'If you did not expect this, you can ignore this email.',
+  ].filter((line) => line !== null).join('\n');
+  const html = [
+    `<p><strong>${escapeHtml(who)}</strong> ${escapeHtml(phrase)}.</p>`,
+    manager ? `<p>${escapeHtml(manager)}</p>` : '',
+    mode === 'share' && roleLine ? `<p>Your role: <strong>${escapeHtml(roleLine)}</strong>.</p>` : '',
+    `<ul>${listed.map((i) => `<li>${i.link && !i.blocked ? `<a href="${escapeHtml(i.link)}">${escapeHtml(oneLine(i.code))}</a>` : escapeHtml(oneLine(i.code))}</li>`).join('')}${more > 0 ? `<li>and ${more} more</li>` : ''}</ul>`,
+    wait ? `<p>${escapeHtml(wait)}</p>` : '',
+    '<p>If you did not expect this, you can ignore this email.</p>',
+  ].filter(Boolean).join('\n');
+  return { subject: `${who} ${phrase}`, text, html };
+}
+
 // ---- the endpoint ----------------------------------------------------------------------------------------
 
 export default {
@@ -188,9 +270,13 @@ export default {
   handler: (router, context) => mount(router, context),
 };
 
-// `clock` is injectable for the tests (the undo window).
-export function mount(router, context, clock = () => new Date()) {
+// `clock` is injectable for the tests (the undo window); so are `timers` (the per-action mail timer: { set, clear }; `sweep: false` skips the startup sweep).
+// Returns { swept }: the promise of the startup sweep of overdue summary mails (for the tests).
+export function mount(router, context, clock = () => new Date(), timers = {}) {
   const { database, logger, services, env, emitter } = context;
+  const setTimer = timers.set ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = timers.clear ?? ((handle) => clearTimeout(handle));
+  const ops = makeAccessOps(context); // the rules of the access tables: the extracted bodies of d1-record-access, used as they are
   const warn = (message) => logger?.warn?.(`${SOURCE}: ${message}`);
   const labAdminRoleId = (typeof env?.D1_LAB_ADMIN_ROLE_ID === 'string' && env.D1_LAB_ADMIN_ROLE_ID.trim()) || DEFAULT_LAB_ADMIN_ROLE_ID;
 
@@ -297,10 +383,24 @@ export function mount(router, context, clock = () => new Date()) {
       return { [params.field]: normaliseValue(def.kind, rec[params.field]) };
     }
     const ownerId = rec[cfg.ownerField];
-    const people = (await trx(cfg.table).where(cfg.fk, id).whereNull('team_access_id').select('person_id', 'role'))
-      .filter((r) => r.role !== 'own' && String(r.person_id) !== String(ownerId ?? ''))
-      .map((r) => ({ person_id: String(r.person_id).toLowerCase(), role: r.role }))
-      .sort((a, b) => a.person_id.localeCompare(b.person_id));
+    // a person's OWN list entry: the access row, or the old co-owner row (samples) read as the role it stands for; the stronger one when both exist
+    const own = new Map();
+    const put = (personId, role) => {
+      const key = String(personId).toLowerCase();
+      if (!own.has(key) || (ROLE_RANK[role] ?? 0) > (ROLE_RANK[own.get(key)] ?? 0)) own.set(key, role);
+    };
+    for (const r of await trx(cfg.table).where(cfg.fk, id).whereNull('team_access_id').select('person_id', 'role')) {
+      if (r.role !== 'own' && String(r.person_id) !== String(ownerId ?? '')) put(r.person_id, r.role);
+    }
+    if (cfg.legacy) {
+      const logins = (await trx(cfg.legacy.table).where(cfg.legacy.fk, id).select('user_id')).map((r) => r.user_id).filter((v) => !isBlank(v));
+      if (logins.length) {
+        for (const p of await trx('people').whereIn('user_id', logins).select('person_id')) {
+          if (String(p.person_id) !== String(ownerId ?? '')) put(p.person_id, cfg.legacy.role);
+        }
+      }
+    }
+    const people = [...own].map(([person_id, role]) => ({ person_id, role })).sort((a, b) => a.person_id.localeCompare(b.person_id));
     const teams = (await trx(`${cfg.kind}_team_access`).where(cfg.fk, id).select('team_id', 'role', 'trust_new_members'))
       .filter((r) => r.role !== 'own')
       .map((r) => ({ team_id: String(r.team_id).toLowerCase(), role: r.role, trust_new_members: toBool(r.trust_new_members) }))
@@ -317,7 +417,18 @@ export function mount(router, context, clock = () => new Date()) {
   // -- errors from the update ---------------------------------------------------------------------------
   // The refusal text of d1-access-guard is plain words made for the person; Directus's own 403 gets one sentence of ours.
   // Directus validation errors (a 4xx with a message) are shown as they are; anything else (a database error) is logged and generic.
-  function classify(err) {
+  function classify(err, phase = 'apply') {
+    if (err instanceof AccessError) {
+      // d1-record-access's own refusals (a 4xx with plain words): a skip, or for an undo that can no longer be done, a refusal
+      if (err.code === 'FORBIDDEN') return { outcome: 'skipped', reason: phase === 'revert' ? REVERT_NOT_MANAGER : NOT_OWNER_REASON };
+      if (err.code === 'TEAM_HAS_NO_MANAGER' && phase === 'revert') return { outcome: 'skipped', reason: REVERT_NO_MANAGER };
+      if (err.status >= 500) {
+        logger?.error?.(`${SOURCE}: ${err?.stack || err?.message || err}`);
+        return { outcome: 'failed', reason: FAILED_REASON };
+      }
+      return { outcome: 'skipped', reason: err.message };
+    }
+    if (err instanceof Mismatch) return { outcome: 'failed', reason: REVERT_MISMATCH };
     if (isForbidden(err)) {
       const reason = err?.extensions?.source === 'd1-access-guard' && !isBlank(err.extensions.reason) ? String(err.extensions.reason) : NO_PERMISSION_REASON;
       return { outcome: 'skipped', reason };
@@ -329,12 +440,117 @@ export function mount(router, context, clock = () => new Date()) {
     return { outcome: 'failed', reason: FAILED_REASON };
   }
 
+  // -- the ownership and access kinds, one record -----------------------------------------------------------
+  // Inside the record's transaction (the row is locked and `before` is read): the caller must manage the record (a refusal is a skip), then the kind's own
+  // rules, then the write, which is one of d1-record-access's own bodies (never a copy of its rules). Returns { noop: true } (nothing written) or
+  // { noop: false, warning? }; a preview adds the warning, worked out after the change inside the transaction the preview rolls back. A refusal is
+  // thrown as d1-record-access's HttpError and becomes the row's skip reason.
+  async function transferWarnings(trx, args, before) {
+    const { acc } = args;
+    const out = [];
+    const me = await ops.callerName(trx, acc);
+    // the acting person managed it through the team that owned it: that team's managers are not kept (Ruling O5)
+    if (before.owner_team_id && me.personId
+      && (await trx('team_members').where({ team_id: before.owner_team_id, person_id: me.personId, is_manager: true }).first('person_id'))) out.push(WARN_TEAM_MANAGERS_LOSE);
+    if (!(await ops.canManage(args, trx))) out.push(WARN_YOU_LOSE_MANAGE);
+    return out;
+  }
+
+  async function runAccess(trx, ctx, id, before, preview) {
+    const { req, acc, cfg, kind, params } = ctx;
+    const args = { req, acc, cfg, id };
+    await ops.requireManage(args, trx);
+    const warnings = [];
+    if (kind === 'assign_team') {
+      if (!cfg.ownerTeam) throw new AccessError(409, 'NOT_OWNABLE_BY_TEAM', NOT_OWNABLE_REASON);
+      if (before.owner_team_id === params.team_id) return { noop: true };
+      await ops.transfer(trx, args, { team_id: params.team_id });
+      if (preview) warnings.push(...(await transferWarnings(trx, args, before)));
+    } else if (kind === 'change_owner') {
+      if (before.owner_person_id === params.person_id) return { noop: true };
+      const done = await ops.transfer(trx, args, { person_id: params.person_id });
+      if (preview) {
+        warnings.push(...(await transferWarnings(trx, args, before)));
+        try {
+          const stop = await ops.blockedFor(trx, cfg, id, done.record, done.next, acc);
+          if (stop) warnings.push(warnBlocked(firstOf(done.next, ['full_name']) ?? 'The new owner', stop));
+        } catch (err) {
+          warn(`could not tell whether the new owner can open ${cfg.collection} ${id}: ${err?.message || err}`);
+        }
+      }
+    } else if (kind === 'share_access' && params.person_id) {
+      if (before.owner_person_id === params.person_id) await ops.addPerson(trx, args, { person_id: params.person_id, role: params.role }); // refuses: the owner already
+      const person = await ops.personById(trx, params.person_id);
+      const had = person ? await ops.rowsOf(trx, cfg, id, person) : { access: null, legacy: null };
+      const level = had.access?.role ?? (had.legacy ? cfg.legacy.role : null);
+      if (level === params.role) return { noop: true };
+      if (level) await ops.changePersonRole(trx, args, { person_id: params.person_id, role: params.role });
+      else await ops.addPerson(trx, args, { person_id: params.person_id, role: params.role });
+    } else if (kind === 'share_access') {
+      const grant = await ops.grantOf(trx, cfg, id, params.team_id);
+      const listed = grant && grant.role !== 'own'; // the owning team is the owner, not a share (addTeam refuses it)
+      if (listed && grant.role === params.role) return { noop: true };
+      if (listed) await ops.changeTeam(trx, args, { team_id: params.team_id, patch: { role: params.role } });
+      else await ops.addTeam(trx, args, { team_id: params.team_id, role: params.role });
+    } else if (params.person_id) {
+      // remove_access, a person
+      const person = await ops.personById(trx, params.person_id);
+      if (!person) return { noop: true };
+      if (before.owner_person_id === params.person_id) throw new AccessError(409, 'CONFLICT', OWNER_REMOVE_REASON);
+      const had = await ops.rowsOf(trx, cfg, id, person);
+      if (!had.access && !had.legacy) return { noop: true };
+      await ops.removePerson(trx, args, { person_id: params.person_id });
+    } else {
+      // remove_access, a team
+      if (!(await ops.grantOf(trx, cfg, id, params.team_id))) return { noop: true };
+      await ops.removeTeam(trx, args, { team_id: params.team_id }); // refuses the owning team (TEAM_OWNS_RECORD)
+    }
+    return { noop: false, ...(warnings.length ? { warning: warnings.join(' ') } : {}) };
+  }
+
+  // Undo and revert of an access change: from `current` (equal to what the action left) back to `before`, through the same bodies (no mail). The owner first
+  // (a transfer keeps the previous person owner as Can edit and removes the new owner's own row, so the list is read again), then people, then team grants.
+  // Refusals (the old owner team has no manager now; the caller cannot manage any more, Rulings O4 and O5) are thrown and become `refused`.
+  async function restoreAccess(trx, args, current, before) {
+    const { req, cfg, id } = args;
+    let now = current;
+    if (now.owner_team_id !== before.owner_team_id || now.owner_person_id !== before.owner_person_id) {
+      if (before.owner_team_id) await ops.transfer(trx, args, { team_id: before.owner_team_id });
+      else if (before.owner_person_id) await ops.transfer(trx, args, { person_id: before.owner_person_id });
+      else throw new AccessError(409, 'CONFLICT', REVERT_NO_OWNER);
+      now = await snapshot(trx, req, cfg, id, 'assign_team', {});
+    }
+    const haveP = new Map(now.people.map((p) => [p.person_id, p.role]));
+    const wantP = new Map(before.people.map((p) => [p.person_id, p.role]));
+    for (const personId of haveP.keys()) if (!wantP.has(personId)) await ops.removePerson(trx, args, { person_id: personId });
+    for (const [personId, role] of wantP) {
+      if (!haveP.has(personId)) await ops.addPerson(trx, args, { person_id: personId, role });
+      else if (haveP.get(personId) !== role) await ops.changePersonRole(trx, args, { person_id: personId, role });
+    }
+    const haveT = new Map(now.teams.map((t) => [t.team_id, t]));
+    const wantT = new Map(before.teams.map((t) => [t.team_id, t]));
+    for (const teamId of haveT.keys()) if (!wantT.has(teamId)) await ops.removeTeam(trx, args, { team_id: teamId });
+    for (const [teamId, want] of wantT) {
+      const had = haveT.get(teamId);
+      if (!had) {
+        await ops.addTeam(trx, args, { team_id: teamId, role: want.role });
+        if (want.trust_new_members) await ops.changeTeam(trx, args, { team_id: teamId, patch: { trust_new_members: true } });
+      } else {
+        const patch = {};
+        if (had.role !== want.role) patch.role = want.role;
+        if (had.trust_new_members !== want.trust_new_members) patch.trust_new_members = want.trust_new_members;
+        if (Object.keys(patch).length) await ops.changeTeam(trx, args, { team_id: teamId, patch });
+      }
+    }
+    if (!snapshotsEqual(await snapshot(trx, req, cfg, id, 'assign_team', {}), before)) throw new Mismatch();
+  }
+
   // -- one record, preview or apply -----------------------------------------------------------------------
   // `commit`: keep the change (apply) or roll it back (preview). `journal`: { action_id } writes the record's journal row inside the same
   // transaction. Returns { id, code, outcome, reason, before, after, events }.
   async function runOne(ctx, id, { commit, journal = null }) {
     const { req, acc, cfg, kind, params, fieldDef, plan } = ctx;
-    const result = { id, code: null, outcome: 'skipped', reason: null, before: null, after: null, events: [] };
+    const result = { id, code: null, outcome: 'skipped', reason: null, warning: null, before: null, after: null, events: [] };
     try {
       if (!(await readable(ctx, id))) {
         result.reason = NOT_FOUND_REASON;
@@ -344,16 +560,27 @@ export function mount(router, context, clock = () => new Date()) {
         await lockRecord(trx, cfg, id); // the snapshot and the write see the same row
         result.code = firstOf(await readRecord(trx, req, cfg, id, cfg.code, true), cfg.code); // the label, as the caller
         result.before = await snapshot(trx, req, cfg, id, kind, params);
-        if (plan.noop(result.before)) {
-          result.outcome = 'noop';
-          result.after = result.before;
-          throw new Rollback();
-        }
-        try {
-          await itemsFor(req, cfg.collection, trx).updateOne(id, plan.payload, { bypassEmitAction: (e) => result.events.push(e), autoPurgeCache: false });
-        } catch (err) {
-          Object.assign(result, classify(err));
-          throw new Rollback();
+        if (plan.access) {
+          // ownership and access: a refusal is thrown (d1-record-access's HttpError) and rolls the record's transaction back
+          const done = await runAccess(trx, ctx, id, result.before, !commit);
+          if (done.noop) {
+            result.outcome = 'noop';
+            result.after = result.before;
+            throw new Rollback();
+          }
+          result.warning = done.warning ?? null;
+        } else {
+          if (plan.noop(result.before)) {
+            result.outcome = 'noop';
+            result.after = result.before;
+            throw new Rollback();
+          }
+          try {
+            await itemsFor(req, cfg.collection, trx).updateOne(id, plan.payload, { bypassEmitAction: (e) => result.events.push(e), autoPurgeCache: false });
+          } catch (err) {
+            Object.assign(result, classify(err));
+            throw new Rollback();
+          }
         }
         result.after = await snapshot(trx, req, cfg, id, kind, params);
         if (snapshotsEqual(result.before, result.after)) {
@@ -392,7 +619,9 @@ export function mount(router, context, clock = () => new Date()) {
     const body = isObject(req.body) ? req.body : {};
     const kind = body.kind;
     if (typeof kind !== 'string' || !KINDS.includes(kind)) throw new HttpError(400, 'INVALID_PAYLOAD', 'That action is not available.');
-    if ((kind === 'restrict' || kind === 'unrestrict') && !ownable(cfg)) throw new HttpError(400, 'NOT_APPLICABLE', 'That action does not apply to this kind of record.');
+    // restrict, change owner, share and remove access are for the four ownable record types; assign to a team is accepted anywhere (a record that no team
+    // can own is skipped per row, Ruling O3)
+    if (kind !== 'edit_field' && kind !== 'assign_team' && !ownable(cfg)) throw new HttpError(400, 'NOT_APPLICABLE', 'That action does not apply to this kind of record.');
     if (kind === 'edit_field' && !hasOwn(BULK_FIELDS, cfg.collection)) throw new HttpError(400, 'NOT_APPLICABLE', 'That action does not apply to this kind of record.');
 
     const rawIds = body.ids;
@@ -423,7 +652,41 @@ export function mount(router, context, clock = () => new Date()) {
         throw new HttpError(400, 'INVALID_PAYLOAD', err.message);
       }
     }
+    if (isAccessKind(kind)) params = parseAccessParams(cfg, kind, isObject(body.params) ? body.params : {});
     return { cfg, kind, ids, params, fieldDef };
+  }
+
+  // params of the access kinds: assign_team { team_id }, change_owner { person_id }, share_access { person_id | team_id, role }, remove_access { person_id | team_id }.
+  // Ids are lower-cased (the snapshots hold them so).
+  function parseAccessParams(cfg, kind, given) {
+    const ask = (key, label) => {
+      if (!isUuid(given[key])) throw new HttpError(400, 'INVALID_PAYLOAD', `${key} must be ${label}.`);
+      return given[key].toLowerCase();
+    };
+    if (kind === 'assign_team') return { team_id: ask('team_id', 'a team id') };
+    if (kind === 'change_owner') return { person_id: ask('person_id', 'a person id') };
+    const hasPerson = given.person_id !== undefined;
+    const hasTeam = given.team_id !== undefined;
+    if (hasPerson && hasTeam) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a person_id or a team_id, not both.');
+    if (!hasPerson && !hasTeam) throw new HttpError(400, 'INVALID_PAYLOAD', 'Choose a person or a team.');
+    const target = hasPerson ? { person_id: ask('person_id', 'a person id') } : { team_id: ask('team_id', 'a team id') };
+    if (kind === 'remove_access') return target;
+    if (given.role !== 'view' && given.role !== 'edit') throw new HttpError(400, 'INVALID_PAYLOAD', 'The access level must be view or edit.');
+    if (!cfg.roles.includes(given.role)) throw new HttpError(400, 'INVALID_PAYLOAD', `The access level must be one of: ${cfg.roles.join(', ')}.`);
+    return { ...target, role: given.role };
+  }
+
+  // The person or team the action points at must exist (and a person be active) before any record is touched, so one wrong choice is one 400, not a
+  // skip on every row. Removing access needs neither: a person or team that is gone is simply not listed.
+  async function checkTarget(kind, params) {
+    if (kind === 'remove_access') return;
+    if (params.team_id) {
+      if (!(await database('teams').where('team_id', params.team_id).first('team_id'))) throw new HttpError(400, 'INVALID_PAYLOAD', 'That team does not exist.');
+    } else if (params.person_id) {
+      const person = await ops.personById(database, params.person_id);
+      if (!person) throw new HttpError(400, 'INVALID_PAYLOAD', 'That person does not exist.');
+      if (person.active === false) throw new HttpError(400, 'INVALID_PAYLOAD', 'That person is not active.');
+    }
   }
 
   // A relation value must be something the CALLER can read (else a person could probe for ids they may not see). Checked once per request.
@@ -442,6 +705,7 @@ export function mount(router, context, clock = () => new Date()) {
   async function prepare(req, acc) {
     const parsed = parseRequest(req);
     await checkRelation(req, parsed.fieldDef, parsed.params.value);
+    await checkTarget(parsed.kind, parsed.params);
     return { ...parsed, req, acc, plan: planFor(parsed.kind, parsed.params, parsed.fieldDef) };
   }
 
@@ -454,7 +718,7 @@ export function mount(router, context, clock = () => new Date()) {
       const r = await runOne(ctx, id, { commit: false });
       const status = r.outcome === 'applied' ? 'ok' : r.outcome === 'noop' ? 'noop' : 'skip';
       counts[status] += 1;
-      results.push({ id: r.id, code: r.code, status, ...(r.reason ? { reason: r.reason } : {}) });
+      results.push({ id: r.id, code: r.code, status, ...(r.reason ? { reason: r.reason } : {}), ...(status === 'ok' && r.warning ? { warning: r.warning } : {}) });
     }
     res.json({ results, counts });
   }));
@@ -474,6 +738,7 @@ export function mount(router, context, clock = () => new Date()) {
     const counts = { total: ctx.ids.length, applied: 0, noop: 0, skipped: 0, failed: 0 };
     const unjournaled = [];
     let undoUntil;
+    let mailDue = null;
     try {
       for (const id of ctx.ids) {
         const r = await runOne(ctx, id, { commit: true, journal: { action_id: actionId } });
@@ -490,13 +755,17 @@ export function mount(router, context, clock = () => new Date()) {
     } finally {
       // Whatever happened, the counts are written so the action can be reverted. The window starts when the work is done (up to 100 records take a while).
       undoUntil = new Date(clock().getTime() + UNDO_WINDOW_MS);
+      // The summary email is held until the window closes (plus a moment), and only when something changed and the kind tells someone.
+      if (counts.applied && MAILING_KINDS.includes(ctx.kind)) mailDue = new Date(undoUntil.getTime() + MAIL_GRACE_MS);
       await database.transaction(async (trx) => {
         if (unjournaled.length) await trx('bulk_action_rows').insert(unjournaled);
         await trx('bulk_actions').where('action_id', actionId).update({
           n_applied: counts.applied, n_skipped: counts.skipped + counts.noop, n_failed: counts.failed, undo_until: undoUntil,
+          ...(mailDue ? { mail_state: 'pending', mail_due_at: mailDue } : {}),
         });
       });
     }
+    if (mailDue) scheduleMail(actionId, mailDue, req.schema);
     if (counts.applied) await clearDataCache(req);
     res.json({ action_id: actionId, undo_until: undoUntil.toISOString(), results, counts });
   }));
@@ -539,14 +808,19 @@ export function mount(router, context, clock = () => new Date()) {
           if (!snapshotsEqual(current, after)) {
             Object.assign(out, { revert_outcome: 'changed_since', reason: 'Changed since this action ran, so it was left alone.', after: current });
           } else {
-            const payload = kind === 'edit_field'
-              ? { [params.field]: normaliseValue(fieldDef.kind, before[params.field]) }
-              : { restricted: before.restricted === true };
-            try {
-              await itemsFor(req, cfg.collection, trx).updateOne(row.record_id, payload, { bypassEmitAction: (e) => out.events.push(e), autoPurgeCache: false });
-            } catch (err) {
-              out.after = current;
-              throw err;
+            if (isAccessKind(kind)) {
+              // owner, access list and team grants go back through d1-record-access's bodies (no mail); a rule that forbids it now is a refusal
+              await restoreAccess(trx, { req, acc, cfg, id: row.record_id }, current, before);
+            } else {
+              const payload = kind === 'edit_field'
+                ? { [params.field]: normaliseValue(fieldDef.kind, before[params.field]) }
+                : { restricted: before.restricted === true };
+              try {
+                await itemsFor(req, cfg.collection, trx).updateOne(row.record_id, payload, { bypassEmitAction: (e) => out.events.push(e), autoPurgeCache: false });
+              } catch (err) {
+                out.after = current;
+                throw err;
+              }
             }
             out.after = await snapshot(trx, req, cfg, row.record_id, kind, params);
             Object.assign(out, { revert_outcome: 'reverted', reason: null });
@@ -557,7 +831,7 @@ export function mount(router, context, clock = () => new Date()) {
       }
     } catch (err) {
       // a refusal or a failure rolled the record's transaction back
-      const c = classify(err);
+      const c = classify(err, 'revert');
       Object.assign(out, { revert_outcome: c.outcome === 'skipped' ? 'refused' : 'failed', reason: c.reason });
     }
     if (!journaled) {
@@ -599,7 +873,7 @@ export function mount(router, context, clock = () => new Date()) {
       if (!applied.length) throw new HttpError(409, 'NOTHING_TO_REVERT', 'That bulk action has nothing left to revert.');
       if (!todo.length) {
         // every record is reverted but the state never got written (a crash after the records committed): put it right, then answer 409
-        await lock('bulk_actions').where('action_id', actionId).update({ state: mode === 'undo' ? 'undone' : 'reverted' });
+        await lock('bulk_actions').where('action_id', actionId).update({ state: mode === 'undo' ? 'undone' : 'reverted', ...(action.mail_state === 'pending' ? { mail_state: 'cancelled' } : {}) });
         return { healed: true };
       }
 
@@ -629,9 +903,16 @@ export function mount(router, context, clock = () => new Date()) {
           after: o.revert_outcome === 'reverted' ? JSON.stringify(o.after) : null,
         })));
       }
-      await lock('bulk_actions').where('action_id', actionId).update({ state });
-      return { state, revertId, outs, revertedNow };
+      // The held summary mail: an undo cancels it; so does a revert that put anything back (the mail would announce what is no longer so). This runs under the
+      // action's row lock, and the sender claims the mail under the same lock, so one of the two wins and never both.
+      const cancelMail = action.mail_state === 'pending' && (mode === 'undo' || revertedNow > 0);
+      await lock('bulk_actions').where('action_id', actionId).update({ state, ...(cancelMail ? { mail_state: 'cancelled' } : {}) });
+      return { state, revertId, outs, revertedNow, cancelMail };
     });
+    if (finished.cancelMail && mailTimers.has(keyOf(actionId))) {
+      clearTimer(mailTimers.get(keyOf(actionId)));
+      mailTimers.delete(keyOf(actionId));
+    }
     if (finished.healed) throw new HttpError(409, 'ALREADY_REVERTED', 'That bulk action has already been undone or reverted.');
     if (finished.revertedNow) await clearDataCache(req);
     res.json({
@@ -691,4 +972,124 @@ export function mount(router, context, clock = () => new Date()) {
         .sort((a, b) => String(a.record_code ?? '').localeCompare(String(b.record_code ?? '')) || a.record_id.localeCompare(b.record_id)),
     });
   }));
+
+  // -- summary emails, held until the undo window closes (spec 3.4) --------------------------------------------
+  // At apply an action that tells someone is `pending` with mail_due_at = undo_until + 2 s, and a timer (one per action) sends it then. Undo (and a revert
+  // that put anything back) sets `cancelled` under the action's row lock. The sender CLAIMS the held mail under the same lock (pending -> sent, committed)
+  // before it sends, so an undo and a send can never both happen; a mail that fails afterwards is logged and never undoes the change (the claim stands: one
+  // try). On start a sweep sends every overdue pending action and re-arms the ones not yet due, so a restart only delays mail, it never loses it.
+  const mailTimers = new Map();
+  const keyOf = (actionId) => String(actionId).toLowerCase();
+
+  function scheduleMail(actionId, dueAt, schema) {
+    const key = keyOf(actionId);
+    if (mailTimers.has(key)) clearTimer(mailTimers.get(key));
+    const handle = setTimer(() => {
+      mailTimers.delete(key);
+      sendActionMail(actionId, schema).catch((err) => warn(`the summary mail of bulk action ${actionId} failed: ${err?.message || err}`));
+    }, Math.max(0, dueAt.getTime() - clock().getTime()));
+    handle?.unref?.(); // a pending mail timer must never keep the process (or a test run) alive
+    mailTimers.set(key, handle);
+  }
+
+  // Who is mailed, read now (a person removed since is not mailed): { person, mode, role, teamName }
+  async function mailRecipients(action, params, cfg) {
+    const keep = (p) => p && p.active !== false && String(p.user_id ?? '') !== String(action.actor_user); // never the one who ran it
+    if (action.kind === 'assign_team') {
+      const team = await database('teams').where('team_id', params.team_id).first('team_id', 'name');
+      if (!team) return [];
+      const ids = (await database('team_members').where('team_id', team.team_id).where('is_manager', true).select('person_id')).map((m) => m.person_id);
+      const people = ids.length ? await database('people').whereIn('person_id', ids).select(...PERSON_COLUMNS) : [];
+      return people.filter((p) => keep(p) && !isBlank(p.user_id)).map((person) => ({ person, mode: 'team_owner', role: null, teamName: team.name }));
+    }
+    if (action.kind === 'change_owner') {
+      const person = await ops.personById(database, params.person_id);
+      return keep(person) ? [{ person, mode: 'owner', role: null, teamName: null }] : [];
+    }
+    if (action.kind !== 'share_access') return [];
+    const role = roleLabel(cfg.collection, params.role);
+    if (params.person_id) {
+      const person = await ops.personById(database, params.person_id);
+      return keep(person) ? [{ person, mode: 'share', role, teamName: null }] : [];
+    }
+    const team = await database('teams').where('team_id', params.team_id).first('team_id', 'name');
+    if (!team) return [];
+    const ids = (await database('team_members').where('team_id', team.team_id).select('person_id')).map((m) => m.person_id);
+    const people = ids.length ? await database('people').whereIn('person_id', ids).select(...PERSON_COLUMNS) : [];
+    return people.filter(keep).map((person) => ({ person, mode: 'share', role, teamName: team.name }));
+  }
+
+  // The records among `ids` this person can open now (their readers rows; an administrator opens all; a person with no login none)
+  async function openableBy(person, cfg, ids) {
+    if (isBlank(person.user_id)) return new Set();
+    if (await ops.isAdminLogin(database, person.user_id)) return new Set(ids.map(String));
+    const rows = await database(cfg.readers).whereIn('record_id', ids).where('user_id', person.user_id).select('record_id');
+    return new Set(rows.map((r) => String(r.record_id)));
+  }
+
+  async function deliverMail(action, schema, tally) {
+    const cfg = COLLECTIONS[action.collection];
+    const params = parseJson(action.params) ?? {};
+    // built from the journal now: what was applied and has not been put back since
+    const rows = (await database('bulk_action_rows').where('action_id', action.action_id).select())
+      .filter((r) => r.outcome === 'applied' && r.revert_outcome !== 'reverted')
+      .sort((a, b) => String(a.record_code ?? '').localeCompare(String(b.record_code ?? '')) || String(a.record_id).localeCompare(String(b.record_id)));
+    if (!cfg || !rows.length) return;
+    const recipients = await mailRecipients(action, params, cfg);
+    if (!recipients.length) return;
+    const logins = [...new Set(recipients.map((r) => r.person.user_id).filter((v) => !isBlank(v)))];
+    const users = new Map();
+    if (logins.length) for (const u of await database('directus_users').whereIn('id', logins).select('id', 'email')) users.set(String(u.id), u);
+    const { name: adder } = await ops.callerName(database, { user: action.actor_user });
+    const ids = rows.map((r) => String(r.record_id));
+    const resolved = schema ?? (typeof context.getSchema === 'function' ? await context.getSchema() : undefined);
+    await Promise.all(recipients.map(async ({ person, mode, role, teamName }) => {
+      try {
+        const to = recipientAddress(person, isBlank(person.user_id) ? null : users.get(String(person.user_id)));
+        if (!to) {
+          tally.skipped += 1;
+          return;
+        }
+        const open = await openableBy(person, cfg, ids);
+        const items = rows.map((r) => ({ code: r.record_code ?? '', link: recordLink(env?.PUBLIC_URL, cfg.collection, r.record_id, env?.STARBASE_URL), blocked: !open.has(String(r.record_id)) }));
+        const content = summaryContent({ adder, kind: cfg.kind, items, mode, role, teamName, blockedReason: isBlank(person.user_id) ? 'no_login' : 'parent' });
+        const mail = new services.MailService({ schema: resolved, knex: database });
+        await withTimeout(mail.send({ to, subject: content.subject, html: content.html, text: content.text }), MAIL_TIMEOUT_MS);
+        tally.sent += 1;
+      } catch (err) {
+        tally.failed += 1;
+        warn(`the summary mail of bulk action ${action.action_id} to ${person?.person_id} was not sent: ${err?.message || err}`);
+      }
+    }));
+  }
+
+  // Claim the held mail (under the row lock) and send it. Returns { sent, skipped, failed }, or null when there was nothing to send (already sent, undone).
+  async function sendActionMail(actionId, schema) {
+    const action = await database.transaction(async (trx) => {
+      const a = await trx('bulk_actions').where('action_id', actionId).forUpdate().first();
+      if (!a || a.mail_state !== 'pending') return null;
+      const gone = a.state === 'undone' || a.state === 'reverted';
+      await trx('bulk_actions').where('action_id', actionId).update({ mail_state: gone ? 'cancelled' : 'sent' });
+      return gone ? null : a;
+    });
+    if (!action) return null;
+    const tally = { sent: 0, skipped: 0, failed: 0 };
+    try {
+      await deliverMail(action, schema, tally);
+    } catch (err) {
+      warn(`the summary mail of bulk action ${actionId} was not sent: ${err?.message || err}`);
+    }
+    return tally;
+  }
+
+  async function sweepMail() {
+    const now = clock().getTime();
+    for (const a of await database('bulk_actions').where('mail_state', 'pending').select('action_id', 'mail_due_at')) {
+      const due = a.mail_due_at ? new Date(a.mail_due_at).getTime() : 0;
+      if (due <= now) await sendActionMail(a.action_id, undefined);
+      else scheduleMail(a.action_id, new Date(due), undefined);
+    }
+  }
+  const swept = timers.sweep === false ? Promise.resolve() : sweepMail().catch((err) => warn(`the sweep of held summary mails failed: ${err?.message || err}`));
+  return { swept };
 }
