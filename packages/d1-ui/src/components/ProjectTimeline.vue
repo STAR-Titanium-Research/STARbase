@@ -192,10 +192,15 @@ const lastTest = computed(() => (model.value.lastTest === null ? 'none' : dayLab
 </template>
 
 <style scoped>
-.d1-timeline { position: relative; min-width: 0; }
+.d1-timeline { position: relative; min-width: 0; container-type: inline-size; }
 .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 6px; }
 .head h2 { margin: 0; font-size: var(--fs-md, 13px); font-weight: 650; line-height: 1.3; }
 .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; flex: 1; min-width: 0; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
+/* Narrow: the title and the range control share the first line, the legend takes the second. */
+@container (max-width: 560px) {
+	.head > :nth-child(3) { order: 2; margin-left: auto; }
+	.legend { order: 3; flex-basis: 100%; }
+}
 .key { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; border-radius: 2px; }
 .key.op { background: var(--d1-chart-1); }
 .key.test { background: var(--d1-chart-2); }
