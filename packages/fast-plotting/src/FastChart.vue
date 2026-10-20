@@ -124,8 +124,8 @@ const geom = computed(() => {
 });
 
 // ---- hover: report the time under the pointer; draw the shared cursor ----
-const local = ref(false);
 const localT = ref<number | null>(null);
+const local = computed(() => localT.value != null);   // the pointer is on this chart
 const cursorT = computed(() => (props.cursor !== undefined ? props.cursor : localT.value));
 function timeOf(ev: MouseEvent): number | null {
 	const g = geom.value; if (!g) return null;
@@ -135,10 +135,10 @@ function timeOf(ev: MouseEvent): number | null {
 }
 function onMove(ev: MouseEvent) {
 	const t = timeOf(ev);
-	local.value = t != null; localT.value = t;
+	localT.value = t;
 	emit('hover', t);
 }
-function onLeave() { local.value = false; localT.value = null; emit('hover', null); }
+function onLeave() { localT.value = null; emit('hover', null); }
 
 const hover = computed(() => {
 	const g = geom.value, c = cursorT.value;

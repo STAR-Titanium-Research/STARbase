@@ -40,8 +40,6 @@ const bar = computed(() => {
 	const outline = win.value ? { left: at(win.value.start), width: `calc(${at(win.value.end)} - ${at(win.value.start)})` } : null;
 	return { parts: parts.map(([label, span, tone]) => ({ label, tone, grow: Math.max(span[1] - span[0], 1), text: mins(span[1] - span[0]) })), outline, target: p.target };
 });
-// the figure the chart below is about
-const keyTile = 'energy';
 
 function exportCsv() {
 	const scopeName = win.value ? `Zoom window ${(win.value.start / 60).toFixed(1)} to ${(win.value.end / 60).toFixed(1)} min` : 'Whole run';
@@ -50,7 +48,7 @@ function exportCsv() {
 	a.href = url;
 	a.download = `${props.detail?.pass_code || 'run'}-statistics${win.value ? '-window' : ''}.csv`;
 	a.click();
-	URL.revokeObjectURL(url);
+	setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 </script>
 
@@ -69,7 +67,7 @@ function exportCsv() {
 			<i v-if="bar.outline" class="outline" :style="bar.outline"></i>
 		</div>
 		<div class="fd-tiles">
-			<div v-for="t in stats.tiles" :key="t.key" class="fd-fig" :class="{ key: t.key === keyTile }">
+			<div v-for="t in stats.tiles" :key="t.key" class="fd-fig" :class="{ key: t.key === 'energy' }">
 				<span class="top"><span class="val">{{ t.value }}</span><span class="unit">{{ t.unit }}</span></span>
 				<span class="lab">{{ t.label }}</span>
 			</div>
