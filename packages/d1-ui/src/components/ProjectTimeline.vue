@@ -27,6 +27,8 @@ const range = defineModel<TimelineRange>('range', { default: 'all' });
 
 const uid = `d1-tl-${Math.random().toString(36).slice(2, 8)}`;
 const host = ref<HTMLElement | null>(null);
+// The tooltip is positioned inside `.plot`, so the pointer is measured against it (not the whole section, which also holds the header).
+const plotEl = ref<HTMLElement | null>(null);
 const width = ref(0);
 let observer: ResizeObserver | null = null;
 onMounted(() => {
@@ -82,7 +84,7 @@ const G = computed(() => {
 		const x = clamp(X(c.start));
 		rows.push({
 			key: c.id, text: c.code, lx: label(y).x, ly: label(y).y, x, y: bar(y), w: Math.max(3, clamp(X(c.end)) - x),
-			cls: c.status === 'active' ? 'span strong' : c.status === 'planned' ? 'span planned' : 'span',
+			cls: c.status === 'active' ? 'span strong' : c.status === 'planned' ? 'span planned' : c.status === 'on_hold' ? 'span hold' : 'span',
 			tip: `Campaign ${c.code} · ${c.name} · ${statusStyle('campaign', c.status)?.label ?? c.status} · ${dayLabel(c.start)} to ${dayLabel(c.end)}`, fade: false,
 		});
 		y += rowH;
@@ -114,12 +116,26 @@ const G = computed(() => {
 const tip = ref<{ text: string; x: number; y: number } | null>(null);
 function onMove(e: MouseEvent) {
 	const text = (e.target as SVGElement).getAttribute?.('data-tip');
-	const box = host.value?.getBoundingClientRect();
+	const box = plotEl.value?.getBoundingClientRect();
 	if (!text || !box) { tip.value = null; return; }
 	tip.value = { text, x: Math.min(Math.max(e.clientX - box.left, 90), Math.max(90, box.width - 90)), y: e.clientY - box.top };
 }
 
 const hasPlanned = computed(() => model.value.planned.length > 0);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const plannedTotals = computed(() => {
+	let ops = 0;
+	let tests = 0;
+	for (const p of model.value.planned) { if (p.kind === 'op') ops += p.n; else tests += p.n; }
+	return { ops, tests };
+});
+const ariaLabel = computed(() => {
+	const base = `Timeline of project ${props.project.code ?? ''} with operations and tests per week`;
+	if (!hasPlanned.value) return base;
+	const { ops, tests } = plannedTotals.value;
+	return `${base}, and planned work: ${[ops ? plural(ops, 'operation') : '', tests ? plural(tests, 'test') : ''].filter(Boolean).join(' and ')} on ${plural(new Set(model.value.planned.map((p) => p.date)).size, 'date')}`;
+});
+const statusText = (status: string) => statusStyle('campaign', status)?.label ?? status;
 const lastOp = computed(() => (model.value.lastOp === null ? 'none' : dayLabel(model.value.lastOp)));
 const lastTest = computed(() => (model.value.lastTest === null ? 'none' : dayLabel(model.value.lastTest)));
 </script>
@@ -140,8 +156,8 @@ const lastTest = computed(() => (model.value.lastTest === null ? 'none' : dayLab
 			<SegmentedControl v-model="range" :options="RANGE_OPTIONS" label="Timeline range" />
 		</div>
 		<p v-if="model.empty" class="empty">{{ emptyText(range) }}</p>
-		<div v-else class="plot">
-			<svg :viewBox="`0 0 ${W} ${G.H}`" :width="W" :height="G.H" role="img" :aria-label="`Timeline of project ${project.code ?? ''} with operations and tests per week`" @mousemove="onMove" @mouseleave="tip = null">
+		<div v-else ref="plotEl" class="plot">
+			<svg :viewBox="`0 0 ${W} ${G.H}`" :width="W" :height="G.H" role="img" :aria-label="ariaLabel" @mousemove="onMove" @mouseleave="tip = null">
 				<defs>
 					<linearGradient :id="`${uid}-fade`" x1="0" x2="1">
 						<stop offset="0" style="stop-color: var(--d1-dim)" />
@@ -179,16 +195,31 @@ const lastTest = computed(() => (model.value.lastTest === null ? 'none' : dayLab
 		<p class="last">
 			<span>Last operation <b>{{ lastOp }}</b></span>
 			<span>Last test <b>{{ lastTest }}</b></span>
-			<span v-if="model.undated.length">Undated: <b>{{ model.undated.join(', ') }}</b></span>
+			<span v-if="model.undated.length" :title="model.undated.join(', ')">Undated: <b>{{ model.undated.length }}</b></span>
 		</p>
 		<p v-if="truncated" class="note">Based on the newest records: the activity read hit its limit, so older weeks are missing.</p>
-		<table class="d1-sr-only">
+		<table v-if="model.weeks.length" class="d1-sr-only">
 			<caption>Operations and tests per week</caption>
 			<thead><tr><th>Week</th><th>Week of</th><th>Operations</th><th>Tests</th></tr></thead>
 			<tbody>
 				<tr v-for="w in model.weeks" :key="w.ms"><td>{{ weekLabel(w) }}</td><td>{{ dayLabel(w.ms) }}</td><td>{{ w.ops }}</td><td>{{ w.tests }}</td></tr>
 			</tbody>
 		</table>
+		<table v-if="model.planned.length" class="d1-sr-only">
+			<caption>Planned work</caption>
+			<thead><tr><th>Date</th><th>Kind</th><th>Count</th></tr></thead>
+			<tbody>
+				<tr v-for="p in model.planned" :key="`${p.kind}${p.date}`"><td>{{ dayLabel(p.date) }}</td><td>{{ p.kind === 'op' ? 'Operations' : 'Tests' }}</td><td>{{ p.n }}</td></tr>
+			</tbody>
+		</table>
+		<table v-if="model.campaigns.length" class="d1-sr-only">
+			<caption>Campaigns with dates</caption>
+			<thead><tr><th>Code</th><th>Name</th><th>Status</th><th>Start</th><th>End</th></tr></thead>
+			<tbody>
+				<tr v-for="c in model.campaigns" :key="c.id"><td>{{ c.code }}</td><td>{{ c.name }}</td><td>{{ statusText(c.status) }}</td><td>{{ dayLabel(c.start) }}</td><td>{{ dayLabel(c.end) }}</td></tr>
+			</tbody>
+		</table>
+		<p v-if="model.undated.length" class="d1-sr-only">Campaigns without dates: {{ model.undated.join(', ') }}</p>
 	</section>
 </template>
 
@@ -216,9 +247,11 @@ svg .rowlabel { fill: var(--theme--foreground); font-weight: 600; }
 .grid { stroke: var(--d1-line); stroke-width: 1; }
 .today-line { stroke: var(--theme--foreground); stroke-width: 1.5; }
 svg .today-label { fill: var(--theme--foreground); font-weight: 700; }
-.span { fill: var(--theme--border-color, var(--d1-line)); }
+/* Light bars (complete, cancelled, on hold) must reach 3:1 on the surface in both themes: the theme's hairline colours are about 1.3:1. */
+.span { fill: color-mix(in srgb, var(--d1-dim) 72%, var(--d1-surface)); }
 .span.strong { fill: var(--d1-dim); }
 .span.planned { fill: var(--d1-surface); stroke: var(--d1-dim); stroke-width: 1.5; }
+.span.hold { fill: color-mix(in srgb, var(--d1-dim) 22%, var(--d1-surface)); stroke: var(--d1-dim); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .op { fill: var(--d1-chart-1); }
 .test { fill: var(--d1-chart-2); }
 .hit { fill: transparent; }
