@@ -102,8 +102,12 @@ describe('ViewRail', () => {
 		expect(html).not.toContain('panel choices');
 	});
 
-	it('marks a changed view with a dot on the tab, and an unchanged one without', async () => {
-		expect(await render({ modified: true })).toContain('class="dot"');
-		expect(await render({ modified: false })).not.toContain('class="dot"');
+	it('marks a changed view with a dot on the tab, named in the button\'s label, and an unchanged one without', async () => {
+		const changed = await render({ modified: true });
+		expect(changed).toContain('class="dot"');
+		expect(changed).toContain('(changed)"');
+		const same = await render({ modified: false });
+		expect(same).not.toContain('class="dot"');
+		expect(same).not.toContain('(changed)');
 	});
 });

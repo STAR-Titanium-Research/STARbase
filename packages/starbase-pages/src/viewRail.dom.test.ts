@@ -79,17 +79,44 @@ describe('ViewRail in a DOM', () => {
 		expect(isOpen()).toBe(false);
 	});
 
+	it('keeps focus in the rail: the tab opens onto the collapse button and collapsing returns to the tab', async () => {
+		await mount();
+		(host.querySelector('.tab') as HTMLElement).click();
+		await nextTick();
+		expect(document.activeElement).toBe(host.querySelector('.collapse'));
+		(host.querySelector('.collapse') as HTMLElement).click();
+		await nextTick();
+		expect(document.activeElement).toBe(host.querySelector('.tab'));
+	});
+
+	it('moves focus with the backslash only when it was already in the rail', async () => {
+		await mount({ defaultOpen: true });
+		(host.querySelector('.collapse') as HTMLElement).focus();
+		await press(host.querySelector('.collapse')!);
+		expect(document.activeElement).toBe(host.querySelector('.tab'));
+		(host.querySelector('#field') as HTMLElement).focus();
+		await press(document.body);
+		expect(document.activeElement).toBe(host.querySelector('#field'));
+	});
+
 	it('becomes a button with a popover under 1100px, not remembered', async () => {
 		window.innerWidth = 900;
 		await mount();
 		expect(host.querySelector('.pop-button')).toBeTruthy();
 		expect(host.querySelector('.tab')).toBeNull();
 		expect(host.querySelector('.choices')).toBeNull();
-		(host.querySelector('.pop-button') as HTMLElement).click();
+		const button = host.querySelector('.pop-button') as HTMLElement;
+		expect(button.getAttribute('aria-expanded')).toBe('false');
+		button.click();
 		await nextTick();
 		expect(host.querySelector('.pop .choices')).toBeTruthy();
-		await press(document.body, 'Escape');
+		expect(button.getAttribute('aria-expanded')).toBe('true');
+		expect(button.getAttribute('aria-controls')).toBe(host.querySelector('.pop')!.id);
+		expect(host.querySelector('.pop')!.getAttribute('role')).toBeNull();
+		button.focus();
+		await press(button, 'Escape');
 		expect(host.querySelector('.pop')).toBeNull();
+		expect(document.activeElement).toBe(button);
 		expect(localStorage.getItem(KEY)).toBeNull();
 	});
 });
