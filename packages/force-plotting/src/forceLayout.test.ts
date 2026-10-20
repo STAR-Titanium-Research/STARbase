@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RIGHT_DEFAULT, layoutColumns, layoutMode, startingGrid, tabForNumberKey, tabTarget } from './forceLayout';
+import { RIGHT_DEFAULT, layoutColumns, layoutMode, stackedLayout, startingGrid, tabForNumberKey, tabTarget } from './forceLayout';
 
 const TYPES = ['signals', 'frm', 'wear', 'doctor'];
 const OLD_DEFAULT = [
@@ -72,5 +72,13 @@ describe('tab keys', () => {
 		const typing = { closest: (sel: string) => (sel.includes('input') ? {} : null) };
 		expect(tabForNumberKey(ev('2', { target: typing }), 5)).toBeNull();
 		expect(tabForNumberKey(ev('2', { target: { closest: () => null } }), 5)).toBe(1);
+	});
+});
+
+describe('stackedLayout', () => {
+	it('puts side-by-side panels one under the other, in reading order', () => {
+		const out = stackedLayout(RIGHT_DEFAULT);
+		expect(out.map((p) => p.i)).toEqual(['frm', 'signals']);
+		expect(out.map((p) => [p.x, p.y])).toEqual([[0, 0], [0, 16]]);
 	});
 });

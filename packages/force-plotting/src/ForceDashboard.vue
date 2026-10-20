@@ -10,7 +10,7 @@ import ForceSignals from './ForceSignals.vue';
 import ForceDoctor from './ForceDoctor.vue';
 import ForceFrm from './ForceFrm.vue';
 import { FORCE_CTX } from './forceCtx';
-import { RIGHT_DEFAULT, layoutColumns, layoutMode, startingGrid, type RPanel, type RPanelType } from './forceLayout';
+import { RIGHT_DEFAULT, layoutColumns, layoutMode, stackedLayout, startingGrid, type RPanel, type RPanelType } from './forceLayout';
 import type { HoverSource } from './chartHover';
 import { downloadFailureMessage } from './downloadError';
 import { pickMode, type FrmMode } from './frmMode';
@@ -992,10 +992,16 @@ watch(rightLayout, (v) => {
 // height down) — with a typical bottomRow of ~20 that is a very visible gap at the bottom of the
 // Signals/FRM column versus the other columns, which stretch to the exact CSS height instead (#16).
 const RIGHT_MARGIN = 10;   // must match :margin="[10, 10]" on the right-hand GridLayout
-const rightBottomRow = computed(() => rightLayout.value.reduce((m, p) => Math.max(m, p.y + p.h), 0) || 1);
-const rightRowH = computed(() =>
+// A one-column page lays the panels out one under the other; the saved grid is left alone (and not written back).
+const gridLayout = computed({
+	get: () => (stacked.value ? stackedLayout(rightLayout.value) : rightLayout.value),
+	set: (v) => { if (!stacked.value) rightLayout.value = v as RPanel[]; },
+});
+const rightBottomRow = computed(() => gridLayout.value.reduce((m, p) => Math.max(m, p.y + p.h), 0) || 1);
+const rightRowH = computed(() => stacked.value ? 36 :
 	Math.max(16, (availableHeight.value - RIGHT_MARGIN) / rightBottomRow.value - RIGHT_MARGIN),
 );
+const cell = (item: RPanel) => gridLayout.value.find((p) => p.i === item.i) ?? item;
 const rightAddOpen = ref(false);
 function addRightPanel(type: RPanelType) {
 	rightAddOpen.value = false;
@@ -2505,10 +2511,10 @@ provide(FORCE_CTX, {
 
 				<!-- COL 3 + 4: the panels (FRM in the centre, Signals on the right by default), arranged on a grid -->
 				<div ref="rightAreaEl" class="right-area">
-					<GridLayout v-model:layout="rightLayout" class="right-grid" :col-num="stacked ? 1 : 12"
+					<GridLayout v-model:layout="gridLayout" class="right-grid" :col-num="stacked ? 1 : 12"
 						:row-height="rightRowH" :margin="[10, 10]" :is-draggable="!stacked" :is-resizable="!stacked"
 						:vertical-compact="true" :use-css-transforms="true">
-						<GridItem v-for="item in rightLayout" :key="item.i" :x="item.x" :y="item.y" :w="item.w" :h="item.h" :i="item.i"
+						<GridItem v-for="item in rightLayout" :key="item.i" :x="cell(item).x" :y="cell(item).y" :w="cell(item).w" :h="cell(item).h" :i="item.i"
 							:data-panel-id="item.i" drag-allow-from=".pg-grip" :min-w="3" :min-h="7">
 							<ForceSignals v-if="item.type === 'signals'" :item="item" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
 							<ForceFrm v-else-if="item.type === 'frm'" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />

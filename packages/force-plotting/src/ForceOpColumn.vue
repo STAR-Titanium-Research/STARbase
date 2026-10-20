@@ -62,13 +62,15 @@ onMounted(listen); onActivated(listen); onDeactivated(unlisten); onBeforeUnmount
 			<span class="fp-code code">{{ detail ? opLabel : 'Operation' }}</span>
 			<span v-if="detail && ready" class="fp-badge" :class="ready.level" :title="ready.hint">{{ ready.label }}</span>
 		</header>
-		<div v-if="!detail" class="fp-empty">
+		<div v-if="!detail" class="nodetail">
 			<div v-if="loadingDetail" class="fp-spin"><v-progress-circular indeterminate small /> loading…</div>
-			<template v-else>Select an operation</template>
-		</div>
-		<div v-if="!detail && !loadingDetail && sampleInfo" class="ident">
-			<div class="fp-pg"><span>Sample</span><span class="v"><span class="fp-code">{{ sampleInfo.sample_code }}</span><button class="fp-link" title="Open the sample record" @click="openSampleForm">Sample ↗</button></span></div>
-			<div v-for="r in sampleRows" :key="r[0]" class="fp-pg"><span>{{ r[0] }}</span><span class="v">{{ r[1] }}</span></div>
+			<template v-else>
+				<div class="fp-empty">{{ sampleInfo ? 'Select one of its operations' : 'Select an operation' }}</div>
+			</template>
+			<div v-if="!loadingDetail && sampleInfo" class="ident">
+				<div class="fp-pg"><span>Sample</span><span class="v"><span class="fp-code">{{ sampleInfo.sample_code }}</span><button class="fp-link" title="Open the sample record" @click="openSampleForm">Sample ↗</button></span></div>
+				<div v-for="r in sampleRows" :key="r[0]" class="fp-pg"><span>{{ r[0] }}</span><span class="v">{{ r[1] }}</span></div>
+			</div>
 		</div>
 		<template v-else>
 			<div class="ident">
@@ -105,6 +107,7 @@ onMounted(listen); onActivated(listen); onDeactivated(unlisten); onBeforeUnmount
 .col { min-height: 0; }
 .col.switching .body { opacity: 0.45; pointer-events: none; transition: opacity 0.12s; }
 .code { font-size: var(--fs-md, 13px); overflow-wrap: anywhere; }
+.nodetail { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .ident { flex: none; padding: 4px 12px 8px; }
 .ident .fp-pg:last-child { border-bottom: 0; }
 .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 12px 12px; }

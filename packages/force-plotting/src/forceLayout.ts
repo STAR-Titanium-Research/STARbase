@@ -38,6 +38,11 @@ export function startingGrid(saved: unknown, knownTypes: readonly string[]): RPa
 	return RIGHT_DEFAULT.map((p) => ({ ...p }));
 }
 
+/** The panel grid of a one-column (stacked) page: the panels one under the other in their saved reading order (top row first, left to right), each `h` rows tall. Positions only; the saved grid is untouched. */
+export function stackedLayout(items: RPanel[], h = 16): Array<{ i: string; x: number; y: number; w: number; h: number }> {
+	return [...items].sort((a, b) => a.y - b.y || a.x - b.x).map((p, n) => ({ i: p.i, x: 0, y: n * h, w: 1, h }));
+}
+
 /** Where Left / Right / Home / End move to in a tab list of `count` tabs from tab `at`; null for any other key. */
 export function tabTarget(key: string, at: number, count: number): number | null {
 	if (key === 'ArrowRight') return (at + 1) % count;
