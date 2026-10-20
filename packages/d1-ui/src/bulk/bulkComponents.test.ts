@@ -50,7 +50,7 @@ describe('UndoToast', () => {
 	});
 	it('shows a failed undo as an alert and keeps Undo', async () => {
 		const html = await render(toast({ error: 'The undo window has closed.' }));
-		expect(html).toMatch(/<p[^>]*class="err"[^>]*role="alert"[^>]*>The undo window has closed\./);
+		expect(html).toMatch(/<p[^>]*class="err"[^>]*role="alert"[^>]*>Undo failed\. The undo window has closed\./);
 		expect(html).toContain('>Undo<');
 	});
 	it('ends as Done with no ring and no Undo', async () => {
@@ -82,7 +82,7 @@ describe('BulkDialog', () => {
 		return reactive({
 			dialog, preview: { loading: false, rows: [{ id: 'a', code: 'S-1', status: 'ok' }, { id: 'b', code: 'S-2', status: 'skip', reason: 'You are not the owner' }], error: '' },
 			applying: false, applyError: '', fieldOptions: [], optionsState: { loading: false, error: '' }, toasts: [],
-			counts: { ok: 1, noop: 0, skip: 1 }, summary: '1 can be changed. 1 will be skipped', skipGroups: [], warnings: ['They may lose access.'], ready: true,
+			counts: { ok: 1, noop: 0, skip: 1 }, summary: '1 can be changed. 1 will be skipped', warnings: ['They may lose access.'], ready: true,
 			open() {}, close() {}, choose() {}, apply() {}, undo() {}, dismiss() {}, ...over,
 		}) as unknown as BulkState;
 	}

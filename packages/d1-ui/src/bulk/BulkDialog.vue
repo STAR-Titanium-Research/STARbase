@@ -10,7 +10,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import '../components/tokens.css';
 import type { IndexDef } from '../index/indexConfig';
 import BulkSkips from './BulkSkips.vue';
-import { applyLabel, canClear, dialogTitle, enumChoices, previewSkips, skippedQuestion } from './bulkModel';
+import { applyLabel, canClear, dialogTitle, enumChoices, lower, previewSkips, skippedQuestion } from './bulkModel';
 import type { BulkState } from './useBulkActions';
 
 const props = defineProps<{
@@ -27,7 +27,7 @@ const heading = ref<HTMLElement | null>(null);
 const state = computed(() => props.bulk.dialog);
 const field = computed(() => state.value?.entry.field ?? null);
 const title = computed(() => (state.value ? dialogTitle(state.value.entry, props.def, state.value.ids.length) : ''));
-const fieldName = computed(() => (field.value ? field.value.label.charAt(0).toLowerCase() + field.value.label.slice(1) : ''));
+const fieldName = computed(() => (field.value ? lower(field.value.label) : ''));
 const selected = computed(() => {
 	const choice = state.value?.choice;
 	return choice && choice.value !== null ? String(choice.value) : '';
@@ -99,7 +99,7 @@ function onKeydown(e: KeyboardEvent): void {
 			<div ref="dialog" class="bulk" role="dialog" aria-modal="true" :aria-labelledby="`${uid}-title`" @keydown="onKeydown">
 				<header class="top">
 					<h2 :id="`${uid}-title`" ref="heading" tabindex="-1">{{ title }}</h2>
-					<button type="button" class="x" aria-label="Close" @click="bulk.close()">&times;</button>
+					<button type="button" class="x" aria-label="Close" :disabled="bulk.applying" @click="bulk.close()">&times;</button>
 				</header>
 
 				<div class="body">
@@ -108,15 +108,15 @@ function onKeydown(e: KeyboardEvent): void {
 					<template v-if="field">
 						<label class="fld">
 							<span>New {{ fieldName }}</span>
-							<input v-if="field.kind === 'date'" type="date" :value="selected" @change="onDate" />
-							<select v-else :value="selected" :disabled="field.kind === 'relation' && bulk.optionsState.loading" @change="onSelect">
+							<input v-if="field.kind === 'date'" type="date" :value="selected" :disabled="bulk.applying" @change="onDate" />
+							<select v-else :value="selected" :disabled="bulk.applying || (field.kind === 'relation' && bulk.optionsState.loading)" @change="onSelect">
 								<option value="" disabled>{{ field.kind === 'relation' && bulk.optionsState.loading ? 'Loading…' : 'Choose…' }}</option>
 								<option v-for="c in choices" :key="c.value" :value="c.value">{{ c.label }}</option>
 							</select>
 						</label>
 						<p v-if="bulk.optionsState.error" class="err" role="alert">The list could not be loaded: {{ bulk.optionsState.error }} Close this and try again.</p>
 						<p v-if="canClear(field)" class="clear">
-							<button type="button" class="link" :aria-pressed="cleared" @click="bulk.choose(null)">Clear {{ fieldName }} instead</button>
+							<button type="button" class="link" :aria-pressed="cleared" :disabled="bulk.applying" @click="bulk.choose(null)">Clear {{ fieldName }} instead</button>
 							<span v-if="cleared" class="hint">The {{ fieldName }} will be emptied on every record that can change.</span>
 						</p>
 					</template>
@@ -136,7 +136,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 				<footer class="foot">
 					<span class="grow" />
-					<button type="button" class="btn" @click="bulk.close()">Cancel</button>
+					<button type="button" class="btn" :disabled="bulk.applying" @click="bulk.close()">Cancel</button>
 					<button type="button" class="btn primary" :disabled="!bulk.ready" @click="bulk.apply()">{{ applyText }}</button>
 				</footer>
 			</div>
@@ -157,8 +157,9 @@ function onKeydown(e: KeyboardEvent): void {
 .top { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 10px; border-bottom: 1px solid var(--d1-line); }
 .top h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--fs-lg, 15px); font-weight: 600; overflow-wrap: anywhere; }
 .top h2:focus { outline: none; }
-.x { border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
-.x:hover { background: var(--d1-tile); }
+.x { border: 0; background: transparent; color: inherit; font-size: var(--fs-2xl, 22px); line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
+.x:hover:not(:disabled) { background: var(--d1-tile); }
+.x:disabled, .link:disabled { opacity: 0.55; cursor: default; }
 .body { overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .fld { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); }
 .fld select, .fld input {

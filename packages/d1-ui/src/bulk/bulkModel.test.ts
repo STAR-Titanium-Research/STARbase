@@ -77,7 +77,7 @@ const pr = (id: string, s: PreviewRow['status'], extra: Partial<PreviewRow> = {}
 describe('the dry run', () => {
 	const rows = [
 		pr('1', 'ok'), pr('2', 'ok', { warning: 'You may lose access' }), pr('3', 'noop'), pr('4', 'skip', { reason: 'You are not the owner' }),
-		pr('5', 'skip', { reason: 'You are not the owner' }), pr('6', 'skip', { reason: 'RESTRICT_ADMIN_ONLY' }), pr('7', 'ok', { warning: 'You may lose access' }),
+		pr('5', 'skip', { reason: 'You are not the owner' }), pr('6', 'skip', { reason: 'Restricting a record is not available yet. Ask an administrator.' }), pr('7', 'ok', { warning: 'You may lose access' }),
 	];
 	it('counts and says it', () => {
 		const c = previewCounts(rows);
@@ -105,7 +105,7 @@ describe('the dry run', () => {
 	it('groups the skipped rows by reason, biggest first, in plain words', () => {
 		expect(groupSkips(previewSkips(rows))).toEqual([
 			{ reason: 'You are not the owner', rows: [{ id: '4', code: 'C-4' }, { id: '5', code: 'C-5' }] },
-			{ reason: 'Only administrators can restrict records yet', rows: [{ id: '6', code: 'C-6' }] },
+			{ reason: 'Restricting a record is not available yet. Ask an administrator', rows: [{ id: '6', code: 'C-6' }] },
 		]);
 	});
 });
@@ -119,10 +119,6 @@ describe('skipReasonText', () => {
 		expect(skipReasonText('SOME_NEW_CODE')).toBe('Some new code');
 		expect(skipReasonText(undefined)).toBe('Could not be changed');
 		expect(skipReasonText('  ')).toBe('Could not be changed');
-	});
-	it('knows the codes the server answers with', () => {
-		expect(skipReasonText('RESTRICT_ADMIN_ONLY')).toBe('Only administrators can restrict records yet');
-		expect(skipReasonText('NOT_FOUND')).toBe('Not found or not visible to you');
 	});
 });
 

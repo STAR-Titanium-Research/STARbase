@@ -28,7 +28,7 @@ const groups = computed(() => groupSkips(props.rows));
 <style scoped>
 .skips { font-size: var(--fs-sm, 12px); color: var(--theme--foreground); }
 summary { cursor: pointer; font-weight: 600; color: var(--d1-accent, var(--theme--primary)); }
-summary:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 4px; }
+summary:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 6px; }
 .group { margin-top: 8px; }
 h3 { margin: 0 0 2px; font-size: var(--fs-sm, 12px); font-weight: 700; }
 .n { font-weight: 400; color: var(--d1-dim); }

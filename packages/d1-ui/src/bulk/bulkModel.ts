@@ -50,7 +50,7 @@ export interface BulkEntry {
 	field?: BulkField;
 }
 
-const lower = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
+export const lower = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
 
 /**
  * The entries a list offers, in menu order: Print labels (the def's select action), Restrict and Unrestrict (the four ownable
@@ -157,19 +157,10 @@ export function previewWarnings(rows: readonly PreviewRow[]): string[] {
 // ---- skip reasons --------------------------------------------------------------------------------------------------
 
 // The endpoint writes its reasons in plain words; a bare code (or nothing) still reads as a sentence.
-const REASONS: Record<string, string> = {
-	NOT_FOUND: 'Not found or not visible to you',
-	FORBIDDEN: 'You do not have permission to change this',
-	RESTRICT_ADMIN_ONLY: 'Only administrators can restrict records yet',
-	READ_ONLY_ROLE: 'Your account can look but not change',
-	NOT_OWNER: 'You are not the owner',
-};
-
 /** A reason as a short sentence without its full stop ("You are not the owner"). */
 export function skipReasonText(reason: string | null | undefined): string {
 	const text = (reason ?? '').trim().replace(/\.+$/, '');
 	if (!text) return 'Could not be changed';
-	if (REASONS[text]) return REASONS[text];
 	return /^[A-Z0-9_]+$/.test(text) ? humanise(text.toLowerCase()) : text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -260,6 +251,8 @@ export interface ToastModel {
 	message: string;
 	/** ms since the epoch in this browser's clock. */
 	deadline: number;
+	/** False when the action changed nothing: there is nothing to undo, so the toast starts done. */
+	undoable: boolean;
 	phase: ToastPhase;
 	left: number;
 	/** An undo is in flight. */
@@ -271,9 +264,9 @@ export interface ToastModel {
 	undoSkipped: SkippedRow[];
 }
 
-export function startToast(actionId: string, message: string, deadline: number, skipped: SkippedRow[], now: number): ToastModel {
-	const left = secondsLeft(deadline, now);
-	return { actionId, message, deadline, phase: left > 0 ? 'pending' : 'done', left, busy: false, error: '', skipped, undoSkipped: [] };
+export function startToast(actionId: string, message: string, deadline: number, skipped: SkippedRow[], now: number, undoable = true): ToastModel {
+	const left = undoable ? secondsLeft(deadline, now) : 0;
+	return { actionId, message, deadline, undoable, phase: left > 0 ? 'pending' : 'done', left, busy: false, error: '', skipped, undoSkipped: [] };
 }
 
 /** One tick of the clock: the seconds left, and `done` when they run out (an undo in flight is allowed to finish). */
@@ -301,9 +294,9 @@ export function undoDone(t: ToastModel, results: readonly RevertRow[], codes: Re
 /** The rows an undo did not put back: they stay ticked, like the rows an apply skipped. */
 export const notRevertedIds = (results: readonly RevertRow[]): string[] => results.filter((r) => r.revert_outcome !== 'reverted').map((r) => r.id);
 
-/** What the toast's status region says, only when something changes: the result, then "Done" or "Undone". The ticking number is not part of it. */
+/** What the toast's status region says, only when something changes: the result, then "Done" or "Undone" (a toast with nothing to undo says only the result). The ticking number is not part of it. */
 export function toastAnnouncement(t: ToastModel): string {
-	if (t.phase === 'done') return 'Done';
+	if (t.phase === 'done' && t.undoable) return 'Done';
 	if (t.phase === 'undone') return t.undoSkipped.length ? `Undone. ${leftAsTheyAre(t.undoSkipped.length)}` : 'Undone';
 	return t.skipped.length ? `${t.message}. ${t.skipped.length} skipped` : t.message;
 }

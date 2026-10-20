@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The toast of an applied bulk action (spec section 1): what was done, an Undo button and a ring that empties over the 60-second window;
 // then "Done", or "Undone" if Undo was pressed. Rows the action skipped (or an undo left alone) are folded under "12 skipped".
-// Look: CreateToast's card. Layer: the toast band of DESIGN.md (1000), set by BulkToasts.
+// Look: CreateToast's card. Layer: the toast band of DESIGN.md (1000), set by BulkLayer.
 //
 // Screen readers: the status region is mounted empty and filled a moment later (a live region that arrives with its text is often not
 // announced); it says the result, then "Done" or "Undone", never the ticking seconds. The ring and the seconds are
@@ -46,7 +46,7 @@ const skipSummary = computed(() => (props.toast.phase === 'undone' ? leftAsTheyA
 			<strong>{{ headline }}</strong>
 			<span v-if="toast.phase !== 'pending'" class="sub">{{ toast.message }}</span>
 			<span v-else class="secs" aria-hidden="true">{{ toast.left }} s left to undo</span>
-			<p v-if="toast.error" class="err" role="alert">{{ toast.error }}</p>
+			<p v-if="toast.error" class="err" role="alert">Undo failed. {{ toast.error }}</p>
 			<BulkSkips :summary="skipSummary" :rows="rows" />
 		</div>
 		<button v-if="toast.phase === 'pending'" type="button" class="undo" :disabled="toast.busy" @click="emit('undo')">{{ toast.busy ? 'Undoing…' : 'Undo' }}</button>
@@ -74,7 +74,7 @@ const skipSummary = computed(() => (props.toast.phase === 'undone' ? leftAsTheyA
 }
 .undo:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
 .undo:disabled { opacity: 0.55; cursor: default; }
-.x { flex: none; border: 0; background: transparent; color: inherit; font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
+.x { flex: none; border: 0; background: transparent; color: inherit; font-size: var(--fs-2xl, 22px); line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
 .x:hover { background: var(--d1-tile); }
 button:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .vh { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

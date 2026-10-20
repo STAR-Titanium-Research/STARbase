@@ -7,8 +7,8 @@ import type { ChipOption } from '../index/indexView';
 import { applyBulk, loadFieldOptions, previewBulk, undoBulk } from './bulkApi';
 import type { BulkChoice, BulkEntry, BulkKind, PreviewRow, ToastModel } from './bulkModel';
 import {
-	applySkips, beginUndo, canApply, deadlineFor, dismissDelay, groupSkips, notRevertedIds, paramsFor, previewCounts, previewSkips, previewSummary,
-	previewWarnings, resultText, startToast, tickToast, undoDone, undoFailed,
+	applySkips, beginUndo, canApply, deadlineFor, dismissDelay, notRevertedIds, paramsFor, previewCounts, previewSummary, previewWarnings,
+	resultText, startToast, tickToast, undoDone, undoFailed,
 } from './bulkModel';
 
 export interface BulkOptions {
@@ -100,7 +100,9 @@ export function useBulkActions(opts: BulkOptions) {
 		void runPreview();
 	}
 
+	/** Closes the dialog. Not while an apply is running: its answer (or its failure) is shown here. */
 	function close(): void {
+		if (applying.value) return;
 		previewGate.cancel();
 		optionsGate.cancel();
 		dialog.value = null;
@@ -110,7 +112,7 @@ export function useBulkActions(opts: BulkOptions) {
 
 	/** The target step's answer (a field value; null clears the field). Asks for a fresh preview. */
 	function choose(value: string | boolean | null, label?: string): void {
-		if (!dialog.value) return;
+		if (!dialog.value || applying.value) return;
 		dialog.value = { ...dialog.value, choice: { value }, choiceLabel: label };
 		applyError.value = '';
 		void runPreview();
@@ -118,7 +120,6 @@ export function useBulkActions(opts: BulkOptions) {
 
 	const counts = computed(() => previewCounts(preview.value.rows ?? []));
 	const summary = computed(() => (preview.value.rows ? previewSummary(counts.value) : ''));
-	const skipGroups = computed(() => groupSkips(previewSkips(preview.value.rows ?? [])));
 	const warnings = computed(() => previewWarnings(preview.value.rows ?? []));
 	const ready = computed(() => !!preview.value.rows && !preview.value.loading && canApply(counts.value) && !applying.value);
 
@@ -134,17 +135,16 @@ export function useBulkActions(opts: BulkOptions) {
 		const res = await applyBulk(opts.api, opts.def.collection, d.entry.kind as BulkKind, d.ids, params);
 		applying.value = false;
 		if (!res.ok) {
-			if (dialog.value === d) applyError.value = res.message;
+			applyError.value = res.message;
 			return;
 		}
-		// Applied is applied: the toast is made whether or not the dialog is still open.
 		const { actionId, undoUntil, results } = res.data;
 		const applied = results.filter((r) => r.outcome === 'applied').length;
 		const skipped = applySkips(results);
 		const at = now();
 		codes.set(actionId, new Map(results.map((r) => [r.id, r.code])));
-		toasts.value = [...toasts.value, startToast(actionId, resultText(d.entry, opts.def, applied, d.choice, d.choiceLabel), deadlineFor(undoUntil, at), skipped, at)];
-		if (dialog.value === d) close();
+		toasts.value = [...toasts.value, startToast(actionId, resultText(d.entry, opts.def, applied, d.choice, d.choiceLabel), deadlineFor(undoUntil, at), skipped, at, applied > 0)];
+		close();
 		afterChange();
 		opts.onChanged(skipped.map((r) => r.id));
 	}
@@ -206,7 +206,7 @@ export function useBulkActions(opts: BulkOptions) {
 	});
 
 	return {
-		dialog, preview, applying, applyError, fieldOptions, optionsState, toasts, counts, summary, skipGroups, warnings, ready,
+		dialog, preview, applying, applyError, fieldOptions, optionsState, toasts, counts, summary, warnings, ready,
 		open, close, choose, apply, undo, dismiss,
 	};
 }

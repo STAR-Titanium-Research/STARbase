@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref } from 'vue';
 import type { AccessApi } from '../access/accessApi';
 import { indexDefBySlug } from '../index/indexConfig';
-import { bulkEntries } from './bulkModel';
+import { bulkEntries, toastAnnouncement } from './bulkModel';
 import { useBulkActions } from './useBulkActions';
 
 const samples = indexDefBySlug('samples')!;
@@ -52,7 +52,6 @@ describe('opening the dialog', () => {
 		await flush();
 		expect(t.api.post).toHaveBeenCalledWith('/d1-bulk-actions/physical_samples/preview', { kind: 'restrict', ids: ['a', 'b', 'c'], params: {} });
 		expect(t.bulk.summary.value).toBe('2 can be changed. 1 will be skipped');
-		expect(t.bulk.skipGroups.value).toEqual([{ reason: 'Only administrators can restrict records yet', rows: [{ id: 'c', code: 'S-c' }] }]);
 		expect(t.bulk.ready.value).toBe(true);
 		t.stop();
 	});
@@ -184,17 +183,31 @@ describe('apply', () => {
 		t.stop();
 	});
 
-	it('still makes the toast when the dialog was closed while the apply ran', async () => {
+	it('ignores a close or a new choice while the apply runs, then closes by itself and makes the toast', async () => {
 		const slow = deferred<{ data: any }>();
 		const t = setup(async (path) => (path.endsWith('/preview') ? preview([['a', 'ok']]) : slow.promise));
 		t.bulk.open(entry('restrict'));
 		await flush();
 		const run = t.bulk.apply();
 		t.bulk.close();
+		t.bulk.choose('x');
+		expect(t.bulk.dialog.value).not.toBeNull();
+		expect(t.bulk.dialog.value?.choice).toBeNull();
 		slow.resolve(applied([['a', 'applied']]));
 		await run;
+		expect(t.bulk.dialog.value).toBeNull();
 		expect(t.bulk.toasts.value).toHaveLength(1);
 		expect(t.bulk.toasts.value[0].message).toBe('Restricted 1 sample');
+		t.stop();
+	});
+
+	it('an apply that changed nothing starts its toast as done, with the result said', async () => {
+		const t = setup(async (path) => (path.endsWith('/preview') ? preview([['a', 'ok']]) : applied([['a', 'skipped', 'You are not the owner']])));
+		t.bulk.open(entry('restrict'));
+		await flush();
+		await t.bulk.apply();
+		expect(t.bulk.toasts.value[0]).toMatchObject({ phase: 'done', undoable: false, message: 'Nothing was changed' });
+		expect(toastAnnouncement(t.bulk.toasts.value[0])).toBe('Nothing was changed. 1 skipped');
 		t.stop();
 	});
 });
