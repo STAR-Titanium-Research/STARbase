@@ -13,9 +13,9 @@ Claude-Session: https://claude.ai/code/session_011vo4wDvALxCfZc4drFUZnP
 
 | Stream | Worktree | Branch | Model | State |
 |---|---|---|---|---|
-| A: kit (timeline model + component, people stack, chart tokens, Sparkline) | agent worktree | hero-a-kit | Sonnet | in progress |
+| A: kit (timeline model + component, people stack, chart tokens, Sparkline) | agent worktree | hero-a-kit | Sonnet | merged |
 | C: docs (DESIGN.md, backlog item) | agent worktree | hero-c-docs | Haiku | merged |
-| B: Project page (data, hero, layout) | agent worktree | hero-b-page | Sonnet | waits for A |
+| B: Project page (data, hero, layout) | agent worktree | hero-b-page | Sonnet | in progress |
 | Simplify pass | main branch | — | coordinator | waits for B |
 | Review | read-only | — | Opus (directus-ui-reviewer) | waits for simplify |
 
