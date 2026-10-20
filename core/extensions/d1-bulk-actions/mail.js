@@ -3,13 +3,15 @@
 // At apply an action that tells someone is `pending` with mail_due_at = undo_until + 2 s, and a timer (one per action) sends it then. Undo (and a revert
 // that put everything back) sets `cancelled` under the action's row lock. The sender CLAIMS the held mail under the same lock (pending -> sent, committed)
 // before it sends, so an undo and a send can never both happen; a mail that fails afterwards is logged and never undoes the change (the claim stands: one
-// try, never twice). On start a sweep sends every overdue pending action and re-arms the ones not yet due, so a restart only delays mail, it never loses it.
+// try, never twice). On start a sweep first finalises any action whose apply was cut off (counts still null after STUCK_AFTER_MS), then sends every overdue
+// pending action and re-arms the ones not yet due, so a restart only delays mail, it never loses it.
 
 import { COLLECTIONS, PERSON_COLUMNS, escapeHtml, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from '../d1-record-access/index.js';
-import { isBlank, parseJson } from './rules.js';
+import { MAILING_KINDS, isBlank, parseJson } from './rules.js';
 
 const MAIL_TIMEOUT_MS = 10_000;
 export const MAIL_GRACE_MS = 2_000; // the summary mail is due this long after the undo window closes
+export const STUCK_AFTER_MS = 5 * 60_000; // an action whose counts are still null this long after it started lost its apply (a crash); far above the longest apply
 const MAIL_LIST_MAX = 20; // codes listed in one summary mail, then "and N more"
 
 const oneLine = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').trim();
@@ -70,7 +72,7 @@ export function summaryContent({ adder, kind, items, mode, role = null, teamName
 
 // `deps`: { context ({ database, services, env, getSchema }), ops (makeAccessOps), warn, clock, setTimer, clearTimer }.
 // Returns { schedule(actionId, dueAt, schema), cancel(actionId), sweep() }.
-export function makeMailer({ context, ops, warn, clock, setTimer, clearTimer }) {
+export function makeMailer({ context, ops, warn, clock, setTimer, clearTimer, undoWindowMs = 60_000 }) {
   const { database, services, env } = context;
   const timers = new Map();
   const keyOf = (actionId) => String(actionId).toLowerCase();
@@ -206,7 +208,37 @@ export function makeMailer({ context, ops, warn, clock, setTimer, clearTimer }) 
     return tally;
   }
 
+  // An apply that was cut off (a crash or restart) leaves its action row with null counts: undo and revert answer STILL_APPLYING for ever, the journal shows
+  // no Revert and the mail is never made pending. Finalise every such action older than STUCK_AFTER_MS the way the end of apply does: recount from the rows that
+  // were journaled (each applied record's row commits with the record, so those are exact; a skipped one that was never written is simply not counted), keep
+  // the undo window as it was set at the start (created_at + the window, long past), and hold the summary mail as due now when something changed and the kind
+  // tells someone. Done under the action's row lock and only while the counts are still null, so it is idempotent and loses to an apply that finishes first.
+  async function finaliseStuck() {
+    const cutoff = clock().getTime() - STUCK_AFTER_MS;
+    const stuck = (await database('bulk_actions').whereNull('n_applied').select('action_id', 'created_at')).filter((a) => new Date(a.created_at).getTime() <= cutoff);
+    for (const { action_id: actionId } of stuck) {
+      try {
+        await database.transaction(async (trx) => {
+          const a = await trx('bulk_actions').where('action_id', actionId).forUpdate().first();
+          if (!a || (a.n_applied !== null && a.n_applied !== undefined)) return; // finished meanwhile
+          const rows = await trx('bulk_action_rows').where('action_id', actionId).select('outcome');
+          const count = (...outcomes) => rows.filter((r) => outcomes.includes(r.outcome)).length;
+          const applied = count('applied');
+          const mails = applied > 0 && MAILING_KINDS.includes(a.kind);
+          await trx('bulk_actions').where('action_id', actionId).update({
+            n_applied: applied, n_skipped: count('skipped', 'noop'), n_failed: count('failed'), undo_until: new Date(new Date(a.created_at).getTime() + undoWindowMs),
+            ...(mails ? { mail_state: 'pending', mail_due_at: clock() } : {}),
+          });
+          warn(`bulk action ${actionId} never finished applying (a restart?); finalised with ${applied} applied`);
+        });
+      } catch (err) {
+        warn(`could not finalise bulk action ${actionId}: ${err?.message || err}`);
+      }
+    }
+  }
+
   async function sweep() {
+    await finaliseStuck();
     const now = clock().getTime();
     for (const a of await database('bulk_actions').where('mail_state', 'pending').select('action_id', 'mail_due_at')) {
       const due = a.mail_due_at ? new Date(a.mail_due_at).getTime() : 0;
@@ -215,5 +247,5 @@ export function makeMailer({ context, ops, warn, clock, setTimer, clearTimer }) 
     }
   }
 
-  return { schedule, cancel, sweep };
+  return { schedule, cancel, sweep, finaliseStuck };
 }

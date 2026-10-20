@@ -20,7 +20,7 @@ export interface BulkOptions {
 	def: IndexDef;
 	/** The ticked keys, in the order ticked. The dialog works on a copy taken when it opens. */
 	picked: Ref<string[]>;
-	/** The list changed (after an apply or an undo): reload it, and leave only `keep` ticked (the rows that were skipped). */
+	/** The list changed (after an apply or an undo): reload it, and leave only `keep` ticked (after an apply, the rows that were skipped; after an undo, the current ticks less the rows put back, plus the ones that were not). */
 	onChanged: (keep: string[]) => void;
 	/** The clock, in ms (a test passes its own). */
 	now?: () => number;
@@ -200,7 +200,11 @@ export function useBulkActions(opts: BulkOptions) {
 			return;
 		}
 		if (cur) replace(undoDone(cur, res.data.results, codes.get(actionId) ?? new Map()));
-		opts.onChanged(notRevertedIds(res.data.results));
+		// rows ticked since the apply stay ticked: only the rows put back leave the selection, and the ones that could not be put back join it
+		const putBack = new Set(res.data.results.filter((r) => r.revert_outcome === 'reverted').map((r) => r.id));
+		const left = notRevertedIds(res.data.results);
+		const kept = opts.picked.value.filter((k) => !putBack.has(k));
+		opts.onChanged([...kept, ...left.filter((k) => !kept.includes(k))]);
 	}
 
 	function dismiss(actionId: string): void {

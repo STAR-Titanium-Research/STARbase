@@ -114,6 +114,7 @@ function makeDb(tables, log) {
       },
       whereIn(c, values) { preds.push((r) => values.some((v) => same(r[c], v))); return q; },
       whereNull(c) { preds.push((r) => r[c] === null || r[c] === undefined); return q; },
+      whereNotNull(c) { preds.push((r) => r[c] !== null && r[c] !== undefined); return q; },
       orderBy(col, dir = 'asc') { order = { col, dir }; return q; },
       limit(n) { max = n; return q; },
       offset(n) { skip = n; return q; },
@@ -187,12 +188,13 @@ function makeDb(tables, log) {
 const guardError = (reason) => Object.assign(new Error(reason), { name: 'DirectusError', status: 403, code: 'FORBIDDEN', extensions: { code: 'FORBIDDEN', reason, source: 'd1-access-guard' } });
 const RESTRICT_REFUSED = 'Restricting a record is not available yet. Ask an administrator.';
 
-function setup({ tables = baseTables(), env = { PUBLIC_URL: 'https://lab.example' }, canRead = () => true, mailFail = false, sweep = false, getSchema = null, now = T0 } = {}) {
+function setup({ tables = baseTables(), env = { PUBLIC_URL: 'https://lab.example' }, canRead = () => true, mailFail = false, sweep = false, getSchema = null, now = T0, beforeTransaction = null } = {}) {
   const log = { inserts: [], updates: [], deletes: [], raw: [], locks: [], depth: 0, caches: [], errors: [], warnings: [], clock: now, mail: [], timers: [] };
   const root = makeDb(tables, log);
   const database = Object.assign((t) => root(t), {
     raw: (...a) => root.raw(...a),
     transaction: async (work) => {
+      await beforeTransaction?.();
       const snapshot = structuredClone(tables);
       const trx = makeDb(tables, log);
       log.depth += 1;
@@ -539,6 +541,20 @@ test('remove_access: removes a listed person or team, noop when not listed, refu
   assert.equal(h.log.timers.length, 0);
 });
 
+test('remove_access of a person whose only access comes through a team is a skip that says so, not "no change needed"', async () => {
+  const h = setup();
+  // Bob reaches SM-002 only through a team grant (a derived row, which the triggers write); SM-003 he cannot reach at all
+  h.tables.sample_access.push({ sample_id: S.two, person_id: P.bob, role: 'view', team_access_id: ID(900) });
+  const p = await preview(h, member(U.ann), 'physical_samples', removeBody([S.two, S.three], person(P.bob)));
+  assert.deepEqual(p.body.results.map((r) => [r.code, r.status]), [['SM-002', 'skip'], ['SM-003', 'noop']]);
+  assert.match(p.body.results[0].reason, /through a team/);
+  const out = await ranOk(h, member(U.ann), removeBody([S.two], person(P.bob)));
+  assert.deepEqual([out.counts.applied, out.counts.skipped], [0, 1]);
+  assert.equal(out.results[0].outcome, 'skipped');
+  assert.match(out.results[0].reason, /through a team/);
+  assert.ok(h.tables.sample_access.some((r) => r.team_access_id === ID(900)), 'the derived row stays');
+});
+
 test('remove_access of an old co-owner is a real change (the snapshot sees the old row), not a noop', async () => {
   const world = baseTables();
   world.sample_co_owners.push({ sample_id: S.two, user_id: U.eve });
@@ -763,6 +779,21 @@ test('change_owner mails the new owner once, a single record reads as the single
   assert.match(h.log.mail[0].text, /Open it here: https:\/\/lab\.example\//);
 });
 
+test('upper-case ids are stored lower-case, so the mail still links the record (the readers tables hold lower-case ids)', async () => {
+  const hex = 'abcdef00-0000-4000-8000-00000000000a'; // an id with letters in it, unlike the plain-digit ids above
+  const world = baseTables();
+  world.physical_samples.push(sample(hex, P.ann, { sample_code: 'SM-HEX' }));
+  world.sample_readers.push(...[U.ann, U.bob].map((user_id) => ({ record_id: hex, user_id })));
+  const h = setup({ tables: world });
+  const out = await ranOk(h, member(U.ann), ownerBody([hex.toUpperCase(), hex], P.bob));
+  assert.equal(out.counts.total, 1, 'the same id in two cases is one record');
+  assert.deepEqual(h.tables.bulk_action_rows.map((r) => r.record_id), [hex], 'stored as the readers tables hold it');
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 1);
+  assert.match(h.log.mail[0].text, new RegExp(`/samples/${hex}`));
+  assert.doesNotMatch(h.log.mail[0].text, /cannot open/i);
+});
+
 test('share_access with a person mails them; with a team mails each active member that has an address, never the actor', async () => {
   const h = setup();
   await ranOk(h, member(U.ann), shareBody([S.one, S.two], person(P.eve), 'edit'));
@@ -932,6 +963,84 @@ test('the startup sweep sends every overdue pending action, re-arms those not ye
   const again = setup({ tables, sweep: true, now: new Date(T0.getTime() + 90_000) });
   await again.swept;
   assert.equal(again.log.mail.length, 0);
+});
+
+// An apply that was cut off leaves counts null and mail_state 'none' (it never reached its finally): the world below is that, made from a real apply.
+async function cutOff(kindBody, acc = member(U.ann)) {
+  const first = setup();
+  const out = await ranOk(first, acc, kindBody);
+  const action = first.tables.bulk_actions.find((x) => x.action_id === out.action_id);
+  Object.assign(action, { n_applied: null, n_skipped: null, n_failed: null, mail_state: 'none', mail_due_at: null });
+  return { tables: first.tables, action, out };
+}
+
+test('an action whose apply was cut off is finalised by the startup sweep: counts recounted, revertable, its mail goes out once', async () => {
+  const { tables, action, out } = await cutOff(ownerBody([S.one, S.two], P.bob));
+  const h = setup({ tables, sweep: true, now: new Date(T0.getTime() + 6 * 60_000) });
+  await h.swept;
+  assert.equal(action.n_applied, 2);
+  assert.equal(action.n_skipped, 0);
+  assert.equal(action.n_failed, 0);
+  assert.equal(action.undo_until.getTime(), T0.getTime() + 60_000);
+  assert.equal(action.mail_state, 'sent', 'made pending and due now, then sent by the same sweep');
+  assert.equal(h.log.mail.length, 1);
+  assert.equal(h.log.mail[0].to, 'bob@login.example');
+  // the journal now reports the real counts, and an administrator's revert no longer answers STILL_APPLYING
+  const one = await getOne(h, admin(U.admin), out.action_id);
+  assert.equal(one.body.action.n_applied, 2);
+  const r = await revert(h, admin(U.admin), out.action_id);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.state, 'reverted');
+  assert.equal(row(tables, 'physical_samples', S.one).owner_person_id, P.ann);
+  // another restart changes and mails nothing more
+  const again = setup({ tables, sweep: true, now: new Date(T0.getTime() + 12 * 60_000) });
+  await again.swept;
+  assert.equal(again.log.mail.length, 0);
+  assert.equal(action.n_applied, 2);
+});
+
+test('a young action with null counts is left alone by the sweep and still answers STILL_APPLYING', async () => {
+  const { tables, action, out } = await cutOff(ownerBody([S.one], P.bob));
+  const young = setup({ tables, sweep: true, now: new Date(T0.getTime() + 4 * 60_000) });
+  await young.swept;
+  assert.equal(action.n_applied, null, 'still within the time an apply may take');
+  assert.equal(action.mail_state, 'none');
+  assert.equal(young.log.mail.length, 0);
+  const r = await revert(young, admin(U.admin), out.action_id);
+  assert.equal(errorOf(r).extensions.code, 'STILL_APPLYING');
+});
+
+test('finalising a cut-off action only counts what was journaled: other outcomes, a kind that mails nobody, and an action that changed nothing', async () => {
+  const { tables, action } = await cutOff(shareBody([S.one, S.two, S.three], person(P.eve), 'view'));
+  // one record changed, one skipped, one failed, one no-op journaled before the cut
+  Object.assign(tables.bulk_action_rows.find((r) => r.record_id === S.three), { outcome: 'skipped', before: null, after: null });
+  tables.bulk_action_rows.push(
+    { action_id: action.action_id, record_id: ID(77), record_code: 'X', outcome: 'failed', reason: 'x', before: null, after: null, revert_outcome: null, revert_reason: null },
+    { action_id: action.action_id, record_id: ID(78), record_code: 'Y', outcome: 'noop', reason: null, before: null, after: null, revert_outcome: null, revert_reason: null },
+  );
+  tables.bulk_action_rows = tables.bulk_action_rows.filter((r) => r.record_id !== S.two);
+  const h = setup({ tables, sweep: true, now: new Date(T0.getTime() + 10 * 60_000) });
+  await h.swept;
+  assert.deepEqual([action.n_applied, action.n_skipped, action.n_failed], [1, 2, 1]);
+  const none = await cutOff({ kind: 'restrict', ids: [S.one], params: {} }, admin(U.admin));
+  const h2 = setup({ tables: none.tables, sweep: true, now: new Date(T0.getTime() + 10 * 60_000) });
+  await h2.swept;
+  assert.equal(none.action.n_applied, 1);
+  assert.equal(none.action.mail_state, 'none', 'a kind that mails nobody stays none');
+  assert.equal(h2.log.mail.length, 0);
+});
+
+test('finalising never touches an action that finished meanwhile (counts already written under the row lock)', async () => {
+  const { tables, action } = await cutOff(ownerBody([S.one], P.bob));
+  // the apply finishes between the sweep's look at the action and its lock on it
+  const h = setup({
+    tables, sweep: true, now: new Date(T0.getTime() + 10 * 60_000),
+    beforeTransaction: () => Object.assign(action, { n_applied: 5, n_skipped: 0, n_failed: 0 }),
+  });
+  await h.swept;
+  assert.equal(action.n_applied, 5, 'the real counts stand');
+  assert.equal(action.mail_state, 'none');
+  assert.equal(h.log.mail.length, 0);
 });
 
 test('the sweep is quiet when there is nothing to send and survives a database error', async () => {

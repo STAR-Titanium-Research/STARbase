@@ -80,6 +80,7 @@ export const NO_PERMISSION_REASON = 'You do not have permission to change this r
 export const FAILED_REASON = 'Something went wrong changing this record.';
 export const NOT_OWNER_REASON = 'You are not the owner of this record.';
 export const OWNER_REMOVE_REASON = 'That person is the owner of this record, so their access cannot be removed. Change the owner instead.';
+export const TEAM_ACCESS_REMOVE_REASON = 'That person has access to this record through a team, so it cannot be removed here. Change the access of the team, or its members, instead.';
 export const NOT_OWNABLE_REASON = 'A team cannot own this kind of record.';
 // what an undo or revert says when the rules no longer allow putting a record back (Rulings O4 and O5)
 export const REVERT_NOT_MANAGER = 'You can no longer manage this record, so it cannot be handed back. Ask an administrator to revert it.';
