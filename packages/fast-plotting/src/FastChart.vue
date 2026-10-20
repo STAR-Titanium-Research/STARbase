@@ -20,11 +20,12 @@ const props = withDefaults(defineProps<{
 	viewStart?: number | null;    // shared x-zoom window (seconds); null = full range
 	viewEnd?: number | null;
 	zoomTool?: boolean;           // when true, drag draws a rectangular zoom box
+	wheel?: boolean;              // the wheel zooms the shared window (off where the page should scroll instead)
 	cursor?: number | null;       // shared hover time (seconds) from the tiles of the same group
 	xLabels?: boolean;            // tick labels and the "Time (min)" title (the bottom row of tiles)
 	fill?: boolean;               // a faint area under the first series (the cumulative energy)
 	band?: { start: number; end: number } | null;   // a shaded time range (the window the statistics cover)
-}>(), { xLabels: true });
+}>(), { xLabels: true, wheel: true });
 const emit = defineEmits<{
 	(e: 'zoom', v: { start: number; end: number } | null): void;
 	(e: 'hover', t: number | null): void;
@@ -190,7 +191,7 @@ function onZoomUp(ev: PointerEvent) {
 	if (e > s) emit('zoom', { start: s, end: e });
 }
 function onWheel(ev: WheelEvent) {
-	const g = geom.value; if (!g) return;
+	const g = geom.value; if (!g || !props.wheel) return;
 	ev.preventDefault();
 	const frac = (pxOf(ev) - ML) / g.plotW;
 	const cursorX = fracToX(frac);

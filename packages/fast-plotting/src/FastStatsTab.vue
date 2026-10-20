@@ -77,7 +77,7 @@ function exportCsv() {
 		<template v-if="energy">
 			<div class="energy-head"><b>Energy</b><span class="fd-dim">cumulative over the whole run</span></div>
 			<div class="chart">
-				<FastChart :time="energy.t" :series="energySeries" :fill="true" :band="win" :zoom-tool="zoomTool" :cursor="cursor" @zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
+				<FastChart :time="energy.t" :series="energySeries" :fill="true" :band="win" :zoom-tool="zoomTool" :wheel="false" :cursor="cursor" @zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
 			</div>
 		</template>
 	</div>
