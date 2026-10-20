@@ -2834,6 +2834,32 @@ records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actio
 - [ ] **BULK5 — Lab Viewer, caps and the journal.** A Lab Viewer token: `preview`, `apply`, `undo` and `revert` all 403 `READ_ONLY_ROLE`. 101 distinct ids: 400; the same id 150 times: one result.
   `GET /d1-bulk-actions` as the owner lists only their actions, as an administrator every one, newest first; `GET /:id` of someone else's action is 404 for a member. Applying to 100 samples takes
   how long on the real stack (one transaction per record): note it, the toast's 60 s starts when the answer arrives. Since: bulk actions, PR 1.
+- [ ] **BULK6 — The extraction changed nothing for the Who-has-access dialog.** d1-record-access's routes now call the extracted bodies. On a copy, with the Who-has-access dialog of a sample: add a person (mail
+  arrives once, "gave you access"), change their level (no mail), remove them; add a team (one mail per active member with a login, "via <team>"), change its level and trust switch, remove it; transfer to a person
+  (new owner mailed, `blocked_by` shown) and to a team (managers mailed once each, the previous person owner stays on as Can edit). Same answers, same mails and the same `audit_logs.actor` as before the change.
+  Since: bulk actions, PR 2.
+- [ ] **BULK7 — assign_team and change_owner on real rows, with the real manage rule.** As a Lab Member owner of 5 samples: `preview` `assign_team` to a team you do NOT manage: every row `ok` with the
+  warning "You will no longer be able to manage this record yourself, so an undo may be refused."; to a team you manage: no warning. `apply`: `owner_team_id` set, `owner_person_id` null, you stay as Can edit,
+  the database's owner grant and the team members' derived rows appear (`sample_access`, `sample_team_access`). A team with no manager: `skip` with the TEAM_HAS_NO_MANAGER wording; Projects: `skip`
+  "A team cannot own this kind of record." `change_owner` to a person who cannot open the record yet (restricted parent): the warning names them; a person with no login: "has no D1 login yet". Team-owned
+  record, as one of its managers, to a person or another team: the warning says the outgoing managers are not kept. Another person's record in the list: `skip` "You are not the owner of this record." (checked before
+  "already the owner"). Since: bulk actions, PR 2.
+- [ ] **BULK8 — share_access and remove_access, including old co-owners.** `share_access` a person as Can view to 10 samples where 3 already have them at that level (`noop`), 2 at Can edit (changed) and 1 where
+  they are the owner (`skip` "That person is the owner already."). A team: add, change level, the owning team is skipped. A sample whose co-owner is only in the old `sample_co_owners` table: sharing at Can edit is
+  `noop`, at Can view converts it to an access row and drops the old row (undo puts an access row back, not the old row: note the difference). `remove_access` of the owner: skipped with "Change the owner instead."; of
+  a person who is only an old co-owner: applied. Since: bulk actions, PR 2.
+- [ ] **BULK9 — Undo and revert of the ownership and access kinds.** Undo of `share_access`, `remove_access` and `assign_team` to a team you manage inside 60 s: the list, the team grants and the owner are exactly as
+  before (compare `sample_access` and `sample_team_access` rows). Undo of `assign_team` to a team you do not manage, and of `change_owner`: `refused` "You can no longer manage this record ..." (Ruling O5: expected, the
+  administrator's `revert` does it and drops the Can edit row you were given). Revert after the old owner team lost its last manager: `refused` with the no-manager reason. A person shared with since: `changed_since`.
+  Nothing is mailed by a revert. Since: bulk actions, PR 2.
+- [ ] **BULK10 — The summary mails with a real mail transport.** `assign_team` on 25 samples: the team's managers get ONE mail each, 62 s after the answer, listing 20 codes and "and 5 more" with links that
+  open the records (STARBASE_URL or PUBLIC_URL set); the person who ran it gets none; `bulk_actions.mail_state` goes `pending` -> `sent`. `share_access` with a team: one mail per active member with an address; a login with
+  an empty address and an inactive person get none; a member with no login is mailed (their People address) with no links. Undo inside the window: no mail ever arrives and `mail_state = 'cancelled'`. A recipient who
+  cannot read a record gets its code and no link. Since: bulk actions, PR 2.
+- [ ] **BULK11 — The mail survives a restart.** Apply a `change_owner`, restart the Directus container inside the 60 s window: the mail still goes out about when it was due (the startup sweep re-arms it, `mail_state`
+  `pending` -> `sent`); undo after the restart (still inside the window) cancels it. Apply, restart AFTER the due time without the endpoint having sent it (stop Directus before the 62 s, start it later): the
+  sweep sends it on start, once. With no `getSchema`-dependent failure in the log: the timer and the sweep have no request, so `MailService` is given the schema from `getSchema()`; confirm the mail renders and
+  arrives (if the transport needs the schema, this is where it would show). Since: bulk actions, PR 2.
 
 ## Done
 

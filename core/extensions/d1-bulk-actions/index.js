@@ -2,11 +2,15 @@
 //
 // Bulk actions on the index pages (spec docs/superpowers/specs/2026-10-20-bulk-actions-design.md): one action on up to 100 ticked records,
 // a dry-run preview per record, apply with partial success, a 60-second undo for the person who ran it, a revert for administrators, and
-// the journal behind it (migration 204: bulk_actions, bulk_action_rows; read and written only here). This release has three kinds:
-// restrict, unrestrict and edit_field (the ownership and access kinds come with the next ones).
+// the journal behind it (migration 204: bulk_actions, bulk_action_rows; read and written only here). Seven kinds: restrict, unrestrict and edit_field
+// (an update of the record as the caller) and the ownership and access kinds assign_team, change_owner, share_access and remove_access, which run
+// through d1-record-access's extracted bodies (makeAccessOps), so the access rules live in one place.
 //
 //   POST /d1-bulk-actions/:collection/preview   { kind, ids[], params }
-//     -> { results: [{ id, code, status: 'ok'|'noop'|'skip', reason? }], counts: { total, ok, noop, skip } }
+//     -> { results: [{ id, code, status: 'ok'|'noop'|'skip', reason?, warning? }], counts: { total, ok, noop, skip } }
+//        warning (a status 'ok' row of an ownership kind only): one plain sentence, or several joined by a space, saying what the change costs the caller
+//        (Ruling O5: the managers of the team that owned it are not kept; the caller can no longer manage it, so an undo may be refused; the new
+//        owner cannot open it yet). The same words for every row they apply to, so the dialog can list each once.
 //   POST /d1-bulk-actions/:collection/apply     { kind, ids[], params }
 //     -> { action_id, undo_until, results: [{ id, code, outcome: 'applied'|'noop'|'skipped'|'failed', reason? }],
 //          counts: { total, applied, noop, skipped, failed } }
@@ -17,12 +21,28 @@
 //        see all, everyone else only their own; newest first)
 //   GET  /d1-bulk-actions/:action_id            -> { action, rows: [...] }  (the same visibility; 404 otherwise; each row's before and after
 //        snapshots are for administrators only, null for everyone else)
-//   params: restrict and unrestrict {}; edit_field { field, value } (null clears). Collections: physical_samples, manufacturing_operations,
-//   test_sessions, campaigns; BULK_FIELDS is the allow-list of fields per collection (the index pages mirror it in `bulkFields`).
+//   params: restrict and unrestrict {}; edit_field { field, value } (null clears); assign_team { team_id }; change_owner { person_id };
+//   share_access { person_id | team_id, role: 'view' | 'edit' }; remove_access { person_id | team_id }. Collections: physical_samples,
+//   manufacturing_operations, test_sessions, campaigns (assign_team is accepted on projects too and skips every row: a team cannot own one);
+//   BULK_FIELDS is the allow-list of fields per collection (the index pages mirror it in `bulkFields`).
+//   A person or team that does not exist (a person that is not active) is a 400 before any record is touched, except for remove_access (a person
+//   or team that is gone is simply not listed: noop).
 //
 // Errors (the Directus shape, source 'd1-bulk-actions'): 401; 403 READ_ONLY_ROLE (a Lab Viewer, on preview too); 400 INVALID_PAYLOAD,
 // NOT_APPLICABLE; 404 NOT_FOUND (an action you may not see); 403 FORBIDDEN (revert by a non-administrator), UNDO_WINDOW_CLOSED;
 // 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED, NOTHING_TO_REVERT, STILL_APPLYING (an action's counts stay null until its apply has finished).
+//
+// The ownership and access kinds, per record, in the record's own transaction after the readable check: the caller must manage it (skip 'You are not the
+// owner of this record.'), then the kind's rules, then one of d1-record-access's bodies. Skip reasons are those bodies' own plain words: the team has no
+// manager (Ruling O4), a team cannot own this kind of record (O3), the person is the owner already, the owner's access cannot be removed, the team owns
+// the record. Already as asked is noop (the team or person already owns it; the person or team already has that level; not listed).
+// Undo and revert of these put the owner, the person entries and the team grants back to `before` through the same bodies; what the rules forbid now
+// (the old team has no manager, the caller cannot manage any more: Rulings O4 and O5) is `refused` with the reason.
+//
+// Summary emails (spec 3.4): assign_team mails the new team's managers, change_owner the new owner, share_access the person or the team's active members
+// that have an address; one mail per recipient lists the codes (the first 20, then 'and N more'), built from the journal when it is sent. At apply the
+// action is mail_state 'pending' with mail_due_at = undo_until + 2 s and a timer sends it; undo (or a revert that put anything back) sets 'cancelled'; on
+// start a sweep sends what is overdue and re-arms the rest; a revert sends nothing; a failed mail is logged and never undoes the change.
 //
 // Per record, preview and apply run the SAME function; a preview runs in a transaction that is always rolled back, so the two cannot disagree:
 //   1. a record the caller cannot read (ItemsService.readOne as the caller) is skipped as "not found", with no code, never revealed;
@@ -267,7 +287,9 @@ export function summaryContent({ adder, kind, items, mode, role = null, teamName
 
 export default {
   id: SOURCE,
-  handler: (router, context) => mount(router, context),
+  handler: (router, context) => {
+    mount(router, context);
+  },
 };
 
 // `clock` is injectable for the tests (the undo window); so are `timers` (the per-action mail timer: { set, clear }; `sweep: false` skips the startup sweep).
