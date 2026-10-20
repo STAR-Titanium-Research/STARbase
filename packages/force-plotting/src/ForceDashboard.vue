@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onBeforeUnmount, provide, reactive, ref, watch } from 'vue';
 import { GridLayout, GridItem } from 'grid-layout-plus';
 import { useRoute, useRouter } from 'vue-router';
-import ForceChart from './ForceChart.vue';
+import './force.css';
+import ForceLists, { type OpCard } from './ForceLists.vue';
+import ForceOpColumn, { type OpTab } from './ForceOpColumn.vue';
+import ForcePanel from './ForcePanel.vue';
+import ForceSignals from './ForceSignals.vue';
+import ForceDoctor from './ForceDoctor.vue';
+import ForceFrm from './ForceFrm.vue';
+import { FORCE_CTX } from './forceCtx';
+import { RIGHT_DEFAULT, layoutColumns, layoutMode, stackedLayout, startingGrid, type RPanel, type RPanelType } from './forceLayout';
 import type { HoverSource } from './chartHover';
 import { downloadFailureMessage } from './downloadError';
 import { pickMode, type FrmMode } from './frmMode';
 import { perKeyComputed } from './perKeyComputed';
-import LoadingOverlay from './LoadingOverlay.vue';
 import { frmOverlay, sameStage, stageInfo, type LoadStage, type OverlayMode, type StageInfo } from './loadStage';
 import { createLoadToken } from './loadToken';
 import { createActivationQueue, createOpGuard } from './opGuard';
-import SpectrumView from './SpectrumView.vue';
-import FrmCloud from './FrmCloud.vue';
-import FrmOctree from './FrmOctree.vue';
 import ContextMenu, { type ContextMenuItem } from './ContextMenu.vue';
 import PlotHelp from './PlotHelp.vue';
 import { formatPointInfo, recentreWindow, type PointInfo, type PointMenuEvent } from './cloudPick';
@@ -23,22 +27,18 @@ import { axisAutoLimits } from './liveCloud';
 import { defaultScale, withAutoRange, withOpenDisplay, type ColorScale } from './colorScale';
 import { useAutoColorScale } from './autoColorScale';
 import { histogramFrom, type Histogram } from './histogram';
-import ColorScaleEditor from './ColorScaleEditor.vue';
-import PlotModeFlyout from './PlotModeFlyout.vue';
 import { cacheGet, cachePut, decimateCache, parseCache, type Cache } from './liveCache';
 import { alignMeasuredRho, measuredRhoSpan, type TurningSpiralParams } from './path';
 import { activeFindings, diagnose, worstSeverity, type Finding } from './metadataDoctor';
 import { computeSignalStats, resolveStatsWindow, type SignalStats } from './signalStats';
 import { statsCsvColumns } from './statsCsv';
-import { AXIS_MAPS, DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
+import { DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
 import { meanRpm } from './filterResponse';
-import { type FilterChain, bakeBlockedReason, chainActive, chainSummary, defaultChain, fetchFiltered, fetchFilteredFft } from './filterChain';
+import { type FilterChain, bakeBlockedReason, chainActive, chainsEqual, cloneChain, defaultChain, fetchFiltered, fetchFilteredFft, stagesOn } from './filterChain';
 import { useForceHost } from './host';
 import { saveChartImage, type ChartSnapshot } from './chartExport';
 import { downloadText, safeFilePart, toCsv, useCopyFeedback, type CsvColumn } from './csvExport';
 import { debounce } from './debounce';
-import FixedNumberInput from './FixedNumberInput.vue';
-import { fmtFixed } from './fixedNumber';
 import { cropWindowSec, diffEnvelopes, diffWindow } from './compare';
 import { createPendingCrop } from './pendingCrop';
 import {
@@ -75,7 +75,6 @@ const AXIS_COLOR: Record<Axis, string> = { Fx: 'var(--d1-series-1, #2a78d6)', Fy
 const loading = ref(true);
 const rows = ref<any[]>([]);
 
-const sampleSearch = ref('');
 const opSearch = ref('');
 // selectedSampleId: which sample is highlighted (set by clicking a sample OR an
 // operation, so the samples list always shows where the current selection lives).
@@ -95,7 +94,7 @@ const CHART_MODES = [
 	{ key: 'force', label: 'Force' },
 	{ key: 'fft', label: 'FFT' },
 	{ key: 'psd', label: 'Power', title: 'Power spectrum (dB)' },
-	{ key: 'spectrogram', label: 'Spectro', title: 'Time × frequency heatmap' },
+	{ key: 'spectrogram', label: 'Spectrogram', title: 'Time × frequency heatmap' },
 	{ key: 'waterfall', label: 'Waterfall', title: 'Stacked spectra over time' },
 ];
 const SPECTRAL_MODES = ['psd', 'spectrogram', 'waterfall'] as const;
@@ -437,13 +436,9 @@ watch(editDiam, (v) => {
 // the crop lines per axis, plus whole-signal effective bit depth and rail/clip analysis
 // (over-range detection). Reuses the FrmCloud LRU so Lite mode costs nothing extra; if
 // the cache isn't downloaded yet the panel offers an explicit compute (= download).
-// One accordion open at a time in the detail column: Operation detail | Signal statistics
-// | Signal filters are mutually exclusive (opening one folds the others).
-type DetailPanel = 'detail' | 'display' | 'stats' | 'cutting' | 'filters';
-const openPanel = ref<DetailPanel | null>('detail');
-function togglePanel(p: DetailPanel) { openPanel.value = openPanel.value === p ? null : p; }
-const opDetailOpen = computed(() => openPanel.value === 'detail');
-const displayPanelOpen = computed(() => openPanel.value === 'display');
+// The operation column shows one tab at a time (ForceOpColumn): cut parameters | display | signal
+// filters | signal statistics | cutting metrics.
+const openPanel = ref<OpTab>('cut');
 const statsOpen = computed(() => openPanel.value === 'stats');
 const cuttingOpen = computed(() => openPanel.value === 'cutting');
 const STAT_AXES = ['Fx', 'Fy', 'Fz'] as const;
@@ -556,6 +551,10 @@ const { copied: statsCopied, failed: statsCopyFailed, copy: copyStatsCsv } = use
 // cache; raw + filtered render side-by-side in two linked viewports (compareView shared).
 // Baking patches the op's filter_chain + reprocesses so ALL outputs are filtered.
 const filtersOpen = computed(() => openPanel.value === 'filters');
+// "Preview on the Lite map and FFT" (Signal filters tab): show the working chain on the maps and the spectrum while it is tuned.
+const previewOn = ref(true);
+const previewing = computed(() => filtersOpen.value && previewOn.value);
+watch(filtersOpen, (open) => { if (open) previewOn.value = true; });
 const workChain = ref<FilterChain>(defaultChain());
 const filteredCache = ref<Cache | null>(null);
 // The RAW pane in compare mode plots the SAME decimated samples as the filtered pane
@@ -573,7 +572,7 @@ const profiles = ref<any[]>([]);
 // temporal-dead-zone ReferenceError at setup — which silently half-wired Lite reactivity.
 const liveAvailable = computed(() => !!detail.value?.live_cache_file);
 const liveOn = computed(() => frmMode.value === 'lite' && liveAvailable.value);
-const compareOn = computed(() => liveOn.value && chainActive(workChain.value) && filtersOpen.value);
+const compareOn = computed(() => liveOn.value && chainActive(workChain.value) && previewing.value);
 // Both live panes share ONE view object so pan/zoom in either drives both.
 const compareView = reactive({ cx: 0, cy: 0, span: 1, active: false });
 // Geometry/display props every Lite FrmCloud pane shares; each pane adds its own cache override,
@@ -606,6 +605,9 @@ const savedChain = computed<FilterChain | null>(() => {
 	if (!fc) return null;
 	return mergeChain(typeof fc === 'string' ? JSON.parse(fc) : fc);
 });
+// A dot on the Signal filters tab: the working chain differs from the saved one; the badge counts its stages.
+const chainDirty = computed(() => !chainsEqual(workChain.value, savedChain.value ?? defaultChain()));
+const stagesOnCount = computed(() => stagesOn(workChain.value));
 const filterBaked = computed(() => detail.value?.filter_baked === true);
 const bakeBlocked = computed(() => bakeBlockedReason(detail.value));
 const bakedChain = computed<FilterChain | null>(() => (filterBaked.value ? savedChain.value : null));
@@ -613,7 +615,7 @@ const appliedLight = computed<boolean>(() => !!savedChain.value && !filterBaked.
 // The single filtered pane: a light-applied op renders one Lite cloud recomputed from filteredCache
 // (the compare panes only appear while the Filters panel is open for tuning). Baked ops need no solo
 // pane — their loaded cache is already filtered, so the normal Lite pane shows the filtered signal.
-const filteredSoloOn = computed(() => liveOn.value && !filtersOpen.value && appliedLight.value && filteredCache.value != null);
+const filteredSoloOn = computed(() => liveOn.value && !previewing.value && appliedLight.value && filteredCache.value != null);
 
 async function loadProfiles() {
 	try { profiles.value = (await api.get('/items/filter_profiles', { params: { fields: ['id', 'name', 'chain'], sort: 'name', limit: 100 } })).data.data ?? []; }
@@ -623,7 +625,7 @@ async function loadProfiles() {
 // open (live tuning + raw|filtered compare), else the op's saved chain when it's light-applied (the
 // single filtered pane persists after leaving the panel). Null => nothing to preview.
 function previewChain(): FilterChain | null {
-	if (filtersOpen.value) return workChain.value;
+	if (previewing.value) return workChain.value;
 	if (appliedLight.value && liveOn.value) return savedChain.value;
 	return null;
 }
@@ -666,9 +668,9 @@ async function runPreview() {
 	} finally { if (previewAbort === ac) filterBusy.value = false; }
 }
 let previewTimer = 0;
-watch([workChain, () => detail.value?.live_cache_file, () => filtersOpen.value, () => appliedLight.value, () => liveOn.value, axis, chartMode], () => {
+watch([workChain, () => detail.value?.live_cache_file, previewing, () => appliedLight.value, () => liveOn.value, axis, chartMode], () => {
 	// Preview whenever we're tuning (panel open) OR the op is light-applied and Lite is showing it.
-	if (!filtersOpen.value && !(appliedLight.value && liveOn.value)) {
+	if (!previewing.value && !(appliedLight.value && liveOn.value)) {
 		if (!compareOn.value) filteredCache.value = null;   // drop the stale filtered cloud
 		return;
 	}
@@ -677,12 +679,13 @@ watch([workChain, () => detail.value?.live_cache_file, () => filtersOpen.value, 
 }, { deep: true });
 watch(() => detail.value?.id, () => {
 	stopHostPolls();   // a poll started for the previous op must not report into this one
-	workChain.value = savedChain.value ?? defaultChain();
+	workChain.value = cloneChain(savedChain.value);
+	previewOn.value = true;
 	filteredCache.value = null; filterErr.value = null; filterFftOverlay.value = null;
 });
 function applyProfile(id: string) {
 	const p = profiles.value.find((x) => x.id === id);
-	if (p?.chain) workChain.value = mergeChain(typeof p.chain === 'string' ? JSON.parse(p.chain) : p.chain);
+	if (p?.chain) workChain.value = cloneChain(mergeChain(typeof p.chain === 'string' ? JSON.parse(p.chain) : p.chain));
 }
 async function saveProfile() {
 	const name = window.prompt('Save filter profile as:'); if (!name) return;
@@ -695,12 +698,12 @@ async function saveProfile() {
 async function applyFilter() {
 	const d = detail.value;
 	if (!d?.id || !chainActive(workChain.value)) return;
-	const chain = JSON.parse(JSON.stringify(workChain.value));
+	const chain = cloneChain(workChain.value);
 	filterErr.value = null;
 	detail.value = { ...detail.value, filter_chain: chain, filter_baked: false };   // optimistic — solo pane shows now
 	try { await api.patch(`/items/machining_force_analysis/${d.id}`, { filter_chain: chain, filter_baked: false }); }
 	catch (e: any) { filterErr.value = e?.response?.status === 403 ? 'Not permitted to save this filter.' : (e?.message || 'save failed'); }
-	openPanel.value = null;   // close the Filters panel → collapse compare down to the single filtered pane
+	previewOn.value = false;   // stop tuning: the compare panes collapse to the single filtered pane
 }
 async function bakeFilters() {
 	const d = detail.value;
@@ -853,10 +856,6 @@ const colorHistogram = computed<Histogram | null>(() => {
 // locked colour limits become meaningless — auto-unlock so both panes recompute their own
 // scale over the (raw / filtered) data.
 watch(() => chainActive(workChain.value), (active) => { if (active) locked.value = false; });
-// In-place collapses to free space when live.
-const sampleDetailOpen = ref(true);
-const colStackHidden = ref(false);               // hide the Samples/Operations column
-const detailHidden = ref(false);                 // hide the Sample/Operation detail column
 const frmUrl = ref<string | null>(null);
 const frmLoading = ref(false);
 // What the active view type (Figure / Lite / Full) is busy with, for the busy mark on its segment
@@ -875,74 +874,34 @@ const frmLoadOverlay = computed(() => frmOverlay(frmShownMode.value, frmStage.va
 const frmCache = new Map<string, string>();
 
 // ---------------------------------------------------------------- layout state
-// Column widths are user-resizable (drag handles); persisted per browser so the layout survives a
-// reload. Keys from the old split layout (rightSplit/showForce/showFRM/visAxes) are ignored.
+// The columns have fixed widths (DESIGN.md 5b, layoutMode / layoutColumns); only the panel grid right of
+// them is arranged by the user. LAYOUT_KEY keeps the view type (Figure / Lite / Full) between visits;
+// the column widths and folds that older versions saved there are ignored.
 const LAYOUT_KEY = 'd1-force-dashboard-layout-v1';
-const colA = ref(240);          // Samples/Operations column width (px)
-const colB = ref(300);          // Sample/Operation detail column width (px)
-const dragging = ref(false);
 
 (function loadLayout() {
 	try {
 		const raw = localStorage.getItem(LAYOUT_KEY);
 		if (!raw) return;
 		const v = JSON.parse(raw);
-		if (typeof v.colA === 'number') colA.value = v.colA;
-		if (typeof v.colB === 'number') colB.value = v.colB;
-		if (typeof v.colStackHidden === 'boolean') colStackHidden.value = v.colStackHidden;
-		if (typeof v.detailHidden === 'boolean') detailHidden.value = v.detailHidden;
 		if (v.frmMode === 'figure' || v.frmMode === 'lite' || v.frmMode === 'full') chooseMode(v.frmMode);
 	} catch { /* ignore malformed/absent saved layout */ }
 })();
-watch([colA, colB, colStackHidden, detailHidden, frmMode], () => {
-	localStorage.setItem(LAYOUT_KEY, JSON.stringify({
-		colA: colA.value, colB: colB.value,
-		colStackHidden: colStackHidden.value, detailHidden: detailHidden.value,
-		// Persist Live so returning to the dashboard keeps the interactive FRM cloud
-		// instead of silently dropping back to the static PNG. (liveOn still requires a
-		// live cache on the selected op, so ops without one safely show the PNG.)
-		frmMode: frmMode.value,
-	}));
+// Persist Live so returning to the dashboard keeps the interactive FRM cloud instead of silently
+// dropping back to the static PNG. (liveOn still requires a live cache on the selected op, so ops
+// without one safely show the PNG.)
+watch(frmMode, () => {
+	try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ frmMode: frmMode.value })); } catch { /* ignore */ }
 });
-
-function dragAxis(getStart: () => number, apply: (v: number) => void, min: number, max: number) {
-	return (ev: PointerEvent) => {
-		ev.preventDefault();
-		const startX = ev.clientX;
-		const start = getStart();
-		dragging.value = true;
-		function onMove(e: PointerEvent) { apply(Math.min(max, Math.max(min, start + (e.clientX - startX)))); }
-		function onUp() {
-			dragging.value = false;
-			window.removeEventListener('pointermove', onMove);
-			window.removeEventListener('pointerup', onUp);
-		}
-		window.addEventListener('pointermove', onMove);
-		window.addEventListener('pointerup', onUp);
-	};
-}
-const startColAResize = dragAxis(() => colA.value, (v) => { colA.value = v; }, 170, 380);
-const startColBResize = dragAxis(() => colB.value, (v) => { colB.value = v; }, 220, 460);
 
 const rightAreaEl = ref<HTMLElement | null>(null);
 
-// Below this content width, fixed pixel columns would overflow — stack instead.
-// Tracks the real element (Directus reserves side chrome, so the viewport is
-// not a reliable proxy).
+// The page reacts to its own width, not the viewport's (Directus reserves side chrome).
 const layoutEl = ref<HTMLElement | null>(null);
 const layoutW = ref(1400);
-const stacked = computed(() => layoutW.value < 860);
-const gridCols = computed(() => {
-	if (stacked.value) return '1fr';
-	// COL1 (samples/operations) and COL2 (sample/operation detail) can each be
-	// folded away to the left to hand the right area more room. Track list is built
-	// positionally to match exactly which columns (+ their resizers) are rendered.
-	const parts: string[] = [];
-	if (!colStackHidden.value) parts.push(`${colA.value}px`, '6px');
-	if (!detailHidden.value) parts.push(`${colB.value}px`, '6px');
-	parts.push('1fr');
-	return parts.join(' ');
-});
+const mode = computed(() => layoutMode(layoutW.value));
+const stacked = computed(() => mode.value === 'stacked');
+const gridCols = computed(() => layoutColumns(mode.value));
 
 // Fit the whole module into the viewport height (no page scroll) on any screen,
 // including 16:9 desktops — measured, not guessed, since Directus's own chrome
@@ -991,17 +950,12 @@ onBeforeUnmount(() => {
 });
 
 // ---- Flexible plot-panel grid (Signals + FRM, add/close/rearrange) ----------
-// The plot area is a grid-layout-plus grid of panels (like the recording view). The
-// Samples/Operations + detail stay as the docked left rail; only the plots are flexible.
+// The area right of the operation column is a grid-layout-plus grid of panels (like the recording view);
+// the default puts the FRM in the centre column and Signals on the right. The lists and the operation
+// column stay docked at the left; only the panels are flexible.
 // Per-instance panel state: a Signals panel carries its own selected channels + RPM toggle so
 // duplicated panels can differ (e.g. one showing only Fz next to one showing Fx/Fy).
-type RPanelType = 'signals' | 'frm' | 'wear' | 'doctor';
-type RPanel = { i: string; type: RPanelType; x: number; y: number; w: number; h: number; channels?: Axis[]; rpm?: boolean };
 const RIGHT_KEY = 'd1-force-right-layout-v2';
-const RIGHT_DEFAULT: RPanel[] = [
-	{ i: 'signals', type: 'signals', x: 0, y: 0, w: 6, h: 20, channels: ['Fx', 'Fy', 'Fz'], rpm: false },
-	{ i: 'frm', type: 'frm', x: 6, y: 0, w: 6, h: 20 },
-];
 const R_META: Record<string, { title: string; icon: string }> = {
 	signals: { title: 'Signals', icon: 'insights' },
 	frm: { title: 'FRM map', icon: 'fingerprint' },
@@ -1012,11 +966,10 @@ const R_META: Record<string, { title: string; icon: string }> = {
 // type is backwards compatible and RIGHT_KEY must NOT be bumped — bumping it would throw away
 // every user's saved panel arrangement to add one optional panel.
 function loadRight(): RPanel[] {
-	try {
-		const v = JSON.parse(localStorage.getItem(RIGHT_KEY) || 'null');
-		if (Array.isArray(v) && v.length && v.every((p) => p && R_META[p.type])) return v;
-	} catch { /* ignore */ }
-	return RIGHT_DEFAULT.map((p) => ({ ...p }));
+	let saved: unknown = null;
+	try { saved = JSON.parse(localStorage.getItem(RIGHT_KEY) || 'null'); } catch { /* ignore */ }
+	// the page used to open with Signals left of the FRM: an untouched saved default moves to the new one
+	return startingGrid(saved, Object.keys(R_META));
 }
 const rightLayout = ref<RPanel[]>(loadRight());
 // Persist debounced: the deep watch fires on every drag/resize tick, and a synchronous
@@ -1039,10 +992,16 @@ watch(rightLayout, (v) => {
 // height down) — with a typical bottomRow of ~20 that is a very visible gap at the bottom of the
 // Signals/FRM column versus the other columns, which stretch to the exact CSS height instead (#16).
 const RIGHT_MARGIN = 10;   // must match :margin="[10, 10]" on the right-hand GridLayout
-const rightBottomRow = computed(() => rightLayout.value.reduce((m, p) => Math.max(m, p.y + p.h), 0) || 1);
-const rightRowH = computed(() =>
+// A one-column page lays the panels out one under the other; the saved grid is left alone (and not written back).
+const gridLayout = computed({
+	get: () => (stacked.value ? stackedLayout(rightLayout.value) : rightLayout.value),
+	set: (v) => { if (!stacked.value) rightLayout.value = v as RPanel[]; },
+});
+const rightBottomRow = computed(() => gridLayout.value.reduce((m, p) => Math.max(m, p.y + p.h), 0) || 1);
+const rightRowH = computed(() => stacked.value ? 36 :
 	Math.max(16, (availableHeight.value - RIGHT_MARGIN) / rightBottomRow.value - RIGHT_MARGIN),
 );
+const cell = (item: RPanel) => gridLayout.value.find((p) => p.i === item.i) ?? item;
 const rightAddOpen = ref(false);
 function addRightPanel(type: RPanelType) {
 	rightAddOpen.value = false;
@@ -1117,6 +1076,7 @@ onMounted(async () => {
 					'operation_id.operation_id', 'operation_id.pass_code', 'operation_id.operation_date',
 					'operation_id.sample_id.sample_id', 'operation_id.sample_id.sample_code',
 					'operation_id.sample_id.nickname', 'operation_id.sample_id.material_id.common_name',
+					'operation_id.sample_id.form', 'operation_id.sample_id.manufactured_date',
 					'operation_id.sample_id.owner_person_id.full_name',
 					// Metadata Doctor (metadataDoctor.ts) runs client-side over this whole list, so every
 					// value it compares has to be fetched here — the archive is ~190 rows and these are all
@@ -1201,7 +1161,7 @@ const samples = computed(() => {
 		let e = map.get(s.sample_id);
 		if (!e) {
 			e = { sample_id: s.sample_id, sample_code: s.sample_code, nickname: s.nickname,
-				material: s.material_id?.common_name, owner: s.owner_person_id?.full_name, ops: [] as any[] };
+				material: s.material_id?.common_name, owner: s.owner_person_id?.full_name, form: s.form, manufactured: s.manufactured_date, ops: [] as any[] };
 			map.set(s.sample_id, e);
 		}
 		e.ops.push(r);
@@ -1209,13 +1169,6 @@ const samples = computed(() => {
 	const arr = [...map.values()];
 	arr.sort(bySampleCode);
 	return arr;
-});
-
-const filteredSamples = computed(() => {
-	const q = sampleSearch.value.trim().toLowerCase();
-	return q ? samples.value.filter((s) =>
-		(s.sample_code || '').toLowerCase().includes(q) || (s.nickname || '').toLowerCase().includes(q)
-		|| (s.material || '').toLowerCase().includes(q)) : samples.value;
 });
 
 // Most recently saved recording across ALL operations (not just the currently filtered/searched
@@ -1231,15 +1184,16 @@ const latestRowId = computed(() => {
 	return best?.id ?? null;
 });
 
-// Data-quality stoplight for an operation row (mirrors the FAST dashboard). Green = a
+// Plot readiness of an operation row (mirrors the FAST dashboard). Green = a
 // plottable FRM cache exists · Blue = processing · Yellow = octree-only (no live cache) ·
 // Red = failed or no plot data.
-function frmQuality(o: any): { level: string; label: string } {
-	if (o?.status === 'pending' || o?.status === 'processing') return { level: 'blue', label: 'Processing…' };
-	if (o?.live_cache_file) return { level: 'green', label: 'FRM plot ready' };
-	if (o?.octree_status === 'done') return { level: 'yellow', label: 'Octree only (no live cache)' };
-	if (o?.status === 'error') return { level: 'red', label: 'Processing failed' };
-	return { level: 'red', label: 'No plot data' };
+// `label` is the worded badge, `hint` its tooltip.
+function frmQuality(o: any): { level: string; label: string; hint: string } {
+	if (o?.status === 'pending' || o?.status === 'processing') return { level: 'blue', label: 'Processing…', hint: 'Being processed on the host' };
+	if (o?.live_cache_file) return { level: 'green', label: 'FRM ready', hint: 'A live cache exists: the interactive FRM can be plotted' };
+	if (o?.octree_status === 'done') return { level: 'yellow', label: 'Octree only', hint: 'Octree only (no live cache)' };
+	if (o?.status === 'error') return { level: 'red', label: 'Failed', hint: 'Processing failed' };
+	return { level: 'red', label: 'No plot data', hint: 'No plot data' };
 }
 
 // ---- Metadata Doctor ------------------------------------------------------------------------
@@ -1304,6 +1258,16 @@ const displayedOps = computed(() => {
 	return list.sort(byPassCode);
 });
 
+// The Operations list of column 1: one card per operation, with its worded badges.
+const opCards = computed<OpCard[]>(() => displayedOps.value.map((o) => {
+	const q = frmQuality(o), d = doctorQuality(o);
+	return {
+		id: o.id, row: o, code: o.operation_id?.pass_code || '—', latest: o.id === latestRowId.value,
+		sub: [filterSampleId.value ? '' : sampleOf(o)?.sample_code, fmtDate(o.operation_id?.operation_date), `Fz ${fmt(o.peak_fz)} N`].filter(Boolean).join(' · '),
+		ready: q, issue: d ? { level: d.level, count: d.count, hint: d.label } : null,
+	};
+}));
+
 const selectedSample = computed(() => samples.value.find((s) => s.sample_id === selectedSampleId.value) || null);
 
 function selectSample(s: any) {
@@ -1334,8 +1298,7 @@ async function selectOp(row: any) {
 	// can be scrolled far outside the initial viewport in a long list), harmless on a direct click
 	// (scrollIntoView is a no-op when the row is already visible).
 	nextTick(() => {
-		document.querySelector('.panel-samples .rowcard.active')?.scrollIntoView({ block: 'nearest' });
-		document.querySelector('.panel-ops .rowcard.active')?.scrollIntoView({ block: 'nearest' });
+		document.querySelectorAll('.fp-lists .fp-card.active').forEach((el) => el.scrollIntoView({ block: 'nearest' }));
 	});
 	// Remember the selection so navigating away and back restores it.
 	try { const opId = row.operation_id?.operation_id; if (opId) localStorage.setItem(LAST_OP_KEY, opId); } catch { /* ignore */ }
@@ -1511,6 +1474,12 @@ const metaDirty = computed(() => {
 		|| editOutcomeNotes.value !== srcMeta.outcomeNotes;
 });
 
+// A dot on the Cut parameters tab: an edited cut field or operation record field. The same fields
+// outline themselves in the form; Reset puts the cut fields back to what the capture was loaded with.
+const cutModified = computed(() => !near(editFeed.value, srcCut.feed) || !near(editDiam.value, srcCut.diam) || !near(editInnerDiam.value, srcCut.inner)
+	|| !near(editPpr.value, srcCut.ppr) || !near(editRate.value, srcCut.rate));
+const cutEdited = computed(() => cutModified.value || metaDirty.value);
+
 // ---- Metadata Doctor, selected operation ----------------------------------------------------
 // Diagnosed from `detail` (not the list row) so the panel reflects edits the moment they're saved
 // and the detail row is refreshed. Falls back to the list row while the detail is still loading.
@@ -1545,7 +1514,7 @@ function adoptFinding(f: Finding) {
 	t.ref.value = f.matValue as number;
 	// Reveal the metadata box holding the field we just seeded, so the pending edit is visible
 	// rather than silently staged behind a folded accordion.
-	openPanel.value = 'detail';
+	openPanel.value = 'cut';
 }
 function applyFix(f: Finding) {
 	if (f.fix === 'adopt') return adoptFinding(f);
@@ -1556,7 +1525,7 @@ function applyFix(f: Finding) {
 // of the user instead — Lite is the only mode that recomputes the crop live (see onCropEdit).
 function startCropFix() {
 	if (liveAvailable.value) chooseMode('lite');
-	document.querySelector('.charts-col')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	document.querySelector('[data-panel-id] .charts')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 const doctorBusy = ref('');
@@ -1611,23 +1580,15 @@ const sampleInfo = computed(() => {
 	}
 	if (selectedSample.value) {
 		const s = selectedSample.value;
-		return { id: s.sample_id, sample_code: s.sample_code, material: s.material, nickname: s.nickname, owner: s.owner, ops: s.ops.length };
+		return { id: s.sample_id, sample_code: s.sample_code, material: s.material, nickname: s.nickname, form: s.form, owner: s.owner, manufactured: s.manufactured, ops: s.ops.length };
 	}
 	return null;
 });
 
-// Subtype/Sequence/New edge/Coolant/Operator moved into the editable "Operation metadata" box
-// below (srcMeta/editOp*) — kept out of this read-only list so they aren't shown twice.
-const opMeta = computed(() => {
-	const o = op.value;
-	if (!o) return [];
-	return [
-		['Date', fmtDate(o.operation_date)],
-		['Recorded', fmtDateTime(detail.value?.trigger_time)],
-		['Machine', o.equipment_id?.equipment_name],
-		['Method', o.method_id?.method_name],
-	].filter(([, v]) => v != null && v !== '');
-});
+// What the operation column always shows above its tabs.
+const ready = computed(() => (detail.value ? frmQuality(detail.value) : null));
+const recordedText = computed(() => fmtDateTime(detail.value?.trigger_time) || fmtDate(op.value?.operation_date) || '—');
+const machineText = computed(() => op.value?.equipment_id?.equipment_name || '—');
 
 function fmtBytes(n: number | null | undefined): string {
 	if (!n) return '—';
@@ -1643,30 +1604,32 @@ function fmtCutTime(d: any): string {
 	return `${secs.toFixed(1)}s`;
 }
 
-// Capture/technical info: rarely needed at a glance -> its own collapsed accordion.
-const captureInfo = computed(() => {
+// The sample, operation and capture details that are not always visible: the Cut parameters tab folds
+// them under "Sample and capture details".
+const moreRows = computed<[string, string][]>(() => {
 	const d = detail.value;
 	if (!d) return [];
-	return [
+	const si = sampleInfo.value;
+	const rows: Array<[string, any]> = [
+		['Material', si?.material], ['Nickname', si?.nickname], ['Form', si?.form], ['Owner', si?.owner],
+		['Made', si?.manufactured ? fmtDate(si.manufactured) : ''], ['Analysed ops', si?.ops],
+		['Method', op.value?.method_id?.method_name],
 		['Sample rate', d.sample_rate ? `${(d.sample_rate / 1000).toFixed(1)} kHz` : '—'],
 		['Dyno gain', d.dyno_gain != null ? `${fmt(d.dyno_gain)} N/V` : '—'],
-		['Pulses/rev', d.pulses_per_rev != null ? String(d.pulses_per_rev) : '—'],
 		['Raw points', d.n_raw != null ? Number(d.n_raw).toLocaleString() : '—'],
 		['File version', d.file_version != null ? String(d.file_version) : '—'],
 		['File size', fmtBytes(d.directus_files_id?.filesize)],
-	].filter(([, v]) => v !== '—') as [string, string][];
+	];
+	return rows.filter(([, v]) => v != null && v !== '' && v !== '—').map(([k, v]) => [k, String(v)]);
 });
-// Accordion state for the reworked op panel (persist nothing; sensible defaults).
 const captureOpen = ref(false);
 
-// The user picking a view type. Choosing Lite collapses the sample detail + the op's date/coolant
-// rows to free vertical space for the crop plots, cloud, and plotting-settings panel. Only a
-// deliberate choice does that: this used to be a watcher on frmMode, so the automatic re-pick when
-// a different file loaded reflowed the whole layout (#94).
+// The user picking a view type. Choosing Lite switches the Signals charts back to Force, where the
+// crop handles are. Only a deliberate choice does that: this used to be a watcher on frmMode, so the
+// automatic re-pick when a different file loaded reflowed the whole layout (#94).
 function chooseMode(m: FrmMode) {
 	preferredMode.value = m;
 	frmMode.value = m;
-	sampleDetailOpen.value = m !== 'lite';
 	if (m === 'lite') chartMode.value = 'force';
 }
 
@@ -1826,10 +1789,6 @@ const effectiveMode = computed(() => chartMode.value);
 const activeCrop = computed(() => (liveOn.value
 	? { start: cropStartSec.value, end: cropEndSec.value }
 	: (savedCropSec.value || cropWindow.value)));
-// When live, drop the date/coolant-ish rows to free space (keep the essentials).
-const HIDE_WHEN_LIVE = new Set(['Date', 'Recorded', 'Coolant', 'New edge', 'Sequence']);
-const compactMeta = computed(() => (liveOn.value ? opMeta.value.filter((m) => !HIDE_WHEN_LIVE.has(m[0] as string)) : opMeta.value));
-
 const PEAK_FIELD: Record<string, string> = { Fx: 'peak_fx', Fy: 'peak_fy', Fz: 'peak_fz' };
 // Charts for one Signals panel instance — its own selected channels + RPM toggle (Force/FFT mode
 // stays shared, since it's tied to the filter preview + FRM). At least one axis is kept on.
@@ -2074,11 +2033,6 @@ function applyPendingCrop(crop: [number, number] | null) {
 	cropStartSec.value = crop[0]; cropEndSec.value = crop[1];
 }
 
-// Selected axes for a panel (spectral views render one SpectrumView per axis, like the force plot).
-function axesFor(item: RPanel): Axis[] {
-	const sel = (item.channels && item.channels.length ? item.channels : AXES) as readonly Axis[];
-	return AXES.filter((a) => sel.includes(a));
-}
 // Chain the spectral views reflect: the live-tuned/applied filter when present, else raw.
 // The rotation speed the filter service notches at: the mean of the cache's rpm channel (not the
 // editable plot-model rpm). cacheGet() is not reactive, so this reads cacheEpoch.
@@ -2088,8 +2042,12 @@ const cacheMeanRpm = computed(() => {
 	return c ? meanRpm(c.rpm) : null;
 });
 // The FFT chart whose trace is the filtered one (the filter panel's preview, on the active axis).
-const fftFiltered = (c: { kind: string; key: string }) => chartMode.value === 'fft' && filtersOpen.value && c.kind === 'line' && c.key === axis.value;
+const fftFiltered = (c: { kind: string; key: string }) => chartMode.value === 'fft' && previewing.value && c.kind === 'line' && c.key === axis.value;
 const specChain = computed<FilterChain>(() => previewChain() ?? savedChain.value ?? defaultChain());
+// The chain whose stop bands the spectra shade ("Filter bands"), and how many of its stages are on.
+const fftChain = computed(() => (chainActive(specChain.value) ? specChain.value : null));
+const activeStages = computed(() => stagesOn(specChain.value));
+const compareOpen = ref(false);   // the Compare bar of the Signals group, opened from its ⋯ menu
 function toggleItemAxis(item: RPanel, a: Axis) {
 	// Every mode (Force/FFT/Power/Spectrogram/Waterfall) draws one chart per selected axis,
 	// stacked in the panel — SpectrumView labels each with its axis name (e.g. "Fx spectrogram"),
@@ -2489,704 +2447,82 @@ function fmtDateTime(v: string | null | undefined) {
 	if (Number.isNaN(d.getTime())) return '';
 	return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+
+// Everything the operation column's tabs, the Signals and FRM panels read or edit, in one bundle (forceCtx.ts).
+// A plain object: a member that is a ref stays that ref (a child's v-model writes straight back to it).
+provide(FORCE_CTX, {
+	DOCTOR_OPTIONAL, applyFix, canAdopt, doctorActive, doctorBusy, doctorDismissedList, doctorErr, doctorGroups, doctorOptional, doctorScope, rows, selectOp, selectedRowId,
+	setDismissed, toggleOptionalCheck,
+	AXES, AXIS_COLOR, AXIS_MAP_STANDARD, CHART_MODES, DIFF_H, DIFF_W, STAT_AXES, activeStages, addCompare, addsInfoOverOp, appliedLight, applyFilter,
+	applyProfile, axis, axisMapSel, axisMapSubtype, bakeBlocked, bakeFilters, bakedChain, baking, buildOctree, buildingOctree, cacheMeanRpm,
+	captureOpen, chainDirty, changeSummary, changesDialogOpen, chartMode, chartsFor, chooseMode, clearCompare, clearFilter, cloudProps, colorDomainHi,
+	colorDomainLo, colorHistogram, colorScale, compareBusy, compareCandidates, compareItems, compareOn, compareOpen, comparePickerOpen, compareRefId,
+	compareRefLabel, compareView, computeStats, copyStatsCsv, cropDirty, cropSavePrompt, cropSavedMsg, cropSaving, cutEdited, cutModified, cutTip,
+	cutVal, cutting, cuttingMapText, detail, diffOn, diffResult, diffSpark, displayedPoints, downloadFrm, downloadMsg, downloadStatsCsv, editDiam,
+	editFeed, editInnerDiam, editOpAxialDoc, editOpCoolant, editOpCuttingSpeed, editOpFeedMmPerRev, editOpNewEdge, editOpSubtype, editOpWorkpieceDiam,
+	editOperatorName, editOutcomeNotes, editPpr, editRate, editRateKHz, editRpm, editVc, effectiveMode, fftChain, fftFiltered, filterBusy, filterErr,
+	filterFftOverlay, filterSkipped, filteredAuto, filteredCache, filteredColorScale, filteredSoloOn, fmtCutTime, fmtDate, fmtDelta, fmtOrDash, fmtPts,
+	fmtStat, frmBusy, frmCloudRef, frmLoadOverlay, frmLoading, frmMode, frmOctreeRef, frmStage, frmUrl, fullResPoints, gridActive, gridAvailable,
+	gridFidelityPct, gridFull, hasChanges, helpOpen, hoverIndex, hoverSource, hoverTime, isSpectral, linkMsg, liveAvailable, liveOn, loadingDetail, locked,
+	machineText, markTime, menu, metaDirty, moreRows, near, numDiffers, numOrNull, octreeAvailable, octreeBudgetCap, octreeMinNodePx, octreeMsg, octreeOn,
+	octreeSampleCache, onAxisMapChange, onChartZoom, onClimits, onCloudLoaded, onCropEdit, opLabel, openChartMenu, openMenu, openOpForm, openPanel,
+	openPointMenu, openSampleForm, plotStride, pointSize, previewOn, processFullRes, profiles, radialFetchBusy, rawDecimatedCache, ready, recordedText,
+	rectZoomTool, removeCompare, renderMsg, renderPoints, rendererHistogram, rendering, resetLive, resetZoom, resolutionPct, sampleInfo, sampleOf,
+	saveCropAsOfficial, saveProfile, savedChain, seedCutFromDetail, seedMetaFromDetail, setAxis, sigStats, specChain, speedMode, srcCut, srcMeta,
+	stacked, stagesOnCount, statsBusy, statsCacheMb, statsCopied, statsCopyFailed, statsErr, toggleCompareRef, toggleItemAxis, workChain, zScale,
+	zSeries, zoomEnd, zoomStart, zoomed,
+});
 </script>
 
 <template>
 	<private-view title="Force Analysis">
-		<div class="fd" :class="{ dense: host.dense }" @click="rightAddOpen = false">
-			<section class="hero">
-				<span class="hero-badge"><v-icon name="insights" x-small /> Force Analysis</span>
-				<span class="hero-stat">{{ rows.length }} op{{ rows.length === 1 ? '' : 's' }} · {{ samples.length }} sample{{ samples.length === 1 ? '' : 's' }}</span>
-				<div class="hero-spacer"></div>
-				<div class="panel-toggles" @click.stop>
-					<span class="pt-label">Panels</span>
-					<!-- Add + each panel's own close is the whole panel menu (as on the Record page). Eye
-						 toggles for Signals and FRM map used to sit here too, a third way to do the same. -->
-					<div class="pt-add">
-						<button class="pt-chip" title="Add a panel" @click.stop="rightAddOpen = !rightAddOpen"><v-icon name="add" x-small /> Add</button>
-						<div v-if="rightAddOpen" class="pt-menu" @click.stop>
-							<button @click="addRightPanel('signals')"><v-icon name="insights" x-small /> Signals</button>
-							<button @click="addRightPanel('frm')"><v-icon name="fingerprint" x-small /> FRM map</button>
-							<button @click="addRightPanel('wear')"><v-icon name="trending_up" x-small /> Wear trend</button>
-							<button @click="addRightPanel('doctor')"><v-icon name="health_and_safety" x-small /> Metadata doctor</button>
-						</div>
+		<div class="fd fp" :class="{ dense: host.dense }" @click="rightAddOpen = false">
+			<section class="bar">
+				<span class="fp-dim">{{ rows.length }} op{{ rows.length === 1 ? '' : 's' }} · {{ samples.length }} sample{{ samples.length === 1 ? '' : 's' }}</span>
+				<span class="grow"></span>
+				<div class="pt-add" @click.stop>
+					<!-- Add + each panel's own close is the whole panel menu (as on the Record page). -->
+					<button class="fp-btn" aria-haspopup="menu" :aria-expanded="rightAddOpen" title="Add a panel" @click.stop="rightAddOpen = !rightAddOpen"><v-icon name="add" x-small /> Add panel</button>
+					<div v-if="rightAddOpen" class="pt-menu" role="menu" @click.stop>
+						<button role="menuitem" @click="addRightPanel('signals')"><v-icon name="insights" x-small /> Signals</button>
+						<button role="menuitem" @click="addRightPanel('frm')"><v-icon name="fingerprint" x-small /> FRM map</button>
+						<button role="menuitem" @click="addRightPanel('wear')"><v-icon name="trending_up" x-small /> Wear trend</button>
+						<button role="menuitem" @click="addRightPanel('doctor')"><v-icon name="health_and_safety" x-small /> Metadata doctor</button>
 					</div>
-					<button class="pt-chip" title="Reset panel layout" @click="resetRightLayout"><v-icon name="grid_view" x-small /></button>
-					<button class="pt-chip" title="Gestures and shortcuts" aria-label="Help: gestures and shortcuts" aria-haspopup="dialog" @click="helpOpen = true">?</button>
-					<button class="pt-chip" title="Copy a link that reopens this view (cut, mode, axes, zoom, compare set)" :disabled="!selectedRowId" @click="copyViewLink">
-						<v-icon name="link" x-small /> {{ linkCopied ? 'Copied' : linkCopyFailed ? 'Copy failed' : 'Copy link' }}
-					</button>
 				</div>
+				<button class="fp-btn icon" title="Reset panel layout" aria-label="Reset panel layout" @click="resetRightLayout"><v-icon name="grid_view" x-small /></button>
+				<button class="fp-btn icon" title="Gestures and shortcuts" aria-label="Help: gestures and shortcuts" aria-haspopup="dialog" @click="helpOpen = true">?</button>
+				<button class="fp-btn" title="Copy a link that reopens this view (cut, mode, axes, zoom, compare set)" :disabled="!selectedRowId" @click="copyViewLink">
+					<v-icon name="link" x-small /> {{ linkCopied ? 'Copied' : linkCopyFailed ? 'Copy failed' : 'Copy link' }}
+				</button>
 			</section>
 
 			<div v-show="loading" class="loading"><v-progress-circular indeterminate /></div>
 
-			<div v-show="!loading" ref="layoutEl" class="layout" :class="{ dragging, stacked }"
+			<div v-show="!loading" ref="layoutEl" class="layout" :class="{ stacked }"
 				:style="{ gridTemplateColumns: gridCols, height: stacked ? 'auto' : availableHeight + 'px' }">
-				<!-- COL 1: samples + operations (collapsible away to the right) -->
-				<div v-if="stacked || !colStackHidden" class="col-stack">
-					<div class="panel panel-samples">
-						<div class="panel-head"><v-icon name="science" small /><span>Samples</span><span class="chip">{{ filteredSamples.length }}</span>
-							<button v-if="!stacked" class="collapsebtn" title="Hide the samples/operations column" @click="colStackHidden = true"><v-icon name="chevron_left" x-small /></button>
-						</div>
-						<input v-model="sampleSearch" class="search" placeholder="Search samples…" />
-						<div class="list">
-							<button v-for="s in filteredSamples" :key="s.sample_id"
-								class="rowcard" :class="{ active: selectedSampleId === s.sample_id }" @click="selectSample(s)">
-								<span class="mono">{{ s.sample_code }}</span>
-								<span class="sub">{{ s.material || '—' }}<template v-if="s.nickname"> · {{ s.nickname }}</template></span>
-								<span class="pill">{{ s.ops.length }} op{{ s.ops.length === 1 ? '' : 's' }}</span>
-							</button>
-							<div v-if="!filteredSamples.length" class="empty">No samples</div>
-						</div>
-					</div>
+				<!-- COL 1: samples -> operations (a 44px tab on a narrower page) -->
+				<ForceLists :samples="samples" :ops="opCards" :selected-sample-id="selectedSampleId" v-model:filter-sample-id="filterSampleId" :selected-row-id="selectedRowId"
+					v-model:op-search="opSearch" v-model:issues-only="issuesOnly" :issue-count="doctorFlaggedCount" :folded="mode === 'folded'"
+					:selected-code="selectedRowId ? opLabel : null" @select-sample="selectSample" @select-op="selectOp" />
 
-					<div class="panel panel-ops">
-						<div class="panel-head">
-							<v-icon name="build" small /><span>Operations</span><span class="chip">{{ displayedOps.length }}</span>
-							<button v-if="filterSampleId" class="clearbtn" @click="filterSampleId = null">all</button>
-						</div>
-						<input v-model="opSearch" class="search" placeholder="Search operations…" />
-						<!-- Metadata Doctor filter. Separate from the plot-readiness dot: this one is about
-						     whether the .mat and D1 agree, which is a different question. -->
-						<label v-if="doctorFlaggedCount" class="doc-filter">
-							<input v-model="issuesOnly" type="checkbox" />
-							<span>Metadata issues only</span>
-							<span class="chip">{{ doctorFlaggedCount }}</span>
-						</label>
-						<div class="list">
-							<button v-for="o in displayedOps" :key="o.id"
-								class="rowcard" :class="{ active: selectedRowId === o.id }" @click="selectOp(o)">
-								<span class="mono sm"><span class="qdot" :class="frmQuality(o).level" :title="frmQuality(o).label"></span>{{ o.operation_id?.pass_code || '—' }}
-									<span v-if="doctorQuality(o)" class="docdot" :class="doctorQuality(o)!.level"
-										:title="`Metadata: ${doctorQuality(o)!.label}`">{{ doctorQuality(o)!.count }}</span>
-									<span v-if="o.id === latestRowId" class="latest-chip" title="The most recently saved recording">
-										<v-icon name="bolt" x-small />Latest
-									</span>
-								</span>
-								<span class="sub">
-									<template v-if="!filterSampleId">{{ sampleOf(o)?.sample_code }} · </template>
-									{{ fmtDate(o.operation_id?.operation_date) }}
-								</span>
-								<span class="badge" :style="{ background: AXIS_COLOR.Fz }">Fz {{ fmt(o.peak_fz) }} N</span>
-							</button>
-							<div v-if="!displayedOps.length" class="empty">No operations</div>
-						</div>
-					</div>
-				</div>
+				<!-- COL 2: the operation: identity, icon tabs, Save changes / Open -->
+				<ForceOpColumn />
 
-				<div v-if="!stacked && !colStackHidden" class="resizer" @pointerdown="startColAResize" title="Drag to resize"></div>
-
-				<!-- COL 2: sample detail + operation detail (foldable away to the left) -->
-				<div v-if="stacked || !detailHidden" class="col-stack" :class="{ switching: loadingDetail }" :aria-busy="loadingDetail" :inert="loadingDetail">
-					<div class="card info" :class="{ collapsed: !sampleDetailOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="sampleDetailOpen = !sampleDetailOpen"><v-icon :name="sampleDetailOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="science" x-small /> Sample detail
-							</span>
-							<span class="ih-actions">
-								<button v-if="sampleInfo?.id" class="openbtn" @click="openSampleForm">Open <v-icon name="open_in_new" x-small /></button>
-								<button v-if="!stacked" class="collapsebtn" title="Hide the detail column" @click="detailHidden = true"><v-icon name="chevron_left" x-small /></button>
-							</span>
-						</div>
-						<template v-if="sampleDetailOpen">
-							<template v-if="sampleInfo">
-								<div class="info-code mono">{{ sampleInfo.sample_code }}</div>
-								<div class="kv">
-									<span>Material</span><span>{{ sampleInfo.material || '—' }}</span>
-									<span>Nickname</span><span>{{ sampleInfo.nickname || '—' }}</span>
-									<template v-if="sampleInfo.form"><span>Form</span><span>{{ sampleInfo.form }}</span></template>
-									<span>Owner</span><span>{{ sampleInfo.owner || '—' }}</span>
-									<template v-if="sampleInfo.manufactured"><span>Made</span><span>{{ fmtDate(sampleInfo.manufactured) }}</span></template>
-									<span>Analysed ops</span><span>{{ sampleInfo.ops ?? '—' }}</span>
-								</div>
-							</template>
-							<div v-else class="empty sm">Select a sample or operation</div>
-						</template>
-					</div>
-
-					<div class="card info info-op" :class="{ collapsed: !opDetailOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="togglePanel('detail')"><v-icon :name="opDetailOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="build" x-small /> Operation detail
-							</span>
-							<button v-if="op?.operation_id" class="openbtn" @click="openOpForm">Open <v-icon name="open_in_new" x-small /></button>
-						</div>
-						<template v-if="detail && opDetailOpen">
-							<div class="info-code mono">{{ opLabel }}</div>
-							<div v-if="compactMeta.length" class="kv">
-								<template v-for="m in compactMeta" :key="m[0]"><span>{{ m[0] }}</span><span>{{ m[1] }}</span></template>
-							</div>
-
-							<!-- Editable cut-parameter fields (spiral feed/Ø, Inner Ø, PPR, sample rate): drive the
-							     Live plot and are threaded into any host bake. Same label + unit-box style as the
-							     Operation record above; "Spiral" in the labels marks them as the capture's geometry,
-							     not the operation's specified feed/Ø. A field is highlighted when its value differs
-							     from what the op was loaded with. -->
-							<div class="stat-sep">Cut parameters <span class="u">(this capture — draws the fingerprint)</span>
-								<button v-if="!near(editFeed, srcCut.feed) || !near(editDiam, srcCut.diam) || !near(editInnerDiam, srcCut.inner) || !near(editPpr, srcCut.ppr) || !near(editRate, srcCut.rate)"
-									class="linkbtn" @click="seedCutFromDetail">Reset</button>
-							</div>
-							<div class="edit-grid">
-								<label>Spiral feed
-									<span class="unit-box"><FixedNumberInput v-model="editFeed" step="0.01" min="0" :class="{ modified: !near(editFeed, srcCut.feed) }" /><span class="unit">mm/rev</span></span>
-								</label>
-								<label>Spiral Ø
-									<span class="unit-box"><FixedNumberInput v-model="editDiam" step="1" min="0" :class="{ modified: !near(editDiam, srcCut.diam) }" /><span class="unit">mm</span></span>
-								</label>
-								<label>Inner Ø
-									<span class="unit-box"><FixedNumberInput v-model="editInnerDiam" step="1" min="0" title="Donut/diaphragm inner diameter — the spiral stops here. 0 = solid disc." :class="{ modified: !near(editInnerDiam, srcCut.inner) }" /><span class="unit">mm</span></span>
-								</label>
-								<label>Pulses/rev
-									<span class="unit-box"><input v-model.number="editPpr" type="number" step="1" min="1" :class="{ modified: !near(editPpr, srcCut.ppr) }" /></span>
-								</label>
-								<label v-if="addsInfoOverOp(detail.surface_speed, srcMeta.cuttingSpeed)" class="wide"><span>Surface speed <span class="u">(capture)</span></span>
-									<span class="unit-box mismatch"><input :value="fmtFixed(detail.surface_speed)" type="text" readonly /><span class="unit">m/min</span></span>
-								</label>
-								<label v-if="addsInfoOverOp(detail.depth_of_cut, srcMeta.axialDoc)" class="wide"><span>Depth of cut <span class="u">(capture)</span></span>
-									<span class="unit-box mismatch"><input :value="fmtFixed(detail.depth_of_cut)" type="text" readonly /><span class="unit">mm</span></span>
-								</label>
-								<label>Sample rate
-									<span class="unit-box"><FixedNumberInput v-model="editRateKHz" step="0.1" min="0.1" :class="{ modified: !near(editRate, srcCut.rate) }" /><span class="unit">kHz</span></span>
-								</label>
-								<label>Cut time
-									<input :value="fmtCutTime(detail)" type="text" disabled />
-								</label>
-							</div>
-
-							<template v-if="liveOn">
-								<div class="stat-sep">Plot model <span class="u">(what-if — plot only)</span> <button class="linkbtn" @click="resetLive">Reset</button></div>
-								<div class="edit-grid">
-									<label class="wide">Spindle speed
-										<div class="speed-row">
-											<select v-model="speedMode">
-												<option value="measured">Measured (tacho)</option>
-												<option value="rpm">Constant RPM</option>
-												<option value="vc">Constant Vc</option>
-											</select>
-											<input v-if="speedMode === 'rpm'" v-model.number="editRpm" type="number" step="10" min="1" title="RPM" />
-											<input v-if="speedMode === 'vc'" v-model.number="editVc" type="number" step="1" min="1" title="Vc (m/min)" />
-										</div>
-									</label>
-								</div>
-							</template>
-
-							<!-- Editable operation metadata: Subtype/New edge/Coolant/Operator/cutting params/
-							     notes. Machine/Method stay read-only above (see opMeta). Sequence and Operation
-							     code are shown here for context but are NOT editable: Operation code is built by
-							     the database from the fields around it, and Sequence is the key archive
-							     .mat filenames are matched to an operation by, so hand-editing either from this
-							     panel would silently desync that link. Combined
-							     with any pending crop edit into one "Save changes" summary dialog below. -->
-							<!-- "Cut parameters" below uses this same field style but is a different RECORD: this
-							     block is the operation as specified (manufacturing_operations), that one is what
-							     this capture actually used (machining_force_analysis, and the source of the
-							     spiral geometry), hence "Spiral feed" / "Spiral Ø" there. -->
-							<div class="stat-sep">Operation record <span class="u">(as specified)</span>
-								<button v-if="metaDirty" class="linkbtn" @click="seedMetaFromDetail">Reset</button>
-							</div>
-							<div class="edit-grid">
-								<label>Subtype<input v-model="editOpSubtype" type="text" :class="{ modified: editOpSubtype !== srcMeta.subtype }" /></label>
-								<label>Sequence<input :value="fmtOrDash(srcMeta.sequence)" type="text" disabled title="Derived — matches the archive .mat filename this operation was linked from. Not editable here." /></label>
-								<!-- Unit inside the field, right of the number, matching the Record page's
-								     .unit-box: folded into the label it wrapped these two-word labels onto a
-								     second line in this narrow column, which cost a row of height per field. -->
-								<label>Surface speed
-									<span class="unit-box"><FixedNumberInput v-model="editOpCuttingSpeed" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpCuttingSpeed), srcMeta.cuttingSpeed) }" /><span class="unit">m/min</span></span>
-								</label>
-								<label>Feed
-									<span class="unit-box"><FixedNumberInput v-model="editOpFeedMmPerRev" step="0.001" min="0" :class="{ modified: numDiffers(numOrNull(editOpFeedMmPerRev), srcMeta.feedMmPerRev) }" /><span class="unit">mm/rev</span></span>
-								</label>
-								<label>Depth of cut
-									<span class="unit-box"><FixedNumberInput v-model="editOpAxialDoc" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /><span class="unit">mm</span></span>
-								</label>
-								<!-- The operation's recorded stock diameter — distinct from the "Spiral Ø"
-								     field under Cut parameters (machining_force_analysis.outer_diameter, a spiral-geometry
-								     override). Editable so the Doctor's diameter backfill has somewhere to write. -->
-								<label>Workpiece Ø
-									<span class="unit-box"><FixedNumberInput v-model="editOpWorkpieceDiam" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /><span class="unit">mm</span></span>
-								</label>
-								<label>Operator<input v-model="editOperatorName" type="text" :class="{ modified: editOperatorName !== srcMeta.operator }" /></label>
-								<label class="chk">New edge<input v-model="editOpNewEdge" type="checkbox" /></label>
-								<label class="chk">Coolant<input v-model="editOpCoolant" type="checkbox" /></label>
-								<label class="wide">Operation code
-									<input :value="fmtOrDash(srcMeta.passCode)" type="text" disabled title="Built by the database from the operation's fields; it updates when you save. Not editable here." />
-								</label>
-								<label class="wide">Notes<textarea v-model="editOutcomeNotes" rows="2" :class="{ modified: editOutcomeNotes !== srcMeta.outcomeNotes }"></textarea></label>
-							</div>
-							<button v-if="hasChanges" class="crop-save" @click="changesDialogOpen = true">Save changes</button>
-
-							<button class="acc-head" @click="captureOpen = !captureOpen">
-								<v-icon :name="captureOpen ? 'expand_more' : 'chevron_right'" x-small /> Capture
-							</button>
-							<div v-if="captureOpen && captureInfo.length" class="kv">
-								<template v-for="m in captureInfo" :key="m[0]"><span>{{ m[0] }}</span><span>{{ m[1] }}</span></template>
-							</div>
-						</template>
-						<div v-else-if="opDetailOpen && loadingDetail" class="loading sm"><v-progress-circular indeterminate small /></div>
-						<div v-else-if="opDetailOpen && !detail" class="empty sm">Select an operation</div>
-					</div>
-
-					<!-- Display: appearance of the FRM plot (colour map / point size / colour limits /
-					     thinning) + the on-demand host full-res render. Its own accordion so it isn't
-					     buried inside the operation detail. -->
-					<div v-if="detail" class="card info info-display" :class="{ collapsed: !displayPanelOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="togglePanel('display')"><v-icon :name="displayPanelOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="palette" x-small /> Display
-							</span>
-						</div>
-						<template v-if="displayPanelOpen">
-							<div class="edit-grid">
-								<label>Point size<input v-model.number="pointSize" type="number" step="0.2" min="0.4" max="6" /></label>
-								<label v-if="liveOn">Show every<select v-model.number="plotStride"><option :value="1">all pts</option><option :value="2">2nd</option><option :value="5">5th</option><option :value="10">10th</option><option :value="25">25th</option></select></label>
-							</div>
-							<ColorScaleEditor v-model:color-scale="colorScale" v-model:locked="locked"
-								:domain-lo="colorDomainLo" :domain-hi="colorDomainHi" :histogram="colorHistogram" :unit="`${axis} (N)`" />
-							<template v-if="liveOn">
-								<div class="stat-sep">Full-resolution render (host)</div>
-								<div class="render-row">
-									<label>Points<input v-model.number="renderPoints" type="number" step="50000" min="1000" /></label>
-									<button class="processbtn" :disabled="rendering" @click="processFullRes">
-										<v-icon :name="rendering ? 'hourglass_top' : 'memory'" x-small /> {{ rendering ? 'Rendering…' : 'Process' }}
-									</button>
-								</div>
-								<div v-if="renderMsg" class="render-msg">{{ renderMsg }}</div>
-							</template>
-						</template>
-					</div>
-
-					<!-- Signal statistics: collapsed by default; computed client-side from the live
-					     cache (crop-window force stats + whole-signal bit-depth / clipping analysis). -->
-					<div v-if="detail" class="card info info-stats" :class="{ collapsed: !statsOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="togglePanel('stats')"><v-icon :name="statsOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="query_stats" x-small /> Signal statistics
-							</span>
-							<span v-if="sigStats" class="stats-win mono">{{ sigStats.windowSec[0].toFixed(1) }}–{{ sigStats.windowSec[1].toFixed(1) }} s
-								<button class="linkbtn" title="Download these statistics as CSV" @click="downloadStatsCsv">Download CSV</button>
-								<button class="linkbtn" title="Copy these statistics to the clipboard as CSV" @click="copyStatsCsv">{{ statsCopied ? 'Copied' : statsCopyFailed ? 'Copy failed' : 'Copy' }}</button>
-							</span>
-						</div>
-						<template v-if="statsOpen">
-							<div v-if="!detail.live_cache_file" class="empty sm">No signal cache — reprocess this op to enable statistics</div>
-							<div v-else-if="statsBusy" class="loading sm"><v-progress-circular indeterminate small /> computing…</div>
-							<div v-else-if="statsErr" class="render-msg">{{ statsErr }}</div>
-							<template v-else-if="sigStats">
-								<table class="stats-table">
-									<thead><tr><th></th><th>Fx</th><th>Fy</th><th>Fz</th></tr></thead>
-									<tbody>
-										<tr><td>Mean <span class="u">N</span></td><td v-for="a in STAT_AXES" :key="'m'+a">{{ fmtStat(sigStats.axes[a].mean) }}</td></tr>
-										<tr><td>RMS <span class="u">N</span></td><td v-for="a in STAT_AXES" :key="'r'+a">{{ fmtStat(sigStats.axes[a].rms) }}</td></tr>
-										<tr><td>Std <span class="u">N</span></td><td v-for="a in STAT_AXES" :key="'s'+a">{{ fmtStat(sigStats.axes[a].std) }}</td></tr>
-										<tr><td>Min / Max <span class="u">N</span></td><td v-for="a in STAT_AXES" :key="'x'+a">{{ fmtStat(sigStats.axes[a].min) }} / {{ fmtStat(sigStats.axes[a].max) }}</td></tr>
-										<tr><td>Dyn. range <span class="u">bits</span></td><td v-for="a in STAT_AXES" :key="'b'+a">{{ sigStats.axes[a].effBits?.toFixed(1) ?? '—' }}</td></tr>
-										<tr><td>Rail hits <span class="u">lo/hi %</span></td><td v-for="a in STAT_AXES" :key="'c'+a">
-											<span :class="{ 'stat-bad': sigStats.axes[a].clipped }">{{ sigStats.axes[a].railLoPct.toFixed(2) }} / {{ sigStats.axes[a].railHiPct.toFixed(2) }}<template v-if="sigStats.axes[a].clipped"> ⚠ clip</template></span>
-										</td></tr>
-									</tbody>
-								</table>
-								<p class="setting-note">Force stats over the crop window; bits + rails over the whole cached signal (CSV columns ending _whole). Dyn. range = log2(signal span ÷ noise floor); a clean full-range 12-bit capture sits near ~12–13, well below = under-ranged. Sustained rail hits = clipped / over-ranged.</p>
-								<div class="kv stats-rpm"><span>RPM (window)</span><span>{{ fmtStat(sigStats.rpm.mean) }} ± {{ fmtStat(sigStats.rpm.std) }} <span class="u">({{ fmtStat(sigStats.rpm.min) }}–{{ fmtStat(sigStats.rpm.max) }})</span></span></div>
-							</template>
-							<button v-else class="processbtn stats-compute" :disabled="statsBusy" @click="computeStats">
-								<v-icon name="calculate" x-small /> Compute<template v-if="statsCacheMb"> (downloads ~{{ statsCacheMb }} MB signal cache)</template>
-							</button>
-						</template>
-					</div>
-
-					<!-- Cutting metrics: resultant force, Fc/Ff/Fp, vc, Pc, kc over the crop window. Needs the
-					     statistics (same window, same cache), so it shows a hint until those are computed. -->
-					<div v-if="detail" class="card info info-cutting" :class="{ collapsed: !cuttingOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="togglePanel('cutting')"><v-icon :name="cuttingOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="precision_manufacturing" x-small /> Cutting metrics
-							</span>
-						</div>
-						<template v-if="cuttingOpen">
-							<div v-if="!cutting" class="empty sm">Compute Signal statistics first (same crop window).</div>
-							<template v-else>
-								<table class="stats-table cutting-table">
-									<thead><tr><th></th><th>Mean</th><th>Peak</th></tr></thead>
-									<tbody>
-										<tr><td>Resultant |F| <span class="u">N</span></td>
-											<td :title="cutTip(cutting.resultant.mean, '|F| = √(Fx² + Fy² + Fz²) per sample, mean over the window')">{{ cutVal(cutting.resultant.mean) }}</td>
-											<td :title="cutTip(cutting.resultant.peak, '|F| = √(Fx² + Fy² + Fz²) per sample, maximum over the window')">{{ cutVal(cutting.resultant.peak) }}</td></tr>
-										<tr v-for="r in (['Fc', 'Ff', 'Fp'] as const)" :key="r">
-											<td>{{ r }} <span class="u">N</span> <span class="u">({{ r === 'Fc' ? 'cutting' : r === 'Ff' ? 'feed' : 'passive' }}, {{ cutting.axisMap[r] }})</span></td>
-											<td :title="cutTip(cutting[r].mean, `${r} = |mean ${cutting.axisMap[r]}| over the window. ${cuttingMapText}`)">{{ cutVal(cutting[r].mean) }}</td>
-											<td :title="cutTip(cutting[r].peak, `${r} peak = max |${cutting.axisMap[r]}| over the window. ${cuttingMapText}`)">{{ cutVal(cutting[r].peak) }}</td></tr>
-									</tbody>
-								</table>
-								<div class="kv" :title="cutTip(cutting.vcMPerMin, 'vc = π · D · n / 1000 [m/min], D in mm at the window midpoint (the disc shrinks by 2·f per rev), n = measured mean RPM in the window')"><span>Cutting speed vc</span><span>{{ cutVal(cutting.vcMPerMin) }} <span class="u">m/min</span></span></div>
-								<div class="kv" :title="cutTip(cutting.pcW, 'Pc = Fc · vc / 60 [W] (vc in m/min), mean Fc. Feed-force power neglected.')"><span>Cutting power Pc</span><span>{{ cutVal(cutting.pcW) }} <span class="u">W</span></span></div>
-								<div class="kv" :title="cutTip(cutting.kcMPa, 'kc = Fc / (ap · f) [N/mm² = MPa], mean Fc, ap = axial depth of cut, f = feed per rev')"><span>Specific cutting energy kc</span><span>{{ cutVal(cutting.kcMPa, 0) }} <span class="u">N/mm²</span></span></div>
-								<p v-if="cutting.pcW.value == null || cutting.kcMPa.value == null" class="setting-note">
-									<template v-if="cutting.Fc.mean.value == null">{{ cutting.Fc.mean.reason }}.</template>
-									<template v-else>
-										<template v-if="cutting.pcW.value == null">Pc: {{ cutting.pcW.reason }}. </template>
-										<template v-if="cutting.kcMPa.value == null">kc: {{ cutting.kcMPa.reason }}.</template>
-									</template>
-								</p>
-								<label class="setting-note cutting-map">Axis mapping<template v-if="axisMapSubtype"> for {{ axisMapSubtype }}</template>:
-									<select v-model="axisMapSel" :title="cuttingMapText" @change="onAxisMapChange">
-										<option v-for="a in AXIS_MAPS" :key="a.key" :value="a.key">{{ formatAxisMap(a.map) }}</option>
-									</select>
-								</label>
-								<p class="setting-note">Depends on workholding and operation, so it is remembered per operation type. Standard: {{ AXIS_MAP_STANDARD }}.</p>
-								<p class="setting-note">Over the crop window. Values use the operation's feed and depth of cut (else the capture's), the Diameter control and the measured mean RPM. Hover a value for its formula.</p>
-							</template>
-						</template>
-					</div>
-
-					<!-- Signal filters: interactive preview in Lite (raw|filtered compare), bake to
-					     apply the chain to every output. Collapsed by default. -->
-					<div v-if="detail" class="card info info-filters" :class="{ collapsed: !filtersOpen }">
-						<div class="info-head">
-							<span>
-								<button class="chevbtn" title="Collapse/expand" @click="togglePanel('filters')"><v-icon :name="filtersOpen ? 'expand_more' : 'chevron_right'" x-small /></button>
-								<v-icon name="filter_alt" x-small /> Signal filters
-							</span>
-							<span v-if="bakedChain" class="frm-fid good" title="This op's outputs are baked with a filter chain">baked</span>
-							<span v-else-if="appliedLight" class="frm-fid" title="Saved as this op's default — Lite recomputes it live; Full & FRM PNG stay raw until you Bake">applied · Lite</span>
-						</div>
-						<template v-if="filtersOpen">
-							<div v-if="!detail.live_cache_file" class="empty sm">No signal cache — reprocess this op to enable filtering</div>
-							<template v-else>
-								<div v-if="!liveOn" class="setting-note">Switch to <b>Lite</b> to preview filters side-by-side. You can still edit + bake here.</div>
-								<div class="filt-row"><label class="chk"><input v-model="workChain.despike.on" type="checkbox" /> Despike</label>
-									<template v-if="workChain.despike.on"><input v-model.number="workChain.despike.window" type="number" min="3" step="2" title="window (odd)" /><input v-model.number="workChain.despike.sigma" type="number" min="1" step="0.5" title="σ" /></template></div>
-								<div class="filt-row"><label class="chk"><input v-model="workChain.detrend.on" type="checkbox" /> Detrend</label>
-									<template v-if="workChain.detrend.on"><select v-model="workChain.detrend.mode"><option value="highpass">high-pass</option><option value="dc">DC</option></select><input v-if="workChain.detrend.mode==='highpass'" v-model.number="workChain.detrend.cutoff_hz" type="number" min="0.1" step="1" title="cutoff Hz" /></template></div>
-								<div class="filt-row"><label class="chk"><input v-model="workChain.highpass.on" type="checkbox" /> High-pass</label>
-									<template v-if="workChain.highpass.on"><input v-model.number="workChain.highpass.cutoff_hz" type="number" min="1" step="10" title="cutoff Hz" /><input v-model.number="workChain.highpass.order" type="number" min="1" max="10" title="order" /></template></div>
-								<div class="filt-row"><label class="chk"><input v-model="workChain.lowpass.on" type="checkbox" /> Low-pass</label>
-									<template v-if="workChain.lowpass.on"><input v-model.number="workChain.lowpass.cutoff_hz" type="number" min="1" step="100" title="cutoff Hz" /><input v-model.number="workChain.lowpass.order" type="number" min="1" max="10" title="order" /></template></div>
-								<div class="filt-row"><label class="chk"><input v-model="workChain.notch.on" type="checkbox" /> Notch ×harmonics</label>
-									<template v-if="workChain.notch.on"><input v-model.number="workChain.notch.q" type="number" min="1" step="5" title="Q" /></template></div>
-								<div v-if="workChain.notch.on" class="filt-harm">
-									<label v-for="h in [1,2,3,4,5]" :key="'h'+h" class="chk">
-										<input type="checkbox" :checked="workChain.notch.harmonics.includes(h)"
-											@change="workChain.notch.harmonics = ($event.target as HTMLInputElement).checked ? [...workChain.notch.harmonics, h].sort() : workChain.notch.harmonics.filter((x)=>x!==h)" /> {{ h }}×
-									</label>
-								</div>
-
-								<div v-if="filterBusy" class="setting-note"><v-progress-circular indeterminate x-small /> previewing…</div>
-								<div v-if="filterErr" class="render-msg">{{ filterErr }}</div>
-								<div v-if="filterSkipped.length" class="setting-note">Preview-only note: {{ filterSkipped.join('; ') }} — bake applies at full rate.</div>
-
-								<div class="filt-actions">
-									<select class="prof-sel" @change="applyProfile(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value=''">
-										<option value="">Load profile…</option>
-										<option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option>
-									</select>
-									<button class="linkbtn" @click="saveProfile">Save…</button>
-								</div>
-								<div class="filt-actions">
-									<button class="applybtn" :disabled="baking || !chainActive(workChain)" @click="applyFilter"
-										title="Keep this filtered version as the op's default. Lite recomputes it live; Full & FRM PNG stay raw until you Bake."><v-icon name="done" x-small /> Apply (Lite)</button>
-									<button class="processbtn" :disabled="baking || !chainActive(workChain) || !!bakeBlocked" @click="bakeFilters"
-										:title="bakeBlocked || 'Reprocess the op on the host so ALL outputs (Lite, Full, FRM PNG) are filtered. Heavier; needs the orchestrator; admin-only.'"><v-icon :name="baking ? 'hourglass_top' : 'save'" x-small /> {{ baking ? 'Baking…' : 'Bake all' }}</button>
-									<button v-if="savedChain" class="recrawlbtn" :disabled="baking" @click="clearFilter">Clear</button>
-								</div>
-								<div v-if="bakeBlocked" class="setting-note">{{ bakeBlocked }}</div>
-							</template>
-						</template>
-					</div>
-				</div>
-
-				<div v-if="!stacked && !detailHidden" class="resizer" @pointerdown="startColBResize" title="Drag to resize"></div>
-
-				<!-- COL 3+4: signals + FRM — independently hideable, resizable against each other -->
+				<!-- COL 3 + 4: the panels (FRM in the centre, Signals on the right by default), arranged on a grid -->
 				<div ref="rightAreaEl" class="right-area">
-					<div v-if="!stacked && (colStackHidden || detailHidden)" class="fold-restore">
-						<button v-if="colStackHidden" class="expandbtn" title="Show the samples/operations column" @click="colStackHidden = false">
-							<v-icon name="chevron_right" x-small /> Lists
-						</button>
-						<button v-if="detailHidden" class="expandbtn" title="Show the sample/operation detail column" @click="detailHidden = false">
-							<v-icon name="chevron_right" x-small /> Detail
-						</button>
-					</div>
-
-					<GridLayout v-model:layout="rightLayout" class="right-grid" :col-num="stacked ? 1 : 12"
+					<GridLayout v-model:layout="gridLayout" class="right-grid" :col-num="stacked ? 1 : 12"
 						:row-height="rightRowH" :margin="[10, 10]" :is-draggable="!stacked" :is-resizable="!stacked"
 						:vertical-compact="true" :use-css-transforms="true">
-						<GridItem v-for="item in rightLayout" :key="item.i" :x="item.x" :y="item.y" :w="item.w" :h="item.h" :i="item.i"
+						<GridItem v-for="item in rightLayout" :key="item.i" :x="cell(item).x" :y="cell(item).y" :w="cell(item).w" :h="cell(item).h" :i="item.i"
 							:data-panel-id="item.i" drag-allow-from=".pg-grip" :min-w="3" :min-h="7">
-						<div v-if="item.type === 'signals'" class="card col-charts pg-card">
-							<div class="pg-bar">
-								<span class="pg-grip" title="Drag to move"><v-icon name="drag_indicator" x-small /></span>
-								<!-- The title is the plot mode and picks it, as in the Record page's panel headers. -->
-								<span class="pg-title"><v-icon name="insights" x-small />
-									<PlotModeFlyout v-model="chartMode" :modes="CHART_MODES" />
-									<span v-if="liveOn" class="live-badge">LIVE</span>
-									<template v-if="liveOn && (cropDirty || cropSavePrompt || cropSavedMsg)">
-										<button v-if="!cropSavePrompt && !cropSavedMsg" class="crop-save" title="Persist this crop as the operation's official crop window" @click.stop="cropSavePrompt = true">Save crop</button>
-										<span v-if="cropSavePrompt" class="crop-confirm" @click.stop>
-											Save as official crop?
-											<button class="cc-yes" :disabled="cropSaving" @click="saveCropAsOfficial">{{ cropSaving ? '…' : 'Save' }}</button>
-											<button class="cc-no" :disabled="cropSaving" @click="cropSavePrompt = false">Cancel</button>
-										</span>
-										<span v-if="cropSavedMsg" class="crop-msg">{{ cropSavedMsg }}</span>
-									</template>
-									<span v-if="linkMsg" class="crop-msg">{{ linkMsg }}</span>
-								</span>
-								<div class="toggle pg-tools">
-									<button class="tbtn icobtn" :class="{ on: rectZoomTool }" title="Rectangular zoom — drag a box on any graph"
-										:style="rectZoomTool ? { background: 'var(--fp-accent)', borderColor: 'var(--fp-accent)', color: 'var(--fp-accent-ink)' } : {}"
-										@click="rectZoomTool = !rectZoomTool"><v-icon name="crop_free" x-small /></button>
-									<button class="tbtn icobtn" title="Reset zoom" :disabled="!zoomed" @click="resetZoom"><v-icon name="restart_alt" x-small /></button>
-									<button v-for="a in AXES" :key="a" class="tbtn axchip" :class="{ on: (item.channels || AXES).includes(a) }"
-										:style="(item.channels || AXES).includes(a) ? { color: AXIS_COLOR[a], borderColor: AXIS_COLOR[a] } : {}"
-										:title="`Show ${a} in this panel`" @click="toggleItemAxis(item, a)">{{ a }}</button>
-									<button v-if="effectiveMode === 'force'" class="tbtn rpmbtn" :class="{ on: item.rpm }"
-										:style="item.rpm ? { background: '#a855f7', borderColor: '#a855f7' } : {}"
-										@click="item.rpm = !item.rpm">RPM</button>
-									<span v-if="effectiveMode === 'force' && radialFetchBusy" class="cmp-hint">loading radial…</span>
-								</div>
-								<button class="pg-x" title="Close panel" @click="closeRightPanel(item.i)"><v-icon name="close" x-small /></button>
-							</div>
-							<!-- Multi-cut comparison. Force mode only: overlaying spectra or spectrograms
-								 from different cuts is not readable, and the wear question this answers is
-								 a time-domain one. -->
-							<div v-if="detail && effectiveMode === 'force'" class="cmp-bar">
-								<span class="cmp-label"><v-icon name="stacked_line_chart" x-small /> Compare</span>
-								<span v-for="c in compareItems" :key="c.id" class="cmp-chip" :style="{ borderColor: c.color, color: c.color }">
-									{{ c.label }}
-									<button class="cmp-ref" :class="{ on: compareRefId === c.id }" :aria-pressed="compareRefId === c.id"
-										:title="compareRefId === c.id ? 'Reference for Difference (click to unset)' : 'Use as the reference for Difference'"
-										@click="toggleCompareRef(c.id)">ref</button>
-									<button class="cmp-x" title="Remove from comparison" @click="removeCompare(c.id)">×</button>
-								</span>
-								<span v-if="compareBusy" class="cmp-hint">loading…</span>
-								<div class="cmp-add">
-									<button class="tbtn" :disabled="!compareCandidates.length"
-										:title="compareCandidates.length ? 'Overlay another cut' : 'No other operations in the current list'"
-										@click.stop="comparePickerOpen = !comparePickerOpen">+ Add cut</button>
-									<div v-if="comparePickerOpen" class="cmp-menu" @click.stop>
-										<button v-for="o in compareCandidates.slice(0, 40)" :key="o.id" @click="addCompare(o)">
-											<span class="mono sm">{{ o.operation_id?.pass_code || sampleOf(o)?.sample_code || o.id }}</span>
-											<span class="sub">{{ fmtDate(o.operation_id?.operation_date) }}</span>
-										</button>
-									</div>
-								</div>
-								<button v-if="compareItems.length" class="tbtn" title="Clear all comparisons" @click="clearCompare">Clear</button>
-								<button v-if="compareItems.length" class="tbtn" :class="{ on: diffOn }" :style="diffOn ? { background: 'var(--theme--primary, #6644ff)', borderColor: 'var(--theme--primary, #6644ff)' } : {}" :disabled="!compareRefId" :aria-pressed="diffOn"
-									:title="compareRefId ? `Show ${axis} of this cut minus ${compareRefLabel}` : 'Mark a cut as ref first'"
-									@click="diffOn = !diffOn">Difference</button>
-							</div>
-							<div v-if="diffOn && compareRefId && chartMode === 'force'" class="cmp-diff">
-								<template v-if="diffResult && diffSpark">
-									<svg :viewBox="`0 0 ${DIFF_W} ${DIFF_H}`" :width="DIFF_W" :height="DIFF_H" role="img"
-										:aria-label="`${axis} difference versus ${compareRefLabel}`">
-										<line x1="0" :x2="DIFF_W" :y1="diffSpark.zeroY" :y2="diffSpark.zeroY" class="cmp-diff-zero" />
-										<path :d="diffSpark.d" fill="none" class="cmp-diff-line" />
-									</svg>
-									<span class="cmp-diff-read">
-										<b>{{ axis }}</b> − {{ compareRefLabel }}, {{ diffSpark.t0.toFixed(1) }}–{{ diffSpark.t1.toFixed(1) }} s:
-										mean {{ fmtDelta(diffResult.mean) }} N · RMS {{ diffResult.rms.toPrecision(3) }} N
-									</span>
-								</template>
-								<span v-else class="cmp-hint">No overlap with the reference for {{ axis }} within both cuts' crops{{ zoomed ? ' and the zoom' : '' }}.</span>
-							</div>
-							<div v-if="!detail" class="empty">Select an operation to view its signals</div>
-							<div v-else-if="isSpectral" class="charts-col">
-								<SpectrumView v-for="a in axesFor(item)" :key="a" :cache-file-id="detail.live_cache_file"
-									:chain="specChain" :axis="a" :mode="(chartMode as 'psd' | 'spectrogram' | 'waterfall')" :color="AXIS_COLOR[a]" :rpm="cacheMeanRpm" />
-							</div>
-							<div v-else class="charts-col" :class="{ switching: loadingDetail }" :aria-busy="loadingDetail">
-								<ForceChart v-for="c in chartsFor(item)" v-bind="c" :key="c.key" :hover="hoverSource" @hover="hoverIndex = $event"
-									:crop-editable="c.kind === 'env'" :active="c.key === axis"
-									:overlay="fftFiltered(c) ? filterFftOverlay : null"
-									:filter-chain="fftFiltered(c) && filterFftOverlay ? workChain : null" :rpm="cacheMeanRpm"
-									:view-start="zoomStart" :view-end="zoomEnd" :zoom-tool="rectZoomTool" @zoom="onChartZoom"
-									@update:crop-start="onCropEdit('start', $event)" @update:crop-end="onCropEdit('end', $event)"
-									:mark-x="c.kind === 'env' && chartMode === 'force' ? markTime : null" menu @chartmenu="openChartMenu" />
-							</div>
-						</div>
-
-						<div v-else-if="item.type === 'wear'" class="card pg-card">
-							<div class="pg-bar">
-								<span class="pg-grip" title="Drag to move"><v-icon name="drag_indicator" x-small /></span>
-								<span class="pg-title"><v-icon name="trending_up" x-small /> Wear trend</span>
-								<button class="pg-x" title="Close panel" @click="closeRightPanel(item.i)"><v-icon name="close" x-small /></button>
-							</div>
-							<WearTrend :detail="detail" />
-						</div>
-
-						<!-- Metadata doctor. Two views over the same diagnose() output: the selected
-						     operation's findings with their fixes, and a scan of the whole archive. -->
-						<div v-else-if="item.type === 'doctor'" class="card pg-card doc-card">
-							<div class="pg-bar">
-								<span class="pg-grip" title="Drag to move"><v-icon name="drag_indicator" x-small /></span>
-								<span class="pg-title"><v-icon name="health_and_safety" x-small /> Metadata doctor</span>
-								<span class="segmode doc-mode">
-									<button class="segbtn" :class="{ on: doctorScope === 'op' }" @click="doctorScope = 'op'">This op</button>
-									<button class="segbtn" :class="{ on: doctorScope === 'all' }" @click="doctorScope = 'all'">All</button>
-								</span>
-								<button class="pg-x" title="Close panel" @click="closeRightPanel(item.i)"><v-icon name="close" x-small /></button>
-							</div>
-
-							<div class="doc-body">
-								<div class="doc-opts">
-									<span class="doc-optlabel">Also check</span>
-									<label v-for="c in DOCTOR_OPTIONAL" :key="c.id" class="doc-opt">
-										<input type="checkbox" :checked="doctorOptional.includes(c.id)" @change="toggleOptionalCheck(c.id)" />
-										<span>{{ c.label }}</span>
-									</label>
-								</div>
-
-								<!-- Selected operation -->
-								<template v-if="doctorScope === 'op'">
-									<div v-if="!detail" class="empty">Select an operation</div>
-									<div v-else-if="!doctorActive.length && !doctorDismissedList.length" class="doc-ok">
-										<v-icon name="check_circle" small /> No metadata issues found
-									</div>
-									<template v-else>
-										<div v-for="f in doctorActive" :key="f.id" class="doc-find" :class="f.severity">
-											<div class="doc-find-head">
-												<span class="doc-sev" :class="f.severity"></span>
-												<span class="doc-title">{{ f.title }}</span>
-											</div>
-											<p class="doc-detail">{{ f.detail }}</p>
-											<div v-if="f.matValue != null || f.dbValue != null" class="doc-cmp">
-												<span class="doc-side"><em>.mat</em> <b>{{ fmtOrDash(f.matValue) }}</b></span>
-												<span class="doc-arrow">vs</span>
-												<span class="doc-side"><em>D1</em> <b>{{ fmtOrDash(f.dbValue) }}</b></span>
-											</div>
-											<div class="doc-acts">
-												<!-- Labelled so it is unambiguous which record changes: the .mat is never
-												     written (see mat-metadata-migration — fileVersion selects the force
-												     matrix parser, so editing legacy metadata corrupts parsing). -->
-												<button v-if="canAdopt(f)" class="doc-btn primary" @click="applyFix(f)">
-													Use .mat value in D1
-												</button>
-												<button v-else-if="f.fix === 'crop'" class="doc-btn primary" @click="applyFix(f)">Adjust crop…</button>
-												<button v-else-if="f.fix === 'link'" class="doc-btn primary" @click="applyFix(f)">Open record…</button>
-												<button class="doc-btn" :disabled="doctorBusy === f.id" @click="setDismissed(f, true)">Not a problem</button>
-											</div>
-										</div>
-
-										<div v-if="doctorDismissedList.length" class="doc-dismissed">
-											<span class="doc-optlabel">Dismissed</span>
-											<div v-for="f in doctorDismissedList" :key="f.id" class="doc-dis-row">
-												<span class="doc-title">{{ f.title }}</span>
-												<button class="doc-btn" :disabled="doctorBusy === f.id" @click="setDismissed(f, false)">Restore</button>
-											</div>
-										</div>
-									</template>
-									<div v-if="doctorErr" class="doc-err">{{ doctorErr }}</div>
-								</template>
-
-								<!-- Whole archive -->
-								<template v-else>
-									<div v-if="!doctorGroups.length" class="doc-ok">
-										<v-icon name="check_circle" small /> No metadata issues across {{ rows.length }} operations
-									</div>
-									<div v-for="g in doctorGroups" :key="g.id" class="doc-group">
-										<div class="doc-group-head">
-											<span class="doc-sev" :class="g.severity"></span>
-											<span class="doc-title">{{ g.title }}</span>
-											<span class="chip">{{ g.rows.length }}</span>
-										</div>
-										<!-- data-row-id is the ANALYSIS-row id, which is not 1:1 with the pass_code
-										     shown: one operation can have more than one .mat, so two rows can
-										     carry the same name. Count on this, never on the label. -->
-										<button v-for="r in g.rows" :key="r.id" class="doc-oprow" :data-row-id="r.id"
-											:class="{ active: selectedRowId === r.id }" @click="selectOp(r)">
-											<span class="mono sm">{{ r.operation_id?.pass_code || sampleOf(r)?.sample_code || r.id }}</span>
-										</button>
-									</div>
-								</template>
-							</div>
-						</div>
-
-						<div v-else-if="item.type === 'frm'" class="card col-frm frm-col pg-card">
-							<div class="frm-head pg-headbar">
-								<span class="pg-grip" title="Drag to move"><v-icon name="drag_indicator" x-small /></span>
-								<span class="frm-kicker"><v-icon name="fingerprint" x-small /> {{ octreeOn ? (gridActive ? 'Full FRM · gridded' : 'Full FRM') : (liveOn ? 'Lite FRM' : 'FRM figure') }}</span>
-								<span v-if="(octreeOn || liveOn) && fullResPoints" class="frm-res"
-									:title="`Displayed ${displayedPoints.toLocaleString()} of ${fullResPoints.toLocaleString()} full-resolution points`">
-									<v-icon name="grain" x-small /> {{ fmtPts(displayedPoints) }} / {{ fmtPts(fullResPoints) }}<template v-if="resolutionPct != null"> · {{ resolutionPct }}%</template>
-								</span>
-								<span v-if="gridActive && gridFidelityPct != null" class="frm-fid" :class="{ good: gridFidelityPct >= 95 }"
-									:title="`Interpolated-grid fidelity (hold-out-arms CV). Arm/cell ratio ${detail.grid_arm_ratio?.toFixed?.(1) ?? '—'}`">
-									grid · fidelity ~{{ gridFidelityPct }}%
-								</span>
-								<span v-else-if="gridActive" class="frm-fid" title="Fidelity could not be computed (too few arms)">grid · fidelity n/a</span>
-								<span v-if="bakedChain" class="frm-fid good" :title="`Baked filters: ${chainSummary(bakedChain)}`">⚙ filtered</span>
-								<span v-else-if="compareOn" class="frm-fid" :title="chainSummary(workChain)">compare · preview</span>
-								<span v-else-if="filteredSoloOn" class="frm-fid" :title="`Lite live-filtered: ${chainSummary(savedChain)} — Full & FRM PNG still raw until baked`">filtered · Lite</span>
-								<div class="toggle">
-									<div class="segmode">
-										<button class="segbtn" :class="{ on: frmMode==='figure', busy: frmBusy && frmMode==='figure' }" :aria-busy="frmBusy && frmMode==='figure'" @click="chooseMode('figure')" title="Prerendered figure (instant)">Figure</button>
-										<button class="segbtn" :class="{ on: frmMode==='lite', busy: frmBusy && frmMode==='lite' }" :aria-busy="frmBusy && frmMode==='lite'" :disabled="!liveAvailable" @click="liveAvailable && chooseMode('lite')" :title="liveAvailable ? 'Lite interactive cloud (reacts to crop/feed)' : 'No live cache — reprocess to enable'">Lite</button>
-										<button class="segbtn" :class="{ on: frmMode==='full', busy: frmBusy && frmMode==='full' }" :aria-busy="frmBusy && frmMode==='full'" :disabled="buildingOctree" @click="octreeAvailable ? chooseMode('full') : buildOctree()" :title="octreeAvailable ? 'Full-resolution octree (LOD-streamed)' : 'Build the full-resolution octree on the host'"><v-icon v-if="buildingOctree" name="hourglass_top" x-small /> Full</button>
-									</div>
-									<button v-if="frmMode==='full'" class="tbtn" :class="{ on: gridFull }" :disabled="buildingOctree"
-										:title="gridAvailable ? 'Interpolated-grid octree (filled surface)' : 'Build the interpolated grid on the host'"
-										:style="gridFull ? { background: 'var(--fp-accent)', borderColor: 'var(--fp-accent)', color: 'var(--fp-accent-ink)' } : {}"
-										@click="gridFull = !gridFull"><v-icon name="grid_on" x-small /> Gridded</button>
-									<select v-if="octreeOn || liveOn" v-model="zSeries" class="zsel" title="Drive the Z axis from a force series (3D view — drag to rotate)">
-										<option value="none">2D</option>
-										<option value="Fx">Z = Fx</option>
-										<option value="Fy">Z = Fy</option>
-										<option value="Fz">Z = Fz</option>
-									</select>
-									<input v-if="(octreeOn || liveOn) && zSeries !== 'none'" type="range" class="zslider"
-										min="0" max="2" step="0.05" v-model.number="zScale"
-										title="Z exaggeration (or a 3-finger vertical swipe on the plot)" />
-									<button v-if="detail && (liveOn || octreeOn || detail[`frm_${axis.toLowerCase()}`])" class="tbtn"
-										:title="(liveOn || octreeOn) ? 'Download the current view (this zoom) as a PNG' : 'Download this FRM image'"
-										@click="downloadFrm"><v-icon name="download" x-small /></button>
-									<button v-for="a in AXES" :key="a" class="tbtn" :class="{ on: axis === a }"
-										:style="axis === a ? { background: AXIS_COLOR[a], borderColor: AXIS_COLOR[a] } : {}"
-										@click="setAxis(a)">{{ a }}</button>
-								</div>
-								<button class="pg-x" title="Close panel" @click="closeRightPanel(item.i)"><v-icon name="close" x-small /></button>
-							</div>
-							<div class="frm-img" :class="{ switching: loadingDetail }" :aria-busy="loadingDetail">
-								<div v-if="!detail" class="empty">Select an operation</div>
-								<FrmOctree v-else-if="octreeOn" ref="frmOctreeRef"
-									:octree-path="gridActive ? detail.grid_octree_path : detail.octree_path" :axis="axis"
-									:color-scale="colorScale" :point-size="pointSize"
-									:z-series="zSeries" :z-scale="zScale"
-									:total-points="gridActive ? Number(detail.grid_octree_points) : (fullResPoints ?? undefined)"
-									:fill="gridActive" :cell-size="Number(detail.grid_cell_mm) || 1"
-									:min-node-px="octreeMinNodePx" :budget-cap="octreeBudgetCap"
-									:sample-cache="octreeSampleCache" :inner-diam="Number(detail.inner_diameter) || 0" :ppr="Number(detail.pulses_per_rev) || 1"
-									:mark-time="markTime" :hover-time="hoverTime" @pointmenu="openPointMenu"
-									@climits="onClimits" @points="displayedPoints = $event" @zscale="zScale = $event" @stage="frmStage = $event" />
-								<!-- Compare mode: raw | filtered, sharing one view (linked pan/zoom) + colour scale. -->
-								<div v-else-if="compareOn" class="frm-compare" :class="{ stacked }">
-									<FrmCloud ref="frmCloudRef" v-bind="cloudProps" :cache-override="rawDecimatedCache" :color-scale="colorScale"
-										:shared-view="compareView" pane-label="raw" :mark-time="markTime" :hover-time="hoverTime" @pointmenu="openPointMenu"
-										@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event" @stage="frmStage = $event" />
-									<FrmCloud v-bind="cloudProps" :cache-override="filteredCache" :color-scale="filteredColorScale"
-										:shared-view="compareView" pane-label="filtered" :mark-time="markTime" :hover-time="hoverTime" @pointmenu="openPointMenu"
-										@climits="filteredAuto = $event" />
-								</div>
-								<FrmCloud v-else-if="filteredSoloOn" ref="frmCloudRef" v-bind="cloudProps" :cache-override="filteredCache" :color-scale="colorScale" :mark-time="markTime" :hover-time="hoverTime" @pointmenu="openPointMenu"
-										:z-series="zSeries" :z-scale="zScale"
-										@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event"
-										@zscale="zScale = $event" @stage="frmStage = $event" />
-									<FrmCloud v-else-if="liveOn" ref="frmCloudRef" v-bind="cloudProps" :color-scale="colorScale" :mark-time="markTime" :hover-time="hoverTime" @pointmenu="openPointMenu"
-									:z-series="zSeries" :z-scale="zScale"
-									@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event"
-									@zscale="zScale = $event" @stage="frmStage = $event" />
-								<span v-else-if="frmLoading" class="fig-pending" aria-hidden="true"></span>
-								<img v-else-if="frmUrl" :src="frmUrl" :alt="`FRM ${axis}`" />
-								<div v-else class="empty">No {{ axis }} fingerprint</div>
-								<div v-if="octreeMsg && !liveOn" class="render-msg frm-render-msg">{{ octreeMsg }}</div>
-								<div v-if="downloadMsg" class="render-msg frm-render-msg" role="alert">{{ downloadMsg }}</div>
-								<LoadingOverlay v-if="frmLoadOverlay" :stage="frmLoadOverlay" />
-							</div>
-						</div>
+							<ForceSignals v-if="item.type === 'signals'" :item="item" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
+							<ForceFrm v-else-if="item.type === 'frm'" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
+							<ForcePanel v-else-if="item.type === 'wear'" title="Wear trend" icon="trending_up" :closable="rightLayout.length > 1" @close="closeRightPanel(item.i)">
+								<WearTrend :detail="detail" />
+							</ForcePanel>
+							<!-- Metadata doctor: findings of the selected operation, or a scan of the whole archive. -->
+							<ForceDoctor v-else-if="item.type === 'doctor'" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
 						</GridItem>
 					</GridLayout>
 				</div>
@@ -3200,14 +2536,14 @@ function fmtDateTime(v: string | null | undefined) {
 			<div v-if="changesDialogOpen" class="changes-backdrop" @click.self="changesDialogOpen = false">
 				<div class="changes-dialog">
 					<h3>Save changes</h3>
-					<p v-if="!changeSummary.length" class="empty sm">Nothing to save.</p>
+					<p v-if="!changeSummary.length" class="fp-empty">Nothing to save.</p>
 					<dl v-else class="changes-list">
 						<template v-for="row in changeSummary" :key="row.label">
 							<dt>{{ row.label }}</dt>
 							<dd>{{ row.from }} → {{ row.to }}</dd>
 						</template>
 					</dl>
-					<div v-if="metaSaveErr" class="render-msg">{{ metaSaveErr }}</div>
+					<div v-if="metaSaveErr" class="fp-err">{{ metaSaveErr }}</div>
 					<div class="changes-actions">
 						<button class="cd-no" :disabled="metaSaving" @click="changesDialogOpen = false">Cancel</button>
 						<button class="cd-yes" :disabled="metaSaving || !changeSummary.length" @click="saveChanges">{{ metaSaving ? 'Saving…' : 'Save' }}</button>
@@ -3223,453 +2559,35 @@ function fmtDateTime(v: string | null | undefined) {
 
 <style scoped>
 .fd {
-	/* App tokens, falling back to the Directus theme when this renders inside the admin. */
-	--fp-accent: var(--accent, var(--theme--primary, #1d4ed8));
-	--fp-accent-ink: var(--accent-ink, var(--theme--foreground-inverted, #fff));
-	padding: 20px 24px 40px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground, #1e293b);
+	padding: 12px 16px 16px;
 	container-type: inline-size;   /* size children to the real content width, not the viewport */
 }
-/* Thin horizontal banner: title + counts on the left, panel toggles on the right. */
-.hero { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 6px 14px; border-radius: 12px;
-	color: #fff; background: linear-gradient(120deg, var(--theme--primary, #1d4ed8), #0d9488);
-	box-shadow: 0 8px 20px -12px rgba(29, 78, 216, 0.5); flex-wrap: wrap; }
-.hero-badge { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; font-size: var(--fs-lg, 15px); }
-.hero-badge :deep(.v-icon) { --v-icon-color: #fff; }
-.hero-stat { font-size: var(--fs-sm, 12px); font-weight: 600; opacity: 0.9; }
-.hero-spacer { flex: 1 1 auto; }
-.hero .pt-label { color: rgba(255, 255, 255, 0.8); }
-.hero .pt-chip { color: #fff; background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.28); }
-.hero .pt-chip:disabled { opacity: 0.5; }
+/* The page's own toolbar: counts on the left, the panel menu, help and Copy link on the right. */
+.bar { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 10px; flex-wrap: wrap; }
+.bar .grow { flex: 1 1 auto; }
+.pt-add { position: relative; }
+.pt-menu { position: absolute; top: 32px; right: 0; z-index: 40; min-width: 160px; padding: 4px; border-radius: 9px; background: var(--theme--background); border: 1px solid var(--fp-line); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
+.pt-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 8px; font: inherit; font-size: var(--fs-sm, 12px); color: var(--theme--foreground); background: transparent; border: 0; border-radius: 6px; cursor: pointer; text-align: left; }
+.pt-menu button:hover { background: var(--fp-tile); }
 
 .loading { display: grid; place-items: center; padding: 40px; }
-.loading.sm { padding: 18px; }
 
-.layout {
-	display: grid;
-	gap: 0; align-items: stretch;
-	overflow: hidden;   /* the measured height is exact; panels scroll internally, the page doesn't */
-}
+/* Four columns (lists | operation | the panel grid, which holds the FRM and Signals); the measured height is
+   exact, so the panels scroll inside and the page does not. */
+.layout { display: grid; gap: 12px; align-items: stretch; overflow: hidden; }
 .layout.stacked { align-items: start; overflow: visible; }
-.layout.dragging { cursor: col-resize; }
-.layout.dragging * { user-select: none; }
+.layout.stacked :deep(.list) { max-height: 40vh; flex: none; }
+.layout.stacked :deep(.fp-lists .stack) { flex: none; }
+.layout.stacked :deep(.fp-lists .part) { flex: none; }
 
-.col-stack, .col-charts, .col-frm, .right-area { min-width: 0; min-height: 0; }
-.col-stack { display: flex; flex-direction: column; gap: 14px; padding-right: 6px; }
-.panel-samples { flex: 0 0 auto; }
-.panel-ops { flex: 1 1 auto; min-height: 0; }
-.panel-ops .list { max-height: none; flex: 1 1 auto; }
-/* Detail column = header-sized cards by default; the ONE open accordion (op detail / stats
-   / filters, mutually exclusive) takes the remaining height and scrolls. A collapsed card
-   must shrink to just its header — otherwise it kept flex:1 and left a big empty box. */
-.col-stack .info { flex: 0 0 auto; min-height: 0; }
-.col-stack .info-op, .col-stack .info-display, .col-stack .info-stats, .col-stack .info-filters { overflow-y: auto; }
-.col-stack .info-op:not(.collapsed),
-.col-stack .info-display:not(.collapsed),
-.col-stack .info-stats:not(.collapsed),
-.col-stack .info-filters:not(.collapsed) { flex: 1 1 auto; }
-.col-stack .info.collapsed { flex: 0 0 auto; overflow: visible; }
-.layout.stacked .col-stack .info:last-child { overflow: visible; }
-.layout.stacked .panel-ops .list { max-height: 40vh; flex: none; }
-.layout.stacked .col-charts .chart { flex: none; min-height: 180px; }
-.col-charts { display: flex; flex-direction: column; }
-.col-charts .charts-col { flex: 1 1 auto; min-height: 0; }
-.col-charts .chart { flex: 1 1 0; }
-
-/* Drag handles between columns (grid tracks on desktop, flex items in the
-   Signals/FRM row) — thin, with a grab affordance on hover/drag. */
-.resizer { width: 6px; cursor: col-resize; position: relative; flex: 0 0 6px; }
-.resizer::after {
-	content: ''; position: absolute; left: 2px; top: 10%; bottom: 10%; width: 2px;
-	border-radius: 2px; background: var(--theme--border-color, #dbe2ea); transition: background 0.15s ease;
-}
-.resizer:hover::after, .layout.dragging .resizer::after { background: var(--theme--primary, #1d4ed8); }
-
-.panel {
-	background: var(--theme--background-subdued, #f7f9fb);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-radius: 16px; display: flex; flex-direction: column; overflow: hidden;
-}
-.panel-samples .list { max-height: 30vh; }
-.panel-ops .list { max-height: 38vh; }
-.dense .panel-ops .list { max-height: none; }
-.panel-head {
-	display: flex; align-items: center; gap: 8px; padding: 12px 14px;
-	font-size: var(--fs-sm, 12px); font-weight: 600; letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #6b7684);
-	border-bottom: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-}
-.chip {
-	font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--theme--primary, #1d4ed8);
-	background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 12%, transparent);
-	padding: 1px 7px; border-radius: 99px;
-}
-.clearbtn { margin-left: auto; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--theme--primary, #1d4ed8); }
-.search {
-	margin: 11px 12px 5px; padding: 8px 11px; font: inherit; font-size: var(--fs-md, 13px);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 9px;
-	background: var(--theme--background, #fff); color: inherit; outline: none;
-}
-.search:focus { border-color: var(--theme--primary, #1d4ed8); }
-.list { overflow-y: auto; padding: 7px 11px 12px; display: flex; flex-direction: column; gap: 9px; }
-/* Data-quality stoplight dot in the row's top-right corner (green ready · blue processing ·
-   yellow octree-only · red none). */
-.qdot { position: absolute; top: 8px; right: 9px; width: 6px; height: 6px; border-radius: 99px; }
-.qdot.green { background: #16a34a; }
-.qdot.yellow { background: #f59e0b; }
-.qdot.blue { background: #3b82f6; }
-.qdot.red { background: #ef4444; }
-/* Marks the single most-recently-saved recording across all operations (see latestRowId) — an
-   inline badge rather than another corner dot since .qdot's corner is already the quality light. */
-.latest-chip {
-	display: inline-flex; align-items: center; gap: 1px; margin-left: 5px;
-	font-family: var(--theme--fonts--sans--font-family, system-ui, sans-serif);
-	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
-	padding: 1px 6px 1px 4px; border-radius: 99px; color: #b45309;
-	background: color-mix(in srgb, #f59e0b 18%, transparent);
-	vertical-align: middle;
-}
-.latest-chip .v-icon-shim { font-size: var(--icon-xs, 14px) !important; }
-
-/* ---- Metadata doctor -------------------------------------------------------------------
-   .docdot is an inline count badge, NOT a second corner dot: .qdot already owns the corner and
-   answers a different question (is this plottable), so the two must stay visually distinct. */
-.docdot {
-	display: inline-flex; align-items: center; justify-content: center; margin-left: 5px;
-	min-width: 14px; height: 14px; padding: 0 4px; border-radius: 99px;
-	font-family: var(--theme--fonts--sans--font-family, system-ui, sans-serif);
-	font-size: var(--fs-xs, 11px); font-weight: 700; vertical-align: middle; color: #fff;
-}
-.docdot.error { background: #dc2626; }
-.docdot.warn { background: #d97706; }
-.docdot.info { background: #64748b; }
-.doc-filter {
-	display: flex; align-items: center; gap: 6px; padding: 4px 10px 6px;
-	font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); cursor: pointer;
-}
-.doc-filter input { margin: 0; cursor: pointer; }
-.doc-card { display: flex; flex-direction: column; min-height: 0; }
-.doc-mode { margin-left: auto; }
-.doc-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 10px 10px; }
-.doc-opts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-.doc-optlabel {
-	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #6b7684);
-}
-.doc-opt { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); cursor: pointer; }
-.doc-opt input { margin: 0; cursor: pointer; }
-.doc-ok { display: flex; align-items: center; gap: 6px; padding: 14px 2px; font-size: var(--fs-sm, 12px); color: #16a34a; }
-.doc-find {
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px;
-}
-.doc-find.error { border-left-color: #dc2626; }
-.doc-find.warn { border-left-color: #d97706; }
-.doc-find.info { border-left-color: #64748b; }
-.doc-find-head { display: flex; align-items: center; gap: 6px; }
-.doc-sev { width: 7px; height: 7px; border-radius: 99px; flex: none; }
-.doc-sev.error { background: #dc2626; }
-.doc-sev.warn { background: #d97706; }
-.doc-sev.info { background: #64748b; }
-.doc-title { font-size: var(--fs-sm, 12px); font-weight: 600; }
-.doc-detail { margin: 4px 0 0; font-size: var(--fs-xs, 11px); line-height: 1.45; color: var(--theme--foreground-subdued, #6b7684); }
-.doc-cmp { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-xs, 11px); }
-.doc-side em { font-style: normal; font-size: var(--fs-xs, 11px); letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #6b7684); margin-right: 4px; }
-.doc-side b { font-family: var(--theme--fonts--monospace--font-family, ui-monospace, monospace); }
-.doc-arrow { color: var(--theme--foreground-subdued, #6b7684); }
-.doc-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.doc-btn {
-	border: 1px solid var(--theme--border-color, #d3dae4); background: transparent;
-	border-radius: 5px; padding: 3px 9px; font-size: var(--fs-xs, 11px); cursor: pointer;
-	color: var(--theme--foreground, #263238);
-}
-.doc-btn:hover:not(:disabled) { background: var(--theme--background-subdued, #f4f6f8); }
-.doc-btn:disabled { opacity: 0.5; cursor: default; }
-.doc-btn.primary { border-color: var(--theme--primary, #6644ff); color: var(--theme--primary, #6644ff); font-weight: 600; }
-.doc-dismissed { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
-.doc-dis-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; opacity: 0.65; }
-.doc-err { margin-top: 8px; font-size: var(--fs-xs, 11px); color: #dc2626; }
-.doc-group { margin-bottom: 10px; }
-.doc-group-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.doc-oprow {
-	display: block; width: 100%; text-align: left; border: 0; background: transparent;
-	padding: 3px 8px; border-radius: 4px; cursor: pointer;
-}
-.doc-oprow:hover { background: var(--theme--background-subdued, #f4f6f8); }
-.doc-oprow.active { background: color-mix(in srgb, var(--theme--primary, #6644ff) 12%, transparent); }
-/* Multi-cut comparison bar (Signals panel, force mode). */
-.cmp-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px;
-	border-bottom: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
-.cmp-label { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); }
-.cmp-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	padding: 1px 4px 1px 8px; border: 1px solid; border-radius: 99px; }
-.cmp-x { border: 0; background: none; cursor: pointer; color: inherit; font-size: var(--fs-md, 13px); line-height: 1; padding: 0 3px; }
-.cmp-hint { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); }
-.cmp-ref { border: 1px solid currentColor; background: none; cursor: pointer; color: inherit; font-size: 9px; font-weight: 700;
-	line-height: 1.4; padding: 0 4px; border-radius: 4px; opacity: 0.6; text-transform: uppercase; }
-.cmp-ref.on { opacity: 1; box-shadow: inset 0 0 0 1px currentColor; }
-.cmp-diff { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 4px 6px; font-size: var(--fs-xs, 11px); }
-.cmp-diff svg { flex: none; max-width: 100%; border: 1px solid var(--theme--border-color-subdued, #e4eaf1); border-radius: 4px; background: var(--plot-bg, transparent); }
-.cmp-diff-zero { stroke: var(--theme--foreground-subdued, #98a2b3); stroke-width: 1; stroke-dasharray: 3 3; }
-.cmp-diff-line { stroke: var(--theme--primary, #6644ff); stroke-width: 1.2; }
-.cmp-diff-read { font-variant-numeric: tabular-nums; }
-.cmp-add { position: relative; }
-.cmp-menu { position: absolute; top: 24px; left: 0; z-index: 40; min-width: 200px; max-height: 280px;
-	overflow: auto; padding: 4px; background: var(--theme--background, #fff);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 9px;
-	box-shadow: 0 14px 40px rgba(15,23,42,0.18); }
-.cmp-menu button { display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 6px 8px;
-	background: transparent; border: 0; border-radius: 6px; cursor: pointer; text-align: left; color: inherit; }
-.cmp-menu button:hover { background: var(--theme--background-subdued, #f4f6f8); }
-.rowcard {
-	position: relative;
-	text-align: left; font: inherit; cursor: pointer; color: inherit;
-	background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-radius: 12px; padding: 11px 13px; display: flex; flex-direction: column; gap: 4px;
-	transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
-}
-.rowcard:hover { transform: translateY(-2px); box-shadow: 0 10px 22px -16px rgba(15, 23, 42, 0.4); }
-.rowcard.active { border-color: var(--theme--primary, #1d4ed8); box-shadow: 0 0 0 1px var(--theme--primary, #1d4ed8) inset; }
-.mono { font-family: var(--theme--fonts--monospace--font-family, 'SF Mono', Menlo, monospace); font-weight: 700; font-size: var(--fs-md, 13px); overflow-wrap: break-word; word-break: normal; }
-.mono.sm { font-size: var(--fs-sm, 12px); }
-.sub { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); }
-.pill, .badge { align-self: flex-start; margin-top: 2px; font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 8px; border-radius: 99px; }
-.pill { color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 12%, transparent); }
-.badge { color: #fff; }
-.empty { padding: 20px 16px; text-align: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: var(--fs-md, 13px); }
-.empty.sm { padding: 14px; font-size: var(--fs-sm, 12px); }
-
-/* Radius and elevation taken from the Record page's PanelFrame so a card here and a panel there
-   are the same object: 12px, one hairline border, one shallow shadow. */
-.card {
-	background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-radius: 12px; padding: 16px 18px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
-}
-.dense .card { padding: 12px 14px; }
-.info-head {
-	display: flex; align-items: center; justify-content: space-between; gap: 8px;
-	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #6b7684); margin-bottom: 11px;
-}
-.dense .info-head { margin-bottom: 8px; }
-.openbtn {
-	display: inline-flex; align-items: center; gap: 3px; border: 0; cursor: pointer; font: inherit;
-	font-size: var(--fs-xs, 11px); font-weight: 700; text-transform: none; letter-spacing: 0;
-	color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 10%, transparent);
-	padding: 3px 8px; border-radius: 8px;
-}
-.openbtn:hover { background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 18%, transparent); }
-.info-code { font-size: var(--fs-md, 13px); margin-bottom: 12px; }
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: var(--fs-md, 13px); margin-bottom: 4px; }
-.dense .kv { gap: 4px 10px; font-size: var(--fs-sm, 12px); margin-bottom: 2px; }
-.kv span:nth-child(odd) { color: var(--theme--foreground-subdued, #6b7684); white-space: nowrap; }
-.kv span:nth-child(even) { font-weight: 600; text-align: right; }
-.stat-sep {
-	margin: 12px 0 9px; font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #98a2b3); border-top: 1px solid var(--theme--border-color-subdued, #eef1f5); padding-top: 10px;
-}
-
-/* Right area: Signals + FRM, independently hideable/resizable against each other. The grid can grow
-   taller than the viewport (adding/moving panels), so this is the scroll container — min-height:0 lets
-   it shrink inside the fixed-height layout cell and overflow-y makes off-screen panels reachable. */
-.right-area { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.panel-toggles { display: flex; align-items: center; gap: 8px; padding: 0 2px; flex-wrap: wrap; }
-.pt-label { font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #98a2b3); margin-right: 2px; }
-.pt-chip {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 650;
-	cursor: pointer; padding: 5px 12px; border-radius: 99px; color: var(--theme--foreground-subdued, #6b7684);
-	background: var(--theme--background-subdued, #f1f5f9); border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	transition: all 0.12s ease;
-}
-.pt-chip:disabled { opacity: 0.55; cursor: not-allowed; }
-
-/* Flexible plot-panel grid (Signals / FRM as draggable, resizable, closeable panels). Pull the grid
-   up by its top margin so row-0 panels align with the top of the samples/detail columns (the empty
-   margin strip above row 0 is what gets clipped, not content). */
+/* The panel grid can grow taller than the viewport (adding or moving panels), so it is the scroll container. */
+.right-area { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+/* Pull the grid up by its top margin so row-0 panels align with the top of the columns beside it. */
 .right-grid { width: 100%; margin-top: -10px; }
 .right-grid :deep(.vgl-item__resizer) { z-index: 3; }
-.right-grid :deep(.vgl-item--placeholder) { background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 18%, transparent); border-radius: 12px; }
-.pg-card { height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
-/* One-line panel bar: drag grip · title · inline tools · close — no separate title row. */
-/* nowrap: the tools group wraps inside itself instead (.toggle already wraps, right-aligned). With
-   the bar itself wrapping, a narrow Signals panel pushed the close button onto a line of its own.
-   Grip, title and close are one tool-row tall and top-aligned, so they stay level with the first
-   row of tools when the rest wrap below. */
-.pg-bar { display: flex; align-items: flex-start; gap: 6px; padding: 2px 4px 6px; flex: 0 0 auto; }
-.pg-bar > .pg-grip, .pg-bar > .pg-title, .pg-bar > .pg-x { min-height: 27px; align-items: center; }
-/* Grows into the bar's free width: the Signals mode picker slides open into it. */
-.pg-title { display: inline-flex; flex: 1 0 auto; align-items: center; gap: 5px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); white-space: nowrap; }
-.pg-tools { flex: 0 1 auto; min-width: 0; }
-.pg-grip { cursor: move; display: inline-flex; color: var(--theme--foreground-subdued, #98a2b3); }
-.pg-grip:hover { color: var(--theme--foreground, #1e293b); }
-.pg-x { margin-left: 4px; display: inline-flex; background: transparent; border: none; cursor: pointer; color: var(--theme--foreground-subdued, #98a2b3); border-radius: 5px; padding: 2px; }
-.pg-x:hover { color: #dc2626; background: color-mix(in srgb, #dc2626 12%, transparent); }
-/* FRM reuses its head row as the bar (grip prepended, close appended). */
-.pg-headbar { padding-bottom: 6px; }
-.pt-add { position: relative; }
-.pt-menu { position: absolute; top: 32px; right: 0; z-index: 40; min-width: 150px; padding: 4px; border-radius: 9px; background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #e7ebf0); box-shadow: 0 14px 34px rgba(0,0,0,0.2); }
-.pt-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 8px; font: inherit; font-size: var(--fs-sm, 12px); color: var(--theme--foreground, #1e293b); background: transparent; border: none; border-radius: 6px; cursor: pointer; text-align: left; }
-.pt-menu button:hover { background: var(--theme--background-subdued, #f1f5f9); }
+.right-grid :deep(.vgl-item--placeholder) { background: color-mix(in srgb, var(--fp-accent) 18%, transparent); border-radius: 12px; }
+.layout.stacked .right-grid :deep(.fp-panel) { min-height: 420px; }
 
-.graphs-title, .frm-kicker {
-	display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684);
-}
-.toggle { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.tbtn {
-	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 700; cursor: pointer; padding: 5px 13px; border-radius: 9px;
-	color: var(--theme--foreground-subdued, #6b7684); background: var(--theme--background-subdued, #f1f5f9);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); transition: all 0.12s ease;
-}
-.tbtn.on { color: #fff; }
-.tbtn.icobtn { padding: 5px 9px; display: inline-flex; align-items: center; }
-/* Signals plots scroll INSIDE the panel (min-height:0 + overflow) instead of overflowing the card
-   and pushing past the page bottom when a panel is short or several charts stack. */
-.charts-col.switching, .frm-img.switching, .col-stack.switching { opacity: 0.45; pointer-events: none; transition: opacity 0.12s; }
-.charts-col { display: flex; flex-direction: column; gap: 13px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-
-.col-frm { display: flex; flex-direction: column; gap: 11px; min-height: 0; }
-.frm-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
-.frm-res { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 600; font-variant-numeric: tabular-nums;
-	color: var(--theme--foreground-subdued, #6b7684); background: var(--theme--background-subdued, #f1f5f9);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 99px; padding: 1px 8px; margin-right: auto; }
-.frm-fid { font-size: var(--fs-xs, 11px); padding: 1px 7px; border-radius: 99px; font-weight: 700;
-	color: #b45309; background: color-mix(in srgb, #d97706 14%, transparent); white-space: nowrap; }
-.frm-fid.good { color: #15803d; background: color-mix(in srgb, #16a34a 14%, transparent); }
-.segmode { display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid var(--theme--border-color-subdued, #d7dee6); }
-.segbtn { font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; cursor: pointer; border: 0; padding: 5px 11px; background: var(--theme--background, #fff); color: var(--theme--foreground-subdued, #64748b); border-right: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
-.segbtn:last-child { border-right: 0; }
-.segbtn.on { background: var(--fp-accent); color: var(--fp-accent-ink); }
-.segbtn:disabled { opacity: 0.4; cursor: default; }
-/* The active view type is still loading (#102): a bar sweeping along the button's foot. Under
-   reduced motion the global rule stops the sweep and the bar stays as a static underline. */
-.segbtn.busy { position: relative; }
-.segbtn.busy::after { content: ''; position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px; border-radius: 2px; background: currentColor; opacity: 0.8; transform-origin: left; animation: seg-busy 1.1s ease-in-out infinite; }
-@keyframes seg-busy { 0%, 100% { transform: scaleX(0.15); } 50% { transform: scaleX(1); } }
-.zslider { width: 70px; accent-color: var(--fp-accent); vertical-align: middle; cursor: pointer; }
-.stats-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm, 12px); margin: 6px 0 4px; }
-.stats-table th { text-align: right; font-size: var(--fs-xs, 11px); letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); padding: 2px 6px; }
-.stats-table td { text-align: right; padding: 3px 6px; font-variant-numeric: tabular-nums; border-top: 1px solid var(--theme--border-color-subdued, #eef1f5); }
-.stats-table td:first-child { text-align: left; color: var(--theme--foreground-subdued, #6b7684); font-weight: 600; white-space: nowrap; }
-.stat-bad { color: #dc2626; font-weight: 700; }
-.stats-win { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); }
-.stats-win .linkbtn { float: none; margin-left: 8px; }
-.stats-rpm { margin-top: 2px; }
-.cutting-map select { margin-left: 4px; }
-.stats-compute { margin-top: 4px; }
-.acc-head {
-	display: flex; align-items: center; gap: 4px; width: 100%; text-align: left;
-	background: none; border: 0; cursor: pointer; font: inherit;
-	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
-	color: var(--theme--foreground-subdued, #98a2b3); margin: 6px 0 4px; padding: 6px 0 0;
-	border-top: 1px solid var(--theme--border-color-subdued, #eef1f5);
-}
-.acc-head:hover { color: var(--theme--foreground, #1e293b); }
-.filt-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
-.filt-row .chk { flex: 1 1 auto; }
-.filt-row input, .filt-row select { width: 60px; font: inherit; font-size: var(--fs-sm, 12px); padding: 3px 6px; border-radius: 7px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
-.filt-row select { width: auto; }
-.filt-harm { display: flex; gap: 8px; margin: 2px 0 6px 20px; }
-.filt-harm .chk { font-size: var(--fs-sm, 12px); }
-.filt-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.prof-sel { flex: 1 1 auto; font: inherit; font-size: var(--fs-sm, 12px); padding: 5px 8px; border-radius: 8px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
-/* compare: two square viewports sharing the FRM area (side-by-side; stacked on mobile) */
-.frm-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; height: 100%; min-height: 0; }
-.frm-compare.stacked { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
-.frm-compare > * { min-width: 0; min-height: 0; }
-.zsel { font: inherit; font-size: var(--fs-xs, 11px); font-weight: 650; padding: 3px 7px; border-radius: 8px; cursor: pointer;
-	border: 1px solid var(--theme--border-color, #d1d9e6); background: var(--theme--background, #fff); color: var(--theme--foreground, #334155); }
-.frm-img { position: relative; flex: 1 1 auto; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 220px; overflow: hidden; }
-.frm-img img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 8px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
-.layout.stacked .frm-img { aspect-ratio: 1 / 1; min-height: 0; flex: 0 0 auto; }
-.frm-img > .frm-cloud, .frm-img > .frm-octree { align-self: stretch; }
-
-.tbtn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* Live badge + collapse chevrons */
-.live-badge { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 800; letter-spacing: 0.06em; color: #7c3aed;
-	background: color-mix(in srgb, #7c3aed 12%, transparent); padding: 2px 7px; border-radius: 99px; }
-/* "Save crop as official" affordance — only appears once the handles have been moved (cropDirty). */
-.crop-save { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--fp-accent); cursor: pointer;
-	background: color-mix(in srgb, var(--fp-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--fp-accent) 45%, transparent);
-	padding: 2px 8px; border-radius: 99px; }
-.crop-save:hover { background: color-mix(in srgb, var(--fp-accent) 22%, transparent); }
-.crop-confirm { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--theme--foreground, #e2e8f0); display: inline-flex; align-items: center; gap: 6px; }
-.crop-confirm .cc-yes, .crop-confirm .cc-no { font-size: var(--fs-xs, 11px); font-weight: 700; cursor: pointer; padding: 2px 8px; border-radius: 99px; border: 1px solid transparent; }
-.crop-confirm .cc-yes { color: var(--fp-accent-ink); background: var(--fp-accent); }
-.crop-confirm .cc-yes:disabled { opacity: 0.6; cursor: default; }
-.crop-confirm .cc-no { color: var(--theme--foreground-subdued, #94a3b8); background: transparent; border-color: color-mix(in srgb, currentColor 40%, transparent); }
-.crop-msg { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: #22c55e; }
-.collapsebtn, .chevbtn {
-	display: inline-flex; align-items: center; justify-content: center; border: 0; cursor: pointer; padding: 1px;
-	margin-left: 4px; color: var(--theme--foreground-subdued, #94a3b8); background: transparent; border-radius: 6px;
-}
-.chevbtn { margin-left: 0; margin-right: 2px; }
-.collapsebtn:hover, .chevbtn:hover { background: var(--theme--background-subdued, #eef2f7); color: var(--theme--foreground, #1e293b); }
-.expandbtn {
-	display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700;
-	cursor: pointer; padding: 5px 10px; border-radius: 9px; margin-bottom: 2px;
-	color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 10%, transparent);
-	border: 1px solid color-mix(in srgb, var(--theme--primary, #1d4ed8) 22%, transparent);
-}
-.fold-restore { display: flex; gap: 6px; flex: 0 0 auto; }
-.ih-actions { display: inline-flex; align-items: center; gap: 4px; }
-.card.info.collapsed { padding-bottom: 12px; }
-.card.info.collapsed .info-head { margin-bottom: 0; }
-
-/* Live-mode editable metadata + plotting settings */
-.linkbtn { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700;
-	color: var(--theme--primary, #1d4ed8); text-transform: none; letter-spacing: 0; float: right; padding: 0; }
-.edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.edit-grid label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); }
-.edit-grid label.wide { grid-column: 1 / -1; }
-.edit-grid label.chk { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: var(--fs-sm, 12px); }
-.edit-grid .u { font-weight: 500; color: var(--theme--foreground-subdued, #a4adba); text-transform: none; }
-/* The qualifier on a section heading ("as specified", "this capture") is what distinguishes two
-   groups that carry the same quantities from different records -- quieter than the heading, but
-   it has to stay readable, so it is not dimmed any further than the heading already is. */
-.stat-sep .u { font-weight: 400; opacity: 0.85; }
-.edit-grid input[type="number"], .edit-grid input[type="text"], .edit-grid select, .edit-grid textarea, .render-row input {
-	font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; text-transform: none; letter-spacing: 0; padding: 5px 8px;
-	border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff);
-	color: var(--theme--foreground, #1e293b); width: 100%; box-sizing: border-box;
-}
-/* The BOX carries the border, not the input, so the trailing unit reads as part of one control
-   (same construction as RecordingOptions.vue's .unit-box on the Record page). */
-.edit-grid .unit-box { display: flex; align-items: center; border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff); }
-/* The capture's Surface speed / Depth of cut only appear when they disagree with the operation
-   record (or it has no value), so they are a discrepancy to look at, not background reference. */
-.edit-grid .unit-box.mismatch { border-color: var(--theme--primary, #1d4ed8); }
-.edit-grid .unit-box:focus-within { border-color: var(--theme--primary, #1d4ed8); }
-.edit-grid .unit-box input { flex: 1 1 auto; min-width: 0; border: none; background: transparent; border-radius: 0; }
-.edit-grid .unit-box input:focus { outline: none; }
-.edit-grid .unit-box input.modified { border: none; box-shadow: none; }
-.edit-grid .unit-box:has(input.modified) { border-color: var(--theme--primary, #1d4ed8); box-shadow: inset 0 0 0 1px var(--theme--primary, #1d4ed8); }
-.edit-grid .unit-box .unit { flex: 0 0 auto; padding-right: 8px; font-size: var(--fs-xs, 11px); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--theme--foreground-subdued, #a4adba); }
-.edit-grid textarea { resize: vertical; min-height: 44px; }
-.edit-grid input:disabled { opacity: 0.5; cursor: not-allowed; }
-.edit-grid input.modified, .edit-grid textarea.modified { border-color: var(--theme--primary, #1d4ed8); box-shadow: inset 0 0 0 1px var(--theme--primary, #1d4ed8); }
-.speed-row { display: flex; gap: 6px; }
-.speed-row select { flex: 1 1 auto; } .speed-row input { flex: 0 0 82px; }
-.render-row { display: flex; align-items: flex-end; gap: 8px; }
-.render-row label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 700;
-	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); flex: 1 1 auto; }
-.processbtn {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 750; cursor: pointer;
-	padding: 7px 14px; border-radius: 9px; color: var(--fp-accent-ink); background: var(--fp-accent); border: 0; white-space: nowrap;
-}
-.processbtn:disabled { opacity: 0.6; cursor: progress; }
-.applybtn {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 750; cursor: pointer;
-	padding: 7px 14px; border-radius: 9px; color: #6d28d9; background: transparent; border: 1.5px solid #7c3aed; white-space: nowrap;
-}
-.applybtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.render-msg { margin-top: 7px; font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); font-style: italic; }
 .changes-backdrop {
 	position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: grid; place-items: center; z-index: 200;
 }

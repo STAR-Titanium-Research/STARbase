@@ -51,7 +51,7 @@ const nav = (p, label) => p.locator('.sidebar .navitem', { hasText: label }).cli
 
 	// Plot page (Directus dashboard renders)
 	await nav(p, 'Plot'); await p.waitForTimeout(3500);
-	const plotNodes = await p.locator('.rowcard, .empty, .charts-col').count();
+	const plotNodes = await p.locator('.fp-lists .fp-card, .fp-empty, [data-panel-id] .charts').count();
 	console.log('plot page nodes:', plotNodes);
 	ok = ok && plotNodes > 0;
 
