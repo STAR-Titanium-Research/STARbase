@@ -11,6 +11,7 @@ import { chunkByBudget } from '../model/requests';
 import { SAMPLE_FIELDS, mapSample } from '../model/rows';
 import type { CheckCollection, CheckCtx, FieldDef, LoadedRecord } from './checks';
 import { collectionOf, recordKey } from './checks';
+import { useGearStatus } from './useGearStatus';
 import { KEY_FIELD, METHOD_FIELDS, checkFieldsOf, existingIds, loadedRecordOf, methodsOf, testTypesOf, type MethodEntry, type TestTypeEntry } from './catalog';
 
 type Row = Record<string, any>;
@@ -21,6 +22,8 @@ const keyOf = (v: unknown, key: string): unknown => (v && typeof v === 'object' 
 const COLLECTIONS: CheckCollection[] = ['physical_samples', 'manufacturing_operations', 'test_sessions'];
 
 export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => Promise<DirectusField[]>) {
+	/** The state of the machines, tools and edges that templates and new cards name (retired, used up): the checks warn about them. */
+	const gear = useGearStatus(api);
 	const methods = shallowRef<MethodEntry[]>([]);
 	const testTypes = shallowRef<TestTypeEntry[]>([]);
 	/** The raw field definitions of each collection (the generated form reads them). */
@@ -80,7 +83,10 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 	/** Records being read (with the read that has them), and records whose read failed: neither is asked for again on every change of the draft. */
 	const readingRecords = new Map<string, Promise<void>>();
 	const failedRecords = new Set<string>();
-	const forgetFailed = (): void => failedRecords.clear();
+	const forgetFailed = (): void => {
+		failedRecords.clear();
+		gear.forget();
+	};
 
 	/**
 	 * Reads the existing records of a draft (version and fields): what its checks and its stale warnings are made of. A record that is being
@@ -195,12 +201,13 @@ export function useEditCatalog(api: HostApi, fieldsFor: (collection: string) => 
 			records: Object.fromEntries(records),
 			alloyCode,
 			methodCode,
+			gear: gear.problem,
 			record: (item) => (item.existing ? records.get(recordKey(collectionOf(item), item.existing.id))?.values : undefined),
 		};
 	}
 
 	return {
-		methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
+		gear, methods, testTypes, rawFields, checkFields, loading, records, samples, materials, methodById,
 		ensure, loadRecords, loadSamples, forgetFailed, searchSamples, ensureMaterials, methodCode, alloyCode, ctx,
 		existingIds,
 	};

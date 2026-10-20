@@ -42,7 +42,7 @@ export interface PaletteDrag {
 }
 
 /** An entry the pointer can carry: a thing to add, not a sub-menu ("Existing sample…" opens the picker). */
-export const draggable = (e: MenuEntry): boolean => e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newSample';
+export const draggable = (e: MenuEntry): boolean => !e.disabled && (e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newSample');
 
 export function useAddDrag(o: {
 	body: () => DraftBody;

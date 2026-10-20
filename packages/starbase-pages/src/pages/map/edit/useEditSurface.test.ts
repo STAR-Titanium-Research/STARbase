@@ -10,6 +10,7 @@ import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
 import { useEditMode } from './useEditMode';
 import { useEditSurface } from './useEditSurface';
+import { useTemplates } from './useTemplates';
 
 // What the keys do to the selected draft item, and Connect to…, with the page's pieces faked.
 
@@ -32,6 +33,7 @@ async function setup(body: DraftBody, selectedId: string | null, over: { canvasE
 	});
 	const surface = useEditSurface({
 		edit,
+		templates: useTemplates({ api: server.api, gear: edit.catalog.gear, me: () => ({}) }),
 		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, inHistory: (id: string) => !!over.loaded?.samples.some((s) => s.id === id), nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
 		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
 		canvasEl: ref(over.canvasEl ?? null),

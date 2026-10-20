@@ -1,7 +1,7 @@
 // d1-build in a box, for the tests of edit mode (not imported by production code): drafts in memory with the routes edit mode
 // calls, the reference data the add search reads, a table of samples, and a log of the calls.
 
-import type { DraftBody, DraftRecord, HostApi } from '@d1/ui';
+import type { DraftBody, DraftRecord, HostApi, TemplateRecord } from '@d1/ui';
 import { emptyBody } from './draft';
 
 export const httpError = (status: number, extensions?: Record<string, unknown>) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: { errors: [{ message: `HTTP ${status}`, ...(extensions ? { extensions } : {}) }] } } });
@@ -45,12 +45,30 @@ export function fakeServer() {
 		/** What Back to planned answers: a body, or an error to throw. */
 		plannedAnswer: null as unknown,
 		bodies: [] as unknown[],
+		/** The templates `/d1-build/templates` holds (all visible to the one person who asks). */
+		templates: [] as TemplateRecord[],
+		/** A non-zero status makes every call of `/d1-build/templates` fail with it (a network error when -1). */
+		templateStatus: 0,
+		/** The person who asks: templates they made are theirs to change, others' are not (403), as d1-build says. */
+		me: 'u1',
+		/** Rows `GET /items/equipment`, `/items/tools` and `/items/insert_edges` answer (the state of gear a template names). */
+		gear: {} as Record<string, Record<string, unknown>[]>,
 		seed(id: string, body: DraftBody = emptyBody(), name = 'Seeded') {
 			drafts.set(id, { id, name, body, version: 1, updated_at: '2026-10-14T10:00:00Z' });
 		},
 	};
 	let n = 0;
 	const idOf = (path: string) => decodeURIComponent(path.split('/')[3]);
+	const templateGate = () => {
+		if (s.templateStatus === -1) throw new Error('Network Error');
+		if (s.templateStatus) throw httpError(s.templateStatus);
+	};
+	const templateById = (path: string) => {
+		const t = s.templates.find((x) => x.id === idOf(path));
+		if (!t) throw httpError(404);
+		return t;
+	};
+	const GEAR_KEY: Record<string, string> = { equipment: 'equipment_id', tools: 'tool_id', insert_edges: 'edge_id' };
 	const api = {
 		get: async (path: string, config?: { params?: Record<string, unknown> }) => {
 			calls.push(`GET ${path}`);
@@ -62,6 +80,16 @@ export function fakeServer() {
 				const d = drafts.get(idOf(path));
 				if (!d) throw httpError(404);
 				return { data: { data: d } };
+			}
+			if (path === '/d1-build/templates') {
+				templateGate();
+				return { data: { data: s.templates.map((t) => ({ ...t })) } };
+			}
+			if (path.startsWith('/items/') && GEAR_KEY[path.slice(7)]) {
+				const key = GEAR_KEY[path.slice(7)];
+				const filter = typeof config?.params?.filter === 'string' ? JSON.parse(config.params.filter) : {};
+				const ids: string[] | undefined = filter?.[key]?._in;
+				return { data: { data: (s.gear[path.slice(7)] ?? []).filter((r) => !ids || ids.includes(String(r[key]))) } };
 			}
 			if (path === '/items/manufacturing_methods') return { data: { data: FAKE_METHODS } };
 			if (path === '/items/projects') return { data: { data: s.projects } };
@@ -93,6 +121,14 @@ export function fakeServer() {
 				drafts.set(rec.id, rec);
 				return { data: { data: rec } };
 			}
+			if (path === '/d1-build/templates') {
+				templateGate();
+				const b = body as Pick<TemplateRecord, 'name' | 'scope' | 'collection' | 'values'>;
+				n += 1;
+				const t: TemplateRecord = { id: `tn${n}`, name: b.name, scope: b.scope ?? 'private', role_id: b.scope === 'role' ? 'role1' : null, collection: b.collection, values: b.values, user_id: s.me, updated_at: 'now', version: 1 };
+				s.templates.push(t);
+				return { data: { data: { ...t } } };
+			}
 			if (path.endsWith('/check')) return { data: { data: { checks: [] } } };
 			if (path.endsWith('/create')) {
 				if (s.createAnswer instanceof Error) throw s.createAnswer;
@@ -113,6 +149,15 @@ export function fakeServer() {
 		},
 		patch: async (path: string, body?: { body?: DraftBody; name?: string }) => {
 			calls.push(`PATCH ${path}`);
+			if (path.startsWith('/d1-build/templates/')) {
+				templateGate();
+				const t = templateById(path);
+				const b = body as unknown as Partial<TemplateRecord> & { version: number };
+				if (t.user_id !== s.me) throw httpError(403);
+				if (b.version !== t.version) throw httpError(409);
+				Object.assign(t, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.scope ? { scope: b.scope, role_id: b.scope === 'role' ? 'role1' : null } : {}), ...(b.values ? { values: b.values } : {}), version: t.version + 1 });
+				return { data: { data: { ...t } } };
+			}
 			if (s.patchStatus === -1) throw new Error('Network Error');
 			if (s.patchStatus) throw httpError(s.patchStatus);
 			const d = drafts.get(idOf(path));
@@ -123,6 +168,13 @@ export function fakeServer() {
 		},
 		delete: async (path: string) => {
 			calls.push(`DELETE ${path}`);
+			if (path.startsWith('/d1-build/templates/')) {
+				templateGate();
+				const t = templateById(path);
+				if (t.user_id !== s.me) throw httpError(403);
+				s.templates = s.templates.filter((x) => x !== t);
+				return { data: {} };
+			}
 			drafts.delete(idOf(path));
 			return { data: {} };
 		},

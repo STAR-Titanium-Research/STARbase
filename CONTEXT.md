@@ -292,7 +292,10 @@ _Avoid_: clone, copy-paste
 A named, saved set of prefilled fields for a new operation or test (method, machine, tool, operator,
 settings), not tied to any record. It belongs to one person or is shared with their role or the whole
 group. Changing a template never changes what was made from it. A template may point to a recipe but
-is not one.
+is not one. It is made with **Save as template** on any operation or test (never the sample, the dates
+or whether it is done; notes only when asked), is the first group of the **palette** and the **add
+search**, and is used by dropping or choosing it: the new container starts with its values and is not
+linked to it.
 _Avoid_: preset, recipe (a FAST or prep recipe is reference data), saved operation
 
 **Checks**:

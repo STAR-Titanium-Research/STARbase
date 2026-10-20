@@ -6,10 +6,13 @@ import { computed, ref, watch, type Ref } from 'vue';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { catalogEntries, searchEntries, type MenuEntry } from './menuModel';
 import { readFolded, writeFolded } from './recents';
+import type { TemplateItem } from './templates';
 
 export function usePalette(o: {
 	methods: () => MethodEntry[];
 	testTypes: () => TestTypeEntry[];
+	/** The templates this person may use: the first group of the catalog (R7). */
+	templates?: () => readonly TemplateItem[];
 	recents: Ref<string[]>;
 	person: () => string | null | undefined;
 }) {
@@ -18,7 +21,7 @@ export function usePalette(o: {
 	watch(o.person, (p) => void (folded.value = readFolded(p)));
 	const query = ref('');
 
-	const all = computed<MenuEntry[]>(() => catalogEntries({ methods: o.methods(), testTypes: o.testTypes() }));
+	const all = computed<MenuEntry[]>(() => catalogEntries({ methods: o.methods(), testTypes: o.testTypes(), templates: o.templates?.() }));
 	/** The entries the dock lists: the whole catalog, or what the search box finds. With nothing typed, what was added lately is on top. */
 	const entries = computed(() => searchEntries(all.value, query.value, o.recents.value));
 	/** Section headers while nothing is typed, as the add search does. */
