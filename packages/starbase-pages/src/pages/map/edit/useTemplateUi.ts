@@ -56,10 +56,11 @@ export function useTemplateUi(o: { edit: EditMode; templates: Templates; map: Pr
 	/** A line the palette says after a change ("Saved the template Roughing."); the templates' own failures are `templates.error`. */
 	const notice = ref('');
 
-	// The machine, tool or edge a new card names (typed, or brought by a template): Checks warns when it is retired or used up.
+	// The machine, tool or edge a new card names (typed, or brought by a template), or that the person picks for an attached operation: Checks warns
+	// when it is retired or used up. An attached operation's recorded machine and tool are not read (the checks do not warn about them).
 	watch(
 		() => edit.body.value.items,
-		(items) => void (edit.drafted.value && edit.catalog.gear.ensure(items.filter((i) => !i.existing).map((i) => i.values))),
+		(items) => void (edit.drafted.value && edit.catalog.gear.ensure(items.filter((i) => !i.existing || (i.kind === 'operation' && i.attach)).map((i) => i.values))),
 		{ immediate: true },
 	);
 

@@ -154,10 +154,15 @@ function sampleChecks(item: DraftSample, body: DraftBody, ctx: CheckCtx): Check[
 	return out;
 }
 
-/** A new card that names gear that is retired or used up (typed in, or brought by a template): only a warning, the person may have a reason. */
+/**
+ * A card that names gear that is retired or used up (typed in, or brought by a template): only a warning, the person may have a reason.
+ * An attached operation is warned only about gear the person chooses for it (`item.values`), not the machine or tool its record already names:
+ * a done record whose old machine is retired is not a problem. `values` is what a new card names.
+ */
 function gearChecks(item: DraftItem, values: Record<string, unknown>, ctx: CheckCtx): Check[] {
-	if (!ctx.gear || (item.existing && !(item.kind === 'operation' && item.attach))) return [];
-	return gearIn(values).flatMap((g) => {
+	const attached = item.existing && item.kind === 'operation' && item.attach === true;
+	if (!ctx.gear || (item.existing && !attached)) return [];
+	return gearIn(attached ? item.values : values).flatMap((g) => {
 		const text = ctx.gear!(g.field, g.id);
 		return text ? [warn(item.key, text, g.field)] : [];
 	});

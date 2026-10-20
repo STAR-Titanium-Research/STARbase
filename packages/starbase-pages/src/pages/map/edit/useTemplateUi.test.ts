@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reactive, ref } from 'vue';
+import { nextTick, reactive, ref } from 'vue';
 import type { ContainerNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
@@ -13,7 +13,7 @@ const run = (actions: DraftAction[]) => actions.reduce((b, a) => apply(b, a), em
 const labels = { method_id: 'Method', equipment_id: 'Machine', tool_id: 'Tool', operator_person_id: 'Operator', machining_feed_mm_per_rev: 'Feed' } as Record<string, string>;
 
 /** A draft with one new Turning operation (n2, row n3) that has a machine, a tool, an operator, a date and notes, selected on the canvas. */
-function setup(over: { values?: Record<string, unknown>; me?: { id?: string; admin?: boolean }; select?: boolean; recorded?: { restricted: boolean } } = {}) {
+function setup(over: { values?: Record<string, unknown>; me?: { id?: string; admin?: boolean }; select?: boolean; recorded?: { restricted: boolean }; ensure?: (sets: Record<string, unknown>[]) => Promise<void> } = {}) {
 	const f = fakeServer();
 	const templates = useTemplates({ api: f.api, gear: useGearStatus(f.api), me: () => over.me ?? { id: 'u1' } });
 	const body = ref(
@@ -37,7 +37,7 @@ function setup(over: { values?: Record<string, unknown>; me?: { id?: string; adm
 			testTypes: ref([]),
 			records: reactive(new Map()),
 			loadRecords: async () => undefined,
-			gear: { ensure: async () => undefined },
+			gear: { ensure: async (sets: Iterable<Record<string, unknown>>) => over.ensure?.([...sets]) },
 		},
 	};
 	if (over.recorded) edit.catalog.records.set('manufacturing_operations:o1', { version: 3, values: { method_id: 'm-turn', process_category: 'machining', equipment_id: 'e1', restricted: over.recorded.restricted } } as never);
@@ -109,6 +109,31 @@ describe('Save as template', () => {
 		x.ui.closeSave();
 		expect(x.ui.saving.value).toBeNull();
 		expect(x.s.templates).toEqual([]);
+	});
+});
+
+describe('the gear the draft names is read for the checks', () => {
+	it('reads what a new card names, and the gear the person picks for an attached operation, not the attached record\'s own', async () => {
+		const seen: Record<string, unknown>[][] = [];
+		const x = setup({ ensure: async (sets) => void seen.push(sets) });
+		expect(seen.at(-1)).toContainEqual(expect.objectContaining({ equipment_id: 'e1', tool_id: 'tool1' }));
+		// An operation attached from the database (its own machine is not in the draft's values), then a tool picked for it in the rail.
+		x.edit.body.value = run([
+			{ type: 'addSample' },
+			{ type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } },
+		]);
+		await nextTick();
+		expect(seen.at(-1)).not.toContainEqual(expect.objectContaining({ equipment_id: expect.anything() }));
+		expect(seen.at(-1)).not.toContainEqual(expect.objectContaining({ tool_id: expect.anything() }));
+		x.edit.body.value = apply(x.edit.body.value, { type: 'setValues', key: 'n2', values: { tool_id: 'old-tool' } });
+		await nextTick();
+		expect(seen.at(-1)).toContainEqual({ tool_id: 'old-tool' });
+	});
+
+	it('does not read the gear of an existing record that is only on the canvas', async () => {
+		const seen: Record<string, unknown>[][] = [];
+		setup({ recorded: { restricted: false }, ensure: async (sets) => void seen.push(sets) });
+		expect(seen.at(-1)).toEqual([]);
 	});
 });
 
