@@ -54,6 +54,12 @@ class Config:
     thumbnails: bool = (
         True  # INBOX_THUMBNAILS=0: no thumbnails at registration, no backfill
     )
+    thumb_batch: int = (
+        THUMB_BATCH  # INBOX_THUMB_BATCH: images the backfill makes per tick at most
+    )
+    thumb_budget_s: float = (
+        THUMB_BUDGET_S  # INBOX_THUMB_BUDGET_S: how long one tick's backfill may run
+    )
 
 
 class Daemon:
@@ -237,8 +243,8 @@ class Daemon:
 
     # ---- thumbnails backfill ---------------------------------------------------------
 
-    def thumbnail_pending(self, limit: int = THUMB_BATCH) -> int:
-        """Make the thumbnails of up to `limit` images that have none (registered before thumbnails existed, or
+    def thumbnail_pending(self, limit: int | None = None) -> int:
+        """Make the thumbnails of up to `limit` (default `config.thumb_batch`) images that have none (registered before thumbnails existed, or
         whose file changed since they were made). Each is read through the share's `open_rb` (not adopted, so
         only allow-listed images) at the shared throttle, and only if it is still the file the candidate
         describes (same size and modification time): a picture of a different file would not match its row.
@@ -246,10 +252,12 @@ class Daemon:
         until it changes. A file that vanished, is not the file the row describes or is refused to us is skipped
         for the rest of the process (`_thumbs_tried`); the scan, not this step, decides what is gone. A share
         hiccup (an OSError other than those) ends this tick's batch and marks nothing as tried, so the files
-        behind it are offered again next tick. A call stops after THUMB_BUDGET_S seconds. Returns how many
+        behind it are offered again next tick. A call stops after `config.thumb_budget_s` seconds. Returns how many
         pictures were made."""
         if not self.config.thumbnails:
             return 0
+        if limit is None:
+            limit = self.config.thumb_batch
         if self._thumbs_retry_at is not None and self._now() < self._thumbs_retry_at:
             return 0
         store = self.store
@@ -272,7 +280,7 @@ class Daemon:
         for target in targets:
             if self.stop_event.is_set():
                 break
-            if self._now() - started >= timedelta(seconds=THUMB_BUDGET_S):
+            if self._now() - started >= timedelta(seconds=self.config.thumb_budget_s):
                 break  # the rest next tick
             try:
                 outcome = self._make_thumbnails(target)
