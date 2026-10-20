@@ -152,8 +152,8 @@ Pure logic in `packages/d1-ui/src/bulk/`, thin components next to it, no file ov
 | # | PR | Contents |
 |---|---|---|
 | 0 | spec + glossary | this document, `CONTEXT.md` terms |
-| 1 | foundation | migration 204 (journal), extraction of `d1-record-access` bodies (no behaviour change), `d1-bulk-actions` skeleton (preview/apply/undo/revert/list plumbing, journal, mail timer + sweep, `edit_field` and `restrict`/`unrestrict` as the first kinds), kit: ticks everywhere, menu (with print labels), dialog, preview, toast with countdown, `bulkFields` on a first page |
-| 2 | ownership | `assign_team`, `change_owner` (server + dialogs + warnings + summary mail) |
+| 1 | foundation | migration 204 (journal), `d1-bulk-actions` (preview/apply/undo/revert/list plumbing, journal, `edit_field` and `restrict`/`unrestrict` as the first kinds; these mail nobody), kit: ticks everywhere, menu (with print labels), dialog, preview, toast with countdown, `bulkFields` on a first page |
+| 2 | ownership | extraction of `d1-record-access` bodies (no behaviour change), mail timer + startup sweep, `assign_team`, `change_owner` (server + dialogs + warnings + summary mail) |
 | 3 | access | `share_access`, `remove_access` |
 | 4 | fields | `bulkFields` on all suitable index pages |
 | 5 | admin | Bulk actions panel on admin Home with Revert |

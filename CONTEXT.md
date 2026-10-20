@@ -21,6 +21,16 @@ STARbase's landing page: the lab view for everyone, and the admin overview for a
 A STARbase page that lists the records of one kind, with search and a few fixed filters.
 _Avoid_: list view, collection page, list
 
+**Selection**:
+The rows ticked on an index page, kept across its pages and filters, that a bulk action is about.
+_Avoid_: batch, basket, checked rows
+
+**Bulk action**:
+One change made to every record in a selection (hand them to a team, change their owner, share them, remove
+someone's access, restrict them, or set a field). It shows what it will and will not change before it runs,
+can be undone for a minute by the person who ran it, and is kept on record so an administrator can revert it.
+_Avoid_: batch (a batch is several samples done together), mass edit, permission change
+
 **Record page**:
 A STARbase page about a single Project, Campaign, Sample, Operation, Test, Tool box, Cutting insert or
 Insert edge.
