@@ -158,6 +158,29 @@ describe('keys', () => {
 		expect(sheetName()).toBe('3fa9c1d2_A1.tif');
 	});
 
+	it('ArrowRight and ArrowLeft move the selection like ArrowDown and ArrowUp (the view box steps with them)', async () => {
+		await mount([withThumb(A), withThumb(B), withThumb(C)]);
+		thumbButton('3fa9c1d2_A1.tif').click();
+		await vi.waitFor(() => expect(sheetName()).toBe('3fa9c1d2_A1.tif'));
+		key('ArrowRight');
+		await vi.waitFor(() => expect(sheetName()).toBe('9ab3c4d5_B2.tif'));
+		key('ArrowRight');
+		await vi.waitFor(() => expect(sheetName()).toBe('5cd6e7f8_C3.tif'));
+		key('ArrowRight'); // the end
+		await new Promise((r) => setTimeout(r, 20));
+		expect(sheetName()).toBe('5cd6e7f8_C3.tif');
+		key('ArrowLeft');
+		await vi.waitFor(() => expect(sheetName()).toBe('9ab3c4d5_B2.tif'));
+		// a text field and a focused checkbox keep the arrows
+		const input = document.createElement('input');
+		document.body.appendChild(input);
+		key('ArrowLeft', input);
+		const checkbox = document.querySelector<HTMLElement>('[data-test="toggle-compare"]')!;
+		key('ArrowRight', checkbox);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(sheetName()).toBe('9ab3c4d5_B2.tif');
+	});
+
 	it('does nothing with the arrows while no sheet is open, or while typing in a field', async () => {
 		await mount([withThumb(A), withThumb(B)]);
 		key('ArrowDown');
@@ -242,6 +265,44 @@ describe('the actions', () => {
 		await vi.waitFor(() => expect(sheet()).not.toBeNull());
 		(sheet()!.querySelector('[data-test="sheet-link"]') as HTMLElement).click();
 		await vi.waitFor(() => expect(document.querySelector('[data-test="link-search"]')).not.toBeNull());
+	});
+
+	it('for a surface scan the sheet offers its own "Add a surface scan" and opens that dialog, not the link picker', async () => {
+		const scan = foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/edge1.al3d' });
+		await mount([withThumb(A), scan]);
+		nameButton('edge1.al3d').click();
+		await vi.waitFor(() => expect(sheetName()).toBe('edge1.al3d'));
+		const btn = sheet()!.querySelector<HTMLElement>('[data-test="sheet-link"]')!;
+		expect(btn.textContent).toBe('Add a surface scan');
+		btn.click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="add-scan-dialog"]')).not.toBeNull());
+		expect(document.querySelector('[data-test="link-search"]')).toBeNull();
+		// any other file keeps "Link to…"
+		app!.unmount();
+		document.body.innerHTML = '';
+		await mount([withThumb(A)]);
+		thumbButton('3fa9c1d2_A1.tif').click();
+		await vi.waitFor(() => expect(sheet()).not.toBeNull());
+		expect(sheet()!.querySelector('[data-test="sheet-link"]')!.textContent).toBe('Link to…');
+	});
+
+	it('Back from the view box returns to the list with the same file selected and its sheet open', async () => {
+		const files = [withThumb(A), withThumb(B), withThumb(C)];
+		await mount(files, {}, '/inbox?folder=sem');
+		nameButton('9ab3c4d5_B2.tif').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-image"]')).not.toBeNull());
+		(sheet()!.querySelector('[data-test="sheet-open-box"]') as HTMLElement).click();
+		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/inbox/file/${files[1].candidate_id}`));
+		router.back();
+		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/inbox'));
+		await vi.waitFor(() => expect(rows()).toHaveLength(3));
+		await vi.waitFor(() => expect(sheetName()).toBe('9ab3c4d5_B2.tif'));
+		expect(selectedRows()).toEqual(['9ab3c4d5_B2.tif']);
+		// a fresh visit to the list (no remembered state) starts with nothing selected
+		await router.push('/inbox?folder=other');
+		await router.push('/inbox');
+		await vi.waitFor(() => expect(rows()).toHaveLength(3));
+		expect(sheet()).toBeNull();
 	});
 
 	it('Open in view box goes to the page of the file, carrying the filters', async () => {

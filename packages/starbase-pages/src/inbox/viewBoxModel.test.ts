@@ -59,6 +59,13 @@ describe('1:1 and the scale bar', () => {
 		expect(actualWidthPx({ image_width_px: 0 }, null)).toBeNull();
 		expect(actualWidthPx({ image_width_px: 'wide' }, 0)).toBeNull();
 	});
+	it('reads the original width the way Common scale does: a file with only the field width and the pixel size has 1024 px, not the preview width', () => {
+		const e = { pixel_size_nm: 194.271, hfw_um: 198.933 }; // 198.933 µm / 194.271 nm = 1024 px
+		expect(actualWidthPx(e, 1600)).toBeCloseTo(1024, 0);
+		expect(actualWidthPx(e, null)).toBeCloseTo(1024, 0);
+		expect(actualWidthPx({ ...e, image_width_px: 2048 }, 1600)).toBe(2048); // a stored width wins
+		expect(actualWidthPx({ hfw_um: 198.933 }, 1600)).toBe(1600); // no pixel size: the field width alone says nothing
+	});
 	it('has no bar without a pixel size', () => {
 		expect(boxScaleBar({}, 'fit', null)).toBeNull();
 		expect(boxScaleBar({ image_width_px: 1000 }, 'actual', 1000)).toBeNull();

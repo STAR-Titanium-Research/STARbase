@@ -195,7 +195,11 @@ test('Fit and 1:1 and the overlays work on the picture and are remembered; a fil
 
 test('a preview that fails says so and Retry loads it; a thumbnail that fails leaves the kind icon, quietly', async ({ browser }) => {
 	const { page, inbox } = await start(browser, '/inbox', 1280, { previewFails: 1 });
-	await openBox(page, '3fa9c1d2_A1.tif');
+	// With the Sheet, the click would fetch the preview for the sheet and use up the one failure there (and the sheet offers no "Open in view box" for a failed
+	// preview). So the View rail's Preview is View box: the click opens the page, and its own preview request is the one that fails.
+	await page.locator('[data-test="rail-preview"]').getByRole('radio', { name: 'View box' }).click();
+	await thumb(page, '3fa9c1d2_A1.tif').click();
+	await expect(viewBox(page)).toBeVisible();
 	await expect(page.locator('[data-test="box-error"]')).toContainText('The preview could not be loaded.');
 	await expect(page.locator('[data-test="box-note"]')).toBeVisible();
 	await shot(page, 'view-box-error');

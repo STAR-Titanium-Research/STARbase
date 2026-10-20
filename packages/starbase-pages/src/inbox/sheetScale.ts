@@ -2,7 +2,7 @@ import { measureScale, scaleFieldUm } from './measure';
 import { scaleBarText } from './semSettings';
 
 // The scale bar drawn over the picture in the sheet. The preview is a reduced copy, so the bar is sized as a share of the picture's width (which holds at
-// any size) rather than in screen pixels: the picture's width in µm is pixel size x original width (measure.ts measureScale: the same two numbers Measure and Common scale need, no fallback).
+// any size) rather than in screen pixels: the picture's width in µm is pixel size x original width (measure.ts measureScale: the same scale rule Measure, 1:1 and Common scale use, never the preview's width).
 
 export interface SheetBar {
 	/** The bar's length as a share of the picture's width, 0 to 1. */

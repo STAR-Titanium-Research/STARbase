@@ -141,6 +141,70 @@ describe('the page', () => {
 		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/inbox'));
 	});
 
+	it('ArrowDown and ArrowUp step like ArrowRight and ArrowLeft, and a text field keeps them', async () => {
+		const files = [withThumb(A), withThumb(B), withThumb(C)];
+		await mountReady(files, at(1));
+		key('ArrowDown');
+		await vi.waitFor(() => expect(currentId()).toBe(files[2].candidate_id));
+		key('ArrowDown'); // nothing after it
+		expect(currentId()).toBe(files[2].candidate_id);
+		key('ArrowUp');
+		await vi.waitFor(() => expect(currentId()).toBe(files[1].candidate_id));
+		const input = document.createElement('input');
+		input.type = 'text';
+		document.body.appendChild(input);
+		key('ArrowUp', input);
+		key('ArrowLeft', input);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(currentId()).toBe(files[1].candidate_id);
+	});
+
+	describe('a long list', () => {
+		const long = (n: number) => Array.from({ length: n }, (_, i) => foundFile({ kind: 'sem_image', extracted: SEM, rel_path: `Users/ab1cd/sem/img${String(i).padStart(5, '0')}.tif` }));
+		const pageAt = (offset: number) => fake.calls.filter((c) => c.path === '/d1-inbox/files' && Number(c.params?.offset) === offset);
+
+		it('Next goes on past the pages read so far: the page after the last row read is fetched, and "n of m" is of the whole list', async () => {
+			const files = long(450);
+			await mountReady(files, at(198));
+			expect(text('[data-test="box-position"]')).toBe('199 of 450');
+			key('ArrowRight'); // 199: the last row the first page held
+			await vi.waitFor(() => expect(currentId()).toBe(files[199].candidate_id));
+			expect(text('[data-test="box-position"]')).toBe('200 of 450');
+			expect(q<HTMLButtonElement>('[data-test="box-next"]')!.disabled).toBe(false);
+			// asked at once, before the page behind it is in: it waits for that page, then steps on
+			key('ArrowRight');
+			await vi.waitFor(() => expect(currentId()).toBe(files[200].candidate_id));
+			expect(text('[data-test="box-position"]')).toBe('201 of 450');
+			expect(pageAt(200).length).toBeGreaterThan(0);
+			// and back again, through the rows now in hand
+			key('ArrowLeft');
+			await vi.waitFor(() => expect(currentId()).toBe(files[199].candidate_id));
+		});
+
+		it('the Next button does the same, and the end of the list is the end', async () => {
+			const files = long(201);
+			await mountReady(files, at(199));
+			await vi.waitFor(() => expect(q<HTMLButtonElement>('[data-test="box-next"]')).not.toBeNull());
+			q<HTMLButtonElement>('[data-test="box-next"]')!.click();
+			await vi.waitFor(() => expect(currentId()).toBe(files[200].candidate_id));
+			expect(text('[data-test="box-position"]')).toBe('201 of 201');
+			expect(q<HTMLButtonElement>('[data-test="box-next"]')!.disabled).toBe(true);
+		});
+
+		it('stops at the 2000-row cap: no Next past the last row the page reads', async () => {
+			const files = long(2100);
+			await mountReady(files, at(1998));
+			key('ArrowRight');
+			await vi.waitFor(() => expect(currentId()).toBe(files[1999].candidate_id));
+			expect(text('[data-test="box-position"]')).toBe('2000 of 2100');
+			expect(q<HTMLButtonElement>('[data-test="box-next"]')!.disabled).toBe(true);
+			key('ArrowRight');
+			await new Promise((r) => setTimeout(r, 30));
+			expect(currentId()).toBe(files[1999].candidate_id);
+			expect(pageAt(2000)).toHaveLength(0);
+		});
+	});
+
 	it('reads the list with the filters in its address: the same files in the same order, "n of m" of that list', async () => {
 		const files = [withThumb(A, { kind: 'surface_scan' }), withThumb(B), withThumb(C)];
 		await mountReady(files, at(2, '?kind=sem_image'));
@@ -303,11 +367,35 @@ describe('Fit, 1:1, the scale bar and the contrast stretch', () => {
 		expect(q('[data-test="toggle-contrast"]')).not.toBeNull();
 	});
 
-	it('the F and arrow keys leave a focused radio group alone', async () => {
+	it('the arrow keys leave a focused radio group alone', async () => {
 		const files = [withThumb(A), withThumb(B)];
 		await mountReady(files, at(0));
 		key('ArrowRight', radio('Fit'));
+		key('ArrowDown', radio('Fit'));
 		expect(currentId()).toBe(files[0].candidate_id);
+	});
+
+	it('F, M and C still work with focus on a segmented control or a rail checkbox (where a click leaves it), but not in a text field', async () => {
+		await mountReady([withThumb(A), withThumb(B)], at(0));
+		await vi.waitFor(() => expect(q('[data-test="box-image"]')).not.toBeNull());
+		radio('1:1').click();
+		await vi.waitFor(() => expect(box()!.dataset.zoom).toBe('actual'));
+		const typing = document.createElement('input');
+		typing.type = 'text';
+		document.body.appendChild(typing);
+		key('f', typing);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(box()!.dataset.zoom).toBe('actual');
+		// dispatched on the focused control itself, so it bubbles up the way a real key does
+		key('f', radio('1:1'));
+		await vi.waitFor(() => expect(box()!.dataset.zoom).toBe('fit'));
+		const contrast = q<HTMLInputElement>('[data-test="toggle-contrast"]')!;
+		key('M', contrast);
+		await vi.waitFor(() => expect(q<HTMLInputElement>('[data-test="toggle-measure"]')!.checked).toBe(true));
+		key('c', radio('Fit'));
+		await vi.waitFor(() => expect(q('[data-test="compare-stage"]')).not.toBeNull());
+		key('C', contrast);
+		await vi.waitFor(() => expect(q('[data-test="compare-stage"]')).toBeNull());
 	});
 
 	it('the rail folds to its tab and the fold is remembered apart from the list\'s', async () => {

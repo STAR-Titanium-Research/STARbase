@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
-import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, settingsOf, suggestionOf } from './inboxModel';
+import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, primaryAction, settingsOf, suggestionOf } from './inboxModel';
 import ScaleBar from './ScaleBar.vue';
 import SemSettingsList from './SemSettingsList.vue';
 import { sheetScaleBar } from './sheetScale';
@@ -42,6 +42,11 @@ const icon = computed(() => kindIcon(props.file.kind));
 const noPictureText = computed(() => (IMAGE_KINDS.includes(props.file.kind) ? 'The preview is not made yet.' : 'This kind of file has no preview.'));
 const openable = computed(() => withPicture.value && state.value !== 'failed');
 const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
+// A surface scan has no link: its button is the row's own "Add a surface scan". Every other file opens the record picker, "Link to…".
+const linkLabel = computed(() => {
+	const a = primaryAction(props.file);
+	return a.kind === 'scan' ? a.label : 'Link to…';
+});
 </script>
 
 <template>
@@ -81,7 +86,7 @@ const canAct = computed(() => props.tab === 'new' || props.tab === 'older');
 		<p v-if="suggestion" class="why" data-test="sheet-suggestion">Looks like <strong class="rec">{{ suggestion.record }}</strong>: <span class="reason">{{ suggestion.text }}</span></p>
 
 		<div class="actions">
-			<v-button v-if="canAct" small :disabled="busy" data-test="sheet-link" @click="emit('link')">Link to…</v-button>
+			<v-button v-if="canAct" small :disabled="busy" data-test="sheet-link" @click="emit('link')">{{ linkLabel }}</v-button>
 			<v-button v-if="canAct" small secondary :disabled="busy" data-test="sheet-dismiss" @click="emit('dismiss')">Dismiss</v-button>
 			<v-button v-if="tab === 'dismissed'" small secondary :disabled="busy" data-test="sheet-restore" @click="emit('restore')">Restore</v-button>
 			<v-button v-if="openable" small secondary data-test="sheet-open-box" @click="emit('open-box')">Open in view box</v-button>

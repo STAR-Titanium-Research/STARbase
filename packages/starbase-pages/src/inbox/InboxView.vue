@@ -14,7 +14,7 @@ import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
-import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
+import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
@@ -186,7 +186,14 @@ async function accept() {
 
 // ---- the sheet: what a click on a file opens (the View rail's Preview setting), the selected row, the keys ----
 const view = useViewSettings();
-const selectedId = ref<string | null>(null);
+// The selected file is kept in this history entry's state when a file's page is opened from here, so Back from the view box lands on the list with the same file
+// selected (the sheet open on it). The state belongs to the entry, so a fresh visit to the list starts with nothing selected.
+const SELECTED_KEY = 'inboxSelected';
+const savedSelection = (): string | null => {
+	const v = (router.options.history.state as Record<string, unknown> | undefined)?.[SELECTED_KEY];
+	return typeof v === 'string' && v ? v : null;
+};
+const selectedId = ref<string | null>(savedSelection());
 const allRows = computed(() => [...main.value.rows, ...other.value.rows]);
 const selected = computed(() => (selectedId.value ? allRows.value.find((f) => f.candidate_id === selectedId.value) ?? null : null));
 // A file that leaves the list (linked, dismissed, ignored) hands the selection to its neighbour (the next row still there, else the one before), or clears it
@@ -241,14 +248,34 @@ const partnerOf = (id: string): string | null => (compareOn.value && ticked.valu
 const compareNote = computed(() => (ticked.value.length === 2 ? 'Two files ticked.' : ticked.value.length === 1 ? '1 of 2 files ticked.' : 'Tick two pictures to compare them.'));
 
 // The view box: the file's own page (/inbox/file/<id>), carrying the filters so its previous / next and Close stay in this list, and the compare partner when the file is one of a ticked pair.
-const openBox = (f: FoundFile) => openLink(viewBoxPath(f.candidate_id, filters.value, partnerOf(f.candidate_id)), router);
-const openPair = () => ticked.value.length === 2 && openLink(viewBoxPath(ticked.value[0], filters.value, ticked.value[1]), router);
+function rememberSelection(): void {
+	const h = router.options.history;
+	try {
+		h.replace(h.location, { ...(h.state as Record<string, unknown>), [SELECTED_KEY]: selectedId.value });
+	} catch {
+		// a history that will not take state: Back then lands on the list with nothing selected
+	}
+}
+const openBox = (f: FoundFile) => {
+	rememberSelection();
+	openLink(viewBoxPath(f.candidate_id, filters.value, partnerOf(f.candidate_id)), router);
+};
+const openPair = () => {
+	if (ticked.value.length !== 2) return false;
+	rememberSelection();
+	openLink(viewBoxPath(ticked.value[0], filters.value, ticked.value[1]), router);
+	return true;
+};
+// The sheet's Link to…: a surface scan is ADDED to an insert or an edge (the row's own button), anything else is linked through the record picker.
+const sheetLink = (f: FoundFile) => (primaryAction(f).kind === 'scan' ? openScan(f) : openDialog(f));
 
 const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open;
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
+// Up / Down and Left / Right all move the selection: the view box steps with Left / Right, so the same keys work in the sheet.
+const ARROWS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 function onKey(e: KeyboardEvent) {
 	if (!selectedId.value || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-	if (e.key !== 'Escape' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+	if (e.key !== 'Escape' && e.key !== 'Enter' && !ARROWS.includes(e.key)) return;
 	if (anyDialogOpen()) return;
 	const t = e.target instanceof Element ? e.target : null;
 	if (e.key === 'Escape') {
@@ -270,7 +297,7 @@ function onKey(e: KeyboardEvent) {
 	if (t?.closest(TYPING)) return;
 	const ids = rowEls().map((el) => el.dataset.rowId ?? '');
 	const at = ids.indexOf(selectedId.value);
-	const to = at < 0 ? -1 : at + (e.key === 'ArrowDown' ? 1 : -1);
+	const to = at < 0 ? -1 : at + (e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1);
 	if (to < 0 || to >= ids.length) return;
 	e.preventDefault();
 	selectedId.value = ids[to];
@@ -434,7 +461,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			:show-owner="showOwner"
 			:busy="inbox.isBusy(selected.candidate_id)"
 			@close="closeSheet()"
-			@link="openDialog(selected)"
+			@link="sheetLink(selected)"
 			@dismiss="dismissRow(selected)"
 			@restore="restoreRow(selected)"
 			@open-box="openBox(selected)"

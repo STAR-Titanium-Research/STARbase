@@ -2,7 +2,7 @@
 // person came from, the "n of m" text, how big the picture is drawn for Fit and 1:1, and the scale bar at either size.
 // Spec: docs/superpowers/specs/2026-10-20-inbox-file-viewer-design.md decisions 4, 8 and 9.
 import { filtersToQuery, type InboxFilters } from './inboxModel';
-import { finitePositive } from './measure';
+import { finitePositive, measureScale } from './measure';
 import { sheetScaleBar, type SheetBar } from './sheetScale';
 
 /** Fit draws the whole picture in the stage; 1:1 draws one picture pixel of the ORIGINAL per screen pixel (the preview is a reduced copy, so it is scaled up). */
@@ -58,10 +58,12 @@ export function neighbours(ids: readonly string[], id: string): Neighbours | nul
 export const positionText = (index: number, total: number): string => `${index + 1} of ${Math.max(total, index + 1)}`;
 
 /**
- * The width, in screen pixels, the picture is drawn at for 1:1: the original's width (from the file: extracted.image_width_px), or the preview's own
- * width when the file does not say. Null when neither is known yet.
+ * The width, in screen pixels, the picture is drawn at for 1:1: the original's width as the one scale rule reads it (measureScale: the stored width, or the field
+ * width over the pixel size when none was stored, so 1:1 and Common scale agree), else a stored width alone, else the preview's own width. Null when none is known yet.
  */
 export function actualWidthPx(extracted: Record<string, unknown>, previewWidthPx: number | null): number | null {
+	const original = measureScale(extracted)?.originalWidthPx;
+	if (original !== undefined) return original;
 	if (finitePositive(extracted.image_width_px)) return extracted.image_width_px;
 	return finitePositive(previewWidthPx) ? previewWidthPx : null;
 }

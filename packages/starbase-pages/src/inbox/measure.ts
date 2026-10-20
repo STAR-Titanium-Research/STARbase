@@ -29,7 +29,7 @@ export const NO_SCALE_REASON = 'no scale known for this image';
 
 export const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 
-/** Measure needs BOTH the pixel size and the original's width (no fallback to the field width or to the preview's width): else null. */
+/** Measure needs the pixel size and the original's width: the stored width, or the one worked out from the field width and the pixel size (never the preview's width); else null. */
 export function measureScale(extracted: Record<string, unknown> | null | undefined): MeasureScale | null {
 	const px = extracted?.pixel_size_nm;
 	if (!finitePositive(px)) return null;

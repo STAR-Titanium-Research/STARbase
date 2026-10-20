@@ -63,6 +63,8 @@ const sized = computed(() => props.forcedWidth !== null || props.zoom === 'actua
 const scale = computed(() => measureScale(props.file.extracted));
 const interactive = computed(() => props.measureOn && !!scale.value && state.value === 'ready');
 let drag: { pointer: number; a: Pt } | null = null;
+// a drag in progress belongs to the picture it started on: another file, or the same one coming in again (Retry), drops it
+watch([() => props.file.candidate_id, url], () => (drag = null));
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 function fraction(e: PointerEvent): Pt | null {
 	const r = img.value?.getBoundingClientRect();

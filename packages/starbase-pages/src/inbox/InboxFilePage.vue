@@ -16,7 +16,7 @@ import LinkDialog from './LinkDialog.vue';
 import ViewBox from './ViewBox.vue';
 import ViewBoxRail from './ViewBoxRail.vue';
 import { loadFiles, type FoundFile } from './inboxApi';
-import { locateFile, LOCATE_PAGE, type Located } from './inboxFileList';
+import { locateFile, LOCATE_MAX_ROWS, LOCATE_PAGE, type Located } from './inboxFileList';
 import {
 	IMAGE_KINDS, duplicateText, extractedText, filtersToQuery, folderOf, hasThumbnail, listPlan, nameOf, needsReadNotice, parseFilters, primaryAction, settingsOf, suggestionOf,
 } from './inboxModel';
@@ -65,9 +65,12 @@ async function reload(): Promise<void> {
 		status.value = 'error';
 	}
 }
-const file = computed<FoundFile | null>(() => located.value?.rows.find((f) => f.candidate_id === props.candidateId) ?? null);
-const around = computed(() => (located.value ? neighbours(located.value.rows.map((f) => f.candidate_id), props.candidateId) : null));
-const position = computed(() => (around.value && located.value ? { text: positionText(around.value.index, located.value.total), hasPrev: !!around.value.prev, hasNext: !!around.value.next } : null));
+// The list as far as it has been read: the pages that held the file, and any read since (a Next off the last row read reads the page after it).
+const file = computed<FoundFile | null>(() => (located.value ? rows.value.find((f) => f.candidate_id === props.candidateId) ?? null : null));
+const around = computed(() => (located.value ? neighbours(rows.value.map((f) => f.candidate_id), props.candidateId) : null));
+/** Whether a file follows this one: its row is in hand, or the list goes on past what was read (the server's total, under the page's row cap). */
+const hasNext = computed(() => !!around.value && (!!around.value.next || (!!located.value && !exhausted.value && around.value.index < located.value.total - 1 && rows.value.length < LOCATE_MAX_ROWS)));
+const position = computed(() => (around.value && located.value ? { text: positionText(around.value.index, located.value.total), hasPrev: !!around.value.prev, hasNext: hasNext.value } : null));
 
 const inbox = createInbox({ api: host.api, getFilters: () => filters.value, onChanged: () => void summary.refresh() });
 const { notice } = inbox;
@@ -100,7 +103,14 @@ const go = (id: string | null | undefined) => {
 	if (id) void router.replace({ path: swapCandidate(route.path, id), query: route.query });
 };
 const prev = () => go(around.value?.prev);
-const next = () => go(around.value?.next);
+async function next(): Promise<void> {
+	if (around.value?.next) return go(around.value.next);
+	if (!hasNext.value) return;
+	// the open file is the last row read and the list goes on: read the page after it (a read already running is waited for), then step on
+	const at = props.candidateId;
+	await loadMore();
+	if (props.candidateId === at) go(around.value?.next);
+}
 const toList = () => openLink(closeTo.value, router);
 const pictureState = ref<PictureState>('idle');
 const hasPicture = computed(() => !!file.value && hasThumbnail(file.value) && pictureState.value !== 'failed');
@@ -128,23 +138,37 @@ const rows = computed<FoundFile[]>(() => {
 	return [...(located.value?.rows ?? []), ...extra.value].filter((f) => !seen.has(f.candidate_id) && !!seen.add(f.candidate_id));
 });
 const more = computed(() => !!located.value && !exhausted.value && rows.value.length < located.value.total);
-async function loadMore(): Promise<void> {
+let moreRun: Promise<void> | null = null;
+function loadMore(): Promise<void> {
+	if (moreRun) return moreRun;
 	const l = located.value;
 	const base = l ? listPlan(filters.value)[l.part] : null;
-	if (!l || !base || moreBusy.value) return;
+	if (!l || !base) return Promise.resolve();
 	moreBusy.value = true;
-	try {
-		const page = await loadFiles(host.api, { ...base, limit: LOCATE_PAGE, offset: rows.value.length });
-		if (located.value === l) {
-			if (page.rows.length === 0) exhausted.value = true;
-			extra.value = [...extra.value, ...page.rows];
+	const run = (async () => {
+		try {
+			const page = await loadFiles(host.api, { ...base, limit: LOCATE_PAGE, offset: rows.value.length });
+			if (located.value === l) {
+				if (page.rows.length === 0) exhausted.value = true;
+				extra.value = [...extra.value, ...page.rows];
+			}
+		} catch {
+			inbox.say({ tone: 'warn', text: 'Could not load more of the list.' });
+		} finally {
+			moreBusy.value = false;
+			moreRun = null;
 		}
-	} catch {
-		inbox.say({ tone: 'warn', text: 'Could not load more of the list.' });
-	} finally {
-		moreBusy.value = false;
-	}
+	})();
+	moreRun = run;
+	return run;
 }
+// Stepping on towards the end of a long list: when the open file is the last row read and the list goes on, the next page is read ahead, so Next is ready when asked.
+watch(
+	() => [around.value?.index, rows.value.length, located.value] as const,
+	() => {
+		if (around.value && !around.value.next && hasNext.value && !moreRun) void loadMore();
+	},
+);
 watch(filtersKey, () => {
 	extra.value = [];
 	exhausted.value = false;
@@ -300,8 +324,11 @@ async function copyPath(): Promise<void> {
 	}
 }
 
-// ---- the keys: left / right previous and next, F fits the picture, M measures, C compares, Esc closes ----
+// ---- the keys: left / right (and up / down) previous and next, F fits the picture, M measures, C compares, Esc closes ----
+// The arrow keys also stay out of a focused segmented control or checkbox (they move inside it); the letter keys only stay out of fields that take text, so F, M and C
+// keep working right after a click on a Fit / 1:1 button or a rail checkbox.
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
+const TEXT_ENTRY = 'input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable=""], [contenteditable="true"]';
 function onKey(e: KeyboardEvent): void {
 	if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
 	if (dialogOpen.value || scanOpen.value) return;
@@ -310,22 +337,23 @@ function onKey(e: KeyboardEvent): void {
 		if (e.shiftKey || t?.closest('input, textarea, select, [role="dialog"]')) return;
 		e.preventDefault();
 		toList();
-	} else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+	} else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
 		if (e.shiftKey || t?.closest(TYPING)) return;
-		if (!(e.key === 'ArrowLeft' ? around.value?.prev : around.value?.next)) return;
+		const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+		if (!(back ? around.value?.prev : hasNext.value)) return;
 		e.preventDefault();
-		if (e.key === 'ArrowLeft') prev();
-		else next();
+		if (back) prev();
+		else void next();
 	} else if (e.key === 'f' || e.key === 'F') {
-		if (t?.closest(TYPING)) return;
+		if (t?.closest(TEXT_ENTRY)) return;
 		e.preventDefault();
 		view.set({ zoom: 'fit' });
 	} else if (e.key === 'm' || e.key === 'M') {
-		if (t?.closest(TYPING) || !canMeasure.value) return;
+		if (t?.closest(TEXT_ENTRY) || !canMeasure.value) return;
 		e.preventDefault();
 		measureWanted.value = !measureWanted.value;
 	} else if (e.key === 'c' || e.key === 'C') {
-		if (t?.closest(TYPING)) return;
+		if (t?.closest(TEXT_ENTRY)) return;
 		e.preventDefault();
 		toggleCompare();
 	}
