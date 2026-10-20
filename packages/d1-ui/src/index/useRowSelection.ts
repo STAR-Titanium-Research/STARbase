@@ -5,9 +5,9 @@ import { SELECT_MAX, selectionRoute } from './indexView';
 
 type Row = Record<string, unknown>;
 
-// Ticked rows of a list whose def has a `selectAction` (samples: "Print labels for selected"). The
-// ticks are kept across pages, filters and views, in the order ticked, up to SELECT_MAX; the action
-// takes them to the route the def names. A def without a selectAction never shows any of this.
+// Ticked rows of a list (every index page ticks, for the With-selected menu). The ticks are kept across pages,
+// filters and views, in the order ticked, up to SELECT_MAX; the def's selectAction (samples: Print labels) takes
+// them to the route the def names; a bulk action reads them and, once done, leaves only the rows it skipped ticked.
 export function useRowSelection(
 	def: IndexDef,
 	rows: Ref<Row[]>,
@@ -32,5 +32,9 @@ export function useRowSelection(
 	function run(): void {
 		if (def.selectAction && picked.value.length) navigate(selectionRoute(def.selectAction, picked.value));
 	}
-	return { picked, isPicked, full, allPicked, toggle, togglePage, run };
+	// After a bulk action: tick exactly these keys (the rows it skipped), nothing else.
+	function keepOnly(keys: readonly string[]): void {
+		picked.value = keys.slice(0, SELECT_MAX);
+	}
+	return { picked, isPicked, full, allPicked, toggle, togglePage, run, keepOnly };
 }

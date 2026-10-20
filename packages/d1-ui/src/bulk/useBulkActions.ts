@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref } from 'vue';
-import type { Ref } from 'vue';
+import type { Ref, UnwrapNestedRefs } from 'vue';
 import type { AccessApi } from '../access/accessApi';
 import { useRequestGate } from '../composables/useRequestGate';
 import type { IndexDef } from '../index/indexConfig';
@@ -210,3 +210,6 @@ export function useBulkActions(opts: BulkOptions) {
 		open, close, choose, apply, undo, dismiss,
 	};
 }
+
+/** What `reactive(useBulkActions(...))` hands the components: the refs read as plain values. */
+export type BulkState = UnwrapNestedRefs<ReturnType<typeof useBulkActions>>;
