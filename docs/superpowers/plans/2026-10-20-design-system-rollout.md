@@ -29,7 +29,7 @@ If the scratchpad is gone, `DESIGN.md` is the spec; the canvas link still has ev
 | Stream | What | Agent profile | Wave | Worktree / branch | State |
 |---|---|---|---|---|---|
 | B | `ViewRail` kit component, title pin (`pagePin`), record-page View rail (panels, table density, empty sections, activity range), chart tokens | `directus-ui-implementer` (Sonnet) | 1 | `agent-a26a30703b413a3b6` / `worktree-agent-a26a30703b413a3b6` | in progress |
-| C | Force charts: axis/tick/grid/title restyle, shared time axis, hover, FFT filter bands, `FilterResponse` preview | `force-plotting-implementer` (Sonnet) | 1 | `agent-a452c19055332b01f` / `worktree-agent-a452c19055332b01f` | in progress |
+| C | Force charts: axis/tick/grid/title restyle, shared time axis, hover, FFT filter bands, `FilterResponse` preview | `force-plotting-implementer` (Sonnet) | 1 | `agent-a452c19055332b01f` / `worktree-agent-a452c19055332b01f` | done (6 commits, tests green); Opus review running. Decision: FilterResponse uses `passes: 2` (service is zero-phase) |
 | D | FAST plotter: layout, Samples → Runs, run column + tabs, statistics (`fastStats.ts`), plot tiles, chart restyle | `directus-ui-implementer` (Sonnet) | 1 | `agent-a125ed7efe09919ee` / `worktree-agent-a125ed7efe09919ee` | in progress |
 | A | Index pages: View rail (count/pager, layout, density, sort, group by, columns dropdown, rows per page), toolbar = filters only | `directus-ui-implementer` (Sonnet) | 2 (after B) | | not started |
 | E | Force plotter layout: four columns, Samples → Operations, icon tabs (operation record in Cut), FRM centre, Signals group | `force-plotting-implementer` (Sonnet) | 2 (after C) | | not started |
