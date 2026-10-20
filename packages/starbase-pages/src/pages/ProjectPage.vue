@@ -20,7 +20,7 @@ const props = defineProps<{ id: string }>();
 
 const {
 	project, loading, notVisible, error, counts, campaigns, looseSamples, looseOperations,
-	looseTests, activity, planned, equipment, access, reload, reloadAccess,
+	looseTests, activity, planned, equipment, access, reloadProject, reloadAccess,
 } = useProjectData(toRef(props, 'id'));
 
 const editing = ref(false);
@@ -29,9 +29,11 @@ const accessOpen = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('projects', toRef(props, 'id'));
-// A save can change who may edit the record (the Owner field), so ask again.
+// A save changes the project row, and can change who may edit the record (the Owner field) and who has access, so ask again.
+// The other sections read other records and do not depend on the edit.
 function onSaved() {
-	reload();
+	reloadProject();
+	reloadAccess();
 	refreshCanUpdate();
 }
 // A change in the dialog (someone added or removed, a transfer) changes the people row and may change who may edit; nothing else on the page.

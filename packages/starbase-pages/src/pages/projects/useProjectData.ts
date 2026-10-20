@@ -36,6 +36,8 @@ const NO_COUNTS: ProjectCounts = {
 	samplesPlanned: null, operationsPlanned: null, testsPlanned: null, campaignStatuses: {},
 };
 
+const sumOf = (groups: ReadonlyArray<Record<string, unknown>>): number => groups.reduce((total, g) => total + (Number(g.count) || 0), 0);
+
 /** Dates of the done operations and tests over the project's whole history (the timeline picks its range from them). */
 export interface Activity {
 	ops: string[];
@@ -66,30 +68,42 @@ export function useProjectData(id: Ref<string>) {
 	const notVisible = ref(false);
 	const error = ref('');
 
-	const counts = block<ProjectCounts>({ ...NO_COUNTS });
-	const campaigns = block<(any & { stats: CampaignProgress | null })[]>([]);
-	const looseSamples = block<any[]>([]);
-	const looseOperations = block<any[]>([]);
-	const looseTests = block<any[]>([]);
-	const activity = block<Activity>({ ops: [], tests: [], truncated: false });
-	const planned = block<PlannedWork>({ ops: [], tests: [] });
-	const equipment = block<EquipmentUse[]>([]);
-	// "Who has access": its own fail-soft section. A failed read leaves `data` null and the hero shows the PI alone.
-	const access = block<AccessList | null>(null);
-
-	const all = [counts, campaigns, looseSamples, looseOperations, looseTests, activity, planned, equipment, access] as Ref<SectionState<any>>[];
-	const initial = (b: Ref<SectionState<any>>) =>
-		b === activity ? { ops: [], tests: [], truncated: false } : b === planned ? { ops: [], tests: [] } : b === counts ? { ...NO_COUNTS } : b === access ? null : [];
-
-	const count = async (collection: string, filter: Record<string, unknown>): Promise<number | null> => {
-		try {
-			const rows = await getItems(collection, { aggregate: { count: '*' }, filter, limit: 1 });
-			return Number(rows[0]?.count ?? 0);
-		} catch {
-			// A collection the role cannot read: the tile shows a dash rather than a wrong 0.
-			return null;
+	// One source for every block's starting data: it creates the sections and resets them when the page moves to another project.
+	// "Who has access" is a fail-soft section: a failed read leaves `data` null and the hero shows the PI alone.
+	const defaults = () => ({
+		counts: { ...NO_COUNTS } as ProjectCounts,
+		campaigns: [] as (any & { stats: CampaignProgress | null })[],
+		looseSamples: [] as any[],
+		looseOperations: [] as any[],
+		looseTests: [] as any[],
+		activity: { ops: [], tests: [], truncated: false } as Activity,
+		planned: { ops: [], tests: [] } as PlannedWork,
+		equipment: [] as EquipmentUse[],
+		access: null as AccessList | null,
+	});
+	type Defaults = ReturnType<typeof defaults>;
+	type Sections = { [K in keyof Defaults]: Ref<SectionState<Defaults[K]>> };
+	const sections = Object.fromEntries(Object.entries(defaults()).map(([key, data]) => [key, block(data)])) as unknown as Sections;
+	const { counts, campaigns, looseSamples, looseOperations, looseTests, activity, planned, equipment, access } = sections;
+	function resetSections() {
+		const fresh = defaults();
+		for (const key of Object.keys(sections) as (keyof Defaults)[]) {
+			(sections[key] as Ref<SectionState<unknown>>).value = { data: fresh[key], loading: false, error: '' };
 		}
-	};
+	}
+
+	// How many records a collection has per state, from one grouped read: the "done" ones (every state but planned) and the planned ones.
+	// `field` is `work_state` for operations and tests, `current_status` for samples (migration 189). A collection the role cannot
+	// read is null for both: the tile shows a dash rather than a wrong 0.
+	async function stateCounts(collection: string, filter: Record<string, unknown>, field: string): Promise<{ done: number | null; planned: number | null }> {
+		try {
+			const groups = await getItems(collection, { aggregate: { count: '*' }, groupBy: [field], filter, limit: -1 });
+			const planned = countsByKey(groups, field).get('planned') ?? 0;
+			return { done: sumOf(groups) - planned, planned };
+		} catch {
+			return { done: null, planned: null };
+		}
+	}
 
 	async function loadCampaigns(token: number, projectId: string) {
 		const inProject = { campaign_id: { project_id: { _eq: projectId } } };
@@ -109,24 +123,19 @@ export function useProjectData(id: Ref<string>) {
 		return rows.map((c: any) => ({ ...c, stats: stats?.get(c.campaign_id) ?? null }));
 	}
 
-	// "Who has access" has a gate of its own: reading it again after the dialog changed it must not cancel the page's other reads.
-	const accessGate = useRequestGate();
-	const { fill: fillAccess } = useSections(accessGate);
-	function loadAccessList(projectId: string) {
-		return fillAccess(access, accessGate.begin(), 'who has access', async () => {
-			const res = await loadAccess(host.api, 'projects', projectId);
-			if (!res.ok) throw new Error(res.message);
-			return res.data;
-		});
+	async function readAccess(projectId: string): Promise<AccessList> {
+		const res = await loadAccess(host.api, 'projects', projectId);
+		if (!res.ok) throw new Error(res.message);
+		return res.data;
 	}
 
-	// How many campaigns each status has, for the totals line (the campaign list itself is capped).
-	async function campaignStatuses(filter: Record<string, unknown>): Promise<Record<string, number>> {
+	// The campaigns' total and how many each status has (for the totals line; the campaign list itself is capped), from one grouped read.
+	async function campaignCounts(filter: Record<string, unknown>): Promise<{ total: number | null; statuses: Record<string, number> }> {
 		try {
 			const groups = await getItems('campaigns', { aggregate: { count: '*' }, groupBy: ['status'], filter, limit: -1 });
-			return Object.fromEntries(countsByKey(groups, 'status'));
+			return { total: sumOf(groups), statuses: Object.fromEntries(countsByKey(groups, 'status')) };
 		} catch {
-			return {};
+			return { total: null, statuses: {} };
 		}
 	}
 
@@ -161,53 +170,57 @@ export function useProjectData(id: Ref<string>) {
 			.sort((a, b) => b.operations - a.operations || a.name.localeCompare(b.name));
 	}
 
+	// The project row decides between "page" and "Not found or not visible to you". `isCurrent` says whether the answer is still wanted.
+	async function readProject(projectId: string, isCurrent: () => boolean): Promise<boolean> {
+		try {
+			const row = await getItem('projects', projectId, { fields: PROJECT_FIELDS });
+			if (!isCurrent()) return false;
+			project.value = row;
+			return true;
+		} catch (e: any) {
+			if (!isCurrent()) return false;
+			if (isNotVisible(e)) notVisible.value = true;
+			else error.value = `Could not load this project: ${errorText(e)}`;
+			return false;
+		}
+	}
+
 	async function load() {
 		const token = gate.begin();
 		const projectId = id.value;
 		notVisible.value = false;
 		error.value = '';
-		// Reloading the same project (after an edit) keeps what is on screen; another project starts clean.
+		// Reloading the same project keeps what is on screen; another project starts clean.
 		if (project.value?.project_id !== projectId) {
 			project.value = null;
-			for (const b of all) b.value = { data: initial(b), loading: false, error: '' };
+			resetSections();
 		}
 		if (!projectId) return;
 
 		loading.value = true;
-		try {
-			const row = await getItem('projects', projectId, { fields: PROJECT_FIELDS });
-			if (!gate.isCurrent(token)) return;
-			project.value = row;
-		} catch (e: any) {
-			if (!gate.isCurrent(token)) return;
-			if (isNotVisible(e)) notVisible.value = true;
-			else error.value = `Could not load this project: ${errorText(e)}`;
-			return;
-		} finally {
-			if (gate.isCurrent(token)) loading.value = false;
-		}
+		const found = await readProject(projectId, () => gate.isCurrent(token));
+		if (gate.isCurrent(token)) loading.value = false;
+		if (!found) return;
 
 		const byProject = { project_id: { _eq: projectId } };
 		await Promise.all([
 			fill(counts, token, 'the totals', async () => {
 				// "Belongs to the project" is one rule (projectScope.ts): own project_id, else the
 				// campaign's. Samples also count when they are in one of the project's campaigns.
-				// Operations and tests are counted by `work_state`; a sample is planned by `current_status`
+				// Operations and tests are grouped by `work_state`; a sample is planned by `current_status`
 				// (migration 189), and the done figure leaves those out so "n planned" is not inside it.
 				const scope = projectScopeFilter(projectId);
-				const sampleScope = sampleProjectScopeFilter(projectId);
-				const state = (s: Record<string, unknown>, work: 'done' | 'planned') => ({ _and: [s, { work_state: { _eq: work } }] });
-				const [samples, operations, tests, campaignCount, samplesPlanned, operationsPlanned, testsPlanned, statuses] = await Promise.all([
-					count('physical_samples', { _and: [sampleScope, { current_status: { _neq: 'planned' } }] }),
-					count('manufacturing_operations', state(scope, 'done')),
-					count('test_sessions', state(scope, 'done')),
-					count('campaigns', byProject),
-					count('physical_samples', { _and: [sampleScope, { current_status: { _eq: 'planned' } }] }),
-					count('manufacturing_operations', state(scope, 'planned')),
-					count('test_sessions', state(scope, 'planned')),
-					campaignStatuses(byProject),
+				const [samples, operations, tests, campaignTotals] = await Promise.all([
+					stateCounts('physical_samples', sampleProjectScopeFilter(projectId), 'current_status'),
+					stateCounts('manufacturing_operations', scope, 'work_state'),
+					stateCounts('test_sessions', scope, 'work_state'),
+					campaignCounts(byProject),
 				]);
-				return { samples, operations, tests, campaigns: campaignCount, samplesPlanned, operationsPlanned, testsPlanned, campaignStatuses: statuses };
+				return {
+					samples: samples.done, operations: operations.done, tests: tests.done, campaigns: campaignTotals.total,
+					samplesPlanned: samples.planned, operationsPlanned: operations.planned, testsPlanned: tests.planned,
+					campaignStatuses: campaignTotals.statuses,
+				};
 			}),
 			fill(campaigns, token, 'campaigns', () => loadCampaigns(token, projectId)),
 			fill(looseSamples, token, 'samples outside campaigns', () =>
@@ -246,24 +259,38 @@ export function useProjectData(id: Ref<string>) {
 				return { ops, tests };
 			}),
 			fill(equipment, token, 'equipment', () => loadEquipment(projectId)),
-			loadAccessList(projectId),
+			fill(access, token, 'who has access', () => readAccess(projectId)),
 		]);
 	}
 
+	// After an edit: only the project row changes (the sections read other records), so only it is read again.
+	async function reloadProject() {
+		const projectId = id.value;
+		if (!projectId) return;
+		notVisible.value = false;
+		error.value = '';
+		await readProject(projectId, () => id.value === projectId);
+	}
+
+	// After the dialog changed "Who has access": a plain read, kept only if the page is still on the same project. A failed read
+	// keeps the last list.
 	async function reloadAccess() {
-		if (id.value) await loadAccessList(id.value);
+		const projectId = id.value;
+		if (!projectId) return;
+		const res = await loadAccess(host.api, 'projects', projectId);
+		if (id.value !== projectId) return;
+		access.value = res.ok
+			? { data: res.data, loading: false, error: '' }
+			: { ...access.value, error: `Could not load who has access: ${res.message}` };
 	}
 
 	watch(id, load, { immediate: true });
-	onBeforeUnmount(() => {
-		gate.cancel();
-		accessGate.cancel();
-	});
+	onBeforeUnmount(() => gate.cancel());
 
 	return {
 		project, loading, notVisible, error,
 		counts, campaigns, looseSamples, looseOperations, looseTests, activity, planned, equipment, access,
-		reload: load,
+		reloadProject,
 		/** Reads "Who has access" again, after the dialog changed it (nothing else on the page depends on it). */
 		reloadAccess,
 	};
