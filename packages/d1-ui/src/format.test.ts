@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { breakableParts, errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isFilterRefused, isForbidden, isNotVisible } from './format';
+import { breakableParts, dateRangeText, errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isFilterRefused, isForbidden, isNotVisible } from './format';
 
 describe('formatQuantity', () => {
 	it('trims trailing zeros of a database numeric string', () => {
@@ -117,5 +117,14 @@ describe('breakableParts', () => {
 		expect(breakableParts('abcdef')).toEqual(['abcdef']);
 		expect(breakableParts('')).toEqual([]);
 		expect(breakableParts('__a').join('')).toBe('__a');
+	});
+});
+
+describe('dateRangeText', () => {
+	it('words a range, an open start, an open end and no dates', () => {
+		expect(dateRangeText('2024-01-05', '2025-03-09')).toBe('5 Jan 2024 to 9 Mar 2025');
+		expect(dateRangeText('2024-01-05', null)).toBe('From 5 Jan 2024');
+		expect(dateRangeText(null, '2025-03-09')).toBe('Until 9 Mar 2025');
+		expect(dateRangeText(null, undefined)).toBe('');
 	});
 });

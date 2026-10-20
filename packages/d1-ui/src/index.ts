@@ -32,7 +32,7 @@ export type {
 } from './build/types';
 
 // Display helpers and error predicates
-export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
+export { breakableParts, formatDate, dateRangeText, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export type { Tone } from './status';
 export { CHOICES, choiceKindFor, choiceLabel } from './choiceLabels';
@@ -54,10 +54,12 @@ export type { ElementRow } from './composition';
 // Campaigns, projects, activity
 export { campaignTypeLabel, operationCategoryFor } from './campaign/campaignType';
 export {
-	DEFAULT_WEEKS, weeklyActivity, datesByKey,
+	DEFAULT_WEEKS, weeklyActivity, datesByKey, windowStart,
 } from './activity';
 export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
+export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
+export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, readTimelineRange, writeTimelineRange, projectDatesText } from './record/projectHero';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {
@@ -108,12 +110,12 @@ export {
 	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
-export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
-export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
 export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
+export { default as ProjectTimeline } from './components/ProjectTimeline.vue';
+export { default as PeopleStack } from './components/PeopleStack.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export {
@@ -127,6 +129,8 @@ export type { EditSessionApi, EditSessionOptions } from './composables/useEditSe
 // Who has access (the dialog of the record pages; the endpoint is core/extensions/d1-record-access)
 export { default as AccessDialog } from './components/AccessDialog.vue';
 export { RESTRICT_UI } from './access/accessModel';
+export type { AccessList } from './access/accessModel';
+export { loadAccess } from './access/accessApi';
 // Teams (the endpoint is core/extensions/d1-teams): the tile and palette, the members card, and the calls
 export { default as TeamTile } from './teams/TeamTile.vue';
 export { default as TeamCard } from './teams/TeamCard.vue';

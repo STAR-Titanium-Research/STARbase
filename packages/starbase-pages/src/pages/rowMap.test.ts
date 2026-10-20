@@ -43,13 +43,20 @@ describe('record page Process map buttons', () => {
 		['SamplePage.vue', 'physical_samples'],
 		['OperationPage.vue', 'manufacturing_operations'],
 		['TestPage.vue', 'test_sessions'],
-		['ProjectPage.vue', 'projects'],
 		['CampaignPage.vue', 'campaigns'],
 	];
 	it.each(pages)('%s builds mapPath(%s, id) and puts it on a Process map button', (file, collection) => {
 		const src = readFileSync(join(here, file), 'utf8');
 		expect(src).toContain(`const mapTo = computed(() => mapPath('${collection}', props.id));`);
 		expect(src).toMatch(/<v-button [^>]*:to="mapTo" title="Process map" aria-label="Process map">/);
+	});
+	// The Project page hands the path to its hero head, which holds the button.
+	it('ProjectPage.vue builds mapPath(projects, id) and hands it to the head, which puts it on a Process map button', () => {
+		const page = readFileSync(join(here, 'ProjectPage.vue'), 'utf8');
+		expect(page).toContain(`const mapTo = computed(() => mapPath('projects', props.id));`);
+		expect(page).toContain(':map-to="mapTo"');
+		expect(readFileSync(join(here, 'projects/ProjectHero.vue'), 'utf8')).toContain(':map-to="mapTo"');
+		expect(readFileSync(join(here, 'projects/ProjectHead.vue'), 'utf8')).toMatch(/<v-button [^>]*:to="mapTo" title="Process map" aria-label="Process map">/);
 	});
 });
 

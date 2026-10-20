@@ -223,7 +223,20 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
 `npm run build:extensions` at the repo root so the rebuilt `d1-lab-dashboard` and
 `d1-composition-bar` load, and apply migrations 138 and 139.
 
-- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** Open a project with a campaign and equipment
+- [ ] **PP2 — Project page hero.** Open a project that has campaigns, planned operations and tests, and several
+  people with access, in light and dark. Expect: the **timeline** shows the project bar and one bar per dated
+  campaign, weekly bars for done operations and tests, and planned work as hollow circles (operations) and hollow
+  diamonds (tests) after **Today**; a planned operation's marker sits on its own planned date (check one west of UTC
+  if you can). If the activity read fails, the timeline still shows the bars and a note. The range control (30 d, 6 mo, All) changes the chart, and the chosen range is
+  still set after a reload on the same device. A range with no work shows one line of text in place of the chart.
+  The totals show "n planned" under each count. The people row shows six faces, then up to three fading ones, and
+  its counts (PI, investigators, "more have access") match the list. **Who has access** opens the dialog.
+  Campaigns are raised cards on the ground, with complete ones folded behind "Show n complete campaigns".
+  **Equipment used** tiles are grey tiles, and each name is a link. At 390px, 1280px and 1920px the hero follows the
+  spec's table: one column under 700px; timeline full width from 700px to 1499px; timeline in two thirds from 1500px,
+  with about and totals beside it. Check each width in light and dark. Spec:
+  `docs/superpowers/specs/2026-10-20-project-page-hero-design.md`. Since: Project page hero (PR pending).
+- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** (Superseded in part by **PP2**: once the hero lands, equipment tiles are grey tiles and Activity is the hero timeline; check the campaign cards and equipment links here.) Open a project with a campaign and equipment
   on its operations (for example macrozone cubes), in light and dark. Expect: the campaign card in **Campaigns** looks the
   same as on the Campaigns list in Cards view (white, rounded, shadowed); each **Equipment used** tile is white too and its
   name is a link that opens that equipment's page. On a project whose operations and tests are all undated or older than 26

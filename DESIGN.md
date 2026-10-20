@@ -71,7 +71,13 @@ The ladder is **ground → surface → tile**. Never put a tile colour on the gr
 |---|---|---|---|
 | `--d1-control-line` | `#868c93` (3.4:1 on white) | `#66717c` (3.5:1) | Outlines of controls a person must find: segmented controls, inputs. WCAG 1.4.11 needs 3:1; `--d1-line` is 1.35:1 |
 | `--d1-panel-line` | `--d1-line` | `#30363d` | Panel borders. In dark, a panel is only 1.09:1 against the ground, so the border carries the edge |
-| `--d1-chart-2` | `#d0459a` (4.2:1 on white) | `#ff99dd` | Second chart series (tests). The theme's `#ff99dd` is 1.9:1 on white |
+
+### Chart series
+
+| Token | Light | Dark | Usage |
+|---|---|---|---|
+| `--d1-chart-1` | `#2a78d6` | `#3987e5` | Operations; slot 1 of every chart |
+| `--d1-chart-2` | `#d0459a` (4.2:1 on white) | `#ff99dd` | Tests; second series. The theme's `#ff99dd` is 1.9:1 on white |
 
 ### Text
 
@@ -89,7 +95,7 @@ The ladder is **ground → surface → tile**. Never put a tile colour on the gr
 | `--d1-accent` | `#18222f` | `#a8bed8` (primary lifted 65% toward the text) | Kit text, icons, borders and fills in the brand colour: record links, the kind pill, count chips, the current-page bar, active segment |
 | `--d1-on-accent` | `#ffffff` | `#0d1117` | Text or icon on a solid accent fill |
 | `--d1-tint` | accent at 10% | accent at 10% | Icon wells, soft accent backgrounds |
-| `--theme--secondary` | `#ff99dd` | `#ff99dd` | Sign-in wash only, plus the tests series in charts |
+| `--theme--secondary` | `#ff99dd` | `#ff99dd` | Sign-in wash only. Charts use `--d1-chart-2` for tests |
 
 Always write `var(--d1-accent, var(--theme--primary))`. Some kit components also render outside the page frame,
 where `--d1-accent` is not set.
@@ -172,11 +178,13 @@ All in `@d1/ui` (`packages/d1-ui/src/components`, `.../nav`). Pages compose thes
 | `SegmentedControl` | Primitive | One-of-N radio group (Table or Cards, density) | on (accent fill), hover, focus-visible |
 | `ProgressBar` | Primitive | "n of m" bar with text | 6px track; empty when max is 0 |
 | `Sparkline`, `CompositionBar` | Primitive | Inline charts | Follow the `dataviz` skill |
+| `ProjectTimeline` | Component | The Project page's one-axis timeline: project and campaign bars, done work per week, planned markers, Today | Range 30 d, 6 mo or All (`SegmentedControl`); one-line empty state |
 | `RecordLink`, `AppLink` | Primitive | Every record link (via `recordRoute()`) | Accent 600, underline on hover |
 | `PinToggle` | Primitive | Pin a page to the sidebar | pinned or not |
 | `LoadState`, `NotVisible` | Component | Loading, error, and "Not found or not visible to you" | |
 | `EditDrawer` | Pattern | Edit a record through the collection's own form | |
 | `AccessDialog` | Pattern | Share a record with people and teams | |
+| `PeopleStack` | Component | Everyone with access as faces | Six full, then three fading; opens Who has access (`AccessDialog`) |
 | `ExplorerNav`: `SidebarExpanded`, `SidebarRail`, `NavHoverMenu` | Pattern | The dark sidebar: Find, Home, Inbox, pins, five sections | expanded (224px), rail (60px icons, tooltips, 224px hover menus) |
 | `PlainFrame` (STARbase) | Template | Sticky page header: title, breadcrumb, actions | 44px, one row (PR 356); static on phones |
 
@@ -184,7 +192,7 @@ All in `@d1/ui` (`packages/d1-ui/src/components`, `.../nav`). Pages compose thes
 - **View rail:** every index and record page puts its viewing settings in one small hanging card on the right, the
   mirror of `RecordRail` on the left. It shows only the settings that apply to that page. Rules in section 5.
 - **Pin on title hover:** the pin moves out of the header actions to a button beside the title, shown on hover or focus.
-- **Activity under the rail:** the record's activity chart moves from the main column to a card under the left rail.
+- **Activity under the rail:** the record's activity chart moves from the main column to a card under the left rail (not the Project page, which has the hero timeline).
 
 ---
 
@@ -205,6 +213,18 @@ heads the content column and sets `--d1-header-offset` (52px: header plus gap). 
 **Pin on the title.** Any page that can be pinned shows a pin button right after the page title, only while the
 pointer is over the title (or the button has keyboard focus). Filled when the page is pinned; the tooltip says "Pin to
 the sidebar" or "Unpin from the sidebar". There is no Pin button among the header actions.
+
+**Project page hero.** The Project page does not use `RecordLayout`: it has no record rail. It is a full-width
+hero surface (title, people row, timeline, about, totals), then campaigns as raised cards on the ground, then
+panels. The hero reacts to the page's own width:
+
+| Page width | Hero |
+|---|---|
+| < 700px | One column: head, timeline, about, totals |
+| 700–1499px | Head; timeline full width; about and totals side by side |
+| ≥ 1500px | Head; timeline in two thirds; about and totals stacked beside it |
+
+The full spec is `docs/superpowers/specs/2026-10-20-project-page-hero-design.md`.
 
 **The View rail (Proposed).** One right-hand card for *how* a page is shown, on index and record pages alike. It
 is a hanging card like `RecordRail`: surface, 1px line, 12px radius, `--d1-shadow`, a 40px tile lid with a sliders

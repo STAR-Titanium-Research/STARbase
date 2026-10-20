@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref } from 'vue';
 import {
-	CURRENT_USER, countsByKey, datesByKey, errorText, fetchActivityRows, useItems, useRequestGate, weeklyActivity, DEFAULT_WEEKS,
+	CURRENT_USER, countsByKey, datesByKey, errorText, fetchActivityRows, useItems, useRequestGate, weeklyActivity, windowStart, DEFAULT_WEEKS,
 	type ProjectRow, type WeeklyActivity,
 } from '@d1/ui';
 
@@ -113,7 +113,7 @@ export function useProjectsIndex() {
 			})(),
 			(async () => {
 				try {
-					const rows = await fetchActivityRows(getItems);
+					const rows = await fetchActivityRows(getItems, undefined, { since: windowStart() });
 					if (!gate.isCurrent(token)) return;
 					const ops = datesByKey(rows.ops, (r) => r.project_id, (r) => r.operation_date);
 					const tests = datesByKey(rows.tests, (r) => r.project_id, (r) => r.session_date);
@@ -124,6 +124,8 @@ export function useProjectsIndex() {
 					}
 					activity.value = out;
 					truncated.value = rows.truncated;
+					// One collection unreadable by this role: the other's series still draw, with the failure said.
+					if (rows.failed.length) activityError.value = rows.failed.map((f) => `Could not load ${f.collection} activity: ${errorText(f.error)}`).join(' ');
 				} catch (e: any) {
 					if (gate.isCurrent(token)) activityError.value = `Could not load activity: ${errorText(e)}`;
 				}
