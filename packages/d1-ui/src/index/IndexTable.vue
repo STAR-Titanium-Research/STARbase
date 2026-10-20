@@ -9,7 +9,7 @@ import { rowAccent } from './accent';
 import RowMapButton from './RowMapButton.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { cellText, groupHeader, plotCode, sortDirection, sortKey } from './indexView';
+import { cellText, groupRuns, plotCode, sortDirection, sortKey } from './indexView';
 import { PICK_ATTR } from './pickMode';
 import type { RowPlots } from './plotData';
 import type { Density } from './listPrefs';
@@ -57,7 +57,8 @@ function ariaSort(c: ColumnDef): 'ascending' | 'descending' | undefined {
 }
 const arrow = (c: ColumnDef) => (sortDirection(props.sort, sortKey(c)) === 'asc' ? '▲' : sortDirection(props.sort, sortKey(c)) === 'desc' ? '▼' : '');
 const colCount = computed(() => (props.ticks ? 1 : 0) + (props.showThumb ? 1 : 0) + props.def.columns.length + (props.hasPlots ? 1 : 0) + (props.hasMap ? 1 : 0));
-const header = (i: number): string | null => (props.groupOf ? groupHeader(props.rows, i, props.groupOf) : null);
+// One <tbody> per group, headed by a row header cell, so a screen reader announces the group.
+const runs = computed(() => groupRuns(props.rows, props.groupOf));
 const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.format === 'code' });
 </script>
 
@@ -79,20 +80,21 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 				<th v-if="hasMap" class="plots"><span class="sr-only">Process map</span></th>
 			</tr>
 		</thead>
-		<tbody>
-			<template v-if="loading && !rows.length">
-				<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
-					<td v-if="ticks" />
-					<td v-if="showThumb" class="thumb"><span class="bar" /></td>
-					<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
-					<td v-if="hasPlots" class="plots" />
-					<td v-if="hasMap" class="plots" />
-				</tr>
-			</template>
-			<template v-else>
-				<template v-for="(row, i) in rows" :key="rowKey(row)">
-				<tr v-if="header(i) !== null" class="group"><th :colspan="colCount" scope="colgroup">{{ header(i) }}</th></tr>
+		<tbody v-if="loading && !rows.length">
+			<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
+				<td v-if="ticks" />
+				<td v-if="showThumb" class="thumb"><span class="bar" /></td>
+				<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
+				<td v-if="hasPlots" class="plots" />
+				<td v-if="hasMap" class="plots" />
+			</tr>
+		</tbody>
+		<template v-else>
+			<tbody v-for="(run, n) in runs" :key="n">
+				<tr v-if="run.label !== null" class="group"><th :colspan="colCount" scope="rowgroup">{{ run.label }}</th></tr>
 				<tr
+					v-for="row in run.rows"
+					:key="rowKey(row)"
 					class="row"
 					:class="{ on: pick && isPicked(row), taken: pick && isTaken(row) }"
 					:[PICK_ATTR]="pick ? rowKey(row) : undefined"
@@ -138,9 +140,8 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 						<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 					</td>
 				</tr>
-				</template>
-			</template>
-		</tbody>
+			</tbody>
+		</template>
 	</DataTable>
 </template>
 

@@ -4,12 +4,13 @@
 // first line is a real link (or a button for a drawer row), a click anywhere else on the row opens it, a tick
 // column when the list has a select action or is picking, and the Force / FAST / map buttons at the end. It draws
 // what IndexPage hands it and reports clicks.
+import { computed } from 'vue';
 import { rowAccent } from './accent';
 import { cardFacts, cardHead } from './cardFacts';
 import RowMapButton from './RowMapButton.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import type { IndexDef } from './indexConfig';
-import { groupHeader, plotCode } from './indexView';
+import { groupRuns, plotCode } from './indexView';
 import { PICK_ATTR } from './pickMode';
 import type { RowPlots } from './plotData';
 import type { Density } from './listPrefs';
@@ -39,7 +40,7 @@ const props = defineProps<{
 const emit = defineEmits<{ open: [row: Row]; toggle: [row: Row]; rowLink: [event: MouseEvent, row: Row] }>();
 
 const SKELETONS = Array.from({ length: 8 }, (_, i) => i);
-const header = (i: number): string | null => (props.groupOf ? groupHeader(props.rows, i, props.groupOf) : null);
+const runs = computed(() => groupRuns(props.rows, props.groupOf));
 </script>
 
 <template>
@@ -47,9 +48,11 @@ const header = (i: number): string | null => (props.groupOf ? groupHeader(props.
 		<li v-for="n in SKELETONS" :key="n" class="row skeleton" :class="density"><span class="bar wide" /><span class="bar" /></li>
 	</ul>
 	<ul v-else class="list">
-		<template v-for="(row, i) in rows" :key="rowKey(row)">
-			<li v-if="header(i) !== null" class="group" role="presentation">{{ header(i) }}</li>
+		<template v-for="(run, n) in runs" :key="n">
+			<li v-if="run.label !== null" class="group" role="presentation"><div role="heading" aria-level="3">{{ run.label }}</div></li>
 			<li
+				v-for="row in run.rows"
+				:key="rowKey(row)"
 				class="row"
 				:class="[density, { on: pick && isPicked(row), taken: pick && isTaken(row) }]"
 				:[PICK_ATTR]="pick ? rowKey(row) : undefined"

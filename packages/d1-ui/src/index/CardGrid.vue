@@ -4,11 +4,12 @@
 // the def's columns. The `thumb` slot (a picture per row) and `footer` slot (the row's buttons) go
 // to the text card; they are only drawn when the page fills them. While the first page loads it
 // shows skeleton cards in the same grid, so nothing jumps when the rows arrive.
+import { computed } from 'vue';
 import type { IndexDef } from './indexConfig';
 import { cardFacts, cardHead } from './cardFacts';
 import TextCard from './TextCard.vue';
 import { rowAccent } from './accent';
-import { groupHeader } from './indexView';
+import { groupRuns } from './indexView';
 import { PICK_ATTR } from './pickMode';
 
 type Row = Record<string, unknown>;
@@ -31,7 +32,7 @@ const props = defineProps<{
 	groupOf?: ((row: Row) => string) | null;
 }>();
 const emit = defineEmits<{ open: [row: Row] }>();
-const header = (i: number): string | null => (props.groupOf ? groupHeader(props.rows, i, props.groupOf) : null);
+const runs = computed(() => groupRuns(props.rows, props.groupOf));
 
 const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 </script>
@@ -41,9 +42,9 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 		<li v-for="n in SKELETONS" :key="n" class="skeleton"><span class="bar wide" /><span class="bar" /><span class="bar short" /></li>
 	</ul>
 	<ul v-else class="card-grid" :class="{ wide }">
-		<template v-for="(row, i) in rows" :key="rowKey(row)">
-		<li v-if="header(i) !== null" class="group" role="presentation">{{ header(i) }}</li>
-		<li :[PICK_ATTR]="pick ? rowKey(row) : undefined">
+		<template v-for="(run, n) in runs" :key="n">
+		<li v-if="run.label !== null" class="group" role="presentation"><div role="heading" aria-level="3">{{ run.label }}</div></li>
+		<li v-for="row in run.rows" :key="rowKey(row)" :[PICK_ATTR]="pick ? rowKey(row) : undefined">
 			<slot name="card" :row="row" :data="data?.get(rowKey(row)) ?? null" :loading="!!dataLoading">
 				<TextCard
 					:link="cardHead(def, row).link"

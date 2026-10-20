@@ -272,10 +272,17 @@ export function rowGroupLabel(def: IndexDef, field: string, row: Row): string {
 	return text || `No ${f.label.toLowerCase()} or not visible`;
 }
 
-/** The header to draw above row `i`: its group's label when it starts a group, else null. */
-export function groupHeader(rows: readonly Row[], i: number, labelOf: (row: Row) => string): string | null {
-	const label = labelOf(rows[i]);
-	return i === 0 || labelOf(rows[i - 1]) !== label ? label : null;
+/** The rows of the page in runs of one group, each with the header to draw above it (null for every row of a list that is not grouped). */
+export function groupRuns<T extends Row>(rows: readonly T[], labelOf?: ((row: Row) => string) | null): { label: string | null; rows: T[] }[] {
+	if (!labelOf) return [{ label: null, rows: [...rows] }];
+	const runs: { label: string | null; rows: T[] }[] = [];
+	for (const row of rows) {
+		const label = labelOf(row);
+		const last = runs.at(-1);
+		if (last && last.label === label) last.rows.push(row);
+		else runs.push({ label, rows: [row] });
+	}
+	return runs;
 }
 
 // ---- the View rail's summary ------------------------------------------------------------------

@@ -5,7 +5,7 @@ import type { Bookmark } from '../nav/navConfig';
 import { recordRoute } from '../recordRoute';
 import { DEFAULT_LIST_PREFS } from './listPrefs';
 import {
-	flipSort, groupHeader, pageCount, rowGroupLabel, splitSort, viewChanged, viewSummary,
+	flipSort, groupRuns, pageCount, rowGroupLabel, splitSort, viewChanged, viewSummary,
 	BOOL_OPTIONS, cellText, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, hasNextPage,
 	nextSort, queryForState, sortKey, rangeText, relationKey, relationOptionParams, relationOptions, relationText, sortDirection, withChange,
 	validSort, withSelected, selectionRoute, SELECT_MAX, rowOpen,
@@ -168,10 +168,12 @@ describe('group headers', () => {
 		expect(rowGroupLabel(tests, 'campaign_id', { campaign_id: { campaign_code: null, name: 'Untitled run' } })).toBe('Untitled run');
 		expect(rowGroupLabel(tests, 'campaign_id', { campaign_id: { campaign_code: null, name: null } })).toBe('No campaign or not visible');
 	});
-	it('draws a header above the first row of each run, and not between rows of one', () => {
+	it('puts the rows in runs of one group, a header for each run and none inside one', () => {
 		const rows = [{ s: 'a' }, { s: 'a' }, { s: 'b' }, { s: 'a' }];
 		const label = (r: Record<string, unknown>) => String(r.s);
-		expect(rows.map((_, i) => groupHeader(rows, i, label))).toEqual(['a', null, 'b', 'a']);
+		expect(groupRuns(rows, label).map((r) => [r.label, r.rows.length])).toEqual([['a', 2], ['b', 1], ['a', 1]]);
+		expect(groupRuns(rows, null)).toEqual([{ label: null, rows }]);
+		expect(groupRuns([], label)).toEqual([]);
 	});
 });
 

@@ -185,9 +185,16 @@ describe('group by', () => {
 		await settle();
 		expect(itemCalls.at(-1)?.sort).toEqual(['current_status', '-created_at']);
 		expect($$('tr.group').map((t) => t.textContent)).toEqual(['active', 'consumed']);
+		// One body per group, headed by a row-group header cell, and the rows follow it.
+		expect($$('table.d1-table > tbody')).toHaveLength(2);
+		expect($$('tbody > tr.group > th').map((t) => t.getAttribute('scope'))).toEqual(['rowgroup', 'rowgroup']);
+		expect($$('tbody')[0].querySelectorAll('tr.row')).toHaveLength(2);
 		expect(saved().groupBy).toBe('current_status');
 		await click($$('[aria-label="Layout"] button')[2]);
 		expect($$('li.group').map((t) => t.textContent)).toEqual(['active', 'consumed']);
+		expect($$('li.group > [role="heading"]').map((t) => t.getAttribute('aria-level'))).toEqual(['3', '3']);
+		await click($$('[aria-label="Layout"] button')[1]);
+		expect($$('.card-grid > li.group > [role="heading"]').map((t) => t.textContent)).toEqual(['active', 'consumed']);
 	});
 
 	it('names a row without the value (or one the person may not read) "No project or not visible"', async () => {
