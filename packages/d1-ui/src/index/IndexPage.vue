@@ -14,7 +14,7 @@
 // `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
 // With `pick` the page is a row picker, opened over another page (the process map's sample picker): its state is kept in
 // memory, not in the URL; a click on a row ticks it instead of opening it; a button hands the ticked rows back (`pick` event,
-// pickMode.ts); the links, Plots, Process map, Pin, New and Data Studio buttons are not drawn.
+// pickMode.ts); the links, Plots, Process map, New and Data Studio buttons are not drawn.
 import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import '../components/tokens.css';
@@ -27,6 +27,7 @@ import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
 import { pinTargetForIndex } from '../components/pinTarget';
+import type { PinTarget } from '../components/pagePin';
 import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -60,7 +61,7 @@ const props = defineProps<{
 	/** What the confirm button counts ("Add 3 samples"); the def's title by default. */
 	pickNouns?: PickNouns;
 }>();
-const emit = defineEmits<{ pick: [rows: PickedRow[]] }>();
+const emit = defineEmits<{ pick: [rows: PickedRow[]]; pin: [target: PinTarget | null] }>();
 
 const host: ExplorerHost = useExplorerHost();
 // Picker mode keeps the list's state in memory: the page it is opened over keeps its own address (and has no router to ask).
@@ -204,11 +205,13 @@ watch(
 onBeforeUnmount(() => cardGate.cancel());
 
 // ---- pin ------------------------------------------------------------------------------------
-// The header's Pin toggle pins the saved view when one is open, else the page. A saved view that is
-// not available (deleted, or not the person's to see) is not pinnable, and the page is not offered
-// in its place: the toggle would then say something other than what is shown.
+// The Pin button after the page title is the host frame's (pagePin.ts). The frame is this component's
+// ancestor, so it cannot inject from here: the page reports what the button pins as `pin`, and the route
+// above provides it (IndexRoute). It is the saved view when one is open, else the page. A saved view that
+// is not available (deleted, or not the person's to see) is not pinnable, and the page is not offered in
+// its place: the button would then say something other than what is shown.
 const pinTarget = computed(() => (bookmarkUnavailable.value ? null : pinTargetForIndex(canonicalPath(route.path), state.value.bookmark)));
-const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.value.find((b) => b.id === state.value.bookmark)?.bookmark ?? props.def.title) : props.def.title));
+watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 </script>
 
 <template>
@@ -222,8 +225,6 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				:def="def"
 				:pick="pick"
 				:range="rangeText(state.page, rows.length, total)"
-				:pin-target="pinTarget"
-				:pin-label="pinLabel"
 				:pick-text="pickState.text.value"
 				:pick-count="pickState.count.value"
 				:picked-count="sel.picked.value.length"

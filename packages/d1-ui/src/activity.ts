@@ -18,6 +18,11 @@
 
 export const DEFAULT_WEEKS = 26;
 
+/** How far back a chart looks: that many weeks (the last one is this week), or everything on record. */
+export type ActivityWindow = number | 'all';
+/** "All" never draws fewer weeks than the shortest range (5, "30 d"), so a young project still has a line. */
+export const MIN_ALL_WEEKS = 5;
+
 export interface WeekInfo {
 	/** The Monday that starts the week, as YYYY-MM-DD (local calendar). */
 	start: string;
@@ -101,12 +106,34 @@ export function binWeekly(
 	return counts;
 }
 
+// The number of weeks a window draws: the count itself, or for "all" the weeks from the oldest date to now.
+export function windowWeeks(
+	span: ActivityWindow,
+	dates: ReadonlyArray<string | Date | null | undefined>,
+	now: Date = new Date(),
+): number {
+	if (span !== 'all') return span;
+	const current = weekStart(now);
+	let weeks = MIN_ALL_WEEKS;
+	for (const value of dates) {
+		if (value === null || value === undefined || value === '') continue;
+		const d = value instanceof Date ? value : new Date(value);
+		if (Number.isNaN(d.getTime()) || d > now) continue;
+		const first = weekStart(d);
+		// Whole weeks between two Mondays, counted on calendar fields so a DST change cannot make it 6.96.
+		const apart = Math.round((Date.UTC(current.getFullYear(), current.getMonth(), current.getDate()) - Date.UTC(first.getFullYear(), first.getMonth(), first.getDate())) / (7 * DAY_MS));
+		weeks = Math.max(weeks, apart + 1);
+	}
+	return weeks;
+}
+
 export function weeklyActivity(
 	opDates: ReadonlyArray<string | Date | null | undefined>,
 	testDates: ReadonlyArray<string | Date | null | undefined>,
-	count: number = DEFAULT_WEEKS,
+	span: ActivityWindow = DEFAULT_WEEKS,
 	now: Date = new Date(),
 ): WeeklyActivity {
+	const count = windowWeeks(span, [...opDates, ...testDates], now);
 	const ops = binWeekly(opDates, count, now);
 	const tests = binWeekly(testDates, count, now);
 	const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);

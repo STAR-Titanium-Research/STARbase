@@ -4,10 +4,10 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
+	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
 	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
 	type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin,
 	mapPath,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
@@ -77,6 +77,8 @@ const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('test_sessions', props.id));
 const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+providePagePin(pin);
 </script>
 
 <template>
@@ -115,8 +117,6 @@ const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 							<span>›</span><HiddenLink label="Sample" />
 						</template>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="typeText" /></template>
 
 					<template #rail>
 						<RecordRail kind="Test" :code="typeText" :facts="railFacts" :contents="contents">

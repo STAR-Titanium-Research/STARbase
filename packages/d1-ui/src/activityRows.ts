@@ -1,4 +1,4 @@
-import { DEFAULT_WEEKS, windowStart } from './activity';
+import { DEFAULT_WEEKS, windowStart, type ActivityWindow } from './activity';
 import { anyProjectFilter, effectiveProjectId, effectiveProjectIdFields, projectScopeFilter } from './projectScope';
 
 // Reads the dates of the operations and tests inside the sparkline window, for one project or for
@@ -25,14 +25,16 @@ export interface ActivityRows {
 export async function fetchActivityRows(
 	getItems: GetItems,
 	projectId?: string,
-	weeks: number = DEFAULT_WEEKS,
+	span: ActivityWindow = DEFAULT_WEEKS,
 	now: Date = new Date(),
 ): Promise<ActivityRows> {
-	const since = windowStart(weeks, now);
+	// "All" reads every dated row (newest first, up to the cap), so the oldest ones are what a busy project loses.
+	const inWindow = (dateField: string) =>
+		span === 'all' ? { [dateField]: { _nnull: true } } : { [dateField]: { _gte: windowStart(span, now) } };
 	const scope = projectId ? projectScopeFilter(projectId) : anyProjectFilter();
 	const read = async (collection: string, dateField: string) => {
 		const rows = await getItems(collection, {
-			filter: { _and: [scope, { [dateField]: { _gte: since } }] },
+			filter: { _and: [scope, inWindow(dateField)] },
 			fields: [...effectiveProjectIdFields, dateField],
 			sort: [`-${dateField}`],
 			limit: ACTIVITY_ROW_CAP,

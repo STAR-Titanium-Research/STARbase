@@ -4,10 +4,10 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AppLink, openLink, AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, RecordViewRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin, provideRecordView,
 	mapPath,
 } from '@d1/ui';
 import { dimsText } from '../geometry';
@@ -72,6 +72,10 @@ const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(pr
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('physical_samples', props.id));
 const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+providePagePin(pin);
+// The View rail's settings (panels, table density, empty sections), one set for every sample page on this device.
+provideRecordView('sample');
 </script>
 
 <template>
@@ -104,8 +108,6 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 						</template>
 					</template>
 
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
-
 					<template #rail>
 						<RecordRail :kind="sampleKind(sample)" :code="code" :title="sample.nickname" :facts="railFacts" :contents="contents">
 							<template #kind-icon><v-icon name="science" x-small /></template>
@@ -123,6 +125,8 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							<template #extra><SampleGeometry :dims="dims" /></template>
 						</RecordRail>
 					</template>
+
+					<template #view><RecordViewRail kind="sample" /></template>
 
 					<SampleDetails
 						:sample="sample"

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { AppLink, CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, thumbKind } from '@d1/ui';
-import type { CampaignStats } from '@d1/ui';
+import { computed, ref } from 'vue';
+import { AppLink, CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, providePagePin, thumbKind } from '@d1/ui';
+import type { CampaignStats, PinTarget } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import IndexThumb from './index/IndexThumb.vue';
 
@@ -16,12 +16,15 @@ const isCampaigns = computed(() => def.value?.collection === 'campaigns');
 // Samples, equipment, tools, insert types, manufacturers and operations have a picture per row (in a
 // roomy row and on a card): the `thumb` slot is only filled for those, so other lists draw none.
 const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !== null);
+// What the title's Pin button pins: the page reports it (a saved view changes it), the frame under this route draws the button.
+const pin = ref<PinTarget | null>(null);
+providePagePin(computed(() => (def.value ? pin.value : null)));
 </script>
 
 <template>
 	<ExplorerView :title="def?.title ?? 'No such page'">
 		<!-- Keyed on the slug: moving from one collection to another starts a fresh page. -->
-		<IndexPage v-if="def" :key="def.slug" :def="def" :card-data="isCampaigns ? campaignCardStats : undefined">
+		<IndexPage v-if="def" :key="def.slug" :def="def" :card-data="isCampaigns ? campaignCardStats : undefined" @pin="pin = $event">
 			<template v-if="isCampaigns" #card="{ row, data, loading }">
 				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" raised />
 			</template>
