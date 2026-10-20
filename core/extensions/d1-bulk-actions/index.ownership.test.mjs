@@ -656,7 +656,10 @@ test('undo of assign_team by the previous owner is refused (Ruling O5: she can n
   assert.equal(r.body.state, 'partly_reverted');
   assert.deepEqual(r.body.results.map((x) => [x.revert_outcome, x.reason]), [['refused', 'You can no longer manage this record, so it cannot be handed back. Ask an administrator to revert it.']]);
   assert.equal(row(h.tables, 'physical_samples', S.one).owner_team_id, T.alpha, 'left as it is');
-  assert.equal(h.tables.bulk_actions.find((a) => a.action_id === out.action_id).mail_state, 'cancelled', 'an undo cancels the mail');
+  assert.equal(h.tables.bulk_actions.find((a) => a.action_id === out.action_id).mail_state, 'pending', 'a refused undo changed nothing, so the mail still goes');
+  assert.equal(h.log.timers[0].cleared, false);
+  await h.fire(0);
+  assert.deepEqual(h.log.mail.map((m) => m.to), ['eve@login.example'], 'the manager of the new owner team is told');
   const rev = await revert(h, admin(U.admin), out.action_id);
   assert.equal(rev.body.state, 'reverted');
   const one = row(h.tables, 'physical_samples', S.one);
@@ -771,12 +774,50 @@ test('share_access with a person mails them; with a team mails each active membe
   h.log.mail.length = 0;
   await ranOk(h, member(U.ann), shareBody([S.two, S.three], team(T.alpha), 'view'));
   await h.fire();
-  // Alpha: Eve (login address), Bob (login address), Cy (a login with no address: nothing), Nell (no login: her People address), Zed (inactive), Ann (the actor)
-  assert.deepEqual(h.log.mail.map((m) => m.to).sort(), ['bob@login.example', 'eve@login.example', 'nell@people.example']);
+  // Alpha: Eve and Bob (login addresses); not Cy (a login with no address), Nell (no login), Zed (inactive) or Ann (the actor)
+  assert.deepEqual(h.log.mail.map((m) => m.to).sort(), ['bob@login.example', 'eve@login.example']);
   assert.ok(h.log.mail.every((m) => /gave you access to 2 samples via Alpha lab/.test(m.subject)));
-  const nell = h.log.mail.find((m) => m.to === 'nell@people.example');
-  assert.doesNotMatch(nell.text, /https:\/\//, 'a person with no login is mailed no link');
-  assert.match(nell.text, /cannot open some of them yet/);
+});
+
+test('a person with no login is mailed at their People address with no link', async () => {
+  const h = setup();
+  await ranOk(h, member(U.ann), shareBody([S.one, S.two], person(P.nell), 'view'));
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 1);
+  assert.equal(h.log.mail[0].to, 'nell@people.example');
+  assert.doesNotMatch(h.log.mail[0].text, /https:\/\//);
+  assert.match(h.log.mail[0].text, /cannot open some of them yet/);
+});
+
+test('a changed level mails nobody (only a new grant is told), and a mix mails only the new ones', async () => {
+  const h = setup();
+  await ranOk(h, member(U.ann), shareBody([S.one], person(P.bob), 'edit')); // Bob had Can view: a change
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 0);
+  assert.equal(h.tables.bulk_actions[0].mail_state, 'sent');
+  const mixed = await ranOk(h, member(U.ann), shareBody([S.one, S.two], person(P.bob), 'view')); // S.one: edit to view (a change), S.two: new
+  assert.equal(mixed.counts.applied, 2);
+  await h.fire();
+  assert.equal(h.log.mail.length, 1);
+  assert.match(h.log.mail[0].subject, /sample SM-002/, 'only SM-002 is new');
+  assert.doesNotMatch(h.log.mail[0].text, /SM-001/);
+  const teams = await ranOk(h, member(U.ann), shareBody([S.three], team(T.beta), 'edit')); // Beta had Can view on S.three: a change
+  await h.fire();
+  assert.equal(h.log.mail.length, 1, 'a team level change mails nobody');
+  assert.equal(teams.counts.applied, 1);
+});
+
+test('an undo that put only some records back leaves the mail pending for the rest', async () => {
+  const h = setup();
+  const out = await ranOk(h, member(U.ann), shareBody([S.one, S.two], person(P.eve), 'view'));
+  h.tables.sample_access.push({ sample_id: S.one, person_id: P.cy, role: 'view', team_access_id: null }); // S.one changed since: its undo is changed_since
+  const r = await undo(h, member(U.ann), out.action_id);
+  assert.equal(r.body.state, 'partly_reverted');
+  assert.equal(h.tables.bulk_actions.find((a) => a.action_id === out.action_id).mail_state, 'pending');
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 1);
+  assert.match(h.log.mail[0].subject, /sample SM-001/, 'the one still applied; SM-002 was put back and is not announced');
+  assert.doesNotMatch(h.log.mail[0].text, /SM-002/);
 });
 
 test('a recipient who cannot read a record gets its code but no link', async () => {

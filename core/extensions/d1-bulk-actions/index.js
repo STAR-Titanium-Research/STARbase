@@ -925,9 +925,10 @@ export function mount(router, context, clock = () => new Date(), timers = {}) {
           after: o.revert_outcome === 'reverted' ? JSON.stringify(o.after) : null,
         })));
       }
-      // The held summary mail: an undo cancels it; so does a revert that put anything back (the mail would announce what is no longer so). This runs under the
-      // action's row lock, and the sender claims the mail under the same lock, so one of the two wins and never both.
-      const cancelMail = action.mail_state === 'pending' && (mode === 'undo' || revertedNow > 0);
+      // The held summary mail is cancelled when the action ends undone or reverted (every changed record is back). An undo that was refused (Ruling O5: the
+      // change stands) or only partly done leaves it pending: the mail then lists what is still so. This runs under the action's row lock, and the sender
+      // claims the mail under the same lock, so one of the two wins and never both.
+      const cancelMail = action.mail_state === 'pending' && (state === 'undone' || state === 'reverted');
       await lock('bulk_actions').where('action_id', actionId).update({ state, ...(cancelMail ? { mail_state: 'cancelled' } : {}) });
       return { state, revertId, outs, revertedNow, cancelMail };
     });
@@ -1038,7 +1039,8 @@ export function mount(router, context, clock = () => new Date(), timers = {}) {
     if (!team) return [];
     const ids = (await database('team_members').where('team_id', team.team_id).select('person_id')).map((m) => m.person_id);
     const people = ids.length ? await database('people').whereIn('person_id', ids).select(...PERSON_COLUMNS) : [];
-    return people.filter(keep).map((person) => ({ person, mode: 'share', role, teamName: team.name }));
+    // like the Who-has-access mail to a team's members: active people with a login (their login's address)
+    return people.filter((p) => keep(p) && !isBlank(p.user_id)).map((person) => ({ person, mode: 'share', role, teamName: team.name }));
   }
 
   // The records among `ids` this person can open now (their readers rows; an administrator opens all; a person with no login none)
@@ -1049,12 +1051,20 @@ export function mount(router, context, clock = () => new Date(), timers = {}) {
     return new Set(rows.map((r) => String(r.record_id)));
   }
 
+  // Like the Who-has-access routes, only a NEW grant is mailed: a changed level (a person or team already on the record's list before) tells nobody.
+  function isNewGrant(r, params) {
+    const before = parseJson(r.before) ?? {};
+    return params.person_id
+      ? !(before.people ?? []).some((p) => p.person_id === params.person_id)
+      : !(before.teams ?? []).some((t) => t.team_id === params.team_id);
+  }
+
   async function deliverMail(action, schema, tally) {
     const cfg = COLLECTIONS[action.collection];
     const params = parseJson(action.params) ?? {};
     // built from the journal now: what was applied and has not been put back since
     const rows = (await database('bulk_action_rows').where('action_id', action.action_id).select())
-      .filter((r) => r.outcome === 'applied' && r.revert_outcome !== 'reverted')
+      .filter((r) => r.outcome === 'applied' && r.revert_outcome !== 'reverted' && (action.kind !== 'share_access' || isNewGrant(r, params)))
       .sort((a, b) => String(a.record_code ?? '').localeCompare(String(b.record_code ?? '')) || String(a.record_id).localeCompare(String(b.record_id)));
     if (!cfg || !rows.length) return;
     const recipients = await mailRecipients(action, params, cfg);
