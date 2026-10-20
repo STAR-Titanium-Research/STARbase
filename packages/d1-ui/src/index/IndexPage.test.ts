@@ -30,7 +30,7 @@ function fakeHost(): ExplorerHost {
 	return { api: { get }, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(null) } as unknown as ExplorerHost;
 }
 
-async function render(props: Record<string, unknown>, opts: { router?: boolean } = {}): Promise<string> {
+async function render(props: Record<string, unknown>, opts: { router?: boolean; path?: string } = {}): Promise<string> {
 	const host = fakeHost();
 	setExplorerHostFactory(() => host);
 	// The page waits for the sidebar's collections and views before it reads rows; a watcher never fires in a server render, so settle that first.
@@ -41,8 +41,8 @@ async function render(props: Record<string, unknown>, opts: { router?: boolean }
 	// The rows arrive from an async load that starts in setup: wait for it before each component renders.
 	app.mixin({ serverPrefetch: () => new Promise((r) => setTimeout(r, 15)) });
 	if (opts.router !== false) {
-		const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }] });
-		await router.push('/home/samples');
+		const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/home/:slug', component: { render: () => null } }, { path: '/:slug', component: { render: () => null } }] });
+		await router.push(opts.path ?? '/home/samples');
 		await router.isReady();
 		app.use(router);
 	}
@@ -68,6 +68,13 @@ describe('IndexPage, normal mode (unchanged)', () => {
 		expect(html).not.toContain('data-pick-key');
 		expect(html).not.toContain('picking');
 		expect(text(html)).not.toMatch(/Add (\d+ )?samples?/);
+	});
+
+	it('reports what the title pin pins (the frame draws the button), and draws no Pin button itself', async () => {
+		const pins: unknown[] = [];
+		const html = await render({ onPin: (t: unknown) => pins.push(t) }, { path: '/samples' });
+		expect(pins).toEqual([{ kind: 'page', target: 'samples' }]);
+		expect(text(html)).not.toMatch(/\bPin\b/);
 	});
 
 	it('ticks only for lists with a select action', async () => {
