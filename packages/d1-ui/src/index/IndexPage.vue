@@ -157,7 +157,6 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 
 // ---- ticked rows: every list ticks; kept across pages, in the order ticked -----------------------------
 // In picker mode rows already taken are not tickable, so "tick every row on this page" leaves them out.
-const ticks = true;
 const tickable = computed(() => (props.pick ? rows.value.filter((r) => !pickState.isTaken(r)) : rows.value));
 const sel = useRowSelection(props.def, tickable, rowKey, (to) => host.navigate(to));
 const root = ref<unknown>(null);
@@ -292,8 +291,8 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || hasMap || ticks" #footer="{ row }">
-						<label v-if="ticks" class="tick">
+					<template #footer="{ row }">
+						<label class="tick">
 							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="pickState.isTaken(row) || (!sel.isPicked(row) && sel.full.value)" @change="sel.toggle(row)" />
 							<span>{{ pickState.isTaken(row) ? 'Already added' : 'Select' }}</span>
 						</label>
@@ -315,7 +314,6 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					:has-plots="hasPlots"
 					:has-map="hasMap"
 					:pick="pick"
-					:ticks="ticks"
 					:is-picked="sel.isPicked"
 					:is-taken="pickState.isTaken"
 					:all-picked="sel.allPicked.value"
@@ -337,7 +335,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				</div>
 			</div>
 
-			<p v-if="ticks && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
+			<p v-if="sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
