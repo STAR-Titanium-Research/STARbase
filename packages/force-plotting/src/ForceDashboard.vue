@@ -68,7 +68,8 @@ const isAdminRole = computed(() => {
 
 const AXES = VIEW_AXES;
 type Axis = ViewAxis;
-const AXIS_COLOR: Record<Axis, string> = { Fx: '#dc2626', Fy: '#16a34a', Fz: '#2563eb' };  // red / green / blue
+// DESIGN.md 5b series slots: blue / orange / teal (the --d1-series tokens, with their light values as fallback)
+const AXIS_COLOR: Record<Axis, string> = { Fx: 'var(--d1-series-1, #2a78d6)', Fy: 'var(--d1-series-2, #eb6834)', Fz: 'var(--d1-series-3, #1baf7a)' };
 
 const loading = ref(true);
 const rows = ref<any[]>([]);
@@ -1834,7 +1835,7 @@ const PEAK_FIELD: Record<string, string> = { Fx: 'peak_fx', Fy: 'peak_fy', Fz: '
 function buildChartsFor(item: RPanel) {
 	const d = detail.value;
 	const sel = (item.channels && item.channels.length ? item.channels : AXES) as readonly Axis[];
-	const secondXLabel = 'radial (mm)';
+	const secondXLabel = 'Radius (mm)';
 	const base = AXES.filter((a) => sel.includes(a)).map((a) => (
 		effectiveMode.value === 'force'
 			? { key: a, title: `${a} · force`, kind: 'env' as const, data: d?.series?.[a], color: AXIS_COLOR[a], xUnit: 's', yUnit: 'N',
@@ -1844,7 +1845,7 @@ function buildChartsFor(item: RPanel) {
 			: { key: a, title: `${a} · spectrum`, kind: 'line' as const, data: d?.fft?.[a], color: AXIS_COLOR[a], xUnit: 'Hz', yUnit: 'N', logY: true }
 	));
 	if (effectiveMode.value === 'force' && item.rpm) {
-		base.push({ key: 'RPM', title: 'RPM', kind: 'env', data: detail.value?.series?.RPM, color: '#a855f7', xUnit: 's', yUnit: 'rpm',
+		base.push({ key: 'RPM', title: 'RPM', kind: 'env', data: detail.value?.series?.RPM, color: 'var(--theme--foreground-subdued, #64748b)', xUnit: 's', yUnit: 'rpm',
 			cropStart: activeCrop.value?.start, cropEnd: activeCrop.value?.end,
 			secondXValues: radialValuesFor(detail.value?.series?.RPM?.t), secondXLabel } as any);
 	}
@@ -2992,6 +2993,7 @@ function fmtDateTime(v: string | null | undefined) {
 								<ForceChart v-for="c in chartsFor(item)" v-bind="c" :key="c.key" :hover="hoverSource" @hover="hoverIndex = $event"
 									:crop-editable="c.kind === 'env'" :active="c.key === axis"
 									:overlay="(chartMode === 'fft' && filtersOpen && c.kind === 'line' && c.key === axis) ? filterFftOverlay : null"
+									:filter-chain="c.kind === 'line' ? specChain : null" :rpm="editRpm"
 									:view-start="zoomStart" :view-end="zoomEnd" :zoom-tool="rectZoomTool" @zoom="onChartZoom"
 									@update:crop-start="onCropEdit('start', $event)" @update:crop-end="onCropEdit('end', $event)"
 									:mark-x="c.kind === 'env' && chartMode === 'force' ? markTime : null" menu @chartmenu="openChartMenu" />
