@@ -62,6 +62,14 @@ export function notchDb(f: number, f0: number, q: number, nyquist: number): numb
 	return toDb(mag2(g, -2 * g * c0, g) / mag2(1, -2 * g * c0, 2 * g - 1));
 }
 
+/** The rotation speed the service notches at: the mean of the cache's rpm channel (0 when empty). */
+export function meanRpm(rpm: ArrayLike<number> | null | undefined): number {
+	if (!rpm || !rpm.length) return 0;
+	let s = 0;
+	for (let i = 0; i < rpm.length; i++) s += rpm[i];
+	return s / rpm.length;
+}
+
 /** The notch frequencies of a chain (Hz): each harmonic times the rotation frequency. */
 export function notchFrequencies(chain: FilterChain, rpm: number | null | undefined, nyquist: number): number[] {
 	const f0 = (rpm ?? 0) / 60;

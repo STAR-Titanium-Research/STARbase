@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultChain, type FilterChain } from './filterChain';
-import { butterDb, FLOOR_DB, filterResponse, fmtHz, logFrequencies, notchDb, notchFrequencies, stopBands } from './filterResponse';
+import { butterDb, FLOOR_DB, filterResponse, fmtHz, logFrequencies, meanRpm, notchDb, notchFrequencies, stopBands } from './filterResponse';
 
 const NY = 12800;
 const chainWith = (patch: (c: FilterChain) => void): FilterChain => { const c = defaultChain(); patch(c); return c; };
@@ -100,6 +100,11 @@ describe('stopBands and helpers', () => {
 	it('lists notch frequencies below Nyquist only', () => {
 		const c = chainWith((x) => { x.notch = { on: true, harmonics: [1, 1000], q: 30 }; });
 		expect(notchFrequencies(c, 1200, NY)).toEqual([20]);
+	});
+	it('takes the mean of the rpm channel, as the service does', () => {
+		expect(meanRpm(new Float32Array([1000, 1200, 1400]))).toBeCloseTo(1200);
+		expect(meanRpm([])).toBe(0);
+		expect(meanRpm(null)).toBe(0);
 	});
 	it('formats frequencies', () => {
 		expect([50, 2000, 3200, 12800, 0.5].map((f) => fmtHz(f))).toEqual(['50 Hz', '2 kHz', '3.2 kHz', '12.8 kHz', '0.5 Hz']);
