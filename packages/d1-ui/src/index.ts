@@ -56,7 +56,7 @@ export { campaignTypeLabel, operationCategoryFor } from './campaign/campaignType
 export {
 	DEFAULT_WEEKS, weeklyActivity, datesByKey,
 } from './activity';
-export type { WeeklyActivity } from './activity';
+export type { ActivityWindow, WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
@@ -86,6 +86,10 @@ export { default as AppLink } from './components/AppLink.vue';
 export { default as SegmentedControl } from './components/SegmentedControl.vue';
 export { default as ViewRail } from './components/ViewRail.vue';
 export { default as ViewRailSection } from './components/ViewRailSection.vue';
+export { default as RecordViewRail } from './components/RecordViewRail.vue';
+export { provideRecordView, useRecordView } from './composables/useRecordView';
+export { ACTIVITY_RANGES, activityPeriod, activityWindow } from './record/recordView';
+export type { ActivityRange, RecordView } from './record/recordView';
 export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';

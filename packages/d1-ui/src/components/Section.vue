@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, useId } from 'vue';
+import { useRecordView } from '../composables/useRecordView';
 
 // A titled block of a page, drawn as the force app's panel: an opaque body under a lid that holds
 // the title, the count and the actions. An empty section is its lid only: the title, a zero count
-// and the "nothing recorded" text on the one line, with no body under it.
+// and the "nothing recorded" text on the one line, with no body under it. On a record page whose View rail
+// says Hide for empty sections (useRecordView), an empty section is not drawn at all; PageContents counts it.
 const props = defineProps<{
 	title: string;
 	/** The element id, so the contents list of a record page (PageContents) can scroll to the section. */
@@ -17,12 +19,13 @@ const props = defineProps<{
 	emptyText?: string;
 }>();
 const open = ref(!props.collapsed);
+const view = useRecordView();
 // Names the region for screen readers (it was aria-labelledby on Home's blocks before the restyle).
 const titleId = useId();
 </script>
 
 <template>
-	<section :id="id" class="d1-section" :class="{ empty }" :aria-labelledby="titleId">
+	<section v-if="!(empty && view?.empty === 'hide')" :id="id" class="d1-section" :class="{ empty }" :aria-labelledby="titleId">
 		<header class="head" :class="{ clickable: collapsible && !empty }" @click="collapsible && !empty && (open = !open)">
 			<v-icon v-if="collapsible && !empty" :name="open ? 'expand_more' : 'chevron_right'" small />
 			<h2 :id="titleId">{{ title }}</h2>

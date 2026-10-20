@@ -1,14 +1,15 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
-	DEFAULT_WEEKS, LIST_CAP, countsByKey, errorText, fetchActivityRows, isNotVisible, loadCampaignStats,
+	LIST_CAP, activityWindow, countsByKey, errorText, fetchActivityRows, isNotVisible, loadCampaignStats,
 	projectScopeFilter, sampleProjectScopeFilter, useItems, useRequestGate, useSections, weeklyActivity,
-	type CampaignProgress, type SectionState, type WeeklyActivity,
+	type ActivityRange, type CampaignProgress, type SectionState, type WeeklyActivity,
 } from '@d1/ui';
 
 // Everything the Project page reads, as the signed-in user (so Directus permissions apply). Reads
 // the real collections, not `project_rollup`, which ADR-0011 restricts. The project decides between
 // "page" and "Not found or not visible to you"; every other block is a section that loads in
-// parallel and fails on its own, so one forbidden collection does not blank the page.
+// parallel and fails on its own, so one forbidden collection does not blank the page. The activity
+// chart's range (the View rail) reloads that one section only, on a gate of its own.
 
 const PROJECT_FIELDS = [
 	'project_id', 'project_code', 'project_name', 'description', 'document_number', 'is_active',
@@ -35,10 +36,12 @@ export interface EquipmentUse {
 	operations: number;
 }
 
-export function useProjectData(id: Ref<string>) {
+export function useProjectData(id: Ref<string>, range: Ref<ActivityRange>) {
 	const { getItems, getItem } = useItems();
 	const gate = useRequestGate();
 	const { section: block, fill } = useSections(gate);
+	const activityGate = useRequestGate();
+	const { fill: fillActivity } = useSections(activityGate);
 
 	const project = ref<any | null>(null);
 	const loading = ref(false);
@@ -104,6 +107,18 @@ export function useProjectData(id: Ref<string>) {
 			.sort((a, b) => b.operations - a.operations || a.name.localeCompare(b.name));
 	}
 
+	// The chart for the chosen range. A newer call (another range, another project) replaces this one.
+	function loadActivity(projectId: string) {
+		const span = activityWindow(range.value);
+		return fillActivity(activity, activityGate.begin(), 'activity', async () => {
+			const rows = await fetchActivityRows(getItems, projectId, span);
+			return {
+				data: weeklyActivity(rows.ops.map((r) => r.operation_date), rows.tests.map((r) => r.session_date), span),
+				truncated: rows.truncated,
+			};
+		});
+	}
+
 	async function load() {
 		const token = gate.begin();
 		const projectId = id.value;
@@ -112,6 +127,7 @@ export function useProjectData(id: Ref<string>) {
 		// Reloading the same project (after an edit) keeps what is on screen; another project starts clean.
 		if (project.value?.project_id !== projectId) {
 			project.value = null;
+			activityGate.cancel();
 			for (const b of all) b.value = { data: b === activity ? { data: null, truncated: false } : b === counts ? { samples: null, operations: null, tests: null, campaigns: null } : [], loading: false, error: '' };
 		}
 		if (!projectId) return;
@@ -181,19 +197,19 @@ export function useProjectData(id: Ref<string>) {
 					limit: LIST_CAP + 1,
 				}),
 			),
-			fill(activity, token, 'activity', async () => {
-				const rows = await fetchActivityRows(getItems, projectId);
-				return {
-					data: weeklyActivity(rows.ops.map((r) => r.operation_date), rows.tests.map((r) => r.session_date), DEFAULT_WEEKS),
-					truncated: rows.truncated,
-				};
-			}),
+			loadActivity(projectId),
 			fill(equipment, token, 'equipment', () => loadEquipment(projectId)),
 		]);
 	}
 
 	watch(id, load, { immediate: true });
-	onBeforeUnmount(() => gate.cancel());
+	watch(range, () => {
+		if (project.value) void loadActivity(project.value.project_id);
+	});
+	onBeforeUnmount(() => {
+		gate.cancel();
+		activityGate.cancel();
+	});
 
 	return {
 		project, loading, notVisible, error,

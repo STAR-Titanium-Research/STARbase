@@ -3,9 +3,9 @@ import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, DEFAULT_WEEKS, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, RecordViewRail, Section, Sparkline, activityPeriod, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
-	pinTargetForRecord, providePagePin,
+	pinTargetForRecord, providePagePin, provideRecordView,
 	mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
@@ -20,10 +20,12 @@ import UnassignedLists from './projects/UnassignedLists.vue';
 // here when it grows a project report.
 const props = defineProps<{ id: string }>();
 
+// The View rail's settings (panels, table density, empty sections, activity range), one set for every project page on this device.
+const view = provideRecordView('project');
 const {
 	project, loading, notVisible, error, investigators, counts, campaigns, looseSamples, looseOperations,
 	looseTests, activity, equipment, reload,
-} = useProjectData(toRef(props, 'id'));
+} = useProjectData(toRef(props, 'id'), toRef(view, 'range'));
 
 const editing = ref(false);
 // "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
@@ -109,6 +111,8 @@ providePagePin(pin);
 						</RecordRail>
 					</template>
 
+					<template #view><RecordViewRail kind="project" range /></template>
+
 					<Section v-if="project.description" id="description" title="Description"><p class="description">{{ project.description }}</p></Section>
 
 					<CampaignCards :campaigns="campaigns" :project-id="id" />
@@ -123,7 +127,7 @@ providePagePin(pin);
 							title="Activity"
 							:count="activityCount"
 							:empty="!activity.loading && !activity.error && activityCount === 0"
-							:empty-text="`No operations or tests in the last ${DEFAULT_WEEKS} weeks.`"
+							:empty-text="`No operations or tests${activityPeriod(view.range)}.`"
 						>
 							<LoadState :loading="activity.loading" :error="activity.error">
 								<Sparkline

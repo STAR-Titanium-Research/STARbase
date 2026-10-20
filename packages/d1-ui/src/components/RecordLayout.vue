@@ -1,9 +1,17 @@
 <script setup lang="ts">
+import { useRecordView } from '../composables/useRecordView';
 import './tokens.css';
 
 // A record page with a side rail: a breadcrumb line, then the rail (left, sticky) beside the
 // main column. The rail is 300px wide; a page that needs more sets `--d1-rail-width` on this component's root
-// (the tooling pages use 360px for their tall stage). Slots: `crumbs`, `title-actions` (buttons at the right of the breadcrumb line, e.g. Pin), `rail` (a RecordRail, or anything), and the default slot (the panels).
+// (the tooling pages use 360px for their tall stage). Slots: `crumbs`, `title-actions` (buttons at the right of the breadcrumb line), `rail` (a RecordRail, or anything), `view` (a RecordViewRail,
+// a third column on the right) and the default slot (the panels).
+//
+// View rail: with a `view` slot the grid has a third column as wide as the rail's own card (220px open,
+// 36px collapsed). The View settings the page provided (useRecordView) set the panels to one stack or two
+// independent stacks side by side (CSS columns, so a short panel stays short and nothing stretches to a
+// row), each at least 360px wide. Under 1100px of the layout's own width the rail is a "View" button
+// (ViewRail turns itself into one) on a row of its own above the record rail.
 //
 // Sticky offset: the rail sticks at `top: var(--d1-sticky-top, 0px)` and its height is capped to the
 // window under it. The default is 0px (no bar above). The page inside the Data Studio sets the height
@@ -18,6 +26,7 @@ import './tokens.css';
 // point down to 840px, for a page whose rail carries something that should stay beside the panels on a
 // laptop with the sidebar open (the tooling pages' tall 3D stage).
 defineProps<{ lateStack?: boolean }>();
+const view = useRecordView();
 </script>
 
 <template>
@@ -26,9 +35,10 @@ defineProps<{ lateStack?: boolean }>();
 			<nav v-if="$slots.crumbs" class="d1-crumbs" aria-label="Breadcrumb"><slot name="crumbs" /></nav>
 			<div v-if="$slots['title-actions']" class="title-actions"><slot name="title-actions" /></div>
 		</div>
-		<div class="grid">
+		<div class="grid" :class="{ 'has-view': $slots.view }">
 			<aside class="rail" aria-label="Record"><slot name="rail" /></aside>
-			<div class="main"><slot /></div>
+			<div class="main" :class="{ 'two-stacks': view?.panels === 2 }"><slot /></div>
+			<slot name="view" />
 		</div>
 	</div>
 </template>
@@ -50,6 +60,17 @@ defineProps<{ lateStack?: boolean }>();
 }
 /* The panels stack with the page frame's 16px gap. */
 .main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* A wrapper whose panels are all hidden (empty sections) is an empty element: it takes no gap. */
+.main > :empty { display: none; }
+.has-view { grid-template-columns: var(--d1-rail-width, 300px) minmax(0, 1fr) auto; }
+/* Two stacks: columns of at most two, each at least 360px, filled top to bottom. A panel never splits. */
+.main.two-stacks { display: block; columns: 2 360px; column-gap: 16px; }
+.main.two-stacks > :deep(*) { break-inside: avoid; margin-bottom: 16px; }
+/* The View rail is a button here: a row of its own at the right, above the rail and the panels. */
+@container (max-width: 1099px) {
+	.has-view { grid-template-columns: var(--d1-rail-width, 300px) minmax(0, 1fr); }
+	.has-view > :deep(.d1-view-rail) { order: -1; grid-column: 1 / -1; }
+}
 @container (max-width: 1000px) {
 	.d1-record-layout:not(.late-stack) .grid { grid-template-columns: minmax(0, 1fr); }
 	.d1-record-layout:not(.late-stack) .rail { position: static; max-height: none; overflow: visible; padding: 0; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
