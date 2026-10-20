@@ -4,7 +4,7 @@
  * chip while one is picked, with a search, "Metadata issues only" and "Show all". Folded (narrow pages) the
  * two panels hide behind a 44px tab that opens them over the operation column.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 export type OpCard = {
 	id: string; row: any; code: string; sub: string;
@@ -37,7 +37,15 @@ function pickOp(row: any) { open.value = false; emit('select-op', row); }
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 function away(ev: Event) { if (open.value && root.value && !root.value.contains(ev.target as Node)) open.value = false; }
-function esc(ev: KeyboardEvent) { if (ev.key === 'Escape') open.value = false; }
+const foldBtn = ref<HTMLElement | null>(null);
+const stack = ref<HTMLElement | null>(null);
+function esc(ev: KeyboardEvent) {
+	if (ev.key !== 'Escape' || !open.value) return;
+	open.value = false;
+	foldBtn.value?.focus();   // back on the tab that opened them
+}
+// opened: focus moves into the lists, to the sample search
+watch(open, (o) => { if (o) nextTick(() => stack.value?.querySelector<HTMLElement>('input')?.focus()); });
 onMounted(() => { document.addEventListener('pointerdown', away); document.addEventListener('keydown', esc); });
 onBeforeUnmount(() => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', esc); });
 watch(() => props.folded, () => { open.value = false; });
@@ -45,11 +53,11 @@ watch(() => props.folded, () => { open.value = false; });
 
 <template>
 	<div ref="root" class="lists fp-lists" :class="{ folded }">
-		<button v-if="folded" class="fold fp-fold fp-panel" :aria-expanded="open" title="Samples and operations" @click="open = !open">
+		<button v-if="folded" ref="foldBtn" class="fold fp-fold fp-panel" :aria-expanded="open" aria-controls="fp-lists-stack" title="Samples and operations" @click="open = !open">
 			<v-icon :name="open ? 'chevron_left' : 'chevron_right'" x-small />
 			<span class="fold-text">Samples<template v-if="selectedCode"> › {{ selectedCode }}</template></span>
 		</button>
-		<div v-show="!folded || open" class="stack" :class="{ over: folded }">
+		<div v-show="!folded || open" id="fp-lists-stack" ref="stack" class="stack" :class="{ over: folded }">
 			<section class="fp-panel part samples" aria-label="Samples">
 				<header class="fp-lid"><span>Samples</span><span class="fp-chip">{{ shown.length }}</span></header>
 				<div class="pad"><label class="fp-search"><v-icon name="search" x-small /><input v-model="sampleSearch" placeholder="Search samples" aria-label="Search samples" /></label></div>

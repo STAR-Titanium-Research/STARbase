@@ -13,6 +13,7 @@ import LoadingOverlay from './LoadingOverlay.vue';
 import { chainSummary } from './filterChain';
 import { useForceCtx } from './forceCtx';
 
+defineProps<{ canClose?: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const { AXES, axis, setAxis, detail, loadingDetail, stacked, octreeOn, gridActive, liveOn, fullResPoints, displayedPoints, resolutionPct, fmtPts, gridFidelityPct,
@@ -27,7 +28,7 @@ const interactive = computed(() => octreeOn.value || liveOn.value);
 </script>
 
 <template>
-	<ForcePanel @close="emit('close')">
+	<ForcePanel :closable="canClose" @close="emit('close')">
 		<template #title><v-icon name="fingerprint" x-small /><span>{{ title }}</span></template>
 		<template #lid>
 			<span v-if="interactive && fullResPoints" class="fp-chip" :title="`Displayed ${displayedPoints.toLocaleString()} of ${fullResPoints.toLocaleString()} full-resolution points`">

@@ -2507,14 +2507,14 @@ provide(FORCE_CTX, shallowReactive({
 						:vertical-compact="true" :use-css-transforms="true">
 						<GridItem v-for="item in rightLayout" :key="item.i" :x="item.x" :y="item.y" :w="item.w" :h="item.h" :i="item.i"
 							:data-panel-id="item.i" drag-allow-from=".pg-grip" :min-w="3" :min-h="7">
-							<ForceSignals v-if="item.type === 'signals'" :item="item" @close="closeRightPanel(item.i)" />
-							<ForceFrm v-else-if="item.type === 'frm'" @close="closeRightPanel(item.i)" />
-							<ForcePanel v-else-if="item.type === 'wear'" title="Wear trend" icon="trending_up" @close="closeRightPanel(item.i)">
+							<ForceSignals v-if="item.type === 'signals'" :item="item" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
+							<ForceFrm v-else-if="item.type === 'frm'" :can-close="rightLayout.length > 1" @close="closeRightPanel(item.i)" />
+							<ForcePanel v-else-if="item.type === 'wear'" title="Wear trend" icon="trending_up" :closable="rightLayout.length > 1" @close="closeRightPanel(item.i)">
 								<WearTrend :detail="detail" />
 							</ForcePanel>
 							<!-- Metadata doctor. Two views over the same diagnose() output: the selected
 							     operation's findings with their fixes, and a scan of the whole archive. -->
-							<ForcePanel v-else-if="item.type === 'doctor'" title="Metadata doctor" icon="health_and_safety" @close="closeRightPanel(item.i)">
+							<ForcePanel v-else-if="item.type === 'doctor'" title="Metadata doctor" icon="health_and_safety" :closable="rightLayout.length > 1" @close="closeRightPanel(item.i)">
 								<template #tools>
 									<span class="fp-seg" role="group" aria-label="Scope">
 										<button :aria-pressed="doctorScope === 'op'" @click="doctorScope = 'op'">This op</button>

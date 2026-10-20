@@ -14,7 +14,7 @@ import { chainActive } from './filterChain';
 import { useForceCtx } from './forceCtx';
 import type { RPanel } from './forceLayout';
 
-const props = defineProps<{ item: RPanel }>();
+const props = defineProps<{ item: RPanel; canClose?: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const { AXES, AXIS_COLOR, CHART_MODES, chartMode, effectiveMode, isSpectral, liveOn, detail, loadingDetail, axis,
@@ -34,7 +34,7 @@ function more(ev: MouseEvent) {
 	openMenu.value(r.left, r.bottom + 4, [
 		{ label: compareOpen.value ? 'Hide the compare bar' : 'Compare with other cuts…', disabled: effectiveMode.value !== 'force', hint: 'Only in Force mode', run: () => { compareOpen.value = !compareOpen.value; } },
 		{ label: 'Reset zoom', disabled: !zoomed.value, hint: 'Not zoomed', run: resetZoom.value },
-		{ label: 'Close panel', run: () => emit('close') },
+		{ label: 'Close panel', disabled: props.canClose === false, hint: 'The last panel stays', run: () => emit('close') },
 	]);
 }
 </script>
