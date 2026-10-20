@@ -6,17 +6,18 @@ import IndexRoute from './pages/IndexRoute.vue';
 import ReportBugPage from './pages/ReportBugPage.vue';
 import CrawlerPage from './pages/CrawlerPage.vue';
 import InboxPage from './pages/InboxPage.vue';
+import InboxFilePage from './inbox/InboxFilePage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
 
 describe('starbaseRoutes', () => {
 	const paths = starbaseRoutes.map((r) => r.path);
 	it('has every page of the Home module', () => {
-		for (const p of ['', 'register-sample', 'people', 'teams/:id', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'inbox', 'map', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
+		for (const p of ['', 'register-sample', 'people', 'teams/:id', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'inbox', 'inbox/file/:candidateId', 'map', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
 			expect(paths).toContain(p);
 		}
 	});
 	it('has no other route', () => {
-		expect(paths).toHaveLength(18);
+		expect(paths).toHaveLength(19);
 	});
 	it('settings resolves to SettingsPage, not IndexRoute', () => {
 		const settings = starbaseRoutes.find((r) => r.path === 'settings');
@@ -35,6 +36,16 @@ describe('starbaseRoutes', () => {
 	it('inbox resolves to InboxPage, ahead of the catch-all', () => {
 		expect(starbaseRoutes.find((r) => r.path === 'inbox')?.component).toBe(InboxPage);
 		expect(paths.indexOf('inbox')).toBeLessThan(paths.indexOf(':slug'));
+	});
+	it('inbox/file/:candidateId resolves to InboxFilePage with the id as a prop, ahead of the catch-all', () => {
+		const record = starbaseRoutes.find((r) => r.path === 'inbox/file/:candidateId');
+		expect(record?.component).toBe(InboxFilePage);
+		expect(record?.props).toBe(true);
+		expect(paths.indexOf('inbox/file/:candidateId')).toBeLessThan(paths.indexOf(':slug'));
+		const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', children: starbaseRoutes }] });
+		const m = router.resolve('/inbox/file/abc?kind=sem_image');
+		expect(m.matched.at(-1)?.components?.default).toBe(InboxFilePage);
+		expect(m.params.candidateId).toBe('abc');
 	});
 	it('serves tool boxes, inserts and edges from one route record, ahead of the catch-all', () => {
 		const record = starbaseRoutes.find((r) => r.path === ':kind(tool-boxes|inserts|edges)/:id');

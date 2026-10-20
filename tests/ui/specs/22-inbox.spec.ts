@@ -113,11 +113,17 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan h
 });
 
 const thumb = (page: Page, name: string) => row(page, name).locator('button[data-test="thumb"]');
-const preview = (page: Page) => page.locator('[data-test="preview-dialog"]');
+const viewBox = (page: Page) => page.locator('[data-test="view-box"]');
 /** The picture really decoded (a blob: URL under the production CSP can be blocked, which leaves a broken image). */
 const decoded = (img: ReturnType<Page['locator']>) => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
+/** A click on the row's picture opens the sheet; its "Open in view box" opens the file's own page. */
+async function openBox(page: Page, name: string) {
+	await thumb(page, name).click();
+	await page.locator('[data-test="sheet-open-box"]').click();
+	await expect(viewBox(page)).toBeVisible();
+}
 
-test('a thumbnail appears in the row, a click opens the full view with its facts and the reduced-size line, and Esc closes it with focus back on the thumbnail', async ({ browser }) => {
+test('a thumbnail appears in the row; a click opens the sheet, Open in view box opens the page of the file with its facts and the reduced-size line, and Esc goes back to the list', async ({ browser }) => {
 	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { previewDelayMs: 800 });
 	const btn = thumb(page, '9ab3c4d5_B2.tif');
 	await expect(btn.locator('img')).toBeVisible();
@@ -125,67 +131,81 @@ test('a thumbnail appears in the row, a click opens the full view with its facts
 	await shot(page, 'inbox-thumbnails');
 	// only the two rows with a picture asked for one, and as the signed-in session (a blob request to d1-inbox, never an <img src> to it)
 	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/thumb'))).toHaveLength(2);
-	await btn.click();
-	const dialog = preview(page);
-	await expect(dialog).toBeVisible();
-	await expect(dialog.getByRole('heading', { name: '9ab3c4d5_B2.tif' })).toBeVisible();
-	await expect(dialog).toContainText('Users/ab1cd/sem');
-	await expect(dialog).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
-	await expect(dialog.locator('[data-test="preview-note"]')).toHaveText('Reduced-size preview. The original stays on the share.');
-	// while the preview loads: a spinner, and the thumbnail enlarged behind it
-	await expect(dialog.locator('[data-test="preview-loading"]')).toBeVisible();
-	await expect(dialog.locator('[data-test="preview-thumb"]')).toBeVisible();
-	// the dialog is outside the page frame (teleported to <body>), so it must bring the --d1-* tokens itself: its hairline and spinner colour resolve
-	await expect(dialog).toHaveCSS('border-top-width', '1px');
-	await expect(dialog.locator('.pv-spinner')).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
-	await shot(page, 'preview-loading');
-	const image = dialog.locator('[data-test="preview-image"]');
+	await openBox(page, '9ab3c4d5_B2.tif');
+	await expect(page).toHaveURL(/\/inbox\/file\/[^/?]+$/);
+	await expect(page.locator('[data-test="box-name"]')).toHaveText('9ab3c4d5_B2.tif');
+	const rail = page.locator('[data-test="file-rail"]');
+	await expect(rail).toContainText('Found file');
+	await expect(rail).toContainText('Users/ab1cd/sem');
+	await expect(rail).toContainText('15 kV · ×5,000 · 2 µm · JEOL');
+	await expect(page.locator('[data-test="box-note"]')).toHaveText('Reduced-size preview. The original stays on the share.');
+	// while the preview loads: a shimmer; then the picture, decoded
+	await expect(page.locator('[data-test="box-loading"]')).toBeVisible();
+	const image = page.locator('[data-test="box-image"]');
 	await expect(image).toBeVisible();
 	await expect.poll(() => decoded(image)).toBe(true);
-	await expect(dialog.locator('[data-test="preview-loading"]')).toHaveCount(0);
-	await shot(page, 'preview-open');
+	await expect(page.locator('[data-test="box-loading"]')).toHaveCount(0);
+	await expect(page.locator('[data-test="box-rail"]')).toBeVisible();
+	await shot(page, 'view-box-open');
 	await page.keyboard.press('Escape');
-	await expect(dialog).toBeHidden();
-	await expect(btn).toBeFocused();
+	await expect(page).toHaveURL(/\/inbox$/);
+	await expect(row(page, '9ab3c4d5_B2.tif')).toBeVisible();
 	expect(errors).toEqual([]);
 	await page.context().close();
 });
 
-test('the full view closes on a click outside and on Close, keeps Tab inside, and a second open asks again', async ({ browser }) => {
-	const { page } = await start(browser, '/inbox');
-	const btn = thumb(page, '3fa9c1d2_A1.tif');
-	await btn.click();
-	const dialog = preview(page);
-	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
-	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
-	await page.keyboard.press('Tab');
-	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
-	await page.keyboard.press('Shift+Tab');
-	await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
-	await page.mouse.click(5, 5);
-	await expect(dialog).toBeHidden();
-	await expect(btn).toBeFocused();
-	await btn.click();
-	await expect(dialog).toBeVisible();
-	await dialog.getByRole('button', { name: 'Close' }).click();
-	await expect(dialog).toBeHidden();
-	await expect(btn).toBeFocused();
+test('the view box moves between the files of the list with its arrows and keeps the filters of the list; Close goes back to that list', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox?kind=sem_image', 1280);
+	await openBox(page, '3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="box-position"]')).toHaveText('1 of 2');
+	await expect(page.locator('[data-test="box-prev"]')).toBeDisabled();
+	await page.locator('[data-test="box-next"]').click();
+	await expect(page.locator('[data-test="box-name"]')).toHaveText('9ab3c4d5_B2.tif');
+	await expect(page.locator('[data-test="box-position"]')).toHaveText('2 of 2');
+	await expect(page).toHaveURL(/kind=sem_image/);
+	await page.keyboard.press('ArrowLeft');
+	await expect(page.locator('[data-test="box-name"]')).toHaveText('3fa9c1d2_A1.tif');
+	await page.locator('[data-test="box-close"]').click();
+	await expect(page).toHaveURL(/\/inbox\?kind=sem_image$/);
+	expect(await names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif']);
+	// the browser's Back from the page goes straight to the list, however many files were stepped through
+	await openBox(page, '3fa9c1d2_A1.tif');
+	await page.locator('[data-test="box-next"]').click();
+	await page.goBack();
+	await expect(page).toHaveURL(/\/inbox\?kind=sem_image$/);
+	await page.context().close();
+});
+
+test('Fit and 1:1 and the overlays work on the picture and are remembered; a file that is not in the list says so', async ({ browser }) => {
+	const { page } = await start(browser, '/inbox', 1280);
+	await openBox(page, '3fa9c1d2_A1.tif');
+	await expect.poll(() => decoded(page.locator('[data-test="box-image"]'))).toBe(true);
+	await page.getByRole('radio', { name: '1:1' }).click();
+	await expect(viewBox(page)).toHaveAttribute('data-zoom', 'actual');
+	await page.keyboard.press('f');
+	await expect(viewBox(page)).toHaveAttribute('data-zoom', 'fit');
+	await page.locator('[data-test="toggle-contrast"]').check();
+	await expect(page.locator('[data-test="box-image"]')).toHaveCSS('filter', /contrast/);
+	await page.reload();
+	await expect(page.locator('[data-test="toggle-contrast"]')).toBeChecked();
+	await page.goto(STAR_BASE + '/inbox/file/c0000000-0000-4000-8000-00000000dead');
+	await expect(page.locator('.d1-not-visible')).toContainText('Not found or not visible to you');
 	await page.context().close();
 });
 
 test('a preview that fails says so and Retry loads it; a thumbnail that fails leaves the kind icon, quietly', async ({ browser }) => {
 	const { page, inbox } = await start(browser, '/inbox', 1280, { previewFails: 1 });
+	// With the Sheet, the click would fetch the preview for the sheet and use up the one failure there (and the sheet offers no "Open in view box" for a failed
+	// preview). So the View rail's Preview is View box: the click opens the page, and its own preview request is the one that fails.
+	await page.locator('[data-test="rail-preview"]').getByRole('radio', { name: 'View box' }).click();
 	await thumb(page, '3fa9c1d2_A1.tif').click();
-	const dialog = preview(page);
-	await expect(dialog.locator('[data-test="preview-error"]')).toContainText('The preview could not be loaded.');
-	await expect(dialog.locator('[data-test="preview-note"]')).toBeVisible();
-	await shot(page, 'preview-error');
-	await dialog.getByRole('button', { name: 'Retry' }).click();
-	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
-	await expect(dialog.locator('[data-test="preview-error"]')).toHaveCount(0);
-	// Retry took itself away: focus went to Close, not to the page; the one status region stays and says so
-	await expect(dialog.locator('[data-test="preview-close"]')).toBeFocused();
-	await expect(dialog.getByRole('status')).toHaveText('Preview ready.');
+	await expect(viewBox(page)).toBeVisible();
+	await expect(page.locator('[data-test="box-error"]')).toContainText('The preview could not be loaded.');
+	await expect(page.locator('[data-test="box-note"]')).toBeVisible();
+	await shot(page, 'view-box-error');
+	await page.locator('[data-test="box-retry"]').click();
+	await expect(page.locator('[data-test="box-image"]')).toBeVisible();
+	await expect(page.locator('[data-test="box-error"]')).toHaveCount(0);
 	expect(inbox.pictureStats.paths.filter((p) => p.endsWith('/preview'))).toHaveLength(2);
 	await page.context().close();
 
@@ -197,36 +217,17 @@ test('a preview that fails says so and Retry loads it; a thumbnail that fails le
 	await failing.page.context().close();
 });
 
-test('a thumbnail clicked while it still shimmers and then fails stays under its preview, and focus lands on the row\'s first button when the preview closes', async ({ browser }) => {
-	const { page } = await start(browser, '/inbox', 1280, { thumbFails: true, pictureDelayMs: 700 });
-	const first = row(page, '3fa9c1d2_A1.tif');
-	const btn = thumb(page, '3fa9c1d2_A1.tif');
-	await expect(btn).toHaveAttribute('data-state', 'loading');
-	await btn.click();
-	const dialog = preview(page);
-	await expect(dialog).toBeVisible();
-	await expect.poll(() => btn.getAttribute('data-state')).toBe('failed');
-	await expect(btn).toHaveCount(1);
-	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
-	await page.keyboard.press('Escape');
-	await expect(dialog).toHaveCount(0);
-	await expect(btn).toHaveCount(0);
-	await expect(first.locator('.buttons button').first()).toBeFocused();
-	await page.context().close();
-});
-
-test('the full view fits a phone screen', async ({ browser }) => {
+test('the view box fits a phone screen', async ({ browser }) => {
 	const { page } = await start(browser, '/inbox', 390);
-	await thumb(page, '3fa9c1d2_A1.tif').click();
-	const dialog = preview(page);
-	await expect(dialog.locator('[data-test="preview-image"]')).toBeVisible();
-	const box = (await dialog.boundingBox())!;
+	await openBox(page, '3fa9c1d2_A1.tif');
+	await expect(page.locator('[data-test="box-image"]')).toBeVisible();
+	const box = (await viewBox(page).boundingBox())!;
 	expect(box.x).toBeGreaterThanOrEqual(0);
 	expect(box.x + box.width).toBeLessThanOrEqual(390);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-	await shot(page, 'preview-phone');
-	await dialog.getByRole('button', { name: 'Close' }).click();
-	await expect(dialog).toBeHidden();
+	await shot(page, 'view-box-phone');
+	await page.locator('[data-test="box-close"]').click();
+	await expect(page).toHaveURL(/\/inbox$/);
 	await page.context().close();
 });
 

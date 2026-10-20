@@ -3,15 +3,13 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { AppLink, formatDate, recordRoute, useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import {
-	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, hasThumbnail, kindLabel, nameOf, needsReadNotice, ownerText,
-	primaryAction, sizeText, suggestionOf,
+	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, needsReadNotice, ownerText,
+	primaryAction, settingsOf, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
 import SemSettingsList from './SemSettingsList.vue';
-import { extractedView, settingRows } from './semSettings';
 import { ignoreTarget } from './ignoredFolders';
 import { ADDED_SCAN_LEAD, SCAN_ROW_NOTICE, isAddedScan, scanTarget } from './inboxScan';
-import PreviewDialog from './PreviewDialog.vue';
 import { useInView, usePicture } from './usePicture';
 
 // One found file: its picture (when the crawler stored one: a button that opens the full view) or the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
@@ -25,6 +23,16 @@ const props = defineProps<{
 	showOwner: boolean;
 	/** Offer "Ignore this folder" beside the folder (the server has the route and the person may change rules). */
 	canIgnore?: boolean;
+	/** What a click on the picture or the name opens: the page's sheet beside the list, or the file's own page (the row only says which was asked). */
+	preview?: 'sheet' | 'box';
+	/** This row is the one the sheet shows. */
+	selected?: boolean;
+	/** "Compare two files" is on and this is a picture: the row has a tick box. */
+	comparable?: boolean;
+	/** The row is ticked for Compare. */
+	ticked?: boolean;
+	/** Two other rows are ticked already: this one cannot be (it can still be un-ticked). */
+	tickFull?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'link'): void;
@@ -33,6 +41,12 @@ const emit = defineEmits<{
 	(e: 'change'): void;
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
+	/** The picture or the name was clicked and Preview is Sheet: the page opens its sheet on this file. */
+	(e: 'select'): void;
+	/** The picture or the name was clicked and Preview is View box: the page opens the file's own page. */
+	(e: 'open'): void;
+	/** The Compare tick box was changed. */
+	(e: 'tick', on: boolean): void;
 	/** The button that was pressed, so the page can give focus back to it when the confirm is cancelled. */
 	(e: 'ignore', opener: HTMLElement): void;
 }>();
@@ -44,18 +58,15 @@ const action = computed(() => primaryAction(props.file));
 const read = computed(() => extractedText(props.file.extracted));
 // A row the crawler read with the settings reader carries `sources` or `flags`: its values are listed with their source and marks. An older row
 // (no sources, no flags) keeps the one line above.
-const settings = computed(() => {
-	const view = extractedView(props.file.extracted);
-	return Object.keys(view.sources).length || Object.keys(view.flags).length ? settingRows(view) : [];
-});
+const settings = computed(() => settingsOf(props.file));
 const copy = computed(() => duplicateText(props.file));
-const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
+const meta = computed(() => metaText(props.file));
 const reads = computed(() => needsReadNotice(props.file.kind));
 // "Ignore this folder": only on an open file whose folder sits below its owner's root (the root itself cannot be ignored)
 const ignorable = computed(() => !!props.canIgnore && (props.tab === 'new' || props.tab === 'older') && ignoreTarget(props.file) !== null);
 
 // The icon of its kind is what a row shows when it has no picture, while none is wanted yet, and when the picture fails to load.
-const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
+const icon = computed(() => kindIcon(props.file.kind));
 
 const linkedTo = computed(() => (props.file.linked_collection && props.file.linked_record_id ? recordRoute(props.file.linked_collection, props.file.linked_record_id) : null));
 const suggestedTo = computed(() => (props.file.suggested_collection && props.file.suggested_record_id ? recordRoute(props.file.suggested_collection, props.file.suggested_record_id) : null));
@@ -72,26 +83,23 @@ const withPicture = computed(() => hasThumbnail(props.file));
 const thumbButton = ref<HTMLElement | null>(null);
 const seen = useInView(thumbButton);
 const { state: thumbState, url: thumbUrl } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'thumb', () => seen.value);
-const previewOpen = ref(false);
-// A picture that failed to load is not mentioned: the row shows its icon, as if it had none. While its preview is open the button stays (focus returns
-// to it on close, and it cannot vanish under a person who clicked it while it still shimmered).
-const showButton = computed(() => withPicture.value && (thumbState.value !== 'failed' || previewOpen.value));
+/** A click on the picture or the name: the sheet beside the list, or the file's own page. */
+function chosen() {
+	if (props.preview === 'box') emit('open');
+	else emit('select');
+}
+// A picture that failed to load is not mentioned: the row shows its icon, as if it had none.
+const showButton = computed(() => withPicture.value && thumbState.value !== 'failed');
 const rowEl = ref<HTMLElement | null>(null);
 /** Where focus goes when the thumbnail button is gone (its picture failed): the row's first action button, if it has one. */
 function focusFallback() {
 	rowEl.value?.querySelector<HTMLElement>('.buttons button:not([disabled])')?.focus();
 }
-async function closePreview() {
-	previewOpen.value = false;
-	await nextTick();
-	if (thumbButton.value) thumbButton.value.focus();
-	else focusFallback();
-}
 // A thumbnail that has focus (tabbed to while it shimmered) and then fails is removed: hand the focus on rather than let it fall to <body>.
 watch(
 	thumbState,
 	async (s) => {
-		if (s !== 'failed' || previewOpen.value || !thumbButton.value || document.activeElement !== thumbButton.value) return;
+		if (s !== 'failed' || !thumbButton.value || document.activeElement !== thumbButton.value) return;
 		await nextTick();
 		if (!thumbButton.value) focusFallback();
 	},
@@ -102,7 +110,18 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 </script>
 
 <template>
-	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+	<li ref="rowEl" class="row" :class="{ busy, weak: suggestion?.weak, selected }" :aria-current="selected ? 'true' : undefined" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+		<input
+			v-if="comparable"
+			type="checkbox"
+			class="tick"
+			:checked="ticked"
+			:disabled="busy || (tickFull && !ticked)"
+			:aria-label="`Compare ${name}`"
+			:title="tickFull && !ticked ? 'Two files are ticked already' : 'Tick two files to compare them'"
+			data-test="row-tick"
+			@change="emit('tick', ($event.target as HTMLInputElement).checked)"
+		/>
 		<button
 			v-if="showButton"
 			ref="thumbButton"
@@ -112,23 +131,22 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 			:aria-busy="thumbState === 'loading'"
 			:data-state="thumbState"
 			data-test="thumb"
-			@click="previewOpen = true"
+			@click="chosen"
 		>
 			<img v-if="thumbUrl" :src="thumbUrl" alt="" draggable="false" />
 			<v-icon v-else-if="thumbState === 'failed'" :name="icon" />
 			<span v-else class="shimmer" aria-hidden="true" />
 		</button>
 		<span v-else class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>
-		<PreviewDialog v-if="previewOpen" :file="file" :thumb-url="thumbUrl" @close="closePreview" />
 
 		<div class="main">
 			<div class="line">
-				<span class="name" :title="file.rel_path">{{ name }}</span>
+				<button type="button" class="name name-btn" :title="file.rel_path" data-test="row-name" @click="chosen">{{ name }}</button>
 				<span class="tag" :class="`kind-${file.kind}`">{{ kindLabel(file.kind) }}</span>
 				<span v-if="file.match_strength !== 'none' && suggestion" class="tag strength" :class="{ weak: suggestion.weak }">{{ STRENGTH_LABEL[file.match_strength] }}</span>
 			</div>
 			<div class="sub">
-				<span class="folder" :title="folder">{{ folder || 'Share root' }}</span>
+				<span class="folder" :title="folder">{{ folderText(file.rel_path) }}</span>
 				<button v-if="ignorable" type="button" class="lf-link quiet" :disabled="busy" data-test="ignore-folder" :aria-label="`Ignore the folder ${folder}`" @click="emit('ignore', $event.currentTarget as HTMLElement)">Ignore this folder</button>
 				<span v-if="meta" class="meta">{{ meta }}</span>
 				<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
@@ -164,24 +182,25 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 	</li>
 </template>
 
+<style scoped src="./inboxShared.css"></style>
 <style scoped>
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
+.tick { flex: none; margin: 2px 0 0; width: 16px; height: 16px; align-self: center; accent-color: var(--d1-accent, var(--theme--primary)); cursor: pointer; }
+.tick:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.tick:disabled { cursor: not-allowed; }
+.row.selected { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: inset 3px 0 0 var(--d1-accent, var(--theme--primary)); }
 .thumb { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--d1-surface, var(--theme--background)); border: 1px solid var(--d1-line); color: var(--d1-dim); }
 .thumb.pic { padding: 0; font: inherit; cursor: zoom-in; position: relative; }
 .thumb.pic:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .thumb.pic:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.shimmer {
-	display: block; width: 100%; height: 100%;
-	background: linear-gradient(90deg, var(--d1-line) 25%, color-mix(in srgb, var(--d1-line) 35%, var(--d1-tile)) 50%, var(--d1-line) 75%); background-size: 200% 100%;
-	animation: shimmer 1.4s linear infinite;
-}
-@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .name { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
+.name-btn { padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.name-btn:hover { text-decoration: underline; }
+.name-btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 8px; }
 .tag {
 	padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap;
 	color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent);

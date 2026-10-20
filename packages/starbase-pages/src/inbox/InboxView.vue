@@ -1,21 +1,25 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { LoadState, Section, formatDate, useExplorerHost, useInboxSummary } from '@d1/ui';
+import { LoadState, Section, formatDate, openLink, useExplorerHost, useInboxSummary } from '@d1/ui';
 import AcceptDialog from './AcceptDialog.vue';
 import AddScanDialog from './AddScanDialog.vue';
 import IgnoreFolderDialog from './IgnoreFolderDialog.vue';
 import IgnoredFolders from './IgnoredFolders.vue';
 import InboxFilters from './InboxFilters.vue';
 import InboxRow from './InboxRow.vue';
+import InboxSheet from './InboxSheet.vue';
 import InboxTabs from './InboxTabs.vue';
+import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
-import { DOCUMENT_NOTICE, EMPTY_TEXT, filtersToQuery, parseFilters, type InboxFilters as Filters } from './inboxModel';
+import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
+import { useViewSettings } from './useViewSettings';
+import { viewBoxPath } from './viewBoxModel';
 import '../labels/form.css';
 
 // The Inbox page (/inbox, spec section 10): the found files in the person's folder and their teams' folders, with tabs New, Older files,
@@ -179,10 +183,133 @@ async function accept() {
 	const r = await inbox.confirmAccept();
 	if (r.ok) (region.value as HTMLElement | null)?.focus();
 }
+
+// ---- the sheet: what a click on a file opens (the View rail's Preview setting), the selected row, the keys ----
+const view = useViewSettings();
+// The selected file is kept in this history entry's state when a file's page is opened from here, so Back from the view box lands on the list with the same file
+// selected (the sheet open on it). The state belongs to the entry, so a fresh visit to the list starts with nothing selected.
+const SELECTED_KEY = 'inboxSelected';
+const savedSelection = (): string | null => {
+	const v = (router.options.history.state as Record<string, unknown> | undefined)?.[SELECTED_KEY];
+	return typeof v === 'string' && v ? v : null;
+};
+const selectedId = ref<string | null>(savedSelection());
+const allRows = computed(() => [...main.value.rows, ...other.value.rows]);
+const selected = computed(() => (selectedId.value ? allRows.value.find((f) => f.candidate_id === selectedId.value) ?? null : null));
+// A file that leaves the list (linked, dismissed, ignored) hands the selection to its neighbour (the next row still there, else the one before), or clears it
+// when none is left, so the sheet and the arrow / Enter keys keep working.
+watch(allRows, (now, before) => {
+	const id = selectedId.value;
+	if (!id || now.some((f) => f.candidate_id === id)) return;
+	const here = new Set(now.map((f) => f.candidate_id));
+	const at = before.findIndex((f) => f.candidate_id === id);
+	const after = at < 0 ? [] : before.slice(at + 1).filter((f) => here.has(f.candidate_id));
+	const earlier = at < 0 ? [] : before.slice(0, at).filter((f) => here.has(f.candidate_id));
+	selectedId.value = (after[0] ?? earlier[earlier.length - 1])?.candidate_id ?? null;
+});
+const sheetOn = computed(() => view.settings.preview === 'sheet');
+function select(f: FoundFile) {
+	selectedId.value = f.candidate_id;
+	// bring the sheet into view (it is a block under the list on a narrow page)
+	void nextTick(() => {
+		root.value?.querySelector<HTMLElement>('[data-test="inbox-sheet"]')?.scrollIntoView?.({ block: 'nearest' });
+	});
+}
+const nameButton = (id: string) => root.value?.querySelector<HTMLElement>(`[data-row-id="${id}"] [data-test="row-name"]`) ?? null;
+async function closeSheet() {
+	const id = selectedId.value;
+	selectedId.value = null;
+	await nextTick();
+	// the keyboard user keeps their place: focus goes back to the row that was open
+	if (id) (nameButton(id) ?? root.value?.querySelector<HTMLElement>(`[data-row-id="${id}"] button[data-test="thumb"]`))?.focus();
+}
+// Preview changed to View box while a sheet is open: the sheet goes away.
+watch(sheetOn, (on) => {
+	if (!on) selectedId.value = null;
+});
+
+// ---- Compare: with "Compare two files" on, pictures can be ticked (at most two); opening one of a ticked pair opens the pair side by side ----
+// The ticks are this visit's own: not kept, not in the address. A file that leaves the list, or turning the option off, drops its tick.
+const compareOn = computed(() => view.settings.compareList);
+const ticked = ref<string[]>([]);
+const canTick = (f: FoundFile) => compareOn.value && IMAGE_KINDS.includes(f.kind);
+function tick(f: FoundFile, on: boolean) {
+	const id = f.candidate_id;
+	if (!on) ticked.value = ticked.value.filter((t) => t !== id);
+	else if (!ticked.value.includes(id) && ticked.value.length < 2) ticked.value = [...ticked.value, id];
+}
+watch([allRows, compareOn], () => {
+	const here = new Set(allRows.value.map((f) => f.candidate_id));
+	const keep = compareOn.value ? ticked.value.filter((id) => here.has(id)) : [];
+	if (keep.length !== ticked.value.length) ticked.value = keep;
+});
+/** The other file of a ticked pair, when `id` is one of the two. */
+const partnerOf = (id: string): string | null => (compareOn.value && ticked.value.length === 2 && ticked.value.includes(id) ? ticked.value.find((t) => t !== id) ?? null : null);
+const compareNote = computed(() => (ticked.value.length === 2 ? 'Two files ticked.' : ticked.value.length === 1 ? '1 of 2 files ticked.' : 'Tick two pictures to compare them.'));
+
+// The view box: the file's own page (/inbox/file/<id>), carrying the filters so its previous / next and Close stay in this list, and the compare partner when the file is one of a ticked pair.
+function rememberSelection(): void {
+	const h = router.options.history;
+	try {
+		h.replace(h.location, { ...(h.state as Record<string, unknown>), [SELECTED_KEY]: selectedId.value });
+	} catch {
+		// a history that will not take state: Back then lands on the list with nothing selected
+	}
+}
+const openBox = (f: FoundFile) => {
+	rememberSelection();
+	openLink(viewBoxPath(f.candidate_id, filters.value, partnerOf(f.candidate_id)), router);
+};
+const openPair = () => {
+	if (ticked.value.length !== 2) return false;
+	rememberSelection();
+	openLink(viewBoxPath(ticked.value[0], filters.value, ticked.value[1]), router);
+	return true;
+};
+// The sheet's Link to…: a surface scan is ADDED to an insert or an edge (the row's own button), anything else is linked through the record picker.
+const sheetLink = (f: FoundFile) => (primaryAction(f).kind === 'scan' ? openScan(f) : openDialog(f));
+
+const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open;
+const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
+// Up / Down and Left / Right all move the selection: the view box steps with Left / Right, so the same keys work in the sheet.
+const ARROWS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+function onKey(e: KeyboardEvent) {
+	if (!selectedId.value || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+	if (e.key !== 'Escape' && e.key !== 'Enter' && !ARROWS.includes(e.key)) return;
+	if (anyDialogOpen()) return;
+	const t = e.target instanceof Element ? e.target : null;
+	if (e.key === 'Escape') {
+		if (t?.closest('input, textarea, select, [role="dialog"]')) return;
+		e.preventDefault();
+		void closeSheet();
+		return;
+	}
+	if (e.key === 'Enter') {
+		// Enter opens the selected file's page, but never takes the key from a control: a button or link answers Enter itself, except the selected row's own name and picture.
+		const own = t?.closest<HTMLElement>('[data-test="row-name"], [data-test="thumb"]');
+		const mine = own?.closest<HTMLElement>('[data-row-id]')?.dataset.rowId === selectedId.value;
+		if (t?.closest(`${TYPING}, button, a[href], summary`) && !mine) return;
+		if (!selected.value) return;
+		e.preventDefault();
+		openBox(selected.value);
+		return;
+	}
+	if (t?.closest(TYPING)) return;
+	const ids = rowEls().map((el) => el.dataset.rowId ?? '');
+	const at = ids.indexOf(selectedId.value);
+	const to = at < 0 ? -1 : at + (e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1);
+	if (to < 0 || to >= ids.length) return;
+	e.preventDefault();
+	selectedId.value = ids[to];
+	rowEls()[to]?.scrollIntoView?.({ block: 'nearest' });
+}
+onMounted(() => document.addEventListener('keydown', onKey));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-	<div ref="root" class="inbox">
+	<div ref="root" class="frame">
+	<div class="inbox">
 		<div class="head">
 			<p class="lead">
 				<template v-if="noFolder">{{ NO_FOLDER_TEXT }}</template>
@@ -235,6 +362,14 @@ async function accept() {
 			<p v-if="error" class="banner bad">{{ error }}</p>
 		</div>
 
+		<div v-if="compareOn" class="cmpbar" data-test="compare-bar">
+			<span class="hint" data-test="compare-note">{{ compareNote }}</span>
+			<v-button small :disabled="ticked.length !== 2" data-test="compare-open" @click="openPair()">Compare them</v-button>
+			<button v-if="ticked.length" type="button" class="lf-link" data-test="compare-clear" @click="ticked = []">Clear the ticks</button>
+		</div>
+
+		<div class="work">
+		<div class="listcol">
 		<LoadState v-if="loading && !main.rows.length" loading loading-text="Loading your Inbox…" />
 		<p v-else-if="nothing" class="d1-note" data-test="empty">{{ EMPTY_TEXT[tab] }}</p>
 
@@ -253,6 +388,14 @@ async function accept() {
 					:busy="inbox.isBusy(f.candidate_id)"
 					:show-owner="showOwner"
 					:can-ignore="canIgnore"
+					:preview="view.settings.preview"
+					:selected="selectedId === f.candidate_id"
+					:comparable="canTick(f)"
+					:ticked="ticked.includes(f.candidate_id)"
+					:tick-full="ticked.length >= 2"
+					@select="select(f)"
+					@open="openBox(f)"
+					@tick="tick(f, $event)"
 					@ignore="openIgnore(f, $event)"
 					@link="linkRow(f)"
 					@pick="openDialog(f)"
@@ -287,6 +430,14 @@ async function accept() {
 							:busy="inbox.isBusy(f.candidate_id)"
 							:show-owner="showOwner"
 							:can-ignore="canIgnore"
+							:preview="view.settings.preview"
+							:selected="selectedId === f.candidate_id"
+							:comparable="canTick(f)"
+							:ticked="ticked.includes(f.candidate_id)"
+							:tick-full="ticked.length >= 2"
+							@select="select(f)"
+							@open="openBox(f)"
+							@tick="tick(f, $event)"
 							@ignore="openIgnore(f, $event)"
 							@link="linkRow(f)"
 							@pick="openDialog(f)"
@@ -300,6 +451,22 @@ async function accept() {
 				<button v-if="other.rows.length < other.total" type="button" class="lf-btn more" @click="inbox.loadMoreOther()">Show more ({{ other.total - other.rows.length }} left)</button>
 			</LoadState>
 		</Section>
+		</div>
+
+		<InboxSheet
+			v-if="selected && sheetOn"
+			:key="selected.candidate_id"
+			:file="selected"
+			:tab="tab"
+			:show-owner="showOwner"
+			:busy="inbox.isBusy(selected.candidate_id)"
+			@close="closeSheet()"
+			@link="sheetLink(selected)"
+			@dismiss="dismissRow(selected)"
+			@restore="restoreRow(selected)"
+			@open-box="openBox(selected)"
+		/>
+		</div>
 
 		<LinkDialog v-model="dialogOpen" :file="dialogFile" :busy="dialogBusy" :error="dialogError" @choose="choose" />
 
@@ -309,15 +476,30 @@ async function accept() {
 
 		<AcceptDialog :dialog="inbox.acceptDialog.value" :busy="inbox.accepting.value" @confirm="accept" @cancel="inbox.closeAccept()" />
 	</div>
+	<InboxViewRail
+		:preview="view.settings.preview"
+		:compare="view.settings.compareList"
+		:open="view.settings.railOpen"
+		@update:preview="view.set({ preview: $event })"
+		@update:compare="view.set({ compareList: $event })"
+		@update:open="view.set({ railOpen: $event })"
+	/>
+	</div>
 </template>
 
 <style scoped>
-.inbox { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.frame { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; min-width: 0; container: inbox-frame / inline-size; }
+.inbox { flex: 1 1 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.work { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
+.listcol { flex: 1 1 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* Narrow pages: the View rail goes above the list (its own CSS, which gives it the full width and order -1), and under 700px the sheet is a block under the list. */
+@container inbox-frame (max-width: 700px) { .work { flex-direction: column; align-items: stretch; } }
 .head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
 .lead { margin: 0; flex: 1 1 320px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); line-height: 1.5; }
 .status { display: flex; flex-direction: column; gap: 8px; }
 .status:empty { display: none; }
 .status:focus { outline: none; }
+.cmpbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .accept { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .hint { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .banner {
