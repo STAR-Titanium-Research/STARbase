@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { campaignStatusParts, parseTimelineRange, projectDatesText, plannedFromCounts, splitCampaigns, timelineCampaigns } from './projectHero';
+import { campaignStatusParts, parseTimelineRange, readTimelineRange, writeTimelineRange, TIMELINE_RANGE_KEY, projectDatesText, plannedFromCounts, splitCampaigns, timelineCampaigns } from './projectHero';
 
 describe('splitCampaigns', () => {
 	it('puts planned, active and on hold first, keeps the given order inside a status, and folds the complete ones', () => {
@@ -58,6 +58,28 @@ describe('parseTimelineRange', () => {
 		expect(parseTimelineRange('all')).toBe('all');
 		expect(parseTimelineRange('1y')).toBe('all');
 		expect(parseTimelineRange(null)).toBe('all');
+	});
+});
+
+describe('the remembered timeline range', () => {
+	const fake = (initial: Record<string, string> = {}): Storage => {
+		const m = new Map(Object.entries(initial));
+		return { get length() { return m.size; }, clear: () => m.clear(), getItem: (k) => m.get(k) ?? null, key: (i) => [...m.keys()][i] ?? null, removeItem: (k) => void m.delete(k), setItem: (k, v) => void m.set(k, String(v)) };
+	};
+	const blocked = (): Storage => ({ ...fake(), getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } });
+	it('round-trips, and is "all" with nothing stored, a stale value or no storage', () => {
+		const s = fake();
+		expect(readTimelineRange(s)).toBe('all');
+		writeTimelineRange('30d', s);
+		expect(s.getItem(TIMELINE_RANGE_KEY)).toBe('30d');
+		expect(readTimelineRange(s)).toBe('30d');
+		expect(readTimelineRange(fake({ [TIMELINE_RANGE_KEY]: '1y' }))).toBe('all');
+		expect(readTimelineRange(null)).toBe('all');
+	});
+	it('survives storage that throws', () => {
+		expect(readTimelineRange(blocked())).toBe('all');
+		expect(() => writeTimelineRange('6mo', blocked())).not.toThrow();
+		expect(() => writeTimelineRange('6mo', null)).not.toThrow();
 	});
 });
 

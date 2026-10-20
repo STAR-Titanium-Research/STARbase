@@ -16,7 +16,7 @@ export const DEFAULT_LIST_PREFS: Readonly<ListPrefs> = { view: 'table', density:
 const KEY_PREFIX = 'd1.list.';
 export const listPrefsKey = (slug: string): string => `${KEY_PREFIX}${slug}`;
 
-function browserStorage(): Storage | null {
+export function browserStorage(): Storage | null {
 	try {
 		return typeof window === 'undefined' ? null : window.localStorage;
 	} catch {

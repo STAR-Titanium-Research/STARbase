@@ -3,7 +3,7 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef, watch } from 'vue';
 import {
 	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, Section, dataStudioRoute,
-	TIMELINE_RANGE_KEY, parseTimelineRange, pinTargetForRecord, mapPath, type TimelineRange,
+	readTimelineRange, writeTimelineRange, pinTargetForRecord, mapPath, type TimelineRange,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import ProjectHero from './projects/ProjectHero.vue';
@@ -44,22 +44,9 @@ function onAccessChanged() {
 const code = computed(() => project.value?.project_code ?? 'Project');
 const studioTo = computed(() => dataStudioRoute('projects', props.id));
 
-// The timeline's range is remembered per device. Storage can be missing or throw (a private window, blocked site data): then it is "All" and not saved.
-function storedRange(): TimelineRange {
-	try {
-		return parseTimelineRange(localStorage.getItem(TIMELINE_RANGE_KEY));
-	} catch {
-		return 'all';
-	}
-}
-const range = ref<TimelineRange>(storedRange());
-watch(range, (value) => {
-	try {
-		localStorage.setItem(TIMELINE_RANGE_KEY, value);
-	} catch {
-		// Not remembered: the page works the same.
-	}
-});
+// The timeline's range is remembered per device (and is "All", not saved, where storage is blocked).
+const range = ref<TimelineRange>(readTimelineRange());
+watch(range, (value) => writeTimelineRange(value));
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
@@ -82,7 +69,6 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="project">
-				<!-- The `page` container: the hero's layout follows this width, not the window's (the Data Studio sidebar takes some of it). -->
 				<div class="project-page">
 					<ProjectHero
 						v-model:range="range"
@@ -139,7 +125,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 </template>
 
 <style scoped>
-.project-page { container: page / inline-size; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.project-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* Side by side while there is room, but a section with nothing in it is only its lid, so it takes the
    whole row (its one line of text does not wrap in half a column). Dense: the sections after it fill
    the gap it leaves in the row above. */

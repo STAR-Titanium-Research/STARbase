@@ -3,6 +3,7 @@
 // their counts, and the remembered timeline range. No Vue, no host.
 
 import { dateRangeText, formatDate } from '../format';
+import { browserStorage } from '../index/listPrefs';
 import { statusStyle } from '../status';
 import type { PlannedInput, TimelineCampaignInput, TimelineRange } from './projectTimeline';
 
@@ -59,6 +60,23 @@ export const TIMELINE_RANGE_KEY = 'd1.project.timelineRange';
 /** A stored range, or "all" for anything else (nothing stored, a value from another version, storage that threw). */
 export function parseTimelineRange(value: unknown): TimelineRange {
 	return value === '30d' || value === '6mo' || value === 'all' ? value : 'all';
+}
+
+/** The remembered range; "all" when nothing is stored or storage is blocked (the page then works the same, it just does not remember). */
+export function readTimelineRange(storage: Storage | null = browserStorage()): TimelineRange {
+	try {
+		return parseTimelineRange(storage?.getItem(TIMELINE_RANGE_KEY));
+	} catch {
+		return 'all';
+	}
+}
+
+export function writeTimelineRange(range: TimelineRange, storage: Storage | null = browserStorage()): void {
+	try {
+		storage?.setItem(TIMELINE_RANGE_KEY, range);
+	} catch {
+		// private mode or blocked storage: the choice just is not remembered
+	}
 }
 
 /** The About block's dates: "13 Jan 2025 to 31 Mar 2027", "From 1 Jun 2024, no end date", "Until 31 Mar 2027" or "No dates set". */

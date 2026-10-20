@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { campaignStatusParts, type SectionState } from '@d1/ui';
+import { campaignStatusParts, formatNumber, type SectionState } from '@d1/ui';
 import type { ProjectCounts } from './useProjectData';
 
 // The Totals block of the Project hero: samples, operations done, tests done and campaigns as 2 x 2 big numbers, each with its planned count
@@ -8,9 +8,8 @@ import type { ProjectCounts } from './useProjectData';
 // plain text, not links: the index pages filter on the record's own project_id and a link could open a shorter list than the number clicked.
 const props = defineProps<{ counts: SectionState<ProjectCounts> }>();
 
-const num = (n: number) => n.toLocaleString('en-GB');
 // A number that could not be read is a dash, never a wrong 0; while it loads it is left empty.
-const big = (n: number | null) => (props.counts.loading ? '' : n === null ? '–' : num(n));
+const big = (n: number | null) => (props.counts.loading ? '' : n === null ? '–' : formatNumber(n));
 const c = computed(() => props.counts.data);
 const tiles = computed(() => [
 	{ key: 'samples', n: big(c.value.samples), label: c.value.samples === 1 ? 'sample' : 'samples', planned: c.value.samplesPlanned },
@@ -27,7 +26,7 @@ const campaigns = computed(() => ({ n: big(c.value.campaigns), label: c.value.ca
 			<div v-for="t in tiles" :key="t.key" class="total">
 				<span class="n">{{ t.n }}</span>
 				<span class="l">{{ t.label }}</span>
-				<span class="sub"><template v-if="t.planned"><b>{{ num(t.planned) }}</b> planned</template></span>
+				<span class="sub"><template v-if="t.planned"><b>{{ formatNumber(t.planned) }}</b> planned</template></span>
 			</div>
 			<div class="total">
 				<span class="n">{{ campaigns.n }}</span>
