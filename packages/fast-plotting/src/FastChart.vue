@@ -1,27 +1,41 @@
 <script setup lang="ts">
 /*
- * Dependency-free multi-series line chart for FAST traces (time on x). Each series
- * carries its own values + unit/group + colour. Y handling:
+ * Dependency-free multi-series line chart for FAST traces (time on x). Each series carries its own
+ * values + unit/group. Y handling:
  *   - all visible series share one unit  -> a real shared y-axis (auto-fit union)
- *   - mixed units (or `normalise`)        -> each series normalised to its own
- *     [min,max] and overlaid, so you compare SHAPES; the legend shows real min/max.
- * Ports the force chart's niceStep/regularTicks tick math. Hover scrubs a shared
- * cursor and shows each series' value at that time.
+ *   - mixed units (or `normalise`)        -> each series normalised to its own [min,max] and
+ *     overlaid, so you compare SHAPES (the axis then reads "% of range")
+ * Look per DESIGN.md section 5b: solid left and bottom axis lines with outward ticks, hairline grid at
+ * every tick, nice ticks with the top one above the data, the unit above the y axis, time in minutes with
+ * its title on the bottom row only (`xLabels`), series colours from the chart tokens then dash patterns.
+ * Hover is shared: the chart reports the time under the pointer (`hover`) and draws the cursor it is
+ * given (`cursor`): the hovered chart also shows a tooltip, the others a dot on each line.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { clock, fmtNum, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
-interface S { key: string; label: string; unit: string; group: string; color: string; values: Float64Array; }
-const props = defineProps<{
+interface S { key: string; label: string; unit: string; group: string; values: Float64Array; }
+const props = withDefaults(defineProps<{
 	time: Float64Array; series: S[]; normalise?: boolean;
 	viewStart?: number | null;    // shared x-zoom window (seconds); null = full range
 	viewEnd?: number | null;
 	zoomTool?: boolean;           // when true, drag draws a rectangular zoom box
+	wheel?: boolean;              // the wheel zooms the shared window (off where the page should scroll instead)
+	cursor?: number | null;       // shared hover time (seconds) from the tiles of the same group
+	xLabels?: boolean;            // tick labels and the "Time (min)" title (the bottom row of tiles)
+	fill?: boolean;               // a faint area under the first series (the cumulative energy)
+	band?: { start: number; end: number } | null;   // a shaded time range (the window the statistics cover)
+}>(), { xLabels: true, wheel: true });
+const emit = defineEmits<{
+	(e: 'zoom', v: { start: number; end: number } | null): void;
+	(e: 'hover', t: number | null): void;
 }>();
-const emit = defineEmits<{ (e: 'zoom', v: { start: number; end: number } | null): void }>();
 
-const ML = 48, MR = 12, MT = 10, MB = 22;
-// Observe the CSS-sized wrapper (plotEl), not the svg itself — see the template
-// comment on .fchart-plot for why observing the svg directly causes runaway growth.
+const ML = 44, MR = 12, MT = 24;
+const MB = computed(() => (props.xLabels ? 38 : 8));
+// Observe the CSS-sized wrapper (plotEl), not the svg itself: the svg is absolutely positioned inside
+// it, so its box comes only from CSS layout, never from its own viewBox (which would feed back into
+// a runaway growth loop when an ancestor's height is indefinite).
 const plotEl = ref<HTMLDivElement | null>(null);
 const w = ref(360), h = ref(200);
 let ro: ResizeObserver | undefined;
@@ -35,37 +49,6 @@ onMounted(() => {
 });
 onBeforeUnmount(() => ro?.disconnect());
 
-function niceNum(v: number): string {
-	const a = Math.abs(v);
-	if (a === 0) return '0';
-	if (a >= 1000) return `${(v / 1000).toFixed(1)}k`;
-	if (a >= 100) return v.toFixed(0);
-	if (a >= 10) return v.toFixed(1);
-	if (a >= 1) return v.toFixed(2);
-	if (a >= 0.01) return v.toFixed(3);
-	return v.toExponential(0);
-}
-function niceStep(rough: number): number {
-	if (!(rough > 0)) return 1;
-	const pow = 10 ** Math.floor(Math.log10(rough));
-	const f = rough / pow;
-	const nice = f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10;
-	return nice * pow;
-}
-function extent(vals: Float64Array): [number, number] {
-	let lo = Infinity, hi = -Infinity;
-	for (let i = 0; i < vals.length; i++) { const v = vals[i]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
-	if (!Number.isFinite(lo)) return [0, 1];
-	if (lo === hi) { lo -= 1; hi += 1; }
-	return [lo, hi];
-}
-
-const shared = computed(() => {
-	if (props.normalise || props.series.length === 0) return false;
-	const g = new Set(props.series.map((s) => s.unit || s.group));
-	return g.size === 1;
-});
-
 // extent over a sub-range [iA,iB] (inclusive) so y auto-rescales to the zoom window
 function extentRange(vals: Float64Array, iA: number, iB: number): [number, number] {
 	let lo = Infinity, hi = -Infinity;
@@ -75,14 +58,20 @@ function extentRange(vals: Float64Array, iA: number, iB: number): [number, numbe
 	return [lo, hi];
 }
 
+const shared = computed(() => {
+	if (props.normalise || props.series.length === 0) return false;
+	return new Set(props.series.map((s) => s.unit || s.group)).size === 1;
+});
+const yUnit = computed(() => (shared.value ? unitLabel(props.series[0]?.unit || '') : '% of range'));
+
 const geom = computed(() => {
 	const t = props.time;
 	if (!t || t.length < 2 || props.series.length === 0) return null;
-	const W = w.value, H = h.value;
-	const plotW = W - ML - MR, plotH = H - MT - MB;
+	const W = w.value, H = h.value, bottom = H - MB.value;
+	const plotW = W - ML - MR, plotH = bottom - MT;
 
-	// visible x-window (shared zoom): clamp to the requested bounds, then snap the
-	// index range so the y-axis rescales to just the zoomed data.
+	// visible x-window (shared zoom): clamp to the requested bounds, then snap the index range so the
+	// y axis rescales to just the zoomed data.
 	const dataX0 = t[0], dataX1 = t[t.length - 1] || 1;
 	let x0 = props.viewStart != null ? Math.max(dataX0, props.viewStart) : dataX0;
 	let x1 = props.viewEnd != null ? Math.min(dataX1, props.viewEnd) : dataX1;
@@ -92,72 +81,77 @@ const geom = computed(() => {
 	while (iB > iA && t[iB - 1] > x1) iB--;
 	const sx = (x: number) => ML + ((x - x0) / (x1 - x0)) * plotW;
 
-	// shared axis range (only meaningful when `shared`) — over the visible window
-	let lo = Infinity, hi = -Infinity;
+	// the shared axis: ticks over the visible data, always including zero
+	let yTicks: { y: number; label: string }[], sharedY: (v: number) => number = () => 0;
 	if (shared.value) {
+		let lo = Infinity, hi = -Infinity;
 		for (const s of props.series) { const [a, b] = extentRange(s.values, iA, iB); if (a < lo) lo = a; if (b > hi) hi = b; }
-		if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
-		lo = Math.min(lo, 0);
+		const { ticks, step } = niceTicks(Math.min(lo, 0), hi, 5);
+		const [min, max] = [ticks[0], ticks[ticks.length - 1]];
+		sharedY = (v) => MT + (1 - (v - min) / (max - min)) * plotH;
+		yTicks = ticks.map((v) => ({ y: sharedY(v), label: tickLabel(v, step) }));
+	} else {
+		yTicks = [0, 25, 50, 75, 100].map((p) => ({ y: MT + (1 - p / 100) * plotH, label: String(p) }));
 	}
-	const syShared = (v: number) => MT + (1 - (v - lo) / (hi - lo || 1)) * plotH;
 
-	// build a polyline for each series (normalised per-series unless shared), over
-	// the visible index window so a zoom both crops x and rescales y.
-	const paths = props.series.map((s) => {
+	// one polyline per series (normalised per series unless shared), over the visible index window
+	const paths = props.series.map((s, i) => {
 		const [smin, smax] = extentRange(s.values, iA, iB);
 		const span = smax - smin || 1;
-		const sy = shared.value ? syShared : (v: number) => MT + (1 - (v - smin) / span) * plotH;
+		const sy = shared.value ? sharedY : (v: number) => MT + (1 - (v - smin) / span) * plotH;
 		let d = '', pen = false;
 		const vals = s.values, n = Math.min(t.length, vals.length), hiIdx = Math.min(iB, n - 1);
 		// decimate to ~2px columns for speed on long traces
 		const stride = Math.max(1, Math.floor((hiIdx - iA + 1) / Math.max(1, plotW * 1.5)));
-		for (let i = iA; i <= hiIdx; i += stride) {
-			const v = vals[i];
+		for (let k = iA; k <= hiIdx; k += stride) {
+			const v = vals[k];
 			if (!Number.isFinite(v)) { pen = false; continue; }
-			const X = sx(t[i]).toFixed(1), Y = sy(v).toFixed(1);
-			d += pen ? `L${X},${Y} ` : `M${X},${Y} `;
+			d += `${pen ? 'L' : 'M'}${sx(t[k]).toFixed(1)},${sy(v).toFixed(1)} `;
 			pen = true;
 		}
-		return { key: s.key, color: s.color, d, smin, smax, unit: s.unit, label: s.label };
+		return { key: s.key, d, sy, ...seriesStyle(i) };
 	});
+	// the band between the first and last point of the first series, down to the axis
+	const first = paths[0];
+	const area = props.fill && first.d ? `${first.d.trim()} L${sx(t[Math.min(iB, t.length - 1)]).toFixed(1)},${bottom} L${sx(t[iA]).toFixed(1)},${bottom} Z` : '';
+	const band = props.band ? { x: sx(Math.max(x0, props.band.start)), x2: sx(Math.min(x1, props.band.end)) } : null;
 
-	// x ticks — plot tiles here can be resized much narrower than a fixed force
-	// chart, so unlike a static minimum this scales down with plotW (floor of 2)
-	// to avoid labels colliding in a small tile.
-	const targetCount = Math.max(2, Math.min(10, Math.floor(plotW / 70)));
-	const step = niceStep((x1 - x0) / targetCount) || (x1 - x0) || 1;
-	const xticks: { x: number; label: string }[] = [];
-	const first = Math.ceil(x0 / step) * step;
-	for (let v = first; v <= x1 + step * 1e-6; v += step) xticks.push({ x: sx(v), label: niceNum(v) });
-	if (xticks.length < 2) { xticks.length = 0; xticks.push({ x: sx(x0), label: niceNum(x0) }, { x: sx(x1), label: niceNum(x1) }); }
+	// time axis in minutes: tiles can be narrow, so the tick count follows the width
+	const { ticks, step } = ticksWithin(x0 / 60, x1 / 60, Math.max(2, Math.floor(plotW / 60)), [1, 2, 5]);
+	const xTicks = ticks.map((v) => ({ x: sx(v * 60), label: tickLabel(v, step) }));
 
-	const yticks = shared.value
-		? [hi, (lo + hi) / 2, lo].map((v) => ({ y: syShared(v), label: niceNum(v) }))
-		: [1, 0.5, 0].map((f) => ({ y: MT + (1 - f) * plotH, label: `${Math.round(f * 100)}%` }));
-
-	return { W, H, plotW, plotH, x0, x1, sx, paths, xticks, yticks };
+	return { W, H, bottom, plotW, plotH, x0, x1, sx, paths, area, band, xTicks, yTicks };
 });
 
-// hover scrub
-const hoverX = ref<number | null>(null);
-const hoverI = computed(() => {
-	const g = geom.value; if (!g || hoverX.value == null) return null;
-	const frac = (hoverX.value - ML) / g.plotW;
-	if (frac < 0 || frac > 1) return null;
-	// map the cursor to a time within the visible [x0,x1] window, then to an index
-	// (time is ~uniformly sampled), so hover stays correct when zoomed.
-	const t = props.time; const x = g.x0 + frac * (g.x1 - g.x0);
-	const span = (t[t.length - 1] - t[0]) || 1;
-	return Math.max(0, Math.min(t.length - 1, Math.round((x - t[0]) / span * (t.length - 1))));
-});
-function onMove(ev: MouseEvent) {
-	const g = geom.value; if (!g) return;
+// ---- hover: report the time under the pointer; draw the shared cursor ----
+const localT = ref<number | null>(null);
+const local = computed(() => localT.value != null);   // the pointer is on this chart
+const cursorT = computed(() => (props.cursor !== undefined ? props.cursor : localT.value));
+function timeOf(ev: MouseEvent): number | null {
+	const g = geom.value; if (!g) return null;
 	const r = (ev.currentTarget as SVGElement).getBoundingClientRect();
-	hoverX.value = (ev.clientX - r.left) * (g.W / r.width);
+	const frac = ((ev.clientX - r.left) * (g.W / r.width) - ML) / g.plotW;
+	return frac < 0 || frac > 1 ? null : g.x0 + frac * (g.x1 - g.x0);
 }
-function onLeave() { hoverX.value = null; }
-const yUnitLabel = computed(() => (shared.value ? (props.series[0]?.unit || '') : 'norm'));
+function onMove(ev: MouseEvent) {
+	const t = timeOf(ev);
+	localT.value = t;
+	emit('hover', t);
+}
+function onLeave() { localT.value = null; emit('hover', null); }
 
+const hover = computed(() => {
+	const g = geom.value, c = cursorT.value;
+	if (!g || c == null || c < g.x0 || c > g.x1) return null;
+	const i = indexAt(props.time, c);
+	if (i < 0) return null;
+	const x = g.sx(props.time[i]);
+	const rows = props.series.map((s, k) => {
+		const v = s.values[i];
+		return { key: s.key, label: s.label, value: Number.isFinite(v) ? fmtNum(v) : '—', cy: Number.isFinite(v) ? g.paths[k].sy(v) : null, ...seriesStyle(k) };
+	});
+	return { x, clock: clock(props.time[i]), rows };
+});
 // ---- x-zoom: wheel + rectangular selection (emits a shared window to the parent) ----
 function pxOf(ev: PointerEvent | WheelEvent): number {
 	const g = geom.value; if (!g) return 0;
@@ -187,14 +181,14 @@ function onZoomUp(ev: PointerEvent) {
 	zoomRect.value = null;
 	try { (ev.currentTarget as Element).releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
 	if (!g || !rsel || rsel.w < 6) return;
-	const clamp = (px: number) => (px - ML) / (g.W - ML - MR);
+	const clamp = (px: number) => (px - ML) / g.plotW;
 	const s = fracToX(clamp(rsel.x)), e = fracToX(clamp(rsel.x + rsel.w));
 	if (e > s) emit('zoom', { start: s, end: e });
 }
 function onWheel(ev: WheelEvent) {
-	const g = geom.value; if (!g) return;
+	const g = geom.value; if (!g || !props.wheel) return;
 	ev.preventDefault();
-	const frac = (pxOf(ev) - ML) / (g.W - ML - MR);
+	const frac = (pxOf(ev) - ML) / g.plotW;
 	const cursorX = fracToX(frac);
 	const t = props.time; const dataSpan = (t[t.length - 1] - t[0]) || 1;
 	const f = ev.deltaY < 0 ? 1 / 1.3 : 1.3;
@@ -206,67 +200,98 @@ function onWheel(ev: WheelEvent) {
 	s = Math.max(dx0, s);
 	emit('zoom', (e - s >= dataSpan * 0.999) ? null : { start: s, end: e });
 }
+
+// Tooltip at the cursor, on the side with room.
+const tipStyle = computed(() => {
+	const g = geom.value, hv = hover.value;
+	if (!g || !hv) return {};
+	return hv.x > g.W * 0.6 ? { right: `${g.W - hv.x + 12}px` } : { left: `${hv.x + 12}px` };
+});
 </script>
 
 <template>
 	<div class="fchart">
-		<!-- The svg is absolutely positioned (inset:0) inside a relatively-positioned,
-		     flex:1 wrapper so its box size comes ONLY from CSS/flex layout, never from
-		     its own viewBox-derived intrinsic aspect ratio. Without this, when an
-		     ancestor's height is indefinite (mobile's stacked layout — .layout has no
-		     fixed height there), the svg's "auto" height falls back to width * (its own
-		     viewBox ratio); since we set that viewBox from the LAST observed size, any
-		     small nudge (e.g. the legend growing when a series is added) feeds back into
-		     a new, larger viewBox on the next layout pass — a runaway growth loop. The
-		     wrapper carries no in-flow content, so it can't trigger that fallback. -->
-		<div class="fchart-plot" ref="plotEl">
-			<svg v-if="geom" :viewBox="`0 0 ${geom.W} ${geom.H}`" preserveAspectRatio="none"
+		<div v-if="series.length > 1" class="legend">
+			<span v-for="(s, i) in series" :key="s.key" class="lg">
+				<svg class="lg-key" width="22" height="8" aria-hidden="true"><line x1="0" x2="22" y1="4" y2="4" :style="{ stroke: seriesStyle(i).color }" :stroke-dasharray="seriesStyle(i).dash ?? undefined" /></svg>{{ s.label }}<em v-if="!shared">{{ unitLabel(s.unit) }}</em>
+			</span>
+		</div>
+		<!-- The svg is absolutely positioned (inset:0) inside a relatively-positioned, flex:1 wrapper so
+		     its box size comes only from CSS/flex layout (see the comment on plotEl above). -->
+		<div ref="plotEl" class="fchart-plot">
+			<svg v-if="geom" :viewBox="`0 0 ${geom.W} ${geom.H}`" preserveAspectRatio="none" role="img"
+				:aria-label="series.map((s) => s.label).join(', ') + ' against time'"
 				class="fchart-svg" :class="{ zoomtool: zoomTool }"
 				@mousemove="onMove" @mouseleave="onLeave" @wheel="onWheel"
 				@pointerdown="onZoomDown" @pointermove="onZoomMove" @pointerup="onZoomUp" @pointercancel="onZoomUp">
-				<line v-for="(t, i) in geom.yticks" :key="'gy' + i" :x1="ML" :x2="geom.W - MR" :y1="t.y" :y2="t.y" stroke="#eef1f5" stroke-width="0.5" />
-				<line v-for="(t, i) in geom.xticks" :key="'gx' + i" :x1="t.x" :x2="t.x" :y1="MT" :y2="geom.H - MB" stroke="#f3f5f8" stroke-width="0.5" />
-				<path v-for="p in geom.paths" :key="p.key" :d="p.d" fill="none" :stroke="p.color" stroke-width="1.2" stroke-linejoin="round" />
-				<line :x1="ML" :x2="ML" :y1="MT" :y2="geom.H - MB" stroke="#94a3b8" stroke-width="0.8" />
-				<line :x1="ML" :x2="geom.W - MR" :y1="geom.H - MB" :y2="geom.H - MB" stroke="#94a3b8" stroke-width="0.8" />
-				<g v-for="(t, i) in geom.yticks" :key="'y' + i">
-					<text :x="ML - 4" :y="t.y + 2.5" text-anchor="end" class="tick">{{ t.label }}</text>
+				<line v-for="(t, i) in geom.yTicks" :key="'gy' + i" class="grid" :x1="ML" :x2="geom.W - MR" :y1="t.y" :y2="t.y" />
+				<line v-for="(t, i) in geom.xTicks" :key="'gx' + i" class="grid" :x1="t.x" :x2="t.x" :y1="MT" :y2="geom.bottom" />
+				<rect v-if="geom.band && geom.band.x2 > geom.band.x" class="band" :x="geom.band.x" :y="MT" :width="geom.band.x2 - geom.band.x" :height="geom.bottom - MT" />
+				<path v-if="geom.area" class="area" :d="geom.area" />
+				<path v-for="(p, i) in geom.paths" :key="p.key" :d="p.d" class="line" :style="{ stroke: p.color }" :stroke-dasharray="p.dash ?? undefined" :data-series="i" />
+				<line class="axis" :x1="ML" :x2="ML" :y1="MT" :y2="geom.bottom" />
+				<line class="axis" :x1="ML" :x2="geom.W - MR" :y1="geom.bottom" :y2="geom.bottom" />
+				<g v-for="(t, i) in geom.yTicks" :key="'y' + i">
+					<line class="axis" :x1="ML - 4" :x2="ML" :y1="t.y" :y2="t.y" />
+					<text :x="ML - 8" :y="t.y + 4" text-anchor="end" class="tick">{{ t.label }}</text>
 				</g>
-				<g v-for="(t, i) in geom.xticks" :key="'x' + i">
-					<line :x1="t.x" :x2="t.x" :y1="geom.H - MB" :y2="geom.H - MB + 3" stroke="#94a3b8" stroke-width="0.7" />
-					<text :x="t.x" :y="geom.H - MB + 12" text-anchor="middle" class="tick">{{ t.label }}</text>
+				<g v-for="(t, i) in geom.xTicks" :key="'x' + i">
+					<line class="axis" :x1="t.x" :x2="t.x" :y1="geom.bottom" :y2="geom.bottom + 4" />
+					<text v-if="xLabels" :x="t.x" :y="geom.bottom + 17" text-anchor="middle" class="tick">{{ t.label }}</text>
 				</g>
-				<text :x="ML - 40" :y="MT + 6" class="tick unit">{{ yUnitLabel }}</text>
-				<text :x="(ML + geom.W - MR) / 2" :y="geom.H - 2" text-anchor="middle" class="tick">s</text>
-				<line v-if="hoverX != null" :x1="hoverX" :x2="hoverX" :y1="MT" :y2="geom.H - MB" stroke="#64748b" stroke-width="0.6" stroke-dasharray="3 3" />
-				<rect v-if="zoomRect" :x="zoomRect.x" :y="MT" :width="zoomRect.w" :height="geom.H - MB - MT" fill="#38bdf8" fill-opacity="0.16" stroke="#0ea5e9" stroke-width="0.8" />
+				<text :x="4" :y="MT - 10" class="tick unit">{{ yUnit }}</text>
+				<text v-if="xLabels" :x="(ML + geom.W - MR) / 2" :y="geom.H - 4" text-anchor="middle" class="tick title">Time (min)</text>
+				<g v-if="hover">
+					<line class="cursor" :x1="hover.x" :x2="hover.x" :y1="MT" :y2="geom.bottom" />
+					<template v-for="r in hover.rows" :key="r.key">
+						<circle v-if="r.cy != null" class="dot" :cx="hover.x" :cy="r.cy" r="4" :style="{ fill: r.color }" />
+					</template>
+					<g v-if="local && xLabels">
+						<rect class="badge" :x="hover.x - 24" :y="geom.bottom + 4" width="48" height="18" rx="4" />
+						<text class="badge-text" :x="hover.x" :y="geom.bottom + 17" text-anchor="middle">{{ hover.clock }}</text>
+					</g>
+				</g>
+				<rect v-if="zoomRect" class="zoombox" :x="zoomRect.x" :y="MT" :width="zoomRect.w" :height="geom.bottom - MT" />
 			</svg>
 			<div v-else class="fchart-empty">Right-click to pick series</div>
-		</div>
-
-		<div class="legend">
-			<span v-for="s in series" :key="s.key" class="lg">
-				<i :style="{ background: s.color }"></i>{{ s.label }}<em>{{ s.unit }}</em>
-				<b v-if="hoverI != null && Number.isFinite(s.values[hoverI])">{{ niceNum(s.values[hoverI]) }}</b>
-			</span>
+			<div v-if="local && hover" class="tip" :style="tipStyle">
+				<div class="tip-time">{{ hover.clock }}</div>
+				<div v-for="r in hover.rows" :key="r.key" class="tip-row">
+					<svg class="lg-key" width="14" height="8" aria-hidden="true"><line x1="0" x2="14" y1="4" y2="4" :style="{ stroke: r.color }" :stroke-dasharray="r.dash ?? undefined" /></svg>
+					<span class="tip-label">{{ r.label }}</span><b>{{ r.value }}</b>
+				</div>
+			</div>
 		</div>
 	</div>
 </template>
 
 <style scoped>
 .fchart { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-/* flex:1 1 auto with NO in-flow content (the svg inside is position:absolute) — its
-   size comes purely from flex distribution + min-height, never from intrinsic
-   content/aspect-ratio, which is what keeps this stable under an indefinite-height
-   ancestor (see the template comment above .fchart-plot). */
-.fchart-plot { position: relative; flex: 1 1 auto; min-height: 140px; width: 100%; }
+.fchart-plot { position: relative; flex: 1 1 auto; min-height: 60px; width: 100%; }
 .fchart-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-.fchart-svg .tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: 8px; font-variant-numeric: tabular-nums; }
-.fchart-svg .unit { font-size: 7.5px; }
-.fchart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--theme--foreground-subdued, #a4adba); font-size: 12px; }
-.legend { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 6px 2px; }
-.lg { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--theme--foreground, #334155); }
-.lg i { width: 9px; height: 3px; border-radius: 2px; display: inline-block; }
-.lg em { color: var(--theme--foreground-subdued, #98a2b3); font-style: normal; font-size: 9px; }
-.lg b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.fchart-svg.zoomtool { cursor: col-resize; }
+.fchart-svg .grid { stroke: var(--d1-grid, color-mix(in srgb, var(--theme--foreground) 10%, transparent)); stroke-width: 1; }
+.fchart-svg .axis { stroke: var(--d1-axis, var(--theme--foreground-subdued)); stroke-width: 1; }
+.fchart-svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.fchart-svg .area { fill: var(--d1-series-1, #2a78d6); fill-opacity: 0.1; stroke: none; }
+.fchart-svg .band { fill: var(--theme--foreground); fill-opacity: 0.08; }
+.fchart-svg .tick { fill: var(--d1-dim, var(--theme--foreground-subdued)); font-size: var(--fs-xs, 11px); font-variant-numeric: tabular-nums; }
+.fchart-svg .unit { font-weight: 600; }
+.fchart-svg .cursor { stroke: var(--d1-axis, var(--theme--foreground-subdued)); stroke-width: 1; }
+.fchart-svg .dot { stroke: var(--fd-surface, var(--theme--background)); stroke-width: 2; }
+.fchart-svg .badge { fill: var(--theme--foreground); }
+.fchart-svg .badge-text { fill: var(--theme--background); font-size: var(--fs-xs, 11px); font-weight: 700; font-variant-numeric: tabular-nums; }
+.fchart-svg .zoombox { fill: var(--d1-accent, var(--theme--primary)); fill-opacity: 0.14; stroke: var(--d1-accent, var(--theme--primary)); stroke-width: 1; }
+.fchart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--d1-dim, var(--theme--foreground-subdued)); font-size: var(--fs-sm, 12px); }
+.legend { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; padding: 4px 6px 0; }
+.lg { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm, 12px); color: var(--theme--foreground); }
+.lg em { color: var(--d1-dim, var(--theme--foreground-subdued)); font-style: normal; font-size: var(--fs-xs, 11px); }
+.lg-key { flex: none; }
+.lg-key line { stroke-width: 2; }
+.tip { position: absolute; top: 14px; z-index: 2; pointer-events: none; min-width: 120px; padding: 6px 10px; border-radius: 8px; font-size: var(--fs-sm, 12px);
+	background: var(--fd-surface, var(--theme--background)); border: 1px solid var(--fd-line, var(--theme--border-color-subdued)); box-shadow: var(--d1-shadow, 0 2px 6px rgba(0, 0, 0, 0.1)); }
+.tip-time { font-weight: 700; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+.tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.5; }
+.tip-label { flex: 1 1 auto; margin-right: 10px; }
+.tip-row b { font-variant-numeric: tabular-nums; }
 </style>
