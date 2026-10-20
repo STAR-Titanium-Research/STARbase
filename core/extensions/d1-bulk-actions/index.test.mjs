@@ -163,7 +163,7 @@ function setup({ tables = baseTables(), env = {}, canRead = () => true, guard = 
     async readOne(id, query) {
       log.reads.push({ collection: this.collection, id, caller: this.options.accountability?.user ?? 'system' });
       const acc = this.options.accountability;
-      if (acc && !canRead(acc.user, this.collection, id)) throw Object.assign(new Error('You do not have permission to access this.'), { status: 403, code: 'FORBIDDEN' });
+      if (acc && !canRead(acc.user, this.collection, id, query.fields)) throw Object.assign(new Error('You do not have permission to access this.'), { status: 403, code: 'FORBIDDEN' });
       const row = await this.db()(this.collection).where(this.key, id).first();
       if (!row) throw Object.assign(new Error('not found'), { status: 403, code: 'FORBIDDEN' });
       return Object.fromEntries(query.fields.map((f) => [f, row[f] ?? null]));
@@ -782,9 +782,13 @@ test('GET one action: the actor and administrators see it with its rows, anyone 
   assert.equal(r.body.action.action_id, id);
   assert.equal(r.body.action.actor_name, 'Ann Owner');
   assert.deepEqual(r.body.rows.map((x) => [x.record_code, x.outcome]), [[null, 'skipped'], ['SM-001', 'applied'], ['SM-002', 'noop']]);
-  assert.deepEqual(r.body.rows[1].before, { mounted: null });
-  assert.deepEqual(r.body.rows[1].after, { mounted: true });
-  assert.equal((await get(admin(U.admin))).status, 200);
+  // the snapshots can hold what the actor may not see: only an administrator gets them
+  assert.ok(r.body.rows.every((x) => x.before === null && x.after === null));
+  const adminView = await get(admin(U.admin));
+  assert.equal(adminView.status, 200);
+  assert.deepEqual(adminView.body.rows[1].before, { mounted: null });
+  assert.deepEqual(adminView.body.rows[1].after, { mounted: true });
+  assert.equal(adminView.body.rows[0].before, null, 'a skipped row has no snapshots');
   for (const acc of [member(U.bob), member(U.eve)]) {
     const x = await get(acc);
     assert.equal(x.status, 404);
@@ -813,4 +817,51 @@ test('an action whose records are all reverted but whose state was never written
   assert.equal(r.status, 409);
   assert.equal(errorOf(r).extensions.code, 'ALREADY_REVERTED');
   assert.equal(h.tables.bulk_actions.find((a) => a.action_id === id).state, 'reverted');
+});
+
+test('snapshots are journaled only for changed records: skipped, noop and failed rows store null before and after', async () => {
+  const guard = (acc, collection, id) => { if (id === S.two) throw guardError('Only the owner can change this.'); };
+  const h = setup({ guard });
+  await apply(h, member(U.ann), 'physical_samples', editBody([S.one, S.two, S.three, ID(404)], 'current_status', 'consumed'));
+  const rows = byId(h.tables.bulk_action_rows.map((x) => ({ id: x.record_id, ...x })));
+  assert.equal(rows[S.one].outcome, 'applied');
+  assert.ok(rows[S.one].before && rows[S.one].after);
+  for (const id of [S.two, S.three, ID(404)]) {
+    assert.notEqual(rows[id].outcome, 'applied');
+    assert.equal(rows[id].before, null, id);
+    assert.equal(rows[id].after, null, id);
+  }
+  // a revert's own rows follow the same rule: changed_since keeps no snapshots
+  const id = h.tables.bulk_actions[0].action_id;
+  row(h.tables, 'physical_samples', S.one).current_status = 'destroyed';
+  await revert(h, admin(U.admin), id);
+  const revRows = h.tables.bulk_action_rows.filter((x) => x.action_id !== id);
+  assert.ok(revRows.length > 0 && revRows.every((x) => x.outcome === 'skipped' && x.before === null && x.after === null));
+});
+
+test('a field Directus hides from the caller makes the record a skip: its value is neither read as the system nor journaled nor returned', async () => {
+  const tables = baseTables();
+  row(tables, 'physical_samples', S.one).mounted = true;
+  const h = setup({ tables, canRead: (user, collection, id, fields) => !(fields ?? []).includes('mounted') });
+  const body = editBody([S.one, S.two], 'mounted', false);
+  const p = await preview(h, member(U.ann), 'physical_samples', body);
+  assert.deepEqual(p.body.results.map((x) => x.status), ['skip', 'skip']);
+  assert.ok(p.body.results.every((x) => x.reason === 'You do not have permission to change this record.'));
+  const a = await apply(h, member(U.ann), 'physical_samples', body);
+  assert.deepEqual(a.body.results.map((x) => x.outcome), ['skipped', 'skipped']);
+  assert.ok(h.tables.bulk_action_rows.every((x) => x.before === null && x.after === null));
+  assert.equal(row(tables, 'physical_samples', S.one).mounted, true);
+  assert.equal(h.log.writes.length, 0);
+  // the field's value was never read with system rights
+  assert.ok(h.log.reads.filter((r) => r.caller === 'system').length === 0);
+});
+
+test('undo of a field edit the actor can no longer read is refused, not failed', async () => {
+  let hide = false;
+  const h = setup({ canRead: (user, collection, id, fields) => !(hide && (fields ?? []).includes('mounted')) });
+  const id = await ran(h, member(U.ann), 'physical_samples', editBody([S.one], 'mounted', false));
+  hide = true;
+  const r = await undo(h, member(U.ann), id);
+  assert.equal(r.body.results[0].revert_outcome, 'refused');
+  assert.equal(row(h.tables, 'physical_samples', S.one).mounted, false);
 });

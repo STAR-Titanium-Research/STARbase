@@ -16,7 +16,8 @@
 //   POST /d1-bulk-actions/:action_id/revert     -> the same shape; administrators only, any time
 //   GET  /d1-bulk-actions                       -> { actions: [...], limit, offset, has_more }  (?limit=50 max 200, ?offset=0; administrators see
 //        all, everyone else only their own; newest first)
-//   GET  /d1-bulk-actions/:action_id            -> { action, rows: [...] }  (the same visibility; 404 for an action you may not see)
+//   GET  /d1-bulk-actions/:action_id            -> { action, rows: [...] }  (the same visibility; 404 for an action you may not see; each row
+//        has before and after (the snapshots) for administrators only, null for everyone else)
 //   params: restrict and unrestrict {}; edit_field { field, value } (value null clears the field). collection: physical_samples,
 //   manufacturing_operations, test_sessions or campaigns (restrict and unrestrict) and the same four for edit_field (BULK_FIELDS below is the
 //   allow-list per collection; the index pages mirror it in `bulkFields`).
@@ -276,9 +277,12 @@ export function mount(router, context, clock = () => new Date()) {
   // -- snapshots --------------------------------------------------------------------------------------
   const snapshotFields = (cfg, kind, params) => (kind === 'edit_field' ? [params.field] : [cfg.ownerField, ...(cfg.ownerTeam ? ['owner_team_id'] : []), 'restricted']);
 
-  // The record row as the snapshot and the label need it (system read): { code, row }.
-  async function readRecord(trx, req, cfg, id, fields) {
-    const row = await systemItems(req, cfg.collection, trx).readOne(id, { fields: [...new Set([...cfg.code, ...fields])] });
+  // The record's fields. A field edit reads as the CALLER, so a field Directus hides from them (a 403) makes the record a skip and its value is
+  // never journaled; restrict and unrestrict read the ownership columns as the system (the caller may not see who is on the access list, and the
+  // journal returns those snapshots to administrators only).
+  async function readRecord(trx, req, cfg, id, fields, asCaller) {
+    const service = asCaller ? itemsFor(req, cfg.collection, trx) : systemItems(req, cfg.collection, trx);
+    const row = await service.readOne(id, { fields });
     if (!row) throw new HttpError(404, 'NOT_FOUND', NOT_FOUND_REASON);
     return row;
   }
@@ -287,9 +291,8 @@ export function mount(router, context, clock = () => new Date()) {
   const lockRecord = (trx, cfg, id) => trx(cfg.collection).where(cfg.key, id).forUpdate().first(cfg.key);
 
   // The state of one record, in the shape of `before` and `after`.
-  async function snapshot(trx, req, cfg, id, kind, params, row = null) {
-    const fields = snapshotFields(cfg, kind, params);
-    const rec = row ?? (await readRecord(trx, req, cfg, id, fields));
+  async function snapshot(trx, req, cfg, id, kind, params) {
+    const rec = await readRecord(trx, req, cfg, id, snapshotFields(cfg, kind, params), kind === 'edit_field');
     if (kind === 'edit_field') {
       const def = BULK_FIELDS[cfg.collection][params.field];
       return { [params.field]: normaliseValue(def.kind, rec[params.field]) };
@@ -340,9 +343,8 @@ export function mount(router, context, clock = () => new Date()) {
     try {
       await inTransaction(acc, async (trx) => {
         await lockRecord(trx, cfg, id); // the snapshot and the write see the same row
-        const row = await readRecord(trx, req, cfg, id, snapshotFields(cfg, kind, params));
-        result.code = firstOf(row, cfg.code);
-        result.before = await snapshot(trx, req, cfg, id, kind, params, row);
+        result.code = firstOf(await readRecord(trx, req, cfg, id, cfg.code, true), cfg.code); // the label, as the caller
+        result.before = await snapshot(trx, req, cfg, id, kind, params);
         if (plan.noop(result.before)) {
           result.outcome = 'noop';
           result.after = result.before;
@@ -483,7 +485,7 @@ export function mount(router, context, clock = () => new Date()) {
       else {
         unjournaled.push({
           action_id: actionId, record_id: String(id), record_code: r.code, outcome: r.outcome, reason: r.reason ?? null,
-          before: r.before === null ? null : JSON.stringify(r.before), after: r.after === null ? null : JSON.stringify(r.after),
+          before: null, after: null, // snapshots are kept only for records that were changed
         });
       }
       results.push({ id: r.id, code: r.code, outcome: r.outcome, ...(r.reason ? { reason: r.reason } : {}) });
@@ -567,7 +569,7 @@ export function mount(router, context, clock = () => new Date()) {
     } catch (err) {
       if (!(err instanceof Rollback)) {
         const c = classify(err);
-        out.revert_outcome = 'failed';
+        out.revert_outcome = c.outcome === 'skipped' ? 'refused' : 'failed';
         out.reason = c.reason;
         journaled = false;
       }
@@ -640,7 +642,9 @@ export function mount(router, context, clock = () => new Date()) {
         await lock('bulk_action_rows').insert(outs.map((o) => ({
           action_id: revertId, record_id: String(o.id), record_code: o.code,
           outcome: o.revert_outcome === 'reverted' ? 'applied' : o.revert_outcome === 'failed' ? 'failed' : 'skipped',
-          reason: o.reason, before: o.before === null ? null : JSON.stringify(o.before), after: o.after === null ? null : JSON.stringify(o.after),
+          reason: o.reason,
+          before: o.revert_outcome === 'reverted' ? JSON.stringify(o.before) : null,
+          after: o.revert_outcome === 'reverted' ? JSON.stringify(o.after) : null,
         })));
       }
       await lock('bulk_actions').where('action_id', actionId).update({ state });
@@ -698,8 +702,9 @@ export function mount(router, context, clock = () => new Date()) {
       action: actionOut(action, names),
       rows: rows
         .map((r) => ({
-          record_id: r.record_id, record_code: r.record_code ?? null, outcome: r.outcome, reason: r.reason ?? null, before: parseJson(r.before),
-          after: parseJson(r.after), revert_outcome: r.revert_outcome ?? null, revert_reason: r.revert_reason ?? null,
+          record_id: r.record_id, record_code: r.record_code ?? null, outcome: r.outcome, reason: r.reason ?? null,
+          // the snapshots can hold values and access lists the actor may not see: administrators only
+          before: admin ? parseJson(r.before) : null, after: admin ? parseJson(r.after) : null, revert_outcome: r.revert_outcome ?? null, revert_reason: r.revert_reason ?? null,
         }))
         .sort((a, b) => String(a.record_code ?? '').localeCompare(String(b.record_code ?? '')) || a.record_id.localeCompare(b.record_id)),
     });
