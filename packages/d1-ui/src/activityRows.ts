@@ -1,4 +1,3 @@
-import { DEFAULT_WEEKS, windowStart } from './activity';
 import { anyProjectFilter, effectiveProjectId, effectiveProjectIdFields, projectScopeFilter } from './projectScope';
 
 // Reads the dates of the operations and tests inside the sparkline window, for one project or for
@@ -9,8 +8,9 @@ import { anyProjectFilter, effectiveProjectId, effectiveProjectIdFields, project
 // missing, and `truncated` lets the page say so.
 //
 // A row belongs to a project by the kit-wide rule (projectScope.ts): its own project_id, else its
-// campaign's. That is why the campaign's project is read too, and why the row's `project_id` in the
-// result is the effective one.
+// campaign's. That is why, across all projects, the campaign's project is read too, and why the row's
+// `project_id` in the result is the effective one. For one project every row is that project's by the
+// filter, so only the date is read and `project_id` is the one asked for.
 
 export const ACTIVITY_ROW_CAP = 5000;
 
@@ -22,19 +22,18 @@ export interface ActivityRows {
 	truncated: boolean;
 }
 
-export async function fetchActivityRows(
-	getItems: GetItems,
-	projectId?: string,
-	weeks: number | null = DEFAULT_WEEKS,
-	now: Date = new Date(),
-): Promise<ActivityRows> {
-	// `weeks = null` reads the whole history (the Project page's timeline, range "All"): every dated row, newest first, up to the cap.
-	const lower = weeks === null ? { _nnull: true } : { _gte: windowStart(weeks, now) };
+export interface ActivityRowsOptions {
+	/** Only rows dated on or after this (an ISO string, `windowStart(weeks)`). Without it: the whole history (the Project page's timeline, range "All"), every dated row, newest first, up to the cap. */
+	since?: string | null;
+}
+
+export async function fetchActivityRows(getItems: GetItems, projectId?: string, options: ActivityRowsOptions = {}): Promise<ActivityRows> {
+	const lower = options.since ? { _gte: options.since } : { _nnull: true };
 	const scope = projectId ? projectScopeFilter(projectId) : anyProjectFilter();
 	const read = async (collection: string, dateField: string) => {
 		const rows = await getItems(collection, {
 			filter: { _and: [scope, { [dateField]: lower }] },
-			fields: [...effectiveProjectIdFields, dateField],
+			fields: projectId ? [dateField] : [...effectiveProjectIdFields, dateField],
 			sort: [`-${dateField}`],
 			limit: ACTIVITY_ROW_CAP,
 		});
@@ -42,7 +41,7 @@ export async function fetchActivityRows(
 	};
 	const [ops, tests] = await Promise.all([read('manufacturing_operations', 'operation_date'), read('test_sessions', 'session_date')]);
 	const flat = (rows: any[], dateField: string) =>
-		rows.map((r) => ({ project_id: effectiveProjectId(r) as string, [dateField]: r[dateField] }));
+		rows.map((r) => ({ project_id: (projectId ?? effectiveProjectId(r)) as string, [dateField]: r[dateField] }));
 	return {
 		ops: flat(ops.rows, 'operation_date') as ActivityRows['ops'],
 		tests: flat(tests.rows, 'session_date') as ActivityRows['tests'],

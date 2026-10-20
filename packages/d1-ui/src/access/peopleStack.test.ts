@@ -43,7 +43,7 @@ describe('peopleStack', () => {
 			entries: [entry('Ivy Ito', 'investigator'), entry('Eli Eng', 'edit'), entry('Amy Ash', 'view')],
 			teams: [team('Materials', 'investigator'), team('Additive', 'view')],
 		}));
-		expect(s).toMatchObject({ total: 6, investigators: 2, more: 3, shown: 6 });
+		expect(s).toMatchObject({ total: 6, investigators: 2, more: 3 });
 	});
 
 	it('shows six in full, then three fading, and counts everyone', () => {
@@ -85,15 +85,16 @@ describe('peopleStack', () => {
 		expect(s.faces).toEqual([
 			{ key: 'pi', label: 'Dennis Premoli: Principal investigator', initials: 'DP', team: false, pi: true, opacity: 1 },
 		]);
-		expect(s).toMatchObject({ total: 1, investigators: 0, more: 0 });
+		expect(s).toMatchObject({ total: 1, investigators: 0, more: 0, piLabel: 'Dennis Premoli' });
 	});
 
 	it('is empty with no list and no PI name', () => {
-		expect(peopleStack(null, '')).toMatchObject({ faces: [], total: 0, more: 0 });
+		expect(peopleStack(null, '')).toMatchObject({ faces: [], total: 0, more: 0, piLabel: '' });
 	});
 
 	it('uses the project PI name when the owner row has none', () => {
 		const s = peopleStack(list({ owner: { person_id: 'pi', name: '', can_sign_in: true } }), 'Dennis Premoli');
 		expect(s.faces[0].label).toBe('Dennis Premoli: Principal investigator');
+		expect(s.piLabel).toBe('Dennis Premoli');
 	});
 });

@@ -109,3 +109,5 @@
 	font-size: var(--fs-sm, 12px);
 	color: var(--d1-dim);
 }
+/* Visually hidden, still read by screen readers. Plain (not :where-scoped) so it also works inside scoped components. */
+.d1-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

@@ -23,27 +23,26 @@ const piName = computed(() => props.project.principal_investigator_person?.full_
 </script>
 
 <template>
-	<div class="head">
-		<div class="row">
-			<div class="id">
-				<div class="title">
-					<h1><span class="code">{{ code }}</span><span v-if="project.project_name" class="name">{{ project.project_name }}</span></h1>
-					<span v-if="pin" class="pin"><PinToggle :target="pin" :label="code" /></span>
-					<span class="badges">
-						<span class="kind"><v-icon name="folder_open" x-small />Project</span>
-						<!-- Active and Inactive read the same on a project as on a campaign (success, neutral). -->
-						<StatusBadge kind="campaign" :value="active ? 'active' : 'inactive'" />
-						<span v-if="project.export_controlled" class="badge danger"><v-icon name="gpp_maybe" x-small />Export controlled</span>
-						<span v-if="access?.restricted" class="badge warn"><v-icon name="lock" x-small />Restricted</span>
-					</span>
-				</div>
-				<PeopleStack :list="access" :pi-name="piName" @open="$emit('access')" />
+	<div class="row">
+		<div class="id">
+			<div class="title">
+				<h1><span class="code">{{ code }}</span><span v-if="project.project_name" class="name">{{ project.project_name }}</span></h1>
+				<span v-if="pin" class="pin"><PinToggle :target="pin" :label="code" /></span>
+				<span class="badges">
+					<span class="kind"><v-icon name="folder_open" x-small />Project</span>
+					<!-- Active and Inactive read the same on a project as on a campaign (success, neutral). -->
+					<StatusBadge kind="campaign" :value="active ? 'active' : 'inactive'" />
+					<span v-if="project.export_controlled" class="badge danger"><v-icon name="gpp_maybe" x-small />Export controlled</span>
+					<span v-if="access?.restricted" class="badge warn"><v-icon name="lock" x-small />Restricted</span>
+				</span>
 			</div>
-			<div class="actions">
-				<RecordActions :can-update="canUpdate" :studio-to="studioTo" hide-access @edit="$emit('edit')">
-					<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
-				</RecordActions>
-			</div>
+			<PeopleStack :list="access" :pi-name="piName" @open="$emit('access')" />
+		</div>
+		<div class="actions">
+			<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="$emit('edit')">
+				<template #access />
+				<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="d1-sr-only">Process map</span></v-button>
+			</RecordActions>
 		</div>
 	</div>
 </template>
@@ -68,5 +67,4 @@ h1 { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 
 .badge.danger { color: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--danger) 14%, transparent); }
 .badge.warn { color: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

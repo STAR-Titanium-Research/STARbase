@@ -133,6 +133,28 @@ describe('RecordActions (the action row of all five record pages) for a Lab View
 	});
 });
 
+describe('RecordActions access slot', () => {
+	it('shows "Who has access" by default and leaves it out when the page passes an empty #access', async () => {
+		const { default: RecordActions } = await import('./RecordActions.vue');
+		for (const [slots, expected] of [[undefined, 1], [{ access: () => [] }, 0]] as const) {
+			document.body.innerHTML = '';
+			setExplorerHostFactory(() => ({
+				api: fakeApi() as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true),
+				canViewAllAccess: ref(false), user: ref(null),
+			}));
+			const small = createApp({ render: () => h(RecordActions, { canUpdate: true, studioTo: '/content/x/1' }, slots) });
+			registerStubs(small);
+			const el = document.createElement('div');
+			document.body.appendChild(el);
+			small.mount(el);
+			await nextTick();
+			expect(document.querySelectorAll('[aria-label="Who has access"]')).toHaveLength(expected);
+			expect(document.querySelector('[aria-label="Data Studio"]')).not.toBeNull();
+			small.unmount();
+		}
+	});
+});
+
 describe('Home quick actions for a Lab Viewer', () => {
 	it('offers Print labels and Scan, and neither Register a sample nor Log an operation; a member gets all four', async () => {
 		const { default: QuickActions } = await import('../home/QuickActions.vue');

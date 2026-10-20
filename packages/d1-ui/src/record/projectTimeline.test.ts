@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayLabel, dayOf, emptyText, niceStep, projectTimeline, weekLabel, yAxis, type TimelineInput } from './projectTimeline';
+import { dayLabel, dayOf, emptyText, niceStep, projectTimeline, timelineData, timelineXTicks, weekLabel, yAxis, type TimelineInput } from './projectTimeline';
 
 const DAY = 86_400_000;
 const TODAY = new Date(2026, 9, 16); // Friday 16 Oct 2026
@@ -41,7 +41,7 @@ describe('range 30d', () => {
 		expect(m.domain[1]).toBe(TODAY.getTime() + 7.5 * DAY);
 	});
 	it('keeps only the weeks in range, with operations and tests apart', () => {
-		expect(m.weeks).toEqual([{ start: '2026-10-12', ms: d('2026-10-12'), ops: 1, tests: 1 }]);
+		expect(m.weeks).toEqual([{ ms: d('2026-10-12'), ops: 1, tests: 1 }]);
 	});
 	it('ticks weekly', () => {
 		expect(m.xTicks.map((t) => t.label)).toEqual(['21 Sep', '28 Sep', '5 Oct', '12 Oct', '19 Oct']);
@@ -55,7 +55,7 @@ describe('range 6mo', () => {
 	const m = projectTimeline(base({ range: '6mo', ops: ['2026-03-01', '2026-10-01'] }));
 	it('is 182 days back, so a record from March is out and one from October is in', () => {
 		expect(m.domain[0]).toBe(d('2026-04-13'));
-		expect(m.weeks.map((w) => w.start)).toEqual(['2026-09-28']);
+		expect(m.weeks.map((w) => w.ms)).toEqual([d('2026-09-28')]);
 	});
 	it('ticks by month', () => {
 		expect(m.xTicks.map((t) => t.label)).toEqual(['May 2026', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov']);
@@ -141,7 +141,7 @@ describe('planned work', () => {
 	it('adds up a day, keeps what is in range, and tells operations from tests', () => {
 		const m = projectTimeline(base({
 			range: '30d',
-			plannedOps: ['2026-10-20', { date: '2026-10-20', n: 2 }, { date: '2026-01-01', n: 9 }],
+			plannedOps: [{ date: '2026-10-20', n: 1 }, { date: '2026-10-20', n: 2 }, { date: '2026-01-01', n: 9 }],
 			plannedTests: [{ date: '2026-10-22', n: 4 }, { date: '2026-10-21', n: 0 }],
 		}));
 		expect(m.planned).toEqual([
@@ -154,7 +154,7 @@ describe('planned work', () => {
 
 describe('empty', () => {
 	it('is empty with nothing done, planned or dated in range', () => {
-		const m = projectTimeline(base({ range: '6mo', ops: ['2020-01-01'], tests: ['2020-01-02'], plannedOps: ['2030-01-01'] }));
+		const m = projectTimeline(base({ range: '6mo', ops: ['2020-01-01'], tests: ['2020-01-02'], plannedOps: [{ date: '2030-01-01', n: 1 }] }));
 		expect(m.empty).toBe(true);
 		expect(m.weeks).toEqual([]);
 		// the newest record is still reported, whatever the range
@@ -177,11 +177,6 @@ describe('empty', () => {
 
 describe('y axis', () => {
 	it('uses steps of 1, 2, 2.5 and 5 times a power of ten', () => {
-		expect(niceStep(40, false)).toBe(10);
-		expect(niceStep(8, false)).toBe(2);
-		expect(niceStep(10, false)).toBe(2.5);
-		expect(niceStep(18, false)).toBe(5);
-		expect(niceStep(0.8, false)).toBe(0.2);
 		expect(niceStep(100)).toBe(25);
 		expect(niceStep(230)).toBe(100);
 		expect(niceStep(180)).toBe(50);
@@ -206,5 +201,17 @@ describe('y axis', () => {
 		const m = projectTimeline(base({ ops: ['2026-10-12', '2026-10-13', '2026-10-14'], tests: ['2026-10-15', '2026-10-15'] }));
 		expect(m.weeks[0]).toMatchObject({ ops: 3, tests: 2 });
 		expect(m.y.top).toBeGreaterThan(5);
+	});
+});
+
+describe('data and x ticks apart', () => {
+	it('gives the same model as projectTimeline, the x ticks following only the domain and the budget', () => {
+		const input = base({ range: '6mo', ops: ['2026-10-01'] });
+		const data = timelineData(input);
+		expect(data).not.toHaveProperty('xTicks');
+		for (const xTickBudget of [3, 8]) {
+			expect(projectTimeline({ ...input, xTickBudget })).toEqual({ ...data, xTicks: timelineXTicks(data.domain, xTickBudget) });
+		}
+		expect(timelineXTicks(data.domain, 3).length).toBeLessThan(timelineXTicks(data.domain, 8).length);
 	});
 });

@@ -15,9 +15,6 @@ const props = defineProps<{
 defineEmits<{ open: [] }>();
 
 const stack = computed(() => peopleStack(props.list, props.piName));
-const name = computed(() => (props.list?.owner?.name || props.piName).trim());
-const investigators = computed(() => stack.value.investigators);
-const more = computed(() => stack.value.more);
 </script>
 
 <template>
@@ -35,8 +32,8 @@ const more = computed(() => stack.value.more);
 				:title="f.label"
 			><v-icon v-if="f.team" name="groups" x-small /><template v-else>{{ f.initials }}</template></span>
 		</span>
-		<span v-if="name" class="line">
-			<b>{{ name }}</b> PI<template v-if="investigators"> · <b>{{ investigators }}</b> investigator{{ investigators === 1 ? '' : 's' }}</template><template v-if="more"> · <b>{{ more }}</b> more {{ more === 1 ? 'has' : 'have' }} access</template>
+		<span v-if="stack.piLabel" class="line">
+			<b>{{ stack.piLabel }}</b> PI<template v-if="stack.investigators"> · <b>{{ stack.investigators }}</b> investigator{{ stack.investigators === 1 ? '' : 's' }}</template><template v-if="stack.more"> · <b>{{ stack.more }}</b> more {{ stack.more === 1 ? 'has' : 'have' }} access</template>
 		</span>
 		<button type="button" class="open" @click="$emit('open')">Who has access</button>
 	</div>
