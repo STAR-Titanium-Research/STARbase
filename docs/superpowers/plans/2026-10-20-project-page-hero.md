@@ -17,7 +17,7 @@ Claude-Session: https://claude.ai/code/session_011vo4wDvALxCfZc4drFUZnP
 | C: docs (DESIGN.md, backlog item) | agent worktree | hero-c-docs | Haiku | merged |
 | B: Project page (data, hero, layout) | agent worktree | hero-b-page | Sonnet | merged |
 | Simplify pass | main branch | — | coordinator | merged |
-| Review | read-only | — | Opus (directus-ui-reviewer) | in progress |
+| Review | read-only | — | Opus (directus-ui-reviewer) | done, 12 of 13 fixed (Restricted badge note in spec) |
 
 ## Stream A: kit (`packages/d1-ui`)
 
