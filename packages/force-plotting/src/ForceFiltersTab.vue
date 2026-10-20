@@ -8,13 +8,13 @@
  */
 import { computed } from 'vue';
 import FilterResponse from './FilterResponse.vue';
-import { chainActive, defaultChain } from './filterChain';
+import { chainActive, cloneChain } from './filterChain';
 import { useForceCtx } from './forceCtx';
 
 const { detail, liveOn, workChain, cacheMeanRpm, previewOn, chainDirty, savedChain, bakedChain, appliedLight, filterBusy, filterErr, filterSkipped,
 	profiles, applyProfile, saveProfile, applyFilter, bakeFilters, clearFilter, baking, bakeBlocked } = useForceCtx();
 const nyquist = computed(() => (Number(detail.value?.sample_rate) || 25600) / 2);
-function resetChain() { workChain.value = savedChain.value ? JSON.parse(JSON.stringify(savedChain.value)) : defaultChain(); }
+function resetChain() { workChain.value = cloneChain(savedChain.value); }
 function toggleHarmonic(h: number, on: boolean) {
 	const cur: number[] = workChain.value.notch.harmonics;
 	workChain.value.notch.harmonics = (on ? [...cur, h] : cur.filter((x) => x !== h)).sort();

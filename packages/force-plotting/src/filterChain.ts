@@ -27,6 +27,11 @@ export function chainActive(c: FilterChain | null | undefined): boolean {
 	return !!c && (c.despike.on || c.detrend.on || c.highpass.on || c.lowpass.on || c.notch.on);
 }
 
+/** An independent copy: a working chain must never share objects with the saved one, or editing it edits the saved chain. */
+export function cloneChain(c: FilterChain | null | undefined): FilterChain {
+	return c ? JSON.parse(JSON.stringify(c)) : defaultChain();
+}
+
 /** How many stages are switched on: the badge of the Signal filters tab. */
 export function stagesOn(c: FilterChain | null | undefined): number {
 	return c ? [c.despike, c.detrend, c.highpass, c.lowpass, c.notch].filter((s) => s.on).length : 0;

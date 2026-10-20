@@ -33,7 +33,7 @@ import { computeSignalStats, resolveStatsWindow, type SignalStats } from './sign
 import { statsCsvColumns } from './statsCsv';
 import { DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
 import { meanRpm } from './filterResponse';
-import { type FilterChain, bakeBlockedReason, chainActive, chainsEqual, defaultChain, fetchFiltered, fetchFilteredFft, stagesOn } from './filterChain';
+import { type FilterChain, bakeBlockedReason, chainActive, chainsEqual, cloneChain, defaultChain, fetchFiltered, fetchFilteredFft, stagesOn } from './filterChain';
 import { useForceHost } from './host';
 import { saveChartImage, type ChartSnapshot } from './chartExport';
 import { downloadText, safeFilePart, toCsv, useCopyFeedback, type CsvColumn } from './csvExport';
@@ -678,12 +678,13 @@ watch([workChain, () => detail.value?.live_cache_file, previewing, () => applied
 }, { deep: true });
 watch(() => detail.value?.id, () => {
 	stopHostPolls();   // a poll started for the previous op must not report into this one
-	workChain.value = savedChain.value ?? defaultChain();
+	workChain.value = cloneChain(savedChain.value);
+	previewOn.value = true;
 	filteredCache.value = null; filterErr.value = null; filterFftOverlay.value = null;
 });
 function applyProfile(id: string) {
 	const p = profiles.value.find((x) => x.id === id);
-	if (p?.chain) workChain.value = mergeChain(typeof p.chain === 'string' ? JSON.parse(p.chain) : p.chain);
+	if (p?.chain) workChain.value = cloneChain(mergeChain(typeof p.chain === 'string' ? JSON.parse(p.chain) : p.chain));
 }
 async function saveProfile() {
 	const name = window.prompt('Save filter profile as:'); if (!name) return;
@@ -696,7 +697,7 @@ async function saveProfile() {
 async function applyFilter() {
 	const d = detail.value;
 	if (!d?.id || !chainActive(workChain.value)) return;
-	const chain = JSON.parse(JSON.stringify(workChain.value));
+	const chain = cloneChain(workChain.value);
 	filterErr.value = null;
 	detail.value = { ...detail.value, filter_chain: chain, filter_baked: false };   // optimistic — solo pane shows now
 	try { await api.patch(`/items/machining_force_analysis/${d.id}`, { filter_chain: chain, filter_baked: false }); }

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest';
 import { setForceHost, resetForceHost, type ForceHost } from './host';
-import { bakeBlockedReason, chainsEqual, defaultChain, fetchFiltered, fetchSpectrogram, NO_MAT_BAKE_REASON, stagesOn } from './filterChain';
+import { bakeBlockedReason, chainsEqual, cloneChain, defaultChain, fetchFiltered, fetchSpectrogram, NO_MAT_BAKE_REASON, stagesOn } from './filterChain';
 
 function hostWith(over: Partial<ForceHost>): ForceHost {
 	return {
@@ -104,4 +104,15 @@ describe('stagesOn / chainsEqual (the Signal filters tab badge and its unsaved-e
 		const c = defaultChain(); c.lowpass.cutoff_hz = 1500;
 		expect(chainsEqual(a, c)).toBe(false);
 	});
+});
+
+describe('cloneChain', () => {
+	it('copies, so editing the copy leaves the original (the saved chain) alone', () => {
+		const saved = defaultChain();
+		const work = cloneChain(saved);
+		work.lowpass.on = true;
+		expect(saved.lowpass.on).toBe(false);
+		expect(chainsEqual(work, saved)).toBe(false);
+	});
+	it('is the default chain for none', () => { expect(chainsEqual(cloneChain(null), defaultChain())).toBe(true); });
 });
