@@ -114,6 +114,7 @@ function makeDb(tables, log) {
       },
       whereIn(c, values) { preds.push((r) => values.some((v) => same(r[c], v))); return q; },
       whereNull(c) { preds.push((r) => r[c] === null || r[c] === undefined); return q; },
+      whereNotNull(c) { preds.push((r) => r[c] !== null && r[c] !== undefined); return q; },
       orderBy(col, dir = 'asc') { order = { col, dir }; return q; },
       limit(n) { max = n; return q; },
       offset(n) { skip = n; return q; },
@@ -538,6 +539,20 @@ test('remove_access: removes a listed person or team, noop when not listed, refu
   assert.ok(!peopleOf(h.tables, S.one).includes(`${P.bob}:view`));
   assert.equal(h.tables.bulk_actions[0].mail_state, 'none', 'removing access mails nobody');
   assert.equal(h.log.timers.length, 0);
+});
+
+test('remove_access of a person whose only access comes through a team is a skip that says so, not "no change needed"', async () => {
+  const h = setup();
+  // Bob reaches SM-002 only through a team grant (a derived row, which the triggers write); SM-003 he cannot reach at all
+  h.tables.sample_access.push({ sample_id: S.two, person_id: P.bob, role: 'view', team_access_id: ID(900) });
+  const p = await preview(h, member(U.ann), 'physical_samples', removeBody([S.two, S.three], person(P.bob)));
+  assert.deepEqual(p.body.results.map((r) => [r.code, r.status]), [['SM-002', 'skip'], ['SM-003', 'noop']]);
+  assert.match(p.body.results[0].reason, /through a team/);
+  const out = await ranOk(h, member(U.ann), removeBody([S.two], person(P.bob)));
+  assert.deepEqual([out.counts.applied, out.counts.skipped], [0, 1]);
+  assert.equal(out.results[0].outcome, 'skipped');
+  assert.match(out.results[0].reason, /through a team/);
+  assert.ok(h.tables.sample_access.some((r) => r.team_access_id === ID(900)), 'the derived row stays');
 });
 
 test('remove_access of an old co-owner is a real change (the snapshot sees the old row), not a noop', async () => {
