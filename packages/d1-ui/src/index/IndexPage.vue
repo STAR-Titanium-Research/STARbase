@@ -78,7 +78,7 @@ const {
 
 // ---- how the list is shown ----------------------------------------------------------------
 const slots = useSlots();
-const initial = readListPrefs(props.def.slug);
+const initial = readListPrefs(props.def.slug, undefined, props.def);
 const view = ref<ListView>(initial.view);
 const density = ref<Density>(initial.density);
 const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
@@ -90,7 +90,7 @@ const hasPlots = computed(() => !props.pick && plotKind(props.def.collection) !=
 const hasMap = computed(() => !props.pick && MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // The row's name, for its buttons' accessible names (its first column, else its key).
 const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def) || rowKey(row);
-const saveListPrefs = () => writeListPrefs(props.def.slug, { view: view.value, density: density.value });
+const saveListPrefs = () => writeListPrefs(props.def.slug, { ...initial, view: view.value, density: density.value });
 function setView(v: ListView): void {
 	view.value = v;
 	saveListPrefs();
