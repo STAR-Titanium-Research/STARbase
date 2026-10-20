@@ -2,9 +2,8 @@
 //
 // Bulk actions on the index pages (spec docs/superpowers/specs/2026-10-20-bulk-actions-design.md): one action on up to 100 ticked records,
 // a dry-run preview per record, apply with partial success, a 60-second undo for the person who ran it, a revert for administrators, and
-// the journal behind all of it (migration 204: bulk_actions, bulk_action_rows; read and written only here).
-//
-// This release has three kinds: `restrict`, `unrestrict` and `edit_field` (the ownership and access kinds come with the next ones).
+// the journal behind it (migration 204: bulk_actions, bulk_action_rows; read and written only here). This release has three kinds:
+// restrict, unrestrict and edit_field (the ownership and access kinds come with the next ones).
 //
 //   POST /d1-bulk-actions/:collection/preview   { kind, ids[], params }
 //     -> { results: [{ id, code, status: 'ok'|'noop'|'skip', reason? }], counts: { total, ok, noop, skip } }
@@ -14,42 +13,34 @@
 //   POST /d1-bulk-actions/:action_id/undo       -> { state, revert_action_id, results: [{ id, code, revert_outcome, reason? }] }
 //        the person who ran it while now < undo_until, or an administrator
 //   POST /d1-bulk-actions/:action_id/revert     -> the same shape; administrators only, any time
-//   GET  /d1-bulk-actions                       -> { actions: [...], limit, offset, has_more }  (?limit=50 max 200, ?offset=0; administrators see
-//        all, everyone else only their own; newest first)
-//   GET  /d1-bulk-actions/:action_id            -> { action, rows: [...] }  (the same visibility; 404 for an action you may not see; each row
-//        has before and after (the snapshots) for administrators only, null for everyone else)
-//   params: restrict and unrestrict {}; edit_field { field, value } (value null clears the field). collection: physical_samples,
-//   manufacturing_operations, test_sessions or campaigns (restrict and unrestrict) and the same four for edit_field (BULK_FIELDS below is the
-//   allow-list per collection; the index pages mirror it in `bulkFields`).
+//   GET  /d1-bulk-actions                       -> { actions: [...], limit, offset, has_more }  (?limit=50 max 200, ?offset=0; administrators
+//        see all, everyone else only their own; newest first)
+//   GET  /d1-bulk-actions/:action_id            -> { action, rows: [...] }  (the same visibility; 404 otherwise; each row's before and after
+//        snapshots are for administrators only, null for everyone else)
+//   params: restrict and unrestrict {}; edit_field { field, value } (null clears). Collections: physical_samples, manufacturing_operations,
+//   test_sessions, campaigns; BULK_FIELDS is the allow-list of fields per collection (the index pages mirror it in `bulkFields`).
 //
-// Errors (the Directus shape { errors: [{ message, extensions: { code, source: 'd1-bulk-actions' } }] }): 401 no user; 403 READ_ONLY_ROLE
-// (a Lab Viewer, on preview too: there is nothing a viewer may preview); 400 INVALID_PAYLOAD (collection, kind, ids, field or value);
-// 400 NOT_APPLICABLE (the kind is not valid for that collection); 404 NOT_FOUND (an action you may not see); 403 FORBIDDEN (revert by a
-// non-administrator, undo by someone else); 403 UNDO_WINDOW_CLOSED; 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED (state undone or
-// reverted), NOTHING_TO_REVERT (the action applied nothing).
+// Errors (the Directus shape, source 'd1-bulk-actions'): 401; 403 READ_ONLY_ROLE (a Lab Viewer, on preview too); 400 INVALID_PAYLOAD,
+// NOT_APPLICABLE; 404 NOT_FOUND (an action you may not see); 403 FORBIDDEN (revert by a non-administrator), UNDO_WINDOW_CLOSED;
+// 409 CANNOT_REVERT_A_REVERT, ALREADY_REVERTED, NOTHING_TO_REVERT.
 //
-// How a request runs, per record (preview and apply run the SAME function; preview in a transaction that is always rolled back, so the
-// two cannot disagree):
-//   1. requireReadable: ItemsService.readOne as the caller. A record the caller cannot read is skipped as "not found", with no code, never
-//      revealed.
-//   2. in ONE knex transaction that first does set_config('d1.actor_identity', <caller>, true) (so audit_logs names the caller): the
-//      `before` snapshot, then ItemsService.updateOne as the CALLER, so Directus's permissions and d1-access-guard decide (the guard's
-//      refusal text becomes the skip reason), then the `after` snapshot. A value already as asked is `noop` and never written.
-//   3. apply: the record's journal row is written in the same transaction, so a change and its journal commit together; preview rolls
-//      everything back. Directus's action events (the hooks that cascade a project or campaign change) are held back with
-//      `bypassEmitAction` and emitted after the commit (never for a preview; filter hooks, including d1-access-guard, still run).
-//   After commit: the Directus data cache is cleared once for the whole action when CACHE_ENABLED is on.
+// Per record, preview and apply run the SAME function; a preview runs in a transaction that is always rolled back, so the two cannot disagree:
+//   1. a record the caller cannot read (ItemsService.readOne as the caller) is skipped as "not found", with no code, never revealed;
+//   2. in one transaction (d1.actor_identity set, so audit_logs names the caller): row lock, `before` snapshot, ItemsService.updateOne as the
+//      CALLER (Directus's permissions and d1-access-guard decide; the guard's refusal text is the skip reason), `after` snapshot. A value
+//      already as asked is `noop` and never written;
+//   3. apply also writes the record's journal row in that transaction. Directus's action events (which cascade a project or campaign change)
+//      are held back with `bypassEmitAction` and emitted after the commit; filter hooks, including d1-access-guard, still run.
+// The data cache is cleared once per action when CACHE_ENABLED is on.
 //
-// Snapshots (what `before` and `after` hold, so "unchanged since" is a plain comparison): restrict and unrestrict keep the ownership and
-// access shape of the spec { owner_person_id, owner_team_id, restricted, people: [{ person_id, role }], teams: [{ team_id, role,
-// trust_new_members }] } (a person's OWN rows, a team's grants; never the derived rows or the database-held owner grant, which are
-// consequences); edit_field keeps { <field>: <value> }.
+// Snapshots (`before` and `after`, so "unchanged since" is a plain comparison): restrict and unrestrict keep the spec's ownership shape
+// { owner_person_id, owner_team_id, restricted, people, teams } (a person's OWN rows and a team's grants, never derived rows or the
+// database-held owner grant); edit_field keeps { <field>: <value> }.
 //
-// Undo and revert are one implementation (section 3.3 of the spec): for each applied row, the current snapshot is compared to `after`
-// (different: `changed_since`, nothing written), otherwise `before` is written back as the caller (a refusal: `refused`, a crash:
-// `failed`). The revert is journaled as a new bulk_actions row (`revert_of` = the original, mail_state 'none', undo_until = created_at, so
-// it can never be undone) and the original's state becomes undone (by `undo`), reverted (by `revert`) or partly_reverted. A row already
-// reverted is never reverted again; an administrator can run `revert` again on a partly_reverted action to retry the rest.
+// Undo and revert are one implementation (spec 3.3): per applied row, a current snapshot that differs from `after` is `changed_since` (nothing
+// written), otherwise `before` is written back as the caller (a refusal: `refused`, a crash: `failed`). The revert is journaled as a new
+// bulk_actions row (revert_of, mail_state 'none', undo_until = created_at so it can never be undone); the original becomes undone, reverted
+// or partly_reverted (an administrator can revert a partly_reverted action again to retry the rest).
 
 import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest } from '../d1-record-access/index.js';
 import { accountAdmin } from '../d1-people-admin/index.js';
@@ -115,7 +106,7 @@ const isBlank = (v) => v === undefined || v === null || v === '';
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1' || v === 't';
 const isUuid = (v) => typeof v === 'string' && UUID.test(v);
-const hasOwn = (obj, key) => Object.hasOwn(obj, key);
+const { hasOwn } = Object;
 const iso = (v) => {
   if (isBlank(v)) return null;
   const d = v instanceof Date ? v : new Date(v);
@@ -222,7 +213,7 @@ export function mount(router, context, clock = () => new Date()) {
       if (labViewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
       const caller = await accountAdmin(database, acc.user, labAdminRoleId);
       const admin = acc.admin === true || caller.admin;
-      await fn({ req, res, acc, admin, labViewer });
+      await fn({ req, res, acc, admin });
     } catch (err) {
       return sendError(res, err);
     }
@@ -242,8 +233,17 @@ export function mount(router, context, clock = () => new Date()) {
       return work(trx);
     });
 
+  // A journal row for an action (or a revert); returns its id (the driver answers an id or { action_id }).
+  async function insertAction(db, acc, { params, ...row }) {
+    const person = await db('people').where('user_id', acc.user).first('person_id');
+    const [created] = await db('bulk_actions').insert({
+      actor_user: String(acc.user), actor_person: person?.person_id ?? null, params: JSON.stringify(params), mail_state: 'none', mail_due_at: null, ...row,
+    }).returning('action_id');
+    return typeof created === 'object' && created !== null ? created.action_id : created;
+  }
+
   async function clearDataCache(req) {
-    if (!(env?.CACHE_ENABLED === true || env?.CACHE_ENABLED === 'true' || env?.CACHE_ENABLED === 1 || env?.CACHE_ENABLED === '1')) return;
+    if (!toBool(env?.CACHE_ENABLED)) return;
     try {
       await new services.UtilsService({ schema: req.schema, accountability: { user: null, role: null, admin: true, app: false } }).clearCache({ system: false });
     } catch (err) {
@@ -378,7 +378,6 @@ export function mount(router, context, clock = () => new Date()) {
         } else {
           Object.assign(result, classify(err));
         }
-        result.events = [];
       }
     }
     if (!commit || result.outcome !== 'applied') result.events = [];
@@ -463,16 +462,12 @@ export function mount(router, context, clock = () => new Date()) {
   // -- apply -------------------------------------------------------------------------------------------
   router.post('/:collection/apply', route(async ({ req, res, acc }) => {
     const ctx = await prepare(req, acc);
-    const person = await database('people').where('user_id', acc.user).first('person_id');
     const started = clock();
-    const header = {
-      actor_user: String(acc.user), actor_person: person?.person_id ?? null, collection: ctx.cfg.collection, kind: ctx.kind,
-      params: JSON.stringify(ctx.params), created_at: started, undo_until: new Date(started.getTime() + UNDO_WINDOW_MS),
-      mail_state: 'none', mail_due_at: null, n_applied: 0, n_skipped: 0, n_failed: 0,
-    };
     // The action row first, so every record's journal row (written in that record's own transaction) has a parent.
-    const [created] = await database('bulk_actions').insert(header).returning('action_id');
-    const actionId = typeof created === 'object' && created !== null ? created.action_id : created;
+    const actionId = await insertAction(database, acc, {
+      collection: ctx.cfg.collection, kind: ctx.kind, params: ctx.params, created_at: started, undo_until: new Date(started.getTime() + UNDO_WINDOW_MS),
+      n_applied: 0, n_skipped: 0, n_failed: 0,
+    });
 
     const results = [];
     const counts = { total: ctx.ids.length, applied: 0, noop: 0, skipped: 0, failed: 0 };
@@ -502,13 +497,18 @@ export function mount(router, context, clock = () => new Date()) {
   }));
 
   // -- undo and revert -----------------------------------------------------------------------------------
-  const actionOr404 = async (db, id) => {
-    if (!isUuid(id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The action id is not valid.');
-    return db('bulk_actions').where('action_id', id).first();
-  };
-  const NO_SUCH_ACTION = () => new HttpError(404, 'NOT_FOUND', 'That bulk action does not exist, or you cannot see it.');
   const sameUser = (a, b) => !isBlank(a) && !isBlank(b) && String(a).toLowerCase() === String(b).toLowerCase();
   const parseJson = (v) => (typeof v === 'string' ? JSON.parse(v) : v ?? null);
+
+  // An action the caller may see (administrators: any; everyone else: their own), else 404. `lockRow` holds the row for the transaction.
+  async function visibleAction(db, { req, acc, admin }, lockRow = false) {
+    const id = req.params?.action_id;
+    if (!isUuid(id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The action id is not valid.');
+    const query = db('bulk_actions').where('action_id', id);
+    const action = await (lockRow ? query.forUpdate() : query).first();
+    if (!action || (!admin && !sameUser(action.actor_user, acc.user))) throw new HttpError(404, 'NOT_FOUND', 'That bulk action does not exist, or you cannot see it.');
+    return action;
+  }
 
   // One record of an undo or revert, in its own transaction. Returns { revert_outcome, reason, before, after, events }.
   async function revertOne(ctx, row) {
@@ -517,64 +517,45 @@ export function mount(router, context, clock = () => new Date()) {
     const fieldDef = kind === 'edit_field' ? (BULK_FIELDS[cfg.collection] ?? {})[params.field] : null;
     const before = parseJson(row.before);
     const after = parseJson(row.after);
-    // what happened to this record, written to its journal row (inside the record's transaction when there is one)
+    const refuse = (reason) => Object.assign(out, { revert_outcome: 'refused', reason });
+    // what happened to this record, written to its journal row: inside the record's transaction when it commits, else on its own below
+    const finish = (db) => db('bulk_action_rows').where({ action_id: row.action_id, record_id: row.record_id }).update({ revert_outcome: out.revert_outcome, revert_reason: out.reason });
     let journaled = false;
-    const finish = async (db) => {
-      journaled = true;
-      await db('bulk_action_rows').where({ action_id: row.action_id, record_id: row.record_id }).update({ revert_outcome: out.revert_outcome, revert_reason: out.reason });
-    };
     if (kind === 'edit_field' && !fieldDef) {
-      out.revert_outcome = 'refused';
-      out.reason = 'That field can no longer be edited in bulk.';
-      await finish(database);
-      return out;
-    }
-    if (!(await readable({ req, cfg }, row.record_id))) {
-      out.revert_outcome = 'refused';
-      out.reason = NOT_FOUND_REASON;
-      await finish(database);
-      return out;
-    }
-    try {
-      await inTransaction(acc, async (trx) => {
-        await lockRecord(trx, cfg, row.record_id); // compared and written under the row lock
-        const current = await snapshot(trx, req, cfg, row.record_id, kind, params);
-        out.before = current;
-        if (!snapshotsEqual(current, after)) {
-          out.revert_outcome = 'changed_since';
-          out.reason = 'Changed since this action ran, so it was left alone.';
-          out.after = current;
+      refuse('That field can no longer be edited in bulk.');
+    } else if (!(await readable({ req, cfg }, row.record_id))) {
+      refuse(NOT_FOUND_REASON);
+    } else {
+      try {
+        await inTransaction(acc, async (trx) => {
+          await lockRecord(trx, cfg, row.record_id); // compared and written under the row lock
+          const current = await snapshot(trx, req, cfg, row.record_id, kind, params);
+          out.before = current;
+          if (!snapshotsEqual(current, after)) {
+            Object.assign(out, { revert_outcome: 'changed_since', reason: 'Changed since this action ran, so it was left alone.', after: current });
+          } else {
+            const payload = kind === 'edit_field'
+              ? { [params.field]: normaliseValue(fieldDef.kind, before[params.field]) }
+              : { restricted: before.restricted === true };
+            try {
+              await itemsFor(req, cfg.collection, trx).updateOne(row.record_id, payload, { bypassEmitAction: (e) => out.events.push(e), autoPurgeCache: false });
+            } catch (err) {
+              out.after = current;
+              throw err;
+            }
+            out.after = await snapshot(trx, req, cfg, row.record_id, kind, params);
+            Object.assign(out, { revert_outcome: 'reverted', reason: null });
+          }
           await finish(trx);
-          return;
-        }
-        const payload = kind === 'edit_field'
-          ? { [params.field]: normaliseValue(fieldDef.kind, before[params.field]) }
-          : { restricted: before.restricted === true };
-        try {
-          await itemsFor(req, cfg.collection, trx).updateOne(row.record_id, payload, { bypassEmitAction: (e) => out.events.push(e), autoPurgeCache: false });
-        } catch (err) {
-          const c = classify(err);
-          out.revert_outcome = c.outcome === 'skipped' ? 'refused' : 'failed';
-          out.reason = c.reason;
-          out.after = current;
-          out.events = [];
-          throw new Rollback();
-        }
-        out.after = await snapshot(trx, req, cfg, row.record_id, kind, params);
-        out.revert_outcome = 'reverted';
-        out.reason = null;
-        await finish(trx);
-      });
-    } catch (err) {
-      if (!(err instanceof Rollback)) {
+        });
+        journaled = true; // the outcome committed with the record
+      } catch (err) {
+        // a refusal or a failure rolled the record's transaction back
         const c = classify(err);
-        out.revert_outcome = c.outcome === 'skipped' ? 'refused' : 'failed';
-        out.reason = c.reason;
-        journaled = false;
+        Object.assign(out, { revert_outcome: c.outcome === 'skipped' ? 'refused' : 'failed', reason: c.reason });
       }
     }
     if (!journaled) {
-      // a refusal or a failure rolled the record's transaction back: remember what happened to it on its own
       try {
         await finish(database);
       } catch (e) {
@@ -586,14 +567,13 @@ export function mount(router, context, clock = () => new Date()) {
   }
 
   // mode 'undo': the actor inside the window, or an administrator. mode 'revert': administrators, any time.
-  async function undoOrRevert({ req, res, acc, admin }, mode) {
+  async function undoOrRevert(c, mode) {
+    const { req, res, acc, admin } = c;
     const actionId = req.params?.action_id;
     if (mode === 'revert' && !admin) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator can revert a bulk action.');
     const finished = await database.transaction(async (lock) => {
       // The action row is locked for the whole run: a second undo or revert waits, then finds the state changed (409).
-      if (!isUuid(actionId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The action id is not valid.');
-      const action = await lock('bulk_actions').where('action_id', actionId).forUpdate().first();
-      if (!action || (!admin && !sameUser(action.actor_user, acc.user))) throw NO_SUCH_ACTION();
+      const action = await visibleAction(lock, c, true);
       if (!isBlank(action.revert_of)) throw new HttpError(409, 'CANNOT_REVERT_A_REVERT', 'A revert cannot be reverted. Run the action again instead.');
       const now = clock();
       if (mode === 'undo' && !admin && !(now.getTime() < new Date(action.undo_until).getTime())) {
@@ -629,14 +609,11 @@ export function mount(router, context, clock = () => new Date()) {
       const state = totalReverted === applied.length ? (mode === 'undo' ? 'undone' : 'reverted') : 'partly_reverted';
 
       // The revert is itself a journaled bulk action: same kind, linked to the original, never undone, mails nobody.
-      const person = await lock('people').where('user_id', acc.user).first('person_id');
-      const [created] = await lock('bulk_actions').insert({
-        actor_user: String(acc.user), actor_person: person?.person_id ?? null, collection: action.collection, kind, params: JSON.stringify(params),
-        created_at: now, undo_until: now, state: 'applied', revert_of: actionId, mail_state: 'none', mail_due_at: null,
+      const revertId = await insertAction(lock, acc, {
+        collection: action.collection, kind, params, created_at: now, undo_until: now, state: 'applied', revert_of: actionId,
         n_applied: revertedNow, n_skipped: outs.filter((o) => o.revert_outcome === 'changed_since' || o.revert_outcome === 'refused').length,
         n_failed: outs.filter((o) => o.revert_outcome === 'failed').length,
-      }).returning('action_id');
-      const revertId = typeof created === 'object' && created !== null ? created.action_id : created;
+      });
       if (outs.length) {
         await lock('bulk_action_rows').insert(outs.map((o) => ({
           action_id: revertId, record_id: String(o.id), record_code: o.code,
@@ -692,9 +669,9 @@ export function mount(router, context, clock = () => new Date()) {
     res.json({ actions: page.map((a) => actionOut(a, names)), limit, offset, has_more: rows.length > limit });
   }));
 
-  router.get('/:action_id', route(async ({ req, res, acc, admin }) => {
-    const action = await actionOr404(database, req.params?.action_id);
-    if (!action || (!admin && !sameUser(action.actor_user, acc.user))) throw NO_SUCH_ACTION();
+  router.get('/:action_id', route(async (c) => {
+    const { res, admin } = c;
+    const action = await visibleAction(database, c);
     const names = await actorNames(database, [action]);
     const rows = await database('bulk_action_rows').where('action_id', action.action_id).select();
     res.json({
