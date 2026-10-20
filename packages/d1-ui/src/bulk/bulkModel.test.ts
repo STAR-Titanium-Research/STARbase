@@ -11,22 +11,26 @@ const samples = indexDefBySlug('samples')!;
 const tests = indexDefBySlug('tests')!;
 const tools = indexDefBySlug('tools')!;
 const status = bulkEntries(samples).find((e) => e.id === 'field:current_status')!;
+const restrict = (def: typeof samples) => bulkEntries(def).find((e) => e.id === 'restrict')!;
+const unrestrict = (def: typeof samples) => bulkEntries(def).find((e) => e.id === 'unrestrict')!;
+const ACCESS_IDS = ['assign_team', 'change_owner', 'share_access', 'remove_access'];
 
 describe('bulkEntries', () => {
-	it('offers samples Print labels, Restrict, Unrestrict and one edit per bulk field, in that order', () => {
+	it('offers samples Print labels, the four access entries, Restrict, Unrestrict and one edit per bulk field, in that order', () => {
 		expect(bulkEntries(samples).map((e) => [e.id, e.label])).toEqual([
-			['print', 'Print labels'], ['restrict', 'Restrict…'], ['unrestrict', 'Unrestrict…'],
+			['print', 'Print labels'], ['assign_team', 'Assign to team…'], ['change_owner', 'Change owner…'], ['share_access', 'Share or change access…'],
+			['remove_access', 'Remove access…'], ['restrict', 'Restrict…'], ['unrestrict', 'Unrestrict…'],
 			['field:current_status', 'Edit status…'], ['field:project_id', 'Edit project…'], ['field:mounted', 'Edit mounted…'],
 		]);
 	});
-	it('offers an ownable page without bulk fields only the restrict pair, and no Print labels', () => {
-		expect(bulkEntries(tests).map((e) => e.id)).toEqual(['restrict', 'unrestrict']);
+	it('offers an ownable page without bulk fields the access entries and the restrict pair, and no Print labels', () => {
+		expect(bulkEntries(tests).map((e) => e.id)).toEqual([...ACCESS_IDS, 'restrict', 'unrestrict']);
 	});
 	it('offers a plain page nothing at all', () => {
 		expect(bulkEntries(tools)).toEqual([]);
 	});
-	it('keys the restrict pair off the ownable flag, not the slug', () => {
-		expect(bulkEntries({ ...tools, ownable: true }).map((e) => e.id)).toEqual(['restrict', 'unrestrict']);
+	it('keys the access entries and the restrict pair off the ownable flag, not the slug', () => {
+		expect(bulkEntries({ ...tools, ownable: true }).map((e) => e.id)).toEqual([...ACCESS_IDS, 'restrict', 'unrestrict']);
 	});
 	it('gives a Lab Viewer only the entries that navigate', () => {
 		expect(bulkEntries(samples, { viewer: true }).map((e) => e.id)).toEqual(['print']);
@@ -50,14 +54,14 @@ describe('dialog wording', () => {
 	});
 	it('titles each kind', () => {
 		expect(dialogTitle(status, samples, 38)).toBe('Edit status for 38 samples');
-		expect(dialogTitle(bulkEntries(tests)[0], tests, 5)).toBe('Restrict 5 tests');
-		expect(dialogTitle(bulkEntries(tests)[1], tests, 1)).toBe('Unrestrict 1 test');
+		expect(dialogTitle(restrict(tests), tests, 5)).toBe('Restrict 5 tests');
+		expect(dialogTitle(unrestrict(tests), tests, 1)).toBe('Unrestrict 1 test');
 	});
 	it('asks for params only when the target is known', () => {
 		expect(paramsFor(status, null)).toBeNull();
 		expect(paramsFor(status, { value: 'archived' })).toEqual({ field: 'current_status', value: 'archived' });
 		expect(paramsFor(status, { value: null })).toEqual({ field: 'current_status', value: null });
-		expect(paramsFor(bulkEntries(tests)[0], null)).toEqual({});
+		expect(paramsFor(restrict(tests), null)).toEqual({});
 	});
 	it('offers Clear value only on a column that may be empty', () => {
 		expect(samples.bulkFields!.map(canClear)).toEqual([false, true, false]);
@@ -135,8 +139,8 @@ describe('apply results', () => {
 		const project = bulkEntries(samples).find((e) => e.id === 'field:project_id')!;
 		expect(resultText(project, samples, 2, { value: 'p1' }, 'P-100')).toBe('Set project to P-100 on 2 samples');
 		expect(resultText(project, samples, 1, { value: null })).toBe('Cleared project on 1 sample');
-		expect(resultText(bulkEntries(tests)[0], tests, 5, null)).toBe('Restricted 5 tests');
-		expect(resultText(bulkEntries(tests)[1], tests, 1, null)).toBe('Unrestricted 1 test');
+		expect(resultText(restrict(tests), tests, 5, null)).toBe('Restricted 5 tests');
+		expect(resultText(unrestrict(tests), tests, 1, null)).toBe('Unrestricted 1 test');
 		expect(resultText(status, samples, 0, { value: 'x' })).toBe('Nothing was changed');
 	});
 });

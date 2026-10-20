@@ -6,12 +6,17 @@
 import { choiceKindFor, choiceLabel } from '../choiceLabels';
 import { formatDate } from '../format';
 import type { BulkField, IndexDef } from '../index/indexConfig';
-import { nounsFor } from '../index/pickMode';
 import { humanise, statusStyle } from '../status';
+import {
+	DEFAULT_ROLE, REASON_WORDS, accessEntries, accessParams, accessResult, accessTitle, isAccessKind, lower, recordsText, warnedAfter,
+} from './bulkWords';
+import type { AccessRole } from './bulkWords';
+
+export { lower, recordsText };
 
 // ---- the endpoint's words ------------------------------------------------------------------------------------------
 
-/** What the endpoint can do (spec 3.2). This change offers restrict, unrestrict and edit_field; the rest arrive with their own dialogs. */
+/** What the endpoint can do (spec 3.2). */
 export type BulkKind = 'assign_team' | 'change_owner' | 'share_access' | 'remove_access' | 'restrict' | 'unrestrict' | 'edit_field';
 
 export type PreviewStatus = 'ok' | 'noop' | 'skip';
@@ -20,7 +25,7 @@ export interface PreviewRow {
 	code: string;
 	status: PreviewStatus;
 	reason?: string;
-	/** A consequence the person should read before applying (ownership transfers). */
+	/** A consequence the person should read before applying (the acting manager may lose access, say). */
 	warning?: string;
 }
 
@@ -50,11 +55,9 @@ export interface BulkEntry {
 	field?: BulkField;
 }
 
-export const lower = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
-
 /**
- * The entries a list offers, in menu order: Print labels (the def's select action), Restrict and Unrestrict (the four ownable
- * record types), then one "Edit <field>…" per bulk field. A Lab Viewer changes nothing (the server refuses even a preview), so a
+ * The entries a list offers, in menu order: Print labels (the def's select action), then on the four ownable record types Assign to
+ * team, Change owner, Share or change access, Remove access, Restrict and Unrestrict, then one "Edit <field>…" per bulk field. A Lab Viewer changes nothing (the server refuses even a preview), so a
  * viewer is offered only the entries that navigate. A list with no entries gets no menu.
  */
 export function bulkEntries(def: IndexDef, opts: { viewer?: boolean } = {}): BulkEntry[] {
@@ -62,6 +65,7 @@ export function bulkEntries(def: IndexDef, opts: { viewer?: boolean } = {}): Bul
 	if (def.selectAction) out.push({ id: 'print', kind: 'print', label: 'Print labels' });
 	if (opts.viewer) return out;
 	if (def.ownable) {
+		out.push(...accessEntries());
 		out.push({ id: 'restrict', kind: 'restrict', label: 'Restrict…' });
 		out.push({ id: 'unrestrict', kind: 'unrestrict', label: 'Unrestrict…' });
 	}
@@ -74,25 +78,24 @@ export const menuLabel = (count: number): string => (count > 0 ? `With ${count} 
 
 // ---- the dialog ----------------------------------------------------------------------------------------------------
 
-/** "38 samples", "1 sample", "4 records" (a def's own title, singular or plural). */
-export function recordsText(def: IndexDef, count: number): string {
-	const nouns = nounsFor(def.title);
-	return `${count} ${count === 1 ? nouns.one : nouns.many}`;
-}
-
-/** "Edit status for 38 samples", "Restrict 5 operations". */
+/** "Edit status for 38 samples", "Restrict 5 operations", "Assign 38 samples to a team". */
 export function dialogTitle(entry: BulkEntry, def: IndexDef, count: number): string {
+	if (isAccessKind(entry.kind)) return accessTitle(entry.kind, def, count);
 	const what = recordsText(def, count);
 	if (entry.kind === 'edit_field' && entry.field) return `Edit ${lower(entry.field.label)} for ${what}`;
 	if (entry.kind === 'unrestrict') return `Unrestrict ${what}`;
 	return `Restrict ${what}`;
 }
 
-/** What the person chose in the target step: a field value (null clears it). `null` for no choice yet. */
-export type BulkChoice = { value: string | boolean | null } | null;
+/**
+ * What the person chose in the target step: a field value (null clears it), or the id of a team or person (`target` says which; Assign
+ * to team is always a team, Change owner a person). `null` for no choice yet.
+ */
+export type BulkChoice = { value: string | boolean | null; target?: 'person' | 'team' } | null;
 
-/** The request's `params`, or null while the dialog still waits for a choice (no preview is asked for yet). */
-export function paramsFor(entry: BulkEntry, choice: BulkChoice): Record<string, unknown> | null {
+/** The request's `params`, or null while the dialog still waits for a choice (no preview is asked for yet). `role` is Share's access level. */
+export function paramsFor(entry: BulkEntry, choice: BulkChoice, role: AccessRole = DEFAULT_ROLE): Record<string, unknown> | null {
+	if (isAccessKind(entry.kind)) return accessParams(entry.kind, choice, role);
 	if (entry.kind === 'edit_field') return entry.field && choice ? { field: entry.field.field, value: choice.value } : null;
 	if (entry.kind === 'restrict' || entry.kind === 'unrestrict') return {};
 	return null;
@@ -161,6 +164,7 @@ export function previewWarnings(rows: readonly PreviewRow[]): string[] {
 export function skipReasonText(reason: string | null | undefined): string {
 	const text = (reason ?? '').trim().replace(/\.+$/, '');
 	if (!text) return 'Could not be changed';
+	if (REASON_WORDS[text]) return REASON_WORDS[text];
 	return /^[A-Z0-9_]+$/.test(text) ? humanise(text.toLowerCase()) : text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -203,10 +207,11 @@ export function revertReasonText(row: RevertRow): string {
 
 // ---- the toast's words ---------------------------------------------------------------------------------------------
 
-/** "Set status to Archived on 38 samples", "Restricted 5 operations", "Cleared project on 2 samples". */
+/** "Set status to Archived on 38 samples", "Restricted 5 operations", "Assigned 38 samples to Team X" (`relationLabel`: the picked value, team or person). */
 export function resultText(entry: BulkEntry, def: IndexDef, applied: number, choice: BulkChoice, relationLabel?: string): string {
 	const what = recordsText(def, applied);
 	if (applied === 0) return 'Nothing was changed';
+	if (isAccessKind(entry.kind)) return accessResult(entry.kind, def, applied, relationLabel);
 	if (entry.kind === 'unrestrict') return `Unrestricted ${what}`;
 	if (entry.kind === 'restrict') return `Restricted ${what}`;
 	if (entry.kind === 'edit_field' && entry.field && choice) {
@@ -262,11 +267,15 @@ export interface ToastModel {
 	/** Rows the action skipped, and the rows an undo left alone. */
 	skipped: SkippedRow[];
 	undoSkipped: SkippedRow[];
+	/** Rows that were changed with a warning (the reason is the warning's words): read while the toast is up. */
+	warned: SkippedRow[];
 }
 
-export function startToast(actionId: string, message: string, deadline: number, skipped: SkippedRow[], now: number, undoable = true): ToastModel {
+export function startToast(
+	actionId: string, message: string, deadline: number, skipped: SkippedRow[], now: number, undoable = true, warned: SkippedRow[] = [],
+): ToastModel {
 	const left = undoable ? secondsLeft(deadline, now) : 0;
-	return { actionId, message, deadline, undoable, phase: left > 0 ? 'pending' : 'done', left, busy: false, error: '', skipped, undoSkipped: [] };
+	return { actionId, message, deadline, undoable, phase: left > 0 ? 'pending' : 'done', left, busy: false, error: '', skipped, undoSkipped: [], warned };
 }
 
 /** One tick of the clock: the seconds left, and `done` when they run out (an undo in flight is allowed to finish). */
@@ -298,12 +307,13 @@ export const notRevertedIds = (results: readonly RevertRow[]): string[] => resul
 export function toastAnnouncement(t: ToastModel): string {
 	if (t.phase === 'done' && t.undoable) return 'Done';
 	if (t.phase === 'undone') return t.undoSkipped.length ? `Undone. ${leftAsTheyAre(t.undoSkipped.length)}` : 'Undone';
-	return t.skipped.length ? `${t.message}. ${t.skipped.length} skipped` : t.message;
+	const notes = [t.skipped.length ? `${t.skipped.length} skipped` : '', t.warned.length ? warnedAfter(t.warned.length) : ''].filter(Boolean);
+	return notes.length ? `${t.message}. ${notes.join('. ')}` : t.message;
 }
 
-/** Milliseconds until a finished toast goes by itself; null when it stays (something to read: skipped rows, or an undo's leftovers). */
+/** Milliseconds until a finished toast goes by itself; null when it stays (something to read: skipped or warned rows, or an undo's leftovers). */
 export function dismissDelay(t: ToastModel): number | null {
 	if (t.phase === 'pending') return null;
-	if (t.skipped.length || t.undoSkipped.length) return null;
+	if (t.skipped.length || t.undoSkipped.length || (t.phase === 'done' && t.warned.length)) return null;
 	return t.phase === 'done' ? 3000 : 5000;
 }

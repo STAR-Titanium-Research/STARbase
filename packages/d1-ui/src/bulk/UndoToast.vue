@@ -10,6 +10,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import BulkSkips from './BulkSkips.vue';
 import { leftAsTheyAre, ringFraction, toastAnnouncement } from './bulkModel';
 import type { ToastModel } from './bulkModel';
+import { warnedAfter } from './bulkWords';
 
 const props = defineProps<{ toast: ToastModel }>();
 const emit = defineEmits<{ undo: []; dismiss: [] }>();
@@ -48,6 +49,7 @@ const skipSummary = computed(() => (props.toast.phase === 'undone' ? leftAsTheyA
 			<span v-else class="secs" aria-hidden="true">{{ toast.left }} s left to undo</span>
 			<p v-if="toast.error" class="err" role="alert">Undo failed. {{ toast.error }}</p>
 			<BulkSkips :summary="skipSummary" :rows="rows" />
+			<BulkSkips v-if="toast.phase !== 'undone'" :summary="warnedAfter(toast.warned.length)" :rows="toast.warned" />
 		</div>
 		<button v-if="toast.phase === 'pending'" type="button" class="undo" :disabled="toast.busy" @click="emit('undo')">{{ toast.busy ? 'Undoing…' : 'Undo' }}</button>
 		<button type="button" class="x" aria-label="Dismiss" @click="emit('dismiss')">&times;</button>

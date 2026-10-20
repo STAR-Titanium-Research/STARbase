@@ -1,6 +1,8 @@
 import { computed, onScopeDispose, ref } from 'vue';
 import type { Ref, UnwrapNestedRefs } from 'vue';
+import { loadTeamHits } from '../access/accessApi';
 import type { AccessApi } from '../access/accessApi';
+import type { TeamHit } from '../access/accessModel';
 import { useRequestGate } from '../composables/useRequestGate';
 import type { IndexDef } from '../index/indexConfig';
 import type { ChipOption } from '../index/indexView';
@@ -10,6 +12,8 @@ import {
 	applySkips, beginUndo, canApply, deadlineFor, dismissDelay, notRevertedIds, paramsFor, previewCounts, previewSummary, previewWarnings,
 	resultText, startToast, tickToast, undoDone, undoFailed,
 } from './bulkModel';
+import { DEFAULT_ROLE, targetKindOf, warnedRows } from './bulkWords';
+import type { AccessRole } from './bulkWords';
 
 export interface BulkOptions {
 	api: AccessApi;
@@ -34,8 +38,10 @@ interface DialogState {
 	/** The ticked keys at the moment the dialog opened. */
 	ids: string[];
 	choice: BulkChoice;
-	/** The picked link's display text, for the toast's words. */
+	/** The picked link's, team's or person's display text, for the toast's words. */
 	choiceLabel?: string;
+	/** Share's access level: chosen before or after the target, `view` until then. */
+	role: AccessRole;
 }
 
 /**
@@ -51,6 +57,8 @@ export function useBulkActions(opts: BulkOptions) {
 	const applying = ref(false);
 	const applyError = ref('');
 	const fieldOptions = ref<ChipOption[]>([]);
+	/** The teams Assign to team offers (the person pickers load their own). */
+	const teamOptions = ref<TeamHit[]>([]);
 	const optionsState = ref<{ loading: boolean; error: string }>({ loading: false, error: '' });
 	const toasts = ref<ToastModel[]>([]);
 
@@ -65,7 +73,7 @@ export function useBulkActions(opts: BulkOptions) {
 
 	async function runPreview(): Promise<void> {
 		const d = dialog.value;
-		const params = d ? paramsFor(d.entry, d.choice) : null;
+		const params = d ? paramsFor(d.entry, d.choice, d.role) : null;
 		if (!d || !params) {
 			previewGate.cancel();
 			preview.value = IDLE;
@@ -80,20 +88,25 @@ export function useBulkActions(opts: BulkOptions) {
 
 	async function loadOptions(entry: BulkEntry): Promise<void> {
 		fieldOptions.value = [];
+		teamOptions.value = [];
 		optionsState.value = { loading: false, error: '' };
-		if (entry.field?.kind !== 'relation') return;
+		const teams = targetKindOf(entry.kind) === 'team';
+		if (!teams && entry.field?.kind !== 'relation') return;
 		const token = optionsGate.begin();
 		optionsState.value = { loading: true, error: '' };
-		const res = await loadFieldOptions(opts.api, entry.field);
+		const res = teams ? await loadTeamHits(opts.api) : await loadFieldOptions(opts.api, entry.field!);
 		if (!optionsGate.isCurrent(token)) return;
-		if (res.ok) fieldOptions.value = res.data;
+		if (res.ok) {
+			if (teams) teamOptions.value = res.data as TeamHit[];
+			else fieldOptions.value = res.data as ChipOption[];
+		}
 		optionsState.value = { loading: false, error: res.ok ? '' : res.message };
 	}
 
 	/** Opens the dialog for a menu entry on the rows ticked now. Restrict and Unrestrict have no target, so their preview starts at once. */
 	function open(entry: BulkEntry): void {
 		if (entry.kind === 'print') return;
-		dialog.value = { entry, ids: [...opts.picked.value], choice: null };
+		dialog.value = { entry, ids: [...opts.picked.value], choice: null, role: DEFAULT_ROLE };
 		applyError.value = '';
 		preview.value = IDLE;
 		void loadOptions(entry);
@@ -110,10 +123,26 @@ export function useBulkActions(opts: BulkOptions) {
 		applyError.value = '';
 	}
 
-	/** The target step's answer (a field value; null clears the field). Asks for a fresh preview. */
-	function choose(value: string | boolean | null, label?: string): void {
+	/** The target step's answer (a field value, null to clear it, or a team's or person's id with its `target` and name). Asks for a fresh preview. */
+	function choose(value: string | boolean | null, label?: string, target?: 'person' | 'team'): void {
 		if (!dialog.value || applying.value) return;
-		dialog.value = { ...dialog.value, choice: { value }, choiceLabel: label };
+		dialog.value = { ...dialog.value, choice: target ? { value, target } : { value }, choiceLabel: label };
+		applyError.value = '';
+		void runPreview();
+	}
+
+	/** Takes the chosen target back, so another can be picked: no preview until then. */
+	function clearChoice(): void {
+		if (!dialog.value || applying.value) return;
+		dialog.value = { ...dialog.value, choice: null, choiceLabel: undefined };
+		applyError.value = '';
+		void runPreview();
+	}
+
+	/** Share's access level; a target already chosen is previewed again with it. */
+	function chooseRole(role: AccessRole): void {
+		if (!dialog.value || applying.value) return;
+		dialog.value = { ...dialog.value, role };
 		applyError.value = '';
 		void runPreview();
 	}
@@ -128,7 +157,7 @@ export function useBulkActions(opts: BulkOptions) {
 	async function apply(): Promise<void> {
 		const d = dialog.value;
 		if (!d || !ready.value) return;
-		const params = paramsFor(d.entry, d.choice);
+		const params = paramsFor(d.entry, d.choice, d.role);
 		if (!params) return;
 		applying.value = true;
 		applyError.value = '';
@@ -141,9 +170,12 @@ export function useBulkActions(opts: BulkOptions) {
 		const { actionId, undoUntil, results } = res.data;
 		const applied = results.filter((r) => r.outcome === 'applied').length;
 		const skipped = applySkips(results);
+		// the apply answer carries no warnings: those are the ones the preview showed for the rows that did change
+		const done = new Set(results.filter((r) => r.outcome === 'applied').map((r) => r.id));
+		const warned = warnedRows(preview.value.rows ?? []).filter((r) => done.has(r.id));
 		const at = now();
 		codes.set(actionId, new Map(results.map((r) => [r.id, r.code])));
-		toasts.value = [...toasts.value, startToast(actionId, resultText(d.entry, opts.def, applied, d.choice, d.choiceLabel), deadlineFor(undoUntil, at), skipped, at, applied > 0)];
+		toasts.value = [...toasts.value, startToast(actionId, resultText(d.entry, opts.def, applied, d.choice, d.choiceLabel), deadlineFor(undoUntil, at), skipped, at, applied > 0, warned)];
 		close();
 		afterChange();
 		opts.onChanged(skipped.map((r) => r.id));
@@ -206,8 +238,8 @@ export function useBulkActions(opts: BulkOptions) {
 	});
 
 	return {
-		dialog, preview, applying, applyError, fieldOptions, optionsState, toasts, counts, summary, warnings, ready,
-		open, close, choose, apply, undo, dismiss,
+		dialog, preview, applying, applyError, fieldOptions, teamOptions, optionsState, toasts, counts, summary, warnings, ready,
+		open, close, choose, clearChoice, chooseRole, apply, undo, dismiss,
 	};
 }
 
