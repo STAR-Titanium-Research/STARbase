@@ -550,7 +550,7 @@ const { copied: statsCopied, failed: statsCopyFailed, copy: copyStatsCsv } = use
 // cache; raw + filtered render side-by-side in two linked viewports (compareView shared).
 // Baking patches the op's filter_chain + reprocesses so ALL outputs are filtered.
 const filtersOpen = computed(() => openPanel.value === 'filters');
-// "Preview on charts" (Signal filters tab): draw the working chain over the raw signal while it is tuned.
+// "Preview on the Lite map and FFT" (Signal filters tab): show the working chain on the maps and the spectrum while it is tuned.
 const previewOn = ref(true);
 const previewing = computed(() => filtersOpen.value && previewOn.value);
 watch(filtersOpen, (open) => { if (open) previewOn.value = true; });

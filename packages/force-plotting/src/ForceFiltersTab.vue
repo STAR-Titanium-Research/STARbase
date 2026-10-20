@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /*
  * Tab 3, Signal filters: the combined and per-stage frequency response (drag a cut-off or notch to edit
- * it) above the stage rows, both editing the same working chain. "Preview on charts" draws the filtered
+ * it) above the stage rows, both editing the same working chain. "Preview on the Lite map and FFT" draws the filtered
  * signal over the raw one (side by side in the Lite map, filtered spectrum in FFT) while you tune;
  * "Apply" keeps the chain as the operation's default (Lite recomputes it live), "Bake all" reprocesses
  * every output on the host.
@@ -48,7 +48,7 @@ function toggleHarmonic(h: number, on: boolean) {
 			</label>
 		</div>
 
-		<label class="chk preview"><input v-model="previewOn" class="tog" type="checkbox" /> Preview on charts</label>
+		<label class="chk preview"><input v-model="previewOn" class="tog" type="checkbox" /> Preview on the Lite map and FFT</label>
 		<div v-if="previewOn && !liveOn" class="fp-note">Switch to <b>Lite</b> to preview the filtered map side by side. You can still edit and bake here.</div>
 		<div v-if="filterBusy" class="fp-note"><v-progress-circular indeterminate x-small /> previewing…</div>
 		<div v-if="filterErr" class="fp-err">{{ filterErr }}</div>
