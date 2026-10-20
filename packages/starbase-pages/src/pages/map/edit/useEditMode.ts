@@ -320,7 +320,16 @@ export function useEditMode(o: EditModeOptions) {
 					.then((read) => unknown.forEach((id) => read.has(id) || unreadable.add(id)))
 					.catch(() => unknown.forEach((id) => unreadable.add(id)));
 			}
-			void catalog.loadRecords({ ...want, physical_samples: [] });
+			// Operations the draft attaches are read for how the map draws them (and the sample each made), which reads their records too.
+			const attached = items.flatMap((i) => (i.kind === 'operation' && i.attach && i.existing ? [i.existing.id] : []));
+			const unknownOps = attached.filter((id) => !catalog.operations.has(id) && !unreadable.has(id));
+			if (unknownOps.length) {
+				void catalog
+					.loadOperations(unknownOps)
+					.then((read) => unknownOps.forEach((id) => read.has(id) || unreadable.add(id)))
+					.catch(() => unknownOps.forEach((id) => unreadable.add(id)));
+			}
+			void catalog.loadRecords({ ...want, physical_samples: [], manufacturing_operations: want.manufacturing_operations.filter((id) => !attached.includes(id)) });
 			void catalog.ensureMaterials(items.map((i) => i.values.material_id).filter((v): v is string => typeof v === 'string'));
 		},
 		{ immediate: true },
@@ -334,6 +343,7 @@ export function useEditMode(o: EditModeOptions) {
 	const mergeCtx = computed<ToGraphCtx>(() => ({
 		...catalog.ctx(),
 		samples: Object.fromEntries(catalog.samples),
+		operations: Object.fromEntries(catalog.operations),
 		methods: Object.fromEntries(catalog.methods.value.map((m) => [m.id, { name: m.name, category: m.category }])),
 		testTypes: Object.fromEntries(catalog.testTypes.value.map((t) => [t.value, { name: t.name, category: null }])),
 		label: (collection, id) => (collection === 'physical_samples' ? catalog.samples.get(id)?.code : undefined),

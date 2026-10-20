@@ -3,8 +3,10 @@ import type { DraftBody, DraftOperation } from '@d1/ui';
 import type { MethodEntry, TestTypeEntry } from './catalog';
 import { apply, emptyBody, itemOf, type DraftAction } from './draft';
 import { grown } from './socketRefs';
+import { recentIdOf } from './recents';
 import { actionsFor, canvasSampleEntries, catalogEntries, firstChoosable, menuFor, moveActive, operationOnlyEntries, placeMenu, rootEntries, sampleLabel, searchEntries, type MenuCatalog, type MenuChoice, type MenuEntry } from './menuModel';
 import type { SocketRef } from './socketRefs';
+import { templateEntries, type TemplateItem } from './templates';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
@@ -59,17 +61,18 @@ describe('the entries', () => {
 	it('from a sample output: operations by category (the lab\'s order, no category last), then the tests', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n1', 'out')), catalog);
-		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
-		expect(labels(es)).toEqual(['Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
+		expect(sections(es)).toEqual(['From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+		expect(labels(es)).toEqual(['From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
 		expect(es.find((e) => e.label === 'Turning')?.detail).toBe('MC');
 	});
 
 	it('unconnected: the whole catalog, one flat list: the samples, the operations by category, the tests', () => {
 		const es = rootEntries(body(), menuFor(body(), null), catalog);
 		expect(es).toEqual(catalogEntries(catalog));
-		expect(sections(es)).toEqual(['Samples', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
-		expect(labels(es).slice(0, 2)).toEqual(['New sample', 'Existing sample…']);
+		expect(sections(es)).toEqual(['Samples', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
+		expect(labels(es).slice(0, 3)).toEqual(['New sample', 'Existing sample…', 'From database…']);
 		expect(es[1].choice).toEqual({ kind: 'pickSamples' });
+		expect(es[2].choice).toEqual({ kind: 'fromDatabase' });
 	});
 
 	it('the operations alone (insert before and after) have no samples and no tests', () => {
@@ -105,6 +108,27 @@ describe('the entries', () => {
 		const b = body();
 		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), catalog);
 		expect(sections(es)).toEqual(['Machining', 'FAST sintering', 'Other methods', 'Wire']);
+	});
+
+	it('From database… is offered from a sample\'s output and unconnected, not at an operation, a test or a sample\'s input', () => {
+		const b = body();
+		const has = (s: SocketRef | null) => labels(rootEntries(b, menuFor(b, s), catalog)).includes('From database…');
+		expect(has(sock('sample', 'draft:n1', 'out'))).toBe(true);
+		expect(has(null)).toBe(true);
+		expect(has(sock('sample', 'draft:n5', 'in'))).toBe(false);
+		expect(has(sock('row', 'draft:n3', 'out'))).toBe(false);
+		expect(has(sock('row', 'draft:n3', 'in'))).toBe(false);
+		expect(has(sock('row', 'draft:n4', 'in'))).toBe(false);
+		// the operations alone (insert before / after) never list it
+		expect(labels(operationOnlyEntries(catalog))).not.toContain('From database…');
+	});
+
+	it('is found by typing "database" or "attach", and is not a recent', () => {
+		const es = rootEntries(body(), menuFor(body(), null), catalog);
+		expect(labels(searchEntries(es, 'database'))).toEqual(['From database…']);
+		expect(labels(searchEntries(es, 'attach'))).toEqual(['From database…']);
+		expect(recentIdOf({ kind: 'fromDatabase' })).toBeNull();
+		expect(recentIdOf({ kind: 'attachOperation', id: 'o', version: 1, workState: 'planned' })).toBeNull();
 	});
 
 	it('lists the samples on the canvas an output could go to, the others greyed with the draft\'s reason', () => {
@@ -268,6 +292,29 @@ describe('what a choice does', () => {
 		expect(inn.wires.at(-1)).toEqual({ from: { key: 'n1' }, to: { key: 'n2', row: 0 } });
 	});
 
+	it('an operation from the database is attached to the sample whose output the menu is for, with the version it was read at', () => {
+		const choice: MenuChoice = { kind: 'attachOperation', id: 'op-9', version: 4, workState: 'planned' };
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), choice, { at });
+		expect(b.items.at(-1)).toMatchObject({ kind: 'operation', existing: { id: 'op-9', version: 4 }, attach: true, workState: 'planned' });
+		expect(b.wires.at(-1)).toEqual({ from: { key: 'n5' }, to: { key: 'n6', row: 0 } });
+		expect(b.positions.n6).toEqual(at);
+		// unconnected: it lands floating, unattached
+		const floating = doIt(body(), null, { ...choice, workState: 'done' });
+		expect(floating.items.at(-1)).toMatchObject({ existing: { id: 'op-9', version: 4 }, attach: true, workState: 'done' });
+		expect(floating.wires).toEqual(body().wires);
+		// one step
+		expect(actionsFor(target(body(), sock('sample', 'draft:n5', 'out')), choice)).toHaveLength(1);
+	});
+
+	it('an operation from the database fits nowhere but a sample\'s output (or nowhere in particular)', () => {
+		const choice: MenuChoice = { kind: 'attachOperation', id: 'op-9', version: 4, workState: 'planned' };
+		for (const s of [sock('sample', 'draft:n5', 'in'), sock('row', 'draft:n3', 'out'), sock('row', 'draft:n3', 'in'), sock('row', 'draft:n4', 'in')]) {
+			expect(actionsFor(target(body(), s), choice)).toEqual([]);
+		}
+		// opening the picker is not an action
+		expect(actionsFor(target(body(), sock('sample', 'draft:n5', 'out')), { kind: 'fromDatabase' })).toEqual([]);
+	});
+
 	it('does nothing for a choice that does not fit, or that is not an action (picking samples, searching)', () => {
 		const b = body();
 		expect(actionsFor(target(b, sock('sample', 'draft:n1', 'out')), { kind: 'newSample' })).toEqual([]);
@@ -293,5 +340,124 @@ describe('names in menus', () => {
 		expect(sampleLabel(b, 'n2', known)).toBe('New sample');
 		expect(sampleLabel(b, 'n3', known)).toBe('PS-001');
 		expect(sampleLabel(b, 'zz', known)).toBe('zz');
+	});
+});
+
+// ---- templates in the catalog (redesign R7) ----------------------------------------------------------------------------------
+
+describe('templates in the catalog', () => {
+	const tplOp = (id: string, name: string, values: Record<string, unknown>, extra: Partial<TemplateItem> = {}): TemplateItem => ({
+		rec: { id, name, scope: 'private', role_id: null, collection: 'manufacturing_operations', values, user_id: 'u1', updated_at: 'now', version: 1 },
+		mine: true,
+		...extra,
+	});
+	const tplTest = (id: string, name: string, values: Record<string, unknown>): TemplateItem => ({
+		rec: { id, name, scope: 'global', role_id: null, collection: 'test_sessions', values, user_id: 'u2', updated_at: 'now', version: 1 },
+		mine: false,
+	});
+	const templates = [tplOp('t1', 'Roughing pass', { method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1' }), tplTest('t2', 'Pull to break', { test_type: 'tensile', equipment_id: 'e2' })];
+	const withTemplates: MenuCatalog = { ...catalog, templates };
+	const tpl = (es: MenuEntry[]) => es.filter((e) => e.template);
+	const doIt = (b: DraftBody, s: SocketRef | null, choice: MenuChoice, over: { at?: { x: number; y: number } } = {}) => {
+		const f = menuFor(b, s);
+		return run(actionsFor({ body: b, end: f.end, side: f.side, card: f.card, at: over.at }, choice), b);
+	};
+
+	it('puts the Templates group first in the whole catalog, above the samples and the categories', () => {
+		const es = catalogEntries(withTemplates);
+		expect(sections(es)[0]).toBe('Templates');
+		expect(labels(es).slice(0, 3)).toEqual(['Pull to break', 'Roughing pass', 'New sample']);
+		expect(labels(catalogEntries(catalog))[0]).toBe('New sample'); // no templates, no empty group
+	});
+
+	it('offers them at a sample output (operations and tests) and a sample input (operations only), not at an operation or a test', () => {
+		const b = body();
+		expect(labels(tpl(rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'out')), withTemplates)))).toEqual(['Pull to break', 'Roughing pass']);
+		expect(labels(tpl(rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), withTemplates)))).toEqual(['Roughing pass']);
+		expect(tpl(rootEntries(b, menuFor(b, sock('row', 'draft:n3', 'out')), withTemplates))).toEqual([]);
+		expect(tpl(rootEntries(b, menuFor(b, sock('row', 'draft:n3', 'in')), withTemplates))).toEqual([]);
+	});
+
+	it('offers the operation templates to an insert, before the methods', () => {
+		const es = operationOnlyEntries(withTemplates);
+		expect(labels(es).slice(0, 2)).toEqual(['Roughing pass', 'Turning']);
+		expect(labels(tpl(es))).toEqual(['Roughing pass']);
+	});
+
+	it('resolves the whole catalog in one order: templates, samples, From database…, then the categories as built', () => {
+		const es = catalogEntries(withTemplates);
+		expect(labels(es)).toEqual(['Pull to break', 'Roughing pass', 'New sample', 'Existing sample…', 'From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD']);
+		expect(sections(es)).toEqual(['Templates', 'Samples', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
+		expect(rootEntries(body(), menuFor(body(), null), withTemplates)).toEqual(es);
+	});
+
+	it('from a sample output: the templates, then From database…, then the categories (operations, then tests), then Connect to…', () => {
+		const b = body();
+		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'out')), withTemplates);
+		expect(labels(es)).toEqual(['Pull to break', 'Roughing pass', 'From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD', 'Connect to…']);
+		expect(sections(es)).toEqual(['Templates', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests', 'Wire']);
+	});
+
+	it('from a sample input: the operation templates, then the operation categories only, with no From database… and no tests', () => {
+		const b = body();
+		const es = rootEntries(b, menuFor(b, sock('sample', 'draft:n5', 'in')), withTemplates);
+		expect(labels(es)).toEqual(['Roughing pass', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Connect to…']);
+		expect(es.some((e) => e.label === 'From database…' || e.choice.kind === 'fromDatabase')).toBe(false);
+		expect(es.some((e) => e.section === 'Tests')).toBe(false);
+	});
+
+	it('an insert offers the operation templates and the methods, but neither From database… nor the samples nor the tests', () => {
+		const es = operationOnlyEntries(withTemplates);
+		expect(labels(es)).toEqual(['Roughing pass', 'Turning', 'Milling', 'FAST sintering', 'Mystery']);
+		expect(sections(es)).toEqual(['Templates', 'Machining', 'FAST sintering', 'Other methods']);
+		expect(es.some((e) => e.choice.kind === 'fromDatabase' || e.section === 'Samples' || e.section === 'Tests')).toBe(false);
+	});
+
+	it('finds one by its name or by the method or test type it is made of, ahead of the method itself', () => {
+		const es = catalogEntries(withTemplates);
+		expect(labels(searchEntries(es, 'rough'))).toEqual(['Roughing pass']);
+		expect(labels(searchEntries(es, 'pull'))).toEqual(['Pull to break']);
+		expect(labels(searchEntries(es, 'turning'))).toEqual(['Turning', 'Roughing pass']); // a label match ranks first, then the template made of it
+		expect(searchEntries(es, 'tensile').map((e) => e.id)).toEqual(['test:tensile', 'tpl:t2']); // the test's own label first, then the template made of it
+		expect(labels(searchEntries(es, 'template'))).toEqual(['Pull to break', 'Roughing pass']);
+	});
+
+	it('keeps the Templates group first while the recents are on top of the rest', () => {
+		const es = searchEntries(catalogEntries(withTemplates), '', ['op:mf']);
+		expect(es.map((e) => e.section).slice(0, 4)).toEqual(['Templates', 'Templates', 'Recent', 'Samples']);
+		expect(es.filter((e) => e.id === 'op:mf')).toHaveLength(1);
+	});
+
+	it('a template operation adds a container with the template values, not linked to the template', () => {
+		const choice = templateEntries([templates[0]], catalog)[0].choice;
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), choice, { at: { x: 5, y: 6 } });
+		const made = b.items.at(-1) as DraftOperation;
+		expect(made).toMatchObject({ kind: 'operation', workState: 'planned', values: { method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1', process_category: 'machining' } });
+		expect(b.wires.at(-1)).toEqual({ from: { key: 'n5' }, to: { key: made.key, row: 0 } });
+		expect(JSON.stringify(made)).not.toContain('t1'); // nothing of the template is kept, not even its id
+		// The container's values are a copy: the template's own are untouched.
+		expect(templates[0].rec.values).toEqual({ method_id: 'mt', equipment_id: 'e1', tool_id: 'tool1' });
+	});
+
+	it('a template test adds a test with the template values; on empty canvas both stand alone', () => {
+		const b = doIt(body(), sock('sample', 'draft:n5', 'out'), templateEntries([templates[1]], catalog)[0].choice);
+		expect(b.items.at(-1)).toMatchObject({ kind: 'test', workState: 'planned', values: { test_type: 'tensile', equipment_id: 'e2' } });
+		const alone = doIt(body(), null, templateEntries([templates[0]], catalog)[0].choice);
+		expect(alone.items.at(-1)).toMatchObject({ kind: 'operation', values: { method_id: 'mt', equipment_id: 'e1' } });
+		expect(alone.wires).toEqual(body().wires);
+	});
+
+	it('a template operation at a free sample input makes the operation and wires it to make that sample', () => {
+		const b = doIt(body(), sock('sample', 'draft:n5', 'in'), templateEntries([templates[0]], catalog)[0].choice);
+		const made = b.items.at(-1) as DraftOperation;
+		expect(made.values).toMatchObject({ method_id: 'mt', tool_id: 'tool1' });
+		expect(b.wires.at(-1)).toEqual({ from: { key: made.key, row: 0 }, to: { key: 'n5' } });
+	});
+
+	it('carries a gear warning on the entry and does not block it', () => {
+		const warned = templateEntries([tplOp('t3', 'Old tool', { method_id: 'mt', tool_id: 'x' }, { warn: 'The tool X is retired.' })], catalog)[0];
+		expect(warned.warn).toBe('The tool X is retired.');
+		expect(warned.disabled).toBeUndefined();
+		expect(firstChoosable([warned])).toBe(0);
 	});
 });

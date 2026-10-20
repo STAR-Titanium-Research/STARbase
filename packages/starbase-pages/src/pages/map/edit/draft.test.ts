@@ -115,6 +115,14 @@ describe('addContainer', () => {
 		expect((b.items[0] as DraftOperation).workState).toBe('done');
 	});
 
+	it('new from and duplicate leave the identity of one run behind: a FAST run number is unique with its machine, so a copy would be refused at Create', () => {
+		const record = {
+			method_id: 'm', equipment_id: 'e', process_category: 'sintering', sintering_run_number: 412, sintering_max_temp_celsius: 1450, source_system: 'crawler', source_recipe_id: 'r', fast_recipe_id: 'r2',
+			owner: 'user-9', gcode_file: 'f', machining_legacy_machining_uid: 'u', status: 'analysed', summary_stats: { n: 1 }, data_file_uri: 's3://x', test_code_number: 3, test_code_subject_id: 'sample-uuid',
+		};
+		expect(newFromValues(record)).toEqual({ method_id: 'm', equipment_id: 'e', process_category: 'sintering', sintering_max_temp_celsius: 1450 });
+	});
+
 	it('new from copies an existing record without its date, sample, notes and code', () => {
 		const record = {
 			operation_id: 'op-1', method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2, operation_date: '2026-01-02', sample_id: 's', output_sample_id: 'o',
@@ -150,6 +158,14 @@ describe('attach', () => {
 		expect(b.items[1]).toMatchObject({ kind: 'operation', existing: { id: 'op-9', version: 4 }, attach: true, workState: 'planned' });
 		expect(inputSampleOf(b, { key: 'n2', row: 0 })).toBe('n1');
 		expect(apply(b, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned' })).toBe(b);
+	});
+
+	it('an attached operation keeps the sample it made: nothing is wired out of it', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned', from: { key: 'n1' } }]);
+		expect(wireProblem(b, { key: 'n3', row: 0 }, { key: 'n2' })).toMatch(/keeps the sample it made/);
+		// not even back to the sample it took in (that would be "the sample carries on", which an existing record cannot be turned into)
+		expect(wireProblem(b, { key: 'n3', row: 0 }, { key: 'n1' })).toMatch(/keeps the sample it made/);
+		expect(apply(b, { type: 'wire', from: { key: 'n3', row: 0 }, to: { key: 'n2' } })).toBe(b);
 	});
 
 	it('an existing operation that is not being attached takes no wires', () => {

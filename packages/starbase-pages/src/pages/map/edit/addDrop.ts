@@ -45,6 +45,10 @@ export function misfit(f: MenuFor, choice: MenuChoice): string | null {
 			if (card === 'sample') return side === 'out' ? 'A sample\'s output takes an operation or a test. Samples are joined through an operation.' : 'A sample is made by an operation. Drop an operation on its input.';
 			if (card === 'test' && side === 'out') return 'A test has no output.';
 			return null;
+		case 'fromDatabase':
+		case 'attachOperation':
+			// A recorded operation with no input takes a sample in: it hangs off a sample's output.
+			return side === 'out' && card === 'sample' ? null : 'A recorded operation is attached to a sample\'s output. Drop From database… on one, or on the empty canvas.';
 		default:
 			return 'That cannot be dropped on a socket.';
 	}
@@ -71,6 +75,8 @@ export function socketVerdict(body: DraftBody, sock: SocketRef, choice: MenuChoi
 	const f = menuFor(body, sock);
 	const bad = misfit(f, choice);
 	if (bad) return { ok: false, reason: bad };
+	// The picker decides which operation: the drop only has to be on a sample's output.
+	if (choice.kind === 'fromDatabase') return { ok: true };
 	const g = grown(body, sock);
 	if (!g) return { ok: false, reason: 'Only a new operation can take another row.' };
 	// A sample of the loaded history: it joins the draft first when something is built from its output; nothing can make it.

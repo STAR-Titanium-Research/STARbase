@@ -21,6 +21,28 @@ const con = (rows: SampleRow[], over: Partial<ContainerNode> = {}): ContainerNod
 
 const ids = (list: { id: string }[]) => list.map((s) => s.id);
 
+describe('an operation the draft attaches (slice 3)', () => {
+	// Recorded: its output is the sample it made. Not wired yet: nothing is on its input.
+	const loose = () => con([{ recordId: 'op1', out: 'op:op1:out:0' }], { id: 'op:op1', attaching: true });
+	const wiredIn = () => con([{ recordId: 'op1', in: 'op:op1:in:0', out: 'op:op1:out:0' }], { id: 'op:op1', attaching: true });
+
+	it('has a free input a sample can be wired to, and never a free output (it keeps the sample it made)', () => {
+		const ins = railSockets(loose(), 'in', { editable: true });
+		expect(ins).toEqual([{ id: 'free:in:op1', fat: false, recordId: 'op1', row: 0, free: true }]);
+		expect(railSockets(loose(), 'out', { editable: true, selected: true }).filter((s) => s.free)).toEqual([]);
+		expect(railSockets(wiredIn(), 'out', { editable: true, selected: true }).filter((s) => s.free)).toEqual([]);
+	});
+
+	it('owns its input socket for the draft, not its output', () => {
+		const owners = socketOwners(wiredIn());
+		expect([...owners.keys()]).toEqual(['op:op1:in:0']);
+	});
+
+	it('is not offered a second input once it has one', () => {
+		expect(railSockets(wiredIn(), 'in', { editable: true, selected: true }).filter((s) => s.free)).toEqual([]);
+	});
+});
+
 describe('railSockets', () => {
 	it('lists each socket id once, in row order (a cut\'s shared input once)', () => {
 		const node = con([

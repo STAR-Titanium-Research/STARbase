@@ -5,6 +5,7 @@ import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
 import EditRailChecks from './edit/EditRailChecks.vue';
 import EditRailItem from './edit/EditRailItem.vue';
+import EditRailTemplate from './edit/EditRailTemplate.vue';
 import MaterialComposition from './MaterialComposition.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
@@ -154,6 +155,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 
 		<!-- Edit mode (spec §7.1): the form of the selected draft item, and Checks above Connections. Each draws nothing outside edit mode. -->
 		<EditRailItem />
+		<EditRailTemplate />
 		<EditRailChecks />
 
 		<Section title="Connections" :count="total" class="pm-conn" :empty="!total" empty-text="Nothing else is connected in what is loaded.">

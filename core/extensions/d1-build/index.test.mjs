@@ -999,6 +999,82 @@ test('attach: an existing operation without an input gets one from a wire; once 
   assert.match(where(unwired.checks, 'o1')[0].text, /Wire a sample into this operation to attach it/);
 });
 
+test('attach: done work cannot be attached to a sample that is still planned (judged by the record, not the draft); planned work can', () => {
+  const TEXT = 'Its sample is still planned; mark the operation that makes it done first.';
+  const body = (state) => draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true, workState: state })],
+    [wire(w('s0'), w('o1'))],
+  );
+  const planned = (state) => known(sampleRow(10, { current_status: 'planned' }), opRow(40, { work_state: state }));
+  // the record is done: blocked, whatever the draft says
+  for (const said of ['done', 'planned']) {
+    assert.deepEqual(buildPlan(body(said), { existing: planned('done') }).checks.filter((c) => c.level === 'block').map((c) => [c.key, c.code, c.text]), [['o1', 'STRUCTURE', TEXT]]);
+  }
+  // the record is planned: fine on a planned sample
+  assert.deepEqual(buildPlan(body('planned'), { existing: planned('planned') }).checks.filter((c) => c.level === 'block'), []);
+  // done on an active sample is fine
+  assert.deepEqual(buildPlan(body('done'), { existing: known(sampleRow(10), opRow(40, { work_state: 'done' })) }).checks.filter((c) => c.level === 'block'), []);
+});
+
+test('attach: an operation is never attached to the sample it made, nor into a loop, nor onto a sample that already has another origin', () => {
+  const blocks = (r) => r.checks.filter((c) => c.level === 'block').map((c) => [c.key, c.code, c.text]);
+  const attach = (inputId, extra = {}) => draft(
+    [sample('s0', { existing: { id: ID(inputId), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true, ...extra })],
+    [wire(w('s0'), w('o1'))],
+  );
+  const rows = (...more) => known(sampleRow(10), sampleRow(11), sampleRow(12), opRow(40, { output_sample_id: ID(10) }), ...more);
+
+  // its own output
+  assert.deepEqual(blocks(buildPlan(attach(10), { existing: rows() })), [['o1', 'NOT_ATTACHABLE', 'S-10 cannot be an input of the operation that made it.']]);
+  // the sample it made is not readable: no code is told
+  assert.deepEqual(blocks(buildPlan(attach(10), { existing: known(sampleRow(10), opRow(40, { output_sample_id: ID(10) })) })).length, 1);
+  assert.match(blocks(buildPlan(attach(10), { existing: known(sampleRow(11), sampleRow(10), opRow(40, { output_sample_id: ID(10) })) }))[0][2], /S-10/);
+  const hidden = known(sampleRow(11), opRow(40, { output_sample_id: ID(10) }));
+  assert.equal(blocks(buildPlan(attach(10), { existing: hidden }))[0][2], 'The sample this operation made cannot be an input of the operation that made it.');
+
+  // a loop: the output is upstream of the sample it is attached to (lineage rows)
+  const lineage = new Map([[ID(11), new Set([ID(12), ID(10)])]]);
+  assert.deepEqual(blocks(buildPlan(attach(11), { existing: rows(), ancestors: lineage })), [['o1', 'NOT_ATTACHABLE', 'It made S-10, which the sample you attached it to comes from: that would run in a circle.']]);
+  assert.deepEqual(blocks(buildPlan(attach(11), { existing: rows(), ancestors: new Map([[ID(11), new Set([ID(12)])]]) })), []);
+  assert.match(blocks(buildPlan(attach(11), { existing: known(sampleRow(11), opRow(40, { output_sample_id: ID(10) })), ancestors: lineage }))[0][2], /It made the sample it made, which/);
+  // ... also through a new operation and a new sample of this draft
+  const chain = draft(
+    [sample('s0', { existing: { id: ID(11), version: 1 } }), mop('make'), sample('n1', { values: code() }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true })],
+    [wire(w('s0'), w('make')), wire(w('make', 0), w('n1')), wire(w('n1'), w('o1'))],
+  );
+  assert.deepEqual(blocks(buildPlan(chain, { existing: rows(), ancestors: lineage })).map((b) => b[0]), ['o1']);
+  // ... and through another attach of the same draft (A makes X from Y; B makes Y from X)
+  const crossed = draft(
+    [sample('sx', { existing: { id: ID(10), version: 1 } }), sample('sy', { existing: { id: ID(11), version: 1 } }),
+      op('a', { existing: { id: ID(40), version: 1 }, attach: true }), op('b', { existing: { id: ID(41), version: 1 }, attach: true })],
+    [wire(w('sy'), w('a')), wire(w('sx'), w('b'))],
+  );
+  const both = buildPlan(crossed, { existing: known(sampleRow(10), sampleRow(11), opRow(40, { output_sample_id: ID(10) }), opRow(41, { output_sample_id: ID(11) })) });
+  assert.deepEqual([...new Set(blocks(both).map((b) => b[0]))].sort(), ['a', 'b']);
+
+  // a second origin: the sample it made already comes from another sample (a lineage row, or another operation); the same sample is fine
+  assert.match(blocks(buildPlan(attach(11), { existing: rows(), origins: new Map([[ID(10), new Set([ID(12)])]]) }))[0][2], /S-10 already comes from another sample/);
+  assert.deepEqual(blocks(buildPlan(attach(11), { existing: rows(), origins: new Map([[ID(10), new Set([ID(11)])]]) })), []);
+  const rival = draft(
+    [sample('s0', { existing: { id: ID(11), version: 1 } }), sample('s1', { existing: { id: ID(12), version: 1 } }),
+      op('a', { existing: { id: ID(40), version: 1 }, attach: true }), op('b', { existing: { id: ID(41), version: 1 }, attach: true })],
+    [wire(w('s0'), w('a')), wire(w('s1'), w('b'))],
+  );
+  const two = buildPlan(rival, { existing: known(sampleRow(11), sampleRow(12), sampleRow(10), opRow(40, { output_sample_id: ID(10) }), opRow(41, { output_sample_id: ID(10) })) });
+  assert.deepEqual(blocks(two).map((b) => b[0]).sort(), ['a', 'b']);
+  // an ordinary attach is untouched
+  assert.deepEqual(blocks(buildPlan(attach(11), { existing: rows() })), []);
+});
+
+test('attach: nothing is wired out of an attached operation (Create writes only its input, so the sample would be made and never linked)', () => {
+  const ctx = { existing: known(sampleRow(10), opRow(40, { output_sample_id: ID(11) })) };
+  const out = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), op('o1', { existing: { id: ID(40), version: 1 }, attach: true }), sample('n1', { values: code() })],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1'))],
+  );
+  assert.deepEqual(buildPlan(out, ctx).checks.filter((c) => c.level === 'block').map((c) => [c.key, c.text]), [['o1', 'An existing operation keeps the sample it made: a new wire out of it cannot be created.']]);
+});
+
 test('a wire into an existing operation that is not being attached is left alone; one out of it, or into an existing test, is refused', () => {
   const ctx = { existing: known(sampleRow(10), sampleRow(11), opRow(40, { sample_id: ID(12) }), testRow(50)) };
   const into = draft(

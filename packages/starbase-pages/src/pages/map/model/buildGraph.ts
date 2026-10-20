@@ -149,7 +149,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         // outside the family (the siblings of the piece the map opened on) are still pieces, not in-place work.
         const output = op.outputSampleId && op.outputSampleId !== op.sampleId ? op.outputSampleId : null;
         // Nothing to draw a row for. A draft operation with no sample wired yet is still drawn (edit mode: a blank container with free sockets).
-        if (!input && !(output && knownSamples.has(output)) && !op.draft) continue;
+        if (!input && !(output && knownSamples.has(output)) && !op.draft && !op.attaching) continue;
         p = {
           rec: op,
           kind: 'operation',
@@ -304,6 +304,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       probable: !!group.batch && !group.batch.recorded,
       ...(records.length && records.every((r) => r.workState === 'planned') ? { planned: true as const } : {}),
       ...(records.length && records.every((r) => r.draft) ? { draft: true as const } : {}),
+      ...(records.length && records.every((r) => 'attaching' in r && r.attaching) ? { attaching: true as const } : {}),
       ...(records.length && records.every((r) => r.removing) ? { removing: true as const } : {}),
     });
   }
