@@ -58,6 +58,8 @@ export {
 } from './activity';
 export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
+export { projectTimeline, RANGE_OPTIONS, dayLabel, emptyText as timelineEmptyText, niceStep } from './record/projectTimeline';
+export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {
@@ -114,6 +116,10 @@ export { campaignCode, campaignRailFacts, campaignContents } from './record/camp
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
+export { default as ProjectTimeline } from './components/ProjectTimeline.vue';
+export { default as PeopleStack } from './components/PeopleStack.vue';
+export { peopleStack } from './access/peopleStack';
+export type { PeopleStack as PeopleStackModel, PersonFace } from './access/peopleStack';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export {
