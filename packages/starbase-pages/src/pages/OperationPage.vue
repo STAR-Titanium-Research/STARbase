@@ -4,9 +4,9 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
+	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
 	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin,
 	mapPath,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
@@ -88,6 +88,8 @@ const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(pro
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('manufacturing_operations', props.id));
 const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.id));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+providePagePin(pin);
 </script>
 
 <template>
@@ -123,8 +125,6 @@ const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.
 							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code ? `Sample ${sample.sample_code}` : 'Sample' }}</RecordLink>
 						</template>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail :kind="operationKind(op)" :code="code" :plain="!isCode" :facts="railFacts" :contents="contents">

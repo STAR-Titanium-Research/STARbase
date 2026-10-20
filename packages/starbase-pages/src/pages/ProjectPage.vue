@@ -3,9 +3,9 @@ import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, DEFAULT_WEEKS, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, AccessDialog, DEFAULT_WEEKS, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin,
 	mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
@@ -67,6 +67,8 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
 const pin = computed(() => pinTargetForRecord('projects', props.id));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+providePagePin(pin);
 </script>
 
 <template>
@@ -86,8 +88,6 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 						<span>›</span>
 						<AppLink to="/home/projects">Projects</AppLink>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail kind="Project" :code="code" :title="project.project_name" :facts="railFacts" :contents="contents">

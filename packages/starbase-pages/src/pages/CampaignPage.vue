@@ -3,9 +3,9 @@ import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, PinToggle, RecordLayout,
+	AppLink, CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
 	RecordLink, RecordRail, Section, StatusBadge, campaignCode, campaignContents, campaignRailFacts, dataStudioRoute, type ContentsEntry,
-	pinTargetForRecord,
+	pinTargetForRecord, providePagePin,
 	mapPath,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
@@ -71,6 +71,8 @@ const contents = computed<ContentsEntry[]>(() => {
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('campaigns', props.id));
 const pin = computed(() => pinTargetForRecord('campaigns', props.id));
+// The Pin button sits after the title, in the host frame (DESIGN.md "Pin on the title").
+providePagePin(pin);
 </script>
 
 <template>
@@ -97,8 +99,6 @@ const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 							<span>›</span><HiddenLink label="Project" />
 						</template>
 					</template>
-
-					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail kind="Campaign" :code="code" :title="subtitle" :facts="railFacts" :contents="contents">
