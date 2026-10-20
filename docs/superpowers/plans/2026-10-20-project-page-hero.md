@@ -16,8 +16,8 @@ Claude-Session: https://claude.ai/code/session_011vo4wDvALxCfZc4drFUZnP
 | A: kit (timeline model + component, people stack, chart tokens, Sparkline) | agent worktree | hero-a-kit | Sonnet | merged |
 | C: docs (DESIGN.md, backlog item) | agent worktree | hero-c-docs | Haiku | merged |
 | B: Project page (data, hero, layout) | agent worktree | hero-b-page | Sonnet | merged |
-| Simplify pass | main branch | — | coordinator | in progress |
-| Review | read-only | — | Opus (directus-ui-reviewer) | waits for simplify |
+| Simplify pass | main branch | — | coordinator | merged |
+| Review | read-only | — | Opus (directus-ui-reviewer) | in progress |
 
 ## Stream A: kit (`packages/d1-ui`)
 
