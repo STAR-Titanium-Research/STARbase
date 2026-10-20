@@ -206,7 +206,8 @@ export function revertConfirm(a: BulkActionSummary, byId: ReadonlyMap<string, Bu
 			'A record changed since this action ran is skipped and left as it is. A record the rules no longer let you put back is refused, with its reason.',
 			'A revert cannot be reverted. To change the records again, run the action again.',
 		],
-		confirm: `Revert ${what}`,
+		// A partly reverted action has rows already put back and the panel does not know how many remain: no count then.
+		confirm: a.state === 'partly_reverted' ? 'Revert the rest' : `Revert ${what}`,
 	};
 }
 

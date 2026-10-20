@@ -173,7 +173,9 @@ describe('the revert dialog', () => {
 		expect(c.paragraphs[3]).toBe('A revert cannot be reverted. To change the records again, run the action again.');
 	});
 	it('says a partly reverted action tries again for the rest', () => {
-		expect(revertConfirm(line({ state: 'partly_reverted' })).paragraphs[1]).toContain('tries again for the records not yet put back');
+		const partly = revertConfirm(line({ state: 'partly_reverted' }));
+		expect(partly.paragraphs[1]).toContain('tries again for the records not yet put back');
+		expect(partly.confirm).toBe('Revert the rest');
 	});
 	it('words the per-record result, the ones not put back first', () => {
 		const results: RevertRow[] = [
