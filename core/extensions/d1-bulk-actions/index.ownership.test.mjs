@@ -241,7 +241,7 @@ function setup({ tables = baseTables(), env = { PUBLIC_URL: 'https://lab.example
     constructor(options) { this.options = options; }
     async send(data) {
       log.mail.push({ ...data, schema: this.options.schema });
-      if (mailFail) throw new Error('SMTP refused');
+      if (mailFail) throw new Error(typeof mailFail === 'string' ? mailFail : 'SMTP refused');
       return { messageId: 'x' };
     }
   }
@@ -777,6 +777,39 @@ test('share_access with a person mails them; with a team mails each active membe
   // Alpha: Eve and Bob (login addresses); not Cy (a login with no address), Nell (no login), Zed (inactive) or Ann (the actor)
   assert.deepEqual(h.log.mail.map((m) => m.to).sort(), ['bob@login.example', 'eve@login.example']);
   assert.ok(h.log.mail.every((m) => /gave you access to 2 samples via Alpha lab/.test(m.subject)));
+});
+
+test('a team member waiting for approval on a record is not told about it, and is mailed the rest (as in the single-record mail)', async () => {
+  const h = setup();
+  await ranOk(h, member(U.ann), shareBody([S.two, S.three], team(T.alpha), 'view'));
+  const grant = h.tables.sample_team_access.find((g) => same(g.sample_id, S.two) && same(g.team_id, T.alpha));
+  h.tables.sample_team_pending.push({ team_access_id: grant.team_access_id, person_id: P.bob, state: 'pending' });
+  await h.fire();
+  const to = (who) => h.log.mail.filter((m) => m.to === who);
+  assert.equal(to('eve@login.example').length, 1);
+  assert.match(to('eve@login.example')[0].subject, /gave you access to 2 samples/);
+  assert.equal(to('bob@login.example').length, 1);
+  assert.match(to('bob@login.example')[0].subject, /gave you access to sample SM-003 via Alpha lab/, 'Bob waits on SM-002, so only SM-003 is his');
+  assert.doesNotMatch(to('bob@login.example')[0].text, /SM-002/);
+});
+
+test('a team member waiting on every record of the action is not mailed at all', async () => {
+  const h = setup();
+  await ranOk(h, member(U.ann), shareBody([S.two], team(T.alpha), 'view'));
+  h.tables.sample_team_pending.push({ team_access_id: h.tables.sample_team_access.find((g) => same(g.sample_id, S.two) && same(g.team_id, T.alpha)).team_access_id, person_id: P.bob, state: 'declined' });
+  await h.fire();
+  assert.deepEqual(h.log.mail.map((m) => m.to), ['eve@login.example']);
+});
+
+test('a mail failure is logged without the recipient address, even when the transport quotes it', async () => {
+  const h = setup({ mailFail: 'Recipient address rejected: <bob@login.example>' });
+  await ranOk(h, member(U.ann), ownerBody([S.one], P.bob));
+  await h.fire(0);
+  assert.equal(h.log.mail.length, 1);
+  const failed = h.log.warnings.filter((m) => m.includes('was not sent'));
+  assert.equal(failed.length, 1);
+  assert.match(failed[0], /Recipient address rejected/);
+  assert.doesNotMatch(failed[0], /@/);
 });
 
 test('a person with no login is mailed at their People address with no link', async () => {
