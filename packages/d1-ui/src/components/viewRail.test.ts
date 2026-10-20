@@ -62,6 +62,14 @@ describe('isRailToggleKey', () => {
 		expect(isRailToggleKey({ key: '\\', target: { tagName: 'DIV', isContentEditable: true } })).toBe(false);
 	});
 
+	it('accepts the backslash typed with AltGr, which Windows reports as Ctrl+Alt', () => {
+		const altGr = (key: string) => key === 'AltGraph';
+		expect(isRailToggleKey({ key: '\\', ctrlKey: true, altKey: true, getModifierState: altGr })).toBe(true);
+		expect(isRailToggleKey({ key: '\\', altKey: true, getModifierState: altGr })).toBe(true);
+		expect(isRailToggleKey({ key: '\\', ctrlKey: true, altKey: true, getModifierState: () => false })).toBe(false);
+		expect(isRailToggleKey({ key: '\\', metaKey: true, getModifierState: altGr })).toBe(false);
+	});
+
 	it('leaves modified keys and handled events to others', () => {
 		expect(isRailToggleKey({ key: '\\', ctrlKey: true })).toBe(false);
 		expect(isRailToggleKey({ key: '\\', metaKey: true })).toBe(false);

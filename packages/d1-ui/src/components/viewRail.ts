@@ -39,11 +39,17 @@ export interface RailKeyEvent {
 	altKey?: boolean;
 	defaultPrevented?: boolean;
 	target?: object | null;
+	getModifierState?: (key: string) => boolean;
 }
 
-/** `\` toggles the rail, but never while a field has the keyboard (it is a character there) or with a modifier held. */
+/**
+ * `\` toggles the rail, but never while a field has the keyboard (it is a character there) or with a modifier
+ * held. AltGr is not a modifier here: on German, French or Italian keyboards it is how `\` is typed (Windows
+ * reports it as Ctrl+Alt).
+ */
 export function isRailToggleKey(e: RailKeyEvent): boolean {
-	if (e.key !== '\\' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return false;
+	const altGr = !!e.getModifierState?.('AltGraph');
+	if (e.key !== '\\' || e.metaKey || e.defaultPrevented || (!altGr && (e.ctrlKey || e.altKey))) return false;
 	const t = e.target as { tagName?: string; isContentEditable?: boolean } | null | undefined;
 	if (t?.isContentEditable) return false;
 	return !['INPUT', 'TEXTAREA', 'SELECT'].includes((t?.tagName ?? '').toUpperCase());
