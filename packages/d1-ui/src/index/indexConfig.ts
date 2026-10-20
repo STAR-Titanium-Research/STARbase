@@ -149,7 +149,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		bulkFields: [
 			{ field: 'current_status', label: 'Status', kind: 'enum', values: ['active', 'consumed', 'destroyed', 'archived'] },
 			{ field: 'project_id', label: 'Project', kind: 'relation', relation: { collection: 'projects', display: 'project_code' } },
-			{ field: 'export_controlled', label: 'Export control', kind: 'bool' },
+			{ field: 'mounted', label: 'Mounted', kind: 'bool' },
 		],
 	},
 	{

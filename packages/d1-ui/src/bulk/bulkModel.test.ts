@@ -16,7 +16,7 @@ describe('bulkEntries', () => {
 	it('offers samples Print labels, Restrict, Unrestrict and one edit per bulk field, in that order', () => {
 		expect(bulkEntries(samples).map((e) => [e.id, e.label])).toEqual([
 			['print', 'Print labels'], ['restrict', 'Restrict…'], ['unrestrict', 'Unrestrict…'],
-			['field:current_status', 'Edit status…'], ['field:project_id', 'Edit project…'], ['field:export_controlled', 'Edit export control…'],
+			['field:current_status', 'Edit status…'], ['field:project_id', 'Edit project…'], ['field:mounted', 'Edit mounted…'],
 		]);
 	});
 	it('offers an ownable page without bulk fields only the restrict pair, and no Print labels', () => {

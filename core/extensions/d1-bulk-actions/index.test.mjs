@@ -281,7 +281,7 @@ test('request validation: collection, kind, ids, field and value are 400s before
   await bad('physical_samples', editBody([S.one], 'current_status', 'exploded'));
   await bad('physical_samples', editBody([S.one], 'current_status', 'planned')); // planned is left out
   await bad('physical_samples', editBody([S.one], 'current_status', null)); // NOT NULL: cannot be cleared
-  await bad('physical_samples', editBody([S.one], 'export_controlled', 'yes'));
+  await bad('physical_samples', editBody([S.one], 'mounted', 'yes'));
   await bad('physical_samples', editBody([S.one], 'manufactured_date', '2026-02-30'));
   await bad('physical_samples', editBody([S.one], 'manufactured_date', '20 October'));
   await bad('physical_samples', editBody([S.one], 'project_id', 'not-a-uuid'));
@@ -489,8 +489,8 @@ test('every field kind applies: enum, relation, bool, date, and null clears', as
   const acc = member(U.ann);
   assert.equal((await apply(h, acc, 'physical_samples', editBody([S.one], 'project_id', PRJ.open))).body.counts.applied, 1);
   assert.equal(row(h.tables, 'physical_samples', S.one).project_id, PRJ.open);
-  assert.equal((await apply(h, acc, 'physical_samples', editBody([S.one], 'export_controlled', true))).body.counts.applied, 1);
-  assert.equal(row(h.tables, 'physical_samples', S.one).export_controlled, true);
+  assert.equal((await apply(h, acc, 'physical_samples', editBody([S.one], 'mounted', true))).body.counts.applied, 1);
+  assert.equal(row(h.tables, 'physical_samples', S.one).mounted, true);
   assert.equal((await apply(h, acc, 'physical_samples', editBody([S.one], 'manufactured_date', '2026-05-06'))).body.counts.applied, 1);
   assert.equal(row(h.tables, 'physical_samples', S.one).manufactured_date, '2026-05-06');
   assert.equal((await apply(h, acc, 'physical_samples', editBody([S.two], 'mounted', null))).body.counts.applied, 1);

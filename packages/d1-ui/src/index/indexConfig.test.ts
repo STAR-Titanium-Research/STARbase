@@ -191,7 +191,7 @@ describe('bulk actions in the defs', () => {
 
 	it('gives the samples page its three safe fields, status without the planned value', () => {
 		const d = indexDefBySlug('samples')!;
-		expect(d.bulkFields!.map((f) => [f.field, f.kind])).toEqual([['current_status', 'enum'], ['project_id', 'relation'], ['export_controlled', 'bool']]);
+		expect(d.bulkFields!.map((f) => [f.field, f.kind])).toEqual([['current_status', 'enum'], ['project_id', 'relation'], ['mounted', 'bool']]);
 		expect(d.bulkFields![0].values).not.toContain('planned');
 		// A bulk link points at the same table as the page's own relation column.
 		expect(d.columns.find((c) => c.field === 'project_id')?.relation?.collection).toBe(d.bulkFields![1].relation!.collection);

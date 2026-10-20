@@ -74,7 +74,6 @@ export const BULK_FIELDS = {
   physical_samples: {
     current_status: { kind: 'enum', label: 'Status', clearable: false, values: ['active', 'consumed', 'destroyed', 'archived'] },
     project_id: { kind: 'relation', label: 'Project', clearable: true, relation: { collection: 'projects', key: 'project_id' } },
-    export_controlled: { kind: 'bool', label: 'Export control', clearable: false },
     mounted: { kind: 'bool', label: 'Mounted', clearable: true },
     manufactured_date: { kind: 'date', label: 'Manufactured date', clearable: true },
   },

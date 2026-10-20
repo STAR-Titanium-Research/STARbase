@@ -110,7 +110,7 @@ describe('bulk actions on the Samples list', () => {
 		await tick(2);
 		await openMenu();
 		expect(Array.from(document.querySelectorAll('[role="menuitem"]')).map((b) => b.textContent?.trim())).toEqual([
-			'Print labels', 'Restrict…', 'Unrestrict…', 'Edit status…', 'Edit project…', 'Edit export control…',
+			'Print labels', 'Restrict…', 'Unrestrict…', 'Edit status…', 'Edit project…', 'Edit mounted…',
 		]);
 		item('Print labels').click();
 		await flush();
