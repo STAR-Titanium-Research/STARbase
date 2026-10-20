@@ -60,6 +60,7 @@ export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
 export { projectTimeline, RANGE_OPTIONS, dayLabel, emptyText as timelineEmptyText, niceStep } from './record/projectTimeline';
 export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
+export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, parseTimelineRange, projectDatesText, TIMELINE_RANGE_KEY } from './record/projectHero';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {
@@ -110,8 +111,7 @@ export {
 	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
-export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
-export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
+export { dateRangeText } from './record/projectFacts';
 export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';
@@ -133,6 +133,8 @@ export type { EditSessionApi, EditSessionOptions } from './composables/useEditSe
 // Who has access (the dialog of the record pages; the endpoint is core/extensions/d1-record-access)
 export { default as AccessDialog } from './components/AccessDialog.vue';
 export { RESTRICT_UI } from './access/accessModel';
+export type { AccessList } from './access/accessModel';
+export { loadAccess } from './access/accessApi';
 // Teams (the endpoint is core/extensions/d1-teams): the tile and palette, the members card, and the calls
 export { default as TeamTile } from './teams/TeamTile.vue';
 export { default as TeamCard } from './teams/TeamCard.vue';

@@ -32,6 +32,13 @@ describe('fetchActivityRows', () => {
 		expect(rows.tests).toEqual([{ project_id: 'b', session_date: '2026-10-03T00:00:00Z' }]);
 		expect(rows.truncated).toBe(false);
 	});
+	it('reads the whole history, not a window, when weeks is null', async () => {
+		const getItems = vi.fn().mockResolvedValue([]);
+		await fetchActivityRows(getItems, 'p1', null, NOW);
+		const [, params] = getItems.mock.calls[0];
+		expect(params.filter._and[1]).toEqual({ operation_date: { _nnull: true } });
+		expect(getItems.mock.calls[1][1].filter._and[1]).toEqual({ session_date: { _nnull: true } });
+	});
 	it('says so when a read hit its cap', async () => {
 		const full = Array.from({ length: ACTIVITY_ROW_CAP }, () => ({ project_id: 'a', operation_date: '2026-10-01T00:00:00Z' }));
 		const getItems = vi.fn(async (c: string) => (c === 'manufacturing_operations' ? full : []));
