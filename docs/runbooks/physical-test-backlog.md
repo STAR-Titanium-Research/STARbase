@@ -2798,6 +2798,32 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
 - [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
   `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.
 
+### Bulk actions (2026-10-20, migration 204, `feat/bulk-actions`, d1-server)
+
+Server half of the bulk actions (docs/superpowers/specs/2026-10-20-bulk-actions-design.md). The `node --test` suite uses a fake knex and a fake
+`ItemsService`; what only a live Directus can show is below. Run on a copy of the stack (not live data), as an administrator, a Lab Member who owns the
+records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actions/<collection>/preview|apply`, bodies as in the endpoint's header.
+
+- [ ] **BULK1 — The preview writes nothing, with real hooks.** On 5 samples run `preview` for `edit_field` (`current_status` to `archived`), then compare:
+  `audit_logs`, `directus_activity`, `directus_revisions` and the samples' `updated_at` / `version` are unchanged, and no flow, `d1-project-inherit` or
+  `d1-campaign-inherit` action ran (watch the Directus log). Repeat for `project_id` on samples that have operations, and for `restrict`. The same ids then `apply`:
+  every record's status in the preview equals its outcome in the apply. Since: bulk actions, PR 1.
+- [ ] **BULK2 — `updateOne` with a transaction, `bypassEmitAction` and `autoPurgeCache: false`.** The code relies on Directus 11.17's `ItemsService.updateOne(id, data, { bypassEmitAction,
+  autoPurgeCache })` inside a caller-supplied knex transaction: filter hooks (d1-access-guard) still run and see the transaction, action events are only collected. Apply
+  `edit_field` `project_id` to samples that have operations: afterwards the operations' project follows (the action hooks ran once, after the commit, and not during a preview), the sample
+  list shows the new value without a cache clear in between when `CACHE_ENABLED=true`, and `audit_logs.actor` names the caller (not "public" or the system). Since: bulk actions, PR 1.
+- [ ] **BULK3 — d1-access-guard decides, its text is the reason.** As a Lab Member owner, `apply` `restrict` on 3 own samples: each is `skipped` with "Restricting a record is not available yet. Ask an
+  administrator." and nothing changed; as an administrator the same call is `applied`. `edit_field` `project_id` to a restricted project the member cannot read: 400 "does not exist, or you cannot see it" (no
+  hint that it exists). A sample inside a restricted campaign the member does not own, edited for `project_id`: `skipped` with the guard's sentence. Another person's unreadable sample in the id list: `skipped`, code `null`.
+  Since: bulk actions, PR 1.
+- [ ] **BULK4 — Undo and revert on real rows.** As the owner: `apply` `edit_field` `current_status`, then `undo` inside 60 s: every record is back, `bulk_actions.state = 'undone'`, a second row with `revert_of` exists.
+  After 60 s the owner's `undo` is 403 `UNDO_WINDOW_CLOSED`; an administrator's `undo` and `revert` work. Change one record by hand in Data Studio, then `revert`: that one is `changed_since`, the action is
+  `partly_reverted`. Share a restricted sample with someone (Who has access), then revert the restrict: `changed_since` (the snapshot holds the access list). Dates: a sample's `manufactured_date` edited and
+  undone comes back as the same day (no timezone shift; the code reads Directus' `YYYY-MM-DD`). Two `revert` calls at once: one answers 200, the other 409 `ALREADY_REVERTED` (row lock). Since: bulk actions, PR 1.
+- [ ] **BULK5 — Lab Viewer, caps and the journal.** A Lab Viewer token: `preview`, `apply`, `undo` and `revert` all 403 `READ_ONLY_ROLE`. 101 distinct ids: 400; the same id 150 times: one result.
+  `GET /d1-bulk-actions` as the owner lists only their actions, as an administrator every one, newest first; `GET /:id` of someone else's action is 404 for a member. Applying to 100 samples takes
+  how long on the real stack (one transaction per record): note it, the toast's 60 s starts when the answer arrives. Since: bulk actions, PR 1.
+
 ## Done
 
 (Move ticked items here with their date and result.)

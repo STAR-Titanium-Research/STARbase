@@ -50,8 +50,8 @@ CREATE TABLE bulk_action_rows (
     record_code TEXT,
     outcome TEXT NOT NULL,
     reason TEXT,
-    before JSONB,
-    after JSONB,
+    before JSONB, -- noqa: RF04
+    after JSONB, -- noqa: RF04
     revert_outcome TEXT,
     revert_reason TEXT,
     CONSTRAINT bulk_action_rows_pkey PRIMARY KEY (action_id, record_id),
