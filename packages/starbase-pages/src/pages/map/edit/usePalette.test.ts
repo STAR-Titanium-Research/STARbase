@@ -21,7 +21,7 @@ const make = (person: { value: string | null } = { value: 'u1' }, recents: strin
 describe('the palette', () => {
 	it('lists the one catalog: samples, operations by category, tests', () => {
 		const p = make();
-		expect(p.entries.value.map((e) => e.label)).toEqual(['New sample', 'Existing sample…', 'CNC Turning', 'FAST/SPS Sintering', 'Tensile']);
+		expect(p.entries.value.map((e) => e.label)).toEqual(['New sample', 'Existing sample…', 'From database…', 'CNC Turning', 'FAST/SPS Sintering', 'Tensile']);
 		expect(p.grouped.value).toBe(true);
 	});
 
@@ -33,7 +33,7 @@ describe('the palette', () => {
 		p.query.value = 'tens';
 		expect(p.entries.value.map((e) => e.label)).toEqual(['Tensile']);
 		p.query.value = '';
-		expect(p.entries.value).toHaveLength(5);
+		expect(p.entries.value).toHaveLength(6);
 	});
 
 	it('puts what was added lately on top, as its own group', () => {

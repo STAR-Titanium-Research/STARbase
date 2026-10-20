@@ -181,7 +181,7 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 @media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
-.name { font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; }
+.name { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; } /* file names are mono (DESIGN.md section 3) */
 .tag {
 	padding: 0 7px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; white-space: nowrap;
 	color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent);

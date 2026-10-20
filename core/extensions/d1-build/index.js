@@ -338,6 +338,19 @@ export const SQL = {
   testSubjects: "SELECT item AS sample_id FROM test_sessions_subject WHERE test_sessions_id = ? AND collection = 'physical_samples'",
   refsGenealogy:
     "SELECT parent_sample_id, child_sample_id FROM sample_genealogy WHERE parent_sample_id = ANY(string_to_array(?, ',')::uuid[])",
+  // Attach: the samples each given sample comes from (ids only, depth-bounded, loop-safe) and the samples that already have an origin
+  // (a genealogy row with it as the child, or another operation that makes it from an input; the second list of ids is the attached operations).
+  ancestors:
+    'WITH RECURSIVE up(root, id, path) AS ('
+    + " SELECT s, s, ARRAY[s] FROM unnest(string_to_array(?, ',')::uuid[]) AS s"
+    + ' UNION ALL SELECT up.root, g.parent_sample_id, up.path || g.parent_sample_id FROM sample_genealogy g JOIN up ON g.child_sample_id = up.id'
+    + ' WHERE NOT g.parent_sample_id = ANY(up.path) AND cardinality(up.path) < 100'
+    + ') SELECT DISTINCT root, id FROM up WHERE id <> root',
+  origins:
+    "SELECT child_sample_id AS child, parent_sample_id AS parent FROM sample_genealogy WHERE child_sample_id = ANY(string_to_array(?, ',')::uuid[])"
+    + ' UNION SELECT output_sample_id, sample_id FROM manufacturing_operations'
+    + " WHERE output_sample_id = ANY(string_to_array(?, ',')::uuid[]) AND sample_id IS NOT NULL AND sample_id <> output_sample_id"
+    + " AND NOT (operation_id = ANY(string_to_array(?, ',')::uuid[]))",
   refsTests:
     "SELECT session_id, work_state, sample_id FROM test_sessions WHERE sample_id = ANY(string_to_array(?, ',')::uuid[])",
   refsSubjects:
@@ -467,6 +480,9 @@ export function buildPlan(body, ctx = {}) {
   const outputsInfo = ctx.outputs ?? new Map();
   const columns = ctx.columns ?? null;
   const refs = ctx.refs ?? [];
+  // Attach: id -> Set of the samples it comes from (lineage rows), and output id -> Set of the samples it already has as an origin.
+  const ancestorsInfo = ctx.ancestors ?? new Map();
+  const originsInfo = ctx.origins ?? new Map();
   const items = Array.isArray(body?.items) ? body.items : [];
   const wires = Array.isArray(body?.wires) ? body.wires : [];
 
@@ -568,7 +584,8 @@ export function buildPlan(body, ctx = {}) {
       const rows = to.row === undefined ? rowsFor(to.item).map((_, i) => i) : [rowSel(to, 'it goes into')];
       for (const i of rows) if (i !== null) push(inWires, `${to.item.key}#${i}`, src);
     } else if (fk === 'operation' && tk === 'sample') {
-      if (!isNew(from.item) && !from.item.attach) {
+      // An attached operation too: Create writes its input only, so a sample wired out of it would be made and never linked.
+      if (!isNew(from.item)) {
         block(from.item.key, 'An existing operation keeps the sample it made: a new wire out of it cannot be created.');
         continue;
       }
@@ -683,7 +700,72 @@ export function buildPlan(body, ctx = {}) {
   const plannedSample = (ref) => !!ref && (ref.startsWith('item:')
     ? makers.get(ref)?.[0]?.workState === 'planned'
     : existing.get(existingKey('physical_samples', ref.slice(3)))?.current_status === 'planned');
-  for (const r of records) if (r.mode === 'new' && r.workState === 'done' && plannedSample(r.input)) block(r.itemKey, SAMPLE_PLANNED);
+  // An attached operation is judged by the work state it has now (the record, not what the draft says), and so is a new one by the draft's.
+  const stateNow = (r) => (r.mode === 'attach' ? (existing.get(existingKey('manufacturing_operations', r.existingId))?.work_state ?? r.workState) : r.workState);
+  for (const r of records) if ((r.mode === 'new' || r.mode === 'attach') && stateNow(r) === 'done' && plannedSample(r.input)) block(r.itemKey, SAMPLE_PLANNED);
+
+  // An attached operation gives the sample it is wired to as its input; its stored output is the sample it made. That must not make a
+  // sample its own input, close a loop in the lineage (the output is already upstream of the input), or give the output a second origin
+  // (it already comes from another sample: joining two process trees is not done from the map). The genealogy trigger would write the
+  // row without complaint. The lineage is read as ids only; a sample's code is named only when the caller can read it.
+  {
+    const attachRows = records.filter((r) => r.mode === 'attach' && r.input);
+    const storedOutput = (r) => {
+      const o = existing.get(existingKey('manufacturing_operations', r.existingId))?.output_sample_id;
+      return o ? lower(o) : null;
+    };
+    const attachInputs = new Map(); // output id -> input refs of the attach rows that make it
+    for (const r of attachRows) {
+      const o = storedOutput(r);
+      if (o) attachInputs.set(o, [...(attachInputs.get(o) ?? []), r.input]);
+    }
+    // The existing samples upstream of a ref: through the lineage rows, the new operations of this draft that make it, and the attaches.
+    const upstream = (start) => {
+      const out = new Set();
+      const seenRefs = new Set();
+      const addRef = (rf) => {
+        if (rf.startsWith('id:')) out.add(rf.slice(3));
+        visit(rf);
+      };
+      const visit = (rf) => {
+        if (!rf || seenRefs.has(rf)) return;
+        seenRefs.add(rf);
+        if (rf.startsWith('id:')) {
+          const id = rf.slice(3);
+          const ids = [id, ...(ancestorsInfo.get(id) ?? [])];
+          for (const a of ids) {
+            if (a !== id) out.add(a);
+            for (const inp of attachInputs.get(a) ?? []) addRef(inp);
+          }
+        } else {
+          for (const m of makers.get(rf) ?? []) if (m.input) addRef(m.input);
+        }
+      };
+      visit(start);
+      return out;
+    };
+    for (const r of attachRows) {
+      const out = storedOutput(r);
+      if (!out) continue;
+      const made = existing.get(existingKey('physical_samples', out))?.sample_code ?? null;
+      const name = made ?? 'the sample it made';
+      const input = r.input.startsWith('id:') ? r.input.slice(3) : null;
+      const block1 = (text) => block(r.itemKey, text, undefined, 'NOT_ATTACHABLE');
+      if (input === out) {
+        block1(`${made ?? 'The sample this operation made'} cannot be an input of the operation that made it.`);
+        continue;
+      }
+      if (upstream(r.input).has(out)) {
+        block1(`It made ${name}, which the sample you attached it to comes from: that would run in a circle.`);
+        continue;
+      }
+      const others = [...(originsInfo.get(out) ?? [])].filter((p) => p !== input);
+      const rivals = (attachInputs.get(out) ?? []).filter((rf) => rf !== r.input);
+      if (others.length || rivals.length) {
+        block1(`${made ?? 'The sample it made'} already comes from another sample: attaching would give it a second origin, and joining another process is not done from the map.`);
+      }
+    }
+  }
 
   // -- samples (new) ------------------------------------------------------------------------------------------------------
   const sampleValues = (ref, trail = new Set()) => {
@@ -1038,6 +1120,30 @@ export function mount(router, context, clock = () => new Date()) {
     }
     take('physical_samples', await read('physical_samples', [...more]));
 
+    // Attach: the lineage of the samples the draft holds (what an attached operation might close a loop through), and the samples its
+    // attached operations made that already have an origin. Ids only; a sample's code is named only if `existing` holds it (the caller reads it).
+    const ancestors = new Map();
+    const origins = new Map();
+    const attached = body.items.filter((i) => i.attach && i.existing).map((i) => lower(i.existing.id));
+    if (attached.length) {
+      const sampleIds = [...ids.physical_samples];
+      if (sampleIds.length) {
+        for (const r of rowsOf(await db.raw(SQL.ancestors, [sampleIds.join(',')]))) {
+          const root = lower(r.root);
+          if (!ancestors.has(root)) ancestors.set(root, new Set());
+          ancestors.get(root).add(lower(r.id));
+        }
+      }
+      const outs = [...new Set(attached.map((id) => existing.get(`manufacturing_operations:${id}`)?.output_sample_id).filter(Boolean).map(lower))];
+      if (outs.length) {
+        for (const r of rowsOf(await db.raw(SQL.origins, [outs.join(','), outs.join(','), attached.join(',')]))) {
+          const child = lower(r.child);
+          if (!origins.has(child)) origins.set(child, new Set());
+          origins.get(child).add(lower(r.parent));
+        }
+      }
+    }
+
     const required = parseRequired(rowsOf(await db.raw(SQL.requiredFields)));
 
     // Samples a removal would delete: the removed samples, and the output of each removed operation.
@@ -1077,7 +1183,7 @@ export function mount(router, context, clock = () => new Date()) {
       }
       refs.push(...tests.values());
     }
-    return { existing, required, outputs, refs, columns: realColumns(schema) };
+    return { existing, required, outputs, refs, ancestors, origins, columns: realColumns(schema) };
   }
 
   // -- drafts -----------------------------------------------------------------------------------------------------

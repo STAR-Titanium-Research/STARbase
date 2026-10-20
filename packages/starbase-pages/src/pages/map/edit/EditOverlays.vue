@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import AddSearch from './AddSearch.vue';
+import AttachPicker from './AttachPicker.vue';
 import ConnectTo from './ConnectTo.vue';
 import CreateToast from './CreateToast.vue';
 import DuplicatePrompt from './DuplicatePrompt.vue';
 import MarkDoneDialog from './MarkDoneDialog.vue';
 import SamplePicker from './SamplePicker.vue';
+import SaveTemplate from './SaveTemplate.vue';
 import { focusCanvas } from './focusCanvas';
 import type { EditMode } from './useEditMode';
 import type { EditSide } from './useEditSide';
@@ -39,13 +41,39 @@ function closeToast(): void {
 	<template v-if="edit.editing.value">
 		<ConnectTo v-if="side.build.connecting.value" :entries="side.build.connectEntries.value" :from="side.build.connectFrom.value" :at="side.build.connecting.value.at" @choose="side.build.connectTo" @close="side.build.connecting.value = null" />
 		<DuplicatePrompt v-if="side.build.duplicating.value" :what="side.build.duplicating.value.what" @confirm="side.build.confirmDuplicate" @close="side.build.duplicating.value = null" />
+		<SaveTemplate
+			v-if="side.build.templateUi.saving.value"
+			:what="side.build.templateUi.saving.value.what"
+			:name="side.build.templateUi.saving.value.name"
+			:labels="side.build.templateUi.saving.value.labels"
+			:has-notes="side.build.templateUi.saving.value.hasNotes"
+			:restricted="side.build.templateUi.saving.value.restricted"
+			:problem="side.build.templateUi.saving.value.problem"
+			:error="side.build.templateUi.saving.value.error"
+			:busy="side.build.templateUi.saving.value.busy"
+			:restore-focus="() => focusCanvas(canvasEl, side.build.templateUi.selectedNodeId.value ?? undefined)"
+			@save="side.build.templateUi.save"
+			@close="side.build.templateUi.closeSave"
+		/>
 		<SamplePicker v-if="side.build.pickerOpen.value" :taken="side.build.picking.taken.value" @pick="side.build.picking.picked" @close="side.build.pickerOpen.value = false" />
+		<AttachPicker
+			v-if="side.build.attaching.target.value"
+			:heading="side.build.attachHeading.value"
+			:search="side.build.attaching.search"
+			:reason-of="side.build.attaching.reasonOf"
+			:problem="side.build.attaching.problem.value"
+			:busy="side.build.attaching.busy.value"
+			:restore-focus="() => focusCanvas(canvasEl, side.build.attaching.anchor.value)"
+			@pick="side.build.attaching.pick"
+			@close="side.build.attaching.close"
+		/>
 		<AddSearch
 			v-if="side.build.menu.target.value"
 			:target="side.build.menu.target.value"
 			:body="edit.body.value"
 			:methods="edit.catalog.methods.value"
 			:test-types="edit.catalog.testTypes.value"
+			:templates="side.build.templates.items.value"
 			:recents="side.build.menu.recents.value"
 			:search="edit.catalog.searchSamples"
 			:code-of="(id: string) => edit.catalog.samples.get(id)?.code"

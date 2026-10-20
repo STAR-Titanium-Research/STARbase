@@ -1456,6 +1456,89 @@ touch confirm:
   swipe, and a mouse or pen drag is unchanged. Switching to another app or window mid-drag (or locking the screen) lets the drag go
   with nothing dropped. Since: edit-mode redesign slice 2a (PR pending); the scroll and the let-go: slice 2c fixes.
 
+#### Process map edit mode redesign, slice 4 templates (`pm-redesign/4-templates`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+Templates (R7) are unit-tested and were driven in a real browser on the local stack by `tests/ui/specs/edit-mode-slice4.spec.ts` (one seeded
+machine, a tool made for the run, two Lab Members, an administrator and a Lab Viewer; the three scopes; rename, who can use it, replace, delete;
+a stale version; a retired tool). What only live data, live roles and real people confirm:
+
+- [ ] **PM9-1 — A template on real tools, edges, operators and lists, and what it must NOT carry.** On live, build an operation of each process
+  category you use, fill in the machine, the tool, the cutting edge, the operator, the typed settings and anything that is a list or a choice
+  on that method's form, and **Save as template** (card right-click menu and the rail's Template section). The dialog's "Keeps" line must name
+  what you filled in. Drop the template on an empty canvas: every setting you filled is on the new card (open "all fields"), and Create writes
+  them (read the operation in Data Studio). Note every field that did NOT come back: a template keeps only the setup and the form's process
+  settings (an allow-list read from the form's groups), and a many-to-many such as additional operators is left out by design. Then the
+  negative cases, on a RECORDED, finished record of each kind: save it as a template and open it in Data Studio's API or look at
+  `GET /d1-build/templates`: (a) a done **tensile, hardness, Charpy, compression, tribology, fatigue, creep, CLEMX and optical** test: only the
+  type, the machine, the operator and the test parameters are there, no result (UTS, yield, hardness, absorbed energy, cycles, grain size...),
+  no `status` (analysed...), no data file, plot or summary, no owner, no test code column; (b) a **FAST/SPS** operation with a run number: no
+  `sintering_run_number`, batch, mass, recipe, `source_system` or `recorded_metadata`, and two operations made from the template on two samples
+  are both created (the second is not refused as "That code or value is already used"); (c) an operation with a g-code file or an owner other
+  than you: no `gcode_file`, no `owner`. (d) A **restricted** record (one only some people may read): the dialog offers only Only me and says
+  why. (e) A column renamed or dropped by a later migration: an old template still adds a card and the draft still saves. Since: edit-mode
+  redesign slice 4 (PR pending); the negative cases: slice 4 review fixes.
+- [ ] **PM9-2 — Sharing with a real account role.** As a Lab Member save one template for **My account role** and one for **Everyone**.
+  Sign in as another Lab Member: both are in the palette (Templates first) and in Shift+A, and neither has the ⋯ controls. Sign in as an
+  administrator (another role): only the one for everyone is listed; the administrator can still rename and delete the role one if they
+  reach it by id (`GET /d1-build/templates/<id>`). If your accounts use nested roles (a child of Lab Member), check a member of the child role
+  sees the role template. A Lab Viewer gets 403 from `/d1-build/templates` and no edit mode. Since: edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-3 — Retired and used-up gear.** Retire a tool (Tools list, `is_active` off) or mark an edge used that a saved template names. Open
+  `/map?edit=new`: the template is greyed with "The tool … is retired." / "The cutting edge … is used up." under it in the palette and the
+  add search, it can still be chosen, and the card made from it has the same warning in Checks (a warning only, Create is not blocked). Turn the
+  tool back on, reload: no warning. Check that a machine set inactive in Equipment does the same. Since: edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-4 — Many templates.** With about 100 templates visible (a few people, all three scopes): the palette's Templates group scrolls inside
+  the dock without pushing the canvas, typing narrows by name and by method, the add search lists them first and finds one by name in a keystroke
+  or two, and opening the palette or the page does not wait on the template list (the list is read once when edit mode starts). Since:
+  edit-mode redesign slice 4 (PR pending).
+- [ ] **PM9-5 — Replace, rename and delete on real shared templates.** Replace a role template with the settings of a card on the map (confirm
+  twice-asked), rename it, change its scope to Everyone and back, delete it: each says what it did, another member's open palette keeps listing
+  the old one until their page reads again, and renaming it from there answers "changed since you opened it" and reloads. What was made
+  from the template (cards already on a draft, records already created) is unchanged by every one of these. Since: edit-mode redesign slice 4 (PR pending).
+
+#### Process map edit mode redesign, slice 3 attach from the database (`pm-redesign/3-attach`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+"From database…" lists the recorded operations that have no input sample and attaches one to a sample's output. It is unit-tested and was driven in
+a real browser on the local stack by `tests/ui/specs/edit-mode-slice3.spec.ts` (orphan operations made through the API, one extra Lab Member). What only
+live data and the real accounts confirm:
+
+- [ ] **PM10-1 — The orphan operations of live data.** On live, open `/map?edit=new`, pick a sample and open **From database…** from its output
+  socket (also from the palette and Shift+A). Expect the list to hold exactly the operations with no input sample that your account may read
+  (ask an admin for the count: `SELECT count(*) FROM manufacturing_operations WHERE sample_id IS NULL`, and compare as yourself and as an admin: a
+  Lab Member sees fewer, never more). Each row shows a code (or "Operation on <sample>" when it has no pass code), the method, Planned or Done, the
+  day, the owner and the sample it made. Typing a method name, part of a code and part of the code of the sample it made each narrow the list; **Show
+  more** pages on without repeating a row; the list does not take more than a moment on the real table. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-2 — Attach a real orphan to a real sample, read it back.** Pick an orphan that is **done** and one that is **planned** (separately), attach
+  each to a real active sample whose history you know, press Create ("Attach 1 operation"). Read the operation, the sample it made and `sample_genealogy`
+  as an admin. Expect: `sample_id` is the sample you chose, `version` up by one, `work_state`, dates, method, owner and output unchanged; **its step number
+  and pass code now follow the new sample** (a code that was typed, or an operation imported from an experiment sheet, keeps its code: say which you
+  saw); one new genealogy row (output sample as child, your sample as parent; `cut_from`, `sintered_from` or `derived_from` by the method); the sample it
+  made has the same fields as before; no new sample anywhere. The map of the output sample now shows the new input. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-3 — Who may attach.** Attaching updates the operation, which the access rules allow its **owner** (or an owner or co-owner of the sample it
+  acts on: an orphan has none). As a Lab Member who can **read** an orphan only through a project or campaign (PI or investigator, campaign owner) and
+  does not own it, pick it and Create. Expect the picker to refuse it at the pick ("You can see this operation but not change it.": the page asks Directus's `/permissions/me` for the record) and
+  nothing to join the draft; if the owner changes between the pick and Create, the check "Changed since you added it..." (a change of owner bumps the version), the operation
+  unchanged, and the draft kept. (Create also answers a bare "You are not allowed to write that record." under the button for a refusal the page did not
+  foresee; it could not be reached on the local stack, where every change moves the version first.) As a Lab Viewer the Edit toggle is not there. As an admin it works. Check `/permissions/me` answers `update.access` the same way for real rules (a co-owned sample, a campaign owner). Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-4 — Greyed rows on a real map.** Open the map of the sample an orphan made (the orphan is drawn as its maker) and open **From database…** from a
+  sample's output: that orphan is greyed "Already on the canvas." On a **planned** sample every **done** orphan is greyed "Its sample is still planned;
+  mark the operation that makes it done first." and a planned one is not. Attach an orphan, open the picker again from another sample: it is greyed
+  "Already attached in this draft." An orphan that made a sample the target comes from (as far as the loaded lineage goes) is greyed as a circle. Greyed rows
+  cannot be chosen by click or Enter. Since: edit-mode redesign slice 3 (PR pending).
+- [ ] **PM10-6 — Lineage loops, own output, second origin, on real lineage.** Needs real lineage depth (the local stack has two levels). On live: (a) pick the
+  sample an orphan made and open **From database…** from the output of a **descendant** of it three or more steps down, in a draft that picked only that
+  descendant from the Samples list (the map has no history loaded): the picker cannot see the loop, so attach the orphan and press Create. Expect the
+  blocking check "It made <code>, which the sample you attached it to comes from: that would run in a circle." (the server read the lineage), nothing written.
+  (b) An orphan whose output sample already has a genealogy parent that is not the sample you attach it to is greyed "already comes from another sample", and
+  if you get it onto the draft some other way Create refuses it with the same words. (c) Attach an orphan to the sample it made (drag the output's wire onto
+  its own input): Create is refused with "cannot be an input of the operation that made it". Check the time the server takes on a deep lineage (the recursion
+  is bounded at 100 levels and visits each sample once per path) and that a sample you may not read is named "the sample it made", not by its code.
+  Since: edit-mode redesign slice 3 review fixes (PR pending).
+- [ ] **PM10-5 — Changed, gone or given an input while the draft is open.** Attach a real orphan in a draft and leave it open; as another account (or in
+  Data Studio) (a) give that operation an input, (b) edit it (any field), (c) delete it, one case per draft. Reload the draft and press Create. Expect
+  (a) a blocking check "It got an input in the meantime, so it cannot be attached any more.", (b) "Changed since you added it. Your edits were made against
+  an older version, so review it first.", (c) "This record no longer exists, or you can no longer see it."; nothing is written in any case and the draft is
+  kept. Since: edit-mode redesign slice 3 (PR pending).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
