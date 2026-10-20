@@ -32,7 +32,7 @@ watch(() => props.description, () => nextTick(measure));
 
 <template>
 	<div class="about">
-		<h2 class="sr-only">About</h2>
+		<h2 class="d1-sr-only">About</h2>
 		<div class="facts">
 			<span><span class="k">Dates</span><span class="v">{{ dates }}</span></span>
 			<span v-if="documentNumber"><span class="k">Document</span><span class="v mono">{{ documentNumber }}</span></span>
@@ -63,5 +63,4 @@ watch(() => props.description, () => nextTick(measure));
 }
 .more:hover { text-decoration: underline; }
 .more:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 2px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

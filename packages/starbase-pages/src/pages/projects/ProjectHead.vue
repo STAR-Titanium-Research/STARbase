@@ -41,7 +41,7 @@ const piName = computed(() => props.project.principal_investigator_person?.full_
 			</div>
 			<div class="actions">
 				<RecordActions :can-update="canUpdate" :studio-to="studioTo" hide-access @edit="$emit('edit')">
-					<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
+					<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="d1-sr-only">Process map</span></v-button>
 				</RecordActions>
 			</div>
 		</div>
@@ -68,5 +68,4 @@ h1 { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 
 .badge.danger { color: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--danger) 14%, transparent); }
 .badge.warn { color: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

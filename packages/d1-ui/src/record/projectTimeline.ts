@@ -5,7 +5,7 @@
 // day before in a negative-offset zone), and every time in the model is the epoch ms of a local midnight.
 // Weeks are the ISO weeks of activity.ts, binned by the Monday that starts them.
 
-import { isoWeek, weekStart } from '../activity';
+import { isoWeek, isoWeekLabel, weekStart } from '../activity';
 
 export type TimelineRange = '30d' | '6mo' | 'all';
 
@@ -19,8 +19,8 @@ const RANGE_DAYS: Record<Exclude<TimelineRange, 'all'>, number> = { '30d': 30, '
 const DAY = 86_400_000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** A planned date with how many records fall on it, or a bare date (one record). */
-export type PlannedInput = string | { date: string; n: number };
+/** A planned date with how many records fall on it. */
+export type PlannedInput = { date: string; n: number };
 
 export interface TimelineCampaignInput {
 	id: string;
@@ -45,9 +45,12 @@ export interface TimelineInput {
 	xTickBudget?: number;
 }
 
+/** What `projectTimeline` needs apart from the x tick budget (the part that does not depend on the drawn width). */
+export type TimelineDataInput = Omit<TimelineInput, 'xTickBudget'>;
+
 export interface TimelineBar { start: number; end: number; openEnd: boolean }
 export interface TimelineCampaignRow { id: string; code: string; name: string; status: string; start: number; end: number }
-export interface TimelineWeek { start: string; ms: number; ops: number; tests: number }
+export interface TimelineWeek { ms: number; ops: number; tests: number }
 export interface TimelineMarker { date: number; kind: 'op' | 'test'; n: number }
 export interface TimelineTick { ms: number; label: string }
 
@@ -93,28 +96,24 @@ export function emptyText(range: TimelineRange): string {
 	return `No operations or tests in ${when}.`;
 }
 
-/**
- * A tick step of 1, 2, 2.5 or 5 times a power of ten that gives about four intervals up to `max`. Counts are whole numbers, so by default
- * a fractional step (2.5 below 10, 0.5 and so on) is not offered and the smallest step is 1.
- */
-export function niceStep(max: number, integer = true): number {
-	let raw = Math.max(max, 0) / 4;
-	if (integer) raw = Math.max(raw, 1);
-	if (!(raw > 0)) return 1;
+/** A tick step of 1, 2, 2.5 or 5 times a power of ten (a whole number, at least 1) that gives about four intervals up to `max`. */
+export function niceStep(max: number): number {
+	const raw = max / 4;
+	if (!(raw >= 1)) return 1;
 	const p = 10 ** Math.floor(Math.log10(raw));
 	for (const s of [1, 2, 2.5, 5, 10]) {
 		const step = s * p;
-		if (step >= raw - 1e-12 && (!integer || Number.isInteger(step))) return step;
+		if (step >= raw - 1e-12 && Number.isInteger(step)) return step;
 	}
 	return 10 * p;
 }
 
 /** Ticks 0, step, ... up to a top strictly above `max`. */
-export function yAxis(max: number, integer = true): TimelineModel['y'] {
-	const step = niceStep(max, integer);
+export function yAxis(max: number): TimelineModel['y'] {
+	const step = niceStep(max);
 	const top = Math.ceil((max + 1e-9) / step) * step;
 	const ticks: number[] = [];
-	for (let i = 0; i * step <= top + 1e-9; i++) ticks.push(Number((i * step).toFixed(6)));
+	for (let i = 0; i * step <= top; i++) ticks.push(i * step);
 	return { top, step, ticks };
 }
 
@@ -122,10 +121,6 @@ export function yAxis(max: number, integer = true): TimelineModel['y'] {
 const minOf = (xs: number[]): number => xs.reduce((a, b) => (b < a ? b : a), Infinity);
 const maxOf = (xs: number[]): number => xs.reduce((a, b) => (b > a ? b : a), -Infinity);
 
-const ymd = (ms: number): string => {
-	const d = new Date(ms);
-	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
 const addDays = (ms: number, n: number): number => {
 	const d = new Date(ms);
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime();
@@ -135,15 +130,17 @@ const mondayOf = (ms: number): number => weekStart(new Date(ms)).getTime();
 function plannedDays(list: readonly PlannedInput[], kind: 'op' | 'test'): TimelineMarker[] {
 	const byDay = new Map<number, number>();
 	for (const p of list) {
-		const date = dayOf(typeof p === 'string' ? p : p.date);
+		const date = dayOf(p.date);
 		if (date === null) continue;
-		const n = typeof p === 'string' ? 1 : Math.max(0, Math.floor(p.n));
+		const n = Math.max(0, Math.floor(p.n));
 		if (n > 0) byDay.set(date, (byDay.get(date) ?? 0) + n);
 	}
 	return [...byDay].sort((a, b) => a[0] - b[0]).map(([date, n]) => ({ date, kind, n }));
 }
 
-function xAxisTicks(x0: number, x1: number, budget: number): TimelineTick[] {
+/** The x axis labels for a domain: weekly Mondays up to about two months, else the 1st of every 1, 2, 3, 6 or 12 months. */
+export function timelineXTicks([x0, x1]: [number, number], budget = 8): TimelineTick[] {
+	budget = Math.max(2, budget);
 	const span = (x1 - x0) / DAY;
 	const out: TimelineTick[] = [];
 	if (span <= 62) {
@@ -166,7 +163,8 @@ function xAxisTicks(x0: number, x1: number, budget: number): TimelineTick[] {
 	return out;
 }
 
-export function projectTimeline(input: TimelineInput): TimelineModel {
+/** Everything in the model but the x ticks: parses and bins the dates. The x ticks (`timelineXTicks`) follow the width, this does not. */
+export function timelineData(input: TimelineDataInput): Omit<TimelineModel, 'xTicks'> {
 	const today = dayOf(input.today) ?? Date.now();
 	const days = (list: readonly (string | null | undefined)[]) => list.map((v) => dayOf(v)).filter((v): v is number => v !== null);
 	const opDays = days(input.ops);
@@ -220,7 +218,7 @@ export function projectTimeline(input: TimelineInput): TimelineModel {
 	const bin = (list: number[], key: 'ops' | 'tests') => {
 		for (const d of list.filter(inRange)) {
 			const ms = mondayOf(d);
-			const w = bins.get(ms) ?? { start: ymd(ms), ms, ops: 0, tests: 0 };
+			const w = bins.get(ms) ?? { ms, ops: 0, tests: 0 };
 			w[key] += 1;
 			bins.set(ms, w);
 		}
@@ -240,15 +238,18 @@ export function projectTimeline(input: TimelineInput): TimelineModel {
 		weeks,
 		planned,
 		y: yAxis(busiest),
-		xTicks: xAxisTicks(x0, x1, Math.max(2, input.xTickBudget ?? 8)),
 		empty: weeks.length === 0 && planned.length === 0 && campaigns.length === 0,
 		lastOp: opDays.length ? maxOf(opDays) : null,
 		lastTest: testDays.length ? maxOf(testDays) : null,
 	};
 }
 
+export function projectTimeline(input: TimelineInput): TimelineModel {
+	const data = timelineData(input);
+	return { ...data, xTicks: timelineXTicks(data.domain, input.xTickBudget) };
+}
+
 /** The ISO week label of a week bar ("2026-W42"), for the screen-reader table and tooltips. */
 export function weekLabel(w: Pick<TimelineWeek, 'ms'>): string {
-	const { isoYear, isoWeek: n } = isoWeek(new Date(w.ms));
-	return `${isoYear}-W${String(n).padStart(2, '0')}`;
+	return isoWeekLabel(isoWeek(new Date(w.ms)));
 }

@@ -23,8 +23,8 @@ export interface PersonFace {
 
 export interface PeopleStack {
 	faces: PersonFace[];
-	/** How many faces are in full opacity. */
-	shown: number;
+	/** The PI's name for the line beside the faces ("" when there is none, and the line is left out). */
+	piLabel: string;
 	/** Everyone with access: the owner, the people and the teams. */
 	total: number;
 	/** Secondary investigators (people and teams). */
@@ -83,5 +83,5 @@ export function peopleStack(list: Pick<AccessList, 'owner' | 'entries' | 'teams'
 		opacity: i < FACES_SHOWN ? 1 : FADE_OPACITIES[i - FACES_SHOWN],
 	}));
 	const hasPi = rows.some((r) => r.pi);
-	return { faces, shown: FACES_SHOWN, total: rows.length, investigators, more: rows.length - (hasPi ? 1 : 0) - investigators };
+	return { faces, piLabel: ownerName, total: rows.length, investigators, more: rows.length - (hasPi ? 1 : 0) - investigators };
 }

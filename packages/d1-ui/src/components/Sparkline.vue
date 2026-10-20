@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { WeekInfo } from '../activity';
+import { isoWeekLabel, type WeekInfo } from '../activity';
 
 // Operations and tests per week as two small lines on ONE shared scale (never two y-axes).
 //
@@ -52,7 +52,7 @@ const hover = computed(() =>
 		const o = props.ops[i] ?? 0;
 		const t = props.tests[i] ?? 0;
 		const w = props.weeks?.[i];
-		const when = w ? `Week of ${w.start} (ISO ${w.isoYear}-W${String(w.isoWeek).padStart(2, '0')})` : `Week ${i + 1}`;
+		const when = w ? `Week of ${w.start} (ISO ${isoWeekLabel(w)})` : `Week ${i + 1}`;
 		return {
 			i,
 			left: i * colWidth.value,

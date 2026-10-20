@@ -22,7 +22,7 @@ const campaigns = computed(() => ({ n: big(c.value.campaigns), label: c.value.ca
 
 <template>
 	<div class="totals-block">
-		<h2 class="sr-only">Totals</h2>
+		<h2 class="d1-sr-only">Totals</h2>
 		<div class="totals">
 			<div v-for="t in tiles" :key="t.key" class="total">
 				<span class="n">{{ t.n }}</span>
@@ -48,5 +48,4 @@ const campaigns = computed(() => ({ n: big(c.value.campaigns), label: c.value.ca
 .l { font-size: var(--fs-sm, 12px); font-weight: 600; }
 .sub { font-size: var(--fs-xs, 11px); color: var(--d1-dim); font-variant-numeric: tabular-nums; min-height: 1.35em; }
 .sub b { color: var(--theme--foreground); font-weight: 600; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

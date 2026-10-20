@@ -32,7 +32,7 @@ export type {
 } from './build/types';
 
 // Display helpers and error predicates
-export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
+export { breakableParts, formatDate, dateRangeText, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export type { Tone } from './status';
 export { CHOICES, choiceKindFor, choiceLabel } from './choiceLabels';
@@ -58,7 +58,6 @@ export {
 } from './activity';
 export type { WeeklyActivity } from './activity';
 export { fetchActivityRows } from './activityRows';
-export { projectTimeline, RANGE_OPTIONS, dayLabel, emptyText as timelineEmptyText, niceStep } from './record/projectTimeline';
 export type { TimelineModel, TimelineInput, TimelineRange, TimelineCampaignInput, PlannedInput } from './record/projectTimeline';
 export { splitCampaigns, campaignStatusParts, timelineCampaigns, plannedFromCounts, parseTimelineRange, projectDatesText, TIMELINE_RANGE_KEY } from './record/projectHero';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
@@ -111,15 +110,12 @@ export {
 	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
-export { dateRangeText } from './record/projectFacts';
 export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as ProjectTimeline } from './components/ProjectTimeline.vue';
 export { default as PeopleStack } from './components/PeopleStack.vue';
-export { peopleStack } from './access/peopleStack';
-export type { PeopleStack as PeopleStackModel, PersonFace } from './access/peopleStack';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export {

@@ -14,7 +14,7 @@ import { indexRoute, recordRoute } from '../recordRoute';
 import { ownerName, type Fact } from './facts';
 import type { ContentsEntry } from './contents';
 import type { HiddenLinks } from './operationFacts';
-import { dateRangeText } from './projectFacts';
+import { dateRangeText } from '../format';
 
 type Rec = Record<string, any>;
 

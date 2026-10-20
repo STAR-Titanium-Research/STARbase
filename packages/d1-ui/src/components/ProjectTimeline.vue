@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import './tokens.css';
 import { statusStyle } from '../status';
 import {
-	RANGE_OPTIONS, dayLabel, dayOf, emptyText, projectTimeline, weekLabel, type PlannedInput, type TimelineCampaignInput, type TimelineRange,
+	RANGE_OPTIONS, dayLabel, dayOf, emptyText, timelineData, timelineXTicks, weekLabel, type PlannedInput, type TimelineCampaignInput, type TimelineRange,
 } from '../record/projectTimeline';
 import SegmentedControl from './SegmentedControl.vue';
 
@@ -48,13 +48,14 @@ const narrow = computed(() => W.value < 520);
 const plotL = computed(() => (narrow.value ? 0 : 64) + 30);
 const plotR = computed(() => W.value - 6);
 
+// Two steps, so a width change only recomputes the x ticks: the dates are parsed and binned once per input or range change.
 const model = computed(() =>
-	projectTimeline({
+	timelineData({
 		project: props.project, campaigns: props.campaigns, ops: props.ops, tests: props.tests,
 		plannedOps: props.plannedOps, plannedTests: props.plannedTests, today: props.today ?? new Date(), range: range.value,
-		xTickBudget: Math.max(3, Math.floor((plotR.value - plotL.value) / 72)),
 	}),
 );
+const xTicks = computed(() => timelineXTicks(model.value.domain, Math.max(3, Math.floor((plotR.value - plotL.value) / 72))));
 
 const G = computed(() => {
 	const m = model.value;
@@ -105,7 +106,7 @@ const G = computed(() => {
 		key: `${p.kind}${p.date}`, kind: p.kind, x: X(p.date), y: base - 7,
 		tip: `Planned ${dayLabel(p.date)} · ${p.n} ${p.kind === 'op' ? 'operation' : 'test'}${p.n === 1 ? '' : 's'}`,
 	}));
-	const xt = m.xTicks.map((t) => ({ ...t, x: X(t.ms) }));
+	const xt = xTicks.value.map((t) => ({ ...t, x: X(t.ms) }));
 	const yt = m.y.ticks.map((v) => ({ v, y: Y(v) }));
 	return { rows, rowsTop, actTop, base, H: base + 24, bars, marks, xt, yt, todayX: X(m.today), fadeX: clamp(X(m.today)) };
 });
@@ -181,7 +182,7 @@ const lastTest = computed(() => (model.value.lastTest === null ? 'none' : dayLab
 			<span v-if="model.undated.length">Undated: <b>{{ model.undated.join(', ') }}</b></span>
 		</p>
 		<p v-if="truncated" class="note">Based on the newest records: the activity read hit its limit, so older weeks are missing.</p>
-		<table class="sr-only">
+		<table class="d1-sr-only">
 			<caption>Operations and tests per week</caption>
 			<thead><tr><th>Week</th><th>Week of</th><th>Operations</th><th>Tests</th></tr></thead>
 			<tbody>
@@ -230,5 +231,4 @@ svg .today-label { fill: var(--theme--foreground); font-weight: 700; }
 .last b { color: var(--theme--foreground); font-weight: 600; }
 .note { margin: 4px 0 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .tip { position: absolute; z-index: 2; pointer-events: none; padding: 4px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); background: var(--theme--foreground); color: var(--d1-surface); font-size: var(--fs-xs, 11px); }
-.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 </style>

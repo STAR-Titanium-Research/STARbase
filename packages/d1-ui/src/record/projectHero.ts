@@ -2,7 +2,7 @@
 // behind the "complete" fold, the "1 active · 1 planned · 1 on hold" line, campaigns as the timeline reads them, planned dates with
 // their counts, and the remembered timeline range. No Vue, no host.
 
-import { formatDate } from '../format';
+import { dateRangeText, formatDate } from '../format';
 import { statusStyle } from '../status';
 import type { PlannedInput, TimelineCampaignInput, TimelineRange } from './projectTimeline';
 
@@ -63,7 +63,7 @@ export function parseTimelineRange(value: unknown): TimelineRange {
 
 /** The About block's dates: "13 Jan 2025 to 31 Mar 2027", "From 1 Jun 2024, no end date", "Until 31 Mar 2027" or "No dates set". */
 export function projectDatesText(start: string | null | undefined, end: string | null | undefined): string {
-	const a = formatDate(start);
-	const b = formatDate(end);
-	return a && b ? `${a} to ${b}` : a ? `From ${a}, no end date` : b ? `Until ${b}` : 'No dates set';
+	const text = dateRangeText(start, end);
+	if (!text) return 'No dates set';
+	return formatDate(start) && !formatDate(end) ? `${text}, no end date` : text;
 }
