@@ -1,6 +1,7 @@
 """filter-service HTTP behaviour: despike cap (6.8), compute off the event loop, id validation."""
 
 import asyncio
+import dataclasses
 import sys
 import threading
 import time
@@ -285,3 +286,33 @@ def test_fft_overlay_is_rms_amplitude_in_newtons():
     peak = int(np.argmax(out["amp"]))
     assert out["f"][peak] == pytest.approx(f0, abs=2.0)
     assert out["amp"][peak] == pytest.approx(amp / np.sqrt(2), rel=0.02)
+
+
+# --- /spectrogram reference level ---------------------------------------------
+
+
+def test_spectrogram_reports_the_reference_level_so_grids_can_share_a_scale(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    base = make_cache(n=16384)
+    tt = base.t.astype(np.float64)
+    # a big 100 Hz component dominates the raw grid; a 2 kHz high-pass removes it
+    fz = (50.0 * np.sin(2 * np.pi * 100 * tt) + base.fz).astype(np.float32)
+    cache = dataclasses.replace(base, fz=fz)
+
+    async def fake_get_cache(file_id, req):
+        return cache
+
+    monkeypatch.setattr(m, "_get_cache", fake_get_cache)
+    c = TestClient(m.app)
+    body = {"cache_file_id": "f", "axis": "Fz"}
+    raw = c.post("/spectrogram", json={**body, "chain": {}}).json()
+    hp = c.post(
+        "/spectrogram",
+        json={**body, "chain": {"highpass": {"on": True, "cutoff_hz": 2000, "order": 4}}},
+    ).json()
+    # each grid is still relative to its own peak (0 dB) ...
+    assert max(max(row) for row in raw["S"]) == pytest.approx(0.0, abs=0.1)
+    assert max(max(row) for row in hp["S"]) == pytest.approx(0.0, abs=0.1)
+    # ... and ref_db tells them apart: the filtered grid's peak is far below the raw one
+    assert raw["ref_db"] - hp["ref_db"] > 20
