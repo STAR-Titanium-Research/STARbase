@@ -8,11 +8,12 @@ import type { IndexDef } from './indexConfig';
 import { cardFacts, cardHead } from './cardFacts';
 import TextCard from './TextCard.vue';
 import { rowAccent } from './accent';
+import { groupHeader } from './indexView';
 import { PICK_ATTR } from './pickMode';
 
 type Row = Record<string, unknown>;
 
-defineProps<{
+const props = defineProps<{
 	def: IndexDef;
 	rows: Row[];
 	loading: boolean;
@@ -26,8 +27,11 @@ defineProps<{
 	wide?: boolean;
 	/** Picker mode: each card carries its key, so the page can measure where it is (pickMode.ts). */
 	pick?: boolean;
+	/** The group a row is under (the rail's Group by): a header takes the full width above each run of cards. */
+	groupOf?: ((row: Row) => string) | null;
 }>();
 const emit = defineEmits<{ open: [row: Row] }>();
+const header = (i: number): string | null => (props.groupOf ? groupHeader(props.rows, i, props.groupOf) : null);
 
 const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 </script>
@@ -37,7 +41,9 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 		<li v-for="n in SKELETONS" :key="n" class="skeleton"><span class="bar wide" /><span class="bar" /><span class="bar short" /></li>
 	</ul>
 	<ul v-else class="card-grid" :class="{ wide }">
-		<li v-for="row in rows" :key="rowKey(row)" :[PICK_ATTR]="pick ? rowKey(row) : undefined">
+		<template v-for="(row, i) in rows" :key="rowKey(row)">
+		<li v-if="header(i) !== null" class="group" role="presentation">{{ header(i) }}</li>
+		<li :[PICK_ATTR]="pick ? rowKey(row) : undefined">
 			<slot name="card" :row="row" :data="data?.get(rowKey(row)) ?? null" :loading="!!dataLoading">
 				<TextCard
 					:link="cardHead(def, row).link"
@@ -53,6 +59,7 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 				</TextCard>
 			</slot>
 		</li>
+		</template>
 	</ul>
 </template>
 
@@ -61,7 +68,9 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 .card-grid.wide { margin: 0; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
 .card-grid > li { min-width: 0; }
 /* Cards of one row share a height, the designed campaign card included. */
-.card-grid > li:not(.skeleton) > :deep(*) { height: 100%; }
+.card-grid > li:not(.skeleton, .group) > :deep(*) { height: 100%; }
+.card-grid > .group { grid-column: 1 / -1; margin-top: 6px; font-size: var(--fs-xs, 11px); font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--d1-dim); }
+.card-grid > .group:first-child { margin-top: 0; }
 .skeleton {
 	display: flex; flex-direction: column; gap: 8px; height: 96px; padding: 12px;
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);

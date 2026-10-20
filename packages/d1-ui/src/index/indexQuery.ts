@@ -4,9 +4,10 @@
 // URL keys: bookmark, q, f.<field> (one per chip filter), sort, page, open.
 
 import type { Bookmark } from '../nav/navConfig';
+import { groupFetchField, groupSortKey, sortWithGroup } from './groupBy';
 import type { IndexDef } from './indexConfig';
+import { DEFAULT_PAGE_SIZE } from './listPrefs';
 
-export const PAGE_SIZE = 50;
 // What a short ID looks like (8-32 hex characters): the finder and the search box match it exactly.
 export const SHORT_ID_RE = /^[0-9a-f]{8,32}$/i;
 
@@ -108,18 +109,26 @@ export const NO_MATCH_ID = '00000000-0000-0000-0000-000000000000';
 // nested field of a collection the user cannot read is refused; the page then shows that cell blank.
 // `teamIds`: the ids of the chosen team's records the viewer can read (GET /d1-teams/:id/records), for the Team chip (`f.team`) when it is set:
 // the primary key must be one of them (none, or ids not known: nothing matches, so a hidden record can never slip in).
+// `view`: how the person looks at the list (View rail, not the URL): rows per page, and the filter field rows are grouped by (sorted by it first).
+export interface ViewParams {
+	pageSize?: number;
+	groupBy?: string | null;
+}
 export function buildItemsParams(
 	def: IndexDef,
 	s: IndexState,
 	bookmark: Bookmark | null,
 	readable: ReadonlySet<string> | null = null,
 	teamIds: readonly string[] | null = null,
+	view: ViewParams = {},
 ): Record<string, unknown> {
 	const fields = [def.primaryKey];
 	for (const c of def.columns) {
 		const f = c.relation && (!readable || readable.has(c.relation.collection)) ? `${c.field}.${c.relation.display}` : c.field;
 		if (!fields.includes(f)) fields.push(f);
 	}
+	const group = groupFetchField(def, view.groupBy ?? null, readable);
+	if (group && !fields.includes(group)) fields.push(group);
 
 	const and: unknown[] = [];
 	if (isNonEmptyObject(def.fixedFilter)) and.push(def.fixedFilter);
@@ -143,8 +152,8 @@ export function buildItemsParams(
 
 	const params: Record<string, unknown> = {
 		fields,
-		sort: [s.sort ?? bookmarkSort(bookmark) ?? def.defaultSort],
-		limit: PAGE_SIZE,
+		sort: sortWithGroup(groupSortKey(def, view.groupBy ?? null, readable), s.sort ?? bookmarkSort(bookmark) ?? def.defaultSort),
+		limit: view.pageSize ?? DEFAULT_PAGE_SIZE,
 		page: s.page,
 		meta: 'filter_count',
 	};

@@ -3,7 +3,9 @@ import { indexDefBySlug } from './indexConfig';
 import type { IndexState } from './indexQuery';
 import type { Bookmark } from '../nav/navConfig';
 import { recordRoute } from '../recordRoute';
+import { DEFAULT_LIST_PREFS } from './listPrefs';
 import {
+	flipSort, groupHeader, pageCount, rowGroupLabel, splitSort, viewChanged, viewSummary,
 	BOOL_OPTIONS, cellText, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, hasNextPage,
 	nextSort, queryForState, sortKey, rangeText, relationKey, relationOptionParams, relationOptions, relationText, sortDirection, withChange,
 	validSort, withSelected, selectionRoute, SELECT_MAX, rowOpen,
@@ -82,20 +84,29 @@ describe('cellText', () => {
 
 describe('paging', () => {
 	it('writes the range with grouped thousands', () => {
-		expect(rangeText(1, 50, 1206)).toBe('Showing 1-50 of 1,206');
-		expect(rangeText(2, 50, 1206)).toBe('Showing 51-100 of 1,206');
-		expect(rangeText(25, 6, 1206)).toBe('Showing 1,201-1,206 of 1,206');
+		expect(rangeText(1, 50, 1206, 50)).toBe('1–50 of 1,206');
+		expect(rangeText(2, 50, 1206, 50)).toBe('51–100 of 1,206');
+		expect(rangeText(25, 6, 1206, 50)).toBe('1,201–1,206 of 1,206');
 	});
-	it('does not write 1-0 for nothing, and nothing before the total is known', () => {
-		expect(rangeText(1, 0, 0)).toBe('Showing 0 of 0');
-		expect(rangeText(9, 0, 120)).toBe('Showing 0 of 120');
-		expect(rangeText(1, 0, null)).toBe('');
+	it('counts from the page size', () => {
+		expect(rangeText(2, 25, 153, 25)).toBe('26–50 of 153');
+		expect(rangeText(2, 53, 153, 100)).toBe('101–153 of 153');
+		expect(pageCount(153, 25)).toBe(7);
+		expect(pageCount(153, 100)).toBe(2);
+		expect(pageCount(0, 50)).toBe(1);
+	});
+	it('does not write 1–0 for nothing, and nothing before the total is known', () => {
+		expect(rangeText(1, 0, 0, 50)).toBe('0 of 0');
+		expect(rangeText(9, 0, 120, 50)).toBe('0 of 120');
+		expect(rangeText(1, 0, null, 50)).toBe('');
 	});
 	it('knows when there is a next page', () => {
-		expect(hasNextPage(1, 51)).toBe(true);
-		expect(hasNextPage(1, 50)).toBe(false);
-		expect(hasNextPage(2, 100)).toBe(false);
-		expect(hasNextPage(1, null)).toBe(false);
+		expect(hasNextPage(1, 51, 50)).toBe(true);
+		expect(hasNextPage(1, 50, 50)).toBe(false);
+		expect(hasNextPage(2, 100, 50)).toBe(false);
+		expect(hasNextPage(1, 51, 100)).toBe(false);
+		expect(hasNextPage(1, 51, 25)).toBe(true);
+		expect(hasNextPage(1, null, 50)).toBe(false);
 	});
 });
 
@@ -116,12 +127,54 @@ describe('sorting', () => {
 	});
 });
 
+describe('splitSort / flipSort', () => {
+	it('splits a sort into its field and direction, and flips it', () => {
+		expect(splitSort('-created_at')).toEqual({ key: 'created_at', desc: true });
+		expect(splitSort('material_id.alloy_code')).toEqual({ key: 'material_id.alloy_code', desc: false });
+		expect(flipSort('-created_at')).toBe('created_at');
+		expect(flipSort('created_at')).toBe('-created_at');
+	});
+});
+
+describe('the View rail summary', () => {
+	it('says the density and the sort: "Normal · Created ↓"', () => {
+		expect(viewSummary(samples, DEFAULT_LIST_PREFS, '-created_at')).toBe('Normal · Created ↓');
+		expect(viewSummary(samples, { ...DEFAULT_LIST_PREFS, density: 'compact' }, 'material_id.alloy_code')).toBe('Compact · Material ↑');
+		expect(viewSummary(tools, DEFAULT_LIST_PREFS, '-created_at')).toBe('Normal · Default order ↓');
+	});
+	it('marks a view that is not the default, and only then', () => {
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, samples.defaultSort)).toBe(false);
+		for (const over of [{ view: 'list' }, { density: 'roomy' }, { columns: ['sample_code'] }, { pageSize: 25 }, { groupBy: 'current_status' }]) {
+			expect(viewChanged(samples, { ...DEFAULT_LIST_PREFS, ...over } as never, samples.defaultSort), JSON.stringify(over)).toBe(true);
+		}
+		expect(viewChanged(samples, DEFAULT_LIST_PREFS, 'nickname')).toBe(true);
+	});
+});
+
+describe('group headers', () => {
+	it('names a group by the row\'s value (a relation by what it shows), or "No …" when it has none', () => {
+		expect(rowGroupLabel(samples, 'current_status', { current_status: 'active' })).toBe('active');
+		expect(rowGroupLabel(samples, 'project_id', { project_id: { project_code: 'STAR-AM' } })).toBe('STAR-AM');
+		expect(rowGroupLabel(samples, 'project_id', { project_id: null })).toBe('No project');
+		expect(rowGroupLabel(samples, 'current_status', {})).toBe('No status');
+	});
+	it('draws a header above the first row of each run, and not between rows of one', () => {
+		const rows = [{ s: 'a' }, { s: 'a' }, { s: 'b' }, { s: 'a' }];
+		const label = (r: Record<string, unknown>) => String(r.s);
+		expect(rows.map((_, i) => groupHeader(rows, i, label))).toEqual(['a', null, 'b', 'a']);
+	});
+});
+
 describe('validSort (the URL sort)', () => {
 	it('accepts a column sort key either way round, and the default', () => {
 		expect(validSort(samples, 'nickname', null)).toBe('nickname');
 		expect(validSort(samples, '-nickname', null)).toBe('-nickname');
 		expect(validSort(samples, 'material_id.alloy_code', null)).toBe('material_id.alloy_code');
 		expect(validSort(samples, samples.defaultSort, null)).toBe(samples.defaultSort);
+	});
+	it('accepts the default either way round (the rail\'s direction button)', () => {
+		expect(validSort(samples, flipSort(samples.defaultSort), null)).toBe(flipSort(samples.defaultSort));
+		expect(validSort(tools, flipSort(tools.defaultSort), null)).toBe(flipSort(tools.defaultSort));
 	});
 	it('accepts the active saved view sort', () => {
 		const b = bm({ layout_query: { tabular: { sort: ['-weight'] } } });

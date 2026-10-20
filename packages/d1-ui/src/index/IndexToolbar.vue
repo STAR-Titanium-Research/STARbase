@@ -1,28 +1,14 @@
 <script setup lang="ts">
-// The top of an index page (IndexPage): the range, the page's buttons, the view switches, the saved-view chips and the
-// search and filter bar. It draws what IndexPage hands it and reports clicks; the state lives in useIndexPage. In picker
-// mode the buttons that navigate away (New, Data Studio, the select action) give way to the confirm button.
-import { useExplorerHost } from '../host';
-import SegmentedControl from '../components/SegmentedControl.vue';
+// The toolbar of an index page (IndexPage), above the table only: the saved-view chips, the search box, one filter
+// per chip and "Clear filters". These choose WHICH rows show (they go in the URL); how rows look is the View rail's
+// (IndexViewRail) and the page's buttons are IndexActions'. It draws what IndexPage hands it and reports clicks;
+// the state lives in useIndexPage.
 import type { IndexDef } from './indexConfig';
 import { toggledBookmark } from './indexQuery';
 import type { ChipView } from './useIndexPage';
-import type { Density, ListView } from './listPrefs';
 
 defineProps<{
 	def: IndexDef;
-	pick?: boolean;
-	range: string;
-	/** Picker mode: the confirm button's text and how many rows it would add. */
-	pickText: string;
-	pickCount: number;
-	/** The def's select action ("Print labels for selected") and how many rows are ticked for it. */
-	pickedCount: number;
-	view: ListView;
-	density: Density;
-	sort: string;
-	sortChoices: { value: string; label: string }[];
-	dsLink: { to: string; note?: string | null };
 	bookmarks: { id: number; bookmark: string }[];
 	activeBookmark: number | null;
 	bookmarkUnavailable: boolean;
@@ -31,51 +17,14 @@ defineProps<{
 	hasFilters: boolean;
 }>();
 const emit = defineEmits<{
-	confirm: [];
-	run: [];
-	view: [value: ListView];
-	density: [value: Density];
-	sort: [value: string];
 	bookmark: [id: number | null];
 	search: [text: string];
 	filter: [field: string, value: string];
 	clear: [];
 }>();
-
-const host = useExplorerHost();
-const VIEW_OPTIONS = [
-	{ value: 'table', label: 'Table', icon: '☰' },
-	{ value: 'cards', label: 'Cards', icon: '▦' },
-] as const;
-const DENSITY_OPTIONS = [
-	{ value: 'compact', label: 'Compact' },
-	{ value: 'normal', label: 'Normal' },
-	{ value: 'roomy', label: 'Roomy' },
-] as const;
 </script>
 
 <template>
-	<div class="head">
-		<span class="range" role="status">{{ range }}</span>
-		<span class="spacer" />
-		<button v-if="pick" type="button" class="btn pri" :disabled="!pickCount" @click="emit('confirm')">{{ pickText }}</button>
-		<button v-else-if="def.selectAction" type="button" class="btn" :disabled="!pickedCount" @click="emit('run')">
-			{{ def.selectAction.label }}{{ pickedCount ? ` (${pickedCount})` : '' }}
-		</button>
-		<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="emit('view', $event as ListView)" />
-		<label v-if="view === 'cards'" class="sortsel">
-			<span>Sort by</span>
-			<select :value="sort" aria-label="Sort by" @change="emit('sort', ($event.target as HTMLSelectElement).value)">
-				<option v-for="o in sortChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
-			</select>
-		</label>
-		<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="emit('density', $event as Density)" />
-		<template v-if="!pick">
-			<button type="button" class="btn" :title="dsLink.note ?? undefined" @click="host.openDataStudio(dsLink.to)">Open in Data Studio</button>
-			<button v-if="!host.canViewAllAccess?.value" type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
-		</template>
-	</div>
-
 	<div v-if="bookmarks.length" class="chips" role="group" aria-label="Saved views">
 		<span class="lbl">Saved views</span>
 		<span v-for="b in bookmarks" :key="b.id" class="chip" :class="{ on: activeBookmark === b.id }">
@@ -121,20 +70,8 @@ const DENSITY_OPTIONS = [
 </template>
 
 <style scoped>
-.head, .filters, .chips { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.filters, .chips { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .filters { align-items: flex-end; }
-.spacer { flex: 1; }
-.range { font-size: var(--fs-md, 13px); color: var(--d1-dim); }
-
-.btn {
-	display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
-	border: 1px solid var(--d1-line); border-radius: 8px;
-	background: var(--d1-tile); color: var(--theme--foreground);
-	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; cursor: pointer;
-}
-.btn:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
-.btn:disabled { opacity: 0.45; cursor: default; }
-.btn.pri { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 .link {
 	border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600;
 	color: var(--d1-accent, var(--theme--primary)); cursor: pointer; text-decoration: underline;
@@ -168,10 +105,5 @@ const DENSITY_OPTIONS = [
 .flag:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .flag.on { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 
-.sortsel { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); }
-.sortsel select {
-	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
-	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
-}
 .d1-note.warn { color: var(--d1-warn); }
 </style>

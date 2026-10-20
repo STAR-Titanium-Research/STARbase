@@ -3,12 +3,13 @@
 // The row stays a table row (so the table is still announced as one); the first cell holds the real link or button, and
 // a click anywhere else on the row does the same for a mouse. In picker mode the first cell is text and a click ticks
 // the row. It draws what IndexPage hands it and reports clicks.
+import { computed } from 'vue';
 import DataTable from '../components/DataTable.vue';
 import { rowAccent } from './accent';
 import RowMapButton from './RowMapButton.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { cellText, plotCode, sortDirection, sortKey } from './indexView';
+import { cellText, groupHeader, plotCode, sortDirection, sortKey } from './indexView';
 import { PICK_ATTR } from './pickMode';
 import type { RowPlots } from './plotData';
 import type { Density } from './listPrefs';
@@ -38,6 +39,8 @@ const props = defineProps<{
 	sort: string;
 	sortable: (c: ColumnDef) => boolean;
 	rowHref: (row: Row) => string;
+	/** The group a row is under (the rail's Group by): a header row is drawn above each run of rows. */
+	groupOf?: ((row: Row) => string) | null;
 }>();
 const emit = defineEmits<{
 	open: [row: Row];
@@ -53,6 +56,8 @@ function ariaSort(c: ColumnDef): 'ascending' | 'descending' | undefined {
 	return d === 'asc' ? 'ascending' : d === 'desc' ? 'descending' : undefined;
 }
 const arrow = (c: ColumnDef) => (sortDirection(props.sort, sortKey(c)) === 'asc' ? '▲' : sortDirection(props.sort, sortKey(c)) === 'desc' ? '▼' : '');
+const colCount = computed(() => (props.ticks ? 1 : 0) + (props.showThumb ? 1 : 0) + props.def.columns.length + (props.hasPlots ? 1 : 0) + (props.hasMap ? 1 : 0));
+const header = (i: number): string | null => (props.groupOf ? groupHeader(props.rows, i, props.groupOf) : null);
 const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.format === 'code' });
 </script>
 
@@ -85,9 +90,9 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 				</tr>
 			</template>
 			<template v-else>
+				<template v-for="(row, i) in rows" :key="rowKey(row)">
+				<tr v-if="header(i) !== null" class="group"><th :colspan="colCount" scope="colgroup">{{ header(i) }}</th></tr>
 				<tr
-					v-for="row in rows"
-					:key="rowKey(row)"
 					class="row"
 					:class="{ on: pick && isPicked(row), taken: pick && isTaken(row) }"
 					:[PICK_ATTR]="pick ? rowKey(row) : undefined"
@@ -133,6 +138,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 						<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 					</td>
 				</tr>
+				</template>
 			</template>
 		</tbody>
 	</DataTable>
@@ -147,6 +153,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 .arrow { font-size: 9px; }
 th.num .sort { justify-content: flex-end; }
 
+.group th { padding-top: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 .row { cursor: pointer; }
 .row.on td { background: var(--d1-tint); }
 .row.taken { opacity: 0.55; cursor: default; }

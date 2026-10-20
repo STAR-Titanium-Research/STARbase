@@ -1,21 +1,22 @@
 <script setup lang="ts">
-// One list page for every collection, driven by an IndexDef (spec section 5): saved-view chips,
-// search, chip filters, a plain sortable table, paging, "+ New" and "Open in Data Studio". Rows go
-// to the record's Explorer page or open the edit drawer, per the def. All state lives in the URL
-// (see useIndexPage); the host (STARbase's ExplorerView) supplies the API and navigation.
-// How the list is shown (table or cards, and the row density) is a per-browser preference kept
-// per list (listPrefs), not part of the URL. The parent can fill the `thumb` slot (a small picture
-// per row, shown as the first column at Roomy density, and the picture area of a text card).
-// A list with a designed card (campaigns) fills the `card` slot and may pass `cardData`, a loader
-// for what that card shows beyond the row (the campaigns' counts); it runs for the rows on screen,
-// in Cards view only, and the slot gets each row's entry as `data` (null while loading or missing).
-// The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples
-// get their Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the
-// `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
+// One list page for every collection, driven by an IndexDef (spec section 5). Three parts (DESIGN.md "The View
+// rail"): the toolbar above the table (search, filters, saved views: IndexToolbar), the page's buttons on the
+// breadcrumb line (IndexActions) and, in the grid's second column and level with the table, the View rail
+// (IndexViewRail: layout, density, sort, grouping, columns, rows per page; a per-browser preference per list,
+// listPrefs, except the sort, which is the URL's). Rows go to the record's Explorer page or open the edit drawer,
+// per the def. What is shown (filters, sort, page) lives in the URL (see useIndexPage); the host (STARbase's
+// ExplorerView) supplies the API and navigation.
+// The parent can fill the `thumb` slot (a small picture per row, shown as the first column at Roomy density, and
+// the picture area of a text card). A list with a designed card (campaigns) fills the `card` slot and may pass
+// `cardData`, a loader for what that card shows beyond the row (the campaigns' counts); it runs for the rows on
+// screen, in Cards view only, and the slot gets each row's entry as `data` (null while loading or missing).
+// The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples get their
+// Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the `thumb` slot also
+// receives the row's `plots` (an operation's Fz figure comes from there).
 // With `pick` the page is a row picker, opened over another page (the process map's sample picker): its state is kept in
 // memory, not in the URL; a click on a row ticks it instead of opening it; a button hands the ticked rows back (`pick` event,
 // pickMode.ts); the links, Plots, Process map, New and Data Studio buttons are not drawn.
-import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue';
+import { computed, ref, toRef, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import '../components/tokens.css';
 import { useExplorerHost } from '../host';
@@ -30,25 +31,27 @@ import { pinTargetForIndex } from '../components/pinTarget';
 import type { PinTarget } from '../components/pagePin';
 import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
-import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
+import IndexActions from './IndexActions.vue';
+import IndexList from './IndexList.vue';
 import IndexTable from './IndexTable.vue';
 import IndexToolbar from './IndexToolbar.vue';
+import IndexViewRail from './IndexViewRail.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import RowMapButton from './RowMapButton.vue';
 import { MAP_ROW_COLLECTIONS } from '../mapLink';
-import { sortOptions } from './cardFacts';
+import { sortFieldOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { PAGE_SIZE } from './indexQuery';
 import { plotKind } from './plotData';
-import { SELECT_MAX, cellText, hasNextPage, plotCode, rangeText, rowOpen } from './indexView';
-import { readListPrefs, writeListPrefs } from './listPrefs';
-import type { Density, ListView } from './listPrefs';
+import { SELECT_MAX, cellText, hasNextPage, pageCount, plotCode, railOpensByDefault, rowGroupLabel, rowOpen } from './indexView';
+import { listPrefsKey } from './listPrefs';
 import { useRowSelection } from './useRowSelection';
 import { memoryRoute, nounsFor } from './pickMode';
 import type { PickedRow, PickNouns } from './pickMode';
 import { usePickMode } from './usePickMode';
+import { useCardData } from './useCardData';
 import { useIndexPage } from './useIndexPage';
+import { useViewPrefs } from './useViewPrefs';
 import type { RouteLike, RouterLike } from './useIndexPage';
 
 const props = defineProps<{
@@ -71,38 +74,30 @@ const router: RouterLike & { resolve(to: string): { href: string } } = memory
 	? { ...memory.router, resolve: () => ({ href: '' }) }
 	: (useRouter() as unknown as RouterLike & { resolve(to: string): { href: string } });
 
-const {
-	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
-	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
-} = useIndexPage(host, props.def, route, router);
+// ---- how the list is shown (the View rail); a new page size or grouping reloads the page (useIndexPage) ----
+const { prefs, viewDef, grid, gridWidth } = useViewPrefs(props.def);
 
-// ---- how the list is shown ----------------------------------------------------------------
+const {
+	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, teamNote, state, sort, groups, activeGroup, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
+	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
+} = useIndexPage(host, props.def, route, router, { pageSize: toRef(prefs, 'pageSize'), groupBy: toRef(prefs, 'groupBy') });
+
 const slots = useSlots();
-const initial = readListPrefs(props.def.slug, undefined, props.def);
-const view = ref<ListView>(initial.view);
-const density = ref<Density>(initial.density);
-const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+const showThumb = computed(() => prefs.density === 'roomy' && !!slots.thumb);
 // A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
-const designedCards = computed(() => view.value === 'cards' && !!slots.card);
+const designedCards = computed(() => prefs.view === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => !props.pick && plotKind(props.def.collection) !== null);
 // The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
 const hasMap = computed(() => !props.pick && MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // The row's name, for its buttons' accessible names (its first column, else its key).
 const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def) || rowKey(row);
-const saveListPrefs = () => writeListPrefs(props.def.slug, { ...initial, view: view.value, density: density.value });
-function setView(v: ListView): void {
-	view.value = v;
-	saveListPrefs();
-}
-function setDensity(d: Density): void {
-	density.value = d;
-	saveListPrefs();
-}
+const groupOf = computed(() => {
+	const field = activeGroup.value;
+	return field ? (row: Record<string, unknown>) => rowGroupLabel(props.def, field, row) : null;
+});
 
-// ---- columns ------------------------------------------------------------------------------
 const sortable = (c: ColumnDef) => !c.relation || relationSortable(c.relation.collection);
-// ---- rows ---------------------------------------------------------------------------------
 const drawerOpen = ref(false);
 const drawerKey = ref('');
 
@@ -170,39 +165,13 @@ const pickState = usePickMode({
 	emit: (picked) => emit('pick', picked),
 });
 
-// ---- cards ----------------------------------------------------------------------------------
-// With no column headers to click, the cards toolbar sorts through a select (the same URL sort).
-const sortChoices = computed(() => sortOptions(props.def, sort.value, (c) => sortable(c)));
+// ---- sort and cards -------------------------------------------------------------------------
+// The rail's Sort is a field select and a direction button for every layout (the same URL sort the table's heads set).
+const sortFields = computed(() => sortFieldOptions(props.def, sort.value, (c) => sortable(c)));
 const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' && !props.pick ? rowHref(row) : null);
 
-// What a designed card shows beyond the row (the campaigns' counts), for the rows on screen. A
-// failure leaves the map empty: the cards then say the numbers are unavailable.
-const cardMap = ref<ReadonlyMap<string, unknown> | null>(null);
-const cardLoading = ref(false);
-const cardGate = useRequestGate();
-watch(
-	[() => view.value, rows],
-	async ([v, list]) => {
-		const token = cardGate.begin();
-		cardMap.value = null;
-		if (v !== 'cards' || !props.cardData || !list.length) {
-			cardLoading.value = false;
-			return;
-		}
-		cardLoading.value = true;
-		let data: ReadonlyMap<string, unknown> = new Map();
-		try {
-			data = await props.cardData(host, list);
-		} catch {
-			// no numbers, not an error page
-		}
-		if (!cardGate.isCurrent(token)) return;
-		cardMap.value = data;
-		cardLoading.value = false;
-	},
-	{ immediate: true },
-);
-onBeforeUnmount(() => cardGate.cancel());
+// What a designed card shows beyond the row (the campaigns' counts), for the rows on screen.
+const { cardMap, cardLoading } = useCardData(host, () => props.cardData, () => prefs.view, rows);
 
 // ---- pin ------------------------------------------------------------------------------------
 // The Pin button after the page title is the host frame's (pagePin.ts). The frame is this component's
@@ -215,42 +184,61 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 </script>
 
 <template>
-	<PageShell ref="root" :class="{ picking: pick }">
-		<nav v-if="!pick" class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
-
-		<NotVisible v-if="forbidden" :what="`${def.title.toLowerCase()} list`" />
-
-		<template v-else>
-			<IndexToolbar
+	<PageShell ref="root" wide :class="{ picking: pick }">
+		<div v-if="!pick || !forbidden" class="top">
+			<nav v-if="!pick" class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
+			<IndexActions
+				v-if="!forbidden"
 				:def="def"
 				:pick="pick"
-				:range="rangeText(state.page, rows.length, total)"
 				:pick-text="pickState.text.value"
 				:pick-count="pickState.count.value"
 				:picked-count="sel.picked.value.length"
-				:view="view"
-				:density="density"
-				:sort="sort"
-				:sort-choices="sortChoices"
 				:ds-link="dsLink"
-				:bookmarks="bookmarks"
-				:active-bookmark="state.bookmark"
-				:bookmark-unavailable="bookmarkUnavailable"
-				:search-text="searchText"
-				:chips="chips"
-				:has-filters="hasFilters"
 				@confirm="pickState.confirm"
 				@run="sel.run"
-				@view="setView"
-				@density="setDensity"
-				@sort="setSortTo"
-				@bookmark="setBookmark"
-				@search="setSearch"
-				@filter="setFilter"
-				@clear="clearFilters"
 			/>
-			<p v-if="teamNote" class="d1-note" role="status">{{ teamNote }}</p>
+		</div>
 
+		<NotVisible v-if="forbidden" :what="`${def.title.toLowerCase()} list`" />
+
+		<div v-else ref="grid" class="index-grid">
+			<div class="tools">
+				<IndexToolbar
+					:def="def"
+					:bookmarks="bookmarks"
+					:active-bookmark="state.bookmark"
+					:bookmark-unavailable="bookmarkUnavailable"
+					:search-text="searchText"
+					:chips="chips"
+					:has-filters="hasFilters"
+					@bookmark="setBookmark"
+					@search="setSearch"
+					@filter="setFilter"
+					@clear="clearFilters"
+				/>
+				<p v-if="teamNote" class="d1-note" role="status">{{ teamNote }}</p>
+			</div>
+
+			<IndexViewRail
+				v-if="gridWidth !== null"
+				class="rail"
+				:def="def"
+				:storage-key="`${listPrefsKey(def.slug)}.open`"
+				:default-open="railOpensByDefault(gridWidth)"
+				:prefs="prefs"
+				:sort="sort"
+				:sort-fields="sortFields"
+				:groups="groups"
+				:page="state.page"
+				:shown="rows.length"
+				:total="total"
+				@page="setPage(state.page + $event)"
+				@change="Object.assign(prefs, $event)"
+				@sort="setSortTo"
+			/>
+
+			<div class="main">
 			<div v-if="error" class="state-row">
 				<LoadState :error="error" />
 				<button type="button" class="btn" @click="reload">Retry</button>
@@ -263,9 +251,10 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 					first page loads, so the grid does not flip to a table and back. Designed cards sit on the page
 					ground in the Projects index's wider grid, not inside the panel. -->
 				<CardGrid
-					v-if="view === 'cards' && (loading || rows.length)"
-					:def="def"
+					v-if="prefs.view === 'cards' && (loading || rows.length)"
+					:def="viewDef"
 					:wide="designedCards"
+					:group-of="groupOf"
 					:rows="rows"
 					:loading="loading"
 					:row-key="rowKey"
@@ -287,10 +276,33 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 						<slot name="footer" :row="row" />
 					</template>
 				</CardGrid>
+				<IndexList
+					v-else-if="prefs.view === 'list' && (loading || rows.length)"
+					:def="viewDef"
+					:density="prefs.density"
+					:rows="rows"
+					:loading="loading"
+					:row-key="rowKey"
+					:row-label="rowLabel"
+					:plots="plots"
+					:has-plots="hasPlots"
+					:has-map="hasMap"
+					:pick="pick"
+					:ticks="ticks"
+					:is-picked="sel.isPicked"
+					:is-taken="pickState.isTaken"
+					:full="sel.full.value"
+					:row-href="rowHref"
+					:group-of="groupOf"
+					@open="openRow"
+					@toggle="sel.toggle"
+					@row-link="onRowLink"
+				/>
 				<IndexTable
 					v-else-if="loading || rows.length"
-					:def="def"
-					:density="density"
+					:def="viewDef"
+					:density="prefs.density"
+					:group-of="groupOf"
 					:rows="rows"
 					:loading="loading"
 					:row-key="rowKey"
@@ -325,26 +337,41 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 			<p v-if="ticks && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
-				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
+				<span class="d1-note">Page {{ state.page }} of {{ pageCount(total, prefs.pageSize) }}</span>
 				<span class="pager">
 					<button type="button" class="btn" :disabled="state.page <= 1" @click="setPage(state.page - 1)">‹ Previous</button>
-					<button type="button" class="btn" :disabled="!hasNextPage(state.page, total)" @click="setPage(state.page + 1)">Next ›</button>
+					<button type="button" class="btn" :disabled="!hasNextPage(state.page, total, prefs.pageSize)" @click="setPage(state.page + 1)">Next ›</button>
 				</span>
 			</div>
 
-			<EditDrawer
-				v-if="def.rowTarget === 'drawer' && !pick && !viewer"
-				:model-value="drawerOpen"
-				:collection="def.collection"
-				:primary-key="drawerKey"
-				@update:model-value="onDrawer"
-				@saved="reload"
-			/>
-		</template>
+			</div>
+		</div>
+
+		<EditDrawer
+			v-if="!forbidden && def.rowTarget === 'drawer' && !pick && !viewer"
+			:model-value="drawerOpen"
+			:collection="def.collection"
+			:primary-key="drawerKey"
+			@update:model-value="onDrawer"
+			@saved="reload"
+		/>
 	</PageShell>
 </template>
 
 <style scoped>
+.top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
+/* The toolbar sits above the table only; the View rail is in the second column, level with the table (its lid with the table's head row). */
+.index-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; row-gap: 12px; align-items: start; container-type: inline-size; }
+.tools { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.main { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rail { grid-column: 2; grid-row: 2; }
+/* Under 1100px of the page's width the rail is a "View" button: a row of its own above the toolbar, at the right. */
+@container (max-width: 1099px) {
+	.index-grid { grid-template-columns: minmax(0, 1fr); }
+	.rail { grid-column: 1; grid-row: 1; }
+	.tools { grid-row: 2; }
+	.main { grid-row: 3; }
+}
 .foot, .state-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .btn {
 	display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
