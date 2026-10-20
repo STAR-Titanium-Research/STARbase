@@ -45,7 +45,7 @@ bulk_actions(
   kind text not null,                  -- assign_team | change_owner | share_access | remove_access | restrict | unrestrict | edit_field
   params jsonb not null,               -- {team_id} | {person_id} | {person_id|team_id, role} | {field, value}
   created_at timestamptz not null default now(),
-  undo_until timestamptz not null,     -- created_at + 60 s
+  undo_until timestamptz not null,     -- 60 s after the apply loop ends (created_at + 60 s until the counts are written)
   state text not null default 'applied',   -- applied | undone | reverted | partly_reverted
   revert_of uuid null references bulk_actions,
   mail_state text not null default 'pending',  -- pending | sent | cancelled | none
@@ -115,7 +115,7 @@ Limits: `ids` ≤ 100, deduplicated; a kind not valid for the collection is 400 
 
 All knex writes use the existing `inTransaction` (sets `d1.actor_identity`, so `audit_logs` names the caller for every row). After commit: clear the data cache once for the whole action.
 
-**Journal write.** `apply` inserts the `bulk_actions` row (with `undo_until = now + 60 s`, `mail_due_at = undo_until + 2 s`) and its `bulk_action_rows` in one transaction after the per-row work, with `before`/`after` captured inside each row's own transaction.
+**Journal write.** `apply` inserts the `bulk_actions` row (first with `undo_until = created_at + 60 s` and null counts; when the per-record loop ends the counts are written and `undo_until` is set to the end of the loop + 60 s, `mail_due_at = undo_until + 2 s`; an apply cut off before that is finalised by the startup sweep after 5 minutes) and its `bulk_action_rows` in one transaction after the per-row work, with `before`/`after` captured inside each row's own transaction.
 
 ### 3.3 Undo and revert (one implementation)
 
