@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clock, fmtNum, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
+import { clock, fmtNum, hasNoTileBelow, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
 describe('niceStep', () => {
 	it('picks 1, 2, 2.5 or 5 times a power of ten, never below the rough step', () => {
@@ -129,5 +129,19 @@ describe('placeTiles', () => {
 	});
 	it('has no rows for no tiles', () => {
 		expect(placeTiles([], 2)).toEqual({ placements: [], rows: 0 });
+	});
+});
+
+describe('hasNoTileBelow', () => {
+	const open = (spans: Parameters<typeof placeTiles>[0], cols = 2) => hasNoTileBelow(placeTiles(spans, cols).placements);
+	it('is the last row of a full grid', () => {
+		expect(open(['sm', 'sm', 'sm', 'sm'])).toEqual([false, false, true, true]);
+	});
+	it('also marks a tile with an empty cell under it, and not a tall tile beside a short one', () => {
+		expect(open(['sm', 'sm', 'sm'])).toEqual([false, true, true]);
+		expect(open(['tall', 'sm', 'sm'])).toEqual([true, false, true]);
+	});
+	it('marks a wide tile only when nothing is under either column', () => {
+		expect(open(['wide', 'sm'])).toEqual([false, true]);
 	});
 });

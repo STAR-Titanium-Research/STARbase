@@ -4,10 +4,10 @@
  * time axis and one hover cursor. A tile is titled by what it shows with its peak, and can pick its series
  * (button or right-click), normalise, resize and be removed.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import FastChart from './FastChart.vue';
 import FastSeriesMenu from './FastSeriesMenu.vue';
-import { placeTiles, type TileSpan } from './chartMath';
+import { hasNoTileBelow, placeTiles, type TileSpan } from './chartMath';
 import type { SeriesMeta, Trace } from './fastCache';
 import { MAX_TILES, tilePeak, tileTitle, type Tile } from './fastTiles';
 
@@ -61,23 +61,33 @@ const place = (i: number) => {
 	const p = layout.value.placements[i];
 	return { gridColumn: `${p.col + 1} / span ${p.colSpan}`, gridRow: `${p.row + 1} / span ${p.rowSpan}` };
 };
-// only the bottom row of tiles carries the time labels and title
-const bottom = (i: number) => layout.value.placements[i].row + layout.value.placements[i].rowSpan >= layout.value.rows;
+// the time labels and title go on every tile with no tile below it (every tile when stacked)
+const labelled = computed(() => hasNoTileBelow(layout.value.placements));
+const bottom = (i: number) => props.stacked || labelled.value[i];
 
 // ---- series picker
 const menu = ref<{ tile: number; x: number; y: number } | null>(null);
+let opener: HTMLElement | null = null;
 function openMenu(ev: MouseEvent, t: Tile) {
 	ev.preventDefault();
 	if (!props.catalog.length) return;
+	// opened by the keyboard (detail 0) the menu sits under its button; otherwise at the pointer
+	const button = ev.currentTarget instanceof HTMLButtonElement ? ev.currentTarget : null;
+	opener = button;
+	const at = ev.detail === 0 && button ? { x: button.getBoundingClientRect().left, y: button.getBoundingClientRect().bottom + 4 } : { x: ev.clientX, y: ev.clientY };
 	// kept on screen, however narrow the viewport
-	const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 268));
-	const y = Math.max(8, Math.min(ev.clientY, window.innerHeight - Math.min(420, window.innerHeight * 0.6) - 8));
+	const x = Math.max(8, Math.min(at.x, window.innerWidth - 268));
+	const y = Math.max(8, Math.min(at.y, window.innerHeight - Math.min(420, window.innerHeight * 0.6) - 8));
 	menu.value = { tile: t.id, x, y };
 }
 const menuTile = computed(() => tiles.value.find((t) => t.id === menu.value?.tile) ?? null);
-const close = () => { menu.value = null; };
+// Escape gives the focus back to the button that opened the picker; a click elsewhere keeps what it focused
+function close(refocus = false) {
+	menu.value = null;
+	if (refocus) nextTick(() => opener?.focus());
+}
 const away = () => close();
-const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(); };
+const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && menu.value) close(true); };
 onMounted(() => { window.addEventListener('click', away); window.addEventListener('keydown', esc); });
 onBeforeUnmount(() => { window.removeEventListener('click', away); window.removeEventListener('keydown', esc); });
 </script>
@@ -111,7 +121,7 @@ onBeforeUnmount(() => { window.removeEventListener('click', away); window.remove
 				</div>
 			</article>
 		</div>
-		<FastSeriesMenu v-if="menu && menuTile" :catalog="catalog" :selected="menuTile.series" :x="menu.x" :y="menu.y" @toggle="toggleSeries(menuTile, $event)" @close="close" />
+		<FastSeriesMenu v-if="menu && menuTile" :key="menu.tile" :catalog="catalog" :selected="menuTile.series" :x="menu.x" :y="menu.y" @toggle="toggleSeries(menuTile, $event)" @close="close(true)" />
 	</section>
 </template>
 

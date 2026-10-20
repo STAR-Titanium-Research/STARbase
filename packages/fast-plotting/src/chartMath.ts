@@ -110,3 +110,8 @@ export function placeTiles(spans: TileSpan[], cols: number): { placements: Place
 	}
 	return { placements, rows };
 }
+
+/** Which tiles carry the time labels and title: those with no tile below them in the grid. */
+export function hasNoTileBelow(placements: Placement[]): boolean[] {
+	return placements.map((p, i) => !placements.some((q, j) => j !== i && q.row >= p.row + p.rowSpan && q.col < p.col + p.colSpan && q.col + q.colSpan > p.col));
+}
