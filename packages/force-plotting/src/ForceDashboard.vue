@@ -31,7 +31,7 @@ import { alignMeasuredRho, measuredRhoSpan, type TurningSpiralParams } from './p
 import { activeFindings, diagnose, worstSeverity, type Finding } from './metadataDoctor';
 import { computeSignalStats, resolveStatsWindow, type SignalStats } from './signalStats';
 import { statsCsvColumns } from './statsCsv';
-import { AXIS_MAPS, DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
+import { DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
 import { meanRpm } from './filterResponse';
 import { type FilterChain, bakeBlockedReason, chainActive, chainsEqual, defaultChain, fetchFiltered, fetchFilteredFft, stagesOn } from './filterChain';
 import { useForceHost } from './host';
@@ -2024,11 +2024,6 @@ function applyPendingCrop(crop: [number, number] | null) {
 	cropStartSec.value = crop[0]; cropEndSec.value = crop[1];
 }
 
-// Selected axes for a panel (spectral views render one SpectrumView per axis, like the force plot).
-function axesFor(item: RPanel): Axis[] {
-	const sel = (item.channels && item.channels.length ? item.channels : AXES) as readonly Axis[];
-	return AXES.filter((a) => sel.includes(a));
-}
 // Chain the spectral views reflect: the live-tuned/applied filter when present, else raw.
 // The rotation speed the filter service notches at: the mean of the cache's rpm channel (not the
 // editable plot-model rpm). cacheGet() is not reactive, so this reads cacheEpoch.
