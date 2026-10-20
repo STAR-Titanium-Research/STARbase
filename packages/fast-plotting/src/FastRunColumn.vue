@@ -7,7 +7,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue';
 import FastStatsTab from './FastStatsTab.vue';
 import type { Trace } from './fastCache';
-import { CYCLE_LABELS, MOULD_LABELS, PEAK_LABELS, buildDetailRows, buildHeader, buildRecipe, buildStats, type Quality } from './fastMeta';
+import { MOULD_LABELS, PEAK_LABELS, buildDetailRows, buildHeader, buildRecipe, buildStats, type Quality } from './fastMeta';
 
 export type RunTab = 'stats' | 'detail' | 'recipe';
 const TABS: Array<{ id: RunTab; name: string; icon: string }> = [

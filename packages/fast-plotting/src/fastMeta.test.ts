@@ -23,7 +23,7 @@ describe('buildStats', () => {
 		expect(buildStats(detail, null, PEAK_LABELS)).toEqual([{ label: 'Peak temp', value: '1340', unit: '°C', source: 'recorded' }]);
 	});
 	it('gives the cycle and the recorded mould figures separately', () => {
-		expect(buildStats(detail, run, CYCLE_LABELS).map((s) => `${s.label} ${s.value} ${s.unit}`)).toEqual(['Dwell 10 min', 'Ramp 100 °C/min']);
+		expect(buildStats(detail, run, CYCLE_LABELS).map((s) => `${s.label} ${s.value} ${s.unit}`)).toEqual(['Dwell 10 min', 'Ramp (10–90 %) 100 °C/min']);
 		expect(buildStats(detail, run, MOULD_LABELS).map((s) => `${s.label} ${s.value} ${s.unit} ${s.source}`)).toEqual(['Mould Ø 20 mm recorded', 'Mass 12.40 g recorded']);
 	});
 });
@@ -45,7 +45,7 @@ describe('buildDetailRows', () => {
 		const detail = { operator_name: 'K', sintering_batch_number: 'B-1', sintering_coshh_ref: 'CH-1', sintering_atmosphere: 'Vacuum' };
 		const run = { status: 'done', n_rows: 1001, duration_s: 1000, updated_at: '2026-10-10T12:02:00Z', summary: { dwell_s: 600 } };
 		const rows = buildDetailRows(detail, run);
-		expect(rows.map((r) => r.label)).toEqual(['Batch', 'Atmosphere', 'CoSHH', 'Dwell', 'Trace', 'Imported']);
+		expect(rows.map((r) => r.label)).toEqual(['Batch', 'CoSHH', 'Dwell', 'Trace', 'Imported']);
 		expect(rows.find((r) => r.label === 'CoSHH')!.tag).toBe('QA log');
 		expect(rows.find((r) => r.label === 'Dwell')).toMatchObject({ value: '10 min', tag: 'measured' });
 		expect(rows.find((r) => r.label === 'Trace')!.value).toBe('1,001 rows · every 1 s');

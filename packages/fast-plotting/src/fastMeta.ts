@@ -56,7 +56,7 @@ const STAT_DEFS: Array<{
 	{ label: 'PTC top',    unit: '°C', sum: 'ptc_top_max_c' },
 	{ label: 'PTC bot',    unit: '°C', sum: 'ptc_bot_max_c' },
 	{ label: 'Dwell',      unit: 's',  sum: 'dwell_s', fmt: fmtDwell },
-	{ label: 'Ramp',       unit: '°C/min', sum: 'ramp_c_per_min' },
+	{ label: 'Ramp (10–90 %)', unit: '°C/min', sum: 'ramp_c_per_min' },
 	{ label: 'Mould Ø',    unit: 'mm', rec: 'sintering_mould_diameter_mm' },
 	{ label: 'Mass',       unit: 'g',  rec: 'sintering_mass_grams', dp: 2 },
 ];
@@ -64,7 +64,7 @@ const STAT_DEFS: Array<{
 // The six peak tiles of the run column, the measured cycle figures of the Operation detail tab, and the
 // two recorded figures that sit with the run's identity.
 export const PEAK_LABELS = ['Peak temp', 'Peak force', 'Peak power', 'Peak volts', 'PTC top', 'PTC bot'];
-export const CYCLE_LABELS = ['Dwell', 'Ramp'];
+export const CYCLE_LABELS = ['Dwell', 'Ramp (10–90 %)'];
 export const MOULD_LABELS = ['Mould Ø', 'Mass'];
 
 export function buildStats(detail: any, fastRun: any, only?: string[]): Stat[] {
@@ -155,7 +155,7 @@ export function buildHeader(detail: any): RunHeader {
 // the measured cycle figures and the trace itself. `tag` says where a value comes from, when it is not
 // the operation record.
 export interface DetailRow { label: string; value: string; tag?: string; }
-const IN_HEADER = ['Sample', 'Date', 'Operator', 'Machine', 'Material'];
+const IN_HEADER = ['Sample', 'Date', 'Operator', 'Machine', 'Material', 'Atmosphere'];
 
 export function buildDetailRows(detail: any, fastRun: any): DetailRow[] {
 	const rows: DetailRow[] = buildOpMeta(detail)
