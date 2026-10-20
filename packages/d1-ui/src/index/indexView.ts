@@ -9,9 +9,8 @@ import { operationLabel } from '../operationLabel';
 import type { Bookmark } from '../nav/navConfig';
 import type { ColumnDef, IndexDef, SelectAction } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
-import { groupColumn } from './groupBy';
 import { bookmarkSort, queryFromState } from './indexQuery';
-import { DEFAULT_LIST_PREFS } from './listPrefs';
+import { DEFAULT_LIST_PREFS, groupFilters } from './listPrefs';
 import type { Density, ListPrefs } from './listPrefs';
 import { dataStudioRoute, recordRoute } from '../recordRoute';
 import type { IndexState } from './indexQuery';
@@ -260,11 +259,17 @@ export function selectionRoute(action: SelectAction, keys: string[]): string {
 	return `${action.path}?${action.param}=${keys.map(encodeURIComponent).join(',')}`;
 }
 
-/** The header text of a row's group: its value, or "No project" for a row without one. */
+/**
+ * The header text of a row's group: its value (a relation by what it shows, else by the fallback that names a row
+ * without one), or "No project or not visible" for a row with none: Directus also gives null for a related row
+ * the person may not read.
+ */
 export function rowGroupLabel(def: IndexDef, field: string, row: Row): string {
-	const col = groupColumn(def, field);
-	const text = col ? cellText(row, col, def) : '';
-	return text || `No ${(col?.label ?? 'value').toLowerCase()}`;
+	const f = groupFilters(def).find((x) => x.field === field);
+	if (!f) return '';
+	const o = f.options;
+	const text = o.kind === 'relation' ? relationText(row[field], o.display) || (o.fallback ? relationText(row[field], o.fallback) : '') : cellText(row, { field, label: f.label }, def);
+	return text || `No ${f.label.toLowerCase()} or not visible`;
 }
 
 /** The header to draw above row `i`: its group's label when it starts a group, else null. */

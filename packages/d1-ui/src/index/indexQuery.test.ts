@@ -97,6 +97,13 @@ describe('buildItemsParams', () => {
 			expect(grouped('nickname').sort).toEqual(['-created_at']);
 			expect(grouped('project_id', null, new Set(['materials'])).sort).toEqual(['-created_at']);
 		});
+		it('asks for and sorts by a relation group\'s fallback too (an uncoded campaign)', () => {
+			const tests = indexDefBySlug('tests')!;
+			const p = buildItemsParams(tests, state(), null, null, null, { groupBy: 'campaign_id' });
+			expect(p.sort).toEqual(['campaign_id.campaign_code', 'campaign_id.name', tests.defaultSort]);
+			expect(p.fields).toEqual(expect.arrayContaining(['campaign_id.campaign_code', 'campaign_id.name']));
+			expect((p.fields as string[]).filter((f) => f === 'campaign_id.campaign_code')).toHaveLength(1);
+		});
 		it('asks for the group field when no column does', () => {
 			const operations = indexDefBySlug('operations')!;
 			const f = operations.filters.find((x) => x.options.kind === 'enum' || x.options.kind === 'relation' )!;

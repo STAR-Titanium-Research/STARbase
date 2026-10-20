@@ -177,13 +177,13 @@ describe('group by', () => {
 		expect($$('li.group').map((t) => t.textContent)).toEqual(['active', 'consumed']);
 	});
 
-	it('names a row without the value "No project"', async () => {
+	it('names a row without the value (or one the person may not read) "No project or not visible"', async () => {
 		await mount(1600);
 		const select = $('select[aria-label="Group by"]') as HTMLSelectElement;
 		select.value = 'project_id';
 		select.dispatchEvent(new Event('change'));
 		await settle();
-		expect($$('tr.group').map((t) => t.textContent)).toEqual(['P-A', 'No project']);
+		expect($$('tr.group').map((t) => t.textContent)).toEqual(['P-A', 'No project or not visible']);
 	});
 });
 

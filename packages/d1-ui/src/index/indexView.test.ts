@@ -155,8 +155,14 @@ describe('group headers', () => {
 	it('names a group by the row\'s value (a relation by what it shows), or "No …" when it has none', () => {
 		expect(rowGroupLabel(samples, 'current_status', { current_status: 'active' })).toBe('active');
 		expect(rowGroupLabel(samples, 'project_id', { project_id: { project_code: 'STAR-AM' } })).toBe('STAR-AM');
-		expect(rowGroupLabel(samples, 'project_id', { project_id: null })).toBe('No project');
-		expect(rowGroupLabel(samples, 'current_status', {})).toBe('No status');
+		expect(rowGroupLabel(samples, 'project_id', { project_id: null })).toBe('No project or not visible');
+		expect(rowGroupLabel(samples, 'current_status', {})).toBe('No status or not visible');
+	});
+	it('names a campaign without a code by its name (the filter\'s fallback)', () => {
+		const tests = indexDefBySlug('tests')!;
+		expect(rowGroupLabel(tests, 'campaign_id', { campaign_id: { campaign_code: 'C-1', name: 'One' } })).toBe('C-1');
+		expect(rowGroupLabel(tests, 'campaign_id', { campaign_id: { campaign_code: null, name: 'Untitled run' } })).toBe('Untitled run');
+		expect(rowGroupLabel(tests, 'campaign_id', { campaign_id: { campaign_code: null, name: null } })).toBe('No campaign or not visible');
 	});
 	it('draws a header above the first row of each run, and not between rows of one', () => {
 		const rows = [{ s: 'a' }, { s: 'a' }, { s: 'b' }, { s: 'a' }];

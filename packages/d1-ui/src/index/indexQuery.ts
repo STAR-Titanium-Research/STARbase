@@ -4,7 +4,7 @@
 // URL keys: bookmark, q, f.<field> (one per chip filter), sort, page, open.
 
 import type { Bookmark } from '../nav/navConfig';
-import { groupFetchField, groupSortKey, sortWithGroup } from './groupBy';
+import { groupKeys, sortWithGroup } from './groupBy';
 import type { IndexDef } from './indexConfig';
 import { DEFAULT_PAGE_SIZE } from './listPrefs';
 
@@ -127,8 +127,8 @@ export function buildItemsParams(
 		const f = c.relation && (!readable || readable.has(c.relation.collection)) ? `${c.field}.${c.relation.display}` : c.field;
 		if (!fields.includes(f)) fields.push(f);
 	}
-	const group = groupFetchField(def, view.groupBy ?? null, readable);
-	if (group && !fields.includes(group)) fields.push(group);
+	const group = groupKeys(def, view.groupBy ?? null, readable);
+	for (const f of group) if (!fields.includes(f)) fields.push(f);
 
 	const and: unknown[] = [];
 	if (isNonEmptyObject(def.fixedFilter)) and.push(def.fixedFilter);
@@ -152,7 +152,7 @@ export function buildItemsParams(
 
 	const params: Record<string, unknown> = {
 		fields,
-		sort: sortWithGroup(groupSortKey(def, view.groupBy ?? null, readable), s.sort ?? bookmarkSort(bookmark) ?? def.defaultSort),
+		sort: sortWithGroup(group, s.sort ?? bookmarkSort(bookmark) ?? def.defaultSort),
 		limit: view.pageSize ?? DEFAULT_PAGE_SIZE,
 		page: s.page,
 		meta: 'filter_count',
