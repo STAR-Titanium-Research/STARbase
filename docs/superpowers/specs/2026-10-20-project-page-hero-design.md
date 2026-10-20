@@ -47,7 +47,7 @@ who can edit, then those who can view. Six faces in full (initials; a team is a 
 icon; the PI filled with the accent), then up to three more fading out (opacity 0.5, 0.26, 0.1, hidden from
 screen readers). Beside it: "**Dennis Premoli** PI · **2** investigators · **9** more have access", and a
 "Who has access" button that opens `AccessDialog`. If the read fails, the row shows the PI only (from the
-project) and no count.
+project) and no count. If the access read fails, the Restricted badge is not shown either; the page cannot tell restricted from not.
 
 ## Timeline
 
