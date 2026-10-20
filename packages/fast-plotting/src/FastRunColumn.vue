@@ -4,7 +4,7 @@
  * on what, by whom, the mould and mass as recorded, the six peaks); then icon tabs for the statistics, the
  * operation detail and the recipe; "Open operation" pinned at the bottom.
  */
-import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import FastStatsTab from './FastStatsTab.vue';
 import type { Trace } from './fastCache';
 import { MOULD_LABELS, PEAK_LABELS, buildDetailRows, buildHeader, buildRecipe, buildStats, type Quality } from './fastMeta';
@@ -45,6 +45,17 @@ const noTrace = computed(() => {
 	const st = props.fastRun?.status;
 	return st === 'pending' || st === 'processing' ? 'The trace is being imported.' : st === 'error' ? 'The trace import failed.' : 'No trace was imported for this run.';
 });
+
+// Left and Right (and Home, End) move between the tabs, as a tab list does; the selected tab is the one in the tab order.
+const tablist = ref<HTMLElement | null>(null);
+function onTabKey(ev: KeyboardEvent) {
+	const at = TABS.findIndex((t) => t.id === props.tab);
+	const to = ev.key === 'ArrowRight' ? (at + 1) % TABS.length : ev.key === 'ArrowLeft' ? (at + TABS.length - 1) % TABS.length : ev.key === 'Home' ? 0 : ev.key === 'End' ? TABS.length - 1 : -1;
+	if (to < 0) return;
+	ev.preventDefault();
+	emit('update:tab', TABS[to].id);
+	nextTick(() => (tablist.value?.querySelectorAll<HTMLElement>('[role=tab]')[to])?.focus());
+}
 
 // Keys 1-3 pick the tab, except while typing in a field.
 function onKey(ev: KeyboardEvent) {
@@ -90,12 +101,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					</div>
 				</template>
 			</div>
-			<div class="tabs" role="tablist" aria-label="Run details">
-				<button v-for="(t, i) in TABS" :key="t.id" class="fd-tab" role="tab" :aria-selected="tab === t.id" :aria-label="t.name" :title="`${t.name} (${i + 1})`" @click="emit('update:tab', t.id)">
+			<div ref="tablist" class="tabs" role="tablist" aria-label="Run details" @keydown="onTabKey">
+				<button v-for="(t, i) in TABS" :id="`fd-tab-${t.id}`" :key="t.id" class="fd-tab" role="tab" :aria-selected="tab === t.id" :aria-controls="tab === t.id ? `fd-panel-${t.id}` : undefined"
+					:tabindex="tab === t.id ? 0 : -1" :aria-label="t.name" :title="`${t.name} (${i + 1})`" @click="emit('update:tab', t.id)">
 					<v-icon :name="t.icon" small />
 				</button>
 			</div>
-			<div class="tabbody" role="tabpanel">
+			<div :id="`fd-panel-${tab}`" class="tabbody" role="tabpanel" :aria-labelledby="`fd-tab-${tab}`">
 				<div v-if="message" class="fd-empty err" role="status">{{ message }}</div>
 				<template v-if="tab === 'stats'">
 					<FastStatsTab v-if="trace" :trace="trace" :detail="detail" :zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="cursor" :zoom-tool="zoomTool"
