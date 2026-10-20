@@ -12,7 +12,7 @@
  * given (`cursor`): the hovered chart also shows a tooltip, the others a dot on each line.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { clock, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin } from './chartMath';
+import { clock, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
 interface S { key: string; label: string; unit: string; group: string; values: Float64Array; }
 const props = withDefaults(defineProps<{
@@ -22,6 +22,8 @@ const props = withDefaults(defineProps<{
 	zoomTool?: boolean;           // when true, drag draws a rectangular zoom box
 	cursor?: number | null;       // shared hover time (seconds) from the tiles of the same group
 	xLabels?: boolean;            // tick labels and the "Time (min)" title (the bottom row of tiles)
+	fill?: boolean;               // a faint area under the first series (the cumulative energy)
+	band?: { start: number; end: number } | null;   // a shaded time range (the window the statistics cover)
 }>(), { xLabels: true });
 const emit = defineEmits<{
 	(e: 'zoom', v: { start: number; end: number } | null): void;
@@ -59,7 +61,7 @@ const shared = computed(() => {
 	if (props.normalise || props.series.length === 0) return false;
 	return new Set(props.series.map((s) => s.unit || s.group)).size === 1;
 });
-const yUnit = computed(() => (shared.value ? (props.series[0]?.unit || '') : '% of range'));
+const yUnit = computed(() => (shared.value ? unitLabel(props.series[0]?.unit || '') : '% of range'));
 
 const geom = computed(() => {
 	const t = props.time;
@@ -108,12 +110,16 @@ const geom = computed(() => {
 		}
 		return { key: s.key, d, sy, ...seriesStyle(i) };
 	});
+	// the band between the first and last point of the first series, down to the axis
+	const first = paths[0];
+	const area = props.fill && first.d ? `${first.d.trim()} L${sx(t[Math.min(iB, t.length - 1)]).toFixed(1)},${bottom} L${sx(t[iA]).toFixed(1)},${bottom} Z` : '';
+	const band = props.band ? { x: sx(Math.max(x0, props.band.start)), x2: sx(Math.min(x1, props.band.end)) } : null;
 
 	// time axis in minutes: tiles can be narrow, so the tick count follows the width
 	const { ticks, step } = ticksWithin(x0 / 60, x1 / 60, Math.max(2, Math.floor(plotW / 60)), [1, 2, 5]);
 	const xTicks = ticks.map((v) => ({ x: sx(v * 60), label: tickLabel(v, step) }));
 
-	return { W, H, bottom, plotW, plotH, x0, x1, sx, paths, xTicks, yTicks };
+	return { W, H, bottom, plotW, plotH, x0, x1, sx, paths, area, band, xTicks, yTicks };
 });
 
 // ---- hover: report the time under the pointer; draw the shared cursor ----
@@ -211,7 +217,7 @@ const tipStyle = computed(() => {
 	<div class="fchart">
 		<div v-if="series.length > 1" class="legend">
 			<span v-for="(s, i) in series" :key="s.key" class="lg">
-				<svg class="lg-key" width="22" height="8" aria-hidden="true"><line x1="0" x2="22" y1="4" y2="4" :style="{ stroke: seriesStyle(i).color }" :stroke-dasharray="seriesStyle(i).dash ?? undefined" /></svg>{{ s.label }}<em v-if="!shared">{{ s.unit }}</em>
+				<svg class="lg-key" width="22" height="8" aria-hidden="true"><line x1="0" x2="22" y1="4" y2="4" :style="{ stroke: seriesStyle(i).color }" :stroke-dasharray="seriesStyle(i).dash ?? undefined" /></svg>{{ s.label }}<em v-if="!shared">{{ unitLabel(s.unit) }}</em>
 			</span>
 		</div>
 		<!-- The svg is absolutely positioned (inset:0) inside a relatively-positioned, flex:1 wrapper so
@@ -224,6 +230,8 @@ const tipStyle = computed(() => {
 				@pointerdown="onZoomDown" @pointermove="onZoomMove" @pointerup="onZoomUp" @pointercancel="onZoomUp">
 				<line v-for="(t, i) in geom.yTicks" :key="'gy' + i" class="grid" :x1="ML" :x2="geom.W - MR" :y1="t.y" :y2="t.y" />
 				<line v-for="(t, i) in geom.xTicks" :key="'gx' + i" class="grid" :x1="t.x" :x2="t.x" :y1="MT" :y2="geom.bottom" />
+				<rect v-if="geom.band && geom.band.x2 > geom.band.x" class="band" :x="geom.band.x" :y="MT" :width="geom.band.x2 - geom.band.x" :height="geom.bottom - MT" />
+				<path v-if="geom.area" class="area" :d="geom.area" />
 				<path v-for="(p, i) in geom.paths" :key="p.key" :d="p.d" class="line" :style="{ stroke: p.color }" :stroke-dasharray="p.dash ?? undefined" :data-series="i" />
 				<line class="axis" :x1="ML" :x2="ML" :y1="MT" :y2="geom.bottom" />
 				<line class="axis" :x1="ML" :x2="geom.W - MR" :y1="geom.bottom" :y2="geom.bottom" />
@@ -263,12 +271,14 @@ const tipStyle = computed(() => {
 
 <style scoped>
 .fchart { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.fchart-plot { position: relative; flex: 1 1 auto; min-height: 100px; width: 100%; }
+.fchart-plot { position: relative; flex: 1 1 auto; min-height: 60px; width: 100%; }
 .fchart-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
 .fchart-svg.zoomtool { cursor: col-resize; }
 .fchart-svg .grid { stroke: var(--d1-grid, color-mix(in srgb, var(--theme--foreground) 10%, transparent)); stroke-width: 1; }
 .fchart-svg .axis { stroke: var(--d1-axis, var(--theme--foreground-subdued)); stroke-width: 1; }
 .fchart-svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.fchart-svg .area { fill: var(--d1-series-1, #2a78d6); fill-opacity: 0.1; stroke: none; }
+.fchart-svg .band { fill: var(--theme--foreground); fill-opacity: 0.08; }
 .fchart-svg .tick { fill: var(--d1-dim, var(--theme--foreground-subdued)); font-size: var(--fs-xs, 11px); font-variant-numeric: tabular-nums; }
 .fchart-svg .unit { font-weight: 600; }
 .fchart-svg .cursor { stroke: var(--d1-axis, var(--theme--foreground-subdued)); stroke-width: 1; }

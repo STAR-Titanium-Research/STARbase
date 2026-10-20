@@ -45,6 +45,11 @@ export function tickLabel(v: number, step: number): string {
 	return v.toFixed(decimals(step)).replace('-', '−');
 }
 
+/** A unit as printed: the catalog stores degrees Celsius as "C". */
+export function unitLabel(unit: string): string {
+	return unit === 'C' ? '°C' : unit;
+}
+
 /** The index of the sample nearest to time `t` in an ascending time array. */
 export function indexAt(time: ArrayLike<number>, t: number): number {
 	let lo = 0, hi = time.length - 1;

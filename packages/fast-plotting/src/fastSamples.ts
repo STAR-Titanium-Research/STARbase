@@ -1,6 +1,8 @@
 // The Samples -> Runs lists: group the FAST operations by their sample and narrow them by a sample and a
 // search. Pure, so the rules are testable and the 10k-row list stays a cheap pass.
 
+import type { Quality } from './fastMeta';
+
 export interface RunRow {
 	id: string;
 	pass_code?: string | null;
@@ -8,6 +10,12 @@ export interface RunRow {
 	sintering_recipe_number?: string | null;
 	sample_id?: { sample_code?: string | null; nickname?: string | null; sample_id?: string | null } | null;
 	material_id?: { common_name?: string | null } | null;
+}
+/** A row of the run list: the operation with what the list shows of its trace. */
+export interface ListRun extends RunRow {
+	sintering_max_temp_celsius?: number | null;
+	sintering_max_force_kn?: number | null;
+	quality: { level: Quality; label: string; hint: string };
 }
 export interface SampleGroup { key: string; code: string; sub: string; runs: number; }
 

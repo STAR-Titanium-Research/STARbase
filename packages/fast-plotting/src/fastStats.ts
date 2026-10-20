@@ -175,6 +175,20 @@ function travelStats(time: Float64Array, vals: Float64Array, win: Span): { net: 
 	return { net: Math.abs(delta), rate };
 }
 
+const csvCell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+
+/** The statistics as CSV (figure, value, unit): the phase durations first, then the tiles. */
+export function statsCsv(stats: RunStats, scope: string): string {
+	const rows = [['Figure', 'Value', 'Unit'], ['Scope', scope, '']];
+	if (stats.phases) {
+		for (const [name, span] of [['Heating', stats.phases.heating], ['Hold', stats.phases.hold], ['Cooling', stats.phases.cooling]] as const) {
+			rows.push([`${name} duration`, minutes(span[1] - span[0]), 'min']);
+		}
+	}
+	for (const t of stats.tiles) rows.push([t.label, t.value, t.unit]);
+	return rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
 /** Cumulative energy over the whole run in kWh, thinned to at most `points` samples for the chart. */
 export function cumulativeEnergy(trace: Trace, points = 400): { t: Float64Array; kwh: Float64Array } | null {
 	const power = usable(trace, ['sps_power']);

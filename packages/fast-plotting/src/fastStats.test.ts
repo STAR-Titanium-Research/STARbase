@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Series, Trace } from './fastCache';
-import { cumulativeEnergy, findPhases, runStats } from './fastStats';
+import { cumulativeEnergy, findPhases, runStats, statsCsv } from './fastStats';
 
 // A 45-minute run sampled every 10 s: heating 20 -> 1350 degC over 800 s, hold at 1350 for 600 s,
 // then a straight cool-down to 100 degC over 1300 s. Power is 6 kW until the end of the hold.
@@ -110,6 +110,17 @@ describe('runStats with series missing', () => {
 	});
 	it('has no figures for a trace without samples', () => {
 		expect(runStats({ time: new Float64Array(0), n: 0, series: {}, order: [] })).toEqual({ phases: null, tiles: [] });
+	});
+});
+
+describe('statsCsv', () => {
+	it('lists the scope, the phase durations and the tiles', () => {
+		const csv = statsCsv(runStats(makeTrace(), { target: 1350 }), 'Whole run').split('\r\n');
+		expect(csv.slice(0, 6)).toEqual(['Figure,Value,Unit', 'Scope,Whole run,', 'Heating duration,13.3,min', 'Hold duration,10.2,min', 'Cooling duration,19.8,min', 'Run duration,45.0,min']);
+		expect(csv[csv.length - 1]).toBe('');
+	});
+	it('quotes a cell with a comma or a quote', () => {
+		expect(statsCsv({ phases: null, tiles: [] }, 'a, "b"')).toContain('Scope,"a, ""b""",');
 	});
 });
 
