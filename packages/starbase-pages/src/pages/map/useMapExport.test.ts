@@ -53,7 +53,7 @@ function setup(over: Partial<ExportDeps> = {}, nodes: MapNode[] = [sample, op], 
   const exp = useMapExport({
     canvas: { whenSettled: extra.whenSettled ?? (async () => true) } as never,
     projectFrame: (extra.projectFrame ?? (() => projectBox)) as never,
-    map: { nodes: nodesRef, data: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover } as never,
+    map: { nodes: nodesRef, overlaid: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover } as never,
     person: () => 'Ada Lovelace',
     deps,
   });

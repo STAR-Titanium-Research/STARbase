@@ -1,0 +1,24 @@
+{
+  "name": "directus-extension-d1-deploy",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Data Studio page for admins: check for updates and deploy origin/main to d1-server through the host-side deploy agent.",
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build --watch",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "^18",
+    "@vue/compiler-sfc": "^3.5.43",
+    "typescript": "^7",
+    "vue": "^3",
+    "vue-tsc": "^3.3.13"
+  },
+  "directus:extension": {
+    "type": "module",
+    "path": "dist/index.js",
+    "source": "src/index.ts",
+    "host": "^11.0.0"
+  }
+}

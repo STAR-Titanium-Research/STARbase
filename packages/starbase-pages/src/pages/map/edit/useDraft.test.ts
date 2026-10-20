@@ -129,6 +129,20 @@ describe('useDraft: is d1-build there', () => {
 		expect(draft.probeError.value).toBe('');
 	});
 
+	it('is not available when the list is 403 (an account that may not build), with no error text and a flag for the page', async () => {
+		const { s, draft } = make();
+		s.listStatus = 403;
+		expect(await draft.probe()).toBe(false);
+		expect(draft.available.value).toBe(false);
+		expect(draft.probed.value).toBe(true);
+		expect(draft.probeError.value).toBe('');
+		expect(draft.forbidden.value).toBe(true);
+		// A later answer from a server that lets the account in clears it.
+		s.listStatus = 200;
+		expect(await draft.probe()).toBe(true);
+		expect(draft.forbidden.value).toBe(false);
+	});
+
 	it('is not available when the server fails, and keeps the reason', async () => {
 		const { s, draft } = make();
 		s.listStatus = 500;
@@ -266,6 +280,58 @@ describe('useDraft: undo and redo', () => {
 		draft.undo();
 		draft.apply({ type: 'addSample', values: { form: 'bar' } });
 		expect(draft.canRedo.value).toBe(false);
+	});
+
+	it('merge folds a change into the step before it, so typing in a field is one undo step', async () => {
+		const { draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample' });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'd' } });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'di' } }, { merge: true });
+		draft.apply({ type: 'setValues', key: 'n1', values: { form: 'disc' } }, { merge: true });
+		expect(draft.body.value.items[0].values.form).toBe('disc');
+		draft.undo();
+		expect(draft.body.value.items[0].values.form).toBeUndefined();
+		expect(draft.body.value.items).toHaveLength(1);
+		// with nothing before it to fold into, it is a step of its own
+		const fresh = make();
+		await fresh.draft.start();
+		fresh.draft.apply({ type: 'addSample' }, { merge: true });
+		expect(fresh.draft.canUndo.value).toBe(true);
+	});
+
+	it('a layout\'s write (merge, keepFuture) changes the present and leaves what Redo has', async () => {
+		const { draft } = make();
+		await draft.start();
+		draft.apply({ type: 'addSample', at: { x: 1, y: 1 } });
+		draft.apply({ type: 'addSample', at: { x: 2, y: 2 } });
+		draft.undo();
+		expect(draft.canRedo.value).toBe(true);
+		draft.apply({ type: 'move', key: 'n1', x: 500, y: 5 }, { merge: true, keepFuture: true });
+		expect(draft.body.value.positions.n1).toEqual({ x: 500, y: 5 });
+		expect(draft.canRedo.value, 'Redo is still there').toBe(true);
+		draft.redo();
+		expect(draft.body.value.items).toHaveLength(2);
+		// A person's own change (no keepFuture) does end Redo.
+		draft.undo();
+		draft.apply({ type: 'move', key: 'n1', x: 7, y: 7 }, { merge: true });
+		expect(draft.canRedo.value).toBe(false);
+	});
+
+	it('applyAll does several actions as one undoable step, and nothing when none of them changes anything', async () => {
+		const { s, draft } = make();
+		await draft.start();
+		draft.applyAll([{ type: 'addSample' }, { type: 'addSample' }, { type: 'move', key: 'n1', x: 5, y: 6 }]);
+		expect(draft.body.value.items).toHaveLength(2);
+		expect(draft.body.value.positions.n1).toEqual({ x: 5, y: 6 });
+		draft.undo();
+		expect(draft.body.value.items).toHaveLength(0);
+		expect(draft.canUndo.value).toBe(false);
+		const before = draft.body.value;
+		expect(draft.applyAll([{ type: 'remove', key: 'nope' }])).toBe(before);
+		expect(draft.canUndo.value).toBe(false);
+		await tick();
+		expect(patches(s.calls)).toHaveLength(1);
 	});
 });
 

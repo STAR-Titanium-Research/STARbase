@@ -1,10 +1,11 @@
 // Run with: node --test core/extensions/d1-build/index.test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, cleanValues, dayOf, describeFailure, editValues, parseRequired, projectItem, realColumns, rolesOf, summarise, summariseProjected, templateVisibleTo, validateDraftBody, validateName,
+  ALIAS_ALLOWED, CHECK_CODES, MAX_RECORDS, TEST_CATEGORY, testCategoryOf, cleanValues, dayOf, describeFailure, editValues, parseRequired, projectItem, realColumns, rolesOf, summarise, summariseProjected, templateVisibleTo, validateDraftBody, validateName,
   validateTemplateValues,
 } from './index.js';
 
@@ -26,9 +27,9 @@ const SCHEMA = {
   collections: {
     physical_samples: { fields: fieldsOf(['sample_id', 'sample_code', 'material_id', 'form', 'primary_method_id', 'project_id', 'current_status', 'notes', 'version', 'mass_grams'], 'co_owners') },
     manufacturing_operations: {
-      fields: fieldsOf(['operation_id', 'method_id', 'equipment_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'outcome_notes', 'campaign_id', 'project_id', 'pass_code'], 'additional_operators'),
+      fields: fieldsOf(['operation_id', 'method_id', 'equipment_id', 'planned_date', 'operation_date', 'notes', 'machining_feed_mm_per_rev', 'outcome_notes', 'campaign_id', 'project_id', 'pass_code', 'material_id'], 'additional_operators'),
     },
-    test_sessions: { fields: fieldsOf(['session_id', 'test_type', 'session_date', 'planned_date', 'equipment_id', 'campaign_id', 'project_id', 'notes'], 'additional_operators') },
+    test_sessions: { fields: fieldsOf(['session_id', 'test_type', 'test_category', 'session_date', 'planned_date', 'equipment_id', 'campaign_id', 'project_id', 'notes'], 'additional_operators') },
   },
 };
 
@@ -57,7 +58,10 @@ function fakeWorld() {
     deniedReads: new Set(), hiddenIds: new Set(), // collections, and record ids, the caller cannot read
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
-    people: [], // { person_id, user_id, is_researcher }
+    // { person_id, user_id, is_researcher }: Alice and Bob are researchers unless a test says otherwise
+    people: [{ person_id: ID(70), user_id: ALICE, is_researcher: true }, { person_id: ID(71), user_id: BOB, is_researcher: true }],
+    noBuild: new Set(), // users whose policies grant no create on manufacturing_operations (a Lab Viewer)
+    permissionAsks: [], // the bindings of every "may this caller build" question
     templates: [], roles: [ROLE_A, ROLE_B, ID(83)],
   };
 }
@@ -85,11 +89,12 @@ function fakeServices(world, log = { built: [], reads: [] }) {
 
     async readByQuery(query) {
       log.reads.push({ collection: this.collection, query });
-      if (world.deniedReads.has(this.collection)) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      const system = !this.options.accountability; // system rights read everything
+      if (!system && world.deniedReads.has(this.collection)) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
       const pk = COLLECTION_PK[this.collection];
       const rows = [];
       for (const id of query.filter[pk]._in) {
-        const r = world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+        const r = !system && world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
         if (r) rows.push(Object.fromEntries(query.fields.map((f) => [f, r[f]])));
       }
       return rows;
@@ -97,13 +102,14 @@ function fakeServices(world, log = { built: [], reads: [] }) {
 
     async readOne(id, query) {
       log.reads.push({ collection: this.collection, query: { one: id, ...query } });
-      const r = world.deniedReads.has(this.collection) || world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+      const system = !this.options.accountability;
+      const r = !system && (world.deniedReads.has(this.collection) || world.hiddenIds.has(String(id).toLowerCase())) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
       if (!r) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
       return { ...r };
     }
 
     async createOne(data) {
-      world.failOn?.('create', this.collection, data);
+      world.failOn?.('create', this.collection, data, this.options);
       const pk = COLLECTION_PK[this.collection];
       const id = ID(2000 + (world.seq += 1));
       const row = { [pk]: id, version: 1, ...data };
@@ -118,20 +124,20 @@ function fakeServices(world, log = { built: [], reads: [] }) {
         row.work_state ??= 'done';
       }
       (world.records[this.collection] ??= new Map()).set(id, row);
-      world.ops.push({ op: 'create', collection: this.collection, id, data, knex: this.options.knex });
+      world.ops.push({ op: 'create', collection: this.collection, id, data, knex: this.options.knex, accountability: this.options.accountability });
       return id;
     }
 
     async updateOne(id, data) {
-      world.failOn?.('update', this.collection, data);
+      world.failOn?.('update', this.collection, data, this.options);
       const row = world.records[this.collection].get(id.toLowerCase());
       Object.assign(row, data, { version: row.version + 1 });
-      world.ops.push({ op: 'update', collection: this.collection, id, data, knex: this.options.knex });
+      world.ops.push({ op: 'update', collection: this.collection, id, data, knex: this.options.knex, accountability: this.options.accountability });
       return id;
     }
 
     async deleteOne(id) {
-      world.failOn?.('delete', this.collection, { id });
+      world.failOn?.('delete', this.collection, { id }, this.options);
       world.records[this.collection].delete(id.toLowerCase());
       world.ops.push({ op: 'delete', collection: this.collection, id, knex: this.options.knex });
       return id;
@@ -207,10 +213,13 @@ function fakeDatabase(world) {
         return { rows: [] };
       case SQL.roleExists:
         return { rows: world.roles.filter((r) => r === b[0]).map((id) => ({ id })) };
+      case SQL.mayCreateOperations:
+        world.permissionAsks.push(b);
+        return { rows: [{ allowed: !world.noBuild.has(b[1]) }] };
       case SQL.personExists:
         return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
       case SQL.personOfUser:
-        return { rows: world.people.filter((p) => p.user_id === b[0]).map((p) => ({ person_id: p.person_id })).slice(0, 1) };
+        return { rows: world.people.filter((p) => p.user_id === b[0] && p.is_researcher === true).map((p) => ({ person_id: p.person_id })).slice(0, 1) };
       case SQL.lockSamples:
         return { rows: csvOf(b).filter((id) => world.records.physical_samples.has(id)).map((sample_id) => ({ sample_id })) };
       case SQL.requiredFields:
@@ -409,6 +418,68 @@ test('summarise: a sample already on the map is not made again; edits and remova
     ],
   };
   assert.equal(summarise(body), '1 operation, 1 sample, 2 changes to existing records, 1 removal');
+});
+
+// ---- who may build (R11) ---------------------------------------------------------------------------------------------
+
+const FORBIDDEN_BUILD = 'Your account may not build processes.';
+
+test('R11: every route but mark-done answers 403 FORBIDDEN to an account that may not create operations', async () => {
+  const env = setup();
+  const viewer = ID(5);
+  env.world.noBuild.add(viewer);
+  const some = ID(99);
+  const routes = [
+    ['GET', '/drafts'], ['POST', '/drafts', { body: { body: emptyBody() } }], ['GET', '/drafts/:id', { params: { id: some } }],
+    ['PATCH', '/drafts/:id', { params: { id: some }, body: { name: 'x', version: 1 } }], ['DELETE', '/drafts/:id', { params: { id: some } }],
+    ['POST', '/drafts/:id/check', { params: { id: some } }], ['POST', '/drafts/:id/create', { params: { id: some } }],
+    ['POST', '/mark-planned', { body: { collection: 'manufacturing_operations', id: some } }],
+    ['GET', '/templates'], ['GET', '/templates/:id', { params: { id: some } }], ['POST', '/templates', { body: cutTemplate() }],
+    ['PATCH', '/templates/:id', { params: { id: some }, body: { name: 'x', version: 1 } }], ['DELETE', '/templates/:id', { params: { id: some } }],
+  ];
+  for (const [method, path, opts = {}] of routes) {
+    const res = await env.call(method, path, { user: viewer, ...opts });
+    assert.equal(res.statusCode, 403, `${method} ${path}`);
+    assert.deepEqual(res.body, { errors: [{ message: FORBIDDEN_BUILD, extensions: { code: 'FORBIDDEN', source: 'd1-build' } }] }, `${method} ${path}`);
+  }
+  assert.deepEqual(env.world.drafts, [], 'nothing was written');
+  assert.equal(env.world.ops.length, 0);
+});
+
+test('R11: mark-done is not gated by the build right (whoever may edit the operation may mark it done)', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.noBuild.add(ALICE);
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(env.world.permissionAsks, [], 'the build right is not even asked about');
+});
+
+test('R11: the question is "may create manufacturing_operations" for the caller and their roles; administrators and the 401 skip it', async () => {
+  const env = setup();
+  const ok = await env.call('GET', '/drafts', { roles: [ROLE_A, ROLE_B] });
+  assert.equal(ok.statusCode, 200);
+  assert.deepEqual(env.world.permissionAsks, [[`${ROLE_A},${ROLE_B}`, ALICE]]);
+  assert.match(SQL.mayCreateOperations, /manufacturing_operations/);
+  assert.match(SQL.mayCreateOperations, /'create'/);
+  // an administrator is never asked, even if the question would say no
+  env.world.noBuild.add(BOB);
+  const admin = await env.call('GET', '/drafts', { user: BOB, admin: true });
+  assert.equal(admin.statusCode, 200);
+  assert.equal(env.world.permissionAsks.length, 1);
+  // no user: 401, before the permission question
+  assert.equal((await env.call('GET', '/drafts', { user: null })).statusCode, 401);
+  assert.equal(env.world.permissionAsks.length, 1);
+});
+
+test('R11: a database failure while asking is a 500, never an open door', async () => {
+  const env = setup();
+  const { world } = env;
+  const real = world.noBuild;
+  world.noBuild = { has() { throw new Error('db down'); } };
+  const res = await env.call('GET', '/drafts');
+  assert.equal(res.statusCode, 500);
+  world.noBuild = real;
 });
 
 // ---- the router and its drafts ---------------------------------------------------------------------------------------
@@ -1181,8 +1252,188 @@ test('create: a done operation keeps its date, its pieces are active, and it is 
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.deepEqual(writes(env.world), ['create:physical_samples', 'create:manufacturing_operations']);
   const [s, o] = env.world.ops;
-  assert.equal('current_status' in s.data, false, 'an active sample keeps the database default');
+  assert.equal(s.data.current_status, 'active', 'the piece a done operation makes is active');
   assert.deepEqual([o.data.work_state, o.data.operation_date, o.data.sample_id, o.data.output_sample_id, 'batch_id' in o.data], ['done', '2026-10-14T08:30:00Z', ID(10), s.id, false]);
+});
+
+test('create (R9): done at Create writes the outputs active, planned work writes them planned, in the same transaction', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('done1', { operation_date: '2026-10-14T08:30:00Z' }, { workState: 'done' }), sample('n1', { values: code('{seq}-X') }),
+      mop('plan1', {}, { workState: 'planned' }), sample('n2', { values: code('{seq}-Y') }),
+    ],
+    [wire(w('s0'), w('done1')), wire(w('done1', 0), w('n1')), wire(w('s0'), w('plan1')), wire(w('plan1', 0), w('n2'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const status = (key) => env.world.records.physical_samples.get(res.body.data.created[key].id).current_status;
+  assert.equal(status('n1'), 'active');
+  assert.equal(status('n2'), 'planned');
+  assert.ok(env.world.ops.every((o) => o.knex === env.world.trx));
+});
+
+test('create (R9): done at Create records who and when like Mark done does, and a done record with no date gets today; planned work gets neither', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('done1', { operation_date: '2026-10-12T08:30:00Z' }, { workState: 'done' }), sample('n1', { values: code('{seq}-X') }),
+      mop('plan1', {}, { workState: 'planned' }), sample('n2', { values: code('{seq}-Y') }),
+      test_('t1', { workState: 'done', values: { test_type: 'tensile' } }),
+      test_('t2', { workState: 'planned', values: { test_type: 'tensile' } }),
+      test_('t3', { workState: 'done', values: { test_type: 'tensile', session_date: '2026-10-13T00:00:00Z' } }),
+    ],
+    [wire(w('s0'), w('done1')), wire(w('done1', 0), w('n1')), wire(w('s0'), w('plan1')), wire(w('plan1', 0), w('n2')),
+      wire(w('s0'), w('t1')), wire(w('s0'), w('t2')), wire(w('s0'), w('t3'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const made = (key) => env.world.ops.find((o) => o.op === 'create' && o.id === res.body.data.created[key].id).data;
+  const stamp = { done_by_person_id: ID(70), done_at: NOW.toISOString() };
+  assert.deepEqual([made('done1').done_by_person_id, made('done1').done_at, made('done1').operation_date], [ID(70), NOW.toISOString(), '2026-10-12T08:30:00Z'], 'the date the person gave is kept');
+  assert.deepEqual([made('t1').done_by_person_id, made('t1').done_at, made('t1').session_date], [stamp.done_by_person_id, stamp.done_at, '2026-10-14T00:00:00.000Z'], 'no date: today');
+  assert.equal(made('t3').session_date, '2026-10-13T00:00:00Z');
+  for (const k of ['plan1', 't2']) {
+    const d = made(k);
+    assert.deepEqual(['done_by_person_id' in d, 'done_at' in d, 'operation_date' in d, 'session_date' in d], [false, false, false, false], `${k} is planned`);
+  }
+});
+
+test('create (R9): a done record made by a login without a researcher row is refused before anything is written (NO_RESEARCHER), so done_by is never empty', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  env.world.people = [];
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 } }), test_('t1', { workState: 'done', values: { test_type: 'tensile' } })], [wire(w('s0'), w('t1'))]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 422);
+  assert.deepEqual(env.world.ops, []);
+});
+
+const NO_RESEARCHER_TEXT = "Your account isn't linked to a researcher record. Ask an admin.";
+
+test('create (R11b): a caller with no researcher People row is refused with 422 NO_RESEARCHER, and nothing is written or deleted', async () => {
+  for (const people of [[], [{ person_id: ID(70), user_id: ALICE, is_researcher: false }], [{ person_id: ID(70), user_id: BOB, is_researcher: true }]]) {
+    const env = setup();
+    seed(env.world, 'physical_samples', [sampleRow(10)]);
+    env.world.people = people;
+    const id = await keep(env, cutDraft());
+    const before = stateOf(env.world);
+    const res = await createCall(env, id);
+    assert.equal(res.statusCode, 422, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { errors: [{ message: NO_RESEARCHER_TEXT, extensions: { code: 'NO_RESEARCHER', source: 'd1-build' } }] });
+    assert.deepEqual(env.world.ops, []);
+    assert.equal(stateOf(env.world), before);
+    assert.equal(env.world.drafts.length, 1, 'the draft is kept');
+  }
+});
+
+test('create (R11b): the researcher rule only matters when Create makes records; edits and removals need no owner', async () => {
+  const env = setup();
+  env.world.people = [];
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 }, values: { notes: 'hello' } })]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writes(env.world), ['update:physical_samples']);
+  // an empty draft too (nothing to make)
+  const empty = await createCall(env, await keep(env, emptyBody()));
+  assert.equal(empty.statusCode, 200);
+});
+
+test('create (R11b): a researcher is found by the same rule as d1-owner-default (user_id and is_researcher)', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  env.world.people = [{ person_id: ID(70), user_id: ALICE, is_researcher: false }, { person_id: ID(72), user_id: ALICE, is_researcher: true }];
+  assert.equal((await createCall(env, await keep(env, cutDraft()))).statusCode, 200);
+  assert.match(SQL.personOfUser, /user_id = \?/);
+  assert.match(SQL.personOfUser, /is_researcher = true/);
+});
+
+// ---- inherited fields (spec section 3 item 7, ADR-0018 amendment) -------------------------------------------------------
+
+test('testCategoryOf is the d1-test-category interface\'s own table: same types, same categories, anything else is other', () => {
+  const vue = readFileSync(new URL('../d1-test-category/src/TestCategory.vue', import.meta.url), 'utf8');
+  const literal = /const TYPE_TO_CAT[^=]*=\s*(\{[\s\S]*?\});/.exec(vue)?.[1];
+  assert.ok(literal, 'the interface still has its TYPE_TO_CAT table');
+  const theirs = Function(`return (${literal})`)();
+  assert.deepEqual(TEST_CATEGORY, theirs, 'keep the two tables in step');
+  for (const [type, category] of Object.entries(theirs)) assert.equal(testCategoryOf(type), category);
+  assert.equal(testCategoryOf('some_new_type'), 'other');
+  assert.equal(testCategoryOf('constructor'), 'other', 'a prototype name is not a type');
+  assert.equal(testCategoryOf(''), null);
+  assert.equal(testCategoryOf(undefined), null);
+});
+
+test('buildPlan: a new test carries its category from the type; one the draft sets itself is kept', () => {
+  const base = (values) => draft([sample('s0', { existing: { id: ID(10), version: 1 } }), test_('t1', { values }), test_('t2', { values: { test_type: 'tensile', test_category: 'other' } })], [wire(w('s0'), w('t1')), wire(w('s0'), w('t2'))]);
+  const { plan } = buildPlan(base({ test_type: 'hardness' }), { existing: known(sampleRow(10)) });
+  assert.deepEqual(plan.tests.map((t) => [t.key, t.category]), [['t1', 'destructive'], ['t2', 'destructive']]);
+  assert.deepEqual(plan.tests.map((t) => t.values.test_category), [undefined, 'other'], 'the draft\'s own value stays in the values; Create prefers it');
+  assert.equal(buildPlan(base({ test_type: 'sem' }), { existing: known(sampleRow(10)) }).plan.tests[0].category, 'nde');
+  assert.equal(buildPlan(base({}), { existing: known(sampleRow(10)) }).plan.tests[0].category, null, 'no type, no category (and a block)');
+});
+
+test('buildPlan: a new operation inherits its input sample\'s material, down a chain; a sample with none gives none', () => {
+  const chain = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1'), sample('n1', { values: code('{seq}-X') }), mop('o2'), sample('n2', { values: code('{seq}-Y') }),
+      sample('s1', { existing: { id: ID(11), version: 1 } }), mop('o3'),
+      mop('o4', { material_id: ID(99) }),
+    ],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1')), wire(w('n1'), w('o2')), wire(w('o2', 0), w('n2')), wire(w('s1'), w('o3')), wire(w('s0'), w('o4'))],
+  );
+  const { plan } = buildPlan(chain, { existing: known(sampleRow(10), sampleRow(11, { material_id: null })) });
+  const material = Object.fromEntries(plan.operations.map((r) => [r.itemKey, r.material]));
+  assert.deepEqual(material, { o1: MATERIAL, o2: MATERIAL, o3: undefined, o4: MATERIAL }, 'o4 would inherit too; Create keeps the value its card has');
+  assert.equal(plan.operations.find((r) => r.itemKey === 'o4').values.material_id, ID(99));
+});
+
+test('create: the new test gets test_category and the new operation gets material_id; what the draft supplies is never overridden', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }),
+      mop('o1'), sample('n1', { values: code('{seq}-X') }),
+      mop('o2', { material_id: ID(99) }), sample('n2', { values: code('{seq}-Y') }),
+      test_('t1', { values: { test_type: 'tensile' } }),
+      test_('t2', { values: { test_type: 'hardness', test_category: 'other' } }),
+      test_('t3', { values: { test_type: 'a_brand_new_type' } }),
+    ],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1')), wire(w('s0'), w('o2')), wire(w('o2', 0), w('n2')), wire(w('s0'), w('t1')), wire(w('s0'), w('t2')), wire(w('s0'), w('t3'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const made = (collection) => env.world.ops.filter((o) => o.op === 'create' && o.collection === collection);
+  assert.deepEqual(made('manufacturing_operations').map((o) => o.data.material_id), [MATERIAL, ID(99)]);
+  assert.deepEqual(made('test_sessions').map((o) => o.data.test_category), ['destructive', 'other', 'other']);
+});
+
+test('create: an operation on a sample whose material is unknown writes no material_id at all', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10, { material_id: null })]);
+  const body = draft([sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1')], [wire(w('s0'), w('o1'))]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal('material_id' in env.world.ops[0].data, false);
+});
+
+test('buildPlan: a done record is not asked for a required field the server inherits itself', () => {
+  const required = parseRequired([
+    { collection: 'test_sessions', field: 'test_category', translations: null },
+    { collection: 'manufacturing_operations', field: 'material_id', translations: null },
+  ]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', {}, { workState: 'done' }), test_('t1', { workState: 'done', values: { test_type: 'sem' } })],
+    [wire(w('s0'), w('o1')), wire(w('s0'), w('t1'))],
+  );
+  const asked = (existing) => buildPlan(body, { existing, required }).checks.filter((c) => c.code === 'REQUIRED').map((c) => `${c.key}:${c.field}`);
+  assert.deepEqual(asked(known(sampleRow(10))), []);
+  assert.deepEqual(asked(known(sampleRow(10, { material_id: null }))), ['o1:material_id'], 'a sample with no material cannot fill it');
 });
 
 test('create: tests are written with their samples as subjects, a planned test without a session date', async () => {
@@ -1202,11 +1453,11 @@ test('create: tests are written with their samples as subjects, a planned test w
   const [, , t1, t2] = env.world.ops;
   const n1 = env.world.ops[0].id;
   assert.deepEqual(t1.data, {
-    test_type: 'hardness', work_state: 'planned',
+    test_type: 'hardness', test_category: 'destructive', work_state: 'planned',
     subject: { create: [{ collection: 'physical_samples', item: n1 }, { collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(t2.data, {
-    test_type: 'tensile', session_date: '2026-10-21', work_state: 'done',
+    test_type: 'tensile', test_category: 'destructive', session_date: '2026-10-21', work_state: 'done', done_at: NOW.toISOString(), done_by_person_id: ID(70),
     subject: { create: [{ collection: 'physical_samples', item: ID(10) }] },
   });
   assert.deepEqual(res.body.data.created.t1, { collection: 'test_sessions', id: t1.id, code: 'T-3' });
@@ -1493,7 +1744,7 @@ const markDone = (env, body, user = ALICE) => env.call('POST', '/mark-done', { u
 function doneWorld(env) {
   seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11), outcome_notes: 'ok' })]);
   seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }, { person_id: ID(71), user_id: BOB }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }, { person_id: ID(71), user_id: BOB, is_researcher: true }];
 }
 
 test('mark-done: an operation turns done with its date, who and when, and its planned output turns active', async () => {
@@ -1529,6 +1780,13 @@ test('mark-done: the date defaults to today and who defaults to the caller\'s pe
   await markDone(named, { collection: 'manufacturing_operations', id: ID(40), personId: ID(71).toUpperCase() });
   assert.equal(named.world.ops[0].data.done_by_person_id, ID(71));
 
+  // the caller's person is the researcher row only: a People row that is not a researcher is not "who did it"
+  const plain = setup();
+  doneWorld(plain);
+  plain.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: false }];
+  await markDone(plain, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal('done_by_person_id' in plain.world.ops[0].data, false);
+
   const nobody = setup();
   doneWorld(nobody);
   nobody.world.people = [];
@@ -1546,7 +1804,7 @@ test('mark-done: the date defaults to today and who defaults to the caller\'s pe
 test('mark-done: a test turns done with its session date and has no output to change', async () => {
   const env = setup();
   seed(env.world, 'test_sessions', [testRow(50)]);
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }];
   const res = await markDone(env, { collection: 'test_sessions', id: ID(50), date: '2026-10-13' });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.deepEqual(env.world.ops.map((o) => o.collection), ['test_sessions']);
@@ -1595,29 +1853,76 @@ test('mark-done: a record that is done already is a 409 ALREADY_DONE; one the ca
   assert.deepEqual(env.world.ops, []);
 });
 
-test('mark-done: an update the caller may not make is a 403 and nothing is changed, even the first write', async () => {
+// A caller's own rights: the fake refuses a write of `collection` made with an accountability (the caller's), never one made
+// with system rights (accountability null), as Directus does.
+const refuseCaller = (...collections) => (op, collection, data, options) => {
+  if (collections.includes(collection) && options?.accountability) {
+    throw Object.assign(new Error('You do not have permission'), { status: 403, code: 'FORBIDDEN' });
+  }
+};
+
+test('mark-done (R10): someone who may edit the operation but not its samples still marks it done; the flip runs with system rights', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.failOn = refuseCaller('physical_samples');
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40), date: '2026-10-12' });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const trx = env.world.trx;
+  assert.deepEqual(env.world.ops.map((o) => [o.op, o.collection, o.id]), [
+    ['update', 'manufacturing_operations', ID(40)], ['update', 'physical_samples', ID(11)],
+  ], 'the operation first, then the sample');
+  const [opUpdate, flip] = env.world.ops;
+  assert.ok(opUpdate.accountability?.user === ALICE, 'the operation is updated as the caller');
+  assert.equal(flip.accountability, null, 'the flip runs with system rights');
+  assert.equal(flip.knex, trx, 'in the same transaction');
+  assert.deepEqual(flip.data, { current_status: 'active' }, 'it touches current_status only');
+  assert.equal(env.world.records.physical_samples.get(ID(11)).current_status, 'active');
+  assert.equal(env.world.records.manufacturing_operations.get(ID(40)).work_state, 'done');
+});
+
+test('mark-done (R10): someone who may not edit the operation is refused with 403 and nothing is written, the samples included', async () => {
+  const env = setup();
+  doneWorld(env);
+  const before = stateOf(env.world);
+  env.world.failOn = refuseCaller('manufacturing_operations');
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
+  assert.deepEqual(env.world.ops, [], 'the sample is never touched when the operation update is refused');
+  assert.equal(stateOf(env.world), before, 'the operation is still planned');
+  assert.deepEqual(env.cleared, []);
+
+  const guarded = setup();
+  doneWorld(guarded);
+  guarded.world.failOn = (op, collection) => {
+    if (collection === 'manufacturing_operations') throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can do that.' } });
+  };
+  const res2 = await markDone(guarded, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res2.statusCode, 403);
+  assert.equal(res2.body.errors[0].message, 'Only the owner can do that.');
+});
+
+test('mark-done (R10): a failure of the flip itself rolls the operation back too', async () => {
   const env = setup();
   doneWorld(env);
   const before = stateOf(env.world);
   env.world.failOn = (op, collection) => {
-    if (op === 'update' && collection === 'physical_samples') {
-      throw Object.assign(new Error('You do not have permission'), { status: 403, code: 'FORBIDDEN' });
-    }
+    if (collection === 'physical_samples') throw Object.assign(new Error('boom'), { code: '23514' });
   };
   const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
-  assert.equal(res.statusCode, 403);
-  assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
-  assert.equal(stateOf(env.world), before, 'the operation is still planned');
-  assert.deepEqual(env.cleared, []);
+  assert.equal(res.statusCode, 400);
+  assert.equal(stateOf(env.world), before);
+});
 
-  const first = setup();
-  doneWorld(first);
-  first.world.failOn = (op, collection) => {
-    if (collection === 'manufacturing_operations') throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can do that.' } });
-  };
-  const res2 = await markDone(first, { collection: 'manufacturing_operations', id: ID(40) });
-  assert.equal(res2.statusCode, 403);
-  assert.equal(res2.body.errors[0].message, 'Only the owner can do that.');
+test('mark-done (R10): what the sample form requires is still checked for an output the caller cannot read', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.required = [{ collection: 'physical_samples', field: 'mass_grams', translations: [{ language: 'en-US', translation: 'Mass' }] }];
+  env.world.hiddenIds.add(ID(11));
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(res.body.errors[0].extensions.checks.map((c) => [c.key, c.field, c.code]), [[ID(11), 'mass_grams', 'REQUIRED']]);
+  assert.deepEqual(env.world.ops, []);
 });
 
 test('mark-done: an output that is not planned (or no output) is left alone', async () => {
@@ -2131,7 +2436,7 @@ const OPS = 'manufacturing_operations';
 function cutWorld(env, state = 'planned', outputStatus = 'planned') {
   seed(env.world, 'physical_samples', [sampleRow(10), ...[11, 12, 13, 14].map((n) => sampleRow(n, { current_status: outputStatus }))]);
   seed(env.world, OPS, [11, 12, 13, 14].map((n) => opRow(n + 30, { sample_id: ID(10), output_sample_id: ID(n), work_state: state })));
-  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+  env.world.people = [{ person_id: PERSON, user_id: ALICE, is_researcher: true }];
 }
 const allIds = [41, 42, 43, 44].map(ID);
 
@@ -2246,9 +2551,14 @@ test('mark-done: the output samples it turns active must have what the sample fo
     { key: ID(14), field: 'form', level: 'block', code: 'REQUIRED', text: 'Form is required before the sample it makes can be made active.' },
   ]);
   assert.deepEqual(env.world.ops, []);
-  // an output the caller cannot read is left to the update; once filled in, it goes through
+  // an output the caller cannot read is checked all the same (R10: the flip runs with system rights, so the rule must hold for
+  // them too); once filled in, it goes through
   env.world.hiddenIds.add(ID(12));
   env.world.records.physical_samples.get(ID(14)).form = 'disc';
+  const hidden = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(hidden.statusCode, 409);
+  assert.deepEqual(hidden.body.errors[0].extensions.checks.map((c) => [c.key, c.field]), [[ID(12), 'material_id']]);
+  env.world.records.physical_samples.get(ID(12)).material_id = MATERIAL;
   const last = await markDone(env, { collection: OPS, ids: allIds });
   assert.equal(last.statusCode, 200, JSON.stringify(last.body));
 });
@@ -2271,6 +2581,21 @@ test('mark-planned: a done container goes back to planned in one transaction, it
   const r = await markPlanned(t, { collection: 'test_sessions', id: ID(50) });
   assert.deepEqual(r.body.data, { ids: [ID(50)], work_state: 'planned', id: ID(50) });
   assert.deepEqual(t.world.ops[0].data, { work_state: 'planned', session_date: null, done_by_person_id: null, done_at: null });
+});
+
+test('mark-planned (R10): the owner who may not edit the output sample still goes back to planned; the sample flips with system rights', async () => {
+  const env = setup();
+  cutWorld(env, 'done', 'active');
+  env.world.failOn = refuseCaller('physical_samples');
+  const res = await markPlanned(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const flips = env.world.ops.filter((o) => o.collection === 'physical_samples');
+  assert.equal(flips.length, 4);
+  for (const f of flips) {
+    assert.equal(f.accountability, null, 'the flip runs with system rights');
+    assert.deepEqual(f.data, { current_status: 'planned' }, 'it touches current_status only');
+  }
+  assert.ok(env.world.ops.filter((o) => o.collection === OPS).every((o) => o.accountability?.user === ALICE), 'the operations update as the caller');
 });
 
 test('mark-planned: refused (REMOVE_BLOCKED) while something done hangs off an output; the code is named only if the caller can read it', async () => {

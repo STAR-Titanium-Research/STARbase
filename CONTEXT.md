@@ -220,7 +220,8 @@ _Avoid_: node, operation card
 
 **Socket**:
 The round connector on the edge of a card or container where a wire starts or ends: inputs on the
-left, outputs on the right.
+left, outputs on the right. A card or container shows a socket for each wire it has plus one free one;
+a spare socket nobody uses is not kept.
 _Avoid_: node, port, handle, pin (a pin is a shortcut)
 
 **Wire**:
@@ -231,6 +232,30 @@ _Avoid_: edge, link, connection
 The process map's mode for building a process: adding cards and containers, wiring them and filling
 them in. A blank canvas is edit mode with nothing on it yet.
 _Avoid_: builder, node editor (for the mode)
+
+**Palette**:
+The side list of everything that can be added to the canvas: a sample, an operation by method, a test,
+a template. Each entry is dragged onto the canvas, onto a socket, or onto a wire.
+_Avoid_: toolbox, menu (the add search is the keyboard route to the same list)
+
+**Add search**:
+The type-to-search list that opens at the pointer (Shift+A or Ctrl/⌘+K) and offers what the palette
+offers, filtered to what fits where it was opened.
+_Avoid_: command palette, add menu
+
+**Insert**:
+To put an operation between the two ends of a **wire** (drop it on the wire), or before or after the
+selected card (I and Shift+I). One undoable step, and never on a wire of done records. Inserting
+**before** a sample that already exists as a record (done, or planned and saved) is refused: its
+history is recorded and can't change from the map. Start from a new sample instead.
+_Avoid_: splice, re-parent
+
+**Remove** / **Delete** / **Dissolve**:
+**Remove** takes a new or planned card, container or wire off the canvas; a planned record that was
+already created is deleted when the draft is created. **Delete** is the key that removes the selection.
+**Dissolve** removes a container and wires its input straight to its output. A done record can be
+neither removed nor dissolved.
+_Avoid_: hide, cut
 
 **Draft**:
 What someone has built in edit mode and not yet created. A draft is kept for its owner automatically,

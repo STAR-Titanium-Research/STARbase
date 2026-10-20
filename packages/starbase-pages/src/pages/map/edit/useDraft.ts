@@ -68,6 +68,8 @@ export function useDraft(options: UseDraftOptions = {}) {
 	const available = ref(false);
 	const probed = ref(false);
 	const probeError = ref('');
+	/** The server answered 403: this account may not build (a Lab Viewer). Treated like no d1-build, with its own words. */
+	const forbidden = ref(false);
 	/** My drafts (id, name, when, what is in it), as the last probe or refresh read them. */
 	const drafts = shallowRef<DraftListEntry[]>([]);
 
@@ -201,11 +203,14 @@ export function useDraft(options: UseDraftOptions = {}) {
 			const res = await api.get('/d1-build/drafts');
 			drafts.value = (res.data?.data ?? []) as DraftListEntry[];
 			available.value = true;
+			forbidden.value = false;
 			probeError.value = '';
 		} catch (e) {
 			available.value = false;
-			// 404: this server has no d1-build (STARbase deployed before d1-server). Anything else is a failure to ask.
-			probeError.value = status(e) === 404 ? '' : errorText(e, 'Could not reach the server.');
+			// 404: this server has no d1-build (STARbase deployed before d1-server). 403: this account may not build.
+			// Anything else is a failure to ask.
+			forbidden.value = status(e) === 403;
+			probeError.value = status(e) === 404 || status(e) === 403 ? '' : errorText(e, 'Could not reach the server.');
 		}
 		probed.value = true;
 		return available.value;
@@ -257,6 +262,8 @@ export function useDraft(options: UseDraftOptions = {}) {
 			serverChecks.value = [];
 			notice.value = '';
 			saveError.value = '';
+			// In My drafts at once: the list was read before this draft was made (spec 2026-10-18 §3, item 9).
+			drafts.value = [{ id: rec.id, name: rec.name, updated_at: rec.updated_at, summary: '' }, ...drafts.value.filter((d) => d.id !== rec.id)];
 			return rec.id;
 		} catch (e) {
 			saveError.value = errorText(e, 'Could not start a draft.');
@@ -300,13 +307,23 @@ export function useDraft(options: UseDraftOptions = {}) {
 	// ---- editing -------------------------------------------------------------------------------------
 
 	/** Does one action on the draft. A change is undoable and kept on the server; an action that changes nothing is no step. */
-	function apply(action: DraftAction): DraftBody {
+	function apply(action: DraftAction, opts?: { merge?: boolean; keepFuture?: boolean }): DraftBody {
+		return applyAll([action], opts);
+	}
+
+	/**
+	 * Several actions as one undoable step (a wire that needs a sample added first, every card moved by a re-layout). `merge` folds
+	 * the change into the step before it instead of making a new one (typing in a field: one step per field, not per key); `keepFuture`: what Redo
+	 * has is left (a layout's write, which is nobody's step: a person's own change ends Redo).
+	 */
+	function applyAll(actions: DraftAction[], opts?: { merge?: boolean; keepFuture?: boolean }): DraftBody {
 		// While Create runs the draft is what is being created: it does not change under it.
 		if (creating.value) return history.value.present;
 		const before = history.value.present;
-		const next = reduce(before, action);
+		const next = actions.reduce((b, a) => reduce(b, a), before);
 		if (next !== before) {
-			history.value = push(history.value, next);
+			const h = history.value;
+			history.value = opts?.merge && h.past.length ? { ...h, present: next, future: opts.keepFuture ? h.future : [] } : push(h, next);
 			dropStale(before, next);
 			schedule();
 		}
@@ -449,12 +466,12 @@ export function useDraft(options: UseDraftOptions = {}) {
 
 	return {
 		// whether edit mode exists on this server, and my drafts
-		available, probed, probeError, drafts, probe, refresh,
+		available, probed, probeError, forbidden, drafts, probe, refresh,
 		// the open draft
 		draftId, name, version, body, loading, saving, saveError, notice,
 		open, start, discard, forget, rename, flush,
 		// editing
-		apply, undo: undoStep, redo: redoStep,
+		apply, applyAll, undo: undoStep, redo: redoStep,
 		canUndo: computed(() => canUndo(history.value)),
 		canRedo: computed(() => canRedo(history.value)),
 		// checks

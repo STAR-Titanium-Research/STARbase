@@ -196,9 +196,12 @@ function openOf(ref: Ref, data: ProcessData): string | null | undefined {
   return undefined;
 }
 
-/** Where "Open record" goes for `info`; null when there is nowhere to go (the button is not drawn). */
+/** A card of an edit-mode draft: its id is `draft:<key>`, not a record that can be opened, mapped or expanded. */
+export const isDraftRef = (ref: Pick<Ref, 'id'>): boolean => ref.id.startsWith('draft:');
+
+/** Where "Open record" goes for `info`; null when there is nowhere to go (the button is not drawn), as for a draft card. */
 export const openPath = (info: Pick<RecordInfo, 'ref' | 'open'>): string | null =>
-  info.open === undefined ? recordPath(info.ref.collection, info.ref.id) : info.open;
+  isDraftRef(info.ref) ? null : info.open === undefined ? recordPath(info.ref.collection, info.ref.id) : info.open;
 
 /** A record shown inside a card's Inside tray: what kind it is and how many steps in the map use it. */
 function slotInfo(id: string, data: ProcessData, graph: ProcessGraph): RecordInfo | null {

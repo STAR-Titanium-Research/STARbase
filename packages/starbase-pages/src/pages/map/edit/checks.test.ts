@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Check, DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
-import { blocking, checks, checksFor, mergeChecks, missingText, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
+import { blocking, checks, checksFor, doneRequiredFields, mergeChecks, missingText, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()) => actions.reduce((b, a) => apply(b, a), from);
 const texts = (list: Check[], key?: string) => list.filter((c) => !key || c.key === key).map((c) => `${c.level}:${c.field ?? '-'}:${c.text}`);
@@ -154,6 +154,25 @@ describe('done work on a planned sample', () => {
 	});
 });
 
+describe('doneRequiredFields: the one list the rail shows and the checks ask for', () => {
+	const op = () => run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, workState: 'done', from: { key: 'n1' } }]);
+	it('is the fields marked required, less the wires, hidden and read-only fields, and what the draft supplies', () => {
+		const body = op();
+		const item = body.items[1];
+		expect(doneRequiredFields(item, body, defs!.manufacturing_operations).map((d) => d.field)).toEqual(['method_id', 'operation_date', 'feed_rate']);
+		expect(doneRequiredFields(item, body, undefined)).toEqual([]);
+		const withProject = [...(defs!.manufacturing_operations as FieldDef[]), { field: 'project_id', required: true, label: 'Project' }, { field: 'campaign_id', required: true, label: 'Campaign' }];
+		expect(doneRequiredFields(item, body, withProject).map((d) => d.field)).toEqual(['method_id', 'operation_date', 'feed_rate', 'project_id', 'campaign_id']);
+		const scoped = apply(apply(body, { type: 'setProject', projectId: 'p' }), { type: 'setCampaign', campaignId: 'c' });
+		expect(doneRequiredFields(scoped.items[1], scoped, withProject).map((d) => d.field)).toEqual(['method_id', 'operation_date', 'feed_rate']);
+	});
+	it('asks a record that exists only for what the draft changes', () => {
+		const body = op();
+		const item = { ...body.items[1], existing: { id: 'o', version: 1 }, values: { feed_rate: 1 } };
+		expect(doneRequiredFields(item, body, defs!.manufacturing_operations).map((d) => d.field)).toEqual(['feed_rate']);
+	});
+});
+
 describe('done records', () => {
 	const done = () => apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
 
@@ -185,6 +204,36 @@ describe('done records', () => {
 	it('a done test needs its required fields too', () => {
 		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, workState: 'done', from: { key: 'n1' } }]);
 		expect(texts(blocking(checks(b, ctx)))).toEqual(['block:session_date:Fill in Date: a done test needs it.']);
+	});
+
+	it('never asks for a reserved field or current_status: the server fills them and refuses a draft that sets one', () => {
+		const live: CheckCtx = {
+			...ctx,
+			fields: {
+				...defs,
+				physical_samples: [
+					{ field: 'current_status', required: true, label: 'Status' },
+					{ field: 'short_id', required: true },
+					{ field: 'code_sort', required: true },
+					{ field: 'restricted', required: true },
+					{ field: 'created_by', required: true },
+					{ field: 'version', required: true },
+					{ field: 'location', required: false },
+				],
+				manufacturing_operations: [{ field: 'work_state', required: true }, { field: 'batch_id', required: true }, { field: 'done_at', required: true }, { field: 'method_id', required: true }],
+				test_sessions: [{ field: 'insert_edge_id', required: true }, { field: 'subject', required: true }, { field: 'test_type', required: true }],
+			},
+		};
+		// A free sample (nothing makes it) can be created.
+		const free = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }]);
+		expect(blocking(checks(free, live))).toEqual([]);
+		const done = apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
+		expect(blocking(checks(done, live)).filter((c) => c.key === 'n4')).toEqual([]);
+		const op = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(blocking(checks(op, live)).map((c) => c.field)).not.toEqual(expect.arrayContaining(['work_state']));
+		const test = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(blocking(checks(test, live)).map((c) => c.field)).not.toContain('insert_edge_id');
+		expect(blocking(checks(test, live)).map((c) => c.field)).not.toContain('subject');
 	});
 
 	it('a free sample, and one made by a done operation, is an active record with its own required fields', () => {

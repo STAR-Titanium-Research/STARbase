@@ -37,6 +37,21 @@ export interface MapRouter {
   replace(to: { path: string; query: Record<string, string> }): unknown;
 }
 
+/**
+ * Edit mode's part in the map (spec §7.1): the draft is merged into the loaded data (toGraph) and drawn through buildGraph and ELK like
+ * any other record. Supplied by useEditMode; a map without edit mode passes none.
+ */
+export interface MapOverlay {
+  /** The draft is on the map (edit mode, or a draft opened read-only on a phone). */
+  active(): boolean;
+  /** A blank canvas: edit mode with no record to map, so the map is ready with only the draft on it. */
+  blank(): boolean;
+  /** The data with the draft merged in. `data` is null on a blank canvas. */
+  merge(data: ProcessData | null): ProcessData;
+  /** Nodes of the draft are always drawn, whatever the reach and the Show chips say. */
+  keep(node: MapNode): boolean;
+}
+
 export interface Selected {
   /** The record the rail shows. */
   ref: Ref;
@@ -51,7 +66,7 @@ function parseReach(v: string | undefined): Reach {
   return v === '1' || v === '2' || v === '3' ? (Number(v) as Reach) : DEFAULT_REACH;
 }
 
-export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) {
+export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter, overlay?: MapOverlay) {
   const gate = useRequestGate();
   if (getCurrentInstance()) onBeforeUnmount(() => gate.cancel());
 
@@ -165,6 +180,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const status = ref<MapStatus>('empty');
   const error = ref('');
   const data = shallowRef<ProcessData | null>(null);
+  /** What is drawn: the loaded data with the draft merged in (edit mode), else the loaded data itself. */
+  const shownData = computed<ProcessData | null>(() => (overlay?.active() && (data.value || !focus.value) ? overlay.merge(data.value) : data.value));
   const defs = shallowRef<DefsByKind>({ operation: FALLBACK_RELATIONS.operation, test: FALLBACK_RELATIONS.test, runtime: false });
   // What the person did to cards is kept under stable keys (model/viewState.ts), not node ids: the Probable
   // batches chip regroups rows into containers with other ids, and the person's work must survive that.
@@ -199,7 +216,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     error.value = '';
     const f = focus.value;
     if (!f) {
-      status.value = 'empty';
+      // A blank canvas (edit mode with nothing to map) is a map with only the draft on it.
+      status.value = overlay?.blank() ? 'ready' : 'empty';
       return;
     }
     const plan = focusPlan(f.collection);
@@ -242,10 +260,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     // Wires between the passes of an unstacked stack are drawn striped only while the chip would stack passes at all.
     return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded, unstackedGroups: stack.value ? unstackedGroups.value : [] });
   }
-  const graph = computed<ProcessGraph | null>(() => (data.value ? graphOf(data.value) : null));
+  const graph = computed<ProcessGraph | null>(() => (shownData.value ? graphOf(shownData.value) : null));
 
   const focusProjectId = computed(() => {
-    const d = data.value;
+    const d = shownData.value;
     if (!d) return null;
     const { kind, id } = d.focus;
     if (kind === 'sample') return d.samples.find((s) => s.id === id)?.projectId ?? null;
@@ -255,7 +273,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   });
   /** The node the map is focused on: the sample's card, the step's container (in whichever batch it is), the record a fan hangs from. */
   const focusNodeId = computed(() => {
-    const d = data.value;
+    const d = shownData.value;
     const g = graph.value;
     if (!d || !g) return '';
     const { kind, id } = d.focus;
@@ -266,7 +284,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   const fitted = computed(() => {
     const g = graph.value;
-    const d = data.value;
+    const d = shownData.value;
     if (!g || !d || !focusNodeId.value) return { ids: new Set<string>(), effective: reach.value, clamped: false };
     // What a fan lists is always drawn. A fan has no reach (it has no steps to count), so only fans are shown.
     const fans = fanNodeIds(d, g);
@@ -276,7 +294,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   });
   const effectiveReach = computed(() => fitted.value.effective);
   /** The banner "Showing part of this history" (spec D22). */
-  const partial = computed(() => !!data.value?.truncated || fitted.value.clamped || capped.value);
+  const partial = computed(() => !!shownData.value?.truncated || fitted.value.clamped || capped.value);
 
   const nodeById = computed(() => new Map((graph.value?.nodes ?? []).map((n) => [n.id, n])));
   /** The nodes of the graph the person revealed or opened, by their stable keys. */
@@ -287,7 +305,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   /** The cards a Show chip never hides: the focus, and the record each fan hangs from (a remembered "Tool" chip must not empty a tool's fan). */
   const pinned = computed(() => {
-    const d = data.value;
+    const d = shownData.value;
     const out = new Set<string>(focusNodeId.value ? [focusNodeId.value] : []);
     if (d) for (const f of [d.fan && { root: d.focus }, ...(d.sideFans ?? [])]) if (f) out.add(fanRootId(f.root));
     return out;
@@ -300,13 +318,15 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const n = nodeById.value.get(id);
       if (n?.type === 'record' && hiddenKinds.value.has(n.kind) && !pinned.value.has(id)) ids.delete(id);
     }
+    // What is in the draft is always drawn: it is what is being built, wherever it sits relative to the focus.
+    if (overlay?.active()) for (const n of graph.value?.nodes ?? []) if (overlay.keep(n)) ids.add(n.id);
     return ids;
   });
 
   /** The projects the loaded rows name, by id: what a card of another project is tagged with. */
   const projectRefs = computed(() => {
     const out = new Map<string, Ref>();
-    for (const row of [...(data.value?.operations ?? []), ...(data.value?.tests ?? [])]) {
+    for (const row of [...(shownData.value?.operations ?? []), ...(shownData.value?.tests ?? [])]) {
       const r = row.relations.project_id;
       if (r && r.code && !out.has(r.id)) out.set(r.id, r);
     }
@@ -327,7 +347,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   // ---- project frame (spec D13) -----------------------------------------------------------------
   /** The focus sample's project, named by an operation or test that carries it; null when no row does. */
   const project = computed(() => {
-    const d = data.value;
+    const d = shownData.value;
     const id = focusProjectId.value;
     if (!d || !id) return null;
     if (d.focus.kind === 'project') return d.focus;
@@ -341,7 +361,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   // ---- selection ----------------------------------------------------------------------------------
   /** The record behind an id of the actions: a node id, or a slot's `<collection>:<id>`. */
   function recordOf(id: string): Selected | null {
-    const d = data.value;
+    const d = shownData.value;
     const n = nodeById.value.get(id);
     if (n?.type === 'record') return { ref: n.ref, kind: n.kind };
     if (n?.type === 'container' && d) {
@@ -385,7 +405,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   // ---- what the rail and the hover card say --------------------------------------------------------
   /** What a record (a node id, or a record inside a card) is: facts, counts, data to ask about. Null when the map does not know it. */
-  const info = (id: string): RecordInfo | null => (data.value && graph.value ? recordInfo(data.value, graph.value, id) : null);
+  const info = (id: string): RecordInfo | null => (shownData.value && graph.value ? recordInfo(shownData.value, graph.value, id) : null);
   const selectedInfo = computed(() => (selectedId.value ? info(selectedId.value) : null));
   /** The selected record's connections, grouped for the rail. */
   const connections = computed<Connections>(() => (graph.value && selectedId.value ? connectionsOf(graph.value, selectedId.value) : {}));
@@ -438,14 +458,25 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     data.value = first;
   }
 
-  // Last, so that everything a load resets is there: it runs at once for a focus already in the address.
-  watch(focusKey, () => void load(), { immediate: true });
+  // Last, so that everything a load resets is there: it runs at once for a focus already in the address. A blank canvas turns
+  // into the search-first page when edit mode ends, and back: a different state of the same (missing) focus.
+  watch(
+    () => `${focusKey.value}|${overlay?.blank() ? 'blank' : ''}`,
+    () => void load(),
+    { immediate: true },
+  );
+
+  /** True when the sample is part of what the map loaded (a draft can also hold samples picked from the index, which are not). */
+  const inHistory = (id: string): boolean => !!data.value?.samples.some((x) => x.id === id);
 
   return {
     status,
     error,
     generation,
+    /** What was loaded for the focus (the record the map is of): null on a blank canvas. */
     data,
+    /** What is drawn: `data` with the draft merged in (edit mode), else `data` itself. The one place the overlay enters; the graph is built from it. */
+    overlaid: shownData,
     graph,
     shown,
     nodes,
@@ -477,6 +508,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     notice,
     expanding,
     takeMergeHints: expansion.takeMergeHints,
+    hintMerge: expansion.hint,
     toggleRows,
     toggleMore,
     moreOpen,
@@ -501,5 +533,6 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     hiddenSides,
     card,
     reload: load,
+    inHistory,
   };
 }

@@ -12,6 +12,7 @@ import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
 import { reslot } from './model/reslot';
 import { shownNodes } from './model/reach';
+import { structureKey } from './model/structureKey';
 import { socketOrder } from './model/socketOrder';
 import type { MapNode } from './model/types';
 import ContainerNode from './nodes/ContainerNode.vue';
@@ -26,6 +27,7 @@ import type { MergeHint } from './useMapExpand';
 import type { useProcessMap } from './useProcessMap';
 import { useElkLayout } from './useElkLayout';
 import { createMapTween, type TweenFrame } from './useMapTween';
+import { useMapSettle } from './useMapSettle';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
@@ -63,7 +65,26 @@ export function miniMapColor(node: { data?: MapNode }): string {
   return `var(${KINDS[kind].color})`;
 }
 
-export function useMapCanvas(map: ProcessMap) {
+/** What edit mode asks of the canvas (spec §7.2): where the draft says its cards are, and being told when one is moved. */
+export interface CanvasEdit {
+  /** The draft is on the map: a change that only alters what cards say is patched in place, with no new layout unless a card changed size. */
+  active?(): boolean;
+  /** Where the draft keeps a card (flow coordinates), when the person placed it; layout leaves such cards there. */
+  positionOf(node: MapNode): { x: number; y: number } | undefined;
+  /** A card was dragged and dropped (`from`: where it was when taken, so Undo has somewhere to bring it back to). */
+  moved(node: MapNode, at: { x: number; y: number }, from?: { x: number; y: number }): void;
+  /** Re-layout put every card where ELK wants it: the draft keeps those places (one change for all of them). */
+  relaid(cards: { node: MapNode; at: { x: number; y: number } }[]): void;
+  /** The card is the draft's own (a new item, or a sample the draft picked from the index): Tidy moves it, and nothing else. */
+  owned?(node: MapNode): boolean;
+  /**
+   * Cards the draft had a place for that were moved to clear another card (R6): the draft keeps the new places, folded into the step that
+   * added them (so undoing the add takes the place away with it).
+   */
+  settled?(cards: { node: MapNode; at: { x: number; y: number } }[]): void;
+}
+
+export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   const vf = useVueFlow();
   const { layout } = useElkLayout();
 
@@ -105,10 +126,14 @@ export function useMapCanvas(map: ProcessMap) {
   let pendingMerges: MergeHint[] = [];
   let pendingFull = true;
   let token = 0;
+  /** The next layout is Re-layout: cards the draft placed go where ELK puts them too, and the draft keeps those places. */
+  let free = false;
   /** Where the last layout put each node and how big it was then: for nodes that are rebuilt (hidden chips, folds) but were not dragged, and to tell cards that are new, or that grew. */
   const placed = new Map<string, Box>();
   /** Cards the person dragged this visit: they stay where they were dropped, whatever else changes, until Re-layout, a new direction or a new focus. */
   const dragged = new Set<string>();
+  /** Every card drawn this visit, also the ones taken away since: a card that comes back (Undo) is not new, and keeps the place the draft has for it. */
+  const seen = new Set<string>();
   /** The expand being drawn: new cards start at the card that was expanded instead of the origin. */
   let merging: MergeHint | null = null;
 
@@ -168,12 +193,6 @@ export function useMapCanvas(map: ProcessMap) {
     return { nodes, edges };
   }
 
-  /** The selected card is Vue Flow's `selected` (the components draw it focal); selection itself is the page's, not Vue Flow's. */
-  function syncSelection(): void {
-    const id = map.selectedId.value;
-    vf.applyNodeChanges(vf.getNodes.value.map((n) => ({ id: n.id, type: 'select' as const, selected: n.id === id })));
-  }
-
   /**
    * While a card or slot is hovered the nodes and wires that are not next to it dim, and its own wires
    * are highlighted (spec §6.3); hovering a wire or a socket only highlights wires. Classes on Vue Flow's
@@ -191,11 +210,53 @@ export function useMapCanvas(map: ProcessMap) {
     }
   }
 
+  /**
+   * Edit mode, a change that left the cards, sockets and wires as they were (a value typed into the form): the cards' data is replaced
+   * where it is. Vue Flow keeps its nodes, so nothing is measured again and ELK does not run, unless a card changed size (settleSizes).
+   */
+  function patchInPlace(): void {
+    const { nodes, edges } = elements();
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    for (const n of vf.getNodes.value) {
+      const next = byId.get(n.id);
+      if (!next) continue;
+      n.data = next.data;
+      n.ariaLabel = next.ariaLabel;
+    }
+    const wires = new Map(edges.map((e) => [e.id, e]));
+    for (const e of vf.getEdges.value) {
+      const next = wires.get(e.id);
+      if (next) e.data = next.data;
+    }
+  }
+  /** Typing makes a burst of patches: the sizes are looked at once, when it pauses. */
+  const SIZE_CHECK_MS = 150;
+  let sizeTimer: ReturnType<typeof setTimeout> | null = null;
+  function settleSizes(): void {
+    if (sizeTimer) clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => void checkSizes(), SIZE_CHECK_MS);
+  }
+  async function checkSizes(): Promise<void> {
+    sizeTimer = null;
+    if (busy()) return settleSizes(); // a layout is on its way: look again when it is done
+    const ids = vf.getNodes.value.map((n) => n.id);
+    if (!ids.length) return;
+    await nextTick();
+    vf.updateNodeInternals(ids);
+    await nextTick();
+    const changed = vf.getNodes.value.some((n) => {
+      const size = measuredSize(n);
+      const was = placed.get(n.id);
+      return !!size && !!was && (Math.abs(size.width - was.width) > 1 || Math.abs(size.height - was.height) > 1);
+    });
+    if (changed) await reflow();
+  }
+  if (getCurrentScope()) onScopeDispose(() => sizeTimer && clearTimeout(sizeTimer));
+
   function rebuild(): void {
     const { nodes, edges } = elements();
     vf.setNodes(nodes);
     vf.setEdges(edges);
-    syncSelection();
     applyFocus();
   }
 
@@ -205,13 +266,6 @@ export function useMapCanvas(map: ProcessMap) {
 
   /** Where every drawn card is now. */
   const currentPositions = (): Record<string, { x: number; y: number }> => Object.fromEntries(vf.getNodes.value.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
-  const median = (xs: number[]): number => {
-    if (!xs.length) return 0;
-    const s = [...xs].sort((a, b) => a - b);
-    const mid = s.length >> 1;
-    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-  };
-
   /**
    * Puts the sockets of every record and junction card in the order of their wires (model/socketOrder.ts), for cards at `positions`.
    * A card whose order changed is told to Vue Flow once (updateNodeInternals), after the DOM has the new order, so its wires meet the
@@ -242,44 +296,20 @@ export function useMapCanvas(map: ProcessMap) {
   }
 
 
-  /**
-   * ＋ or − on a card: the whole map as ELK puts it, moved so that the card pressed keeps its place (no jump across the map), and
-   * every card that was dragged stays where it was dropped (spec D18). With no such card left (a − that took it away) the cards that
-   * were already on the map keep their typical offset instead.
-   */
-  function fullAroundDragged(elk: Record<string, { x: number; y: number }>, graph: NonNullable<typeof map.graph.value>, sizes: Record<string, { width: number; height: number }>, anchors: string[]): Record<string, { x: number; y: number }> {
-    const dir = map.dir.value;
-    const here: Record<string, Box> = {};
-    for (const n of vf.getNodes.value) {
-      const was = placed.get(n.id);
-      if (was && dragged.has(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
-    }
-    // Where a card is: where the last layout sent it (a card still moving is not there yet, and a layout that arrives mid-way must not
-    // take that for its place: rapid ＋ and − would drift the map); a dragged card is where it is dropped.
-    const placeOf = (id: string): { x: number; y: number } | undefined => (dragged.has(id) ? undefined : placed.get(id)) ?? vf.findNode(id)?.position;
-    let shift = { x: 0, y: 0 };
-    const anchor = anchors.find((id) => elk[id] && placeOf(id));
-    if (anchor) {
-      const now = placeOf(anchor)!;
-      shift = { x: now.x - elk[anchor].x, y: now.y - elk[anchor].y };
-    } else {
-      const kept = vf.getNodes.value.filter((n) => placed.has(n.id) && !dragged.has(n.id) && elk[n.id]);
-      shift = { x: median(kept.map((n) => placed.get(n.id)!.x - elk[n.id].x)), y: median(kept.map((n) => placed.get(n.id)!.y - elk[n.id].y)) };
-    }
-    const moved = Object.fromEntries(Object.entries(elk).map(([id, p]) => [id, { x: p.x + shift.x, y: p.y + shift.y }]));
-    const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
-    return placeMerged({ elk: moved, sizes, placed: here, edges: wires, dir, anchors, pinned: dragged, exact: true });
-  }
-
-  async function runLayout(): Promise<void> {
+  /** Runs a job the export must wait for: a layout or a move in progress (`busy`). */
+  async function track<T>(job: () => Promise<T>): Promise<T> {
     running++;
     try {
-      await layoutOnce();
+      return await job();
     } finally {
       running--;
       notifySettled();
     }
   }
+  const runLayout = (): Promise<void> => track(layoutOnce);
+
+  const settle = useMapSettle({ vf, map, edit, layout, tween, placed, dragged, seen, atPlaced, measuredSize, allMeasured, busy, track, whenSettled, reorderSockets, currentPositions, layoutError });
+  settle.followStored();
 
   async function layoutOnce(): Promise<void> {
     const mine = ++token;
@@ -300,10 +330,13 @@ export function useMapCanvas(map: ProcessMap) {
       if (mine !== token) return; // a newer layout (or a new family) supersedes this one
       layoutError.value = '';
       let positions = elk;
+      // Re-layout (free): the cards the draft placed go where ELK puts them too, and the draft keeps those places.
+      const relaying = free;
+      free = false;
       const anchors = (merges ?? []).flatMap((m) => (m.anchor ? [m.anchor] : []));
       if (merges?.some((m) => m.full)) {
         // ＋ and −: the whole map is laid out again, round the cards that were dragged.
-        positions = fullAroundDragged(elk, graph, sizes, anchors);
+        positions = settle.fullAroundDragged(elk, graph, sizes, anchors);
       } else if (merges) {
         // Cards already placed stay where they are (a dragged one stays where it was dropped): only new cards, and cards a grown one pushed, move.
         const here: Record<string, Box> = {};
@@ -314,6 +347,32 @@ export function useMapCanvas(map: ProcessMap) {
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors, pinned: dragged });
       }
+      // Cards the person placed (dragged, or dropped from the add search) stay where the draft says, whatever ELK would do.
+      const stored = new Set<string>();
+      if (edit && !relaying) {
+        positions = { ...positions };
+        const own = stored;
+        const shifts: { id: string; dx: number; dy: number }[] = [];
+        for (const n of vf.getNodes.value) {
+          const at = edit.positionOf(n.data as MapNode);
+          if (!at) continue;
+          own.add(n.id);
+          const was = positions[n.id] ?? n.position;
+          shifts.push({ id: n.id, dx: at.x - was.x, dy: at.y - was.y });
+          positions[n.id] = at;
+        }
+        // A material, stock lot or powder batch only ever sits beside what it feeds: it goes along with that card.
+        const sources = new Set(graph.nodes.filter((m) => m.type === 'record' && ['material', 'stock_lot', 'powder_batch'].includes(m.kind)).map((m) => m.id));
+        for (const w of graph.wires) {
+          const src = nodeOfSocket(w.from);
+          const shift = shifts.find((x) => x.id === nodeOfSocket(w.to));
+          if (shift && sources.has(src) && !own.has(src) && positions[src]) positions[src] = { x: positions[src].x + shift.dx, y: positions[src].y + shift.dy };
+        }
+      }
+      // R6: nothing new lies on another card. A card that has no place of the draft's and is new here (or, in a first layout, that has no place
+      // of the draft's at all) steps to the nearest free slot beside what it is wired to if it would lie on another; the others stay exactly where
+      // they are. A place the draft had kept for a new card that is moved off is kept as the new one.
+      if (edit && !relaying) positions = settle.settleFresh(graph, positions, sizes, stored, !placed.size, merges);
       if (merges) {
         // A container that folded or unfolded: the cards on its sockets deal out the places they have, in the sockets' order (they glide there).
         for (const m of merges) {
@@ -342,6 +401,7 @@ export function useMapCanvas(map: ProcessMap) {
         const at = positions[n.id] ?? (merges ? n.position : undefined);
         const size = sizes[n.id];
         if (at && size) placed.set(n.id, { x: at.x, y: at.y, ...size });
+        seen.add(n.id);
       }
       // The sockets are put in the order of their wires for the places the cards are going to, before they move: the wires never cross on the way.
       await reorderSockets({ ...currentPositions(), ...positions });
@@ -350,6 +410,7 @@ export function useMapCanvas(map: ProcessMap) {
       if (mine !== token) return;
       await reorderSockets(currentPositions()); // (a card that was dragged mid-way, or a place that was cleared, can change the order again)
       if (mine !== token) return;
+      if (edit && relaying) edit.relaid(vf.getNodes.value.map((n) => ({ node: n.data as MapNode, at: { x: positions[n.id]?.x ?? n.position.x, y: positions[n.id]?.y ?? n.position.y } })));
       laidOut.value = true;
       if (needsFit) {
         needsFit = false;
@@ -363,14 +424,8 @@ export function useMapCanvas(map: ProcessMap) {
     }
   }
 
-  // Grabbing a card takes it out of the move (it follows the pointer, not the layout); letting go pins it (spec D18) and the sockets
-  // of the cards it is wired to may now be better the other way round.
   if (getCurrentScope()) onScopeDispose(() => tween.dispose()); // (a move that outlives the canvas would draw into a store that is gone)
-  vf.onNodeDragStart((e) => tween.cancel(e.nodes.map((n) => n.id)));
-  vf.onNodeDragStop((e) => {
-    for (const n of e.nodes) dragged.add(n.id);
-    void reorderSockets(currentPositions());
-  });
+  settle.watchDrags();
 
   /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merges`: the expands (spec §6.7) it is for, none for a full layout. */
   async function scheduleLayout(merges: MergeHint[] | null = null): Promise<void> {
@@ -390,6 +445,8 @@ export function useMapCanvas(map: ProcessMap) {
   vf.onNodesInitialized(() => {
     if (pending) void runLayout();
   });
+  /** A point of the window (client pixels) in the map's own coordinates: where a card added there is placed. */
+  const toFlow = (clientX: number, clientY: number): { x: number; y: number } => vf.screenToFlowCoordinate({ x: clientX, y: clientY });
 
   /**
    * Resolves true once no layout is waiting or running and no card is moving (the export must not photograph a map half-way to its
@@ -428,11 +485,12 @@ export function useMapCanvas(map: ProcessMap) {
     if (!g || !map.focusNodeId.value) return fitIds(undefined, animate);
     return fitIds([...shownNodes(g, map.focusNodeId.value, 1)], animate);
   }
-  /** Fit everything drawn (the Fit button). */
-  const fit = () => fitIds(undefined);
+  /** Fit everything drawn (the Fit button): after the sizes that are about to be looked at have been, and the layout they cause, or the frame is of cards about to move. */
+  const fit = async () => { if (sizeTimer) { clearTimeout(sizeTimer); await checkSizes(); } await whenSettled(); return fitIds(undefined); };
 
   /** Re-layout (spec D18): every card back where ELK puts it, including the ones that were dragged. */
   async function relayout(): Promise<void> {
+    free = true;
     dragged.clear();
     await scheduleLayout();
   }
@@ -450,6 +508,7 @@ export function useMapCanvas(map: ProcessMap) {
       needsFit = true;
       placed.clear();
       dragged.clear();
+      seen.clear();
       ordered.clear();
       tween.stop();
       token++;
@@ -471,10 +530,19 @@ export function useMapCanvas(map: ProcessMap) {
     return next ? { ...hint, anchor: next.id, from: hint.anchor } : hint;
   }
   let lastDir = map.dir.value;
+  let lastShape = '';
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
     const hints = map.takeMergeHints();
+    const shape = edit?.active?.() ? structureKey(map.nodes.value, map.graph.value?.wires ?? []) : '';
+    const same = !!shape && shape === lastShape;
+    lastShape = shape;
+    if (same && !turned && placed.size && vf.getNodes.value.length === map.nodes.value.length) {
+      patchInPlace();
+      settleSizes();
+      return;
+    }
     if (turned) dragged.clear();
     const merges = turned || !placed.size ? null : hints.map(reanchored);
     merging = merges?.find((m) => m.anchor) ?? null;
@@ -498,9 +566,21 @@ export function useMapCanvas(map: ProcessMap) {
     rebuild();
     merging = null;
     if (map.nodes.value.length) void scheduleLayout(merges);
+    // A new wire or a removed one adds a socket to a card or takes one away: where the sockets are is measured again once the layout is done.
+    if (edit?.active?.()) settleSizes();
   });
-  watch(() => map.selectedId.value, syncSelection);
   watch(() => map.focusOfHover.value, applyFocus);
+  // Edit mode: the selected card draws its free socket and the others on that side shift along the edge (and the card it leaves takes
+  // its spare away), but Vue Flow only knows where a socket is when it is told: measure the two cards once the DOM has them.
+  watch(
+    () => map.selectedId.value,
+    async (now, was) => {
+      if (!edit?.active?.()) return;
+      const ids = [now, was].filter((id): id is string => !!id && !!vf.findNode(id));
+      if (ids.length) await remeasure(...ids);
+      settleSizes(); // and every card once the dust has settled (a change of wires moves sockets as well)
+    },
+  );
   watch(
     () => map.centreRequest.value,
     (req) => {
@@ -558,5 +638,5 @@ export function useMapCanvas(map: ProcessMap) {
   /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
   const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy: settle.tidy, canTidy: settle.canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
 }

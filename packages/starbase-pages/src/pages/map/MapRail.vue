@@ -3,10 +3,12 @@ import { computed, ref } from 'vue';
 import { AppLink, RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, mapPath, sampleDims, type ElementRow } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
+import EditRailChecks from './edit/EditRailChecks.vue';
+import EditRailItem from './edit/EditRailItem.vue';
 import MaterialComposition from './MaterialComposition.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
-import { openPath, type RecordInfo } from './model/recordInfo';
+import { isDraftRef, openPath, type RecordInfo } from './model/recordInfo';
 import { focusPlan, kindOf } from './model/collections';
 import { KINDS, kindVar, statusKindOf } from './nodes/kinds';
 import { CARD_CAP, type Reach } from './model/reach';
@@ -38,6 +40,10 @@ const props = defineProps<{
 	reach: Reach;
 	/** The reach actually drawn: fewer steps than `reach` when the card cap clamped it (spec D22). */
 	drawnReach?: Reach;
+	/** The selected card is a planned operation or test that can be marked done (E6): the button shows, in view mode and on phones too. */
+	canMarkDone?: boolean;
+	/** The selected card is a done operation or test: Back to planned shows (the server decides who may; a refusal is said on the page). */
+	canMarkPlanned?: boolean;
 }>();
 const emit = defineEmits<{
 	expand: [];
@@ -48,9 +54,13 @@ const emit = defineEmits<{
 	setProbable: [on: boolean];
 	setStack: [on: boolean];
 	setReach: [reach: Reach];
+	markDone: [];
+	markPlanned: [];
 }>();
 
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
+/** A card of an edit-mode draft: not a record yet, so nothing to expand (Open record and the map of it are hidden by their own rules). */
+const isDraft = computed(() => !!props.info && isDraftRef(props.info.ref));
 /** Where Open record goes: the record's page, the Force dashboard for Force data, the file library for a file; none, no button. */
 const openTo = computed(() => (props.info ? openPath(props.info) : null));
 /**
@@ -59,7 +69,7 @@ const openTo = computed(() => (props.info ? openPath(props.info) : null));
  */
 const mapTo = computed(() => {
 	const ref = props.info?.ref;
-	if (!ref || props.info?.batch || !focusPlan(ref.collection)) return null;
+	if (!ref || isDraftRef(ref) || props.info?.batch || !focusPlan(ref.collection)) return null;
 	if (props.focus && props.focus.collection === ref.collection && props.focus.id === ref.id) return null;
 	return mapPath(ref.collection, ref.id);
 });
@@ -129,8 +139,10 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			<template #actions>
 				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
 				<AppLink v-if="mapTo" :to="mapTo" class="pm-maplink" :title="mapLabel"><v-icon name="account_tree" small left /><span class="pm-maplabel">{{ mapLabel }}</span></AppLink>
-				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
+				<v-button v-if="onMap && !isDraft" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
+				<v-button v-if="canMarkDone" small @click="emit('markDone')"><v-icon name="done" small left />Mark done</v-button>
+				<v-button v-if="canMarkPlanned" small secondary @click="emit('markPlanned')"><v-icon name="undo" small left />Back to planned</v-button>
 			</template>
 			<template v-if="drawable || (preview && preview.kind !== 'none') || showComposition" #extra>
 				<SampleGeometry v-if="drawable" :dims="dims" aria-hidden="true" />
@@ -139,6 +151,10 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			</template>
 		</RecordRail>
 		<div v-else class="pm-none">Select a record on the map to see it here.</div>
+
+		<!-- Edit mode (spec §7.1): the form of the selected draft item, and Checks above Connections. Each draws nothing outside edit mode. -->
+		<EditRailItem />
+		<EditRailChecks />
 
 		<Section title="Connections" :count="total" class="pm-conn" :empty="!total" empty-text="Nothing else is connected in what is loaded.">
 			<template v-for="g in groups" :key="g.group">

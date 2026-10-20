@@ -794,26 +794,52 @@ describe('buildGraph: planned work and drafts', () => {
     expect(container(build(data), 'test:t').planned).toBe(true);
   });
 
-  it('a draft pass in place joins the stack of passes the recorded ones make, and draft samples carry the draft flag', () => {
+  it('a draft pass in place joins a stack of draft passes, not the recorded done ones (planned and done stay apart), and draft samples carry the draft flag', () => {
     const pass = (id: string, day: number, p: Parameters<typeof mkOp>[0] = {}) =>
       mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, ...p });
-    // Two recorded passes, and a third drawn from the draft: planned, no date of its own, no batch, no output.
+    // Two recorded passes, and two drawn from the draft: planned, no date of its own, no batch, no output.
     const data = mkData({
       samples: [mkSample('s1'), mkSample('d1', { draft: true })],
-      operations: [pass('a', 1), pass('b', 2), pass('c', 3, { date: null, workState: 'planned', draft: true })],
+      operations: [pass('a', 1), pass('b', 2), pass('c', 3, { date: null, workState: 'planned', draft: true }), pass('d', 4, { date: null, workState: 'planned', draft: true })],
     });
     const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
-    const stack = container(g, 'stack:a,b,c');
-    expect(stack).toMatchObject({ stacked: true, title: '3 passes' });
-    // Mixed recorded and draft: neither flag on the stack as a whole.
-    expect(stack.planned).toBeUndefined();
-    expect(stack.draft).toBeUndefined();
+    expect(container(g, 'stack:a,b')).toMatchObject({ stacked: true, title: '2 passes' });
+    expect(container(g, 'stack:a,b').planned).toBeUndefined();
+    const planned = container(g, 'stack:c,d');
+    expect(planned).toMatchObject({ stacked: true, planned: true, draft: true });
     expect(record(g, 's:d1').draft).toBe(true);
     expect(record(g, 's:s1').draft).toBeUndefined();
+  });
+
+  it('a planned recorded pass beside done passes is a container of its own, planned, so Mark done is offered', () => {
+    const pass = (id: string, day: number, p: Parameters<typeof mkOp>[0] = {}) =>
+      mkOp({ id, sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: `2026-09-0${day}T09:00:00Z`, ...p });
+    const data = mkData({ samples: [mkSample('s1')], operations: [pass('a', 1), pass('b', 2), pass('c', 3, { workState: 'planned' })] });
+    const g = buildGraph(data, groupBatches(data.operations, data.tests, { probable: true, stack: true }), { slots });
+    expect(container(g, 'stack:a,b').planned).toBeUndefined();
+    expect(container(g, 'op:c')).toMatchObject({ planned: true });
+    expect(container(g, 'op:c').stacked).toBeFalsy();
   });
 
   it('a container of draft rows only is a draft container', () => {
     const data = mkData({ samples: sam('s1'), operations: [mkOp({ id: 'n', sampleId: 's1', draft: true, workState: 'planned' })] });
     expect(container(build(data), 'op:n')).toMatchObject({ draft: true, planned: true });
+  });
+
+  it('a draft operation or test with no sample wired yet is drawn (a blank container), a recorded one with none is not', () => {
+    const data = mkData({
+      samples: sam('s1'),
+      operations: [mkOp({ id: 'blank', methodName: 'Turning', draft: true, workState: 'planned' }), mkOp({ id: 'orphan', methodName: 'Turning' })],
+      tests: [mkTest({ id: 'tb', testType: 'Tensile', draft: true, workState: 'planned' }), mkTest({ id: 'to', testType: 'Tensile' })],
+    });
+    const g = build(data);
+    const blank = container(g, 'op:blank');
+    expect(blank).toMatchObject({ draft: true, method: 'Turning' });
+    // One row, no sample in: an output socket nothing is wired to, and no input socket to draw.
+    expect(blank.rows).toEqual([{ recordId: 'blank', out: 'op:blank:out:0' }]);
+    expect(container(g, 'test:tb').rows).toEqual([{ recordId: 'tb', out: 'test:tb:out:0' }]);
+    expect(g.nodes.some((n) => n.id === 'op:orphan' || n.id === 'test:to')).toBe(true); // the container is drawn either way...
+    expect(container(g, 'op:orphan').rows).toEqual([]); // ...but a recorded row with no sample has nothing to draw
+    expect(container(g, 'test:to').rows).toEqual([]);
   });
 });

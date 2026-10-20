@@ -45,9 +45,8 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 
 <template>
 	<ExplorerView title="Projects">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Projects</span></nav>
-
 			<div class="filters">
 				<label class="field search">
 					<span>Search</span>

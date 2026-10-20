@@ -30,8 +30,8 @@ const tabTo = (id: TabId) => (id === 'force' ? '/crawler' : `/crawler?tab=${id}`
 
 <template>
 	<ExplorerView :title="title">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ title }}</span></nav>
 			<p v-if="access === 'checking'" class="d1-note" role="status">Checking your access…</p>
 			<p v-else-if="access === 'denied'" class="d1-note warn" role="alert" data-test="crawler-admins-only">
 				Admins only. The Force Crawler controls the host's .mat processing queue; ask an administrator if you need something changed.

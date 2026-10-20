@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-deploy-endpoint",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Admin-only proxy from the Deploy page to the host-side deploy agent (infra/deploy-agent). Injects the agent token and the signed-in admin's id so neither is chosen by the browser.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

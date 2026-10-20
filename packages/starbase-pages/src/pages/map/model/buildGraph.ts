@@ -148,7 +148,8 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         // A branch is decided from the row itself, not from what is loaded: the pieces a cut made that are
         // outside the family (the siblings of the piece the map opened on) are still pieces, not in-place work.
         const output = op.outputSampleId && op.outputSampleId !== op.sampleId ? op.outputSampleId : null;
-        if (!input && !(output && knownSamples.has(output))) continue; // nothing to draw a row for
+        // Nothing to draw a row for. A draft operation with no sample wired yet is still drawn (edit mode: a blank container with free sockets).
+        if (!input && !(output && knownSamples.has(output)) && !op.draft) continue;
         p = {
           rec: op,
           kind: 'operation',
@@ -161,7 +162,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         const test = testById.get(id);
         if (!test) continue;
         const subjects = [...new Set(test.subjectSampleIds.map(known).filter((s): s is string => !!s))];
-        if (!subjects.length) continue;
+        if (!subjects.length && !test.draft) continue; // a draft test with no sample yet is drawn all the same (edit mode)
         p = {
           rec: test,
           kind: 'test',
@@ -303,6 +304,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       probable: !!group.batch && !group.batch.recorded,
       ...(records.length && records.every((r) => r.workState === 'planned') ? { planned: true as const } : {}),
       ...(records.length && records.every((r) => r.draft) ? { draft: true as const } : {}),
+      ...(records.length && records.every((r) => r.removing) ? { removing: true as const } : {}),
     });
   }
 
@@ -441,6 +443,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       projectId: s.projectId,
       ...(s.status === 'planned' ? { planned: true as const } : {}),
       ...('draft' in s && s.draft ? { draft: true as const } : {}),
+      ...('removing' in s && s.removing ? { removing: true as const } : {}),
     };
   });
 

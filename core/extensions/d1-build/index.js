@@ -19,17 +19,23 @@
 //                                              (everything is rolled back, the draft is untouched)
 //   POST   /d1-build/mark-done {collection, ids (1 to 100 of one collection) | id, date?, personId?}
 //                                           -> { data: { ids, work_state: 'done' } }  (one transaction, all or nothing; a single `id` request
-//                                              also gets `id`; 409 CHECKS as above, 409 ALREADY_DONE)
+//                                              also gets `id`; 409 CHECKS as above, 409 ALREADY_DONE). Whoever may edit the operation may mark
+//                                              it done (R10): the operation updates as the caller, then its planned output samples turn active
+//                                              with SYSTEM rights (accountability null, same transaction), current_status only.
 //   POST   /d1-build/mark-planned {collection, ids | id} -> { data: { ids, work_state: 'planned' } }  (owner or admin only through the access
 //                                              guard; clears the date, done_by and done_at; planned output samples go back to planned unless
 //                                              something done hangs off them: 409 CHECKS REMOVE_BLOCKED; 409 ALREADY_PLANNED)
 //   GET    /d1-build/templates              -> { data: [{ id, name, scope, role_id, collection, values, user_id, updated_at, version }] }
 //   GET    /d1-build/templates/:id, POST /d1-build/templates, PATCH /d1-build/templates/:id, DELETE /d1-build/templates/:id
+//   POST /d1-build/drafts/:id/create also answers 422 { errors: [{ extensions: { code: 'NO_RESEARCHER' } }] } (message "Your account isn't linked to a
+//   researcher record. Ask an admin.") when it would make records for a caller with no People row that has is_researcher = true (R11b).
 //   Check = { key: DraftKey (or a record id for mark-done); field?: string; level: 'block' | 'warn'; code: CheckCode; text: string }
 //   CheckCode (CHECK_CODES) is a stable reason to branch on: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION (reserved:
 //   no check says it yet, a refused write is WRITE_FAILED), REQUIRED, STRUCTURE, OTHER.
 //
-// Every route needs a signed-in user (401 otherwise). Errors have the Directus shape
+// Every route needs a signed-in user (401 otherwise). Every route EXCEPT mark-done also needs the right to create manufacturing_operations
+// (R11, ADR-0018 amendment): an account without it (a Lab Viewer) gets 403 { errors: [{ extensions: { code: 'FORBIDDEN' } }] } from all of
+// them, the drafts list included, which is how STARbase knows to hide edit mode. Errors have the Directus shape
 // { errors: [{ message, extensions: { code, source: 'd1-build', ... } }] }.
 //
 // How it runs (the d1-record-access and d1-people-admin pattern):
@@ -43,6 +49,10 @@
 //     after a commit when CACHE_ENABLED is on (knex writes bypass the services that do it).
 //   * Testable without Directus: mount(router, { database, services, getSchema, logger, env }, clock) takes everything it uses,
 //     and the pure parts are exported (validateDraftBody, summarise, orderOperations, buildPlan, computeChecks ...).
+//
+// Inherited fields (ADR-0018 amendment): a draft runs none of the form interfaces, so Create fills in what they would: a new test's
+// test_category (from its test_type, TEST_CATEGORY, the d1-test-category table) and a new operation's material_id (from the sample it
+// works on, d1-material-inherit). A value the card carries is never overridden.
 //
 // Naming of keys: a DraftKey names an item (a sample, an operation, a test). An operation's `rows` (one per output piece) have
 // their own keys; `created` holds one entry per created record: a sample or test under its item key, an operation under each of
@@ -64,6 +74,22 @@ export const ALIAS_ALLOWED = { physical_samples: [], manufacturing_operations: [
 export const MAX_RECORDS = 500;
 export const WORK_STATES = ['planned', 'done'];
 export const KINDS = ['sample', 'operation', 'test'];
+
+// What a test's category is, from its type: a COPY of the d1-test-category form interface's own table (TYPE_TO_CAT in
+// core/extensions/d1-test-category/src/TestCategory.vue). The generated form there fills the category in as you pick the type;
+// a draft never runs that interface, so Create does it (ADR-0018 amendment). The test file reads the interface's table and fails
+// when the two differ, so change both together. A type that is not listed is 'other'; no type, no category.
+export const TEST_CATEGORY = {
+  optical_microscopy: 'nde', sem: 'nde', tem: 'nde', xrd: 'nde',
+  alicona: 'nde', clemx: 'nde', dct: 'nde', ct_scan: 'nde',
+  tensile: 'destructive', hardness: 'destructive', charpy: 'destructive',
+  compression: 'destructive', tribology: 'destructive',
+  fatigue: 'dynamic', creep: 'dynamic', dma: 'dynamic',
+};
+export const testCategoryOf = (testType) => {
+  if (isBlank(testType)) return null;
+  return Object.hasOwn(TEST_CATEGORY, testType) ? TEST_CATEGORY[testType] : 'other';
+};
 
 // What each kind of item makes.
 export const KIND_COLLECTION = { sample: 'physical_samples', operation: 'manufacturing_operations', test: 'test_sessions' };
@@ -347,9 +373,22 @@ export const SQL = {
     + ' version = version + 1, updated_at = now() WHERE template_id = ? AND version = ?'
     + ' RETURNING template_id, user_id, scope, role_id, name, collection, values, version, updated_at',
   deleteTemplate: 'DELETE FROM d1_private.process_templates WHERE template_id = ?',
-  // Mark done: is this person there, and which person is the caller (a researcher's row first, as d1-owner-default does).
+  // R11: may this caller create manufacturing_operations? Directus's own rule, read from its tables: a policy of the caller (their
+  // own, their role's or a parent role's, or the public one) that is an admin policy or has a create permission row on the
+  // collection. Bindings: the caller's role ids as one comma-separated text (empty: none), the caller.
+  mayCreateOperations:
+    'WITH RECURSIVE tree AS (SELECT id, parent, 0 AS depth FROM directus_roles'
+    + " WHERE id = ANY(string_to_array(?, ',')::uuid[])"
+    + ' UNION ALL SELECT r.id, r.parent, t.depth + 1 FROM directus_roles r JOIN tree t ON r.id = t.parent WHERE t.depth < 20)'
+    + ' SELECT EXISTS (SELECT 1 FROM directus_access a JOIN directus_policies p ON p.id = a.policy'
+    + ' WHERE (a."user" = ? OR a.role IN (SELECT id FROM tree) OR (a."user" IS NULL AND a.role IS NULL))'
+    + ' AND (p.admin_access OR EXISTS (SELECT 1 FROM directus_permissions x WHERE x.policy = p.id'
+    + " AND x.collection = 'manufacturing_operations' AND x.action = 'create'))) AS allowed",
+  // Is this person there, and which person is the caller: their RESEARCHER row, the lookup d1-owner-default makes to own a new record
+  // (people.user_id = the login and is_researcher = true). Create refuses a caller without one (R11b) and Mark done records them as
+  // who did it by the same rule.
   personExists: 'SELECT person_id FROM people WHERE person_id = ?',
-  personOfUser: 'SELECT person_id FROM people WHERE user_id = ? ORDER BY is_researcher DESC, person_id LIMIT 1',
+  personOfUser: 'SELECT person_id FROM people WHERE user_id = ? AND is_researcher = true ORDER BY person_id LIMIT 1',
   // The code the triggers gave a new record.
   codeOf: {
     physical_samples: 'SELECT sample_code AS code FROM physical_samples WHERE sample_id = ?',
@@ -677,6 +716,10 @@ export function buildPlan(body, ctx = {}) {
     return out;
   };
 
+  // What a new operation inherits from the sample it works on, as the d1-material-inherit form interface does: the material. The
+  // generated form runs no interface, so Create fills it in unless the card has its own (ADR-0018 amendment).
+  for (const r of records) if (r.mode === 'new' && r.input) r.material = sampleValues(r.input).material_id ?? undefined;
+
   const samples = [];
   for (const item of [...items].sort((a, b) => keyOrder(a.key, b.key))) {
     if (item.kind !== 'sample' || !isNew(item) || !live(item) || byKey.get(item.key) !== item) continue;
@@ -705,15 +748,23 @@ export function buildPlan(body, ctx = {}) {
     if (stateOf(item) === 'done' && subjectRefs.some(plannedSample)) block(item.key, SAMPLE_PLANNED);
     if (isBlank(item.values.test_type)) block(item.key, 'Choose a test type.', 'test_type');
     if (!subjectRefs.length) block(item.key, 'Wire a sample into this test.', 'subject');
-    tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs });
+    tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs, category: testCategoryOf(item.values.test_type) });
   }
 
   // -- required for done, and the warnings ----------------------------------------------------------------------------------
+  // The card's values and what Create fills in from them (a test's category, an operation's material), so a field the server
+  // inherits itself is not asked for.
+  const withInherited = (item) => {
+    if (item.kind === 'test') return { test_category: testCategoryOf(item.values.test_type), ...item.values };
+    if (item.kind === 'operation') return { material_id: records.find((r) => r.itemKey === item.key && r.material)?.material, ...item.values };
+    return item.values;
+  };
   const needDone = (kind, collection, item) => {
     if (stateOf(item) !== 'done') return;
+    const values = withInherited(item);
     for (const { field, label } of required[collection] ?? []) {
       if (RESERVED_FIELDS[kind].includes(field) || blockedFields.has(`${item.key}|${field}`)) continue;
-      if (isBlank(item.values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
+      if (isBlank(values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
     }
   };
   for (const item of items) {
@@ -919,10 +970,20 @@ export function mount(router, context, clock = () => new Date()) {
     });
   };
   // Routes: need a signed-in user, hand the handler the request, turn every failure into a Directus-shaped answer.
-  const route = (fn) => async (req, res) => {
+  // R11: building (drafts, checks, Create, templates, Mark planned) needs the right to create operations, so an account that only
+  // reads (a Lab Viewer) is told so up front and STARbase hides edit mode, instead of drafting and failing at Create.
+  // Mark done is the exception: whoever may edit the operation may mark it done (the access rules decide, not this).
+  // Administrators are not asked. A failed question is a failure (500), never a yes.
+  async function mayBuild(acc) {
+    if (acc.admin === true) return true;
+    const [row] = rowsOf(await database.raw(SQL.mayCreateOperations, [rolesOf(acc).join(','), String(acc.user)]));
+    return row?.allowed === true;
+  }
+  const route = (fn, { build = true } = {}) => async (req, res) => {
     try {
       const acc = req.accountability;
       if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
+      if (build && !(await mayBuild(acc))) throw new HttpError(403, 'FORBIDDEN', 'Your account may not build processes.');
       await fn({ req, res, acc });
     } catch (err) {
       sendError(res, err);
@@ -1307,6 +1368,8 @@ export function mount(router, context, clock = () => new Date()) {
     // All of them, in ONE transaction: all done or none.
     await inTransaction(acc, async (trx) => {
       const svc = (c) => itemsFor(schema, req.accountability, c, trx);
+      // System rights (accountability null), in the same transaction: for the one write the caller's rights do not cover.
+      const systemSvc = (c) => itemsFor(schema, null, c, trx);
       const recs = await readContainers(svc, trx, collection, ids);
       if (recs.some((r) => r.state !== 'planned')) throw new HttpError(409, 'ALREADY_DONE', recs.length > 1 ? 'One of those records is already marked done.' : 'That record is already marked done.');
       const checks = [];
@@ -1333,8 +1396,9 @@ export function mount(router, context, clock = () => new Date()) {
           checks.push({ key: id, level: 'block', code: 'STRUCTURE', text: 'Its sample is still planned; mark the operation that makes it done first.' });
         }
       }
-      // An operation's planned output turns active, so what the sample's form marks required must be there too (as the caller
-      // reads it; an output they cannot read is left to the update, which will refuse it).
+      // An operation's planned output turns active, so what the sample's form marks required must be there too. The sample is read
+      // with system rights, like the flip itself (R10): the caller may edit the operation without being able to read its sample,
+      // and the rule must hold for them as for anyone. Only the label of a missing field is ever said, never a value.
       const outputs = new Map(); // record id -> output sample id
       if (collection === 'manufacturing_operations') {
         for (const { id, rec } of recs) {
@@ -1346,7 +1410,7 @@ export function mount(router, context, clock = () => new Date()) {
           outputs.set(id, sid);
           let row = null;
           try {
-            row = await svc('physical_samples').readOne(sid, { fields: ['*'] });
+            row = await systemSvc('physical_samples').readOne(sid, { fields: ['*'] });
           } catch (err) {
             if (!isDenied(err)) throw err;
           }
@@ -1370,11 +1434,18 @@ export function mount(router, context, clock = () => new Date()) {
       const day = b.date ?? clock().toISOString().slice(0, 10);
       const data = { work_state: 'done', [dateField]: `${day}T00:00:00.000Z`, done_at: clock().toISOString() };
       if (person) data.done_by_person_id = person;
-      // Each record first (the caller's update rule decides), then its planned output turns active: what makes a sample first.
+      // Each record first (the caller's update rule decides: whoever may edit the operation may mark it done), then its planned
+      // output turns active with system rights (R10, ADR-0019 amendment): editing an operation does not imply editing its samples.
+      // It only runs once the operation's own update went through, and it touches current_status and nothing else.
       for (const { id } of collection === 'manufacturing_operations' ? inOrder(recs) : recs) {
         try {
           await svc(collection).updateOne(id, data);
-          if (outputs.has(id)) await svc('physical_samples').updateOne(outputs.get(id), { current_status: 'active' });
+        } catch (err) {
+          throw refused(err);
+        }
+        if (!outputs.has(id)) continue;
+        try {
+          await systemSvc('physical_samples').updateOne(outputs.get(id), { current_status: 'active' });
         } catch (err) {
           throw refused(err);
         }
@@ -1382,7 +1453,7 @@ export function mount(router, context, clock = () => new Date()) {
     });
     await clearDataCache(req);
     res.json({ data: answer(ids, 'done', single) });
-  }));
+  }, { build: false }));
 
   // Back to planned: one transaction for the whole container. The access guard (owner or admin) is the rule, run by ItemsService
   // for each record; the output samples go back to planned unless something done hangs off them.
@@ -1431,10 +1502,18 @@ export function mount(router, context, clock = () => new Date()) {
       }
       if (checks.length) throw new HttpError(409, 'CHECKS', 'Something done depends on this, so it cannot go back to planned.', { checks });
       const data = { work_state: 'planned', [dateField]: null, done_by_person_id: null, done_at: null };
+      // As for Mark done (R10): the record's own update runs as the caller (the access guard's owner rule decides), then its output
+      // sample goes back to planned with system rights, current_status only: owning an operation does not imply editing its samples.
+      const systemSvc = (c) => itemsFor(schema, null, c, trx);
       for (const { id } of recs) {
         try {
           await svc(collection).updateOne(id, data);
-          if (back.has(id)) await svc('physical_samples').updateOne(back.get(id), { current_status: 'planned' });
+        } catch (err) {
+          throw refused(err);
+        }
+        if (!back.has(id)) continue;
+        try {
+          await systemSvc('physical_samples').updateOne(back.get(id), { current_status: 'planned' });
         } catch (err) {
           throw refused(err);
         }
@@ -1458,6 +1537,14 @@ export function mount(router, context, clock = () => new Date()) {
       if (!valid.ok) throw new HttpError(400, 'INVALID_PAYLOAD', valid.message);
       const ctx = await loadContext(req, body, { db: trx, knex: trx, lock: true });
       const { checks, plan } = buildPlan(body, ctx);
+      // R11b: no ownerless records. d1-owner-default owns a new record to the caller's researcher row and leaves it blank when they
+      // have none, which hides the record from its own creator (ADR-0011), so refuse before anything is written, and say why.
+      // Only a Create that makes records needs an owner: edits, attaches and removals do not.
+      const makes = plan.samples.length > 0 || plan.tests.length > 0 || plan.operations.some((r) => r.mode === 'new');
+      const researcher = rowsOf(await trx.raw(SQL.personOfUser, [acc.user]))[0]?.person_id ?? null;
+      if (makes && !researcher) {
+        throw new HttpError(422, 'NO_RESEARCHER', "Your account isn't linked to a researcher record. Ask an admin.");
+      }
       if (checks.some((c) => c.level === 'block')) {
         throw new HttpError(409, 'CHECKS', 'Some things are missing, so nothing was created.', { checks });
       }
@@ -1483,6 +1570,14 @@ export function mount(router, context, clock = () => new Date()) {
         const [r] = rowsOf(await trx.raw(SQL.codeOf[collection], [idValue]));
         created[key] = { collection, id: idValue, code: r?.code ?? null };
       };
+      // R9, done at Create: who and when, as Mark done records them, and today when the person gave no date.
+      const doneStamp = (workState, dateField, values) => {
+        if (workState !== 'done') return {};
+        const stamp = { done_at: clock().toISOString() };
+        if (isBlank(values[dateField])) stamp[dateField] = `${clock().toISOString().slice(0, 10)}T00:00:00.000Z`;
+        if (researcher) stamp.done_by_person_id = researcher;
+        return stamp;
+      };
       const project = (values) => (isBlank(values.project_id) ? (body.projectId ?? undefined) : values.project_id);
       const campaign = (values) => (isBlank(values.campaign_id) ? (body.campaignId ?? undefined) : values.campaign_id);
 
@@ -1505,7 +1600,9 @@ export function mount(router, context, clock = () => new Date()) {
       // 4. New samples, in key order (the code trigger numbers them in this order).
       for (const s of plan.samples) {
         const data = cleanValues(s.values);
-        if (s.planned) data.current_status = 'planned';
+        // Made by a planned operation: planned. Made by one that is done (R9: done at Create), or by none: active, said outright
+        // rather than left to the column default, so a draft's done work never leaves a planned piece behind.
+        data.current_status = s.planned ? 'planned' : 'active';
         const newId = await attempt(s.key, () => svc('physical_samples').createOne(data));
         sampleId.set(s.key, newId);
         newSampleIds.push(newId);
@@ -1532,10 +1629,12 @@ export function mount(router, context, clock = () => new Date()) {
         const data = {
           ...cleanValues(r.values, r.workState === 'planned' ? ['operation_date'] : []),
           work_state: r.workState,
+          ...doneStamp(r.workState, 'operation_date', r.values),
         };
         if (r.input) data.sample_id = refId(r.input);
         if (r.output) data.output_sample_id = refId(r.output);
         if (r.batchKey) data.batch_id = batchId.get(r.batchKey);
+        if (isBlank(r.values.material_id) && !isBlank(r.material)) data.material_id = r.material;
         const pid = project(r.values);
         if (pid !== undefined) data.project_id = pid;
         const cid = campaign(r.values);
@@ -1549,8 +1648,10 @@ export function mount(router, context, clock = () => new Date()) {
         const data = {
           ...cleanValues(t.values, t.workState === 'planned' ? ['session_date'] : []),
           work_state: t.workState,
+          ...doneStamp(t.workState, 'session_date', t.values),
           subject: { create: t.subjects.map((ref) => ({ collection: 'physical_samples', item: refId(ref) })) },
         };
+        if (isBlank(t.values.test_category) && t.category) data.test_category = t.category;
         const pid = project(t.values);
         if (pid !== undefined) data.project_id = pid;
         const cid = campaign(t.values);

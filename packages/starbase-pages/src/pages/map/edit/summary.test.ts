@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftAction } from './draft';
 import { apply, emptyBody } from './draft';
-import { countDraft, defaultName, summaryList, summaryText } from './summary';
+import { countDraft, defaultName, makesNothing, NOTHING_TO_MAKE, summaryList, summaryText } from './summary';
 
 const run = (actions: DraftAction[]) => actions.reduce((b, a) => apply(b, a), emptyBody());
 
@@ -33,9 +33,29 @@ describe('summaryText', () => {
 		expect(summaryText(b)).toBe('Create 1 sample; attach 1 operation; change 1 record; delete 1 planned record');
 	});
 
-	it('an empty draft has nothing to create', () => {
-		expect(summaryText(emptyBody())).toBe('Nothing to create yet');
+	it('an empty draft has nothing to create, and says what to do', () => {
+		expect(summaryText(emptyBody())).toBe(NOTHING_TO_MAKE);
+		expect(summaryText(emptyBody())).toBe('Add an operation, test or new sample to create');
 		expect(summaryList(emptyBody())).toBe('Empty');
+	});
+
+	it('makes nothing when only existing samples were picked, whatever the number of cards', () => {
+		const picked = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }, { id: 't', version: 1 }] }]);
+		expect(picked.items).toHaveLength(2);
+		expect(makesNothing(emptyBody())).toBe(true);
+		expect(makesNothing(picked)).toBe(true);
+		expect(summaryText(picked)).toBe(NOTHING_TO_MAKE);
+	});
+
+	it('makes something once a new record, an attach, an edit or a delete is in the draft', () => {
+		const picked = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }]);
+		expect(makesNothing(apply(picked, { type: 'addSample' }))).toBe(false);
+		expect(makesNothing(apply(picked, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }))).toBe(false);
+		expect(makesNothing(apply(picked, { type: 'attach', operation: { id: 'o', version: 1 }, workState: 'planned' }))).toBe(false);
+		expect(makesNothing(apply(picked, { type: 'setValues', key: 'n1', values: { notes: 'x' } }))).toBe(false);
+		const withOp = run([{ type: 'addExisting', kind: 'operation', record: { id: 'o', version: 1 }, workState: 'planned' }]);
+		expect(makesNothing(withOp)).toBe(true);
+		expect(makesNothing(apply(withOp, { type: 'remove', key: 'n1', deleteRecord: true }))).toBe(false);
 	});
 });
 

@@ -27,7 +27,7 @@ describe('useMapExport default frame', () => {
     const exp = useMapExport({
       canvas: { whenSettled: async () => true } as never,
       projectFrame: () => null,
-      map: { nodes: ref<MapNode[]>([sample]), data: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover: vi.fn() } as never,
+      map: { nodes: ref<MapNode[]>([sample]), overlaid: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover: vi.fn() } as never,
       person: () => null,
       deps: {
         loadCapture: async () => ({ toPng: vi.fn(), toBlob }),

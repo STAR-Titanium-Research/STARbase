@@ -61,6 +61,8 @@ export interface OpRow {
   plannedDate?: string | null;
   /** A draft item (edit mode), drawn dashed with a "Draft" tint; never loaded, only made by toGraph. */
   draft?: true;
+  /** A planned record the draft deletes at Create (edit mode R4): drawn struck through with "will be deleted"; only made by toGraph. */
+  removing?: true;
 }
 
 export interface TestRow {
@@ -85,6 +87,8 @@ export interface TestRow {
   plannedDate?: string | null;
   /** A draft item (edit mode), drawn dashed with a "Draft" tint; never loaded, only made by toGraph. */
   draft?: true;
+  /** A planned record the draft deletes at Create: see `OpRow.removing`. */
+  removing?: true;
 }
 
 export interface SampleRec {
@@ -98,6 +102,8 @@ export interface SampleRec {
   facts: Record<string, string>;
   /** A draft sample (edit mode); see `OpRow.draft`. A planned sample is one whose `status` is 'planned'. */
   draft?: true;
+  /** A planned sample the draft deletes at Create: see `OpRow.removing`. */
+  removing?: true;
 }
 
 export interface LineageRow {
@@ -213,6 +219,8 @@ export type RecordNode = {
   planned?: true;
   /** A draft sample: drawn dashed with a "Draft" tint. */
   draft?: true;
+  /** A planned sample the draft deletes at Create: drawn struck through with a "Will be deleted" badge. */
+  removing?: true;
 };
 
 export type ContainerNode = {
@@ -245,6 +253,8 @@ export type ContainerNode = {
   planned?: true;
   /** Every row is a draft item: drawn dashed with a "Draft" tint. */
   draft?: true;
+  /** Every row is a planned record the draft deletes at Create: drawn struck through with a "Will be deleted" badge. */
+  removing?: true;
 };
 
 /** The "+N more" stub that ends a used-in fan: clicking it loads the next page. */

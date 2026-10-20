@@ -1211,6 +1211,48 @@ migration 141 prints about ownerless records.
   field of an existing planned operation: it shows empty, and after Create the record's field is empty too. An
   existing sample's Status is not offered (d1-build refuses it), and the date done is not offered on a planned
   operation or test. Since: Process map edit mode, stream D2 (PR pending).
+- [ ] **PME-D1-1 — Build a cut on the canvas, with the mouse.** Open a real sample's map and press **Edit**. Click the
+  sample's output socket: the menu lists the manufacturing methods by process category (as in `manufacturing_methods`)
+  and the test types; type "wire", Enter. Expect: a Wire cut container appears wired from the sample, with a free
+  output; **＋ output** adds rows (3 clicks, 4 rows); dragging each row's output into empty canvas offers New sample /
+  Same sample / Existing sample…; New sample makes a draft sample card. Drag a wire onto a socket that does not fit
+  (an input that already has a sample): the socket goes red with the reason as a tooltip and nothing is wired; onto one
+  that fits: green, and the wire is made. Cards you drag stay where you drop them after the next addition and after
+  reload of the draft; **Re-layout** moves them all back (one undo step). Right-click on empty canvas and the lid's
+  **Add** open the same menu with Templates (empty until the templates slice), methods and tests, New sample and Pick
+  samples. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-2 — Pick samples and the fly-in on a real list.** **Pick samples** with a saved view applied, tick 4 rows
+  (one of them on page 2), Add. Expect: the cards fly from their rows to a column at the top left of the canvas, 40 ms
+  apart, the one picked on another page only fades in; the draft's project becomes the first sample's project (shown as
+  the project frame). Ctrl/⌘+Z plays it backwards and takes all 4 away in one step, Ctrl/⌘+Shift+Z brings them back. With
+  the OS setting "reduce motion" the cards only fade (150 ms). A sample already on the canvas is greyed in the picker.
+  Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-3 — Keyboard only.** Without the mouse: Tab to a sample's output socket, Enter opens the menu (arrows,
+  Enter choose), **C** opens Connect to… (type a code, Enter wires); Shift+A opens the menu at the pointer; select a
+  draft card and press Shift+D (a copy), Shift+Ctrl/⌘+D (asks how many, Enter), Delete (the card and its wires go); the
+  keys do nothing while typing in a field of the rail form. Existing records: Shift+D on an existing sample makes a
+  new sample with the same details and no code. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-4 — Create, the toast and Mark done in view mode, on real data.** Build a cut with 4 planned outputs
+  (project defaulted from the sample), fix what Checks lists, press **Create 1 operation, 4 samples** (the button says
+  what it will make, and "N things missing" while something blocks). Expect: edit mode closes, the first new sample is
+  focused (planned, ghosted), the toast offers **Print labels for 4 new samples** (`/labels?ids=…` lists the four) and
+  the draft is gone from My drafts. A Create that the server refuses with Checks leaves the draft, shows the reason under
+  the button and marks the empty required fields. Then, in view mode (and in a window under 768 px), select the planned
+  cut: **Mark done** is in the rail, asks the date and who, marks all 4 rows in one request and the map reloads with
+  solid cards. Open `/map?edit=new` on a server where `d1-build` is not deployed: the panel says "Building processes
+  isn't available on this server yet." and the map still works. Since: Process map edit mode, stream D1 (PR pending).
+- [ ] **PME-D1-5 — Edit mode in a real browser: typing, zoom, focus, lost connection.** On a real sample's map in edit
+  mode: (a) type a long value into a field of a new operation's rail form: the map does not re-lay out or flicker while
+  you type (cards keep their places), and a value that makes the card taller (a long note shown in the card) makes room
+  once you pause. (b) Zoom the map out to about 50 % and use **Pick samples**: the cards still fly in from their rows (not
+  from far off). (c) Create, with a screen reader or just Tab: focus lands on the toast (its labels link), the toast stays
+  while the map reloads, and Dismiss puts focus back on a card. (d) Delete a draft card with the keyboard: focus stays on
+  the map. (e) With the Mark done dialog or the Finder (Ctrl+K) open, Delete, Shift+A and Ctrl+Z do nothing to the draft.
+  (f) Turn the network off (DevTools offline) after a change, press **Done editing**: you stay in edit mode and the page
+  says "Your last changes are not kept yet"; turn it on and **Done editing** again leaves, with the change kept (see it in
+  My drafts). Press Space on a free socket button and on a wired socket: the menu opens each time. A card with only a
+  warning (no machine yet) wears an amber badge, a card with a blocking check a red one. Since: Process map edit mode,
+  stream D1 review fixes (PR pending).
 
 #### Process map edit mode, server side (migrations 189 and 190, `d1-build`; plan `2026-10-14-process-map-edit-mode.md`, stream A)
 
@@ -1280,6 +1322,126 @@ checks can be run from `/map?edit=new`.
 - [ ] **PM5-9 — A large create is fast enough.** Create a draft of one cut with 20 rows and 20 planned outputs plus a
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
+
+#### Process map edit mode redesign, slice 1 canvas (`pm-redesign/1b-canvas`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The canvas rules (removal, derived sockets, placement) are unit-tested against fake servers and a fake canvas. What needs a real
+browser and the real stack (Postgres, Directus, the repo's extensions, STARbase) is pointer work, measured sizes and the server's
+own answers. Run these on the slice-0 stack.
+
+- [ ] **PM6-1 — Delete, X, Backspace take a new card or a wire.** In `/map?edit=new` add a sample and an operation, wire them.
+  Select the operation, press Delete: it goes with its wire. Undo brings both back. Click the wire (it turns dashed), press X: only
+  the wire goes. Expect the keys to do nothing while typing in a form field, and the Remove button in the lid to do the same as
+  Delete. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-2 — A planned record that exists is struck through and deleted at Create.** Open a map with a planned operation (and
+  its planned output sample), choose Edit, select the operation, press Delete. Expect the card struck through with a "Will be
+  deleted" pill (the planned sample too), the Create button saying "delete 1 planned record", and Undo bringing the card back.
+  Create it: the operation and its planned output are gone after the map reloads. With something planned still hanging off the
+  output Create answers with the server's check on the card; with something done hanging off it the card shows the lock at once.
+  Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-3 — A done record cannot be removed.** Select a done sample or a done operation on an edit map and press Delete, X,
+  Backspace or Remove. Expect a lock on the card, the line "Done records can't be removed from the map" under the lid, and nothing
+  changed. Click a wire between two done records and press Delete: "Done records' wires can't be removed from the map", the
+  wire wears a padlock. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-4 — Drag a wire end off its input.** Drag from a wired input socket onto empty canvas and let go: the wire goes and
+  the menu does not open; Undo puts it back. Drag from a free input onto empty canvas: the Add menu opens as before. Drop a wire
+  end on another card that does not fit: nothing changes and the reason shows. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-5 — Dissolve.** Build sample A, a cut (one row), sample B, a polish on B. Select the cut and press Ctrl/⌘+Delete (or use
+  Dissolve in the lid or the card's right-click menu). Expect the cut and B gone and A wired straight into the polish; Undo
+  restores all three. On a cut with three pieces, a test, or a card with no input sample, Dissolve says why and changes nothing.
+  Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-6 — Sockets are derived.** A new sample shows one free socket on each side and nothing else. Wire it to an operation:
+  the sample keeps its wired socket and shows no free output until you select it. Select the operation: a free output appears
+  beside nothing else; connect it to a new sample, select the operation again and drag a second wire to its free output: it
+  gets a second piece (a second row), sharing the input sample. Take the wire off the second piece's sample: the piece goes with
+  it. Reload the draft: the canvas shows the same sockets (nothing about them was saved). Cards must not change size when
+  selected. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-7 — New cards never land on others.** Add, duplicate (Shift+D, and ×4), pick samples and attach cards on a crowded
+  history map. Expect no two cards to overlap after any of them, the new ones beside what they came from, and undo and redo to
+  leave no overlap either. Drag a card on top of another on purpose, add something, reload the draft: the dragged card is still
+  where you left it. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-8 — Tidy.** Make a mess of the draft's own cards (drag them over each other), press Tidy in the lid. Expect only the
+  draft's cards to glide to ELK's arrangement beside the history, the history cards not to move, nothing to overlap, and Undo to
+  put every card back in one step. Since: edit-mode redesign slice 1 (PR pending).
+- [ ] **PM6-9 — Plain fixes against live data.** (a) Create a draft of one operation and two outputs: the toast says "Created 3
+  records", not 5. (b) Open the history of a sample, choose Edit: a card's Open record, Process map of it, Expand and the plus on
+  the card are missing for a draft card and present for a recorded one. (c) A draft of only picked samples: Create is disabled and
+  says what to add. (d) A free new sample (no operation) with material and method can be created on live (`current_status` is
+  required there and is not asked for). (e) A planned pass after done passes of one sample is its own card and its Mark done
+  works. (f) Duplicate a team-owned sample and create the copy: it is created, owned by you. (g) On a done operation you own,
+  the rail's Back to planned works; as someone else it shows the server's refusal. (h) Sign in as a Lab Viewer: no Edit toggle,
+  no My drafts, and `/map?edit=new` says "Your account may not build processes." Since: edit-mode redesign slice 1 (PR pending).
+
+The slice 1 behaviours above were also driven in a real browser on the local stack (real Postgres, Directus and the repo's extensions) by
+`tests/ui/specs/edit-mode-slice1.spec.ts` and `edit-mode.spec.ts` (slice 1c, 2026-10-18): PM6-1, PM6-2, PM6-3, PM6-6, PM6-7 and PM6-8 in
+full; PM6-4 for a wired input dragged off, a free one, and one with two wires (not "drop a wire end on a card that does not fit"); PM6-5
+for the join and the refusal on a cut of three (not the refusals on a test or a card with no input); PM6-9 (a), (c), (d) and the page's
+message for a Lab Viewer in (h). They stay unticked: this list is for what live data, real pointers on a real history and the real accounts
+confirm. Not run anywhere yet: PM6-9 (b), (e), (f), (g) beyond the second Lab Member's refusal, and the Lab Viewer's missing Edit toggle and
+My drafts in (h) (a known failure of `edit-mode.spec.ts`), a phone, and Tidy on a map of hundreds of cards.
+
+#### Process map edit mode redesign, slice 2b draft controls (`pm-redesign/2b-draft-controls`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The Planned / Done toggle, the project and campaign chooser and plain fixes 9 to 12 are unit-tested and were driven in a real browser on the local
+stack by `tests/ui/specs/edit-mode-slice2b.spec.ts` (2026-10-19). What only live confirms is the field definitions, the project and campaign
+lists and the accounts of the real lab.
+
+- [ ] **PM7-1 — Done at Create asks for what live's forms require.** On live, build an operation of each process category you use (machining,
+  sintering, heat treatment, sample prep) and a test of each type on a real sample, and press **Done** on each. Expect the rail to ask for the
+  date it happened (today by default) and for exactly the fields the form of that method or test marks required, in the key settings; the
+  Checks list the same fields (and the server agrees: Create is refused with the same fields until they are filled). Fill them, Create. Read
+  the records: `work_state` done, the date, `done_by_person_id` (you), `done_at`, and the operation's output sample `active`. A required field
+  that live has and the local stack does not (a hand-added one) must show here, not first as a refusal at Create. Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-2 — Planned and done in one draft, a planned input.** One draft with a done cut, a planned polish on its output and a done test on
+  the polished piece: the test and the polish say "Its sample is still planned; mark the operation that makes it done first." until the
+  operation before them is Done too; set the whole chain Done (the chip on each card) and Create: every record is done and every output active.
+  Undo steps back one toggle at a time. Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-3 — Project and campaign chooser on live's lists.** In a draft, pick a sample of a real project: the Project box takes it. Open
+  Campaign: only that project's campaigns are listed; change the project to another: a campaign of the first is cleared. Pick a campaign with
+  no project: its project is set. As a Lab Member with a long project list (over 500) the box says it shows the first 500. Create: every new
+  operation, test and sample carries the project, the campaign is on the operations and tests, and the new samples are in the campaign (Campaign
+  page, Samples). Since: edit-mode redesign slice 2b (PR pending).
+- [ ] **PM7-4 — My drafts, Build a process, undo and the blank canvas on real accounts.** (a) Press **Build a process** twice in a row: one draft
+  in My drafts, not two. (b) In a form field of a new operation, change the feed, then the speed, then the feed again within a second or two:
+  Undo takes them back one at a time. (c) A blank canvas says "Pick samples, or press Shift+A…" and has no Find, Reset or Clear until something is
+  on it. (d) In the rail's all-fields form of a new sample, a field the form cannot draw (Co-owners, Files) says "Opens in Data Studio after
+  Create", with no link; on a record that exists it still offers Open in Data Studio. Since: edit-mode redesign slice 2b (PR pending).
+
+#### Process map edit mode redesign, slice 2a adding (`pm-redesign/2a-adding`; plan `2026-10-18-process-map-edit-redesign.md`)
+
+The palette, the add search, the drops and insert (with its refusal before a recorded sample) are unit-tested and were driven in a real browser on the local stack by
+`tests/ui/specs/edit-mode-slice2a.spec.ts` (a seeded family of four samples, eight methods). What only live data, other browsers and real
+touch confirm:
+
+- [ ] **PM8-1 — The palette on the live catalog.** In `/map?edit=new` on live: the palette lists every manufacturing method under its
+  process category (no method missing, none twice, methods with no category under "Other methods"), every test type, and the two
+  samples entries; the list scrolls inside the dock and the dock never pushes the canvas off the page at 1280 and 1920 px. Fold it,
+  reload: still folded; sign in as someone else in the same browser: open. Add things from the palette and the add search, close the
+  tab, come back: what you added lately is first in both. Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-2 — Drops on a real draft.** Pick a real family's sample, build an operation from its output, then drag a method from the
+  palette (a) onto empty canvas (a floating card where you let go), (b) onto a free socket (connected), (c) onto a wire the draft made
+  (the card goes between, one Ctrl+Z puts it all back), (d) onto a wire between two done records of the real history (the wire shows
+  red, the reason "Done records' wires can't be removed from the map" follows the pointer, nothing changes), (e) onto a wire of a
+  planned record that exists (refused: remove the planned record instead). No two cards overlap after any of them. Since: edit-mode
+  redesign slice 2a (PR pending).
+- [ ] **PM8-3 — Insert before a real recorded sample is refused.** Open the map of a real done sample (and, separately, a real planned
+  sample that is saved), select it, press Shift+I. Expect: the banner says "Its history is recorded and can't change from the map. Start
+  from a new sample instead.", no add search opens, no card is added, Undo stays disabled and Create stays disabled ("Add an operation,
+  test or new sample to create"). Right-click it: **Insert before…** is shown greyed out and hovering it shows the same reason; **Insert
+  after…** still opens the search. Select a new sample and Shift+I opens the search as before. Expect the done sample, its maker and its
+  lineage rows unchanged (same `version` and `date_updated`; `sample_genealogy` has no new row naming it). There is no "Add an earlier
+  step" any more: a missing earlier step is recorded by asking an admin to fix the lineage. Since: edit-mode redesign slice 2a (PR pending),
+  rewritten for the R3 decision (refusal).
+- [ ] **PM8-4 — Ctrl/⌘+K in each browser.** On Windows (Chrome, Edge, Firefox) and macOS (Safari, Chrome, Firefox) press Ctrl/⌘+K in edit
+  mode with the pointer over the canvas: the add search opens at the pointer, the browser's own search bar and STARbase's Finder do not.
+  With the focus in the draft's name field, in a form field of the rail, or with a dialog open, the same keys do not open the add
+  search (the Finder opens where it did before, except over a dialog). Since: edit-mode redesign slice 2a (PR pending).
+- [ ] **PM8-5 — Dragging from the palette with a finger or a pen.** On a tablet at least 768 px wide (and a pen on a Windows touch
+  screen): drag a palette entry onto the canvas, a socket and a wire. Expect it to follow the finger, mark the target, drop, and the
+  page not to scroll or pan during the drag. A finger must also be able to **scroll the palette** by swiping up and down on its
+  entries (the list moves, nothing is carried); an entry is carried by a long press (about a third of a second) or a clear sideways
+  swipe, and a mouse or pen drag is unchanged. Switching to another app or window mid-drag (or locking the screen) lets the drag go
+  with nothing dropped. Since: edit-mode redesign slice 2a (PR pending); the scroll and the let-go: slice 2c fixes.
 
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
@@ -2508,6 +2670,40 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   count to include B's files only, B's files in Dismissed, and A's old candidates untouched (still `state = 'new'`, `decided_by` NULL). As A (or an
   administrator) nothing of A's changed. Accept all as B for that filter links none of A's files. Since: merge of origin/main (ignored folders, PR #338)
   into the SEM reader branch.
+
+- [ ] **DEPLOY1 — Install the deploy agent and reach it from Directus (deploy button).** On d1-server follow `docs/runbooks/deploy-button.md` "Install":
+  set `DEPLOY_AGENT_TOKEN` in `.env`, run `infra\deploy-agent\install.ps1`, recreate Directus. Expect: the task **D1 Deploy Agent** exists (current user, logon type S4U so it runs
+  with nobody logged on, at startup and at logon, restart every minute, no time limit); `curl http://127.0.0.1:8212/health` answers `{"ok":true}`; the agent does NOT answer on the machine's LAN or Tailscale
+  address (it binds 127.0.0.1); with the token removed from `.env` the task fails to start and logs "Refusing to start"; from inside the Directus container
+  `curl http://host.docker.internal:8212/health` answers (Docker Desktop must forward to a service on the host's loopback; if it does not, the agent has to bind another
+  address and the runbook changes). A request without `X-Deploy-Token`, or with a wrong one, answers 401.
+  **Unattended reboot:** reboot d1-server and do NOT log on. After a few minutes `curl http://127.0.0.1:8212/health` answers (the agent started by itself), Docker Desktop is running,
+  and a Check from the Deploy page succeeds (git fetch works with nobody logged on). If the fetch fails there (an S4U task cannot read the Windows credential manager), reinstall with
+  `-StorePassword` and repeat. Since: deploy button, stream A (PR: the deploy-agent branch).
+- [ ] **DEPLOY2 — Check for updates on a real update.** With origin/main ahead of the live branch: `node scripts/deploy/deploy.mjs check` (and `POST /check` through the agent)
+  lists the same commits as `git log --oneline HEAD..origin/main`, `changedCount` equals `git diff --name-only HEAD...origin/main | wc -l`, `steps` match the table in the
+  `starbase-deploy` skill for those paths, every new migration is listed and a destructive one is flagged, and `dirty`/`overlap` match `git status --short --untracked-files=no`.
+  Afterwards `git status`, `git log` and `docker compose ps` are unchanged (check only fetches). On an up-to-date checkout: `upToDate: true`. With `git` older than 2.38
+  (no `merge-tree --write-tree`): `conflicts` is `null` and no conflict is claimed. Since: deploy button, stream A.
+- [ ] **DEPLOY3 — Deploy a trivial commit (docs only), then one that rebuilds.** First a commit that changes only a doc: Deploy merges it and reports success with every
+  other step skipped (no build, no restart, no backup). Then a commit that touches an extension under `core/extensions/`: the log shows `##STEP build` (`npm run build:extensions`),
+  `docker compose up -d --force-recreate directus`, and the health check passing; the Deploy page keeps polling through the Directus restart ("Directus is restarting...") and shows
+  the result afterwards. `result.json` names the actor (the admin's user id), `fromSha` and `toSha`. `git status` shows only the maintainer's own uncommitted edits and the merge commit
+  is unpushed on the live branch. Since: deploy button, stream A.
+- [ ] **DEPLOY4 — Refusals leave everything as it was.** Using a throwaway branch of main: (a) an update that changes a file which has an uncommitted edit on d1-server: check shows an
+  `overlap` blocker and Deploy refuses at `preflight`, with no merge and no backup; (b) an update that conflicts with a local commit: `conflict` blocker naming the paths; (c) an update
+  with a migration whose `migrate:up` contains `DELETE FROM` or `DROP COLUMN` (and a harmless one whose only such statement is in `migrate:down` or in a comment): only the first needs
+  the acknowledgement, a Deploy without it is refused at `preflight`, with it the run proceeds. Never use the live database for the destructive one: use a clone. Since: deploy button, stream A.
+- [ ] **DEPLOY5 — A deploy that carries a migration.** On a copy of the stack (not live data first): an update with a pending migration. Expect `##STEP worktree`, `##STEP migrate` running
+  dbmate from `ghcr.io/amacneil/dbmate:2` on the `d1-database_d1net` network with the worktree's `db` folder mounted (the checkout path contains spaces: the mount must work on Windows),
+  `backup.sh` run first through `DEPLOY_BASH` with the dump name in `result.json`'s `backup`, `up` applying the migration, then the merge; the temporary worktree
+  `.claude/worktrees/deploy-main` is gone afterwards. With no pending migration (migration file already applied): no backup is taken. Since: deploy button, stream A.
+- [ ] **DEPLOY6 — The agent replaces itself, and survives being killed mid-run.** (a) Deploy a commit that changes `infra/deploy-agent/agent.mjs`: after the run is recorded the agent exits
+  with code 75 and `run-agent.ps1` (the task's wrapper) starts the new code within seconds; the log shows two `listening` lines. Also stop the agent with a wrong
+  token (exit 1): the wrapper restarts it after 2 s, 4 s, ... up to 60 s (the log shows each wait). (b) Start a deploy, then stop the task (or the machine) mid-run: after the agent starts again the run shows `interrupted`, the lock is gone,
+  and a new deploy can start. (c) With the task stopped, the Deploy page says the agent is unreachable and offers the fix hint. Since: deploy button, stream A.
+- [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
+  `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.
 
 ## Done
 

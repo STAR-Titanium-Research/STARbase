@@ -9,8 +9,8 @@ import InboxView from '../inbox/InboxView.vue';
 
 <template>
 	<ExplorerView title="Inbox">
+		<template #headline><AppLink to="/home">Home</AppLink></template>
 		<PageShell>
-			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Inbox</span></nav>
 			<InboxView />
 		</PageShell>
 	</ExplorerView>

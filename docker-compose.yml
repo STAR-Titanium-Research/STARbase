@@ -160,6 +160,10 @@ services:
       MINIO_SURFACE_READER_USER: ${MINIO_SURFACE_READER_USER:-surface-reader}
       MINIO_SURFACE_READER_PASSWORD: ${MINIO_SURFACE_READER_PASSWORD:-}
       MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
+      # The Data Studio Deploy page (d1-deploy-endpoint) proxies to the host-side deploy agent (infra/deploy-agent, docs/runbooks/deploy-button.md).
+      # The agent listens on the host (127.0.0.1:8212); host.docker.internal reaches it from here. Token unset: the endpoint answers 503 and the page says so.
+      DEPLOY_AGENT_URL: ${DEPLOY_AGENT_URL:-http://host.docker.internal:8212}
+      DEPLOY_AGENT_TOKEN: ${DEPLOY_AGENT_TOKEN:-}
     # Path A (built-in AI Chat) and any server-side extension that calls the host
     # can reach the host's Ollama here. Auto-resolved on Windows/Mac Docker
     # Desktop; the host-gateway mapping makes it work on Linux too.

@@ -17,10 +17,10 @@ defineProps<{ narrow?: boolean; wide?: boolean }>();
 .d1-page {
 	max-width: 1440px;
 	margin: 0;
-	padding: 20px var(--content-padding, 32px) 64px;
+	padding: 12px var(--content-padding, 32px) 32px;
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: 12px;
 	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
 	font-size: var(--fs-md, 13px);
 	line-height: 1.45;

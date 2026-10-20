@@ -69,6 +69,30 @@
 	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, var(--d1-surface));
 }
 .d1-process-map .node.draft.planned:not(.rec)::after { content: 'Draft · planned'; }
+/* Planned or done at Create (R9): a new item that is done is drawn solid, one that is planned stays ghosted (dashed, see-through until
+   hovered or selected), the same look the records have once they exist. */
+.d1-process-map .node.draft:not(.planned) { border-style: solid; }
+.d1-process-map .node.draft:not(.planned):not(.rec)::after { content: 'Draft · done'; }
+.d1-process-map .node.draft.planned { opacity: 0.8; }
+.d1-process-map .node.draft.planned:hover,
+.d1-process-map .node.draft.planned.focal { opacity: 1; }
+
+/* A planned record the draft deletes at Create (R4): struck through, with a "Will be deleted" pill. The pill's selector is as specific as
+   the "Planned" one above and comes after it. */
+.d1-process-map .node.removing { opacity: 0.6; border-style: dashed; border-color: var(--d1-bad); }
+.d1-process-map .node.removing .code,
+.d1-process-map .node.removing .n,
+.d1-process-map .node.removing .meta,
+.d1-process-map .node.removing .d { text-decoration: line-through; }
+.d1-process-map .node.removing:not(.never-a):not(.never-b)::after {
+	content: 'Will be deleted';
+	color: var(--d1-bad);
+	border: 1px dashed var(--d1-bad);
+	background: color-mix(in srgb, var(--d1-bad) 10%, var(--d1-surface));
+}
+/* The lock on the selected card that is done, and the reason under its name. */
+.d1-process-map .node .lock { display: inline-flex; align-items: center; color: var(--d1-bad); }
+.d1-process-map .node .why { margin-top: 2px; font-size: var(--fs-xs, 11px); color: var(--d1-bad); }
 
 .d1-process-map .kind {
 	display: inline-flex;
@@ -139,3 +163,57 @@
 .d1-process-map .vue-flow__node:focus { outline: none; }
 .d1-process-map .vue-flow__node:focus-visible > .node { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .d1-process-map .sock:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 3px; }
+
+/* Edit mode (spec E8, E9; the classes come from the node components while a draft can be changed). A socket the person can build
+   from is a button: a free one (nothing wired) is a hollow dashed ring, so it reads as "open"; a dragged wire marks the socket it
+   would land on, green when it fits and red when the draft refuses it (the page says why). */
+.d1-process-map .sock.editable { cursor: pointer; touch-action: none; user-select: none; }
+.d1-process-map .sock.editable:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sk, var(--k-sample)) 30%, transparent); }
+.d1-process-map button.sock.free {
+	padding: 0;
+	background: var(--d1-surface);
+	border: 2px dashed var(--sk, var(--k-sample));
+	box-shadow: none;
+	color: inherit;
+}
+.d1-process-map button.sock.free:hover { background: color-mix(in srgb, var(--sk, var(--k-sample)) 25%, var(--d1-surface)); }
+/* The socket a dragged wire is over: green when the draft takes it, red when not. Sockets sit on the rail (translate -50% both ways); the :hover
+   forms keep the mark when the pointer is on the socket, which is where a drop is. */
+.d1-process-map .sock.drop-ok,
+.d1-process-map .sock.drop-ok:hover { background: var(--d1-ok); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-ok) 30%, transparent); transform: translate(-50%, -50%) scale(1.5); }
+.d1-process-map .sock.drop-bad,
+.d1-process-map .sock.drop-bad:hover { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
+
+/* The red badge of a card whose checks block Create: how many things. A card with only warnings (a stale version) gets an amber one. */
+.d1-process-map .node .chk {
+	flex: none;
+	min-width: 20px;
+	padding: 0 6px;
+	border-radius: 99px;
+	background: var(--theme--danger);
+	color: var(--theme--foreground-inverted, var(--d1-surface));
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	line-height: 20px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+.d1-process-map .node .chk.warn { background: color-mix(in srgb, var(--theme--background), var(--theme--warning) 12%); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
+/* The Planned / Done chip of a new operation or test (R9): a small button in the title bar; Done is filled, Planned is an outline. */
+.d1-process-map .node .wchip {
+	flex: none;
+	padding: 0 8px;
+	border: 1px dashed var(--d1-line);
+	border-radius: 99px;
+	background: var(--d1-surface);
+	color: var(--d1-dim);
+	font: inherit;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	line-height: 18px;
+	cursor: pointer;
+}
+.d1-process-map .node .wchip.done { border-style: solid; border-color: var(--d1-ok, var(--theme--success)); background: color-mix(in srgb, var(--d1-ok, var(--theme--success)) 14%, var(--d1-surface)); color: var(--d1-ok, var(--theme--success)); }
+.d1-process-map .node .wchip:hover,
+.d1-process-map .node .wchip:focus-visible { border-color: var(--d1-accent, var(--theme--primary)); outline: none; }
+.d1-process-map .orow.addrow { cursor: pointer; }

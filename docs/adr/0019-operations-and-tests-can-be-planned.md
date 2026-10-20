@@ -39,6 +39,20 @@ who drew it can see.
    planned operation's planned output samples go with it, unless something done already hangs off one of
    them, in which case the delete is refused. Done records are never deleted from the map.
 
+## Amendments
+
+- **2026-10-18 — who may mark done.** Anyone who may edit the operation or test may mark it done, as decision 4
+  says. The operation's own update runs as the caller; flipping its planned output samples to `active` then runs
+  with system rights, because editing the operation does not imply editing its samples (a technician with edit
+  access to the operation got a 403 and nothing was marked done). The flip touches `current_status` only. Back to planned does the same in reverse: the owner rule (decision 5) is the
+  operation's, and its output samples go back to `planned` with system rights.
+- **2026-10-18 — done at Create.** A new operation or test in a draft can be planned or done. Done carries its date
+  (default today), and Create writes it as done in the same transaction, with its outputs `active`, so recording
+  work that already happened is one step, not Create followed by Mark done. It records who and when as Mark done does
+  (`done_by_person_id` is the caller's researcher row, `done_at` is the time of Create), and the date is today when the draft
+  carries none; a planned record gets none of these. The edit mode's rail and card offer the choice as a Planned / Done toggle
+  (one undo step), and a Done record is asked for the fields the forms mark required, with the same words the server uses.
+
 ## Alternatives considered
 
 - **No state; a plan is a record without a date.** Rejected: "no date yet" and "not done yet" are different

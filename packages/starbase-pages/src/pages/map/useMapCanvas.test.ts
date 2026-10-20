@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { effectScope, nextTick, reactive, type ShallowRef } from 'vue';
+import { effectScope, nextTick, reactive, ref, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import { nodeOfSocket } from './model/sockets';
-import type { ContainerNode as ContainerData, ProcessData } from './model/types';
-import { MIN_ZOOM, screenPixel, useMapCanvas } from './useMapCanvas';
+import type { ContainerNode as ContainerData, MapNode, ProcessData } from './model/types';
+import { MIN_ZOOM, screenPixel, useMapCanvas, type CanvasEdit } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], fitAt: [] as number[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -44,15 +44,17 @@ vi.mock('@vue-flow/core', async (orig) => {
       });
     },
     setEdges: (list: { id: string }[]) => void (edges.value = list),
-    applyNodeChanges: (changes: { id: string; type: string; from?: { x: number; y: number }; position?: { x: number; y: number } }[]) => {
+    applyNodeChanges: (changes: { id: string; type: string; selected?: boolean; from?: { x: number; y: number }; position?: { x: number; y: number } }[]) => {
       for (const c of changes) {
+        if (c.type === 'select') store.selects.push({ id: c.id, selected: !!c.selected });
         if (c.type === 'position' && c.position && c.from) store.moves.push({ id: c.id, from: c.from, position: c.position });
         const n = nodes.value.find((x) => x.id === c.id);
         if (n && c.type === 'position' && c.position) n.position = { ...c.position };
       }
     },
     // A node that is not collapsed is as tall as its rows: the test's stand-in for measuring.
-    updateNodeInternals: () => {
+    updateNodeInternals: (ids?: string[]) => {
+      store.internals.push(ids);
       for (const n of nodes.value) {
         const d = n.data as { type?: string; collapsed?: boolean } | undefined;
         n.dimensions = { width: 310, height: store.tall.get(n.id) ?? (d?.type === 'container' && !d.collapsed ? 200 : 40) };
@@ -61,7 +63,8 @@ vi.mock('@vue-flow/core', async (orig) => {
     onNodesInitialized: () => undefined,
     onNodeDragStop: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStops.push(fn),
     onNodeDragStart: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStarts.push(fn),
-    fitView: async () => true,
+    screenToFlowCoordinate: (p: { x: number; y: number }) => ({ x: p.x - 10, y: p.y - 20 }),
+    fitView: async () => (store.fitAt.push(store.layouts), true),
     setCenter: async () => true,
   };
   return { ...(await orig<typeof import('@vue-flow/core')>()), useVueFlow: () => vf };
@@ -104,6 +107,10 @@ const drag = (id: string, to: { x: number; y: number }) => {
   nodesOf().find((n) => n.id === id)!.position = { ...to };
   for (const fn of store.dragStops) fn({ node: { id }, nodes: [{ id }] });
 };
+/** The drop of a card, as Vue Flow reports it: the node with its data and place. */
+const dropOn = (id: string, position: { x: number; y: number }) => {
+  for (const fn of store.dragStops) fn({ node: { id, data: { id }, position } as never, nodes: [{ id }] });
+};
 const noOverlaps = (involving: string[]) => {
   const boxes = nodesOf().map((n) => ({ id: n.id, ...n.position, width: n.dimensions.width, height: n.dimensions.height }));
   for (let i = 0; i < boxes.length; i++) {
@@ -142,6 +149,8 @@ beforeEach(() => {
   store.tall.clear();
   store.elk = null;
   store.moves.length = 0;
+  store.selects.length = 0;
+  store.internals.length = 0;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -906,5 +915,377 @@ describe('screenPixel: dashed outlines keep their on-screen width', () => {
     expect(screenPixel(1.6)).toBeCloseTo(0.625);
     expect(screenPixel(0.01)).toBeCloseTo(1 / MIN_ZOOM); // below the minimum zoom counts as the minimum
     expect(screenPixel(Number.NaN)).toBeCloseTo(1 / MIN_ZOOM);
+  });
+});
+
+describe('useMapCanvas: edit mode', () => {
+  const editHooks = (over: Partial<CanvasEdit> = {}) => {
+    const calls: string[] = [];
+    const hooks: CanvasEdit = {
+      positionOf: () => undefined,
+      moved: (n, to) => void calls.push(`moved ${n.id} ${to.x},${to.y}`),
+      relaid: (cards) => void calls.push(`relaid ${cards.length}`),
+      ...over,
+    };
+    return { hooks, calls };
+  };
+  async function openEdit(hooks: CanvasEdit) {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const canvas = useMapCanvas(map, hooks);
+    await settle();
+    return { map, canvas };
+  }
+
+  it('keeps a card where the draft says it is, whatever the layout would do', async () => {
+    const { hooks } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    expect(at('op:u3')).not.toEqual({ x: 700, y: 650 });
+  });
+
+  it('tells the draft when a card is dropped', async () => {
+    const { hooks, calls } = editHooks();
+    await openEdit(hooks);
+    dropOn('op:u1', { x: 12, y: 34 });
+    expect(calls).toEqual(['moved op:u1 12,34']);
+  });
+
+  it('Re-layout puts every card where ELK says, and tells the draft the places (one change for all)', async () => {
+    const { hooks, calls } = editHooks({ positionOf: (n: MapNode) => (n.id === 'op:u2' ? { x: 700, y: 650 } : undefined) });
+    const { canvas } = await openEdit(hooks);
+    expect(at('op:u2')).toEqual({ x: 700, y: 650 });
+    await canvas.relayout();
+    await settle();
+    expect(at('op:u2')).not.toEqual({ x: 700, y: 650 });
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual([`relaid ${nodesOf().length}`]);
+  });
+
+  it('turns a point of the window into the map\'s own coordinates', async () => {
+    const { canvas } = await openEdit(editHooks().hooks);
+    expect(canvas.toFlow(110, 120)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('is as before without edit mode: no hook is called', async () => {
+    await open();
+    dropOn('op:u1', { x: 1, y: 2 });
+    expect(at('op:u1')).toBeDefined();
+  });
+});
+
+describe('useMapCanvas: the selected card is the page\'s, never Vue Flow\'s', () => {
+  // Vue Flow drags EVERY card it holds as selected along with the one the pointer grabs, so a card marked selected there moves whenever any
+  // other card is dragged (found in a real browser: the recorded focus card flew across the map with a new card the person dragged).
+  it('selecting a card tells Vue Flow of no selected card', async () => {
+    const { map } = await open();
+    map.select('op:u1');
+    await settle();
+    expect(map.selectedId.value).toBe('op:u1');
+    expect(store.selects.filter((c) => c.selected)).toEqual([]);
+  });
+});
+
+describe('useMapCanvas: a selection moves sockets, so Vue Flow measures them again (R5)', () => {
+  // In edit mode the selected card draws its free socket and the others on that side move along the edge; Vue Flow only knows where a socket is
+  // when it is told, so a wire kept its old end (found in a real browser: the wires of a selected operation hung 8 px off its sockets).
+  const hooks: CanvasEdit = { active: () => true, positionOf: () => undefined, moved: () => undefined, relaid: () => undefined };
+  const measured = () => store.internals.flatMap((ids) => ids ?? ['(all)']);
+  it('selecting a card, and the card it leaves, are measured again; the others are not', async () => {
+    vi.mocked(loadRecordRef).mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    vi.mocked(loadUsedIn).mockResolvedValue({ items: toolOps(5), total: 5 });
+    const route = reactive({ path: '/map', query: { focus: 'tools:t1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    useMapCanvas(map, hooks);
+    await settle();
+    store.internals.length = 0;
+    map.select('op:u1');
+    await settle();
+    expect(measured()).toContain('op:u1');
+    store.internals.length = 0;
+    map.select('op:u2');
+    await settle();
+    expect(measured()).toEqual(expect.arrayContaining(['op:u1', 'op:u2']));
+    expect(measured()).not.toContain('op:u3');
+  });
+
+  it('is not needed outside edit mode: no socket moves when a card is selected', async () => {
+    const { map } = await open();
+    store.internals.length = 0;
+    map.select('op:u1');
+    await settle();
+    expect(measured()).toEqual([]);
+  });
+});
+
+describe('useMapCanvas: edit mode does not lay out again for what a card says', () => {
+  const code = ref('OP-1');
+  const overlay = {
+    active: () => true,
+    blank: () => false,
+    keep: () => false,
+    merge: (d: ProcessData | null) => ({ ...d!, operations: d!.operations.map((o) => ({ ...o, code: code.value })) }),
+  };
+  let scope = effectScope();
+  afterEach(() => scope.stop());
+  async function openOverlay() {
+    scope = effectScope();
+    code.value = 'OP-1';
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const { map, canvas } = scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      return { map, canvas: useMapCanvas(map, { active: () => true, positionOf: () => undefined, moved: () => undefined, relaid: () => undefined }) };
+    })!;
+    await settle();
+    return { map, canvas };
+  }
+  const container = () => nodesOf().find((n) => (n.data as { type?: string }).type === 'container')!;
+
+  it('patches the card in place: the same nodes, the new words, no layout', async () => {
+    await openOverlay();
+    const before = container();
+    const layouts = store.layouts;
+    code.value = 'OP-1x';
+    await settle();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(container()).toBe(before);
+    expect((container().data as ContainerData).code).toBe('OP-1x');
+    expect(store.layouts).toBe(layouts);
+  });
+
+  it('lays out again, once, when the card changed size, after the typing pauses', async () => {
+    await openOverlay();
+    const layouts = store.layouts;
+    store.tall.set(container().id, 320);
+    for (let i = 0; i < 5; i++) {
+      code.value = `OP-${i}`;
+      await settle();
+    }
+    expect(store.layouts).toBe(layouts); // typing: nothing yet
+    await new Promise((r) => setTimeout(r, 300));
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
+  });
+
+  it('Fit pressed before that look at the sizes does the look first, and frames the cards where they will be (a card added a moment ago was framed in its old place)', async () => {
+    const { canvas } = await openOverlay();
+    store.fitAt.length = 0;
+    const layouts = store.layouts;
+    store.tall.set(container().id, 320);
+    code.value = 'OP-grown';
+    await settle(); // the sizes are looked at in 150 ms, and the cards laid out again if one changed
+    expect(store.layouts).toBe(layouts);
+    await canvas.fit();
+    expect(store.layouts, 'the layout the new size causes has been done').toBe(layouts + 1);
+    expect(store.fitAt, 'the viewport is fitted once, after it').toEqual([layouts + 1]);
+    // And nothing is left to move the cards afterwards.
+    await new Promise((r) => setTimeout(r, 300));
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
+  });
+});
+
+describe('useMapCanvas: edit mode places new cards clear of the others (R6)', () => {
+  const extra = ref(false);
+  // Reactive, like the draft's places: the canvas watches them.
+  const stored = reactive(new Map<string, { x: number; y: number }>());
+  const calls: string[] = [];
+  let ownedIds: string[] = [];
+  const overlay = {
+    active: () => true,
+    blank: () => false,
+    keep: (n: MapNode) => n.id === 's:new1',
+    merge: (d: ProcessData | null) => (extra.value ? { ...d!, samples: [...d!.samples, mkSample('new1', { draft: true })] } : d!),
+  };
+  const hooks: CanvasEdit = {
+    active: () => true,
+    positionOf: (n: MapNode) => stored.get(n.id),
+    moved: () => undefined,
+    relaid: (cards) => {
+      for (const c of cards) stored.set(c.node.id, c.at);
+      calls.push(`relaid ${cards.map((c) => c.node.id).join(',')}`);
+    },
+    owned: (n: MapNode) => ownedIds.includes(n.id),
+    // (As the page does: the draft keeps the places it is told of.)
+    settled: (cards) => {
+      for (const c of cards) stored.set(c.node.id, c.at);
+      calls.push(`settled ${cards.map((c) => `${c.node.id}@${c.at.x},${c.at.y}`).join(',')}`);
+    },
+  };
+  let scope = effectScope();
+  afterEach(() => scope.stop());
+  async function openIt(withExtra = false) {
+    scope = effectScope();
+    extra.value = withExtra;
+    stored.clear();
+    calls.length = 0;
+    ownedIds = [];
+    const data = mkData({
+      samples: ['a', 'b'].map((id) => mkSample(id)),
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    vi.mocked(loadFamily).mockResolvedValue(data);
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    const out = scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      return { map, canvas: useMapCanvas(map, hooks) };
+    })!;
+    await settle();
+    return out;
+  }
+  const box = (id: string) => {
+    const n = nodesOf().find((x) => x.id === id)!;
+    return { x: n.position.x, y: n.position.y, width: n.dimensions.width, height: n.dimensions.height };
+  };
+  const apart = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+
+  it('a new card dropped on top of another steps to a free slot, and the draft keeps the new place', async () => {
+    await openIt();
+    const onA = { ...at('s:a') };
+    stored.set('s:new1', onA); // dropped where the person clicked: on a card
+    extra.value = true;
+    await settle();
+    expect(nodesOf().some((n) => n.id === 's:new1')).toBe(true);
+    expect(apart(box('s:new1'), box('s:a'))).toBe(true);
+    expect(at('s:a')).toEqual(onA);
+    const moved = at('s:new1');
+    expect(calls).toEqual([`settled s:new1@${moved.x},${moved.y}`]);
+  });
+
+  it('a new card that lies clear is left where it was put, and nothing is told to the draft', async () => {
+    await openIt();
+    stored.set('s:new1', { x: 5000, y: 5000 });
+    extra.value = true;
+    await settle();
+    expect(at('s:new1')).toEqual({ x: 5000, y: 5000 });
+    expect(calls).toEqual([]);
+  });
+
+  it('a new card with no place of its own is put clear of every card, beside what it was attached to', async () => {
+    await openIt();
+    extra.value = true;
+    await settle();
+    for (const id of ['s:a', 's:b']) expect(apart(box('s:new1'), box(id)), id).toBe(true);
+    expect(calls).toEqual([]); // nothing was a stored place: nothing to keep
+  });
+
+  it('cards the person placed are where the draft says, even on each other, when a draft is opened (never re-flowed)', async () => {
+    stored.set('s:a', { x: 40, y: 40 });
+    stored.set('s:b', { x: 50, y: 50 });
+    scope = effectScope();
+    calls.length = 0;
+    extra.value = false;
+    ownedIds = [];
+    vi.mocked(loadFamily).mockResolvedValue(
+      mkData({ samples: ['a', 'b'].map((id) => mkSample(id)), operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })] }),
+    );
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      useMapCanvas(map, hooks);
+    });
+    await settle();
+    expect(at('s:a')).toEqual({ x: 40, y: 40 });
+    expect(at('s:b')).toEqual({ x: 50, y: 50 });
+    expect(calls).toEqual([]);
+  });
+
+  it('two cards with the very same place of the draft\'s in a first layout are a collision, not a choice: the second steps aside and the draft keeps its new place', async () => {
+    // (Two cards added within a moment of each other to a blank canvas both arrive before the first layout has run, and the Add menu gave
+    // both the place it was opened at: found in a real browser, where two samples lay on each other for good.)
+    stored.set('s:a', { x: 40, y: 40 });
+    stored.set('s:b', { x: 40, y: 40 });
+    scope = effectScope();
+    calls.length = 0;
+    extra.value = false;
+    ownedIds = [];
+    vi.mocked(loadFamily).mockResolvedValue(
+      mkData({ samples: ['a', 'b'].map((id) => mkSample(id)), operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })] }),
+    );
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: 'all' } as Record<string, unknown> });
+    scope.run(() => {
+      const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) }, overlay);
+      useMapCanvas(map, hooks);
+    });
+    await settle();
+    expect(at('s:a')).toEqual({ x: 40, y: 40 });
+    expect(apart(box('s:a'), box('s:b'))).toBe(true);
+    const moved = at('s:b');
+    expect(calls).toEqual([`settled s:b@${moved.x},${moved.y}`]);
+    expect(stored.get('s:b')).toEqual(moved);
+  });
+
+  it('Tidy moves only the draft\'s own cards, tells the draft once, and leaves every other card where it is', async () => {
+    const { canvas } = await openIt(true);
+    ownedIds = ['s:new1'];
+    stored.set('s:new1', at('s:a')); // lying on a card, as a person can leave it
+    const before = Object.fromEntries(nodesOf().filter((n) => n.id !== 's:new1').map((n) => [n.id, { ...n.position }]));
+    await canvas.tidy();
+    await settle();
+    for (const [id, p] of Object.entries(before)) expect(at(id), id).toEqual(p);
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual(['relaid s:new1']);
+    for (const id of Object.keys(before)) expect(apart(box('s:new1'), box(id)), id).toBe(true);
+  });
+
+  it('Tidy keeps where the draft\'s cards were when the draft had no place for them, in the step before, so Undo can take them back', async () => {
+    const { canvas } = await openIt(true);
+    ownedIds = ['s:new1'];
+    const was = { ...at('s:new1') };
+    await canvas.tidy();
+    await settle();
+    expect(calls[0]).toBe(`settled s:new1@${was.x},${was.y}`);
+    expect(calls.filter((c) => c.startsWith('relaid'))).toEqual(['relaid s:new1']);
+  });
+
+  it('a place the draft changes by itself (Undo, Redo of a drag or of Tidy) is followed: the card goes there', async () => {
+    await openIt(true);
+    stored.set('s:new1', { x: 900, y: 900 });
+    await settle();
+    expect(at('s:new1')).toEqual({ x: 900, y: 900 });
+    stored.set('s:new1', { x: 1300, y: 40 }); // Undo or Redo brings another place back
+    await settle();
+    expect(at('s:new1')).toEqual({ x: 1300, y: 40 });
+    expect(calls).toEqual([]); // following the draft writes nothing to it
+  });
+
+  it('a card that comes back (Undo) goes to the place the draft has for it, even on another card, and writes nothing', async () => {
+    await openIt(true);
+    const onA = { ...at('s:a') };
+    stored.set('s:new1', { x: 5000, y: 5000 });
+    await settle();
+    extra.value = false; // the card is removed
+    await settle();
+    expect(nodesOf().some((n) => n.id === 's:new1')).toBe(false);
+    stored.set('s:new1', onA); // Undo brings it back: the draft has it where the person had dragged it, lying on a card
+    extra.value = true;
+    await settle();
+    expect(at('s:new1')).toEqual(onA);
+    expect(calls).toEqual([]);
+  });
+
+  it('canTidy is on only while the canvas holds something of the draft\'s own', async () => {
+    const withDraft = await openIt(true);
+    ownedIds = ['s:new1'];
+    expect(withDraft.canvas.canTidy.value).toBe(true);
+    const without = await openIt();
+    ownedIds = [];
+    expect(without.canvas.canTidy.value).toBe(false);
+  });
+
+  it('Tidy with nothing of the draft\'s on the canvas does nothing at all', async () => {
+    const { canvas } = await openIt();
+    const layouts = store.layouts;
+    store.moves.length = 0;
+    await canvas.tidy();
+    await settle();
+    expect(calls).toEqual([]);
+    expect(store.moves).toEqual([]);
+    expect(store.layouts).toBe(layouts + 1); // ELK was asked, and had nothing of the draft's to place
   });
 });

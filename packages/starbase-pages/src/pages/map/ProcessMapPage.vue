@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from '../../ExplorerView.vue';
-import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
+import { computed, provide, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -14,13 +14,20 @@ import type { Dir } from './model/elkInput';
 import { recordWord } from './model/collections';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
+import EditOverlays from './edit/EditOverlays.vue';
+import EmptyDraftHint from './edit/EmptyDraftHint.vue';
+import { canvasEditOf } from './edit/useEditCanvas';
+import { isNotice, provideEditMode, useEditMode } from './edit/useEditMode';
+import { useEditSide } from './edit/useEditSide';
+import Palette from './edit/Palette.vue';
+import WirePreview from './edit/WirePreview.vue';
 import ChainMenu from './ChainMenu.vue';
-import type { ChainDir } from './model/hoverFocus';
 import ExportFrame from './ExportFrame.vue';
-import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
 import MapSheet from './MapSheet.vue';
+import MapStrip from './MapStrip.vue';
+import MapTitleActions from './MapTitleActions.vue';
 import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
@@ -41,10 +48,27 @@ import { useRecentRecords } from './useRecentRecords';
 const host = useExplorerHost();
 const route = useRoute();
 const router = useRouter();
-const map = useProcessMap(host.api, route, router);
-const canvas = useMapCanvas(map);
-/** Below 768 px: the rail is a bottom sheet, the minimap is gone, a long press shows the hover card. */
+/** Below 768 px: the rail is a bottom sheet, the minimap is gone, a long press shows the hover card, and nothing can be built (E20). */
 const phone = useIsPhone();
+// Edit mode (spec §7.1) is made first: the map draws the draft it merges in (its overlay), and edit mode reads which card is selected from the map.
+const edit = useEditMode({
+	api: host.api,
+	fieldsFor: (c) => host.fieldsFor(c),
+	route,
+	router,
+	isPhone: phone,
+	focus: () => map.focus.value,
+	focusCode: () => map.data.value?.focus.code || undefined,
+	selected: () => map.graph.value?.nodes.find((n) => n.id === map.selectedId.value),
+	hint: (h) => map.hintMerge(h),
+});
+const map = useProcessMap(host.api, route, router, edit.overlay);
+const canvas = useMapCanvas(map, canvasEditOf(edit, map.inHistory));
+provideEditMode(edit);
+const canvasEl = ref<HTMLElement | null>(null);
+/** Edit mode beside the map: the canvas interactions, Create and its toast, Mark done (which view mode and phones have too). */
+const side = useEditSide({ host, edit, map, canvas, canvasEl, finderOpen: () => finderOpen.value });
+const { build, create, markDone } = side;
 const pointerKind = createPointerKind();
 
 // What the node and wire components call (nodes/actions.ts).
@@ -75,7 +99,7 @@ const labelSocket = computed(() => socketLabeller(map.graph.value?.wires ?? [], 
 const view: MapView = {
 	direction: map.dir,
 	moreOpen: map.moreOpen,
-	selectedRef: map.selectedRefKey,
+	selectedRef: map.selectedRefKey, selectedId: map.selectedId,
 	hiddenSides: map.hiddenSides,
 	socketLabel: (socket, side) => labelSocket.value(socket, side),
 	expanded: map.expandedIds,
@@ -84,11 +108,15 @@ provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
 
 const focusCode = computed(() => map.data.value?.focus.code ?? '');
+/** A blank canvas: edit mode with no record to map. */
+const blank = computed(() => !map.focus.value);
 // The record the map is opened on is not always a sample (a tool, a project, an operation...).
 // The loaded record's collection; before anything is loaded (not visible) the one in the address.
 const focusCollection = computed(() => map.data.value?.focus.collection ?? map.focus.value?.collection ?? 'physical_samples');
+/** A blank canvas whose draft has nothing on it yet: it says what to do first, and Find / Reset / Clear (of the map's focus) are not offered. */
+const emptyDraft = computed(() => blank.value && edit.drafted.value && edit.body.value.items.length === 0);
 const focusWord = computed(() => recordWord(focusCollection.value));
-const pageTitle = computed(() => (map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
+const pageTitle = computed(() => (blank.value && edit.drafted.value ? 'Build a process' : map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
 
 const DIRECTIONS: { value: Dir; label: string }[] = [
 	{ value: 'RIGHT', label: 'Left → right' },
@@ -111,17 +139,16 @@ const frameStyle = computed(() => {
 });
 
 // ---- the rail, the hover card and the data they show -----------------------------------------------
-const canvasEl = ref<HTMLElement | null>(null);
 
 // Data previews (the Fz figure, FAST run data) are read when operations arrive, so hovering and selecting only
 // look the answer up (no request per hover). An expand reads just the operations it added; a new focus (the data
 // is cleared first) starts afresh.
 const dataPreviews = useDataPreviews(host.api);
 watch(
-	() => map.data.value,
+	() => map.overlaid.value,
 	(d) => {
 		if (!d) dataPreviews.reset();
-		else dataPreviews.load(d.operations.map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));
+		else dataPreviews.load(d.operations.filter((o) => !o.id.startsWith('draft:')).map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));
 	},
 	{ immediate: true },
 );
@@ -173,11 +200,13 @@ const railProps = computed(() => ({
 	stack: map.stack.value,
 	reach: map.reach.value,
 	drawnReach: map.effectiveReach.value,
+	canMarkDone: markDone.canMarkDone.value,
+	canMarkPlanned: markDone.canMarkPlanned.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
-const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach };
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach, markDone: markDone.show, markPlanned: markDone.markPlanned };
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
@@ -186,7 +215,7 @@ const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind 
 // Not on touch: a long press there is the hover card (useLongPress).
 const chainMenu = ref<{ x: number; y: number } | null>(null);
 const MENU_W = 200;
-const MENU_H = 150;
+const MENU_H = 240;
 function onContextMenu(e: MouseEvent) {
 	input.onContextMenu(e);
 	if (pointerKind.touch || !canvasEl.value) return;
@@ -197,10 +226,6 @@ function onContextMenu(e: MouseEvent) {
 	map.select(id);
 	const r = canvasEl.value.getBoundingClientRect();
 	chainMenu.value = { x: Math.min(e.clientX - r.left, r.width - MENU_W), y: Math.min(e.clientY - r.top, r.height - MENU_H) };
-}
-function pickChain(d: ChainDir) {
-	map.setChainDir(d);
-	chainMenu.value = null;
 }
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
@@ -214,27 +239,12 @@ const tipHint = computed(() => {
 	return from ? `Ctrl/⌘+click to go to ${from.slice(5)}` : undefined;
 });
 
-const copied = ref(false);
-let copiedTimer: ReturnType<typeof setTimeout> | null = null;
-async function copyLink() {
-	try {
-		await navigator.clipboard.writeText(window.location.href);
-		copied.value = true;
-		if (copiedTimer) clearTimeout(copiedTimer);
-		copiedTimer = setTimeout(() => (copied.value = false), 2000);
-	} catch {
-		/* no clipboard (an insecure origin or a refused permission): the address bar has the link */
-	}
-}
-onBeforeUnmount(() => {
-	if (copiedTimer) clearTimeout(copiedTimer);
-});
 </script>
 
 <template>
 	<ExplorerView :title="pageTitle">
 		<PageShell wide>
-			<LoadState v-if="map.status.value === 'loading'" loading loading-text="Loading the Process map…" />
+			<LoadState v-if="map.status.value === 'loading' || edit.pending.value" loading :loading-text="edit.pending.value ? 'Opening your draft…' : 'Loading the Process map…'" />
 
 			<NotVisible v-else-if="map.status.value === 'notVisible'" :what="focusWord.one" />
 
@@ -246,6 +256,7 @@ onBeforeUnmount(() => {
 			<Section v-else-if="map.status.value === 'empty'" title="Process map" class="d1-process-map">
 				<div class="pm-empty">
 					<h2>Pick a record to map</h2>
+					<p v-if="edit.failed.value" class="pm-note" :role="isNotice(edit.failed.value) ? 'status' : 'alert'">{{ edit.failed.value }}</p>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
 					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">
@@ -260,16 +271,22 @@ onBeforeUnmount(() => {
 			<template v-else>
 				<RecordLayout class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 					<template #crumbs>
-						<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
-						<span>›</span>
-						<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
-						<span>›</span>
-						<span>Process map</span>
+						<template v-if="blank">
+							<AppLink to="/map">Process map</AppLink>
+							<span>›</span>
+							<span>{{ edit.drafted.value ? edit.draft.name.value || 'Build a process' : 'Build a process' }}</span>
+						</template>
+						<template v-else>
+							<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
+							<span>›</span>
+							<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
+							<span>›</span>
+							<span>Process map</span>
+						</template>
 					</template>
 
 					<template #title-actions>
-						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
-						<ExportMenu :busy="mapExport.exporting.value" :disabled="!canvas.laidOut.value || !map.nodes.value.length || mapExport.exporting.value" @pick="mapExport.exportAs" />
+						<MapTitleActions :edit="edit" :map-export="mapExport" :can-export="canvas.laidOut.value && map.nodes.value.length > 0" />
 					</template>
 
 					<template v-if="!phone" #rail>
@@ -278,64 +295,75 @@ onBeforeUnmount(() => {
 
 					<Section class="pm-panel" title="Process map">
 						<template #actions>
-							<v-button small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
+							<v-button v-if="!emptyDraft" small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
 							<SegmentedControl :model-value="map.dir.value" :options="DIRECTIONS" label="Direction" @update:model-value="map.setDir" />
 							<v-button small secondary @click="canvas.relayout()">Re-layout</v-button>
 							<v-button small secondary @click="canvas.fit()">Fit</v-button>
-							<v-button small secondary :disabled="!!map.expanding.value" @click="map.reset()">Reset</v-button>
-							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
+							<v-button v-if="!emptyDraft" small secondary :disabled="!!map.expanding.value" @click="map.reset()">Reset</v-button>
+							<v-button v-if="!emptyDraft" small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
 
-						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
-						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
-						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
-						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
-						<div v-if="mapExport.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
-							<span>{{ mapExport.error.value }}</span>
-							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="mapExport.dismissError()"><v-icon name="close" x-small /></button>
-						</div>
-						<div v-else-if="mapExport.notice.value" class="pm-banner" role="status">{{ mapExport.notice.value }}</div>
+						<MapStrip :edit="edit" :side="side" :map="map" :canvas="canvas" :map-export="mapExport" />
 
-						<div
-							ref="canvasEl"
-							class="pm-canvas"
-							:class="{ pending: !canvas.laidOut.value }"
-							:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
-							@mouseleave="map.clearHover()"
-							@keydown="input.onKey"
-							@focusin="input.onFocusIn"
-							@pointerdown.capture="input.onPointerDown"
-							@pointermove.capture="input.onPointerMove"
-							@pointerup.capture="input.onPointerEnd"
-							@pointercancel.capture="input.onPointerEnd"
-							@click.capture="input.onClickCapture"
-							@contextmenu="onContextMenu"
-						>
-							<VueFlow
-								:node-types="canvas.nodeTypes"
-								:edge-types="canvas.edgeTypes"
-								:nodes-draggable="true"
-								:nodes-focusable="true"
-								:edges-focusable="false"
-								:nodes-connectable="false"
-								:elements-selectable="false"
-								:zoom-on-double-click="false"
-								:min-zoom="MIN_ZOOM"
-								:max-zoom="1.6"
-								:only-render-visible-elements="false"
+						<div class="pm-row">
+							<Palette v-if="edit.editing.value" v-bind="build.paletteProps.value" v-model:query="build.palette.query.value" v-on="build.paletteEvents" />
+							<div
+								ref="canvasEl"
+								class="pm-canvas"
+								:class="{ pending: !canvas.laidOut.value && map.nodes.value.length > 0 }"
+								:style="{ '--pm-px': `${canvas.screenPx.value}px` }"
+								@mouseleave="map.clearHover()"
+								@keydown="input.onKey"
+								@focusin="input.onFocusIn"
+								@pointerdown.capture="input.onPointerDown"
+								@pointermove.capture="input.onPointerMove"
+								@pointerup.capture="input.onPointerEnd"
+								@pointercancel.capture="input.onPointerEnd"
+								@click.capture="input.onClickCapture"
+								@click="build.onCanvasClick"
+								@contextmenu="(e: MouseEvent) => build.onContextMenu(e) || onContextMenu(e)"
 							>
-								<template #zoom-pane>
-									<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
-										<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
-									</div>
-								</template>
-								<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-								<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
-								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
-							</VueFlow>
-							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
-							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
-							<ChainMenu v-if="chainMenu" :x="chainMenu.x" :y="chainMenu.y" :dir="map.chainDir.value" @pick="pickChain" @close="chainMenu = null" />
+								<VueFlow
+									:node-types="canvas.nodeTypes"
+									:edge-types="canvas.edgeTypes"
+									:nodes-draggable="true" :delete-key-code="null"
+									:nodes-focusable="true"
+									:edges-focusable="false"
+									:nodes-connectable="false"
+									:elements-selectable="false"
+									:zoom-on-double-click="false"
+									:min-zoom="MIN_ZOOM"
+									:max-zoom="1.6"
+									:only-render-visible-elements="false"
+								>
+									<template #zoom-pane>
+										<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
+											<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
+										</div>
+									</template>
+									<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
+									<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+									<Controls :show-interactive="false" :position="controlsPosition(phone)" />
+								</VueFlow>
+								<EmptyDraftHint v-if="emptyDraft" />
+								<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
+								<WirePreview v-if="edit.editing.value" :preview="build.preview.value" :refusal="build.refusal.value" />
+								<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :composition="compositionOf(map.card.value.info)" :target="map.card.value.el" :canvas="canvasEl" />
+								<ChainMenu
+									v-if="chainMenu"
+									:x="chainMenu.x" :y="chainMenu.y"
+									:dir="map.chainDir.value"
+									:can-remove="edit.editing.value"
+									:can-dissolve="edit.editing.value && build.canDissolve.value"
+									:can-insert="edit.editing.value && build.canInsertSelected()"
+									:insert-before-refusal="build.selectedInsertBeforeRefusal()"
+									@pick="map.setChainDir"
+									@remove="build.removeSelected"
+									@dissolve="build.dissolveSelected"
+									@insert="build.insertSelected"
+									@close="chainMenu = null"
+								/>
+							</div>
 						</div>
 						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>
@@ -345,6 +373,8 @@ onBeforeUnmount(() => {
 				</MapSheet>
 			</template>
 		</PageShell>
+		<!-- Beside the layout, and outside the loading / ready chain (see EditOverlays): the toast after Create must survive the map reading again. -->
+		<EditOverlays :edit="edit" :side="side" :canvas-el="canvasEl" />
 		<Finder v-if="finderOpen" :pick-record="map.pickRecord" @close="finderOpen = false" />
 	</ExplorerView>
 </template>
@@ -353,6 +383,7 @@ onBeforeUnmount(() => {
 .pm-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 24px 8px; max-width: 560px; }
 .pm-empty h2 { margin: 0; font-size: var(--fs-xl, 18px); }
 .pm-empty p { margin: 0; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.pm-empty .pm-note { padding: 8px 12px; border-radius: 8px; background: var(--d1-tile, var(--theme--background-subdued)); }
 .pm-recent { margin-top: 8px; }
 .pm-recent h3 { margin: 0 0 6px; font-size: var(--fs-md, 14px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .pm-recent ul { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
@@ -362,8 +393,11 @@ onBeforeUnmount(() => {
 .pm-panel :deep(.body) { padding: 0; }
 .pm-panel :deep(.head) { flex-wrap: wrap; }
 .pm-panel :deep(.head .spacer) { min-width: 0; }
+.pm-row { display: flex; align-items: stretch; }
 .pm-canvas {
 	position: relative;
+	flex: 1;
+	min-width: 0;
 	height: max(420px, calc(100vh - var(--d1-header-offset, 72px) - 130px));
 	height: max(420px, calc(100dvh - var(--d1-header-offset, 72px) - 130px));
 	background: var(--d1-surface, var(--theme--background));
@@ -371,19 +405,6 @@ onBeforeUnmount(() => {
 }
 /* Nodes sit at 0,0 until the first layout has run; keep them out of sight until then. */
 .pm-canvas.pending { opacity: 0; }
-
-.pm-banner {
-	padding: 7px 14px;
-	font-size: var(--fs-sm, 12px);
-	color: var(--d1-dim, var(--theme--foreground-subdued));
-	background: var(--d1-tile, var(--theme--background-subdued));
-	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
-}
-.pm-bad { color: var(--d1-bad, var(--theme--danger)); }
-.pm-dismissable { display: flex; align-items: center; gap: 8px; }
-.pm-dismissable span { flex: 1; }
-.pm-dismiss { display: inline-flex; padding: 2px; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer; }
-.pm-dismiss:hover, .pm-dismiss:focus-visible { background: var(--d1-tile, var(--theme--background-subdued)); outline: none; }
 
 /* The project frame (spec D13): in flow coordinates inside Vue Flow's transformed pane, behind the nodes. */
 .pm-frame {
