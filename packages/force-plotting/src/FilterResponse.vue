@@ -95,13 +95,14 @@ function setFrequency(h: Handle, f: number) {
 	emit('update:chain', next);
 }
 let drag: Handle | null = null;
+const dragging = ref(false);   // for the template: the read-out hides while a handle moves
 function px(ev: PointerEvent | MouseEvent): number {
 	const r = svgEl.value!.getBoundingClientRect();
 	return (ev.clientX - r.left) * (w.value / r.width);
 }
 function onDown(h: Handle, ev: PointerEvent) {
 	if (ev.button !== 0) return;
-	drag = h;
+	drag = h; dragging.value = true;
 	(ev.currentTarget as Element).setPointerCapture(ev.pointerId);
 	ev.stopPropagation();
 }
@@ -109,7 +110,7 @@ function onDragMove(ev: PointerEvent) {
 	if (drag) setFrequency(drag, fAt(px(ev)));
 }
 function onUp(ev: PointerEvent) {
-	drag = null;
+	drag = null; dragging.value = false;
 	try { (ev.currentTarget as Element).releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
 }
 function onKey(h: Handle, ev: KeyboardEvent) {
@@ -169,7 +170,7 @@ const legend = computed(() => [{ id: 'combined', label: 'Combined' }, ...curves.
 			</g>
 			<text x="4" y="12" class="fr-title">Gain (dB)</text>
 			<text :x="ML + plotW / 2" :y="height - 6" text-anchor="middle" class="fr-title">Frequency (Hz)</text>
-			<g v-if="hover && !drag" pointer-events="none">
+			<g v-if="hover && !dragging" pointer-events="none">
 				<line :x1="hover.x" :x2="hover.x" :y1="MT" :y2="MT + plotH" class="fr-cursor" />
 			</g>
 			<g v-for="h in handles" :key="h.key">
@@ -181,7 +182,7 @@ const legend = computed(() => [{ id: 'combined', label: 'Combined' }, ...curves.
 					:aria-label="`${h.stage} frequency`" :aria-valuenow="Math.round(h.f)" aria-valuemin="1" :aria-valuemax="Math.round(nyquist)"
 					@pointerdown="onDown(h, $event)" @keydown="onKey(h, $event)" />
 			</g>
-			<g v-if="readout && !drag" pointer-events="none">
+			<g v-if="readout && !dragging" pointer-events="none">
 				<rect :x="readout.x" :y="MT + plotH - 20" :width="readout.wText" height="15" rx="3" class="fr-readout" />
 				<text :x="readout.x + readout.wText / 2" :y="MT + plotH - 9" text-anchor="middle" class="fr-readout-text">{{ readout.text }}</text>
 			</g>
