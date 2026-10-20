@@ -30,9 +30,12 @@ let ro: ResizeObserver | null = null;
 const off = document.createElement('canvas');
 const offCtx = off.getContext('2d');
 
-type Grid = { f: number[]; t: number[]; S: number[][]; fmax: number };
+type Grid = { f: number[]; t: number[]; S: number[][]; fmax: number; ref_db?: number };
 const grid = ref<Grid | null>(null);
-const rawGrid = ref<Grid | null>(null);   // the unfiltered spectrum, loaded only for the power view with a chain on
+// The unfiltered spectrum, loaded once per file and axis and only for the power view with a chain on.
+const rawGrid = ref<Grid | null>(null);
+let rawKey = '';
+let rawAbort: AbortController | null = null;
 const loading = ref(false);
 const err = ref<string | null>(null);
 let reqId = 0;
@@ -59,7 +62,7 @@ function computeHover(ev: MouseEvent) {
 		hover.value = { x: px, y: py, text: `${g.t[ti].toFixed(1)}s · ${Math.round(g.f[fi])}Hz · ${db != null ? db.toFixed(1) : '?'}dB` };
 	} else if (props.mode === 'psd') {
 		const fi = nearestIndex(g.f, psdFreqAt(g, (px - ML) / plotW), 0, nF - 1);
-		const db = psdOf(g)[fi];
+		const db = psdOf(g)[fi] + psdOffset(g);
 		hover.value = { x: px, y: py, text: `${fmtHz(g.f[fi])}${db != null ? ` · ${db.toFixed(1)} dB` : ''}` };
 	} else {   // waterfall — no numeric y-axis (vertical offset encodes recency, not a value)
 		const fi = Math.min(nF - 1, Math.max(0, Math.round(((px - ML) / plotW) * (nF - 1))));
@@ -91,21 +94,38 @@ let themeObserver: MutationObserver | null = null;
 let loadAbort: AbortController | null = null;
 async function load() {
 	loadAbort?.abort(); loadAbort = null;
-	if (!props.cacheFileId) { ++reqId; grid.value = null; rawGrid.value = null; loading.value = false; return; }
+	if (!props.cacheFileId) {
+		++reqId; grid.value = null; loading.value = false;
+		rawAbort?.abort(); rawKey = ''; rawGrid.value = null;
+		return;
+	}
 	const mine = ++reqId;
 	const ac = new AbortController(); loadAbort = ac;
 	loading.value = true; err.value = null;
 	try {
-		// The raw spectrum for the faint line behind a filtered one; its failure costs only that line.
-		const wantRaw = props.mode === 'psd' && chainActive(props.chain);
-		const rawReq = wantRaw ? fetchSpectrogram(props.cacheFileId, defaultChain(), props.axis, ac.signal).catch(() => null) : Promise.resolve(null);
+		void loadRaw();   // in parallel; the filtered trace never waits for it
 		const g = await fetchSpectrogram(props.cacheFileId, props.chain, props.axis, ac.signal);
-		const raw = await rawReq;
-		if (mine === reqId) { grid.value = g; rawGrid.value = raw; }
+		if (mine === reqId) { grid.value = g; }
 	} catch (e: any) {
 		if (mine === reqId && !ac.signal.aborted) { err.value = e?.message || 'spectrogram failed'; grid.value = null; }
 	} finally {
 		if (mine === reqId) { loading.value = false; draw(); }
+	}
+}
+
+// The raw spectrum for the faint line behind a filtered one. It does not depend on the chain, so it
+// loads once per file and axis; its failure costs only that line (and is retried on the next load).
+async function loadRaw() {
+	if (props.mode !== 'psd' || !chainActive(props.chain) || !props.cacheFileId) return;
+	const key = `${props.cacheFileId}|${props.axis}`;
+	if (key === rawKey) return;
+	rawAbort?.abort(); rawKey = key; rawGrid.value = null;
+	const ac = new AbortController(); rawAbort = ac;
+	try {
+		const raw = await fetchSpectrogram(props.cacheFileId, defaultChain(), props.axis, ac.signal);
+		if (rawKey === key) { rawGrid.value = raw; draw(); }
+	} catch {
+		if (rawKey === key && !ac.signal.aborted) rawKey = '';
 	}
 }
 
@@ -205,6 +225,17 @@ function psdOf(g: Grid): number[] {
 	}
 	return v;
 }
+// Each grid is in dB relative to its own peak, so a filtered grid is moved onto the raw one's scale
+// with the services' `ref_db` (filtered_db + filtered_ref - raw_ref); without it (an older service)
+// the filtered trace is drawn alone, relative to its own peak.
+function usableRaw(): Grid | null {
+	const r = rawGrid.value, g = grid.value;
+	return r && r.S.length && g && r.ref_db != null && g.ref_db != null && chainActive(props.chain) ? r : null;
+}
+function psdOffset(g: Grid): number {
+	const r = usableRaw();
+	return r && g !== r ? g.ref_db! - r.ref_db! : 0;
+}
 // Log frequency axis from the decade of the first non-zero bin (never below 1 Hz) to Nyquist.
 function psdFreqRange(g: Grid): [number, number] {
 	const lo = Math.max(1, 10 ** Math.floor(Math.log10(g.f.find((v) => v > 0) ?? 1)));
@@ -252,19 +283,19 @@ function drawPsd(g: Grid, W: number, H: number, plotW: number, plotH: number, st
 	for (const v of yScale.ticks) { const y = sy(v); ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + plotW, y); ctx.stroke(); }
 	ctx.globalAlpha = 1;
 	// traces: raw faint behind, filtered (or the only one) solid
-	const trace = (db: number[], gf: number[], alpha: number) => {
+	const trace = (db: number[], gf: number[], alpha: number, offset: number) => {
 		ctx!.strokeStyle = stroke; ctx!.globalAlpha = alpha; ctx!.lineWidth = 1.5; ctx!.beginPath();
 		let started = false;
 		for (let fi = 0; fi < gf.length; fi++) {
 			if (!(gf[fi] >= xLo)) continue;
-			const x = sx(gf[fi]), y = sy(db[fi]);
+			const x = sx(gf[fi]), y = sy(db[fi] + offset);
 			started ? ctx!.lineTo(x, y) : ctx!.moveTo(x, y); started = true;
 		}
 		ctx!.stroke(); ctx!.globalAlpha = 1; ctx!.lineWidth = 1;
 	};
-	const raw = rawGrid.value && rawGrid.value.S.length && chainActive(props.chain) ? rawGrid.value : null;
-	if (raw) trace(psdOf(raw), raw.f, 0.35);
-	trace(psdOf(g), g.f, 1);
+	const raw = usableRaw();
+	if (raw) trace(psdOf(raw), raw.f, 0.35, 0);
+	trace(psdOf(g), g.f, 1, psdOffset(g));
 	// axes with 4px outward ticks, labels, titles
 	ctx.strokeStyle = pal.textFaint; ctx.fillStyle = pal.text; ctx.globalAlpha = 1;
 	ctx.beginPath(); ctx.moveTo(ML, MT); ctx.lineTo(ML, MT + plotH); ctx.lineTo(ML + plotW, MT + plotH); ctx.stroke();
@@ -275,7 +306,7 @@ function drawPsd(g: Grid, W: number, H: number, plotW: number, plotH: number, st
 	for (const f of lt.major) { const x = sx(f); ctx.beginPath(); ctx.moveTo(x, MT + plotH); ctx.lineTo(x, MT + plotH + 4); ctx.stroke(); ctx.fillText(fmtFreq(f), x, MT + plotH + 16); }
 	ctx.font = '600 11px system-ui';
 	ctx.fillText('Frequency (Hz)', ML + plotW / 2, H - 6);
-	ctx.textAlign = 'left'; ctx.fillText('Magnitude (dB re 1 N)', 4, 13);
+	ctx.textAlign = 'left'; ctx.fillText(raw ? 'Magnitude (dB re raw peak)' : 'Magnitude (dB re peak)', 4, 13);
 	ctx.font = '11px system-ui';
 	label(`${props.axis}${raw ? ' · filtered, raw faint' : ''}`, stroke, W - MR, 'right');
 }
@@ -388,7 +419,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
 	ro?.disconnect(); themeObserver?.disconnect();
-	loadSoon.cancel(); loadAbort?.abort(); loadAbort = null; ++reqId;   // nothing may land after unmount
+	loadSoon.cancel(); loadAbort?.abort(); loadAbort = null; rawAbort?.abort(); ++reqId;   // nothing may land after unmount
 });
 </script>
 

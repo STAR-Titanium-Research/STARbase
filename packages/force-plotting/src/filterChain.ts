@@ -78,9 +78,10 @@ export async function fetchFilteredFft(cacheFileId: string, chain: FilterChain, 
 	return res.json();
 }
 
-// STFT of one axis for the spectrogram / waterfall / power-spectrum views. S is [freq][time] in dB.
+// STFT of one axis for the spectrogram / waterfall / power-spectrum views. S is [freq][time] in dB relative to
+// the grid's own peak; ref_db is that peak in dB (absent on an older service), to compare two grids.
 export async function fetchSpectrogram(cacheFileId: string, chain: FilterChain, axis: string, signal?: AbortSignal):
-	Promise<{ f: number[]; t: number[]; S: number[][]; fmax: number }> {
+	Promise<{ f: number[]; t: number[]; S: number[][]; fmax: number; ref_db?: number }> {
 	const res = await authorizedFetch(`${useForceHost().filterUrl}/spectrogram`, {
 		method: 'POST',
 		signal,
