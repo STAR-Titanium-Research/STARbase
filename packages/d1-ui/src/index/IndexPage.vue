@@ -16,7 +16,7 @@
 // With `pick` the page is a row picker, opened over another page (the process map's sample picker): its state is kept in
 // memory, not in the URL; a click on a row ticks it instead of opening it; a button hands the ticked rows back (`pick` event,
 // pickMode.ts); the links, Plots, Process map, New and Data Studio buttons are not drawn.
-import { computed, ref, toRef, useSlots, watch } from 'vue';
+import { computed, reactive, ref, toRef, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import '../components/tokens.css';
 import { useExplorerHost } from '../host';
@@ -31,6 +31,10 @@ import { pinTargetForIndex } from '../components/pinTarget';
 import type { PinRef } from '../nav/sidebarModel';
 import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
+import BulkLayer from '../bulk/BulkLayer.vue';
+import { bulkEntries } from '../bulk/bulkModel';
+import type { BulkEntry } from '../bulk/bulkModel';
+import { useBulkActions } from '../bulk/useBulkActions';
 import CardGrid from './CardGrid.vue';
 import IndexActions from './IndexActions.vue';
 import IndexList from './IndexList.vue';
@@ -147,10 +151,8 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 	openRow(row);
 }
 
-// ---- ticked rows (defs with a selectAction): kept across pages, in the order ticked ----------------
-// In picker mode every list can tick (not only those with a selectAction), and rows already taken are not tickable,
-// so "tick every row on this page" leaves them out.
-const ticks = !!props.pick || !!props.def.selectAction;
+// ---- ticked rows: every list ticks; kept across pages, in the order ticked -----------------------------
+// In picker mode rows already taken are not tickable, so "tick every row on this page" leaves them out.
 const tickable = computed(() => (props.pick ? rows.value.filter((r) => !pickState.isTaken(r)) : rows.value));
 const sel = useRowSelection(props.def, tickable, rowKey, (to) => host.navigate(to));
 const root = ref<unknown>(null);
@@ -164,6 +166,17 @@ const pickState = usePickMode({
 	nouns: props.pickNouns ?? nounsFor(props.def.title),
 	emit: (picked) => emit('pick', picked),
 });
+
+// ---- bulk actions: the With-selected menu (in IndexActions), its dialog and the undo toasts (bulk/) ----------
+// The menu holds Print labels (the def's select action, same route as before) and what the def offers; a list with nothing to offer
+// has no menu. A Lab Viewer is offered only what navigates. After an apply or undo the list reloads and only skipped rows stay ticked.
+const actions = ref<InstanceType<typeof IndexActions> | null>(null);
+const menuEntries = computed(() => (props.pick ? [] : bulkEntries(props.def, { viewer: viewer.value })));
+const bulk = reactive(useBulkActions({ api: host.api, def: props.def, picked: sel.picked, onChanged: (keep) => { sel.keepOnly(keep); void reload(); } }));
+function onBulk(entry: BulkEntry): void {
+	if (entry.kind === 'print') sel.run();
+	else bulk.open(entry);
+}
 
 // ---- sort and cards -------------------------------------------------------------------------
 // The rail's Sort is a field select and a direction button for every layout (the same URL sort the table's heads set).
@@ -189,14 +202,16 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 			<nav v-if="!pick" class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
 			<IndexActions
 				v-if="!forbidden"
+				ref="actions"
 				:def="def"
 				:pick="pick"
 				:pick-text="pickState.text.value"
 				:pick-count="pickState.count.value"
 				:picked-count="sel.picked.value.length"
+				:bulk-entries="menuEntries"
 				:ds-link="dsLink"
 				@confirm="pickState.confirm"
-				@run="sel.run"
+				@bulk="onBulk"
 			/>
 		</div>
 
@@ -268,8 +283,8 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || hasMap || ticks" #footer="{ row }">
-						<label v-if="ticks" class="tick">
+					<template #footer="{ row }">
+						<label class="tick">
 							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="pickState.isTaken(row) || (!sel.isPicked(row) && sel.full.value)" @change="sel.toggle(row)" />
 							<span>{{ pickState.isTaken(row) ? 'Already added' : 'Select' }}</span>
 						</label>
@@ -290,7 +305,6 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 					:has-plots="hasPlots"
 					:has-map="hasMap"
 					:pick="pick"
-					:ticks="ticks"
 					:is-picked="sel.isPicked"
 					:is-taken="pickState.isTaken"
 					:full="sel.full.value"
@@ -314,7 +328,6 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 					:has-plots="hasPlots"
 					:has-map="hasMap"
 					:pick="pick"
-					:ticks="ticks"
 					:is-picked="sel.isPicked"
 					:is-taken="pickState.isTaken"
 					:all-picked="sel.allPicked.value"
@@ -336,7 +349,7 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 				</div>
 			</div>
 
-			<p v-if="ticks && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
+			<p v-if="sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ pageCount(total, prefs.pageSize) }}</span>
@@ -357,6 +370,7 @@ watch(pinTarget, (target) => emit('pin', target), { immediate: true });
 			@update:model-value="onDrawer"
 			@saved="reload"
 		/>
+		<BulkLayer v-if="!forbidden && !pick" :bulk="bulk" :def="def" :restore-focus="() => actions?.focusMenu()" />
 	</PageShell>
 </template>
 

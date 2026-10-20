@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { AppLink, Section, ago, crawlerOnline, formatDate, overviewTime, ownerlessRows, ownerlessTotal } from '@d1/ui';
+import BulkActionsPanel from './BulkActionsPanel.vue';
 import { useAdminOverview } from './useAdminOverview';
 
 // Three admin-only panels under the work panels: the force crawler's queue, files the indexer
-// flagged missing on the share, and records with no owner. All three come from one call
+// flagged missing on the share, and records with no owner, then the Bulk actions journal (its own
+// panel and its own endpoint, BulkActionsPanel). The first three come from one call
 // (useAdminOverview). The whole call failing is one quiet line, not three broken panels; a part that
 // failed on the server is null and only that panel's body says it could not load. No panel is ever
 // an empty box: each one says what it found, including "nothing" with a tick.
@@ -106,6 +108,8 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 				</ul>
 			</Section>
 		</div>
+		<!-- Its own block: the bulk-action journal is a separate endpoint, so it stays when the overview above could not load. -->
+		<BulkActionsPanel :active="isAdmin" />
 	</template>
 </template>
 

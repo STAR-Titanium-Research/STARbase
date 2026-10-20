@@ -65,6 +65,11 @@ export function isoWeek(d: Date): { isoYear: number; isoWeek: number } {
 	return { isoYear, isoWeek: Math.floor(dayOfYear / 7) + 1 };
 }
 
+// "2026-W42": the label of an ISO week.
+export function isoWeekLabel(w: { isoYear: number; isoWeek: number }): string {
+	return `${w.isoYear}-W${String(w.isoWeek).padStart(2, '0')}`;
+}
+
 // The `count` Mondays ending with the week that contains `now`, oldest first.
 export function lastWeeks(count: number, now: Date = new Date()): WeekInfo[] {
 	const n = Math.max(0, Math.floor(count));

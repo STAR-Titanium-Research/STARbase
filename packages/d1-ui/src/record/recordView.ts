@@ -85,8 +85,9 @@ export const DENSITY_OPTIONS: readonly { value: Density; label: string }[] = [
 ];
 
 /** The collapsed tab's text after "View": "1 column · Normal", with what is not the default added ("Empty hidden", "30 d"). */
-export function viewSummary(view: RecordView, withRange: boolean): string {
-	const parts = [view.panels === 2 ? '2 columns' : '1 column', DENSITY_OPTIONS.find((o) => o.value === view.density)!.label];
+export function viewSummary(view: RecordView, withRange: boolean, withPanels = true): string {
+	const parts = [DENSITY_OPTIONS.find((o) => o.value === view.density)!.label];
+	if (withPanels) parts.unshift(view.panels === 2 ? '2 columns' : '1 column');
 	if (view.empty === 'hide') parts.push('Empty hidden');
 	if (withRange && view.range !== DEFAULT_RECORD_VIEW.range) parts.push(ACTIVITY_RANGES.find((r) => r.value === view.range)!.label);
 	return parts.join(' · ');

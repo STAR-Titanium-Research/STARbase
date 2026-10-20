@@ -9,6 +9,13 @@ export function formatDate(value: string | null | undefined, fallback = ''): str
 	return d.toLocaleDateString(EN_GB, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** "5 Jan 2024 to 9 Mar 2025", "From 5 Jan 2024", "Until 9 Mar 2025"; empty when neither is set. */
+export function dateRangeText(start: string | null | undefined, end: string | null | undefined): string {
+	const a = formatDate(start);
+	const b = formatDate(end);
+	return a && b ? `${a} to ${b}` : a ? `From ${a}` : b ? `Until ${b}` : '';
+}
+
 export function formatNumber(value: number | string | null | undefined, unit = '', digits = 3): string {
 	if (value === null || value === undefined || value === '') return '';
 	const n = Number(value);

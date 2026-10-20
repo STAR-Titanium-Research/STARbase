@@ -1,9 +1,12 @@
 <script setup lang="ts">
-// The page's own buttons, on the breadcrumb line of an index page (IndexPage): the select action ("Print labels
-// for selected", disabled until rows are ticked, then "(2)"), Open in Data Studio and "+ New". In picker mode the
-// buttons that navigate away give way to the confirm button. They are the page's actions, not the toolbar's
+// The page's own buttons, on the breadcrumb line of an index page (IndexPage): the With-selected menu (bulk/: Print
+// labels and the bulk actions the def offers, disabled until rows are ticked), Open in Data Studio and "+ New". In
+// picker mode the buttons that navigate away give way to the confirm button. They are the page's actions, not the toolbar's
 // (search and filters) nor the View rail's (how rows look). It draws what IndexPage hands it and reports clicks.
+import { ref } from 'vue';
 import { useExplorerHost } from '../host';
+import BulkMenu from '../bulk/BulkMenu.vue';
+import type { BulkEntry } from '../bulk/bulkModel';
 import type { IndexDef } from './indexConfig';
 
 defineProps<{
@@ -12,21 +15,23 @@ defineProps<{
 	/** Picker mode: the confirm button's text and how many rows it would add. */
 	pickText: string;
 	pickCount: number;
-	/** The def's select action and how many rows are ticked for it. */
+	/** How many rows are ticked, and the entries of the With-selected menu (none: no menu). */
 	pickedCount: number;
+	bulkEntries: BulkEntry[];
 	dsLink: { to: string; note?: string | null };
 }>();
-const emit = defineEmits<{ confirm: []; run: [] }>();
+const emit = defineEmits<{ confirm: []; bulk: [entry: BulkEntry] }>();
 
 const host = useExplorerHost();
+// The page hands focus back here after a bulk dialog closes.
+const menu = ref<InstanceType<typeof BulkMenu> | null>(null);
+defineExpose({ focusMenu: () => menu.value?.focus() });
 </script>
 
 <template>
 	<div class="actions">
 		<button v-if="pick" type="button" class="btn pri" :disabled="!pickCount" @click="emit('confirm')">{{ pickText }}</button>
-		<button v-else-if="def.selectAction" type="button" class="btn" :disabled="!pickedCount" @click="emit('run')">
-			{{ def.selectAction.label }}{{ pickedCount ? ` (${pickedCount})` : '' }}
-		</button>
+		<BulkMenu v-else-if="bulkEntries.length" ref="menu" :entries="bulkEntries" :count="pickedCount" @choose="emit('bulk', $event)" />
 		<template v-if="!pick">
 			<button type="button" class="btn" :title="dsLink.note ?? undefined" @click="host.openDataStudio(dsLink.to)">Open in Data Studio</button>
 			<button v-if="!host.canViewAllAccess?.value" type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>

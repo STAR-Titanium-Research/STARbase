@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-bulk-actions",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-bulk-actions: bulk actions on the index pages (assign to a team, change owner, share, remove access, restrict, unrestrict, edit a field): a dry-run preview per record, apply with partial success, a 60-second undo, an administrator's revert, the held summary mail and the journal behind them.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

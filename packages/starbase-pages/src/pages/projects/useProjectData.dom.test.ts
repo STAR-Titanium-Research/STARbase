@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-// The Project page's activity chart follows the View rail's range: changing it reads the chart again and nothing else.
+// The Project page's timeline follows the View rail's Activity range (30 d, 6 mo, All) client side: the page reads the whole history once, so
+// changing the range reads nothing again, and the timeline's "last operation" still sees work older than the range.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick, ref, type App } from 'vue';
 import { setExplorerHostFactory } from '@d1/ui';
-import type { ActivityRange } from '@d1/ui';
 import { useProjectData } from './useProjectData';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -17,55 +17,33 @@ afterEach(() => {
 	app = null;
 });
 
-// The chart's read is the one that asks for the campaign's project too (the project rule), unlike the Project page's plain lists.
+// The chart's read is the one that asks for the operation date alone (for one project the rows are its own by the filter), unlike the page's lists.
 const isActivityRead = (url: string, p: Record<string, any>) =>
-	url === '/items/manufacturing_operations' && !!p.fields?.includes('campaign_id.project_id') && p.fields.includes('operation_date');
+	url === '/items/manufacturing_operations' && p.fields?.length === 1 && p.fields[0] === 'operation_date';
 
 function setup() {
 	const get = vi.fn(async (url: string, config?: { params?: Record<string, any> }) => {
 		const p = config?.params ?? {};
 		if (url === `/items/projects/${PROJECT}`) return { data: { data: { project_id: PROJECT, project_code: 'P-1' } } };
-		if (isActivityRead(url, p)) {
-			const all = [{ project_id: PROJECT, operation_date: RECENT }, { project_id: PROJECT, operation_date: OLD }];
-			// the server applies the window: a start date keeps only the recent one
-			return { data: { data: JSON.stringify(p.filter).includes('_gte') ? all.slice(0, 1) : all } };
-		}
+		if (isActivityRead(url, p)) return { data: { data: [{ operation_date: RECENT }, { operation_date: OLD }] } };
 		return { data: { data: [] } };
 	});
 	setExplorerHostFactory(() => ({ api: { get }, navigate: () => {}, openDataStudio: () => {}, user: ref(null) }) as any);
-	const range = ref<ActivityRange>('6mo');
 	let data!: ReturnType<typeof useProjectData>;
-	app = createApp(defineComponent({ setup: () => { data = useProjectData(ref(PROJECT), range); return () => h('div'); } }));
+	app = createApp(defineComponent({ setup: () => { data = useProjectData(ref(PROJECT)); return () => h('div'); } }));
 	app.mount(document.createElement('div'));
-	return { get, range, data: () => data };
+	return { get, data: () => data };
 }
 const settle = async () => { for (let i = 0; i < 20; i++) await nextTick(); await new Promise((r) => setTimeout(r)); };
 const activityReads = (get: ReturnType<typeof vi.fn>) => get.mock.calls.filter(([u, c]) => isActivityRead(u, c?.params ?? {}));
 
-describe('useProjectData activity range', () => {
-	it('starts with the 26-week default window', async () => {
+describe('useProjectData activity', () => {
+	it('reads the whole history once: every dated done row, not a window', async () => {
 		const { get, data } = setup();
 		await settle();
-		expect(data().activity.value.data.data?.weeks).toHaveLength(26);
-		expect(data().activity.value.data.data?.totalOps).toBe(1);
 		expect(activityReads(get)).toHaveLength(1);
-	});
-
-	it('reads only the activity again when the range changes, over the new window', async () => {
-		const { get, range, data } = setup();
-		await settle();
-		const campaignReads = () => get.mock.calls.filter(([u]) => u === '/items/campaigns').length;
-		const before = campaignReads();
-		range.value = '30d';
-		await settle();
-		expect(data().activity.value.data.data?.weeks).toHaveLength(5);
-		range.value = 'all';
-		await settle();
-		const a = data().activity.value.data.data!;
-		expect(a.weeks.length).toBeGreaterThanOrEqual(41);
-		expect(a.totalOps).toBe(2);
-		expect(activityReads(get)).toHaveLength(3);
-		expect(JSON.stringify(activityReads(get)[2][1].params.filter)).toContain('_nnull');
-		expect(campaignReads()).toBe(before);
+		expect(JSON.stringify(activityReads(get)[0][1].params.filter)).toContain('_nnull');
+		expect(JSON.stringify(activityReads(get)[0][1].params.filter)).not.toContain('_gte');
+		expect(data().activity.value.data.ops).toEqual([RECENT, OLD]);
 	});
 });

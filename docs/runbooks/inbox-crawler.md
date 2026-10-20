@@ -314,7 +314,10 @@ are replaceable copies, never the original, and the table is outside Directus's 
   picture of each); the size so far is
   `SELECT count(*), pg_size_pretty(sum(octet_length(thumb) + octet_length(preview))) FROM d1_private.file_thumbnails`.
   The backlog is worked through at up to 25 images per 30-second tick, about 3,000 an hour, less when the read
-  throttle or big TIFFs slow it. To save the space, set `INBOX_THUMBNAILS=0` or
+  throttle or big TIFFs slow it. To clear a big backlog sooner set `INBOX_THUMB_BATCH` and `INBOX_THUMB_BUDGET_S` in `.env`
+  (both: the batch only helps when the time budget lets it run, about one picture a second; 150 and 90 give roughly
+  8,000 an hour) and recreate the crawler; while a tick's backfill runs, scan requests wait for it, so remove both
+  when the backlog is done. To save the space, set `INBOX_THUMBNAILS=0` or
   `TRUNCATE d1_private.file_thumbnails` (they are made again from the share if it is switched on).
 - **Memory.** About 500 MB peak for a 50 MP 16-bit TIFF; the service has no limit of its own
   today, so give the container room for that (backlog IF54).

@@ -29,7 +29,6 @@ const props = defineProps<{
 	hasPlots: boolean;
 	hasMap: boolean;
 	pick?: boolean;
-	ticks: boolean;
 	isPicked: (row: Row) => boolean;
 	isTaken: (row: Row) => boolean;
 	full: boolean;
@@ -59,7 +58,6 @@ const runs = computed(() => groupRuns(props.rows, props.groupOf));
 				@click="emit('open', row)"
 			>
 				<input
-					v-if="ticks"
 					type="checkbox"
 					class="tick"
 					:checked="isPicked(row)"

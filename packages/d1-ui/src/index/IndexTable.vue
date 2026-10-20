@@ -29,8 +29,7 @@ const props = defineProps<{
 	hasPlots: boolean;
 	hasMap: boolean;
 	pick?: boolean;
-	/** The tick column (a select action, or picker mode) and its state. */
-	ticks: boolean;
+	/** The tick column's state. */
 	isPicked: (row: Row) => boolean;
 	isTaken: (row: Row) => boolean;
 	allPicked: boolean;
@@ -56,7 +55,7 @@ function ariaSort(c: ColumnDef): 'ascending' | 'descending' | undefined {
 	return d === 'asc' ? 'ascending' : d === 'desc' ? 'descending' : undefined;
 }
 const arrow = (c: ColumnDef) => (sortDirection(props.sort, sortKey(c)) === 'asc' ? '▲' : sortDirection(props.sort, sortKey(c)) === 'desc' ? '▼' : '');
-const colCount = computed(() => (props.ticks ? 1 : 0) + (props.showThumb ? 1 : 0) + props.def.columns.length + (props.hasPlots ? 1 : 0) + (props.hasMap ? 1 : 0));
+const colCount = computed(() => 1 + (props.showThumb ? 1 : 0) + props.def.columns.length + (props.hasPlots ? 1 : 0) + (props.hasMap ? 1 : 0));
 // One <tbody> per group, headed by a row header cell, so a screen reader announces the group.
 const runs = computed(() => groupRuns(props.rows, props.groupOf));
 const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.format === 'code' });
@@ -66,7 +65,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 	<DataTable :density="density">
 		<thead>
 			<tr>
-				<th v-if="ticks" class="fit">
+				<th class="fit">
 					<input type="checkbox" :checked="allPicked" aria-label="Tick every row on this page" @change="emit('togglePage')" />
 				</th>
 				<th v-if="showThumb" class="thumb" aria-hidden="true" />
@@ -82,7 +81,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 		</thead>
 		<tbody v-if="loading && !rows.length">
 			<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
-				<td v-if="ticks" />
+				<td />
 				<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 				<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 				<td v-if="hasPlots" class="plots" />
@@ -100,7 +99,7 @@ const cellClass = (c: ColumnDef) => ({ num: c.format === 'number', mono: c.forma
 					:[PICK_ATTR]="pick ? rowKey(row) : undefined"
 					@click="emit('open', row)"
 				>
-					<td v-if="ticks" class="fit" @click.stop>
+					<td class="fit" @click.stop>
 						<input
 							type="checkbox"
 							:checked="isPicked(row)"

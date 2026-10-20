@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NAV_GROUPS } from '../nav/navConfig';
 import { INDEX_DEFS, indexDefByCollection, indexDefBySlug } from './indexConfig';
+import { relationKey } from './indexView';
 
 const BESPOKE = ['projects', 'people'];
 const navLinks = NAV_GROUPS.flatMap((g) => g.links).filter((l) => l.collection);
@@ -160,5 +161,82 @@ describe('lookups', () => {
 		expect(indexDefBySlug('projects')).toBeUndefined();
 		expect(indexDefByCollection('people')).toBeUndefined();
 		expect(indexDefBySlug('nope')).toBeUndefined();
+	});
+});
+
+describe('bulk actions in the defs', () => {
+	it('flags exactly the four ownable record types', () => {
+		expect(INDEX_DEFS.filter((d) => d.ownable).map((d) => d.collection).sort()).toEqual([
+			'campaigns', 'manufacturing_operations', 'physical_samples', 'test_sessions',
+		]);
+	});
+
+	it('describes every bulk field fully, once per field, on a real column or an existing one', () => {
+		for (const d of INDEX_DEFS) {
+			const fields = d.bulkFields ?? [];
+			expect(new Set(fields.map((f) => f.field)).size, d.slug).toBe(fields.length);
+			for (const f of fields) {
+				expect(['relation', 'enum', 'bool', 'date'], `${d.slug}.${f.field}`).toContain(f.kind);
+				expect(f.label, `${d.slug}.${f.field}`).toBeTruthy();
+				if (f.kind === 'relation') {
+					expect(f.relation?.collection, `${d.slug}.${f.field}`).toBeTruthy();
+					expect(f.relation?.display, `${d.slug}.${f.field}`).toBeTruthy();
+				} else {
+					expect(f.relation, `${d.slug}.${f.field}`).toBeUndefined();
+				}
+				if (f.kind === 'enum') expect(f.values?.length, `${d.slug}.${f.field}`).toBeGreaterThan(0);
+				else expect(f.values, `${d.slug}.${f.field}`).toBeUndefined();
+			}
+		}
+	});
+
+	it('gives the samples page its three safe fields, status without the planned value', () => {
+		const d = indexDefBySlug('samples')!;
+		expect(d.bulkFields!.map((f) => [f.field, f.kind])).toEqual([['current_status', 'enum'], ['project_id', 'relation'], ['mounted', 'bool']]);
+		expect(d.bulkFields![0].values).not.toContain('planned');
+		// A bulk link points at the same table as the page's own relation column.
+		expect(d.columns.find((c) => c.field === 'project_id')?.relation?.collection).toBe(d.bulkFields![1].relation!.collection);
+	});
+});
+
+describe('bulk fields on the other record pages', () => {
+	const fieldsOf = (slug: string) => indexDefBySlug(slug)!.bulkFields!.map((f) => [f.field, f.label, f.kind]);
+
+	it('gives operations, tests and campaigns the fields the server allows, with its labels', () => {
+		expect(fieldsOf('operations')).toEqual([['project_id', 'Project', 'relation'], ['campaign_id', 'Campaign', 'relation'], ['planned_date', 'Planned date', 'date']]);
+		expect(fieldsOf('tests')).toEqual([
+			['status', 'Status', 'enum'], ['project_id', 'Project', 'relation'], ['campaign_id', 'Campaign', 'relation'], ['planned_date', 'Planned date', 'date'],
+		]);
+		expect(fieldsOf('campaigns')).toEqual([['project_id', 'Project', 'relation'], ['start_date', 'Start date', 'date'], ['end_date', 'End date', 'date']]);
+	});
+
+	it('offers no bulk field on a page that is not a record type', () => {
+		for (const d of INDEX_DEFS) if (!d.ownable) expect(d.bulkFields, d.slug).toBeUndefined();
+	});
+
+	it('names the campaign by its name when it has no code', () => {
+		const campaign = indexDefBySlug('operations')!.bulkFields!.find((f) => f.field === 'campaign_id')!;
+		expect(campaign.relation).toEqual({ collection: 'campaigns', display: 'campaign_code', fallback: 'name' });
+		expect(relationKey(campaign.relation!.collection)).toBe('campaign_id');
+	});
+
+	it('mirrors the endpoint allow-list exactly: same fields, kinds, labels, values and link tables', async () => {
+		// BULK_FIELDS is the server's own list (core/extensions/d1-bulk-actions); a page offering a field it refuses, or missing one it takes, fails here.
+		const path = new URL('../../../../core/extensions/d1-bulk-actions/index.js', import.meta.url).href;
+		const server = (await import(/* @vite-ignore */ path)).BULK_FIELDS as Record<string, Record<string, { kind: string; label: string; values?: string[]; relation?: { collection: string } }>>;
+		for (const d of INDEX_DEFS.filter((x) => x.bulkFields)) {
+			const allowed = server[d.collection];
+			expect(allowed, d.collection).toBeDefined();
+			for (const f of d.bulkFields!) {
+				const s = allowed[f.field];
+				expect(s, `${d.slug}.${f.field}`).toBeDefined();
+				expect([f.kind, f.label, f.values, f.relation?.collection]).toEqual([s.kind, s.label, s.values, s.relation?.collection]);
+			}
+		}
+		// The three pages of this change offer every field the server allows; samples leaves manufactured_date out on purpose (see its def).
+		for (const slug of ['operations', 'tests', 'campaigns']) {
+			const d = indexDefBySlug(slug)!;
+			expect(d.bulkFields!.map((f) => f.field).sort(), slug).toEqual(Object.keys(server[d.collection]).sort());
+		}
 	});
 });

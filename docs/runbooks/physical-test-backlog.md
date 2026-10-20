@@ -223,7 +223,20 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
 `npm run build:extensions` at the repo root so the rebuilt `d1-lab-dashboard` and
 `d1-composition-bar` load, and apply migrations 138 and 139.
 
-- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** Open a project with a campaign and equipment
+- [ ] **PP2 — Project page hero.** Open a project that has campaigns, planned operations and tests, and several
+  people with access, in light and dark. Expect: the **timeline** shows the project bar and one bar per dated
+  campaign, weekly bars for done operations and tests, and planned work as hollow circles (operations) and hollow
+  diamonds (tests) after **Today**; a planned operation's marker sits on its own planned date (check one west of UTC
+  if you can). If the activity read fails, the timeline still shows the bars and a note. The range control (30 d, 6 mo, All) changes the chart, and the chosen range is
+  still set after a reload on the same device. A range with no work shows one line of text in place of the chart.
+  The totals show "n planned" under each count. The people row shows six faces, then up to three fading ones, and
+  its counts (PI, investigators, "more have access") match the list. **Who has access** opens the dialog.
+  Campaigns are raised cards on the ground, with complete ones folded behind "Show n complete campaigns".
+  **Equipment used** tiles are grey tiles, and each name is a link. At 390px, 1280px and 1920px the hero follows the
+  spec's table: one column under 700px; timeline full width from 700px to 1499px; timeline in two thirds from 1500px,
+  with about and totals beside it. Check each width in light and dark. Spec:
+  `docs/superpowers/specs/2026-10-20-project-page-hero-design.md`. Since: Project page hero (PR pending).
+- [ ] **PP1 — Project page cards match the index; empty Activity is a lid.** (Superseded in part by **PP2**: once the hero lands, equipment tiles are grey tiles and Activity is the hero timeline; check the campaign cards and equipment links here.) Open a project with a campaign and equipment
   on its operations (for example macrozone cubes), in light and dark. Expect: the campaign card in **Campaigns** looks the
   same as on the Campaigns list in Cards view (white, rounded, shadowed); each **Equipment used** tile is white too and its
   name is a link that opens that equipment's page. On a project whose operations and tests are all undated or older than 26
@@ -1526,6 +1539,32 @@ live data and the real accounts confirm:
   an older version, so review it first.", (c) "This record no longer exists, or you can no longer see it."; nothing is written in any case and the draft is
   kept. Since: edit-mode redesign slice 3 (PR pending).
 
+#### Bulk actions, STARbase side (`feat/bulk-actions`, PR 1; spec `2026-10-20-bulk-actions-design.md`)
+Needs migration 204 and the `d1-bulk-actions` endpoint on the live stack, then `npm run build:starbase`. Use a copy of the data.
+
+- [ ] **BA1 — ticks and the With-selected menu on every list.** Open Samples, Operations, Tools and Equipment. Expect: a tick column on every list; with nothing ticked Samples, Operations, Tests and Campaigns show a disabled **With selected ▾** and Tools and Equipment show no menu; tick 4 samples and it reads **With 4 selected ▾**. The menu opens with the mouse and the keyboard (Enter or the down arrow, then the arrows, Escape closes and gives focus back to the button, a click elsewhere closes it). Samples: Print labels, Restrict…, Unrestrict…, Edit status…, Edit project…, Edit export control…. **Print labels** opens the labels page with the same 4 samples as before. A Lab Viewer sees only Print labels (Samples) and no menu elsewhere.
+- [ ] **BA2 — edit a field: preview, apply, undo toast.** Tick 38 samples across two pages (the tick survives the page change), **Edit status…**, choose Archived. Expect: the dialog says "Edit status for 38 samples"; the check runs by itself and says "N can be changed" (rows already archived are "need no change"), skipped rows (ones you may not edit) are folded under "Why are N skipped?" with their reasons; **Apply to N** is off at 0. Apply: the dialog closes, the list reloads with the new status, the ticks clear except the skipped rows, and a toast bottom right says "Set status to Archived on N samples" with a ring that empties over 60 s and **Undo**. Undo puts the old statuses back ("Undone"); a sample edited by someone else in between is left alone and listed under "left as they are". Let the ring run out instead: "Done", and the toast goes after a few seconds. A second action inside the 60 s gets its own toast and both can be undone.
+- [ ] **BA3 — link and yes / no fields; clear.** **Edit project…**: the picker lists the projects you can read; **Clear project instead** shows "will be emptied" and the preview counts; apply, then Undo restores each sample's own project. **Edit export control…**: Yes / No, no clear option. A role that cannot read projects: the dialog says the list could not be loaded and Apply stays off.
+- [ ] **BA4 — Restrict and Unrestrict as a member and as an administrator.** As a Lab Member tick samples you own, **Restrict…**: every row is skipped with "Only administrators can restrict records yet" and Apply is off. As an administrator the rows apply, the toast says "Restricted N samples", Undo works, and the Who has access dialog of one sample shows it restricted.
+- [ ] **BA5 — toast and dialog accessibility.** Screen reader on: the toast announces the result once, then "Done" or "Undone", and does not read the seconds. With the operating system set to reduce motion: the ring is full and still and "N s left to undo" is written under the result. Tab stays inside the dialog, Escape closes it, focus returns to the With-selected button (also after Apply, when the ticks have cleared and the button is disabled). Dark theme: ring, card and dialog are readable.
+- [ ] **BA6 — failure wording.** Stop Directus's endpoint (or cut the network) with the dialog open: the check says "The check failed: …Nothing has been changed. Close this and try again." Press Undo after the 60 s have passed (change the clock or wait): the toast keeps its card and shows the server's message in red instead of "Done" without a word.
+
+#### Bulk actions, STARbase side, PR 2 (assign team, change owner, share, remove access; stacked on PR 1)
+Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy of the data, as an owner of the records, as a team manager and as an administrator.
+
+- [ ] **BA7 — menu entries per list.** Samples, Operations, Tests and Campaigns: the menu reads Assign to team…, Change owner…, Share or change access…, Remove access…, then Restrict… / Unrestrict… and the field edits (Samples also has Print labels first). Tools, Equipment and the other lists: none of the four. A Lab Viewer sees none of them.
+- [ ] **BA8 — Assign to team: the tiles and the real teams.** Tick 5 operations you own, **Assign to team…**. Expect: every team (the same list as the Teams page) with its tile or logo and "Team · N members"; nothing is asked of the server until one is chosen; the check then says "5 can be changed" and "Assign 5 operations to Team X". A team with no manager: every row skipped with "That team has no manager yet" (or the server's own words) and Apply to 0 is off. Apply: the toast says "Assigned 5 operations to Team X"; the Who has access dialog of one operation shows Team X as the owner and you as Can edit; **Undo** puts you back as owner.
+- [ ] **BA9 — Change owner and the person search.** **Change owner…** on 3 samples: the search finds People by name (people with no login are marked "can't sign in yet" in the list), choosing one writes the name with **Change** and runs the check at once; Change empties the check and puts the cursor back in the box. A sample you do not own is skipped with "You are not the owner". Apply: "Changed the owner of 3 samples to Ann Lee"; Undo gives each sample its old owner back.
+- [ ] **BA10 — Share or change access: person, team, level.** **Share or change access…** on 12 operations. The box finds people and teams. The level starts at Can view; changing it runs the check again and the sentence reads "Share 12 operations with Ann (Can edit)". Operations Ann already has at that level need no change; the others change (added, or the level changed). Apply: "Shared 12 operations with Ann"; the Who has access dialog shows her at the chosen level; Undo removes new grants and restores old levels. Repeat with a team.
+- [ ] **BA11 — Remove access.** **Remove access…**, pick a person (and again a team): rows where they are not listed need no change; the owner and a team that owns the record are skipped with the server's reason. Apply: "Removed access for Ann on N operations"; Undo puts the grants back at their levels.
+- [ ] **BA12 — Warnings before Apply (Ruling O5).** As a manager of Team A, tick operations owned by Team A and **Assign to team…** Team B, or **Change owner…** to a person. The dialog says "Read before you apply: N have a warning." with the server's sentence under it, and **Which N have a warning?** lists the operations. Apply: the toast says "N had a warning" and the fold keeps them listed (the toast stays until closed); an Undo that is refused for the same reason shows under "left as they are". Rows without a warning are not in the list.
+- [ ] **BA13 — the person box inside the dialog.** In the Share dialog, type two letters: the list opens under the box without being cut off or making the dialog jump; the arrow keys and Enter pick; the first Escape closes the list, the second closes the dialog; focus lands on **Change** after a pick. Tab and Shift+Tab stay inside the dialog, through the team radios (arrow keys move between teams) and the level select. Dark theme and a phone-width window: team tiles, chip and level select are readable and nothing scrolls sideways.
+- [ ] **BA14 — Edit entries on operations, tests and campaigns.** Operations: **Edit project…**, **Edit campaign…**, **Edit planned date…**. Tests: **Edit status…**, project, campaign, planned date. Campaigns: **Edit project…**, **Edit start date…**, **Edit end date…**. The campaign picker names a campaign without a code by its name (never an id). The date box takes a day; **Clear planned date instead** shows "will be emptied" and the counts, apply, then Undo puts each row's own date back. Test status lists Registered to Failed in lifecycle order with the list's words ("Pending processing"); there is no Clear for it. Apply on rows you may not edit: skipped with the server's reason. Samples keep their three entries (the server also allows manufactured date there; the page does not offer it yet).
+- [ ] **BA15 — admin Home: the Bulk actions panel.** As an administrator, Home shows **Bulk actions** under the three admin panels, newest first: one line per action in plain words ("Assigned 38 samples to a team", "Set status to Archived on 38 samples"), who ran it, "2 h ago" (hover for the exact time), "38 changed, 12 not changed", and a badge: Applied / Undone / Reverted / Partly reverted; a revert line says "Revert of ‘…’" and reads "N put back". Run one action from a list, then Reload: it is the top line. **Show more** appears only with more than 25 lines and adds the next 25 without repeating a line (run an action in another tab between the two clicks). As a Lab Member and as a Lab Viewer the panel is not there at all (and the network tab shows no `/d1-bulk-actions` call from Home). With the admin overview stopped (or its endpoint failing) the panel still shows.
+- [ ] **BA16 — expanding a line.** Click a line (or Tab to it and press Enter): its records list with the record code, **Changed / Skipped / No change needed / Failed**, the reason in plain words and, once reverted, a **Revert** column (Reverted / Changed since / Refused). Collapse and reopen: no second request. An action someone else ran is readable; a revert line lists "Put back" and "Left as it is" with no revert column. The before and after values are not shown (they can hold access lists).
+- [ ] **BA17 — Revert, as an administrator, on real rows.** Pick an applied action that is older than 60 seconds (assign a team on a copy). **Revert** opens a dialog that names the action, who ran it and when, says "Reverting puts N samples back as they were before", warns that records changed since are skipped, and that a revert cannot be reverted; focus starts on **Cancel**; Escape closes it and focus returns to **Revert**. Confirm **Revert N samples**: the dialog shows the per-record result, the ones not put back first (Changed since, Refused with the server's reason, Failed), then those Reverted, and focus lands on **Close**. Edit one sample's owner by hand before confirming: that row says Changed since and the rest are put back. The list reloads: the original is Reverted or Partly reverted and a "Revert of …" line sits on top. A Partly reverted action still offers Revert, with the button "Revert the rest" (it tries only the rows not yet put back); a Reverted action, an Undone action and a revert line offer none.
+- [ ] **BA18 — Revert failures and the screen reader.** Revert an action that was already undone from its toast in another tab: the dialog stays open and says "The revert failed: … The list has been reloaded; check it before you try again.", and the line no longer offers Revert. Stop Directus with the panel open and press Reload or Show more: the message says what failed and what to do, and the lines already shown stay. Screen reader: the dialog is announced with its title, the result is read when it appears, Tab and Shift+Tab stay inside, the badge text and counts are readable in the light and dark themes, and at phone width the table scrolls inside its own box.
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
@@ -1571,7 +1610,8 @@ live data and the real accounts confirm:
   Hide removes truly empty sections and "On this page" counts them; a section that failed to load stays listed. Table
   density changes every table. Two columns with real long lists. At about 1280px the rail becomes a "View" button with a
   popover. Since: PR #377 (stream B).
-- [ ] **DSR3 — Project activity range on a project with real history.** 30 d / 6 mo / All reload only the chart; "All" on a
+- [ ] **DSR3 — Project activity range on a project with real history.** 30 d / 6 mo / All in the View rail and in the hero timeline's own control change each other and read nothing again;
+  "Last operation" and "Last test" stay the newest ever, whatever the range; "All" on a
   project with more than 5000 operations shows the truncation note and no false zero weeks. Since: PR #377 (stream B).
 - [ ] **DSR4 — Index-page View rail with real data.** On Samples and Operations: the rail starts level with the table,
   open at 1920 wide and collapsed at 1440; columns dropdown (hide, reorder, Reset) survives a reload; rows per page
@@ -2826,6 +2866,58 @@ crawler stamping, the `d1-inbox` routes and the STARbase pages are other streams
   and a new deploy can start. (c) With the task stopped, the Deploy page says the agent is unreachable and offers the fix hint. Since: deploy button, stream A.
 - [ ] **DEPLOY7 — Failure messages are usable.** Make a build fail on a scratch branch (a syntax error in an extension) and a service fail its health check: the run stops at `build` / `verify`,
   `failedStep` and `message` say which build or which service, the log shows the output, and the page shows the message. A failed `npm install` never falls back to `npm ci`. Since: deploy button, stream A.
+
+### Bulk actions (2026-10-20, migration 204, `feat/bulk-actions`, d1-server)
+
+Server half of the bulk actions (docs/superpowers/specs/2026-10-20-bulk-actions-design.md). The `node --test` suite uses a fake knex and a fake
+`ItemsService`; what only a live Directus can show is below. Run on a copy of the stack (not live data), as an administrator, a Lab Member who owns the
+records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actions/<collection>/preview|apply`, bodies as in the endpoint's header.
+
+- [ ] **BULK1 — The preview writes nothing, with real hooks.** On 5 samples run `preview` for `edit_field` (`current_status` to `archived`), then compare:
+  `audit_logs`, `directus_activity`, `directus_revisions` and the samples' `updated_at` / `version` are unchanged, and no flow, `d1-project-inherit` or
+  `d1-campaign-inherit` action ran (watch the Directus log). Repeat for `project_id` on samples that have operations, and for `restrict`. The same ids then `apply`:
+  every record's status in the preview equals its outcome in the apply. Since: bulk actions, PR 1.
+- [ ] **BULK2 — `updateOne` with a transaction, `bypassEmitAction` and `autoPurgeCache: false`.** The code relies on Directus 11.17's `ItemsService.updateOne(id, data, { bypassEmitAction,
+  autoPurgeCache })` inside a caller-supplied knex transaction: filter hooks (d1-access-guard) still run and see the transaction, action events are only collected. Apply
+  `edit_field` `project_id` to samples that have operations: afterwards the operations' project follows (the action hooks ran once, after the commit, and not during a preview), the sample
+  list shows the new value without a cache clear in between when `CACHE_ENABLED=true`, and `audit_logs.actor` names the caller (not "public" or the system). Since: bulk actions, PR 1.
+- [ ] **BULK3 — d1-access-guard decides, its text is the reason.** As a Lab Member owner, `apply` `restrict` on 3 own samples: each is `skipped` with "Restricting a record is not available yet. Ask an
+  administrator." and nothing changed; as an administrator the same call is `applied`. `edit_field` `project_id` to a restricted project the member cannot read: 400 "does not exist, or you cannot see it" (no
+  hint that it exists). A sample inside a restricted campaign the member does not own, edited for `project_id`: `skipped` with the guard's sentence. Another person's unreadable sample in the id list: `skipped`, code `null`.
+  Since: bulk actions, PR 1.
+- [ ] **BULK4 — Undo and revert on real rows.** As the owner: `apply` `edit_field` `current_status`, then `undo` inside 60 s: every record is back, `bulk_actions.state = 'undone'`, a second row with `revert_of` exists.
+  After 60 s the owner's `undo` is 403 `UNDO_WINDOW_CLOSED`; an administrator's `undo` and `revert` work. Change one record by hand in Data Studio, then `revert`: that one is `changed_since`, the action is
+  `partly_reverted`. Share a restricted sample with someone (Who has access), then revert the restrict: `changed_since` (the snapshot holds the access list). Dates: a sample's `manufactured_date` edited and
+  undone comes back as the same day (no timezone shift; the code reads Directus' `YYYY-MM-DD`). Two `revert` calls at once: one answers 200, the other 409 `ALREADY_REVERTED` (row lock). Since: bulk actions, PR 1.
+- [ ] **BULK5 — Lab Viewer, caps and the journal.** A Lab Viewer token: `preview`, `apply`, `undo` and `revert` all 403 `READ_ONLY_ROLE`. 101 distinct ids: 400; the same id 150 times: one result.
+  `GET /d1-bulk-actions` as the owner lists only their actions, as an administrator every one, newest first; `GET /:id` of someone else's action is 404 for a member. Applying to 100 samples takes
+  how long on the real stack (one transaction per record): note it, the toast's 60 s starts when the answer arrives. Since: bulk actions, PR 1.
+- [ ] **BULK6 — The extraction changed nothing for the Who-has-access dialog.** d1-record-access's routes now call the extracted bodies. On a copy, with the Who-has-access dialog of a sample: add a person (mail
+  arrives once, "gave you access"), change their level (no mail), remove them; add a team (one mail per active member with a login, "via <team>"), change its level and trust switch, remove it; transfer to a person
+  (new owner mailed, `blocked_by` shown) and to a team (managers mailed once each, the previous person owner stays on as Can edit). Same answers, same mails and the same `audit_logs.actor` as before the change.
+  Since: bulk actions, PR 2.
+- [ ] **BULK7 — assign_team and change_owner on real rows, with the real manage rule.** As a Lab Member owner of 5 samples: `preview` `assign_team` to a team you do NOT manage: every row `ok` with the
+  warning "You will no longer be able to manage this record yourself, so an undo may be refused."; to a team you manage: no warning. `apply`: `owner_team_id` set, `owner_person_id` null, you stay as Can edit,
+  the database's owner grant and the team members' derived rows appear (`sample_access`, `sample_team_access`). A team with no manager: `skip` with the TEAM_HAS_NO_MANAGER wording; Projects: `skip`
+  "A team cannot own this kind of record." `change_owner` to a person who cannot open the record yet (restricted parent): the warning names them; a person with no login: "has no D1 login yet". Team-owned
+  record, as one of its managers, to a person or another team: the warning says the outgoing managers are not kept. Another person's record in the list: `skip` "You are not the owner of this record." (checked before
+  "already the owner"). Since: bulk actions, PR 2.
+- [ ] **BULK8 — share_access and remove_access, including old co-owners.** `share_access` a person as Can view to 10 samples where 3 already have them at that level (`noop`), 2 at Can edit (changed) and 1 where
+  they are the owner (`skip` "That person is the owner already."). A team: add, change level, the owning team is skipped. A sample whose co-owner is only in the old `sample_co_owners` table: sharing at Can edit is
+  `noop`, at Can view converts it to an access row and drops the old row (undo puts an access row back, not the old row: note the difference). `remove_access` of the owner: skipped with "Change the owner instead."; of
+  a person who is only an old co-owner: applied. Since: bulk actions, PR 2.
+- [ ] **BULK9 — Undo and revert of the ownership and access kinds.** Undo of `share_access`, `remove_access` and `assign_team` to a team you manage inside 60 s: the list, the team grants and the owner are exactly as
+  before (compare `sample_access` and `sample_team_access` rows). Undo of `assign_team` to a team you do not manage, and of `change_owner`: `refused` "You can no longer manage this record ..." (Ruling O5: expected, the
+  administrator's `revert` does it and drops the Can edit row you were given). Revert after the old owner team lost its last manager: `refused` with the no-manager reason. A person shared with since: `changed_since`.
+  Nothing is mailed by a revert. Since: bulk actions, PR 2.
+- [ ] **BULK10 — The summary mails with a real mail transport.** `assign_team` on 25 samples: the team's managers get ONE mail each, 62 s after the answer, listing 20 codes and "and 5 more" with links that
+  open the records (STARBASE_URL or PUBLIC_URL set); the person who ran it gets none; `bulk_actions.mail_state` goes `pending` -> `sent`. `share_access` with a team: one mail per active member with an address; a login with
+  an empty address, an inactive person, a member with no login and a member still waiting for approval on that record get none (a person shared with directly who has no login is mailed at their People address, with no links). Undo inside the window: no mail ever arrives and `mail_state = 'cancelled'`. A recipient who
+  cannot read a record gets its code and no link. Since: bulk actions, PR 2.
+- [ ] **BULK11 — The mail survives a restart.** Apply a `change_owner`, restart the Directus container inside the 60 s window: the mail still goes out about when it was due (the startup sweep re-arms it, `mail_state`
+  `pending` -> `sent`); undo after the restart (still inside the window) cancels it. Apply, restart AFTER the due time without the endpoint having sent it (stop Directus before the 62 s, start it later): the
+  sweep sends it on start, once. With no `getSchema`-dependent failure in the log: the timer and the sweep have no request, so `MailService` is given the schema from `getSchema()`; confirm the mail renders and
+  arrives (if the transport needs the schema, this is where it would show). Since: bulk actions, PR 2.
 
 ## Done
 

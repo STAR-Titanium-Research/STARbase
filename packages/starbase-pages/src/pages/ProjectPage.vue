@@ -1,71 +1,53 @@
 <script setup lang="ts">
-import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, RecordViewRail, Section, Sparkline, activityPeriod, dataStudioRoute,
-	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
-	pinTargetForRecord, providePagePin, provideRecordView,
-	mapPath,
+	AppLink, AccessDialog, RecordLink, EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordViewRail, Section, dataStudioRoute,
+	pinTargetForRecord, providePagePin, provideRecordView, mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
+import ProjectHero from './projects/ProjectHero.vue';
 import CampaignCards from './projects/CampaignCards.vue';
 import UnassignedLists from './projects/UnassignedLists.vue';
 
-// Project page: a rail (identity, actions, dates, people, totals, contents) beside the description,
-// campaigns as cards, what is not in a campaign, activity and the equipment used. Design:
-// docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Project"), laid out as a rail and
-// panels by docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
+// Project page: a hero (what the project is, who is on it, how far it has got: head, people, timeline, about, totals), then the
+// campaigns as raised cards on the ground, then what is not in a campaign and the equipment used. It has no record rail: the hero
+// takes its place. Design: docs/superpowers/specs/2026-10-20-project-page-hero-design.md (it supersedes the Project row of
+// 2026-10-09-explorer-rail-layout-design.md); the read-only facts behind it are 2026-10-06-explorer-pages-design.md ("Project").
 // There is no "Report" action yet: d1-report has sample, operation and test reports only. Add one
 // here when it grows a project report.
 const props = defineProps<{ id: string }>();
 
-// The View rail's settings (panels, table density, empty sections, activity range), one set for every project page on this device.
+// The View rail's settings (table density, empty sections, activity range), one set for every project page on this device.
+// The rail's Activity range is the hero timeline's range (30 d, 6 mo, All): the timeline picks it from the whole history the
+// page reads once, so changing it reads nothing again.
 const view = provideRecordView('project');
+
 const {
-	project, loading, notVisible, error, investigators, counts, campaigns, looseSamples, looseOperations,
-	looseTests, activity, equipment, reload,
-} = useProjectData(toRef(props, 'id'), toRef(view, 'range'));
+	project, loading, notVisible, error, counts, campaigns, looseSamples, looseOperations,
+	looseTests, activity, planned, equipment, access, reloadProject, reloadAccess,
+} = useProjectData(toRef(props, 'id'));
 
 const editing = ref(false);
-// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
-const access = ref(false);
+// "Who has access": the dialog of the record's owner list, opened from the hero's people row.
+const accessOpen = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('projects', toRef(props, 'id'));
-// A save can change who may edit the record (the Owner field), so ask again.
+// A save changes the project row, and can change who may edit the record (the Owner field) and who has access, so ask again.
+// The other sections read other records and do not depend on the edit.
 function onSaved() {
-	reload();
+	reloadProject();
+	reloadAccess();
+	refreshCanUpdate();
+}
+// A change in the dialog (someone added or removed, a transfer) changes the people row and may change who may edit; nothing else on the page.
+function onAccessChanged() {
+	reloadAccess();
 	refreshCanUpdate();
 }
 const code = computed(() => project.value?.project_code ?? 'Project');
 const studioTo = computed(() => dataStudioRoute('projects', props.id));
-const active = computed(() => project.value?.is_active !== false);
-
-// The rail's key facts: the old header line and the totals the stat tiles showed. The counts follow
-// the project rule (projectScope.ts), so they are text here, not links (see record/projectFacts.ts).
-const railFacts = computed(() => projectRailFacts(project.value, investigators.value.data, counts.value.data, counts.value.loading));
-
-// Operations and tests in the activity window: null while loading, 0 when there is nothing to draw
-// (then the panel is its lid only, and the contents list dims it, like the other empty panels). Null
-// while it loads and when the read failed: the panel is drawn then, with its error, so it is not "empty".
-const activityCount = computed(() => {
-	const a = activity.value;
-	if (a.loading || a.error) return null;
-	return a.data.data ? a.data.data.totalOps + a.data.data.totalTests : 0;
-});
-
-// "On this page": the panels in page order. A count is null while its read loads or when it failed.
-const rows = (s: { loading: boolean; error: string; data: unknown[] }) => (s.loading || s.error ? null : Math.min(s.data.length, LIST_CAP));
-const contents = computed<ContentsEntry[]>(() => projectContents({
-	hasDescription: !!project.value?.description,
-	campaigns: rows(campaigns.value),
-	samples: rows(looseSamples.value),
-	operations: rows(looseOperations.value),
-	tests: rows(looseTests.value),
-	activity: activityCount.value,
-	equipment: rows(equipment.value),
-}));
 
 // The Process map, opened on this record.
 const mapTo = computed(() => mapPath('projects', props.id));
@@ -76,7 +58,13 @@ providePagePin(pin);
 
 <template>
 	<ExplorerView :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
-		<PageShell>
+		<template #headline>
+			<AppLink to="/home">Home</AppLink>
+			<span>›</span>
+			<AppLink to="/home/projects">Projects</AppLink>
+		</template>
+
+		<PageShell wide>
 			<LoadState v-if="loading && !project" loading loading-text="Loading project…" />
 
 			<NotVisible v-else-if="notVisible" what="project" />
@@ -84,85 +72,51 @@ providePagePin(pin);
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="project">
-				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
-				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px)">
-					<template #crumbs>
-						<AppLink to="/home">Home</AppLink>
-						<span>›</span>
-						<AppLink to="/home/projects">Projects</AppLink>
-					</template>
+				<div class="project-page">
+					<div class="project-main">
+						<ProjectHero
+							v-model:range="view.range"
+							:project="project"
+							:can-update="canUpdate"
+							:studio-to="studioTo"
+							:map-to="mapTo"
+							:access="access"
+							:counts="counts"
+							:campaigns="campaigns"
+							:activity="activity"
+							:planned="planned"
+							@edit="editing = true"
+							@access="accessOpen = true"
+						/>
 
-					<template #rail>
-						<RecordRail kind="Project" :code="code" :title="project.project_name" :facts="railFacts" :contents="contents">
-							<template #kind-icon><v-icon name="folder_open" x-small /></template>
-							<template #status>
-								<span class="status" :class="{ active }">{{ projectStatusLabel(project.is_active) }}</span>
-								<span v-if="project.export_controlled" class="export">Export controlled</span>
-							</template>
-							<template #actions>
-								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
-									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
-								</RecordActions>
-							</template>
-							<template #after-facts>
-								<p class="d1-note">Counts of the records you can see in this project.</p>
-								<p v-if="investigators.error" class="d1-note warn" role="alert">{{ investigators.error }}</p>
-								<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
-							</template>
-						</RecordRail>
-					</template>
+						<CampaignCards :campaigns="campaigns" :project-id="id" />
 
-					<template #view><RecordViewRail kind="project" range /></template>
+						<!-- Short lists side by side: stacked, three empty ones took a third of the screen. -->
+						<div class="d1-cols project-cols">
+							<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 
-					<Section v-if="project.description" id="description" title="Description"><p class="description">{{ project.description }}</p></Section>
-
-					<CampaignCards :campaigns="campaigns" :project-id="id" />
-					<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
-					<div class="d1-cols project-cols">
-						<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
+							<Section
+								id="equipment"
+								title="Equipment used"
+								:count="equipment.loading ? null : equipment.data.length"
+								:empty="!equipment.loading && !equipment.error && !equipment.data.length"
+								empty-text="No equipment recorded on this project's operations."
+							>
+								<LoadState :loading="equipment.loading" :error="equipment.error">
+									<ul class="equipment">
+										<li v-for="e in equipment.data" :key="e.equipment_id">
+											<RecordLink collection="equipment" :id="e.equipment_id" class="e-name">{{ e.name }}</RecordLink>
+											<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
+										</li>
+									</ul>
+								</LoadState>
+							</Section>
+						</div>
 					</div>
+					<RecordViewRail kind="project" range :panels="false" />
+				</div>
 
-					<div class="d1-cols project-cols">
-						<Section
-							id="activity"
-							title="Activity"
-							:count="activityCount"
-							:empty="!activity.loading && !activity.error && activityCount === 0"
-							:empty-text="`No operations or tests${activityPeriod(view.range)}.`"
-						>
-							<LoadState :loading="activity.loading" :error="activity.error">
-								<Sparkline
-									v-if="activity.data.data"
-									:ops="activity.data.data.ops"
-									:tests="activity.data.data.tests"
-									:weeks="activity.data.data.weeks"
-									:width="640"
-									:height="80"
-								/>
-								<p v-if="activity.data.truncated" class="d1-note warn">Based on the newest records only: the project has more than the page loads.</p>
-							</LoadState>
-						</Section>
-
-						<Section
-							id="equipment"
-							title="Equipment used"
-							:count="equipment.loading ? null : equipment.data.length"
-							:empty="!equipment.loading && !equipment.error && !equipment.data.length"
-							empty-text="No equipment recorded on this project's operations."
-						>
-							<LoadState :loading="equipment.loading" :error="equipment.error">
-								<ul class="equipment">
-									<li v-for="e in equipment.data" :key="e.equipment_id">
-										<RecordLink collection="equipment" :id="e.equipment_id" class="e-name">{{ e.name }}</RecordLink>
-										<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
-									</li>
-								</ul>
-							</LoadState>
-						</Section>
-					</div>
-				</RecordLayout>
-
-				<AccessDialog v-model="access" collection="projects" :id="id" :title="`Project ${code}`" @changed="onSaved" />
+				<AccessDialog v-model="accessOpen" collection="projects" :id="id" :title="`Project ${code}`" @changed="onAccessChanged" />
 				<EditDrawer
 					v-model="editing"
 					collection="projects"
@@ -176,26 +130,22 @@ providePagePin(pin);
 </template>
 
 <style scoped>
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
+/* The hero and the panels in the first column; the View rail hangs at the right (the mirror of the record rail the other record
+   pages have). Under 1100px of the page's own width the rail is a "View" button on a row of its own above them (ViewRail). */
+.project-page { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; min-width: 0; container-type: inline-size; }
+.project-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@container (max-width: 1099px) {
+	.project-page { grid-template-columns: minmax(0, 1fr); }
+	.project-page > :deep(.d1-view-rail) { order: -1; }
+}
 /* Side by side while there is room, but a section with nothing in it is only its lid, so it takes the
    whole row (its one line of text does not wrap in half a column). Dense: the sections after it fill
    the gap it leaves in the row above. */
 .project-cols { grid-auto-flow: row dense; }
 .project-cols :deep(.d1-section.empty) { grid-column: 1 / -1; }
-.status {
-	font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px;
-	color: var(--d1-dim); background: var(--theme--background-normal);
-}
-.status.active { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
-.export { color: var(--d1-bad); font-weight: 650; font-size: var(--fs-md); }
-.warn { color: var(--d1-warn); }
-.d1-note { margin: 0; }
-.description { margin: 0; max-width: 90ch; font-size: var(--fs-md); line-height: 1.55; color: var(--d1-dim); white-space: pre-line; }
 .equipment { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.equipment li {
-	display: flex; flex-direction: column; padding: 7px 10px; border-radius: 8px;
-	border: 1px solid var(--d1-line); background: var(--d1-surface);
-}
-.e-name { font-weight: 650; font-size: var(--fs-md); }
-.e-count { font-size: var(--fs-xs); font-weight: 600; color: var(--d1-dim); }
+/* A card inside a panel is a tile (DESIGN.md section 2). */
+.equipment li { display: flex; flex-direction: column; padding: 7px 10px; border-radius: 8px; background: var(--d1-tile); }
+.e-name { font-weight: 650; font-size: var(--fs-md, 13px); }
+.e-count { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); }
 </style>

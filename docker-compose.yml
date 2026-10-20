@@ -618,6 +618,10 @@ services:
       # Thumbnails for the Inbox (spec section 14): 1 (default) makes a small and a reduced picture of each image
       # and SEM image, in the database; 0 turns that and the backfill of older files off.
       INBOX_THUMBNAILS: ${INBOX_THUMBNAILS:-1}
+      # The backfill of older files' thumbnails: at most this many per tick, for at most this many seconds (empty keeps 25 and 20).
+      # Raise both to clear a big backlog (150 and 90 is about a picture a second), then remove them.
+      INBOX_THUMB_BATCH: ${INBOX_THUMB_BATCH:-}
+      INBOX_THUMB_BUDGET_S: ${INBOX_THUMB_BUDGET_S:-}
       # auto|cpu|cuda for the data-bar OCR: CPU unless asked; auto takes the GPU when onnxruntime offers one.
       INBOX_OCR_DEVICE: ${INBOX_OCR_DEVICE:-cpu}
       INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}

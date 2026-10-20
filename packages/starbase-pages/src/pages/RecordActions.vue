@@ -9,6 +9,8 @@ import { mayChange, useExplorerHost } from '@d1/ui';
 // `<v-button icon small secondary title="…" aria-label="…"><v-icon …/><span class="sr-only">…</span></v-button>`
 // and sit before Data Studio. Edit shows only when the viewer can change the record (`canUpdate !== false`, as before) and is not a
 // Lab Viewer (migration 185: reads everything, changes nothing; host.canViewAllAccess), whatever the page passes in `canUpdate`.
+// `#access`: the "Who has access" button is what shows when the page gives no such slot. A page that shows the access list itself (the Project hero's people row)
+// passes an empty `<template #access />` to leave it out.
 const props = defineProps<{ canUpdate?: boolean | null; studioTo: string }>();
 const host = useExplorerHost();
 const showEdit = computed(() => mayChange(host.canViewAllAccess?.value === true, props.canUpdate));
@@ -17,7 +19,9 @@ defineEmits<{ edit: []; access: [] }>();
 
 <template>
 	<v-button v-if="showEdit" icon small title="Edit" aria-label="Edit" @click="$emit('edit')"><v-icon name="edit" small /><span class="sr-only">Edit</span></v-button>
-	<v-button icon small secondary title="Who has access" aria-label="Who has access" @click="$emit('access')"><v-icon name="group" small /><span class="sr-only">Who has access</span></v-button>
+	<!-- Not a plain slot fallback: Vue falls back when the slot renders nothing, so an empty #access would still show the button. -->
+	<slot v-if="$slots.access" name="access" />
+	<v-button v-else icon small secondary title="Who has access" aria-label="Who has access" @click="$emit('access')"><v-icon name="group" small /><span class="sr-only">Who has access</span></v-button>
 	<slot />
 	<v-button icon small secondary :to="studioTo" title="Data Studio" aria-label="Data Studio"><v-icon name="open_in_new" small /><span class="sr-only">Data Studio</span></v-button>
 </template>

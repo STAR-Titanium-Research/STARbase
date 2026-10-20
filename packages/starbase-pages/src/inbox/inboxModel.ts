@@ -6,7 +6,9 @@
 // surface scan is "added", never "linked" or "attached".
 import type { FileKind, FilesQuery, FoundFile, InboxTab, MatchStrength } from './inboxApi';
 import { SCAN_ADD_LABEL } from './inboxScan';
-import { magnificationText, scaleBarText } from './semSettings';
+import { formatDate } from '@d1/ui';
+import { extractedView, magnificationText, scaleBarText, settingRows } from './semSettings';
+import type { SettingRow } from './semSettings';
 
 // ---- tabs ----
 
@@ -332,3 +334,21 @@ export const canChange = (f: FoundFile): boolean => f.kind !== 'surface_scan' &&
 
 /** The line under a document row's Link button: linking reads it once. */
 export const needsReadNotice = (kind: FileKind): boolean => kind !== 'sem_image' && kind !== 'image' && kind !== 'surface_scan';
+
+// ---- shared by the row, the sheet and the view box ----
+
+/** The icon of a kind: what a file shows when it has no picture. */
+export const kindIcon = (kind: FileKind): string => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[kind];
+
+/** A file's folder as shown; a file straight in its share root has none. */
+export const folderText = (relPath: string): string => folderOf(relPath) || 'Share root';
+
+/** "1.2 MB · 4 Mar 2026": the size and the date the file was last changed (or first seen). */
+export const metaText = (f: Pick<FoundFile, 'size_bytes' | 'source_mtime' | 'first_seen_at'>): string =>
+	[sizeText(f.size_bytes), formatDate(f.source_mtime ?? f.first_seen_at)].filter(Boolean).join(' · ');
+
+/** The settings rows the crawler read with the settings reader; none for an older row (no sources, no flags), which keeps its one line. */
+export function settingsOf(f: Pick<FoundFile, 'extracted'>): SettingRow[] {
+	const view = extractedView(f.extracted);
+	return Object.keys(view.sources).length || Object.keys(view.flags).length ? settingRows(view) : [];
+}

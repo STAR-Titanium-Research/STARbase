@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_ALL_WEEKS, binWeekly, datesByKey, isoWeek, lastWeeks, weekStart, weeklyActivity, windowStart, windowWeeks } from './activity';
+import { MIN_ALL_WEEKS, binWeekly, datesByKey, isoWeek, isoWeekLabel, lastWeeks, weekStart, weeklyActivity, windowStart, windowWeeks } from './activity';
 
 // Local-time constructors at noon, so the tests do not depend on the machine's time zone.
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h);
+
+describe('isoWeekLabel', () => {
+	it('pads the week to two digits', () => {
+		expect(isoWeekLabel({ isoYear: 2026, isoWeek: 42 })).toBe('2026-W42');
+		expect(isoWeekLabel({ isoYear: 2027, isoWeek: 1 })).toBe('2027-W01');
+	});
+});
 
 describe('isoWeek', () => {
 	it('numbers ordinary weeks', () => {

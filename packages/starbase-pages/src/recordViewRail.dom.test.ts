@@ -14,14 +14,14 @@ const CONTENTS = [
 	{ id: 'files', title: 'Files', count: 0 },
 ];
 
-async function mount() {
+async function mount(railProps: Record<string, unknown> = {}) {
 	const Page = defineComponent({
 		setup() {
 			provideRecordView('sample');
 			return () =>
 				h(RecordLayout, null, {
 					rail: () => h(PageContents, { entries: CONTENTS }),
-					view: () => h(RecordViewRail, { kind: 'sample' }),
+					view: () => h(RecordViewRail, { kind: 'sample', ...railProps }),
 					default: () => [
 						h(Section, { id: 'ops', title: 'Operations', count: 2 }, () => h(DataTable, null, () => h('tr', [h('td', 'row')]))),
 						h(Section, { id: 'tests', title: 'Tests', count: 0, empty: true }),
@@ -115,5 +115,18 @@ describe('record page View rail', () => {
 		expect(sections()).toEqual(['Operations']);
 		expect(host.querySelector('.tab .dot')).toBeTruthy();
 		expect(host.querySelector('.tab')?.textContent).toContain('View · 2 columns · Normal · Empty hidden');
+	});
+
+	it('leaves Panels out for a page that lays its panels out itself (the Project page), and the tab does not name them', async () => {
+		await mount({ panels: false, range: true });
+		expect(host.querySelector('[role="radiogroup"][aria-label="Panels"]')).toBeNull();
+		expect(host.querySelector('[role="radiogroup"][aria-label="Table density"]')).toBeTruthy();
+		expect(host.querySelector('[role="radiogroup"][aria-label="Activity range"]')).toBeTruthy();
+		app!.unmount();
+		host.innerHTML = '';
+		localStorage.setItem('d1.view.sample.open', '0');
+		await mount({ panels: false });
+		expect(host.querySelector('.tab')?.textContent).toContain('View · Normal');
+		expect(host.querySelector('.tab')?.textContent).not.toContain('column');
 	});
 });

@@ -14,6 +14,7 @@ import SettingsPage from './pages/SettingsPage.vue';
 import ReportBugPage from './pages/ReportBugPage.vue';
 import CrawlerPage from './pages/CrawlerPage.vue';
 import InboxPage from './pages/InboxPage.vue';
+import InboxFilePage from './inbox/InboxFilePage.vue';
 import IndexRoute from './pages/IndexRoute.vue';
 import ToolingPage from './pages/tooling/ToolingPage.vue';
 
@@ -41,6 +42,8 @@ export const starbaseRoutes: RouteRecordRaw[] = [
 	{ path: 'crawler', component: CrawlerPage },
 	// The Inbox: found files waiting to be linked (spec 2026-10-15-found-files-inbox). No /home form (links.ts LOCAL_PAGES).
 	{ path: 'inbox', component: InboxPage },
+	// One found file in the view box: the stage, its detail panel and the viewer's View rail. The list's filters ride in the query. No /home form (links.ts LOCAL_PAGES covers /inbox/...).
+	{ path: 'inbox/file/:candidateId', component: InboxFilePage, props: true },
 	// The Process map: lazy, so Vue Flow and ELK load only when someone opens it. No /home form (links.ts LOCAL_PAGES).
 	{ path: 'map', component: () => import('./pages/map/ProcessMapPage.vue') },
 	// After every static route: one list page per collection.

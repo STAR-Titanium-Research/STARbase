@@ -15,10 +15,11 @@ import ViewRailSection from './ViewRailSection.vue';
 // per kind, like the settings); the dot on its tab says the view is not the default.
 //   kind   what the settings are stored under and named by: "sample" (d1.view.sample, "every sample page")
 //   range  also offer the Activity range (a Project's chart)
-const props = defineProps<{ kind: string; range?: boolean }>();
+//   panels false: leave out Panels, for a page that lays its panels out itself (the Project page's hero)
+const props = withDefaults(defineProps<{ kind: string; range?: boolean; panels?: boolean }>(), { panels: true });
 
 const view = useRecordView();
-const panels = computed({
+const panelCount = computed({
 	get: () => String(view?.panels ?? 1) as '1' | '2',
 	set: (v) => { if (view) view.panels = v === '2' ? 2 : 1; },
 });
@@ -27,9 +28,9 @@ const EMPTY = [{ value: 'show', label: 'Show' }, { value: 'hide', label: 'Hide' 
 </script>
 
 <template>
-	<ViewRail v-if="view" :storage-key="`${recordViewKey(props.kind)}.open`" :summary="viewSummary(view, !!range)" :modified="isChanged(view)">
-		<ViewRailSection label="Panels">
-			<SegmentedControl v-model="panels" :options="PANELS" label="Panels" />
+	<ViewRail v-if="view" :storage-key="`${recordViewKey(props.kind)}.open`" :summary="viewSummary(view, !!range, props.panels)" :modified="isChanged(view)">
+		<ViewRailSection v-if="props.panels" label="Panels">
+			<SegmentedControl v-model="panelCount" :options="PANELS" label="Panels" />
 		</ViewRailSection>
 		<ViewRailSection label="Table density">
 			<SegmentedControl :model-value="view.density" :options="DENSITY_OPTIONS" label="Table density" @update:model-value="view.density = $event as Density" />

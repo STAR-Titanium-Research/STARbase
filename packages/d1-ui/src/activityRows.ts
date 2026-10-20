@@ -8,9 +8,12 @@ import { anyProjectFilter, effectiveProjectId, effectiveProjectIdFields, project
 // covers a very busy lab (26 weeks x ~190 a week). Past the cap the oldest rows are the ones
 // missing, and `truncated` lets the page say so.
 //
+// Only DONE work counts (`work_state` = done; planned work is read separately, per planned date).
+//
 // A row belongs to a project by the kit-wide rule (projectScope.ts): its own project_id, else its
-// campaign's. That is why the campaign's project is read too, and why the row's `project_id` in the
-// result is the effective one.
+// campaign's. That is why, across all projects, the campaign's project is read too, and why the row's
+// `project_id` in the result is the effective one. For one project every row is that project's by the
+// filter, so only the date is read and `project_id` is the one asked for.
 
 export const ACTIVITY_ROW_CAP = 5000;
 
@@ -20,6 +23,8 @@ export interface ActivityRows {
 	ops: { project_id: string; operation_date: string }[];
 	tests: { project_id: string; session_date: string }[];
 	truncated: boolean;
+	/** The collections whose read failed while the other answered (a role that may read tests but not operations). Both failing throws instead. */
+	failed: { collection: 'operations' | 'tests'; error: unknown }[];
 }
 
 export async function fetchActivityRows(
@@ -34,14 +39,22 @@ export async function fetchActivityRows(
 	const scope = projectId ? projectScopeFilter(projectId) : anyProjectFilter();
 	const read = async (collection: string, dateField: string) => {
 		const rows = await getItems(collection, {
-			filter: { _and: [scope, inWindow(dateField)] },
-			fields: [...effectiveProjectIdFields, dateField],
+			filter: { _and: [scope, inWindow(dateField), { work_state: { _eq: 'done' } }] },
+			fields: projectId ? [dateField] : [...effectiveProjectIdFields, dateField],
 			sort: [`-${dateField}`],
 			limit: ACTIVITY_ROW_CAP,
 		});
 		return { rows, capped: rows.length >= ACTIVITY_ROW_CAP };
 	};
-	const [ops, tests] = await Promise.all([read('manufacturing_operations', 'operation_date'), read('test_sessions', 'session_date')]);
+	// One collection failing (a role that cannot read it) keeps the other's series; both failing is an error.
+	const [opsRes, testsRes] = await Promise.allSettled([read('manufacturing_operations', 'operation_date'), read('test_sessions', 'session_date')]);
+	if (opsRes.status === 'rejected' && testsRes.status === 'rejected') throw opsRes.reason;
+	const none = { rows: [] as any[], capped: false };
+	const ops = opsRes.status === 'fulfilled' ? opsRes.value : none;
+	const tests = testsRes.status === 'fulfilled' ? testsRes.value : none;
+	const failed: ActivityRows['failed'] = [];
+	if (opsRes.status === 'rejected') failed.push({ collection: 'operations', error: opsRes.reason });
+	if (testsRes.status === 'rejected') failed.push({ collection: 'tests', error: testsRes.reason });
 	// A capped series is known only back to its oldest row (it reads newest first). For "All" the chart starts at
 	// the later of the capped series' oldest dates, so no week before that shows a false zero for either series.
 	let from = 0;
@@ -55,10 +68,11 @@ export async function fetchActivityRows(
 	const flat = (rows: any[], dateField: string) =>
 		rows
 			.filter((r) => !from || !(new Date(r[dateField]).getTime() < from))
-			.map((r) => ({ project_id: effectiveProjectId(r) as string, [dateField]: r[dateField] }));
+			.map((r) => ({ project_id: (projectId ?? effectiveProjectId(r)) as string, [dateField]: r[dateField] }));
 	return {
 		ops: flat(ops.rows, 'operation_date') as ActivityRows['ops'],
 		tests: flat(tests.rows, 'session_date') as ActivityRows['tests'],
 		truncated: ops.capped || tests.capped,
+		failed,
 	};
 }

@@ -25,6 +25,7 @@ function fakeHost(): ExplorerHost {
 	const get = vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
 		calls.push(path);
 		if (path === '/items/physical_samples' && !config?.params?.groupBy) return { data: { data: ROWS, meta: { filter_count: 3 } } };
+		if (path === '/items/tools' && !config?.params?.groupBy) return { data: { data: [{ tool_id: 't1', tool_code: 'T-1', tool_name: 'Drill' }], meta: { filter_count: 1 } } };
 		return { data: { data: [] } };
 	});
 	return { api: { get }, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(null) } as unknown as ExplorerHost;
@@ -58,12 +59,13 @@ afterEach(() => {
 });
 
 describe('IndexPage, normal mode (unchanged)', () => {
-	it('has the crumbs, the header buttons, the print-labels button and links in the first column', async () => {
+	it('has the crumbs, the header buttons, the With-selected menu and links in the first column', async () => {
 		const html = await render({});
 		expect(html).toContain('d1-crumbs');
 		expect(text(html)).toContain('Open in Data Studio');
 		expect(text(html)).toContain('+ New');
-		expect(text(html)).toContain('Print labels for selected');
+		expect(text(html)).toContain('With selected');
+		expect(text(html)).not.toContain('Print labels for selected');
 		expect(html).toMatch(/<a class="cell-link"[^>]*href="[^"]*s1/);
 		expect(html).not.toContain('data-pick-key');
 		expect(html).not.toContain('picking');
@@ -86,11 +88,29 @@ describe('IndexPage, normal mode (unchanged)', () => {
 		expect(text(html)).not.toMatch(/\bPin\b/);
 	});
 
-	it('ticks only for lists with a select action', async () => {
+	it('ticks on every list, not only those with a select action', async () => {
+		expect(await render({})).toContain('Tick every row on this page');
+		expect(await render({ def: indexDefBySlug('tools')! })).toContain('Tick every row on this page');
+	});
+
+	it('replaces the single print button with the With-selected menu, disabled while nothing is ticked', async () => {
 		const html = await render({});
-		expect(html).toContain('Tick every row on this page');
-		const tools = await render({ def: indexDefBySlug('tools')! });
-		expect(tools).not.toContain('Tick every row on this page');
+		const button = html.match(/<button[^>]*aria-haspopup="menu"[^>]*>/)?.[0] ?? '';
+		expect(button).toContain('aria-disabled="true"');
+		expect(button).toContain('aria-expanded="false"');
+		// the entries appear when the menu opens (a DOM test); the model decides which, and the print entry is the first for samples
+		expect(html).not.toContain('role="menuitem"');
+	});
+
+	it('has a menu on the lists that offer something and none on the others', async () => {
+		expect(await render({ def: indexDefBySlug('operations')! })).toContain('aria-haspopup="menu"');
+		expect(await render({ def: indexDefBySlug('tools')! })).not.toContain('aria-haspopup="menu"');
+	});
+
+	it('leaves the dialog and toasts out until an action starts', async () => {
+		const html = await render({});
+		expect(html).not.toContain('role="dialog"');
+		expect(html).not.toContain('bulk-toast');
 	});
 });
 
@@ -124,6 +144,7 @@ describe('IndexPage, picker mode', () => {
 		expect(text(html)).not.toContain('Open in Data Studio');
 		expect(text(html)).not.toContain('+ New');
 		expect(text(html)).not.toContain('Print labels');
+		expect(html).not.toContain('aria-haspopup="menu"');
 		expect(text(html)).not.toContain('Plots');
 		expect(text(html)).not.toContain('Process map');
 		expect(html).toContain('picking');
