@@ -14,7 +14,7 @@
 | 1a — correctness, server: R10, R11, `test_category`/`material_id` (`d1-build`) | agent worktree | `pm-redesign/1a-server` | built, reviewed, merged into the working branch (2026-10-19) |
 | 1b — correctness, client: remove, derived sockets, layout, plain fixes (needs 0 for its browser check) | agent worktree | `pm-redesign/1b-canvas` (+ `1c-verify`: browser specs and the fixes they and the Opus review found) | built, reviewed, merged into the working branch; slice 1 PR up (2026-10-19) |
 | 2 — adding: palette, add search, drops, insert before, planned/done toggle, project/campaign | agent worktree | `pm-redesign/2-adding` | not started (needs 1) |
-| 3 — attach from the database: scoped to existing operations with no input sample (decided 2026-10-19) | agent worktree | `pm-redesign/3-attach` | not started |
+| 3 — attach from the database: scoped to existing operations with no input sample (decided 2026-10-19) | agent worktree | `pm-redesign/3-attach` | built, reviewed (2 blocking + 6 findings fixed), browser suite green; merged with slice 4 (2026-10-20) |
 | 4 — templates | agent worktree | `pm-redesign/4-templates` | built, reviewed (3 blocking + 10 findings fixed), browser suite green (2026-10-20) |
 
 ## Global constraints
@@ -63,7 +63,7 @@
 
 ## Slice 3 — attach from the database
 
-Scoped by the maintainer on 2026-10-19 to **recorded operations that have no input sample** (planned or done); built on `pm-redesign/3-attach` (spec 2.2).
+Scoped by the maintainer on 2026-10-19 to **recorded operations that have no input sample** (planned or done); built on `pm-redesign/3-attach` (spec 2.3).
 
 - [x] "From database…" action row in the palette, the add search (unconnected and from a sample's output) and as a drag source onto a sample's output; the picker (`AttachPicker.vue`) lists operations with `sample_id` null as the signed-in user (search by pass code, method, the sample it made; paged), greyed with the reason when it cannot attach (on the canvas, already attached in this draft, done work on a planned sample, would run in a circle).
 - [x] A pick re-reads the operation (version), refuses one that got an input or is gone, else dispatches the draft's `attach` at the sample's output. Create re-checks (GONE, STALE_VERSION, NOT_ATTACHABLE are blocking checks, nothing written); the summary reads "Attach 1 operation". The sample the operation made is drawn from the database, never made again.
@@ -73,7 +73,7 @@ Scoped by the maintainer on 2026-10-19 to **recorded operations that have no inp
 
 ## Slice 4 — templates
 
-- [ ] Client for `/d1-build/templates` (list, create, edit, delete), "Save as template" on a container, Templates group first in the palette and add search, scope handling (private / role / everyone), greyed when a tool or edge is depleted.
+- [x] Client for `/d1-build/templates` (list, create, edit, delete), "Save as template" on a container, Templates group first in the palette and add search, scope handling (private / role / everyone), greyed when a tool or edge is depleted.
 
 ## Review focus
 
