@@ -4,7 +4,7 @@
 
 import { HttpError as AccessError } from '../d1-record-access/index.js';
 import {
-  Mismatch, NOT_OWNABLE_REASON, OWNER_REMOVE_REASON, REVERT_NO_OWNER, WARN_TEAM_MANAGERS_LOSE, WARN_YOU_LOSE_MANAGE, firstOf, snapshotsEqual, warnBlocked,
+  Mismatch, NOT_OWNABLE_REASON, OWNER_REMOVE_REASON, REVERT_NO_OWNER, TEAM_ACCESS_REMOVE_REASON, WARN_TEAM_MANAGERS_LOSE, WARN_YOU_LOSE_MANAGE, firstOf, snapshotsEqual, warnBlocked,
 } from './rules.js';
 
 // `ops`: makeAccessOps(context); `snapshot`: from makeSnapshots; `warn`: logs one line.
@@ -65,7 +65,11 @@ export function makeAccess({ ops, snapshot, warn }) {
       if (!person) return { noop: true };
       if (before.owner_person_id === params.person_id) throw new AccessError(409, 'CONFLICT', OWNER_REMOVE_REASON);
       const had = await ops.rowsOf(trx, cfg, id, person);
-      if (!had.access && !had.legacy) return { noop: true };
+      if (!had.access && !had.legacy) {
+        // access that comes only through a team is not on the person's own list: nothing to remove here, but not "no change needed" either
+        if (await trx(cfg.table).where({ [cfg.fk]: id, person_id: person.person_id }).whereNotNull('team_access_id').first('person_id')) throw new AccessError(409, 'CONFLICT', TEAM_ACCESS_REMOVE_REASON);
+        return { noop: true };
+      }
       await ops.removePerson(trx, args, { person_id: params.person_id });
     } else {
       // remove_access, a team
