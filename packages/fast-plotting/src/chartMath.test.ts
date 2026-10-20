@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clock, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin } from './chartMath';
+import { clock, indexAt, niceStep, niceTicks, placeTiles, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
 
 describe('niceStep', () => {
 	it('picks 1, 2, 2.5 or 5 times a power of ten, never below the rough step', () => {
@@ -49,6 +49,13 @@ describe('tickLabel', () => {
 		expect(tickLabel(7.5, 2.5)).toBe('7.5');
 		expect(tickLabel(0.2, 0.2)).toBe('0.2');
 		expect(tickLabel(-4, 4)).toBe('−4');
+	});
+});
+
+describe('unitLabel', () => {
+	it('prints degrees Celsius with its sign and leaves other units alone', () => {
+		expect(unitLabel('C')).toBe('°C');
+		expect(unitLabel('kN')).toBe('kN');
 	});
 });
 

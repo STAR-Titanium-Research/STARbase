@@ -71,7 +71,7 @@ function openMenu(ev: MouseEvent, t: Tile) {
 	if (!props.catalog.length) return;
 	// kept on screen, however narrow the viewport
 	const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 268));
-	const y = Math.max(8, Math.min(ev.clientY, window.innerHeight - 120));
+	const y = Math.max(8, Math.min(ev.clientY, window.innerHeight - Math.min(420, window.innerHeight * 0.6) - 8));
 	menu.value = { tile: t.id, x, y };
 }
 const menuTile = computed(() => tiles.value.find((t) => t.id === menu.value?.tile) ?? null);

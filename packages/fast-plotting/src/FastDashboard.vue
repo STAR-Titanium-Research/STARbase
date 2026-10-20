@@ -238,7 +238,8 @@ const openSample = () => { const id = detail.value?.sample_id?.sample_id; if (id
 .layout { display: grid; gap: 12px; align-items: stretch; }
 .layout.stacked { align-items: start; }
 /* stacked (phone / narrow): one scrolling column, the lists bounded so hundreds of rows do not flood it */
+.layout.stacked :deep(.part) { flex: none; }
 .layout.stacked :deep(.list) { max-height: 40vh; flex: none; }
-.layout.stacked :deep(.tabbody) { overflow: visible; }
-.layout.stacked :deep(.plots) { min-height: 420px; }
+.layout.stacked :deep(.tabbody) { flex: none; overflow: visible; }
+.layout.stacked :deep(.chart) { min-height: 200px; }
 </style>
