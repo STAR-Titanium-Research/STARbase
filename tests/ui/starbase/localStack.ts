@@ -28,6 +28,11 @@ export function account(who: Who): [string, string] {
 /** Signs a browser page in to STARbase as one of the three seeded accounts (the same form a person fills in). */
 export async function signIn(page: Page, who: Who): Promise<void> {
 	const [email, password] = account(who);
+	await signInWith(page, email, password);
+}
+
+/** Signs a browser page in to STARbase with any login (a user a test made). */
+export async function signInWith(page: Page, email: string, password: string): Promise<void> {
 	await page.goto(`${STAR}/signin`, { waitUntil: 'domcontentloaded' });
 	await page.locator('input[type="email"]').fill(email);
 	await page.locator('input[type="password"]').fill(password);

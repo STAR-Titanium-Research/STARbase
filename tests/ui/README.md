@@ -47,7 +47,7 @@ redesign (`docs/superpowers/plans/2026-10-18-process-map-edit-redesign.md`), ins
 ```bash
 bash scripts/dev/local-stack.sh up        # 81 s from nothing with warm npm caches (it installs Directus and fetches dbmate); about 8 s when restarting with the data kept
 bash scripts/dev/local-stack.sh status    # URLs and the three logins (also in /tmp/d1-local-stack/credentials.txt)
-cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 12 minutes, 68 tests: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts (the run reads "1 skipped" and a ✘ that is a known failure saying so)
+cd tests/ui && npx playwright test -c playwright.local-stack.config.ts          # about 30 minutes, 99 tests across seven specs: 9 of edit-mode.spec.ts, 28 of edit-mode-slice1.spec.ts, 15 of edit-mode-slice2a.spec.ts, 12 of edit-mode-slice2b.spec.ts, 4 of edit-mode-slice2c.spec.ts, 15 of edit-mode-slice3.spec.ts, 16 of edit-mode-slice4.spec.ts
 cd tests/ui && D1_SHOW_KNOWN_FAILURES=1 npx playwright test -c playwright.local-stack.config.ts   # the known failures show their real errors
 bash scripts/dev/local-stack.sh down      # stop everything (data kept); `down --purge` also deletes the data
 ```
@@ -108,6 +108,36 @@ sideways swipe carries an entry; after Insert from a card's right-click menu foc
 offered no Insert, I and Shift+I give the lock reason with no search, and a drop on it is refused and not remembered as a recent. The rules of
 insert (a recorded or struck-through operation, a cut, a stack of passes, after a pass) are unit tests (`insertModel.test.ts`). `getRetrying`
 (`starbase/localStack.ts`) repeats an idempotent API read when the connection is reset (the local Directus drops a socket now and then).
+
+`specs/edit-mode-slice4.spec.ts` is slice 4 of the redesign (R7 templates), as the Lab Member, with a second Lab Member (made through the admin API,
+signed in in a second browser context), the administrator and the Lab Viewer where a test says so. It builds a CNC Turning, fills the machine,
+tool and operator in the rail's pickers (and a planned date and notes that must NOT travel), saves it as a private template from the rail and
+checks what d1-build stored (`GET /d1-build/templates`: the filled fields, never a date, notes, sample, owner or project), that the Templates
+group is first in the palette and in Shift+A (found by name and by method), drops it on the empty canvas, a free socket and a wire (and Enter on
+its entry), wires a sample into the dropped card and Creates, and reads the operation back over REST (the prefilled fields were written, the
+template is untouched). Other tests: the notes only when ticked and a test template; "Save as template" from the right-click menu of a recorded
+(done) container; the three scopes as two Lab Members and an administrator see them and may change them (403 and 404 over REST), and in the
+second member's own browser (no ⋯ controls); the Lab Viewer's 403 from `/d1-build/templates` and its missing edit mode; rename, who can use it,
+replace with the selected card's settings and delete without changing a card made from the template; a template that changed elsewhere (409:
+plain words, the list reloads, the second try works); and a template that names a retired tool, greyed with the reason in the palette and the add
+search with a warning in Checks. Review fixes: a done tensile test with a result, a status, a file and an owner, and a recorded FAST/SPS operation with a run number, are saved as templates and carry none of them (two operations made from the FAST template are both created); the arrow keys and focus in the template controls, a refused change putting the radio back (a PATCH answered 403 through `page.route`), the Save dialog's focus; and a template whose method no longer exists. It makes a tool and templates (all named "PM4 ...") and removes them, the records it Creates and the second
+member afterwards. The pickers' options are found by typing, so the spec needs a seeded machine "Haas VF-2" (the reference data has one).
+`specs/edit-mode-slice3.spec.ts` is slice 3 of the redesign (R8 attach from the database: recorded operations with no input sample), as the Lab Member. The
+orphan operations (an operation needs an input or an output sample, so one with no input has made a sample) are made through the REST API, planned and
+done, and removed afterwards (a done one goes back to planned first). It drives: a planned orphan found in **From database…** (the add search on a sample's
+output socket, searched by the code of the sample it made), picked, drawn wired and ghosted with the sample it made, Create ("Attach 1 operation") and the
+operation, the sample it made and `sample_genealogy` read back through REST (only `sample_id`, `version` and the step number, code and sort key the database
+derives from the new sample move; the lineage row is the one the trigger writes; no sample is made; the draft is gone); a done one, solid and still done;
+undo and redo of the attach, its wire removed (the operation stays, Create is refused with the check) and Delete (the record is not touched); a row greyed on
+the canvas, already attached in this draft, done work on a planned sample, one that made the sample's ancestor and the sample's own maker; an operation that
+got an input, was edited or was deleted after the pick (Create is refused with the check and writes nothing); the palette entry (floating, wired by hand) and
+a drop on a sample's output; the entry's absence from an operation's output and a new sample's input; and a second Lab Member (made by the admin and removed) who
+does not see the first member's orphan, in the list and through the API; and an investigator of the operation's project (can read it, may not change it) who is
+told so at the pick ("You can see this operation but not change it."), and nothing joins the draft. Its second group, "what Create refuses whatever the page showed",
+makes the cases the picker cannot grey and asks d1-build directly: an operation wired by hand to the sample it made (a client check, and a 409 from the server), a
+lineage loop through a sample picked from the index (no history on the map; the server reads the lineage), a second origin that appeared after the pick, and the
+keyboard of Show more (22 orphans: focus on the search box, the highlighted row kept, Esc still closes). `SLICE3_SHOTS=<dir>` saves screenshots of the picker and the canvas. Creates no records
+that outlive the test.
 
 ## STARbase end to end (spec 14; specs 11 and 13 run here too)
 

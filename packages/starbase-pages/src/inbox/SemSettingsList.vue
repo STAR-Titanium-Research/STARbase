@@ -26,11 +26,14 @@ defineProps<{ rows: SettingRow[] }>();
 </template>
 
 <style scoped>
-.settings { margin: 2px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 1px 12px; font-size: var(--fs-sm, 12px); }
-.setting { display: contents; }
-dt { color: var(--d1-dim); }
-dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
-.value { color: var(--theme--foreground); }
+/* The look of FactList (DESIGN.md section 4): label left in the secondary colour, value right at weight 600, a hairline under each row, as many
+   columns as fit at 260px; so a dozen values take three or four lines, not a dozen. Not FactList itself, because a row here also carries its
+   source, a "check this" mark and (on the record page) an edit control. */
+.settings { margin: 4px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); column-gap: 28px; font-size: var(--fs-md, 13px); }
+.setting { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 28px; padding: 4px 0; border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued)); line-height: 1.35; }
+dt { flex: none; color: var(--d1-dim); }
+dd { margin: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0 8px; min-width: 0; overflow-wrap: anywhere; text-align: right; }
+.value { color: var(--theme--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
 .source { padding: 0 6px; border-radius: 99px; font-size: var(--fs-xs, 11px); line-height: 1.6; color: var(--d1-dim); background: color-mix(in srgb, var(--d1-dim) 14%, transparent); }
 .source.src-manual { color: var(--d1-ok); background: color-mix(in srgb, var(--d1-ok) 14%, transparent); }
 .check { padding: 0 6px; border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 650; line-height: 1.6; color: var(--d1-warn); background: color-mix(in srgb, var(--d1-warn) 14%, transparent); }

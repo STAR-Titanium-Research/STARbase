@@ -11,6 +11,7 @@
 
 import { isReserved, type Check, type DraftBody, type DraftItem, type DraftKey, type DraftOperation, type DraftSample } from '@d1/ui';
 import { inputSampleOf, itemOf, outputSampleOf, subjectsOf, wiresOutOf } from './draft';
+import { gearIn, type GearField } from './gearStatus';
 import { inheritedValues, makerOf, sampleCodeFor, type InheritCtx } from './inherit';
 
 export type CheckCollection = 'physical_samples' | 'manufacturing_operations' | 'test_sessions';
@@ -38,6 +39,8 @@ export interface CheckCtx extends InheritCtx {
 	fields?: Partial<Record<CheckCollection, FieldDef[]>>;
 	/** Existing records re-read, by `<collection>:<id>`. `null` = gone or no longer readable; a key that is absent = not read (yet). */
 	records?: Record<string, LoadedRecord | null>;
+	/** What is wrong with a machine, tool or cutting edge (retired, used up), or undefined when it is fine or not known (R7). */
+	gear?: (field: GearField, id: string) => string | undefined;
 }
 
 export const recordKey = (collection: CheckCollection, id: string) => `${collection}:${id}`;
@@ -123,7 +126,7 @@ function staleChecks(item: DraftItem, ctx: CheckCtx): Check[] {
 	return out;
 }
 
-const SAMPLE_STILL_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
+export const SAMPLE_STILL_PLANNED = 'Its sample is still planned; mark the operation that makes it done first.';
 
 /** A sample no done operation has made yet: a new one made by a planned operation, or an existing one the record says is planned. */
 function samplePlanned(body: DraftBody, key: DraftKey | null, ctx: CheckCtx): boolean {
@@ -151,6 +154,20 @@ function sampleChecks(item: DraftSample, body: DraftBody, ctx: CheckCtx): Check[
 	return out;
 }
 
+/**
+ * A card that names gear that is retired or used up (typed in, or brought by a template): only a warning, the person may have a reason.
+ * An attached operation is warned only about gear the person chooses for it (`item.values`), not the machine or tool its record already names:
+ * a done record whose old machine is retired is not a problem. `values` is what a new card names.
+ */
+function gearChecks(item: DraftItem, values: Record<string, unknown>, ctx: CheckCtx): Check[] {
+	const attached = item.existing && item.kind === 'operation' && item.attach === true;
+	if (!ctx.gear || (item.existing && !attached)) return [];
+	return gearIn(attached ? item.values : values).flatMap((g) => {
+		const text = ctx.gear!(g.field, g.id);
+		return text ? [warn(item.key, text, g.field)] : [];
+	});
+}
+
 function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): Check[] {
 	if (item.remove) return removeChecks(item, ctx);
 	const out: Check[] = [];
@@ -167,6 +184,15 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 			out.push(warn(item.key, `${label} makes no new sample yet: add a sample to its output socket.`));
 		}
 	});
+	// An attached operation is given an input at Create; it cannot be the sample it made (the genealogy trigger skips that row, so the record would
+	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see.
+	if (item.attach && item.existing) {
+		const made = loadedOf(item, ctx)?.values.output_sample_id;
+		const into = itemOf(body, inputSampleOf(body, { key: item.key, row: 0 }) ?? '');
+		if (typeof made === 'string' && into?.kind === 'sample' && into.existing && into.existing.id.toLowerCase() === made.toLowerCase()) {
+			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.'));
+		}
+	}
 	const planned = item.workState === 'planned';
 	// Done work on a sample that is still planned: its maker is not done yet (d1-build refuses it).
 	if (item.workState === 'done' && (!item.existing || item.attach)) {
@@ -177,6 +203,7 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 		if (!item.existing && planned && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));
 		if (empty(values.equipment_id)) out.push(warn(item.key, 'No machine yet.', 'equipment_id'));
 	}
+	out.push(...gearChecks(item, values, ctx));
 	if (item.workState === 'done') out.push(...missingRequired(item, body, ctx, values));
 	return out;
 }
@@ -196,6 +223,7 @@ function testChecks(item: DraftItem & { kind: 'test' }, body: DraftBody, ctx: Ch
 		if (item.workState === 'planned' && empty(values.planned_date)) out.push(warn(item.key, 'No planned date yet.', 'planned_date'));
 		if (empty(values.equipment_id)) out.push(warn(item.key, 'No machine yet.', 'equipment_id'));
 	}
+	out.push(...gearChecks(item, values, ctx));
 	if (item.workState === 'done') out.push(...missingRequired(item, body, ctx, values));
 	return out;
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useEditRail } from './edit/railContext';
 import type { ChainDir } from './model/hoverFocus';
 
 // A card's right-click menu: which way the selected card's chain is lit on the map. Placed at the pointer
@@ -17,6 +18,9 @@ const props = defineProps<{
 	insertBeforeRefusal?: string | null;
 }>();
 const emit = defineEmits<{ pick: [dir: ChainDir]; close: []; remove: []; dissolve: []; insert: [where: 'before' | 'after'] }>();
+// Edit mode, an operation or a test: Save as template… (R7). It reads and acts through the rail's context (the page provides it), so the page binds nothing for it.
+const rail = useEditRail();
+const canTemplate = computed(() => !!props.canRemove && !!rail?.saveTemplate?.can.value);
 
 const OPTIONS: { dir: ChainDir; label: string; icon: string }[] = [
 	{ dir: 'up', label: 'Show upstream', icon: 'arrow_back' },
@@ -61,7 +65,7 @@ onBeforeUnmount(() => {
 			<span>{{ o.label }}</span>
 			<v-icon v-if="o.dir === props.dir" class="ck" name="check" x-small />
 		</button>
-		<template v-if="canRemove || canDissolve || canInsert">
+		<template v-if="canRemove || canDissolve || canInsert || canTemplate">
 			<div class="hd">Edit</div>
 			<template v-if="canInsert">
 				<button type="button" role="menuitem" class="it" :disabled="!!insertBeforeRefusal" :aria-disabled="!!insertBeforeRefusal" :title="insertBeforeRefusal || undefined" @click="emit('insert', 'before'), emit('close')">
@@ -75,6 +79,10 @@ onBeforeUnmount(() => {
 					<kbd>I</kbd>
 				</button>
 			</template>
+			<button v-if="canTemplate" type="button" role="menuitem" class="it" @click="rail?.saveTemplate?.open(), emit('close')">
+				<v-icon name="bookmark_add" x-small />
+				<span>Save as template…</span>
+			</button>
 			<button v-if="canRemove" type="button" role="menuitem" class="it" @click="emit('remove'), emit('close')">
 				<v-icon name="delete" x-small />
 				<span>Remove</span>

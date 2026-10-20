@@ -575,6 +575,24 @@ describe('useEditMode: the draft on the map', () => {
 		expect(edit.selectedItem.value?.kind).toBe('sample');
 	});
 
+	it('an operation the draft attaches (a saved draft opened again) is read, with the sample it made, and drawn from that', async () => {
+		const server = fakeServer();
+		server.s.rows.manufacturing_operations = [{ operation_id: 'orph', version: 5, sample_id: null, output_sample_id: 's2', work_state: 'planned', planned_date: '2026-11-01', pass_code: 'X-1', method_id: { method_id: 'm-turn', method_name: 'Turning' } }];
+		const saved = [{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }, { type: 'attach', operation: { id: 'orph', version: 5 }, workState: 'planned', from: { key: 'n1' } }] as const;
+		server.s.seed('d', saved.reduce((b, a) => apply(b, a as never), emptyBody()));
+		const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
+		const edit = useEditMode({ api: server.api, fieldsFor: async () => [], route, router: { replace: vi.fn() }, isPhone: ref(false), focus: () => null });
+		await flush();
+		expect(edit.catalog.operations.get('orph')).toMatchObject({ methodName: 'Turning', sampleId: null, outputSampleId: 's2' });
+		expect(edit.catalog.samples.get('s2')?.code).toBe('PS-002');
+		const merged = edit.overlay.merge(null);
+		expect(merged.operations).toHaveLength(1);
+		expect(merged.operations[0]).toMatchObject({ id: 'orph', code: 'X-1', methodName: 'Turning', sampleId: 's1', outputSampleId: 's2', workState: 'planned' });
+		expect(merged.samples.map((s) => s.id).sort()).toEqual(['s1', 's2']);
+		// each record is read once: the attached operation's read is its record's read
+		expect(server.s.calls.filter((c) => c === 'GET /items/manufacturing_operations')).toHaveLength(1);
+	});
+
 	it('reads the methods for the add search once edit mode is on', async () => {
 		const { edit, s } = setup({ edit: 'new' });
 		await flush();

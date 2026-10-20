@@ -13,6 +13,8 @@ export interface EditRailContext {
 	openExternal(key: string, field: FormField): void;
 	/** After a Create that was refused: mark what is missing, not only what has been touched. */
 	showMissing: Ref<boolean>;
+	/** "Save as template" for the selected container (R7): whether one is selected, and opening the dialog. */
+	saveTemplate?: { can: Ref<boolean>; open(): void };
 }
 
 export const EDIT_RAIL_KEY: InjectionKey<EditRailContext> = Symbol('editRail');
