@@ -1,5 +1,5 @@
 // The "Add a surface scan" form's pure parts: which library files are offered, what a form must hold before it can
-// be sent, and the words of the lab-wide warning. No Vue.
+// be sent, and the words of the visibility warning. No Vue.
 
 import { formatDate, operationLabel, processLabel } from '@d1/ui';
 import { SCAN_CONDITIONS, type ScanCondition } from './scanModel';
@@ -18,9 +18,9 @@ export const TOPOGRAPHY_EXTENSIONS = [
 /** Only files on the archive share (a pointer row, `storage = 'star'`): the worker reads them by metadata.archive_path and refuses the rest. */
 export const ARCHIVE_STORAGE = 'star';
 
-/** The visible warning of the dialog (spec decision 6). */
+/** The visible warning of the dialog (spec 2026-10-21, "STARbase"): who sees a scan follows its file's owner (ADR-0023). */
 export const VISIBILITY_WARNING =
-	'Adding a surface scan makes this file visible to every lab member, whoever owns the file and whatever project it belongs to. Only add files the whole lab may see.';
+	"Only the file's owner (or its team) and administrators see this scan's file and 3D view; others see that the item has a scan. Files with no owner stay visible to every lab member.";
 
 export interface LibraryFile {
 	id: string;

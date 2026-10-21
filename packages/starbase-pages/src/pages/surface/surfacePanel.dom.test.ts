@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-// The Surface scans panel and its Add dialog against a fake API: rows with thumbnails, "Render again" on a failed
-// render only, an edge page that also asks for its insert's scans, the lab-wide warning in the dialog, the create it
-// sends, and no write controls for a Lab Viewer. The 3D viewer itself is WebGL and is covered by the headless spec.
+// The Surface scans panel and its Add dialog against a fake API: rows (GET /d1-surface-scan/scans) with thumbnails,
+// "Render again" on a failed or finished render, an edge page that also asks for its insert's scans, a locked scan as a
+// lock tile (condition, date and operation only, no thumbnail request, no buttons, still counted), the visibility warning
+// in the dialog, the create it sends, and no write controls for a Lab Viewer. The 3D viewer itself is WebGL and is covered by the headless spec.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick, ref, type App } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -14,16 +15,18 @@ const INSERT = '00000000-0000-4000-8000-0000000000a1';
 const EDGE = '00000000-0000-4000-8000-0000000000e1';
 
 const scan = (o: Record<string, unknown>) => ({
-	scan_id: 's0', insert_id: INSERT, edge_id: null, condition: 'new', condition_note: null, scanned_on: null, notes: null, render_status: 'done', render_error: null,
-	version: 1, directus_files_id: { id: 'f0', filename_download: 'a.al3d' }, operation_id: null, ...o,
+	scan_id: 's0', insert_id: INSERT, edge_id: null, locked: false, condition: 'new', scanned_on: null, operation: null, notes: null, condition_note: null,
+	added_by: null, file: { id: 'f0', name: 'a.al3d' }, render_status: 'done', render_error: null, rendered_at: null, grid: { width: 2, height: 2 }, can_edit: true, ...o,
 });
-const DONE = scan({ scan_id: 's-done', condition: 'worn', scanned_on: '2026-09-30', condition_note: 'flank wear', directus_files_id: { id: 'f1', filename_download: 'edge-A.al3d' } });
-const FAILED = scan({ scan_id: 's-failed', edge_id: EDGE, insert_id: null, render_status: 'failed', render_error: 'Cannot read this file', directus_files_id: { id: 'f2', filename_download: 'bad.al3d' } });
+const DONE = scan({ scan_id: 's-done', condition: 'worn', scanned_on: '2026-09-30', condition_note: 'flank wear', file: { id: 'f1', name: 'edge-A.al3d' } });
+const FAILED = scan({ scan_id: 's-failed', edge_id: EDGE, insert_id: null, render_status: 'failed', render_error: 'Cannot read this file', file: { id: 'f2', name: 'bad.al3d' } });
+// What the endpoint sends for a scan whose file belongs to someone else: nothing but condition, date and operation.
+const LOCKED = { scan_id: 's-locked', insert_id: INSERT, edge_id: null, locked: true, condition: 'cleaned', scanned_on: '2026-08-15', operation: { id: 'op-9', label: 'OP-LOCK-9' } };
 
 function fakeApi(rows: unknown[]) {
 	return {
 		get: vi.fn(async (url: string, _config?: unknown) => {
-			if (url === '/items/surface_scans') return { data: { data: rows } };
+			if (url === '/d1-surface-scan/scans') return { data: { data: rows } };
 			if (url.endsWith('/thumb')) return { data: new Blob(['png'], { type: 'image/png' }) };
 			if (url === '/files') return { data: { data: [{ id: 'f9', filename_download: 'new-scan.al3d', filesize: 2048, metadata: { archive_path: 'Alicona/new-scan.al3d' } }] } };
 			return { data: { data: [] } };
@@ -71,7 +74,7 @@ async function mountPanel(rows: unknown[], props: Record<string, unknown>, viewe
 
 const text = () => document.body.textContent ?? '';
 const button = (label: RegExp) => [...document.querySelectorAll('button')].find((b) => label.test(b.textContent ?? '')) as HTMLButtonElement | undefined;
-const listReads = () => api.get.mock.calls.filter(([u]) => u === '/items/surface_scans');
+const listReads = () => api.get.mock.calls.filter(([u]) => u === '/d1-surface-scan/scans');
 
 beforeEach(() => {
 	document.body.innerHTML = '';
@@ -98,13 +101,14 @@ describe('Surface scans panel', () => {
 		expect(button(/Open in 3D/)).toBeDefined();
 		expect(button(/Render again/)).toBeDefined(); // a finished render can be rendered again too (its files may be gone)
 		const read = listReads()[0][1] as any;
-		expect(read.params.filter).toEqual({ insert_id: { _eq: INSERT } });
+		expect(read.params).toEqual({ insert_id: INSERT });
+		expect(api.get.mock.calls.some(([u]) => u === '/items/surface_scans')).toBe(false); // not the table: the endpoint decides what is shown
 	});
 
 	it("asks an edge page for the edge's scans and its insert's, tags the insert's, and offers Render again on a failed and on a finished render, never Open on a failed one", async () => {
 		await mountPanel([DONE, FAILED], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge CNMG12-1-3B' });
 		const read = listReads()[0][1] as any;
-		expect(read.params.filter).toEqual({ _or: [{ edge_id: { _eq: EDGE } }, { insert_id: { _eq: INSERT } }] });
+		expect(read.params).toEqual({ insert_id: INSERT, edge_id: EDGE }); // an edge page passes both ids
 		const rows = [...document.querySelectorAll('.scan')];
 		expect(rows).toHaveLength(2);
 		const done = rows.find((r) => r.textContent?.includes('edge-A.al3d'))!;
@@ -147,12 +151,60 @@ describe('Surface scans panel', () => {
 	});
 });
 
+const LOCKED2 = { ...LOCKED, scan_id: 's-locked-2', scanned_on: '2026-08-01' };
+
+describe('a locked scan', () => {
+	const LOCKED_TEXT = 'A surface scan you cannot open: its file belongs to someone else';
+	it('is a lock tile with the condition, date and operation, and no file, notes, thumbnail, Open or Render again', async () => {
+		await mountPanel([DONE, LOCKED], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		const tile = document.querySelector('.scan[data-locked="true"]')!;
+		expect(tile).not.toBeNull();
+		expect(tile.textContent).toContain(LOCKED_TEXT);
+		expect(tile.textContent).toContain('Cleaned');
+		expect(tile.textContent).toMatch(/15 Aug 2026/);
+		expect(tile.textContent).toContain('OP-LOCK-9');
+		expect(tile.querySelector('img')).toBeNull();
+		expect(tile.querySelector('button')).toBeNull();
+		expect(tile.textContent).not.toMatch(/Open in 3D|Render again|Ready|Waiting|Rendering|failed/i);
+		// the readable one beside it is unchanged
+		const readable = [...document.querySelectorAll('.scan')].find((r) => r.textContent?.includes('edge-A.al3d'))!;
+		expect(readable.textContent).toContain('Render again');
+		expect(document.querySelectorAll('.scan')).toHaveLength(2);
+	});
+	it('counts in the section total and is never asked for a thumbnail', async () => {
+		await mountPanel([LOCKED, LOCKED2], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		await vi.waitFor(() => expect(document.querySelectorAll('.scan')).toHaveLength(2));
+		expect(document.querySelector('#scans')?.textContent).toMatch(/Surface scans\s*2/);
+		await new Promise((r) => setTimeout(r, 50));
+		expect(api.get.mock.calls.some(([u]) => String(u).includes('/thumb'))).toBe(false);
+		expect(api.get.mock.calls.some(([u]) => String(u).includes('s-locked'))).toBe(false);
+	});
+	it('does not show a file, notes or render state even if a faulty answer carried them', async () => {
+		await mountPanel([{ ...LOCKED, file: { id: 'f9', name: 'secret-scan.al3d' }, notes: 'private note', condition_note: 'private cond', render_status: 'failed', render_error: 'private error', can_edit: true }], { insertId: INSERT, itemLabel: 'Insert' });
+		expect(text()).not.toMatch(/secret-scan|private/);
+		expect(button(/Render again|Open in 3D/)).toBeUndefined();
+	});
+	it('keeps a locked scan out of the files the Add dialog calls taken, and its readable neighbours in', async () => {
+		await mountPanel([DONE, { ...LOCKED, file: { id: 'f9', name: 'new-scan.al3d' } }], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		button(/Add a surface scan/)!.click();
+		await vi.waitFor(() => expect(document.querySelector('.hit')).not.toBeNull());
+		expect((document.querySelector('.hit') as HTMLButtonElement).disabled).toBe(false); // f9 is in the library list and not taken: a locked row has no file id here
+	});
+	it('offers a Lab Viewer nothing on it either, and an edge page tags an insert’s locked scan', async () => {
+		await mountPanel([LOCKED], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge' }, true);
+		const tile = document.querySelector('.scan[data-locked="true"]')!;
+		expect(tile.querySelector('.tag')?.textContent).toBe('Insert');
+		expect(tile.querySelector('button')).toBeNull();
+	});
+});
+
 describe('Add a surface scan dialog', () => {
-	it('warns that the file becomes visible to every lab member, then creates the scan with what was chosen', async () => {
+	it('warns who sees the scan (the file’s owner, not the lab), then creates the scan with what was chosen', async () => {
 		await mountPanel([DONE], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge CNMG12-1-3B' });
 		button(/Add a surface scan/)!.click();
 		await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
-		expect(document.querySelector('[data-testid="visibility-warning"]')?.textContent).toMatch(/visible to every lab member/);
+		expect(document.querySelector('[data-testid="visibility-warning"]')?.textContent).toContain("Only the file's owner (or its team) and administrators see this scan's file and 3D view");
+		expect(document.querySelector('[data-testid="visibility-warning"]')?.textContent).not.toContain('makes this file visible to every lab member');
 		expect(text()).toContain('Add a surface scan to Edge CNMG12-1-3B');
 		const submit = button(/Add surface scan$/)!;
 		expect(submit.disabled).toBe(true);
@@ -188,8 +240,25 @@ describe('Add a surface scan dialog', () => {
 		expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 	});
 
+	it('shows the access guard’s reason in words when the person cannot read the file, and stays open', async () => {
+		await mountPanel([DONE], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		button(/Add a surface scan/)!.click();
+		await vi.waitFor(() => expect(document.querySelector('.hit')).not.toBeNull());
+		(document.querySelector('.hit') as HTMLButtonElement).click();
+		await nextTick();
+		const condition = document.querySelectorAll('select')[0] as HTMLSelectElement;
+		condition.value = '0';
+		condition.dispatchEvent(new Event('change'));
+		await nextTick();
+		const reason = 'You can only add a surface scan of a file you can see.';
+		api.post.mockRejectedValueOnce(Object.assign(new Error('x'), { response: { status: 403, data: { errors: [{ message: reason, extensions: { code: 'FORBIDDEN', reason, source: 'd1-access-guard', kind: 'junction', collection: 'surface_scans', parent: 'directus_files' } }] } } }));
+		button(/Add surface scan$/)!.click();
+		await vi.waitFor(() => expect(text()).toContain(reason));
+		expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+	});
+
 	it('does not offer a file this item already has', async () => {
-		await mountPanel([scan({ scan_id: 's-have', directus_files_id: { id: 'f9', filename_download: 'new-scan.al3d' } })], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		await mountPanel([scan({ scan_id: 's-have', file: { id: 'f9', name: 'new-scan.al3d' } })], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
 		button(/Add a surface scan/)!.click();
 		await vi.waitFor(() => expect(document.querySelector('.hit')).not.toBeNull());
 		expect((document.querySelector('.hit') as HTMLButtonElement).disabled).toBe(true);

@@ -2,8 +2,9 @@
 // Add a surface scan to a cutting insert or an insert edge: a file from the library, the condition the item was in,
 // a note, the day it was scanned and, if known, the operation that wore it. A plain Directus create on
 // surface_scans as the signed-in user (permissions and hooks apply); the render worker picks the new row up. The
-// dialog always shows that the file becomes visible to every lab member (spec, decision 6). A create has no
-// version to clash with, so the refusals handled here are permission, a file already added, and validation.
+// dialog always shows who will see the scan's file (the file's owner or team and administrators; ADR-0023). A create has
+// no version to clash with, so the refusals handled here are permission (the d1-access-guard's reason, in its own words,
+// when the file is one the person cannot read), a file already added, and validation.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useExplorerHost, useRequestGate } from '@d1/ui';
 import {

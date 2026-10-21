@@ -76,8 +76,11 @@ describe('the rest', () => {
 		expect(operationFilter({ edgeId: 'e1', insertId: 'i1' })).toEqual({ insert_edge_id: { _eq: 'e1' } });
 		expect(operationFilter({ insertId: 'i1' })).toEqual({ insert_edge_id: { insert_id: { _eq: 'i1' } } });
 	});
-	it('warns about lab-wide visibility, and never says attach', () => {
-		expect(VISIBILITY_WARNING).toMatch(/every lab member/);
+	it('warns who sees the scan (its file’s owner, not the whole lab), and never says attach', () => {
+		expect(VISIBILITY_WARNING).toBe(
+			"Only the file's owner (or its team) and administrators see this scan's file and 3D view; others see that the item has a scan. Files with no owner stay visible to every lab member.",
+		);
+		expect(VISIBILITY_WARNING).not.toMatch(/makes this file visible to every lab member/);
 		expect(VISIBILITY_WARNING.toLowerCase()).not.toContain('attach');
 	});
 });
