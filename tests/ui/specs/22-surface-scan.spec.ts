@@ -413,20 +413,36 @@ test("a scan whose file belongs to someone else is a lock tile: condition, date 
 	await page.context().close();
 });
 
-test('a scan that became private after the panel loaded says so in the viewer (403 FILE_LOCKED), without a way round it', async ({ browser }) => {
+test('a scan that became private after the panel loaded: Open in 3D is refused (403 FILE_LOCKED) and its row comes back as a lock tile', async ({ browser }, testInfo) => {
 	const { page, state, errors } = await start(browser, `/edges/${T.edgeId}`);
 	const worn = row(page, 'CNMG12-1-A-worn.al3d');
 	await expect(worn.getByRole('button', { name: /Open .* in 3D/ })).toBeVisible();
+	await expect(worn.locator('.thumb img')).toBeVisible(); // the cached picture the row shows until it is told otherwise
+	const rowsBefore = await panel(page).locator('.scan').count();
+	const locks = panel(page).locator('.scan[data-locked="true"]');
+	const locksBefore = await locks.count(); // the insert's own locked scan is on this page already
+	const listedBefore = state.scans.listed.length;
 	// An administrator gave the file an owner (or it was moved) after the list was read: the next read of the scan is refused.
 	state.scans.rows.find((r) => r.scan_id === 'scan-edge-worn')!.locked = true;
 	await worn.getByRole('button', { name: /Open .* in 3D/ }).click();
-	const viewer = page.getByTestId('surface-scan-viewer');
-	await expect(viewer).toHaveAttribute('data-phase', 'error');
-	await expect(viewer).toContainText("This scan's file belongs to someone else, so it cannot be shown.");
-	await expect(viewer.getByRole('button', { name: 'Render again' })).toHaveCount(0);
+
+	// The viewer asked once, was refused, and told the panel: the list is read again and the row is a lock tile (no file, note, thumbnail, status or buttons).
+	await expect.poll(() => state.scans.listed.length).toBeGreaterThan(listedBefore);
+	await expect(locks).toHaveCount(locksBefore + 1);
+	const tile = locks.filter({ hasText: 'Worn' }); // the scan's own condition, date and operation stay on its tile
+	await expect(tile).toHaveCount(1);
+	await expect(tile).toContainText('A surface scan you cannot open: its file belongs to someone else');
+	await expect(tile).toContainText('30 Sep 2026');
+	await expect(tile.getByRole('button')).toHaveCount(0); // no Open in 3D, no Render again
+	await expect(tile.locator('img')).toHaveCount(0);
+	await expect(tile).not.toContainText(/Ready|Flank wear/);
+	await expect(panel(page)).not.toContainText('CNMG12-1-A-worn.al3d');
+	await expect(panel(page).locator('.scan')).toHaveCount(rowsBefore); // still counted
+	await expect(page.getByTestId('surface-scan-open')).toHaveCount(0); // its view is closed
+	await expect(page.getByTestId('surface-scan-viewer')).toHaveCount(0);
 	expect(state.scans.endpoint).toContain('GET /d1-surface-scan/scan-edge-worn/meta');
 	expect(state.scans.endpoint).not.toContain('GET /d1-surface-scan/scan-edge-worn/grid'); // meta failed first: nothing was drawn
-	await expect(viewer.locator('canvas')).toHaveCount(0);
+	await panel(page).screenshot({ path: testInfo.outputPath('became-private-panel.png') });
 	expect(errors).toEqual([]);
 	await page.context().close();
 });

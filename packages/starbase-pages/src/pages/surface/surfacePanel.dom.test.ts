@@ -9,10 +9,16 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { setExplorerHostFactory } from '@d1/ui';
 import SurfaceScansPanel from './SurfaceScansPanel.vue';
 
-vi.mock('./viewer/SurfaceScanViewer.vue', () => ({ default: { props: ['scanId'], render() { return null; } } }));
+// The viewer is WebGL: a stand-in that can say the scan is locked (what the real one does on a 403 FILE_LOCKED), as the test asks.
+const viewerHook = vi.hoisted(() => ({ locked: null as null | (() => void) }));
+vi.mock('./viewer/SurfaceScanViewer.vue', () => ({
+	default: { props: ['scanId'], emits: ['locked', 'rerendered'], setup(_p: unknown, { emit }: any) { viewerHook.locked = () => emit('locked'); return () => null; } },
+}));
 
 const INSERT = '00000000-0000-4000-8000-0000000000a1';
 const EDGE = '00000000-0000-4000-8000-0000000000e1';
+
+const httpError = (status: number, code: string) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: { errors: [{ message: code, extensions: { code } }] } } });
 
 const scan = (o: Record<string, unknown>) => ({
 	scan_id: 's0', insert_id: INSERT, edge_id: null, locked: false, condition: 'new', scanned_on: null, operation: null, notes: null, condition_note: null,
@@ -32,11 +38,14 @@ const FILES = [
 const UNOWNED_SENTENCE = 'No owner: every lab member will see this scan and its file.';
 const OWNED_SENTENCE = "This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.";
 
+// `state.rows` is what the next list read answers (a test changes it to say a scan became private); `state.thumb` may throw.
 function fakeApi(rows: unknown[]) {
+	const state = { rows, thumb: null as null | ((url: string) => unknown) };
 	return {
+		state,
 		get: vi.fn(async (url: string, _config?: unknown) => {
-			if (url === '/d1-surface-scan/scans') return { data: { data: rows } };
-			if (url.endsWith('/thumb')) return { data: new Blob(['png'], { type: 'image/png' }) };
+			if (url === '/d1-surface-scan/scans') return { data: { data: state.rows } };
+			if (url.endsWith('/thumb')) { state.thumb?.(url); return { data: new Blob(['png'], { type: 'image/png' }) }; }
 			if (url === '/files') return { data: { data: FILES } };
 			return { data: { data: [] } };
 		}),
@@ -64,8 +73,8 @@ function registerStubs(app: App) {
 let app: App | null = null;
 let api: ReturnType<typeof fakeApi>;
 
-async function mountPanel(rows: unknown[], props: Record<string, unknown>, viewer = false) {
-	api = fakeApi(rows);
+async function mountPanel(rows: unknown[], props: Record<string, unknown>, viewer = false, reuseApi = false) {
+	if (!reuseApi) api = fakeApi(rows);
 	setExplorerHostFactory(() => ({
 		api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true),
 		canViewAllAccess: ref(viewer), user: ref({ id: 'u1', role: 'r1' }),
@@ -293,5 +302,57 @@ describe('Add a surface scan dialog', () => {
 		await vi.waitFor(() => expect(document.querySelector('.hit')).not.toBeNull());
 		expect((document.querySelector('.hit') as HTMLButtonElement).disabled).toBe(true);
 		expect(document.querySelector('.hit')?.textContent).toContain('already a surface scan here');
+	});
+});
+
+describe('a scan that became private after the list was read (403 FILE_LOCKED)', () => {
+	const goPrivate = () => { api.state.rows = [{ ...LOCKED, scan_id: 's-done', insert_id: INSERT }]; };
+	const row = () => document.querySelector('.scan')!;
+
+	it('comes back as a lock tile when the open viewer says so: no file name, thumbnail, status or buttons, view closed, thumbnail URL given back', async () => {
+		await mountPanel([DONE], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		await vi.waitFor(() => expect(document.querySelector('.thumb img')?.getAttribute('src')).toBe('blob:thumb'));
+		button(/Open in 3D/)!.click();
+		await vi.waitFor(() => expect(document.querySelector('[data-testid="surface-scan-open"]')).not.toBeNull());
+		const before = listReads().length;
+		(URL.revokeObjectURL as any).mockClear();
+		goPrivate();
+		viewerHook.locked!();
+		await vi.waitFor(() => expect(row().getAttribute('data-locked')).toBe('true'));
+		expect(listReads().length).toBe(before + 1);
+		expect(document.querySelector('[data-testid="surface-scan-open"]')).toBeNull();
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:thumb');
+		expect(row().textContent).toContain('A surface scan you cannot open: its file belongs to someone else');
+		expect(row().textContent).not.toMatch(/edge-A\.al3d|flank wear|Ready|Open in 3D|Render again/);
+		expect(row().querySelector('img')).toBeNull();
+		expect(row().querySelector('button')).toBeNull();
+	});
+
+	it('Render again refused with FILE_LOCKED reloads the list, and the row is a lock tile', async () => {
+		await mountPanel([FAILED], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge CNMG12-1-3B' });
+		const before = listReads().length;
+		api.post.mockRejectedValueOnce(httpError(403, 'FILE_LOCKED'));
+		api.state.rows = [{ ...LOCKED, scan_id: 's-failed', insert_id: null, edge_id: EDGE }];
+		button(/Render again/)!.click();
+		await vi.waitFor(() => expect(row().getAttribute('data-locked')).toBe('true'));
+		expect(listReads().length).toBe(before + 1);
+		expect(row().querySelector('button')).toBeNull();
+		expect(row().textContent).not.toMatch(/bad\.al3d|Cannot read this file|belongs to someone else, so it cannot be shown/); // the tile has its own words only
+	});
+
+	it('does not reload for any other Render again refusal', async () => {
+		await mountPanel([FAILED], { insertId: INSERT, edgeId: EDGE, itemLabel: 'Edge' });
+		const before = listReads().length;
+		api.post.mockRejectedValueOnce(httpError(403, 'FORBIDDEN'));
+		button(/Render again/)!.click();
+		await vi.waitFor(() => expect(text()).toContain('do not have permission'));
+		expect(listReads().length).toBe(before);
+	});
+
+	it('a thumbnail answered with FILE_LOCKED reloads the list too', async () => {
+		api = fakeApi([DONE]);
+		api.state.thumb = () => { api.state.rows = [{ ...LOCKED, scan_id: 's-done', insert_id: INSERT }]; throw httpError(403, 'FILE_LOCKED'); };
+		await mountPanel([DONE], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' }, false, true);
+		await vi.waitFor(() => expect(row().getAttribute('data-locked')).toBe('true'));
 	});
 });

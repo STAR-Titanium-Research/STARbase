@@ -4,7 +4,7 @@
 
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { useExplorerHost } from '@d1/ui';
-import { fetchThumb } from './scanApi';
+import { fetchThumb, isFileLocked } from './scanApi';
 import { canOpenScan, type ScanRow } from './scanModel';
 
 const PARALLEL = 3;
@@ -14,7 +14,8 @@ export function thumbsToLoad(rows: ScanRow[], have: ReadonlySet<string>, tried: 
 	return rows.filter((r) => canOpenScan(r) && r.id && !have.has(r.id) && !tried.has(r.id)).map((r) => r.id);
 }
 
-export function useScanThumbs(rows: Ref<ScanRow[]>) {
+/** `onLocked` is told of a scan whose thumbnail answered 403 FILE_LOCKED (its file got an owner since the list was read), so the panel can reload. */
+export function useScanThumbs(rows: Ref<ScanRow[]>, onLocked?: (id: string) => void) {
 	const api = useExplorerHost().api;
 	const urls = ref<Record<string, string>>({});
 	const tried = new Set<string>();
@@ -39,8 +40,9 @@ export function useScanThumbs(rows: Ref<ScanRow[]>) {
 			const blob = await fetchThumb(api, id);
 			if (disposed || !rows.value.some((r) => r.id === id && canOpenScan(r))) return; // gone, or being rendered again
 			urls.value = { ...urls.value, [id]: URL.createObjectURL(blob) };
-		} catch {
+		} catch (e) {
 			tried.add(id); // the row shows its placeholder; a reload of the list tries again
+			if (isFileLocked(e) && !disposed) onLocked?.(id);
 		} finally {
 			running--;
 			inFlight.delete(id);
@@ -64,6 +66,15 @@ export function useScanThumbs(rows: Ref<ScanRow[]>) {
 		{ immediate: true },
 	);
 
+	/** Give back one scan's object URL now (its file became private: the cached picture must not stay on screen). */
+	function drop(id: string): void {
+		const url = urls.value[id];
+		if (!url) return;
+		URL.revokeObjectURL(url);
+		const { [id]: _gone, ...rest } = urls.value;
+		urls.value = rest;
+	}
+
 	/** Forget failures, so the next list load tries those thumbnails again. */
 	const retry = () => {
 		tried.clear();
@@ -76,5 +87,5 @@ export function useScanThumbs(rows: Ref<ScanRow[]>) {
 		urls.value = {};
 	});
 
-	return { urls, retry };
+	return { urls, retry, drop };
 }

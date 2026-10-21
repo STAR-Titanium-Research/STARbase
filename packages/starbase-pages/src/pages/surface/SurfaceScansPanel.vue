@@ -9,7 +9,7 @@ import { LIST_CAP, LoadState, RecordLink, Section, formatDate, useExplorerHost }
 import AddSurfaceScanDialog from './AddSurfaceScanDialog.vue';
 import ScanStatusBadge from './ScanStatusBadge.vue';
 import SurfaceScanViewer from './viewer/SurfaceScanViewer.vue';
-import { renderAgain, scanErrorText } from './scanApi';
+import { isFileLocked, renderAgain, scanErrorText } from './scanApi';
 import { canOpenScan, canRenderAgain, conditionLabel, LOCKED_SCAN_TEXT, scanOwner, type ScanRow } from './scanModel';
 import { useScanThumbs } from './useScanThumbs';
 import { useSurfaceScans } from './useSurfaceScans';
@@ -25,7 +25,7 @@ const props = defineProps<{
 const host = useExplorerHost();
 const edge = computed(() => props.edgeId ?? null);
 const { state, rows, capped, reload } = useSurfaceScans(toRef(props, 'insertId'), edge);
-const { urls, retry } = useScanThumbs(rows);
+const { urls, retry, drop } = useScanThumbs(rows, (id) => onLocked(id));
 
 // A Lab Viewer looks and changes nothing: no button that adds or renders.
 const canWrite = computed(() => !host.canViewAllAccess.value);
@@ -46,6 +46,15 @@ const takenFileIds = computed(() => rows.value.filter((r) => !r.locked && scanOw
 const emptyText = computed(() => (edge.value ? 'No surface scan of this edge or its insert.' : 'No surface scan of this insert.'));
 const fileName = (r: ScanRow) => r.file?.name ?? 'File not visible to you';
 
+// A scan's file got an owner after this list was read (a viewer, a thumbnail or Render again answered 403 FILE_LOCKED): its row still
+// shows the file name, note, thumbnail and buttons, and a finished row is not polled. Close its view, drop the cached picture and read
+// the list again, so the row comes back as a lock tile.
+function onLocked(id: string): void {
+	if (openId.value === id) openId.value = null;
+	drop(id);
+	void reload();
+}
+
 async function open(r: ScanRow): Promise<void> {
 	openId.value = r.id;
 	await nextTick();
@@ -62,6 +71,7 @@ async function again(r: ScanRow): Promise<void> {
 		await reload();
 	} catch (e) {
 		actionError.value = { ...actionError.value, [r.id]: scanErrorText(e) };
+		if (isFileLocked(e)) onLocked(r.id);
 	} finally {
 		const next = new Set(busy.value);
 		next.delete(r.id);
@@ -115,7 +125,7 @@ function onAdded(): void {
 					</div>
 					<p v-if="!r.locked && r.conditionNote" class="note">{{ r.conditionNote }}</p>
 					<p v-if="!r.locked && r.status === 'failed'" class="fail" role="alert">{{ r.renderError ?? 'The render failed; no reason was recorded.' }}</p>
-					<p v-if="actionError[r.id]" class="fail" role="alert">{{ actionError[r.id] }}</p>
+					<p v-if="!r.locked && actionError[r.id]" class="fail" role="alert">{{ actionError[r.id] }}</p>
 				</div>
 				<div v-if="!r.locked" class="act">
 					<v-button v-if="canOpenScan(r)" small secondary :aria-label="`Open ${fileName(r)} in 3D`" @click="open(r)">Open in 3D</v-button>
@@ -132,7 +142,7 @@ function onAdded(): void {
 				<span class="spacer" />
 				<v-button small secondary @click="openId = null">Close</v-button>
 			</div>
-			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" @rerendered="onRerendered" />
+			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" @rerendered="onRerendered" @locked="onLocked(opened.id)" />
 		</div>
 	</Section>
 
