@@ -127,8 +127,8 @@ The **Surface scans** panel sits under **Details** on an insert page and on an e
 a thumbnail, its condition, date, operation and render status. A scan whose file belongs to someone else
 still shows, as a lock tile reading "A surface scan you cannot open: its file belongs to someone else",
 with only its condition, date and operation: no file name, notes, thumbnail, **Open in 3D** or **Render
-again**. It counts in the panel's total. If a scan becomes private after you opened the page, the view says
-"This scan's file belongs to someone else, so it cannot be shown."
+again**. It counts in the panel's total. If a scan becomes private after you opened the page, **Open in 3D** (or
+**Render again**) is refused, the view closes and the row turns into the same lock tile without a reload.
 
 ![A surface scan opened in 3D: height as colour, a legend in micrometres, the exaggeration slider](../images/database/surface-scan-viewer.png)
 
@@ -139,7 +139,9 @@ behind it in the cloud tests); the surface is synthetic.*
   topography ending such as `.al3d`, and only files from the archive share, are listed), the condition, a note (required for *other*), the date and
   the operation if you know it. **A scan follows its file's owner**: only the file's owner (or its team) and
   administrators see the scan's file and 3D view, and the dialog says so each time. Files with no owner stay
-  visible to every lab member. You can only add a scan of a file you can see; if you try another, the form
+  visible to every lab member, and the dialog tells you which case applies: each file in the list, and the one
+  you pick, says either "No owner: every lab member will see this scan and its file." or that the file has an
+  owner. You can only add a scan of a file you can see; if you try another, the form
   says "You can only add a surface scan of a file you can see." A file can be a scan of one item once.
 - **Rendering.** The server reads the file once and keeps a down-sampled height grid and a thumbnail
   (at most 1024 cells on the longer side). A new scan shows *Waiting to render*, then *Rendering*, then

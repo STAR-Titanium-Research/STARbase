@@ -432,7 +432,7 @@ test('a scan that became private after the panel loaded: Open in 3D is refused (
 	const tile = locks.filter({ hasText: 'Worn' }); // the scan's own condition, date and operation stay on its tile
 	await expect(tile).toHaveCount(1);
 	await expect(tile).toContainText('A surface scan you cannot open: its file belongs to someone else');
-	await expect(tile).toContainText('30 Sep 2026');
+	await expect(tile).toContainText(/30 Sep(t)? 2026/);
 	await expect(tile.getByRole('button')).toHaveCount(0); // no Open in 3D, no Render again
 	await expect(tile.locator('img')).toHaveCount(0);
 	await expect(tile).not.toContainText(/Ready|Flank wear/);
