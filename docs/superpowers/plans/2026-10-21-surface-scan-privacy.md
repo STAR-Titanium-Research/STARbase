@@ -22,12 +22,12 @@ Claude-Session: https://claude.ai/code/session_01NbxXFsBQbJUfCfYzsigV9M
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| S1 schema, rules, guard (migration 205, access rules, generator, d1-access-guard, phase1 tests) | | | not started |
-| S2 endpoint (`d1-surface-scan`: `/scans`, lock checks, `/result`, access log) | | | not started |
-| S3 worker (`plugins/surface-scan-worker`: report through `/result`) | | | not started |
-| S4 STARbase (`pages/surface`: locked placeholder, warning, error states) | | | not started |
-| Inbox text and comments (another session's files) | | | waiting for the inbox session |
-| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | not started |
+| S1 schema, rules, guard (migration 205, access rules, generator, d1-access-guard, phase1 tests) | agent-a1248cb3ffa552f66 | worktree-agent-a1248cb3ffa552f66 | merged (4f2fa7f2) |
+| S2 endpoint (`d1-surface-scan`: `/scans`, lock checks, `/result`, access log) | agent-a3d9520c5acc3f5b8 | worktree-agent-a3d9520c5acc3f5b8 | merged (fe9d84b8) |
+| S3 worker (`plugins/surface-scan-worker`: report through `/result`) | agent-aea913981c27ae1b8 | worktree-agent-aea913981c27ae1b8 | merged |
+| S4 STARbase (`pages/surface`: locked placeholder, warning, error states) | agent-aaea41786e2e64133 | worktree-agent-aaea41786e2e64133 | merged |
+| S5 Inbox text and comments (inbox session agreed we change the wording) | agent-a5bfcb93c6c06d85c | worktree-agent-a5bfcb93c6c06d85c | merged |
+| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | all streams merged, cross-stream contract checks pass (access-log columns, /result payloads from a real scan); Opus review next |
 
 Order: S1 to S4 run in parallel against the spec's contracts (fakes where the other side is missing). They ship as one release.
 
