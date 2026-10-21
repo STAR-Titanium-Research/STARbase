@@ -47,7 +47,9 @@ grid without asking who owns the file, and a member can add someone else's owned
     `insert_id`. This is an integrity matter, not a confidentiality one, and is left as it is.
   - The public columns `updated_at` and `version` of a scan stay readable to members and move when a render is claimed and
     reported, so a non-owner can see roughly when a scan of an owned file was rendered. Nothing else about the render is exposed.
-  - **Forged pointer rows (predates this change, not fixed here).** The Lab Member rules on `directus_files` let a member write
+  - **Forged pointer rows (predates this change, not fixed here; closed afterwards, see ADR-0022's consequence of 2026-10-21: the
+    worker refuses an unowned row in a personal or tied team folder, and `d1-access-guard` refuses a member's write of
+    `archive_path` or `storage = 'star'`).** The Lab Member rules on `directus_files` let a member write
     `id`, `storage`, `filename_disk` and `metadata`, so a member who knows the exact path of a file in someone's personal folder
     that the crawler has not registered yet can create a row with the id the indexer would derive (`uuid5('file:'+path)`),
     add a scan of it (it is unowned, so the guard passes) and have the worker render it; the crawler's later insert conflicts and

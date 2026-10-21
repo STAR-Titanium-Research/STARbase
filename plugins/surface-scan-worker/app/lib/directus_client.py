@@ -265,10 +265,12 @@ def list_scans(
 
 
 def get_file(file_id: str) -> dict:
-    """``GET /files/{id}``: the file's ``storage``, ``filename_download`` and ``metadata``."""
+    """``GET /files/{id}``: the file's ``storage``, ``filename_download``, ``metadata`` and owner stamps."""
     resp = requests.get(
         f"{DIRECTUS_URL}/files/{file_id}",
-        params={"fields": "id,storage,filename_download,filesize,metadata"},
+        params={
+            "fields": "id,storage,filename_download,filesize,metadata,owner_person_id,owner_team_id"
+        },
         headers=_headers(),
         timeout=30,
     )
@@ -276,6 +278,27 @@ def get_file(file_id: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"file {file_id}: unexpected GET response")
     return data
+
+
+def get_team_folders() -> list[str]:
+    """The ``teams.share_folder`` values: the folders under ``Shared/`` that belong to a team. Raises on
+    any failure (including a 403), so the caller refuses the file instead of treating the folder as free."""
+    resp = requests.get(
+        f"{DIRECTUS_URL}/items/teams",
+        params={
+            "filter[share_folder][_nnull]": "true",
+            "fields": "share_folder",
+            "limit": "-1",
+        },
+        headers=_headers(),
+        timeout=30,
+    )
+    data = _data(resp)
+    if not isinstance(data, list):
+        raise ValueError("teams: unexpected GET response")
+    return [
+        r["share_folder"] for r in data if isinstance(r, dict) and r.get("share_folder")
+    ]
 
 
 def get_fingerprint(file_id: str) -> dict | None:

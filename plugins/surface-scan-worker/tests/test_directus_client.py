@@ -147,6 +147,36 @@ def test_a_server_error_reading_the_fingerprint_propagates(http):
         dc.get_fingerprint("f1")
 
 
+def test_team_folders_are_a_filtered_list_of_share_folders(http):
+    http.get.return_value = _resp(
+        body={
+            "data": [
+                {"share_folder": "Alloys"},
+                {"share_folder": None},
+                {"share_folder": "Sintering"},
+            ]
+        }
+    )
+    assert dc.get_team_folders() == ["Alloys", "Sintering"]
+    args, kwargs = http.get.call_args
+    assert args[0].endswith("/items/teams")
+    assert kwargs["params"]["filter[share_folder][_nnull]"] == "true"
+    assert kwargs["params"]["limit"] == "-1"
+
+
+def test_a_failed_team_lookup_raises_so_the_file_is_refused(http):
+    http.get.return_value = _resp(status=403)
+    with pytest.raises(requests.HTTPError):
+        dc.get_team_folders()
+
+
+def test_get_file_asks_for_the_owner_stamps(http):
+    http.get.return_value = _resp(body={"data": {"id": "x"}})
+    dc.get_file("x")
+    fields = http.get.call_args.kwargs["params"]["fields"].split(",")
+    assert {"owner_person_id", "owner_team_id"} <= set(fields)
+
+
 # --- the result route (ADR-0023): the outcome is POSTed, never PATCHed ---------------------------
 
 
