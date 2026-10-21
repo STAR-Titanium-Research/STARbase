@@ -27,7 +27,7 @@ Claude-Session: https://claude.ai/code/session_01NbxXFsBQbJUfCfYzsigV9M
 | S3 worker (`plugins/surface-scan-worker`: report through `/result`) | agent-aea913981c27ae1b8 | worktree-agent-aea913981c27ae1b8 | merged |
 | S4 STARbase (`pages/surface`: locked placeholder, warning, error states) | agent-aaea41786e2e64133 | worktree-agent-aaea41786e2e64133 | merged |
 | S5 Inbox text and comments (inbox session agreed we change the wording) | agent-a5bfcb93c6c06d85c | worktree-agent-a5bfcb93c6c06d85c | merged |
-| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | all streams merged, cross-stream contract checks pass (access-log columns, /result payloads from a real scan); Opus review next |
+| Integration, Opus review, CI, PR | main checkout | `ccr-6b593491-4alqyj` | all streams merged; two Opus reviews (server, UI) done and their findings fixed (two further workers: result-route file check and token probe; add-dialog owner note and stale lock tile); PR and CI next |
 
 Order: S1 to S4 run in parallel against the spec's contracts (fakes where the other side is missing). They ship as one release.
 
