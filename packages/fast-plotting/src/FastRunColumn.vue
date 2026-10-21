@@ -7,18 +7,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import FastStatsTab from './FastStatsTab.vue';
 import type { Trace } from './fastCache';
-import { MOULD_LABELS, PEAK_LABELS, buildDetailRows, buildHeader, buildRecipe, buildStats, type Quality } from './fastMeta';
+import { buildHeader, buildRecipe, type Quality } from './fastMeta';
+import type { RunProfile, RunTab } from './profile';
 
-export type RunTab = 'stats' | 'detail' | 'recipe';
-const TABS: Array<{ id: RunTab; name: string; icon: string }> = [
+
+const ALL_TABS: Array<{ id: RunTab; name: string; icon: string }> = [
 	{ id: 'stats', name: 'Statistics', icon: 'bar_chart' },
 	{ id: 'detail', name: 'Operation detail', icon: 'info' },
 	{ id: 'recipe', name: 'Recipe', icon: 'science' },
 ];
 
 const props = defineProps<{
-	tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
-	detail: any | null; fastRun: any | null; trace: Trace | null; loading: boolean; message: string | null;
+	profile: RunProfile; tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
+	detail: any | null; runData: any | null; trace: Trace | null; loading: boolean; message: string | null;
 	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean;
 }>();
 const emit = defineEmits<{
@@ -27,10 +28,13 @@ const emit = defineEmits<{
 }>();
 
 const header = computed(() => buildHeader(props.detail));
-const peaks = computed(() => buildStats(props.detail, props.fastRun, PEAK_LABELS));
-const mould = computed(() => buildStats(props.detail, props.fastRun, MOULD_LABELS));
-const peaksNote = computed(() => (peaks.value.some((p) => p.source === 'recorded') ? 'measured, or recorded' : 'measured from the trace'));
-const rows = computed(() => buildDetailRows(props.detail, props.fastRun));
+const TABS = computed(() => ALL_TABS.filter((t) => props.profile.tabs.includes(t.id)));
+const stats = computed(() => props.profile.buildStats(props.detail, props.runData));
+const peaks = computed(() => stats.value.filter((s) => props.profile.peakLabels.includes(s.label)));
+const mould = computed(() => stats.value.filter((s) => props.profile.factLabels.includes(s.label)));
+const facts = computed(() => props.profile.headerFacts(props.detail));
+const peaksNote = computed(() => props.profile.peaksNote ?? (peaks.value.some((p) => p.source === 'recorded') ? 'measured, or recorded' : 'measured from the trace'));
+const rows = computed(() => props.profile.detailRows(props.detail, props.runData));
 const recipe = computed(() => buildRecipe(props.detail));
 const recipeRows = computed(() => {
 	const r = recipe.value;
@@ -41,19 +45,17 @@ const recipeRows = computed(() => {
 	];
 	return all.filter(([, v]) => v !== null && v !== '').map(([label, value]) => ({ label, value: String(value), mono: label === 'Source' }));
 });
-const noTrace = computed(() => {
-	const st = props.fastRun?.status;
-	return st === 'pending' || st === 'processing' ? 'The trace is being imported.' : st === 'error' ? 'The trace import failed.' : 'No trace was imported for this run.';
-});
+const noTrace = computed(() => props.profile.noTraceMessage(props.runData));
 
 // Left and Right (and Home, End) move between the tabs, as a tab list does; the selected tab is the one in the tab order.
 const tablist = ref<HTMLElement | null>(null);
 function onTabKey(ev: KeyboardEvent) {
-	const at = TABS.findIndex((t) => t.id === props.tab);
-	const to = ev.key === 'ArrowRight' ? (at + 1) % TABS.length : ev.key === 'ArrowLeft' ? (at + TABS.length - 1) % TABS.length : ev.key === 'Home' ? 0 : ev.key === 'End' ? TABS.length - 1 : -1;
+	const tabs = TABS.value;
+	const at = tabs.findIndex((t) => t.id === props.tab);
+	const to = ev.key === 'ArrowRight' ? (at + 1) % tabs.length : ev.key === 'ArrowLeft' ? (at + tabs.length - 1) % tabs.length : ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : -1;
 	if (to < 0) return;
 	ev.preventDefault();
-	emit('update:tab', TABS[to].id);
+	emit('update:tab', tabs[to].id);
 	nextTick(() => (tablist.value?.querySelectorAll<HTMLElement>('[role=tab]')[to])?.focus());
 }
 
@@ -62,7 +64,7 @@ function onKey(ev: KeyboardEvent) {
 	const el = ev.target as HTMLElement | null;
 	if (ev.ctrlKey || ev.metaKey || ev.altKey || el?.closest('input, textarea, select, [contenteditable]')) return;
 	const i = Number(ev.key) - 1;
-	if (Number.isInteger(i) && TABS[i]) emit('update:tab', TABS[i].id);
+	if (Number.isInteger(i) && TABS.value[i]) emit('update:tab', TABS.value[i].id);
 }
 onMounted(() => window.addEventListener('keydown', onKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
@@ -85,10 +87,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					<div v-if="header.material" class="fd-dim">{{ header.material }}</div>
 				</div>
 				<dl class="facts">
-					<div><dt>Date</dt><dd>{{ header.date || '—' }}</dd></div>
-					<div><dt>Machine</dt><dd>{{ header.machine || '—' }}</dd></div>
-					<div><dt>Operator</dt><dd>{{ header.operator || '—' }}</dd></div>
-					<div><dt>Atmosphere</dt><dd>{{ header.atmosphere || '—' }}</dd></div>
+					<div v-for="[label, value] in facts" :key="label"><dt>{{ label }}</dt><dd>{{ value || '—' }}</dd></div>
 					<div v-for="m in mould" :key="m.label"><dt>{{ m.label }}</dt><dd>{{ m.value }} {{ m.unit }}<span class="fd-tag">recorded</span></dd></div>
 				</dl>
 				<template v-if="peaks.length">
@@ -112,7 +111,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 				<template v-if="tab === 'stats'">
 					<FastStatsTab v-if="trace" :trace="trace" :detail="detail" :zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="cursor" :zoom-tool="zoomTool"
 						@zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
-					<div v-else-if="fastRun?.status === 'done' && loading" class="fd-spin"><v-progress-circular indeterminate small /> loading trace…</div>
+					<div v-else-if="profile.traceReady(runData) && loading" class="fd-spin"><v-progress-circular indeterminate small /> loading trace…</div>
 					<div v-else class="fd-empty">{{ noTrace }}</div>
 				</template>
 				<template v-else-if="tab === 'detail'">

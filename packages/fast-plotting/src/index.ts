@@ -4,3 +4,5 @@ export { resetFastHost, setFastHost, useFastHost, type FastHost } from './host';
 export * from './fastCache';
 export * from './fastMeta';
 export * from './conform';
+export * from './profile';
+export { fastProfile } from './profiles/fastProfile';

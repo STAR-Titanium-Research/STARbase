@@ -5,9 +5,10 @@
  * opens them over the run column.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue';
+import type { RunProfile } from './profile';
 import { NO_SAMPLE, filterRuns, filterSamples, groupBySample, sampleKeyOf, type ListRun } from './fastSamples';
 
-const props = defineProps<{ rows: ListRun[]; selectedId: string | null; sample: string | null; folded?: boolean }>();
+const props = defineProps<{ profile: RunProfile; rows: ListRun[]; selectedId: string | null; sample: string | null; folded?: boolean }>();
 const emit = defineEmits<{ (e: 'update:sample', v: string | null): void; (e: 'select', row: ListRun): void }>();
 
 // The searches run after typing settles, not per keystroke: the list can hold 10k runs.
@@ -36,7 +37,7 @@ function pickRun(r: ListRun) { open.value = false; emit('select', r); }
 
 const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 // the sample's code too while runs of every sample are listed
-const meta = (r: ListRun) => [props.sample === null ? r.sample_id?.sample_code : '', fmtDate(r.operation_date), r.sintering_max_temp_celsius ? `${Math.round(r.sintering_max_temp_celsius)} °C` : '', r.sintering_max_force_kn ? `${+Number(r.sintering_max_force_kn).toFixed(1)} kN` : '']
+const meta = (r: ListRun) => [props.sample === null ? r.sample_id?.sample_code : '', fmtDate(r.operation_date), ...props.profile.listMeta(r)]
 	.filter(Boolean).join(' · ');
 
 // folded: the tab opens the lists over the run column; Escape or a click elsewhere closes them

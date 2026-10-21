@@ -23,21 +23,28 @@ export function validTiles(saved: unknown): Tile[] {
 
 // On first open (no saved layout) the grid is six tiles, one per main series category present in the trace
 // (temperature, force, power, ...), so a run shows its whole picture at once instead of empty tiles.
-const SEED_GROUP_ORDER = ['temp', 'force', 'power', 'pressure', 'position', 'vacuum', 'speed', 'voltage', 'current', 'flow'];
+export const SEED_GROUP_ORDER = ['temp', 'force', 'power', 'pressure', 'position', 'vacuum', 'speed', 'voltage', 'current', 'flow'];
 const SEED_MAX_LINES: Record<string, number> = { temp: 6 };   // temperature gets the pyrometer and the TCs; the others stay focused
-export function seedTiles(catalog: Array<{ key: string; group: string }>, firstId: number): Tile[] {
+/** How a run plotter seeds its first tiles (a RunProfile's seed fields); the default is FAST's. */
+export interface SeedOptions { groups?: string[]; series?: Record<string, string[]>; strict?: boolean }
+export function seedTiles(catalog: Array<{ key: string; group: string }>, firstId: number, opts: SeedOptions = {}): Tile[] {
+	const order = opts.groups ?? SEED_GROUP_ORDER;
 	const byGroup: Record<string, string[]> = {};
 	for (const c of catalog) (byGroup[c.group || 'other'] ||= []).push(c.key);
+	const have = new Set(catalog.map((c) => c.key));
+	// a group the profile names series for is drawn from those series (the ones the run has), not the group's first few
+	const picked = (g: string): string[] => (opts.series?.[g] ? opts.series[g].filter((k) => have.has(k)) : byGroup[g]?.slice(0, SEED_MAX_LINES[g] ?? 3) ?? []);
 	const groups = [
-		...SEED_GROUP_ORDER.filter((g) => byGroup[g]?.length),
-		...Object.keys(byGroup).filter((g) => !SEED_GROUP_ORDER.includes(g)),
+		...order.filter((g) => picked(g).length),
+		...(opts.strict ? [] : Object.keys(byGroup).filter((g) => !order.includes(g))),
 	].slice(0, MAX_TILES);
-	return groups.map((g, i) => ({ id: firstId + i, series: byGroup[g].slice(0, SEED_MAX_LINES[g] ?? 3), span: 'sm' as const, normalise: false }));
+	return groups.map((g, i) => ({ id: firstId + i, series: picked(g), span: 'sm' as const, normalise: false }));
 }
 
 const GROUP_TITLES: Record<string, string> = {
 	temp: 'Temperature', force: 'Force', position: 'Position', pressure: 'Pressure', power: 'Power', voltage: 'Voltage',
 	current: 'Current', speed: 'Speed', flow: 'Flow', percent: 'Percent', other: 'Other',
+	torque: 'Torque', ips: 'IPS', cooling: 'Cooling',
 };
 export function groupTitle(group: string): string {
 	return GROUP_TITLES[group] ?? (group ? group[0].toUpperCase() + group.slice(1) : 'Other');
