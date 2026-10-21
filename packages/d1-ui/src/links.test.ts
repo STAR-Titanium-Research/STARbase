@@ -58,6 +58,11 @@ describe('STARbase', () => {
 		expect(resolveLink('/d1-fast-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/fast?operation=9' });
 		expect(resolveLink('/d1-force-dashboard')).toEqual({ kind: 'route', to: '/plot/force' });
 	});
+	it('keeps the Conform plotter as a route, and canonical in both directions', () => {
+		use();
+		expect(resolveLink('/plot/conform?operation=9')).toEqual({ kind: 'route', to: '/plot/conform?operation=9' });
+		expect(canonicalPath('/plot/conform?operation=9')).toBe('/plot/conform?operation=9');
+	});
 	it('keeps its own pages (Report a bug, Force crawler) as routes, not Data Studio pages', () => {
 		use();
 		expect(resolveLink('/report-bug')).toEqual({ kind: 'route', to: '/report-bug' });
