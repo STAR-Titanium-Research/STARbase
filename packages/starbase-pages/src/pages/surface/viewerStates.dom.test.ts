@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, ref, type App } from 'vue';
 import { setExplorerHostFactory } from '@d1/ui';
 import SurfaceScanViewer from './viewer/SurfaceScanViewer.vue';
-import { OBJECT_MISSING_MESSAGE } from './scanApi';
+import { FILE_LOCKED_MESSAGE, OBJECT_MISSING_MESSAGE } from './scanApi';
 
 const webgl2 = vi.hoisted(() => ({ on: true }));
 vi.mock('./viewer/webgl2', () => ({ hasWebGL2: () => webgl2.on }));
@@ -112,5 +112,23 @@ describe('SurfaceScanViewer when the rendered data is missing', () => {
 		button(/Render again/)!.click();
 		await vi.waitFor(() => expect(text()).toContain('do not have permission'));
 		expect(rerendered).not.toHaveBeenCalled();
+	});
+});
+
+describe('SurfaceScanViewer on a scan whose file belongs to someone else', () => {
+	it('says so in words (403 FILE_LOCKED), offers no Render again, and shows no facts', async () => {
+		await mountViewer({ get: () => { throw httpError(403, [{ message: 'locked', extensions: { code: 'FILE_LOCKED' } }]); } });
+		await vi.waitFor(() => expect(document.querySelector('[data-phase="error"]')).not.toBeNull());
+		expect(text()).toContain("This scan's file belongs to someone else, so it cannot be shown.");
+		expect(text()).toContain(FILE_LOCKED_MESSAGE);
+		expect(text()).not.toContain('do not have permission');
+		expect(button(/Render again/)).toBeUndefined();
+		expect(document.querySelector('canvas')).toBeNull();
+	});
+	it('says the same when only /grid is refused (its body is bytes)', async () => {
+		const bytes = httpError(403, []);
+		(bytes as any).response.data = new TextEncoder().encode(JSON.stringify({ errors: [{ message: 'locked', extensions: { code: 'FILE_LOCKED' } }] })).buffer;
+		await mountViewer({ get: (url) => { if (url.endsWith('/meta')) return { data: META }; throw bytes; } });
+		await vi.waitFor(() => expect(text()).toContain(FILE_LOCKED_MESSAGE));
 	});
 });

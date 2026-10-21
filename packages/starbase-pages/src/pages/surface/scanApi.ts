@@ -4,11 +4,24 @@
 
 import { errorText, forbiddenReason, type HostApi } from '@d1/ui';
 import { decodeGrid, parseMeta, ScanDataError, type ScanMeta } from './viewer/gridData';
-import { scanPath, type ScanCondition } from './scanModel';
+import { normaliseScan, scanPath, SCANS_PATH, scanQuery, type ScanCondition, type ScanRow } from './scanModel';
 
 export async function fetchMeta(api: HostApi, scanId: string): Promise<ScanMeta> {
 	const res = await api.get(scanPath(scanId, 'meta'), { responseType: 'json' });
 	return parseMeta(res.data);
+}
+
+/**
+ * The scans of an insert, or of an edge and its insert, as the signed-in user: readable rows in full, locked ones (the file
+ * belongs to someone else) as condition, date and operation only. One endpoint, so Directus never hands the page a file id
+ * it may not see. Answers `{ data: rows }` (a bare array is tolerated).
+ */
+export async function fetchScans(api: HostApi, target: { insertId?: string | null; edgeId?: string | null }): Promise<ScanRow[]> {
+	const params = scanQuery(target);
+	if (!params) return [];
+	const res = await api.get(SCANS_PATH, { params });
+	const body = res.data?.data ?? res.data;
+	return (Array.isArray(body) ? body : []).map(normaliseScan).filter((r) => r.id);
 }
 
 export const OBJECT_MISSING_MESSAGE = 'The rendered data is missing; render the scan again.';
@@ -23,6 +36,13 @@ function readErrorBody(e: unknown): void {
 	} catch {
 		/* not JSON: leave it */
 	}
+}
+
+export const FILE_LOCKED_MESSAGE = "This scan's file belongs to someone else, so it cannot be shown.";
+
+/** The endpoint's 403 FILE_LOCKED: the scan's file is owned by someone the caller is not (and the caller is not an administrator). */
+export function isFileLocked(e: unknown): boolean {
+	return (e as any)?.response?.status === 403 && (e as any)?.response?.data?.errors?.some?.((x: any) => x?.extensions?.code === 'FILE_LOCKED') === true;
 }
 
 /** The endpoint's own code for "this scan says done, but its files are gone from the object store" (404 OBJECT_MISSING). */
@@ -60,6 +80,7 @@ export function scanErrorText(e: unknown): string {
 	if (e instanceof ScanDataError) return e.message;
 	const status = (e as any)?.response?.status;
 	if (isObjectMissing(e)) return OBJECT_MISSING_MESSAGE;
+	if (isFileLocked(e)) return FILE_LOCKED_MESSAGE;
 	if (status === 404) return 'This scan has not been rendered yet, or you cannot see it.';
 	if (status === 403) return forbiddenReason(e) ?? 'You do not have permission to do that with this scan.';
 	return errorText(e, 'The scan could not be loaded.');
