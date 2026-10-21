@@ -2,9 +2,11 @@ import type { Request, Route } from '@playwright/test';
 import { syntheticScan, type SyntheticScan } from './syntheticScan';
 
 // The surface-scan part of the d1-server stand-in (stubD1.ts): one tool box with two cutting inserts and three
-// edges, the surface_scans rows of the first insert and its first edge, the file library for the Add dialog, and the
-// d1-surface-scan endpoint (meta, grid, thumb, render). Same shapes as the real endpoint
-// (docs/superpowers/specs/2026-10-15-surface-scans-design.md); the grid is made up (syntheticScan.ts). A queued render
+// edges, the surface scans of the first insert and its first edge (one of them locked: its file belongs to someone else),
+// the file library for the Add dialog, and the d1-surface-scan endpoint (GET /scans, meta, grid, thumb, render). Same
+// shapes as the real endpoint (docs/superpowers/specs/2026-10-21-surface-scan-privacy-design.md, "Endpoint contract"):
+// /scans answers a readable row in full and a locked row as condition, date and operation only, and meta, grid and thumb
+// of a locked scan answer 403 FILE_LOCKED before anything else. The grid is made up (syntheticScan.ts). A queued render
 // finishes on its own: each read of the scan list moves a pending scan to rendering and a rendering one to done.
 
 export const STUB_TOOLING = {
@@ -27,10 +29,13 @@ export const STUB_LIBRARY = [
 ];
 
 type Status = 'pending' | 'rendering' | 'done' | 'failed';
+/** What the stand-in knows about a scan; GET /scans shows a locked one as condition, date and operation only. */
 export interface StubScanRow {
 	scan_id: string;
 	insert_id: string | null;
 	edge_id: string | null;
+	/** The scan's file belongs to someone else (the caller is neither its owner nor an administrator). */
+	locked: boolean;
 	condition: string;
 	condition_note: string | null;
 	scanned_on: string | null;
@@ -38,8 +43,9 @@ export interface StubScanRow {
 	render_status: Status;
 	render_error: string | null;
 	version: number;
-	directus_files_id: { id: string; filename_download: string };
-	operation_id: { operation_id: string; pass_code: string } | null;
+	file: { id: string; name: string };
+	operation: { id: string; label: string } | null;
+	can_edit: boolean;
 }
 
 export interface StubScans {
@@ -50,10 +56,14 @@ export interface StubScans {
 	renders: string[];
 	/** "GET /d1-surface-scan/<id>/<part>" of every call, in order. */
 	endpoint: string[];
+	/** The query string of every GET /d1-surface-scan/scans, in order (an edge page sends both ids). */
+	listed: string[];
 	/** Ids of done scans whose rendered files are gone: meta, grid and thumb answer 404 OBJECT_MISSING until the scan is rendered again. */
 	objectMissing: string[];
 	/** A POST /items/surface_scans answers 403 with this text, once, when set. */
 	refuseCreate: string | null;
+	/** Same, but as the d1-access-guard words it (extensions.source, kind, reason): a file the person cannot read. */
+	refuseCreateGuard: string | null;
 	scan: SyntheticScan;
 }
 
@@ -63,26 +73,43 @@ export function stubScans(): StubScans {
 	return {
 		rows: [
 			{
-				scan_id: 'scan-insert-new', insert_id: T.insertId, edge_id: null, condition: 'new', condition_note: 'As received', scanned_on: '2026-06-12', notes: null,
-				render_status: 'done', render_error: null, version: 1, directus_files_id: { id: 'file-old-0', filename_download: 'CNMG12-1-new.al3d' }, operation_id: null,
+				scan_id: 'scan-insert-new', insert_id: T.insertId, edge_id: null, locked: false, condition: 'new', condition_note: 'As received', scanned_on: '2026-06-12', notes: null,
+				render_status: 'done', render_error: null, version: 1, file: { id: 'file-old-0', name: 'CNMG12-1-new.al3d' }, operation: null, can_edit: true,
+			},
+			// Someone else's file: this person sees that the insert has a scan, its condition, date and operation, and nothing more.
+			{
+				scan_id: 'scan-insert-locked', insert_id: T.insertId, edge_id: null, locked: true, condition: 'cleaned', condition_note: 'PRIVATE condition note', scanned_on: '2026-08-20', notes: 'PRIVATE notes',
+				render_status: 'done', render_error: null, version: 1, file: { id: 'file-private-0', name: 'PRIVATE-owner-file.al3d' }, operation: { id: 'op-1', label: 'OP-TURN-7' }, can_edit: false,
 			},
 			{
-				scan_id: 'scan-edge-worn', insert_id: null, edge_id: T.edgeId, condition: 'worn', condition_note: 'Flank wear land about 0.2 mm', scanned_on: '2026-09-30', notes: null,
-				render_status: 'done', render_error: null, version: 1, directus_files_id: { id: 'file-old-1', filename_download: 'CNMG12-1-A-worn.al3d' },
-				operation_id: { operation_id: 'op-1', pass_code: 'OP-TURN-7' },
+				scan_id: 'scan-edge-worn', insert_id: null, edge_id: T.edgeId, locked: false, condition: 'worn', condition_note: 'Flank wear land about 0.2 mm', scanned_on: '2026-09-30', notes: null,
+				render_status: 'done', render_error: null, version: 1, file: { id: 'file-old-1', name: 'CNMG12-1-A-worn.al3d' },
+				operation: { id: 'op-1', label: 'OP-TURN-7' }, can_edit: true,
 			},
 			{
-				scan_id: 'scan-edge-bad', insert_id: null, edge_id: T.edgeId, condition: 'cleaned', condition_note: null, scanned_on: '2026-10-02', notes: null,
+				scan_id: 'scan-edge-bad', insert_id: null, edge_id: T.edgeId, locked: false, condition: 'cleaned', condition_note: null, scanned_on: '2026-10-02', notes: null,
 				render_status: 'failed', render_error: 'SurfaceTopography could not read this file: unsupported file version', version: 1,
-				directus_files_id: { id: 'file-old-2', filename_download: 'CNMG12-1-A-cleaned.al3d' }, operation_id: null,
+				file: { id: 'file-old-2', name: 'CNMG12-1-A-cleaned.al3d' }, operation: null, can_edit: true,
 			},
 		],
 		created: [],
 		renders: [],
 		endpoint: [],
+		listed: [],
 		objectMissing: [],
 		refuseCreate: null,
+		refuseCreateGuard: null,
 		scan: syntheticScan(),
+	};
+}
+
+/** One row as GET /d1-surface-scan/scans sends it. A locked row carries no file, notes, render state or author. */
+function shapeRow(r: StubScanRow): Record<string, unknown> {
+	const head = { scan_id: r.scan_id, insert_id: r.insert_id, edge_id: r.edge_id, locked: r.locked, condition: r.condition, scanned_on: r.scanned_on, operation: r.operation };
+	if (r.locked) return head;
+	return {
+		...head, notes: r.notes, condition_note: r.condition_note, added_by: { person_id: 'person-1', name: 'Test Person' }, file: r.file, render_status: r.render_status,
+		render_error: r.render_error, rendered_at: r.render_status === 'done' ? '2026-10-01T10:00:00Z' : null, grid: r.render_status === 'done' ? { width: 192, height: 128 } : null, can_edit: r.can_edit,
 	};
 }
 
@@ -129,6 +156,21 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 	const { path, method, scans, json } = c;
 	const raw = decodeURIComponent(c.url.search);
 
+	if (path === '/d1-surface-scan/scans' && method === 'GET') {
+		scans.listed.push(c.url.search);
+		const edgeId = c.url.searchParams.get('edge_id');
+		const insertId = c.url.searchParams.get('insert_id');
+		if (!edgeId && !insertId) return answer(json({ errors: [{ message: 'insert_id or edge_id is required', extensions: { code: 'INVALID_QUERY' } }] }, 400));
+		const rows = scans.rows.filter((r) => (r.edge_id !== null && r.edge_id === edgeId) || (r.insert_id !== null && r.insert_id === insertId));
+		const out = rows.map(shapeRow);
+		// A queued render moves on with every read of the list: pending, then rendering, then done.
+		for (const r of scans.rows) {
+			if (r.render_status === 'pending') r.render_status = 'rendering';
+			else if (r.render_status === 'rendering') r.render_status = 'done';
+		}
+		return answer(json({ data: out }));
+	}
+
 	const ep = /^\/d1-surface-scan\/([^/]+)\/(meta|grid|thumb|render)$/.exec(path);
 	if (ep) {
 		const [, id, part] = ep;
@@ -143,6 +185,8 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 			return answer(c.route.fulfill({ status: 204, headers: c.cors }));
 		}
 		if (method !== 'GET') return false;
+		// The visibility rule runs first (before the 404 and the ETag branch): a locked scan answers 403 FILE_LOCKED, never cached.
+		if (row?.locked) return answer(c.route.fulfill({ status: 403, headers: { ...c.cors, 'cache-control': 'no-store' }, json: { errors: [{ message: "This scan's file belongs to someone else.", extensions: { code: 'FILE_LOCKED' } }] } }));
 		if (!row || row.render_status !== 'done') return answer(json({ errors: [{ message: 'Not found', extensions: { code: 'NOT_RENDERED' } }] }, 404));
 		// A done scan whose files are gone from the object store (spec of the endpoint: 404 OBJECT_MISSING).
 		if (scans.objectMissing.includes(id)) return answer(json({ errors: [{ message: 'The rendered data is missing; render the scan again.', extensions: { code: 'OBJECT_MISSING' } }] }, 404));
@@ -152,31 +196,14 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 		return answer(c.route.fulfill({ status: 200, headers: { ...c.cors, ...cache, 'content-type': 'image/png' }, body: scans.scan.thumb }));
 	}
 
-	if (path === '/items/surface_scans' && method === 'GET') {
-		// The ids asked for, exactly: every `filter[...][edge_id][_eq]=<id>` (or the JSON form of the filter) in the query.
-		const asked = (field: 'edge_id' | 'insert_id'): string[] => {
-			const ids: string[] = [];
-			for (const [key, value] of c.url.searchParams) {
-				if (new RegExp(`\\[${field}\\]\\[_eq\\]$`).test(key)) ids.push(value);
-			}
-			const filterText = c.url.searchParams.get("filter");
-			if (filterText) for (const m of filterText.matchAll(new RegExp(`"${field}":\\{"_eq":"([^"]+)"\\}`, 'g'))) ids.push(m[1]);
-			return ids;
-		};
-		const edgeIds = asked('edge_id');
-		const insertIds = asked('insert_id');
-		const rows = scans.rows.filter((r) => (r.edge_id !== null && edgeIds.includes(r.edge_id)) || (r.insert_id !== null && insertIds.includes(r.insert_id)));
-		const out = rows.map((r) => ({ ...r }));
-		// A queued render moves on with every read of the list: pending, then rendering, then done.
-		for (const r of scans.rows) {
-			if (r.render_status === 'pending') r.render_status = 'rendering';
-			else if (r.render_status === 'rendering') r.render_status = 'done';
-		}
-		return answer(json({ data: out }));
-	}
 	if (path === '/items/surface_scans' && method === 'POST') {
 		const body = (c.req.postDataJSON() ?? {}) as Record<string, any>;
 		scans.created.push(body);
+		if (scans.refuseCreateGuard) {
+			const reason = scans.refuseCreateGuard;
+			scans.refuseCreateGuard = null;
+			return answer(json({ errors: [{ message: reason, extensions: { code: 'FORBIDDEN', reason, source: 'd1-access-guard', kind: 'junction', collection: 'surface_scans', parent: 'directus_files' } }] }, 403));
+		}
 		if (scans.refuseCreate) {
 			const message = scans.refuseCreate;
 			scans.refuseCreate = null;
@@ -187,10 +214,10 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 			return answer(json({ errors: [{ message: 'Value for field "directus_files_id" in collection "surface_scans" has to be unique.', extensions: { code: 'RECORD_NOT_UNIQUE' } }] }, 400));
 		}
 		const row: StubScanRow = {
-			scan_id: `scan-new-${scans.created.length}`, insert_id: body.insert_id ?? null, edge_id: body.edge_id ?? null, condition: body.condition, condition_note: body.condition_note ?? null,
+			scan_id: `scan-new-${scans.created.length}`, insert_id: body.insert_id ?? null, edge_id: body.edge_id ?? null, locked: false, condition: body.condition, condition_note: body.condition_note ?? null,
 			scanned_on: body.scanned_on ?? null, notes: null, render_status: 'pending', render_error: null, version: 1,
-			directus_files_id: { id: body.directus_files_id, filename_download: file?.filename_download ?? 'new.al3d' },
-			operation_id: body.operation_id ? { operation_id: body.operation_id, pass_code: OPERATION.pass_code } : null,
+			file: { id: body.directus_files_id, name: file?.filename_download ?? 'new.al3d' },
+			operation: body.operation_id ? { id: body.operation_id, label: OPERATION.pass_code } : null, can_edit: true,
 		};
 		scans.rows.push(row);
 		return answer(json({ data: { scan_id: row.scan_id } }));
