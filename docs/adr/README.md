@@ -29,8 +29,9 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0018](./0018-starbase-writes-records.md) | STARbase writes records on the process map: its own generated form and one transactional create endpoint | Proposed (2026-10-14); amends 0015 |
 | [0019](./0019-operations-and-tests-can-be-planned.md) | Operations and tests can be planned; samples an operation will make are planned samples | Proposed (2026-10-14) |
 | [0020](./0020-inbox-crawler-read-only-allow-listed.md) | The inbox crawler: read-only, allow-listed, and it only suggests | Proposed (2026-10-15) |
-| [0021](./0021-surface-scans-on-inserts-and-edges.md) | Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker | Proposed (2026-10-15) |
+| [0021](./0021-surface-scans-on-inserts-and-edges.md) | Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker | Proposed (2026-10-15); decision 4 (lab-wide visibility) superseded by 0023 |
 | [0022](./0022-files-belong-to-their-provenance-owner.md) | A file belongs to its provenance owner: only they see it, link it or read its settings | Proposed (2026-10-16) |
+| [0023](./0023-surface-scans-follow-their-files-owner.md) | Surface scans follow their file's provenance owner: locked placeholder, private render data, supersedes 0021's lab-wide visibility | Proposed (2026-10-21) |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

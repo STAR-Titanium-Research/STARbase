@@ -187,9 +187,16 @@ grep -qF "$guard_sql" core/extensions/d1-access-guard/index.js \
     && ok "d1-access-guard sends the 'inserted here and never updated' proof this test exercises" \
     || bad "d1-access-guard/index.js no longer contains: $guard_sql (update this test with it)"
 guard_parents=$(python3 -c "import json;print(' '.join(sorted({c['parent'] for v in json.load(open('core/extensions/d1-access-guard/rules.json'))['guards'].values() for c in v})))")
-[[ "$guard_parents" == "campaigns physical_samples projects test_sessions" ]] \
-    && ok "the guarded parents are exactly campaigns, physical_samples, projects and test_sessions" \
+[[ "$guard_parents" == "campaigns directus_files physical_samples projects test_sessions" ]] \
+    && ok "the guarded parents are exactly campaigns, directus_files, physical_samples, projects and test_sessions" \
     || bad "d1-access-guard now guards another parent ($guard_parents): give it a version column or fail it closed, and extend this test"
+# directus_files (the parent of surface_scans.directus_files_id, ADR-0023) is a Directus system table with no OCC version column, so the guard must
+# never ask it the "inserted here and never updated" question (the query would fail): index.js lists it in UNVERSIONED_PARENTS.
+run_eq "directus_files has no OCC version column (the guard skips the created-here proof for it)" \
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='directus_files' AND column_name='version'" "0"
+grep -qF "const UNVERSIONED_PARENTS = new Set(['directus_files']);" core/extensions/d1-access-guard/index.js \
+    && ok "d1-access-guard skips the created-here proof for exactly directus_files" \
+    || bad "d1-access-guard/index.js UNVERSIONED_PARENTS is no longer exactly directus_files (update this test with it)"
 run_eq "every guarded parent has the OCC version column" \
     "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','physical_samples','projects','test_sessions')" "4"
 run_eq "every guarded parent has its OCC trigger (version rises on every update)" \
@@ -432,7 +439,14 @@ sem_down=$(awk '/-- migrate:down/{f=1;next}f' "$SEM_MIG")
 # 20261016000201 (file owner follow-ups) replaces 196's readers function and people trigger and adds two guard triggers and their functions, so its down goes before everything else and it is not replayed.
 FOF_MIG=$(migration file_owner_followups)
 fof_down=$(awk '/-- migrate:down/{f=1;next}f' "$FOF_MIG")
-lv_down="$fof_down
+# 20261021000205 (surface scans follow their file's owner) adds three tables in d1_private, one of which references surface_scans, and replaces the surface_scans
+# rows it backed up, so its down goes before everything else (before 201's): without it d1_private is not empty at the end of the chain and migration 192's down
+# could not drop surface_scans. Only its permission rows are replayed (the marked block), after 196's, wherever the rows are compared with the generator.
+SSF_MIG=$(migration surface_scans_follow_file_owner)
+ssf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SSF_MIG")
+ssf_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$SSF_MIG")
+lv_down="$ssf_down
+$fof_down
 $sem_down
 $fpo_down
 $lv_down"
@@ -440,7 +454,8 @@ lv_up="$lv_up
 $fpo_up"
 fpo_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$FPO_MIG")
 tr_up="$tr_up
-$fpo_rules_up"
+$fpo_rules_up
+$ssf_rules_up"
 tr_down="$lv_down
 $tr_down"
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
@@ -532,9 +547,10 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates), 20261014000177 (batches) and 20261015000192 (surface_scans), custom-rows collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
+-- (the surface_scans rows come with tr_up: migration 205's rules block)
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'surface_scans');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)

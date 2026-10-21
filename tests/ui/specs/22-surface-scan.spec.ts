@@ -7,12 +7,14 @@ import { parseMeta } from '../../../packages/starbase-pages/src/pages/surface/vi
 import { defaultExaggeration, frameCamera, heightRange, scanLayout } from '../../../packages/starbase-pages/src/pages/surface/viewer/scanLayout';
 import { SCAN_H, SCAN_W } from '../starbase/syntheticScan';
 
-// Surface scans on inserts and edges (docs/superpowers/specs/2026-10-15-surface-scans-design.md), in a real browser:
+// Surface scans on inserts and edges (docs/superpowers/specs/2026-10-15-surface-scans-design.md; who sees a scan's file:
+// 2026-10-21-surface-scan-privacy-design.md), in a real browser:
 // the Surface scans panel with its thumbnails, the 3D viewer drawn on the GPU from a made-up height grid (a software
 // WebGL in headless Chromium), the exaggeration slider and colour-by-height changing the picture, an edge page that also
 // lists its insert's scans, Render again on a failed render and on a done one whose files are gone (404 OBJECT_MISSING), the
-// surface's orientation (the file's hole lands where the file puts it: not flipped, not mirrored), arrow keys and plus / minus, the Add a surface scan dialog with its lab-wide warning, and
-// the page without WebGL. d1-server is the stand-in of tests/ui/starbase (stubD1.ts + stubScans.ts + syntheticScan.ts), so
+// surface's orientation (the file's hole lands where the file puts it: not flipped, not mirrored), arrow keys and plus / minus, the Add a surface scan dialog with its warning
+// (the file's owner, not the whole lab, sees the scan) and a guard refusal in words, a scan whose file belongs to someone else (a lock tile with no file, notes, thumbnail or buttons;
+// 403 FILE_LOCKED in the viewer), and the page without WebGL. d1-server is the stand-in of tests/ui/starbase (stubD1.ts + stubScans.ts + syntheticScan.ts), so
 // this needs only STARbase from `vite preview`, no Directus and no real scan.
 // Run: npm run build -w starbase-web && STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web, then
 //      cd tests/ui && npx playwright test specs/22-surface-scan.spec.ts
@@ -172,7 +174,8 @@ async function openViewer(page: Page, rowText: string | RegExp) {
 
 test('an insert page lists its scan with a thumbnail, and the viewer draws the surface on the GPU', async ({ browser }, testInfo) => {
 	const { page, state, errors } = await start(browser, `/inserts/${T.insertId}`);
-	await expect(panel(page).locator('.scan')).toHaveCount(1);
+	await expect(panel(page).locator('.scan')).toHaveCount(2); // the readable scan and the locked one (its tile is checked in its own test)
+	expect(state.scans.listed).toEqual([`?insert_id=${T.insertId}`]); // the endpoint, not the table; an insert page asks for its own id only
 	const r = row(page, 'CNMG12-1-new.al3d');
 	await expect(r).toContainText('New');
 	await expect(r).toContainText('12 Jun 2026');
@@ -273,7 +276,9 @@ test('an insert page lists its scan with a thumbnail, and the viewer draws the s
 
 test("an edge page lists its own scans and its insert's, and Render again moves a failed scan to Ready", async ({ browser }) => {
 	const { page, state, errors } = await start(browser, `/edges/${T.edgeId}`);
-	await expect(panel(page).locator('.scan')).toHaveCount(3);
+	await expect(panel(page).locator('.scan')).toHaveCount(4); // two of its own, its insert's readable scan and its insert's locked one
+	expect(state.scans.listed[0]).toContain(`edge_id=${T.edgeId}`);
+	expect(state.scans.listed[0]).toContain(`insert_id=${T.insertId}`); // an edge page passes both ids
 	await expect(row(page, 'CNMG12-1-new.al3d').locator('.tag')).toHaveText('Insert');
 	await expect(row(page, 'CNMG12-1-A-worn.al3d').locator('.tag')).toHaveCount(0);
 	await expect(row(page, 'CNMG12-1-A-worn.al3d')).toContainText('OP-TURN-7');
@@ -314,20 +319,29 @@ test('a done scan whose rendered files are gone says so in the viewer, and Rende
 	await page.context().close();
 });
 
-test('Add a surface scan: the lab-wide warning, a file from the library, and a plain create that ends as a rendered scan', async ({ browser }, testInfo) => {
+test('Add a surface scan: the warning about who sees it, a file from the library, and a plain create that ends as a rendered scan', async ({ browser }, testInfo) => {
 	const { page, state, errors } = await start(browser, `/edges/${T.edgeId}`);
 	await panel(page).getByRole('button', { name: 'Add a surface scan' }).click();
 	const dialog = page.getByRole('dialog');
 	await expect(dialog).toContainText('Add a surface scan to Edge');
-	await expect(dialog.getByTestId('visibility-warning')).toContainText('visible to every lab member');
+	await expect(dialog.getByTestId('visibility-warning')).toHaveText(
+		"Only the file's owner (or its team) and administrators see this scan's file and 3D view; others see that the item has a scan. Files with no owner stay visible to every lab member.",
+	);
 	await expect(dialog).not.toContainText(/attach/i);
+	const UNOWNED = 'No owner: every lab member will see this scan and its file.';
+	const OWNED = "This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.";
 	const submit = dialog.getByRole('button', { name: 'Add surface scan' });
 	await expect(submit).toBeDisabled();
 
 	// The library lists topography files; a file this edge already has is not offered.
 	await expect(dialog.locator('.hit')).toHaveCount(2);
+	// Each file says which case applies to it: the first is an unowned legacy file, the second has an owner.
+	await expect(dialog.locator('.hit').filter({ hasText: 'after-12min' }).getByTestId('hit-owner')).toHaveText(UNOWNED);
+	await expect(dialog.locator('.hit').filter({ hasText: 'cleaned' }).getByTestId('hit-owner')).toHaveText(OWNED);
 	await dialog.locator('.hit').filter({ hasText: 'after-12min' }).click();
 	await expect(dialog.locator('.chosen')).toContainText('Alicona-edgeA-after-12min.al3d');
+	await expect(dialog.getByTestId('file-visibility')).toHaveText(UNOWNED);
+	await expect(dialog.getByTestId('visibility-warning')).toBeVisible(); // the generic warning stays above
 	await expect(submit).toBeDisabled(); // no condition yet
 	await dialog.locator('select').first().selectOption({ label: 'Other' });
 	await expect(dialog).toContainText('Say in the note what the condition is.');
@@ -356,13 +370,79 @@ test('Add a surface scan: the lab-wide warning, a file from the library, and a p
 	await panel(page).getByRole('button', { name: 'Add a surface scan' }).click();
 	await expect(dialog.locator('.hit').filter({ hasText: 'after-12min' })).toBeDisabled(); // already this edge's scan: not offered
 	await dialog.locator('.hit').filter({ hasText: 'cleaned' }).click();
+	await expect(dialog.getByTestId('file-visibility')).toHaveText(OWNED);
 	await dialog.locator('select').first().selectOption({ label: 'Cleaned' });
 	state.scans.refuseCreate = 'You do not have permission to access this.';
 	await dialog.getByRole('button', { name: 'Add surface scan' }).click();
 	await expect(dialog.locator('.err')).toContainText('You may not add a surface scan here.'); // a refusal is shown, not swallowed
 	await expect(dialog).toBeVisible();
+	// A file the person cannot read: the access guard's own reason is shown in words.
+	state.scans.refuseCreateGuard = 'You can only add a surface scan of a file you can see.';
+	await dialog.getByRole('button', { name: 'Add surface scan' }).click();
+	await expect(dialog.locator('.err')).toContainText('You can only add a surface scan of a file you can see.');
+	await expect(dialog).toBeVisible();
 	await dialog.getByRole('button', { name: 'Cancel' }).click();
 	await expect(dialog).toHaveCount(0);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test("a scan whose file belongs to someone else is a lock tile: condition, date and operation, and nothing to open", async ({ browser }, testInfo) => {
+	const { page, state, errors } = await start(browser, `/inserts/${T.insertId}`);
+	await expect(panel(page).locator('.scan')).toHaveCount(2);
+	const tile = panel(page).locator('.scan[data-locked="true"]');
+	await expect(tile).toHaveCount(1);
+	await expect(tile).toContainText('A surface scan you cannot open: its file belongs to someone else');
+	await expect(tile).toContainText('Cleaned');
+	await expect(tile).toContainText('20 Aug 2026');
+	await expect(tile).toContainText('OP-TURN-7');
+	await expect(tile.getByRole('button')).toHaveCount(0); // no Open in 3D, no Render again
+	await expect(tile.locator('img')).toHaveCount(0);
+	await expect(tile).not.toContainText(/PRIVATE|\.al3d|Ready|Render failed/);
+	await expect(panel(page)).not.toContainText('PRIVATE');
+	// the section's count includes it
+	await expect(panel(page).locator('.count').first()).toHaveText('2');
+	// the readable scan beside it still has its thumbnail, and the locked one never asked for anything
+	await expect(row(page, 'CNMG12-1-new.al3d').locator('.thumb img')).toBeVisible();
+	await expect.poll(() => state.scans.endpoint.some((c) => c.includes('scan-insert-new/thumb'))).toBe(true);
+	expect(state.scans.endpoint.filter((c) => c.includes('scan-insert-locked'))).toEqual([]);
+	await tile.screenshot({ path: testInfo.outputPath('locked-scan-tile.png') });
+	await testInfo.attach('locked-scan-tile', { path: testInfo.outputPath('locked-scan-tile.png'), contentType: 'image/png' });
+	await panel(page).screenshot({ path: testInfo.outputPath('locked-scan-panel.png') });
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('a scan that became private after the panel loaded: Open in 3D is refused (403 FILE_LOCKED) and its row comes back as a lock tile', async ({ browser }, testInfo) => {
+	const { page, state, errors } = await start(browser, `/edges/${T.edgeId}`);
+	const worn = row(page, 'CNMG12-1-A-worn.al3d');
+	await expect(worn.getByRole('button', { name: /Open .* in 3D/ })).toBeVisible();
+	await expect(worn.locator('.thumb img')).toBeVisible(); // the cached picture the row shows until it is told otherwise
+	const rowsBefore = await panel(page).locator('.scan').count();
+	const locks = panel(page).locator('.scan[data-locked="true"]');
+	const locksBefore = await locks.count(); // the insert's own locked scan is on this page already
+	const listedBefore = state.scans.listed.length;
+	// An administrator gave the file an owner (or it was moved) after the list was read: the next read of the scan is refused.
+	state.scans.rows.find((r) => r.scan_id === 'scan-edge-worn')!.locked = true;
+	await worn.getByRole('button', { name: /Open .* in 3D/ }).click();
+
+	// The viewer asked once, was refused, and told the panel: the list is read again and the row is a lock tile (no file, note, thumbnail, status or buttons).
+	await expect.poll(() => state.scans.listed.length).toBeGreaterThan(listedBefore);
+	await expect(locks).toHaveCount(locksBefore + 1);
+	const tile = locks.filter({ hasText: 'Worn' }); // the scan's own condition, date and operation stay on its tile
+	await expect(tile).toHaveCount(1);
+	await expect(tile).toContainText('A surface scan you cannot open: its file belongs to someone else');
+	await expect(tile).toContainText(/30 Sep(t)? 2026/);
+	await expect(tile.getByRole('button')).toHaveCount(0); // no Open in 3D, no Render again
+	await expect(tile.locator('img')).toHaveCount(0);
+	await expect(tile).not.toContainText(/Ready|Flank wear/);
+	await expect(panel(page)).not.toContainText('CNMG12-1-A-worn.al3d');
+	await expect(panel(page).locator('.scan')).toHaveCount(rowsBefore); // still counted
+	await expect(page.getByTestId('surface-scan-open')).toHaveCount(0); // its view is closed
+	await expect(page.getByTestId('surface-scan-viewer')).toHaveCount(0);
+	expect(state.scans.endpoint).toContain('GET /d1-surface-scan/scan-edge-worn/meta');
+	expect(state.scans.endpoint).not.toContain('GET /d1-surface-scan/scan-edge-worn/grid'); // meta failed first: nothing was drawn
+	await panel(page).screenshot({ path: testInfo.outputPath('became-private-panel.png') });
 	expect(errors).toEqual([]);
 	await page.context().close();
 });

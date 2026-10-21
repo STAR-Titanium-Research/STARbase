@@ -12,7 +12,7 @@ import { MIN_QUERY, SEARCH_DEBOUNCE_MS, isSearchable } from './recordSearch';
 
 // The "Add a surface scan" dialog of a found file (spec 2026-10-15-found-files-inbox-design.md section 8): the insert or edge it belongs to, its condition
 // (required, nothing chosen to begin with), and optionally the operation that wore it, the day it was scanned, a condition note and notes. It shows the
-// lab-wide warning of the Alicona dialog (pages/surface/AddSurfaceScanDialog.vue, whose conditions, validation and wording it reuses). Inserts, edges and
+// visibility warning of the Alicona dialog (pages/surface/AddSurfaceScanDialog.vue, whose conditions, validation and wording it reuses). Inserts, edges and
 // operations are read through /items as the signed-in user; the endpoint has the last word and its refusal shows here, with the control it is about marked.
 const props = defineProps<{
 	modelValue: boolean;

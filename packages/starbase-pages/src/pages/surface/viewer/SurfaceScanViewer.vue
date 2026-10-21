@@ -6,7 +6,7 @@
 // around it. Without WebGL it says so and still shows the facts.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { LoadState, useExplorerHost, useRequestGate } from '@d1/ui';
-import { fetchGrid, fetchMeta, isObjectMissing, renderAgain, scanErrorText } from '../scanApi';
+import { fetchGrid, fetchMeta, isFileLocked, isObjectMissing, renderAgain, scanErrorText } from '../scanApi';
 import { rampCss } from './colourRamp';
 import { prepareScan, type PreparedScan } from './prepareScan';
 import {
@@ -17,7 +17,8 @@ import type { SurfaceScene } from './surfaceScene'; // type only: erased, three.
 
 const props = defineProps<{ scanId: string; title?: string }>();
 // The scan was sent to be rendered again (after "the rendered data is missing"): the panel reloads its list.
-const emit = defineEmits<{ (e: 'rerendered'): void }>();
+// The scan's file got an owner after the list was read (the endpoint answered 403 FILE_LOCKED): the panel reloads its list, so the row becomes a lock tile.
+const emit = defineEmits<{ (e: 'rerendered'): void; (e: 'locked'): void }>();
 
 const host = useExplorerHost();
 const gate = useRequestGate();
@@ -70,6 +71,7 @@ async function load(): Promise<void> {
 		error.value = scanErrorText(e);
 		missing.value = isObjectMissing(e);
 		phase.value = 'error';
+		if (isFileLocked(e)) emit('locked');
 	}
 }
 
@@ -126,6 +128,7 @@ async function renderThisAgain(): Promise<void> {
 		emit('rerendered');
 	} catch (e) {
 		renderError.value = scanErrorText(e);
+		if (isFileLocked(e)) emit('locked');
 	} finally {
 		rendering.value = false;
 	}

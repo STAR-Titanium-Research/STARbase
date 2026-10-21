@@ -311,6 +311,8 @@ services:
       ARCHIVE_MOUNT: /mnt/archive
       # archive_path in directus_files.metadata is relative to this (the root index_archive.py indexes).
       ARCHIVE_ROOT: ${ARCHIVE_CONTAINER_ROOT:-/mnt/archive/star_group1}
+      # The personal folders' parent, as the inbox crawler spells it: an unowned file below it is not rendered (ADR-0022).
+      INBOX_PERSON_DIR: ${INBOX_PERSON_DIR:-User}
       SURFACE_SCAN_CONCURRENCY: ${SURFACE_SCAN_CONCURRENCY:-1}
       POLL_INTERVAL_SECONDS: ${SURFACE_SCAN_POLL_SECONDS:-60}
       JOB_TIMEOUT_SECONDS: ${SURFACE_SCAN_JOB_TIMEOUT_SECONDS:-3600}

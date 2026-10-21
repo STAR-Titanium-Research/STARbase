@@ -3,14 +3,17 @@
 pending -> rendering -> done | failed. Resolves the file from ``directus_files.metadata.archive_path``
 under the read-only archive mount, reads it with SurfaceTopography, writes ``grid.bin``,
 ``thumb.png`` and ``meta.json`` (last, so its presence marks a complete render) under
-``surface-scans/<cache_key>/`` and fills the row's render columns. A cache hit on the key skips the
-read of the file altogether.
+``surface-scans/<cache_key>/`` and reports the render's columns (or its error) through the endpoint's
+``POST /d1-surface-scan/<id>/result`` (they live in a private table, not on the row). A cache hit on
+the key skips the read of the file altogether.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import os
 from datetime import UTC, datetime
 
 from app.lib import archive, directus_client, grid, minio_client, topography
@@ -49,26 +52,29 @@ def render_scan(scan_id: str) -> None:
         log.info("skip scan=%s status=%s", scan_id, row.get("render_status"))
         return
     try:
+        # Only the public status: the private render_error is cleared by POST /render (and replaced by
+        # the result), the column is no longer on this row.
         directus_client.patch_scan(
-            scan_id,
-            {"render_status": STATUS_RENDERING, "render_error": None},
-            version=row["version"],
+            scan_id, {"render_status": STATUS_RENDERING}, version=row["version"]
         )
     except VersionConflictError:
         log.info("skip scan=%s: claimed by another job", scan_id)
         return
 
-    log.info("start scan=%s file=%s", scan_id, row.get("directus_files_id"))
+    # The file this job renders: the one on the row it claimed. Every report carries it, and none is
+    # posted for a scan that has been repointed to another file meanwhile.
+    files_id = row["directus_files_id"]
+    log.info("start scan=%s file=%s", scan_id, files_id)
     try:
-        columns = _render(row["directus_files_id"])
-        _finish(
-            scan_id, {**columns, "render_status": STATUS_DONE, "render_error": None}
-        )
+        columns = _render(files_id)
+        _finish(scan_id, files_id, {"render_status": STATUS_DONE, "columns": columns})
         log.info("done scan=%s key=%s", scan_id, columns["cache_key"])
     except Exception as err:
         log.exception("failed scan=%s", scan_id)
         _finish(
-            scan_id, {"render_status": STATUS_FAILED, "render_error": _message(err)}
+            scan_id,
+            files_id,
+            {"render_status": STATUS_FAILED, "render_error": _message(err)},
         )
         raise
 
@@ -82,14 +88,16 @@ def _message(err: Exception) -> str:
     return text[:_ERROR_LIMIT]
 
 
-def _finish(scan_id: str, payload: dict) -> None:
-    """Write the terminal state, unless the row left ``rendering`` meanwhile (someone reset it)."""
+def _finish(scan_id: str, files_id: str, payload: dict) -> None:
+    """Post the terminal state to ``POST /d1-surface-scan/<id>/result`` with the version read and the
+    id of the file rendered, unless the row left ``rendering`` or now points at another file meanwhile
+    (someone reset or repointed it). A 409 re-reads and tries again."""
 
     def compute(current: dict) -> dict | None:
         return payload if current.get("render_status") == STATUS_RENDERING else None
 
     try:
-        directus_client.update_scan(scan_id, compute)
+        directus_client.report_result(scan_id, compute, rendered_file_id=files_id)
     except Exception:
         log.exception("could not write the final state of scan=%s", scan_id)
         if payload.get("render_status") == STATUS_DONE:
@@ -105,7 +113,13 @@ def _render(directus_files_id: str) -> dict:
         )
     archive_path = (file_row.get("metadata") or {}).get("archive_path")
     archive.check_identity(file_row.get("id"), archive_path)
+    owner = (file_row.get("owner_person_id"), file_row.get("owner_team_id"))
+    team_folders = functools.cache(lambda: directus_client.get_team_folders())
+    archive.check_owner_stamped(archive_path, *owner, team_folders)
     path = archive.resolve(archive_path)
+    # A link inside the archive can lead from a harmless folder into someone's: check where it lands too.
+    root = os.path.realpath(archive.ARCHIVE_ROOT)
+    archive.check_owner_stamped(os.path.relpath(path, root), *owner, team_folders)
     st = archive.stat_file(path)
 
     key = cache_key(

@@ -141,15 +141,16 @@ const denied = (re) => (err) => {
   return true;
 };
 
-test('registers the items.create, items.delete and items.update filters, and the three comment filters of the Lab Viewer', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'items.create', 'items.delete', 'items.update']);
+test('registers the items.create, items.delete and items.update filters, the three comment filters of the Lab Viewer and the three file filters (archive pointers)', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'files.create', 'files.update', 'files.upload', 'items.create', 'items.delete', 'items.update']);
 });
 
-test('the shipped rules guard exactly the four visibility junctions', () => {
+test('the shipped rules guard exactly the four visibility junctions and the surface scan file link', () => {
   assert.deepEqual(Object.keys(RULES).sort(), [
     'campaign_samples',
     'project_investigators',
     'sample_co_owners',
+    'surface_scans',
     'test_sessions_subject',
   ]);
   assert.deepEqual(RULES.campaign_samples.map((c) => c.parent), ['campaigns', 'physical_samples']);
@@ -1802,4 +1803,171 @@ test('back to planned: an owner change in the same payload still needs the owner
   const err = await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update'](
     { work_state: 'planned', owner_person_id: 'p2' }, { collection: 'manufacturing_operations', keys: ['o1'] }, ctx({ database })));
   assert.equal(err.message, BACK);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Surface scans (ADR-0023): surface_scans.directus_files_id is guarded with the READ rule of directus_files. The parent is read as the caller; the
+// guard ships that rule (rules.json), so these tests run the shipped filter against a small model of directus_files and its `readers` rows instead
+// of faking the answer: owner, non-owner, team members, an inactive person who owns files, an unowned file, a re-stamped file, a repointed scan.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+// Evaluates the operators the shipped filter uses against a row of the model (`readers` is the to-many alias over file_readers).
+function matches(filter, row) {
+  const entries = Object.entries(filter);
+  assert.equal(entries.length, 1, `one key per filter object: ${JSON.stringify(filter)}`);
+  const [key, value] = entries[0];
+  if (key === '_and') return value.every((f) => matches(f, row));
+  if (key === '_or') return value.some((f) => matches(f, row));
+  if ('_some' in value) return (row[key] ?? []).some((child) => matches(value._some, child));
+  if ('_eq' in value) return String(row[key]) === String(value._eq);
+  if ('_in' in value) return value._in.map(String).includes(String(row[key]));
+  if ('_null' in value) return (row[key] === null || row[key] === undefined) === value._null;
+  throw new Error(`the model does not know ${JSON.stringify(filter)}`);
+}
+
+// file_readers as migrations 196 and 201 define them: the owning person's login (an inactive person keeps theirs), or the login of every ACTIVE
+// member of the owning team; a file with no owner has no rows (its filter leaf is the owner test).
+const FILES = [
+  { id: 'f-own', owner_person_id: 'p-owner', owner_team_id: null, readers: [{ user_id: 'u-owner' }] },
+  { id: 'f-team', owner_person_id: null, owner_team_id: 't1', readers: [{ user_id: 'u-active' }, { user_id: 'u-lead' }] },
+  { id: 'f-gone', owner_person_id: 'p-gone', owner_team_id: null, readers: [{ user_id: 'u-gone' }] },
+  { id: 'f-open', owner_person_id: null, owner_team_id: null, readers: [] },
+  // an administrator re-stamped it from p-owner to p-new: the readers follow the owner columns
+  { id: 'f-restamped', owner_person_id: 'p-new', owner_team_id: null, readers: [{ user_id: 'u-new' }] },
+];
+
+function mountFiles() {
+  const filters = {};
+  const reads = [];
+  class ItemsService {
+    constructor(collection, options) {
+      this.collection = collection;
+      this.options = options;
+    }
+    async readByQuery(query) {
+      reads.push({ collection: this.collection, query, accountability: this.options.accountability });
+      assert.equal(this.collection, 'directus_files');
+      return FILES.filter((f) => matches(query.filter, f)).map((f) => ({ id: f.id }));
+    }
+  }
+  hook({ filter: (name, fn) => (filters[name] = fn) }, { services: { ItemsService } });
+  return { filters, reads };
+}
+
+const SCAN_REFUSED = 'You can only add a surface scan of a file you can see.';
+const scanCtx = (user, extra = {}) => ({
+  // a created-in-this-transaction row must NOT rescue a refusal: directus_files has no version column, and a query on it would fail
+  database: fakeDb([], ['directus_files:f-own', 'directus_files:f-team', 'directus_files:f-restamped']),
+  schema: { collections: { surface_scans: { primary: 'scan_id' } } },
+  accountability: { user, admin: false },
+  ...extra,
+});
+
+test('the surface scan guard ships the read rule of directus_files', () => {
+  assert.deepEqual(RULES.surface_scans.map((c) => [c.field, c.parent, c.key]), [['directus_files_id', 'directus_files', 'id']]);
+  const text = JSON.stringify(RULES.surface_scans[0].filter);
+  assert.ok(text.includes('owner_person_id') && text.includes('owner_team_id') && text.includes('readers') && text.includes('$CURRENT_USER'));
+});
+
+const SCAN_CASES = [
+  // [who, file, allowed, why]
+  ['u-owner', 'f-own', true, 'the owner adds a scan of their own file'],
+  ['u-other', 'f-own', false, 'a member who is not the owner'],
+  ['u-active', 'f-team', true, 'an active member of the owning team'],
+  ['u-lead', 'f-team', true, 'another active member of the team'],
+  ['u-inactive', 'f-team', false, 'an inactive team member has no readers row (migration 201)'],
+  ['u-other', 'f-team', false, 'a member outside the team'],
+  ['u-gone', 'f-gone', true, 'an inactive person keeps reading the files they own'],
+  ['u-other', 'f-gone', false, 'another member and an inactive owner'],
+  ['u-other', 'f-open', true, 'an unowned file stays open to every member'],
+  ['u-owner', 'f-restamped', false, 'the old owner after an administrator re-stamped the file'],
+  ['u-new', 'f-restamped', true, 'the new owner of a re-stamped file'],
+  ['u-owner', 'f-missing', false, 'a file id that does not exist is refused like a file the caller cannot see'],
+];
+
+for (const [who, file, allowed, why] of SCAN_CASES) {
+  test(`surface_scans create of ${file} by ${who}: ${allowed ? 'allowed' : 'refused'} (${why})`, async () => {
+    const { filters, reads } = mountFiles();
+    const payload = { insert_id: 'i1', directus_files_id: file, condition: 'new' };
+    const run = () => filters['items.create'](payload, { collection: 'surface_scans' }, scanCtx(who));
+    if (allowed) {
+      assert.equal(await run(), payload);
+    } else {
+      await assert.rejects(run(), (e) => {
+        assert.equal(e.status, 403);
+        assert.equal(e.code, 'FORBIDDEN');
+        assert.equal(e.message, SCAN_REFUSED);
+        assert.equal(e.extensions.source, 'd1-access-guard');
+        assert.equal(e.extensions.kind, 'junction');
+        assert.equal(e.extensions.collection, 'surface_scans');
+        assert.equal(e.extensions.parent, 'directus_files');
+        assert.equal(e.extensions.id, file);
+        return true;
+      });
+    }
+    assert.equal(reads.length, 1, 'one read of the file, as the caller');
+    assert.equal(reads[0].accountability.user, who);
+    assert.deepEqual(reads[0].query.fields, ['id']);
+  });
+}
+
+test('surface_scans create: the file read replaces $CURRENT_USER with the caller and no "created here" shortcut exists for files', async () => {
+  const { filters, reads } = mountFiles();
+  const c = scanCtx('u-other');
+  await assert.rejects(filters['items.create']({ directus_files_id: 'f-own' }, { collection: 'surface_scans' }, c));
+  const sent = JSON.stringify(reads[0].query.filter);
+  assert.ok(sent.includes('u-other') && !sent.includes('$CURRENT_USER'));
+  assert.deepEqual(c.database.calls, [], 'directus_files has no version column: the xmin query is never asked');
+});
+
+test('surface_scans create: an administrator and a call with no accountability are not checked', async () => {
+  const { filters, reads } = mountFiles();
+  const payload = { directus_files_id: 'f-own' };
+  const admin = scanCtx('u-admin', { accountability: { user: 'u-admin', admin: true } });
+  assert.equal(await filters['items.create'](payload, { collection: 'surface_scans' }, admin), payload);
+  const internal = scanCtx('x', { accountability: null });
+  assert.equal(await filters['items.create'](payload, { collection: 'surface_scans' }, internal), payload);
+  assert.equal(reads.length, 0);
+});
+
+test('surface_scans create: a nested file object and a batch are read the same way, and a blank file is left to the database', async () => {
+  const { filters, reads } = mountFiles();
+  const ok = { directus_files_id: { id: 'f-own' } };
+  assert.equal(await filters['items.create'](ok, { collection: 'surface_scans' }, scanCtx('u-owner')), ok);
+  await assert.rejects(
+    filters['items.create']([{ directus_files_id: 'f-open' }, { directus_files_id: 'f-own' }], { collection: 'surface_scans' }, scanCtx('u-other')),
+    (e) => e.extensions.id === 'f-own',
+  );
+  const blank = { directus_files_id: null };
+  assert.equal(await filters['items.create'](blank, { collection: 'surface_scans' }, scanCtx('u-other')), blank);
+  assert.deepEqual(reads.map((r) => r.query.filter._and[0].id._eq), ['f-own', 'f-open', 'f-own']);
+});
+
+test('surface_scans update: repointing the file to one the caller cannot read is refused; to one they can, or the same file, is allowed', async () => {
+  const { filters, reads } = mountFiles();
+  const meta = { collection: 'surface_scans', keys: ['scan-1'] };
+  const database = () => fakeDb([{ scan_id: 'scan-1', directus_files_id: 'f-open' }], []);
+  const run = (who, file) => filters['items.update']({ directus_files_id: file }, meta, scanCtx(who, { database: database() }));
+  await assert.rejects(run('u-other', 'f-own'), (e) => e.message === SCAN_REFUSED && e.extensions.id === 'f-own');
+  assert.deepEqual(await run('u-owner', 'f-own'), { directus_files_id: 'f-own' });
+  assert.equal(reads.length, 2);
+  // the file it already has: an editor saving the whole form is not a change
+  assert.deepEqual(await run('u-other', 'f-open'), { directus_files_id: 'f-open' });
+  assert.equal(reads.length, 2, 'no read when the value is unchanged');
+  // clearing it grants nothing (and the column is NOT NULL)
+  assert.deepEqual(await run('u-other', null), { directus_files_id: null });
+  // an update that does not touch the file is never checked
+  const other = { notes: 'x' };
+  assert.equal(await filters['items.update'](other, meta, scanCtx('u-other', { database: database() })), other);
+  assert.equal(reads.length, 2);
+});
+
+test('surface_scans update: a file moved by repoint_candidate (the scan then points at the new file) is checked like any other repoint', async () => {
+  const { filters } = mountFiles();
+  const meta = { collection: 'surface_scans', keys: ['scan-1'] };
+  const database = fakeDb([{ scan_id: 'scan-1', directus_files_id: 'f-open' }], []);
+  await assert.rejects(
+    filters['items.update']({ directus_files_id: 'f-gone' }, meta, scanCtx('u-owner', { database })),
+    (e) => e.message === SCAN_REFUSED,
+  );
 });

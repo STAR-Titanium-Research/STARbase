@@ -79,6 +79,11 @@
 // and octrees of a restricted record are not yet protected, so letting owners switch it would promise privacy the system cannot keep. Admins can. The
 // owner-only logic underneath stays for A1b.
 //
+// A fifth junction is not a visibility grant but follows the same pattern (ADR-0023): surface_scans.directus_files_id. A scan of an OWNED file may be
+// created, or repointed to another file, only by a caller who can read that file (the read rule of directus_files, run as the caller, so the owner,
+// the owning team's members and an administrator pass and an unowned file is open); a file id that does not exist is refused with the same
+// words. directus_files has no OCC `version` column, so the created-in-this-transaction shortcut above never applies to it.
+//
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
 //
@@ -106,6 +111,7 @@
 import { readFileSync } from 'node:fs';
 
 import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE } from '../d1-record-access/index.js';
+import { createsPointer, POINTER_REFUSED, repointsPointer } from './archivePointers.js';
 
 const RULES = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8'));
 const GUARDS = RULES.guards;
@@ -187,7 +193,12 @@ const JUNCTION_MESSAGES = {
   'campaign_samples.sample_id': 'You can only add a sample to a campaign if you own, co-own or can edit it.',
   'test_sessions_subject.test_sessions_id':
     'You can only change the samples of a test you own, or of a test on a sample you own or co-own.',
+  // ADR-0023: the same words for a file that does not exist, so the answer does not say which file ids are real
+  'surface_scans.directus_files_id': 'You can only add a surface scan of a file you can see.',
 };
+// Guarded parents that have no OCC `version` column (a Directus system table), so the "inserted by this transaction" shortcut cannot be
+// asked of them: the caller either passes the parent's rule or is refused.
+const UNVERSIONED_PARENTS = new Set(['directus_files']);
 const UNREADABLE_SAMPLE = 'You cannot see that sample, so you cannot add it to a campaign.';
 const RESTRICTED_SAMPLE = "Only the sample's owner can add a restricted sample to a campaign.";
 const RESTRICTED_TEST =
@@ -387,7 +398,7 @@ export default ({ filter }, { services }) => {
       const refuse = (reason) =>
         forbidden(reason, { kind: 'junction', collection, parent: check.parent, id: String(id) });
       if (!(await canUpdate(check, id, context))) {
-        if (!(await createdInThisTransaction(check, id, context))) {
+        if (UNVERSIONED_PARENTS.has(check.parent) || !(await createdInThisTransaction(check, id, context))) {
           throw refuse(JUNCTION_MESSAGES[`${collection}.${check.field}`] ?? 'You cannot change this record.');
         }
         continue; // a parent created by this very request is the creator's to build: no further check
@@ -641,7 +652,39 @@ export default ({ filter }, { services }) => {
     }
   }
 
+  // ADR-0022: a non-admin cannot create an archive pointer row or repoint one (see archivePointers.js). Directus names the filter of a system
+  // collection after its scope (files.create, files.update, files.upload); items.* is registered too in case a Directus version fires it for
+  // directus_files as well (the two share this function, and a refused write is refused once). Not tried on a live Directus: physical-test
+  // item IF91.
+  const refusePointerCreate = (payload, meta, context) => {
+    if (!checked(context) || !payload) return payload;
+    if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
+    for (const item of Array.isArray(payload) ? payload : [payload]) {
+      if (createsPointer(item)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
+    }
+    return payload;
+  };
+  const refusePointerUpdate = async (payload, meta, context) => {
+    if (!checked(context) || !payload || typeof payload !== 'object') return payload;
+    if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
+    const keys = Array.isArray(meta?.keys) ? meta.keys.filter((key) => !isBlank(key) && typeof key !== 'object') : [];
+    if (!keys.length) {
+      // No key to look the stored row up by: refuse only what is a pointer on its face
+      if (createsPointer(payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
+      return payload;
+    }
+    const stored = await context.database('directus_files').whereIn('id', keys).select('id', 'storage', 'filename_disk', 'metadata');
+    for (const row of stored) {
+      if (repointsPointer(row, payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: String(row.id) });
+    }
+    return payload;
+  };
+  filter('files.create', refusePointerCreate);
+  filter('files.upload', refusePointerCreate);
+  filter('files.update', refusePointerUpdate);
+
   filter('items.create', async (payload, meta, context) => {
+    if (meta?.collection === 'directus_files') return refusePointerCreate(payload, meta, context);
     // Ruling O3: a non-admin cannot create a record that is already owned by a team (the owner grant and its manage rows would be made
     // with nobody having agreed to it); Transfer ownership is the only way a record becomes team-owned. A blank value is fine.
     if (OWNER_GUARDS[meta?.collection] !== undefined && checked(context) && payload) {
@@ -669,6 +712,7 @@ export default ({ filter }, { services }) => {
   filter('items.update', async (payload, meta, context) => {
     if (!checked(context) || !payload || typeof payload !== 'object') return payload;
     const collection = meta?.collection;
+    if (collection === 'directus_files') return refusePointerUpdate(payload, meta, context);
     if (collection === 'projects' && restrictAdminOnly() && 'restricted' in payload) {
       // projects have no owner guard (only the PI can update one), but the PI can restrict it: refused until A1b like the other four
       const keys = Array.isArray(meta.keys) ? meta.keys.filter((key) => !isBlank(key)) : [];
