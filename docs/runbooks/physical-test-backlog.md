@@ -1665,7 +1665,11 @@ below. "Since" is the surface scan privacy PR (pending).
   `directus_files_id`: `409 VERSION_CONFLICT` and the row is unchanged; without `directus_files_id`: `400` naming the field. Start
   the worker with a token of a non-administrator user: its log shows a CRITICAL line naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
   `WORKER_DIRECTUS_TOKEN` and the container exits non-zero (with the administrator's token it starts and logs the probe's `409`).
-  Since: the surface scan privacy PR (pending).
+  Cold start: with the non-administrator token, bring the whole stack up at once (`docker compose --profile archive up -d`, or reboot the
+  host) so the worker starts while Directus is still booting: the log shows `token probe: Directus could not be reached ... will ask
+  again`, then, once Directus answers, the same CRITICAL line and a non-zero exit (the poller re-asks at the end of each poll pass
+  until it gets a definite answer; with the administrator's token it stops asking after the first `409`).
+  Since: the surface scan privacy PR (#392); the cold-start check: its follow-up (#394).
 
 ### Design system rollout: View rail, title pin, FAST plotter (PR #377)
 

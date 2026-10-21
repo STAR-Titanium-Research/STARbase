@@ -257,3 +257,73 @@ def test_the_poller_loop_starts_when_the_probe_is_inconclusive(monkeypatch):
     with pytest.raises(StopLoopError):
         poller.run_forever()
     assert len(passes) == 1  # the loop ran its first pass
+
+
+def test_a_refusal_that_only_shows_after_directus_is_up_still_stops_the_poller(
+    monkeypatch,
+):
+    """Cold start: Directus is not up at the first probe, so the worker starts its loop; the token is
+    asked about again at the end of each pass and a refusal then stops the poller."""
+    answers = iter([requests.ConnectionError("down"), 403])
+
+    def probe():
+        outcome = next(answers)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(directus_client, "probe_result_route", probe)
+    monkeypatch.setattr(poller, "get_redis", lambda: MagicMock())
+    monkeypatch.setattr(poller, "Queue", lambda *a, **k: MagicMock())
+    passes = []
+    monkeypatch.setattr(poller, "fail_rendering", lambda *a, **k: [])
+    monkeypatch.setattr(poller, "fail_killed", lambda q: passes.append(1) or [])
+    monkeypatch.setattr(poller, "enqueue_pending", lambda q: 0)
+    monkeypatch.setattr(poller, "reap_once", lambda: [])
+    monkeypatch.setattr(
+        poller.time, "sleep", lambda s: pytest.fail("it must exit before sleeping")
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        poller.run_forever()
+    assert exit_info.value.code == 1
+    assert passes == [1]  # one pass ran, then the second probe was refused
+
+
+def test_the_probe_stops_being_asked_once_it_has_a_definite_answer(monkeypatch):
+    asked = []
+    answers = iter([requests.ConnectionError("down"), 409])
+
+    def probe():
+        asked.append(1)
+        outcome = next(answers)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(directus_client, "probe_result_route", probe)
+    monkeypatch.setattr(poller, "get_redis", lambda: MagicMock())
+    monkeypatch.setattr(poller, "Queue", lambda *a, **k: MagicMock())
+    for name in ("fail_rendering", "fail_killed", "enqueue_pending", "reap_once"):
+        monkeypatch.setattr(poller, name, lambda *a, **k: [])
+    sleeps = []
+
+    class StopLoopError(Exception):
+        pass
+
+    def sleep(_seconds):
+        sleeps.append(1)
+        if len(sleeps) == 3:
+            raise StopLoopError
+
+    monkeypatch.setattr(poller.time, "sleep", sleep)
+    with pytest.raises(StopLoopError):
+        poller.run_forever()
+    assert len(asked) == 2  # the start-up probe and one re-probe; then it is settled
+
+
+def test_the_critical_message_explains_both_refusals(monkeypatch, caplog):
+    _probe_says(monkeypatch, 401)
+    with caplog.at_level("INFO", logger="poller"):
+        assert poller.verify_token() is False
+    text = next(r.getMessage() for r in caplog.records if r.levelname == "CRITICAL")
+    assert "401" in text and "blank" in text and "not an administrator's" in text

@@ -37,7 +37,8 @@ read in that pass).
 `failed` report for the nil scan (`00000000-0000-0000-0000-000000000000`): an administrator token gets `409`,
 anything else `403`. On `403` (or `401`) it logs CRITICAL, naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
 `WORKER_DIRECTUS_TOKEN` and the administrator requirement, and exits non-zero (the container exits with it);
-`409`/`400` carry on; a connection error, `5xx` or `404` only warn.
+`409`/`400` carry on; a connection error, `5xx` or `404` only warn, and the probe is asked again at the end of every
+poll pass until it gets a definite answer (a cold start of the whole stack reaches the worker before Directus is up).
 
 MinIO, `surface-scans/<cache_key>/`:
 
