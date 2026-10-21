@@ -69,7 +69,7 @@ Tooling hierarchy (3 levels)
   tool_boxes                   grandparent: storage container
   cutting_inserts              parent: individual multi-edged insert
   insert_edges                 child: discrete cutting point
-  surface_scans                topography scans (an .al3d or any SurfaceTopography file) of one insert or one edge, with the condition it was in
+  surface_scans                topography scans (an .al3d or any SurfaceTopography file) of one insert or one edge, with the condition it was in; a scan follows its file's owner (locked placeholder for others, render data in d1_private.surface_scan_renders)
 
 Core sample lifecycle
   physical_samples             central entity (dual identity: UUID + sample_code)
@@ -611,43 +611,69 @@ user); index on `(directus_files_id, read_at)`.
 **`d1_private.file_candidates.classified_by`** TEXT, nullable: the classifier profile and version that set `kind`, `kind_confidence` and `extracted` (for example
 `sem-2`); a re-classification pass skips rows already at the current version.
 
-### `surface_scans`
+### `surface_scans`, `d1_private.surface_scan_renders`, `d1_private.surface_scan_access_log`
 
 One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0021). Not a Test: an Alicona
 Test on a sample surface stays a Test. The file is a `directus_files` pointer row on the read-only archive share; the
-`surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and fills the `render_*` and
-derived columns. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO. Reference data like
-`insert_edges`: every Lab Member reads, creates, updates and deletes, every Lab Viewer reads (ADR-0011); create and update name their
-fields, so the worker-filled columns (`cache_key`, `rendered_at`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*`) cannot be written
-through the API (update also takes `render_status` and `render_error`, which Render again writes). Not granted to the Ask-DB role.
-OCC (`version`) and audit triggers as on every mutable table. Changing `directus_files_id` sets the scan back to `pending` and clears
-everything the worker derived (trigger `surface_scans_reset_render`).
+`surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and reports what it derived through
+`POST /d1-surface-scan/<id>/result`. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO.
+
+**A scan follows its file's provenance owner** (migration `…205`, [ADR-0023](adr/0023-surface-scans-follow-their-files-owner.md), which supersedes
+decision 4 of ADR-0021 and fulfils decision 6 of ADR-0022). One rule is used everywhere: the scan's file is visible to an administrator, when the
+file has no owner (`owner_person_id` and `owner_team_id` both null), or when `file_readers` has a row for (file, the caller's login). A scan the caller
+cannot see the file of stays visible as a **locked placeholder** with only its condition, date and operation. The Lab Member and Lab Viewer **read**
+row lists only the link facts (`scan_id`, `insert_id`, `edge_id`, `condition`, `scanned_on`, `operation_id`, `created_at`, `updated_at`, `version`), so
+`directus_files_id`, `render_status`, `notes`, `condition_note` and `owner_person_id` are readable through REST and GraphQL by administrators only (the
+endpoint's `GET /d1-surface-scan/scans` shows them to people who can see the file). **Create** names its fields as before and the `d1-access-guard`
+refuses a file the caller cannot read (a missing file gets the same answer); **update** and **delete** carry the file's owner test through the scan's
+file (an unowned file, or the caller has a `file_readers` row), and update no longer takes `render_error`. Scans of files with no owner stay visible
+to every lab member. A scan becomes private when its file later gets an owner (an administrator's re-stamp, a crawler move): visibility is computed
+live, nothing is synced. Not granted to the Ask-DB role. OCC (`version`) and audit triggers as on every mutable table. Changing
+`directus_files_id` sets the scan back to `pending` and deletes its `surface_scan_renders` row (trigger `surface_scans_reset_render`).
 
 | Column | Type | Description |
 |---|---|---|
 | `scan_id` | UUID PK | |
 | `insert_id` | UUID | The cutting insert (`ON DELETE CASCADE`). Exactly one of `insert_id` and `edge_id` is set (`CHECK`) |
 | `edge_id` | UUID | The insert edge (`ON DELETE CASCADE`) |
-| `directus_files_id` | UUID NOT NULL | The scan file (`ON DELETE CASCADE`). `UNIQUE (insert_id, directus_files_id)` and `UNIQUE (edge_id, directus_files_id)`: a file is filed once per item |
+| `directus_files_id` | UUID NOT NULL | The scan file (`ON DELETE CASCADE`). `UNIQUE (insert_id, directus_files_id)` and `UNIQUE (edge_id, directus_files_id)`: a file is filed once per item. Not readable by members (see above) |
 | `condition` | TEXT NOT NULL | `new`, `worn`, `cleaned` or `other` |
-| `condition_note` | TEXT | Free note on the condition |
+| `condition_note` | TEXT | Free note on the condition. Hidden from members who cannot see the file |
 | `scanned_on` | DATE | The day it was scanned |
 | `operation_id` | UUID | The operation that wore the item (`ON DELETE SET NULL`) |
-| `notes` | TEXT | |
-| `render_status` | TEXT NOT NULL | `pending` (default), `rendering`, `done` or `failed`. The viewer is served only when `done` |
+| `notes` | TEXT | Hidden from members who cannot see the file |
+| `render_status` | TEXT NOT NULL | `pending` (default), `rendering`, `done` or `failed`. The viewer is served only when `done`. Stays on this row: the worker polls and claims it (partial index on `pending` and `rendering`) |
+| `owner`, `owner_person_id` | UUID | Legacy login (hidden) and the person who added it (filled by `d1-owner-default`). Informational: it does not decide who sees the scan |
+| `created_at`, `updated_at`, `version` | | As on every mutable table |
+
+Indexes on `insert_id`, `edge_id`, `directus_files_id`, `render_status` (partial: only `pending` and `rendering`),
+`operation_id` and `owner_person_id` (both partial: non-null).
+
+**`d1_private.surface_scan_renders`** holds what the worker derived from the file, one row per scan that has any of it (`scan_id` UUID PK, FK to
+`surface_scans` `ON DELETE CASCADE`). These columns used to sit on `surface_scans`; migration `…205` copied them here and dropped them. In `d1_private`:
+not exposed by Directus, not in `v_schema_dictionary`, not granted to the LLM role; read only through the `d1-surface-scan` endpoint (which runs the
+visibility rule first) and written only through its administrator-only `POST /d1-surface-scan/<id>/result` route. No foreign key to `directus_files`
+(the indexer repoints those rows) and no audit trigger (derived data).
+
+| Column | Type | Description |
+|---|---|---|
 | `render_error` | TEXT | Why the last render failed; cleared by Render again |
 | `rendered_at` | TIMESTAMPTZ | When the last render finished |
-| `cache_key` | TEXT | Names the objects under `surface-scans/<cache_key>/` (`grid.bin`, `meta.json`, `thumb.png`): `file_fingerprints.content_sha256`, else the provisional `p-<directus_files_id>-<size>-<mtime>`. Set by the worker, which never hashes a file. The endpoint's ETag |
+| `cache_key` | TEXT | Names the objects under `surface-scans/<cache_key>/` (`grid.bin`, `meta.json`, `thumb.png`): `file_fingerprints.content_sha256`, else the provisional `p-<directus_files_id>-<size>-<mtime>`. Set by the worker, which never hashes a file. The endpoint's ETag. `CHECK`: a name (letters, digits, dot, dash, underscore, at most 200 characters, no `..`), the pattern of `validCacheKey` in the endpoint. Two files with the same bytes share objects (ADR-0023 decision 9) |
 | `source_format` | TEXT | Name of the SurfaceTopography reader |
 | `source_width`, `source_height` | INTEGER | Pixels of the file's height map |
 | `grid_width`, `grid_height` | INTEGER | Cells of the decimated grid (at most 1024 on the longer side) |
 | `pixel_pitch_x_um`, `pixel_pitch_y_um` | NUMERIC | Cell size of the decimated grid, micrometres |
 | `z_min_um`, `z_max_um` | NUMERIC | Lowest and highest height in the grid, micrometres. The file's extremes, not a roughness value |
-| `owner`, `owner_person_id` | UUID | Legacy login (hidden) and the person who added it (filled by `d1-owner-default`) |
-| `created_at`, `updated_at`, `version` | | As on every mutable table |
+| `updated_at` | TIMESTAMPTZ NOT NULL | When the row was last written |
 
-Indexes on `insert_id`, `edge_id`, `directus_files_id`, `render_status` (partial: only `pending` and `rendering`),
-`operation_id` and `owner_person_id` (both partial: non-null).
+**`d1_private.surface_scan_access_log`**: one row per administrator 3D open (a `grid` read through the endpoint) of a scan the administrator could not
+have read as a non-administrator. `id` BIGSERIAL PK, `scan_id`, `directus_files_id` and `read_by_user` UUID NOT NULL, `read_at` TIMESTAMPTZ NOT NULL
+(default now), `reason` TEXT NOT NULL (not blank). No foreign keys (the log outlives the scan, the file and the user); index on `(scan_id, read_at)`.
+Not a general audit: thumbnails, `/assets` and Data Studio are not logged, and a Directus administrator can read the file directly without a row.
+
+`d1_private.surface_scans_rules_backup` keeps the Lab Member and Lab Viewer `surface_scans` permission rows migration `…205` replaced, so its down restores
+them exactly; the down also drops both tables above (the access log is lost) and re-creates the twelve columns with their values.
 
 ---
 
