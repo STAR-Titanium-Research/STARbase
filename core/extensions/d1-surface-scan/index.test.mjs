@@ -177,6 +177,7 @@ function fakeKnex(world) {
 			return { rows: [{ scan_id: scan, render_status: status, version: row.version }] };
 		}
 		if (SQL.resultUpsert && sql === SQL.resultUpsert) {
+			if (world.failUpsert) throw new Error('private table is gone');
 			const [scan, ...values] = bindings;
 			world.results.push({ scan, values });
 			return { rows: [] };
@@ -626,10 +627,10 @@ test('GET /scans: an administrator reading a locked scan\'s list is not logged (
 
 // ---- GET grid / meta / thumb -----------------------------------------------------------------------------------------
 
-test('mounts the routes at /d1-surface-scan', () => {
+test('mounts the list, the three objects, render and result at /d1-surface-scan', () => {
 	assert.equal(endpoint.id, 'd1-surface-scan');
 	const { router } = setup();
-	assert.deepEqual([...router.routes.keys()], ['GET /scans', 'GET /:id/grid', 'GET /:id/meta', 'GET /:id/thumb', 'POST /:id/render']);
+	assert.deepEqual([...router.routes.keys()], ['GET /scans', 'GET /:id/grid', 'GET /:id/meta', 'GET /:id/thumb', 'POST /:id/render', 'POST /:id/result']);
 });
 
 test('GET grid streams the object with its ETag, Cache-Control private and its content type', async () => {
@@ -1019,4 +1020,200 @@ test('a log row that cannot be written is a 500 and no data (the store is not ev
 	assert.equal(res.headers['Cache-Control'], 'no-store');
 	assert.equal(store.calls.length, 0);
 	assert.equal(world.accessLog.length, 0);
+});
+
+// ---- POST result (the worker's report) -------------------------------------------------------------------------------
+
+const COLUMNS = {
+	cache_key: HASH, source_format: 'al3d', source_width: 4096, source_height: 3072, grid_width: 1024, grid_height: 768,
+	pixel_pitch_x_um: 1.5, pixel_pitch_y_um: 1.5, z_min_um: -12.25, z_max_um: 40.5, rendered_at: '2026-10-21T09:30:00Z',
+};
+const DONE = { version: 3, render_status: 'done', columns: COLUMNS };
+// A scan the worker holds: rendering, at version 3.
+const claimed = (extra = {}) => setup({ row: { render_status: 'rendering', version: 3 }, render: { cache_key: null, grid_width: null, grid_height: null, rendered_at: null }, ...extra });
+
+test('POST result: the worker reports a finished render: claimed and upserted in one transaction that names the actor first, then the cache is cleared', async () => {
+	const { call, world } = claimed({ env: { CACHE_ENABLED: 'true' } });
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: DONE });
+	assert.equal(res.statusCode, 200);
+	assert.deepEqual(res.body, { data: { scan_id: SCAN, render_status: 'done', version: 4 } });
+	assert.equal(world.txs, 1);
+	assert.deepEqual(world.raw.map((r) => r.sql), [SQL.setActor, SQL.resultClaim, SQL.resultUpsert]);
+	assert.deepEqual(world.raw[0].bindings, [ADMIN]);
+	assert.deepEqual(world.raw[1].bindings, ['done', SCAN, 3]);
+	assert.deepEqual(world.raw[2].bindings, [
+		SCAN, null, '2026-10-21T09:30:00.000Z', HASH, 'al3d', 4096, 3072, 1024, 768, 1.5, 1.5, -12.25, 40.5,
+	]);
+	assert.equal(world.scans.get(SCAN).render_status, 'done');
+	assert.equal(world.cacheCleared, 1);
+	// the SQL's own shape: a claim that only wins a 'rendering' row at the version read, and an upsert on the scan id
+	assert.match(SQL.resultClaim, /WHERE scan_id = \? AND version = \? AND render_status = 'rendering'/);
+	assert.match(SQL.resultUpsert, /INSERT INTO d1_private\.surface_scan_renders \(scan_id, render_error, rendered_at, cache_key, source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, updated_at\)/);
+	assert.match(SQL.resultUpsert, /ON CONFLICT \(scan_id\) DO UPDATE SET/);
+});
+
+test('POST result: a finished render needs only a cache_key, and rendered_at defaults to now', async () => {
+	const { call, world } = claimed();
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'done', columns: { cache_key: `p-${FILE}-123-1760000000.5` } } });
+	assert.equal(res.statusCode, 200);
+	const [, rendered, key, ...rest] = world.raw[2].bindings.slice(1);
+	assert.match(rendered, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
+	assert.equal(key, `p-${FILE}-123-1760000000.5`);
+	assert.deepEqual(rest, Array(9).fill(null));
+});
+
+test('POST result: a failed render stores its error and nothing derived', async () => {
+	const { call, world } = claimed();
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed', render_error: '  cannot read the file  ' } });
+	assert.equal(res.statusCode, 200);
+	assert.equal(res.body.data.render_status, 'failed');
+	assert.deepEqual(world.raw[2].bindings, [SCAN, 'cannot read the file', null, null, null, null, null, null, null, null, null, null, null]);
+	assert.equal(world.scans.get(SCAN).render_status, 'failed');
+	// no error text is fine too; a long one is cut
+	const bare = claimed();
+	await bare.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed' } });
+	assert.equal(bare.world.raw[2].bindings[1], null);
+	const long = claimed();
+	await long.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed', render_error: 'x'.repeat(5000) } });
+	assert.equal(long.world.raw[2].bindings[1].length, 2000);
+});
+
+test('POST result: administrators only; a member, the file\'s owner and a Lab Viewer are refused with 403 before anything is read or written', async () => {
+	for (const who of [WHO.alice, WHO.bob, WHO.carol, WHO.viewer]) {
+		const { call, world } = claimed({ file: { owner_person_id: P.alice } });
+		const res = await call('POST', '/:id/result', { ...who, body: DONE });
+		assert.equal(res.statusCode, 403, who.user);
+		assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
+		assertUncacheable(res, 'result 403');
+		assert.equal(world.raw.length, 0);
+		assert.equal(world.txs, 0);
+		assert.equal(world.scans.get(SCAN).render_status, 'rendering');
+	}
+	assert.equal((await claimed().call('POST', '/:id/result', { user: null, body: DONE })).statusCode, 401);
+});
+
+test('POST result: an administrator may report on a scan of a file that is not theirs (the worker\'s machine user is an administrator, and nothing is logged)', async () => {
+	const { call, world } = claimed({ file: { owner_person_id: P.alice } });
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: DONE })).statusCode, 200);
+	assert.equal(world.accessLog.length, 0);
+});
+
+test('POST result: a stale version, a scan that is not rendering, and a scan that does not exist are 409 VERSION_CONFLICT with nothing written', async () => {
+	const stale = claimed();
+	const res = await stale.call('POST', '/:id/result', { ...WHO.admin, body: { ...DONE, version: 2 } });
+	assert.equal(res.statusCode, 409);
+	assert.equal(res.body.errors[0].extensions.code, 'VERSION_CONFLICT');
+	assertUncacheable(res, '409');
+	assert.equal(stale.world.results.length, 0);
+	assert.equal(stale.world.scans.get(SCAN).render_status, 'rendering');
+	assert.equal(stale.world.cacheCleared, 0);
+	for (const state of ['pending', 'done', 'failed']) {
+		const { call, world } = setup({ row: { render_status: state, version: 3 } });
+		const out = await call('POST', '/:id/result', { ...WHO.admin, body: DONE });
+		assert.equal(out.statusCode, 409, state);
+		assert.equal(out.body.errors[0].extensions.code, 'VERSION_CONFLICT');
+		assert.equal(world.results.length, 0);
+		assert.equal(world.scans.get(SCAN).render_status, state);
+	}
+	const missing = await claimed().call('POST', '/:id/result', { ...WHO.admin, id: ID(99), body: DONE });
+	assert.equal(missing.statusCode, 409);
+	assert.equal((await claimed().call('POST', '/:id/result', { ...WHO.admin, id: 'nope', body: DONE })).statusCode, 404);
+});
+
+test('POST result: a report that arrives twice wins once (the second sees the new version)', async () => {
+	const { call, world } = claimed();
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: DONE })).statusCode, 200);
+	const again = await call('POST', '/:id/result', { ...WHO.admin, body: DONE });
+	assert.equal(again.statusCode, 409);
+	assert.equal(world.results.length, 1);
+});
+
+test('POST result: Render again between the claim and the report beats the worker (it must read the new version)', async () => {
+	const { call, world } = claimed();
+	world.scans.get(SCAN).render_status = 'pending';
+	world.scans.get(SCAN).version = 4;
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: DONE })).statusCode, 409);
+});
+
+test('POST result: a failed upsert undoes the claim (one transaction)', async () => {
+	const { call, world } = claimed({ env: { CACHE_ENABLED: 'true' } });
+	world.failUpsert = true;
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: DONE });
+	assert.equal(res.statusCode, 500);
+	assert.equal(world.scans.get(SCAN).render_status, 'rendering');
+	assert.equal(world.scans.get(SCAN).version, 3);
+	assert.equal(world.cacheCleared, 0);
+});
+
+test('POST result: validation is a 400 INVALID_PAYLOAD naming the field, and nothing is touched', async () => {
+	const withColumns = (patch) => ({ ...DONE, columns: { ...COLUMNS, ...patch } });
+	const cases = [
+		[null, undefined],
+		['text', undefined],
+		[[], undefined],
+		[{ ...DONE, version: '3' }, 'version'],
+		[{ ...DONE, version: 0 }, 'version'],
+		[{ ...DONE, version: 1.5 }, 'version'],
+		[{ ...DONE, version: undefined }, 'version'],
+		[{ ...DONE, render_status: 'rendering' }, 'render_status'],
+		[{ ...DONE, render_status: 'pending' }, 'render_status'],
+		[{ ...DONE, render_status: undefined }, 'render_status'],
+		[{ ...DONE, surprise: 1 }, 'surprise'],
+		[{ ...DONE, render_error: 'oops' }, 'render_error'],
+		[{ version: 3, render_status: 'failed', render_error: 5 }, 'render_error'],
+		[{ version: 3, render_status: 'failed', columns: COLUMNS }, 'columns'],
+		[{ version: 3, render_status: 'done' }, 'columns'],
+		[{ ...DONE, columns: null }, 'columns'],
+		[{ ...DONE, columns: [] }, 'columns'],
+		[withColumns({ cache_key: undefined }), 'columns.cache_key'],
+		[withColumns({ cache_key: '' }), 'columns.cache_key'],
+		[withColumns({ cache_key: '../other' }), 'columns.cache_key'],
+		[withColumns({ cache_key: 'a/b' }), 'columns.cache_key'],
+		[withColumns({ cache_key: '..' }), 'columns.cache_key'],
+		[withColumns({ cache_key: '.hidden' }), 'columns.cache_key'],
+		[withColumns({ cache_key: 'x'.repeat(201) }), 'columns.cache_key'],
+		[withColumns({ cache_key: 5 }), 'columns.cache_key'],
+		[withColumns({ extra: 1 }), 'columns.extra'],
+		[withColumns({ render_error: 'x' }), 'columns.render_error'],
+		[withColumns({ source_format: '' }), 'columns.source_format'],
+		[withColumns({ source_format: 7 }), 'columns.source_format'],
+		[withColumns({ source_format: 'x'.repeat(101) }), 'columns.source_format'],
+		[withColumns({ source_width: '4096' }), 'columns.source_width'],
+		[withColumns({ source_height: 0 }), 'columns.source_height'],
+		[withColumns({ grid_width: 10.5 }), 'columns.grid_width'],
+		[withColumns({ grid_height: -1 }), 'columns.grid_height'],
+		[withColumns({ grid_height: 2 ** 31 }), 'columns.grid_height'],
+		[withColumns({ pixel_pitch_x_um: 0 }), 'columns.pixel_pitch_x_um'],
+		[withColumns({ pixel_pitch_y_um: -2 }), 'columns.pixel_pitch_y_um'],
+		[withColumns({ pixel_pitch_y_um: Number.NaN }), 'columns.pixel_pitch_y_um'],
+		[withColumns({ z_min_um: '1' }), 'columns.z_min_um'],
+		[withColumns({ z_max_um: Number.POSITIVE_INFINITY }), 'columns.z_max_um'],
+		[withColumns({ z_min_um: 50, z_max_um: 40 }), 'columns.z_min_um'],
+		[withColumns({ rendered_at: 'yesterday' }), 'columns.rendered_at'],
+		[withColumns({ rendered_at: 5 }), 'columns.rendered_at'],
+	];
+	for (const [body, field] of cases) {
+		const { call, world } = claimed();
+		const res = await call('POST', '/:id/result', { ...WHO.admin, body });
+		assert.equal(res.statusCode, 400, JSON.stringify(body));
+		assert.equal(res.body.errors[0].extensions.code, 'INVALID_PAYLOAD');
+		if (field) assert.equal(res.body.errors[0].extensions.field, field, JSON.stringify(body));
+		assert.equal(world.txs, 0);
+		assert.equal(world.results.length, 0);
+		assert.equal(world.scans.get(SCAN).render_status, 'rendering');
+		assertUncacheable(res, '400');
+	}
+});
+
+test('POST result: null columns are stored as null, and z_min equal to z_max is fine', async () => {
+	const { call, world } = claimed();
+	const columns = { cache_key: HASH, source_format: null, source_width: null, pixel_pitch_x_um: null, z_min_um: 5, z_max_um: 5 };
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'done', columns } })).statusCode, 200);
+	assert.deepEqual(world.raw[2].bindings.slice(4), [null, null, null, null, null, null, null, 5, 5]);
+});
+
+test('POST result: the data cache stays alone when it is off', async () => {
+	const { call, world } = claimed();
+	await call('POST', '/:id/result', { ...WHO.admin, body: DONE });
+	assert.equal(world.cacheCleared, 0);
 });

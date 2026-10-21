@@ -28,6 +28,11 @@
 //        filter, 403 otherwise; 403 FILE_LOCKED first for a file they may not see) and clears the PRIVATE render_error in the same
 //        transaction. From any state but pending: a scan stuck in 'rendering' (a worker that died) can be queued again too. Already
 //        pending: nothing is written.
+//   POST /d1-surface-scan/:id/result  -> 200 { data: { scan_id, render_status, version } }   ADMINISTRATORS ONLY (403 otherwise)
+//        The worker's report, { version, render_status: 'done'|'failed', render_error?, columns? } with columns = { cache_key, source_format,
+//        source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at? }.
+//        400 INVALID_PAYLOAD (extensions.field) for a wrong type or a cache_key that is not a plain name; 409 VERSION_CONFLICT when the row
+//        is not 'rendering' at that version. One transaction: the row is claimed, d1_private.surface_scan_renders is upserted.
 //
 // THE visibility rule (ADR-0023, canSeeFile), used by every route: the caller may see a scan's file when they are an administrator, or the file
 // has no owner (directus_files.owner_person_id and owner_team_id both null), or file_readers has a row for (file, the caller's login).
@@ -77,6 +82,14 @@ const LIST_SORT = ['-scanned_on', '-created_at'];
 const OPERATION_FIELDS = ['operation_id', 'pass_code'];
 const OPERATION_FALLBACK = 'Operation';
 
+// The private render row, in the order resultUpsert binds it: the error of a failed render, when it finished, the cache key and what the file said.
+const RESULT_COLUMNS = [
+	'render_error', 'rendered_at', 'cache_key', 'source_format', 'source_width', 'source_height', 'grid_width', 'grid_height',
+	'pixel_pitch_x_um', 'pixel_pitch_y_um', 'z_min_um', 'z_max_um',
+];
+const RENDER_ERROR_MAX = 2000;
+const INT_MAX = 2147483647;
+
 // The SQL this endpoint sends (one place, so the tests and the migration can be checked against it). The file's owner columns and the
 // caller's file_readers row come with every scan row: they are the whole input of the visibility rule (canSeeFile).
 //   scanDetail   one scan, bindings [caller user, scan id]
@@ -95,6 +108,12 @@ export const SQL = {
 	setActor: "SELECT set_config('d1.actor_identity', ?, true)",
 	scanDetail: `SELECT ${SCAN_COLUMNS}\n  ${SCAN_JOINS}\n WHERE s.scan_id = ?`,
 	accessLog: 'INSERT INTO d1_private.surface_scan_access_log (scan_id, directus_files_id, read_by_user, reason) VALUES (?, ?, ?, ?)',
+	// The worker's report: claim the row (only a row the worker still holds, 'rendering', at the version it read; the OCC trigger bumps version), then
+	// upsert the private row. Bindings: [render_status, scan, version] and [scan, ...RESULT_COLUMNS in order].
+	resultClaim: "UPDATE surface_scans SET render_status = ? WHERE scan_id = ? AND version = ? AND render_status = 'rendering' RETURNING scan_id, render_status, version",
+	resultUpsert: `INSERT INTO d1_private.surface_scan_renders (scan_id, ${RESULT_COLUMNS.join(', ')}, updated_at)
+VALUES (?, ${RESULT_COLUMNS.map(() => '?').join(', ')}, now())
+ON CONFLICT (scan_id) DO UPDATE SET ${RESULT_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}, updated_at = now()`,
 	renderErrorClear: 'UPDATE d1_private.surface_scan_renders SET render_error = NULL, updated_at = now() WHERE scan_id = ?',
 	scanDetails: `SELECT ${SCAN_COLUMNS}\n  ${SCAN_JOINS}\n WHERE s.scan_id = ANY(string_to_array(?, ',')::uuid[])`,
 };
@@ -122,6 +141,61 @@ export const isAdminOverride = (admin, file) => admin === true && !canSeeFile(fa
 export function isViewerAccountability(acc) {
 	const ids = [acc?.role, ...(Array.isArray(acc?.roles) ? acc.roles : [])].filter((id) => typeof id === 'string');
 	return ids.some((id) => id.toLowerCase() === LAB_VIEWER_ROLE_ID);
+}
+
+const invalid = (message, field) => new HttpError(400, 'INVALID_PAYLOAD', message, field ? { field } : {});
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// POST /:id/result body: { version, render_status: 'done'|'failed', render_error?, columns? }. Returns the values to store, in RESULT_COLUMNS order.
+//   done:   columns required, with a valid cache_key; every other column optional (a number of the right kind, or null); render_error absent or null.
+//   failed: render_error optional text (kept to RENDER_ERROR_MAX characters), no columns; every derived value is stored as NULL.
+// Anything else (an unknown key, a string for a number, a negative size) is a 400 INVALID_PAYLOAD naming the field, so a worker bug fails loudly.
+export function parseResult(body, now = new Date()) {
+	if (!isObject(body)) throw invalid('Send a JSON object.');
+	const unknown = Object.keys(body).filter((k) => !['version', 'render_status', 'render_error', 'columns'].includes(k));
+	if (unknown.length) throw invalid(`Unknown field: ${unknown[0]}.`, unknown[0]);
+	if (!Number.isInteger(body.version) || body.version < 1 || body.version > INT_MAX) throw invalid('version must be the whole number you read.', 'version');
+	if (body.render_status !== 'done' && body.render_status !== 'failed') throw invalid("render_status must be 'done' or 'failed'.", 'render_status');
+	let error = null;
+	if (!isBlank(body.render_error)) {
+		if (typeof body.render_error !== 'string') throw invalid('render_error must be text.', 'render_error');
+		error = body.render_error.trim().slice(0, RENDER_ERROR_MAX);
+	}
+	const out = Object.fromEntries(RESULT_COLUMNS.map((c) => [c, null]));
+	if (body.render_status === 'failed') {
+		if (body.columns !== undefined && body.columns !== null) throw invalid('A failed render has no columns.', 'columns');
+		out.render_error = error;
+		return { version: body.version, render_status: 'failed', values: RESULT_COLUMNS.map((c) => out[c]) };
+	}
+	if (error !== null) throw invalid('A finished render has no render_error.', 'render_error');
+	const cols = body.columns;
+	if (!isObject(cols)) throw invalid('columns is required for a finished render.', 'columns');
+	const allowed = RESULT_COLUMNS.filter((c) => c !== 'render_error');
+	const extra = Object.keys(cols).filter((k) => !allowed.includes(k));
+	if (extra.length) throw invalid(`Unknown column: ${extra[0]}.`, `columns.${extra[0]}`);
+	if (!validCacheKey(cols.cache_key)) throw invalid('cache_key must be a plain name (letters, digits, dot, dash, underscore).', 'columns.cache_key');
+	out.cache_key = cols.cache_key;
+	const ifSet = (name, check, what) => {
+		const v = cols[name];
+		if (v === undefined || v === null) return null;
+		if (!check(v)) throw invalid(`${name} must be ${what}.`, `columns.${name}`);
+		return v;
+	};
+	const wholeNumber = (v) => Number.isInteger(v) && v >= 1 && v <= INT_MAX;
+	const positive = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 1e12;
+	const height = (v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 1e12;
+	out.source_format = ifSet('source_format', (v) => typeof v === 'string' && v.trim() !== '' && v.length <= 100, 'a name of at most 100 characters');
+	for (const c of ['source_width', 'source_height', 'grid_width', 'grid_height']) out[c] = ifSet(c, wholeNumber, 'a whole number of at least 1');
+	for (const c of ['pixel_pitch_x_um', 'pixel_pitch_y_um']) out[c] = ifSet(c, positive, 'a positive number');
+	for (const c of ['z_min_um', 'z_max_um']) out[c] = ifSet(c, height, 'a number');
+	if (out.z_min_um !== null && out.z_max_um !== null && out.z_min_um > out.z_max_um) throw invalid('z_min_um is above z_max_um.', 'columns.z_min_um');
+	let at = now;
+	if (cols.rendered_at !== undefined && cols.rendered_at !== null) {
+		at = typeof cols.rendered_at === 'string' ? new Date(cols.rendered_at) : null;
+		if (!at || Number.isNaN(at.getTime())) throw invalid('rendered_at must be a time (ISO 8601).', 'columns.rendered_at');
+	}
+	out.rendered_at = at.toISOString();
+	return { version: body.version, render_status: 'done', values: RESULT_COLUMNS.map((c) => out[c]) };
 }
 
 const fileName = (row) => (isBlank(row.filename_download) ? (isBlank(row.title) ? '(file)' : row.title) : row.filename_download);
@@ -377,6 +451,26 @@ export function mount(router, context, store) {
 			await clearDataCache(req);
 		}
 		res.json({ data: { scan_id: id, render_status: 'pending' } });
+	}));
+
+	// POST /:id/result: the worker reports a render (done with its columns, or failed with an error), ADMINISTRATORS ONLY (the worker's machine
+	// user is one). The render columns are private now, so this is the only way they are written. One transaction names the actor, claims the row
+	// (render_status 'rendering' and the version the worker read, else 409 VERSION_CONFLICT: somebody queued it again, the worker rereads and
+	// retries) and upserts d1_private.surface_scan_renders. The Directus data cache is cleared after the commit (render_status is a public column).
+	router.post('/:id/result', route(async ({ req, res, acc }) => {
+		if (acc.admin !== true) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator can report a render result.');
+		const id = idParam(req);
+		const result = parseResult(req.body);
+		const row = await inTransaction(acc.user, async (trx) => {
+			const [claimed] = rowsOf(await trx.raw(SQL.resultClaim, [result.render_status, id, result.version]));
+			if (!claimed) {
+				throw new HttpError(409, 'VERSION_CONFLICT', 'The scan changed since you read it (or is no longer rendering). Read it again.');
+			}
+			await trx.raw(SQL.resultUpsert, [id, ...result.values]);
+			return claimed;
+		});
+		await clearDataCache(req);
+		res.json({ data: { scan_id: row.scan_id, render_status: row.render_status, version: row.version } });
 	}));
 
 	// Knex writes bypass the Directus services that clear the data cache, and ItemsService only does so when it owns the
