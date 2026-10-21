@@ -64,9 +64,12 @@ its `archive_path` (section 4) and renders only archive files.
 
 **Token check at start-up.** Before its loop the poller probes the result route with a harmless `failed`
 report for a scan that does not exist (all-zero uuid): an administrator token gets `409`, a token that is not
-an administrator's gets `403`. On `403` it logs CRITICAL and exits non-zero, so the container stops (and
-restarts, if its policy says so) instead of failing every render silently. `409`/`400` carry on; Directus
-being unreachable, a `5xx` or a `404` (endpoint not deployed yet) only log a warning.
+an administrator's gets `403`. On `403` (or `401`, a token Directus does not know or a blank one) it logs
+CRITICAL and exits non-zero, so the container stops (and restarts, if its policy says so) instead of failing
+every render silently. `409`/`400` carry on; Directus being unreachable, a `5xx` or a `404` (endpoint not
+deployed yet) only log a warning and the probe is **asked again at the end of every poll pass until it gets
+a definite answer** (on a cold start of the whole stack the worker usually starts before Directus is up, and
+a wrong token must still be caught).
 
 ## 2. Start it
 
@@ -120,8 +123,8 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | `The render did not finish within the time limit` | Slow share or huge file. Raise `SURFACE_SCAN_JOB_TIMEOUT_SECONDS`. |
 | Rows stay `pending` | The container is not running (it is in the `archive` profile), or the worker's token cannot read `surface_scans`. `docker compose logs surface-scan-worker`. |
 | Log (CRITICAL, then the poller and the container exit): `the surface-scan worker's Directus token is not an administrator's (the result route answered 403)` | The start-up probe found that `SURFACE_SCAN_DIRECTUS_TOKEN` (or `WORKER_DIRECTUS_TOKEN`, when that is blank) belongs to a user that is not an administrator, so no outcome could ever be recorded. Put the static token of an **administrator** machine user there and `docker compose up -d surface-scan-worker`. A `401` in the same message means Directus does not know the token at all. |
-| Log: `token probe: Directus could not be reached` or `unexpected answer 404/5xx` | Directus was still starting, or the endpoint extension without `/result` is deployed. Only a warning; the worker carries on. If it stays, see the `404` row below. |
-| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` until the poller fails them | The worker's token is not an administrator's (the start-up probe should have stopped the poller; a role changed afterwards). The result route is administrators only; make the machine user an administrator (the claim works for lesser roles, the outcome does not). |
+| Log: `token probe: Directus could not be reached` or `unexpected answer 404/5xx` | Directus was still starting, or the endpoint extension without `/result` is deployed. Only a warning; the worker carries on and asks again at the end of each poll pass until it gets a definite answer. If it stays, see the `404` row below. |
+| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` (the poller's own failure report goes to the same administrators-only route and is refused too) | The worker's token is not an administrator's (the start-up probe stops the poller as soon as Directus answers; a role changed afterwards would get here). The result route is administrators only; make the machine user an administrator. A non-administrator token cannot even claim a row any more (a member cannot read `render_status` or `directus_files_id`, migration 205), so a token that was never an administrator's shows up as the CRITICAL probe line first. |
 | Same log with `404` on `/d1-surface-scan/<id>/result` | Directus is running the old endpoint extension (no `/result` route). Deploy the release as a whole: stop Directus and the worker, migrate, restart Directus and flush Redis. |
 | Same log with `400` | The endpoint refused the body (a missing or malformed `directus_files_id`, a bad `cache_key` or a wrongly typed column). A worker bug: the log line has Directus's message. |
 | Log: `skip result scan=... it now points at file=...` | A job finished a render of a file the scan no longer points at (it was repointed, perhaps claimed again): the report was dropped on purpose and the new file is rendered by its own job. Nothing to do. |
