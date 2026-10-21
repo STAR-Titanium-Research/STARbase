@@ -1626,6 +1626,33 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
   a layout saved by the old page (`d1-fast-dashboard-v1`) still restores its tiles and run; unit strings print correctly
   ("C" shown as "°C"). Since: PR #377 (stream D).
 
+### Conform runs (migrations 206 to 208, ADR-0024)
+
+- [ ] **C1 — Conform log upload and energy.** On a real Directus (migrations 206 to 208 applied, Directus restarted), create a
+  Conform run (method **CF**, the Conform machine, a real input sample, a date, run number 12, die 8 mm) and upload the real
+  log `TiSwarf.csv` (Operation page or Conform plotter). Expect: the operation code becomes `DD-MM-YY-CF-012-8dia`; the run
+  shows status Done with the whole log as its window; the whole-log energy (motor, IPS, cooling, total kWh) matches the
+  spreadsheet method (the "Power & Cost" tab of `MT3 - Machine Data.xlsx`) within 0.01 kWh per component; the normalised CSV is
+  in the **Conform Logs** folder of Directus Files; a malformed CSV (no `Timestamp` column) is refused with the reason and leaves
+  no file or row behind. Since: Conform runs PR.
+- [ ] **C2 — Two runs share one log.** Create a second Conform run and pick **Use a log already uploaded** (the log of C1). Expect
+  it to link with an empty window (status No window). In the plotter set non-overlapping windows for the two runs: both bands
+  are drawn and labelled, each run's summary and steps cover its own window only. Setting a window that overlaps the other run
+  is refused with `run window overlaps <the other run's code>`; a window touching the other run's end is accepted; a window
+  outside the log is refused with `run window lies outside the log`. As a member who may read only one of the two runs, open
+  the other run's log: the plot shows (the whole file is visible, as documented in ADR-0011) but the other run's record does
+  not. Since: Conform runs PR.
+- [ ] **C3 — The Conform form.** In Data Studio, Operations: choose method CF. The Conform group appears (run number,
+  feedstock, form, feed mass, die, tooling, wheel speed, IPS setpoint, extrusion length, mass, yield, flash) between Sample
+  preparation and Notes & files, and no other category's group shows; with another method the Conform group and its
+  **Conform run** panel under Related records are hidden. The Machine picker offers the Conform machine for CF. Saving with a
+  CF input and output sample writes the lineage **extruded from**. The code follows the run number and die as they are typed;
+  two CF runs on the Conform machine with the same run number are refused. Since: Conform runs PR.
+- [ ] **C4 — The PDF appendix prints.** Print the operation report (PDF) of the C1 run: the Conform appendix follows the
+  summary, with four panels (wheel speed, motor torque, temperatures, IPS output) drawn over the run window only, the summary
+  table (extruding time, energy total) and the steps table; the run window's clock times are UK local time. Check it on a
+  run that shares its log with another (only its own window is plotted). Since: Conform runs PR.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

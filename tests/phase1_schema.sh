@@ -3853,10 +3853,11 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
--- migrations 143 and 175 keep a ledger in d1_private; drop them (rolled back) so 141's down can drop the empty schema
+-- migrations 143, 175 and 208 keep a ledger or backup in d1_private; drop them (rolled back) so 141's down can drop the empty schema
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DROP TABLE IF EXISTS d1_private.form_values_175_backup;
+DROP TABLE IF EXISTS d1_private.conform_form_layout_208_backup;
 DROP TABLE IF EXISTS d1_private.process_templates;
 DROP TABLE IF EXISTS d1_private.process_drafts;
 DROP TABLE IF EXISTS d1_private.inbox_prefs;
@@ -8051,6 +8052,26 @@ cc_check "^cc_up2_code_fn:true$" "206 up again: operation_code_for has its confo
 else
 bad "the Conform category migration is missing ($CC_MIG)"
 fi
+# directus_fields is an empty stub on CI, so seed the capabilities dropdown as the live database has it (migration 056 gave the machine
+# 'deformation'; the choices come from configure_directus.sql) and prove that up adds the choice once and down takes it out again
+cc2_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+$cc_down
+DELETE FROM directus_fields WHERE collection = 'equipment' AND field = 'capabilities';
+INSERT INTO directus_fields (collection, field, interface, options) VALUES ('equipment', 'capabilities', 'select-multiple-dropdown',
+    '{"choices":[{"text":"Machining","value":"machining"},{"text":"Deformation","value":"deformation"}]}');
+$cc_up
+SELECT 'cc2_up_choices:' || (SELECT string_agg(c ->> 'value', ',' ORDER BY ord) FROM directus_fields f, jsonb_array_elements(f.options::jsonb -> 'choices') WITH ORDINALITY AS t (c, ord)
+    WHERE f.collection = 'equipment' AND f.field = 'capabilities');
+$cc_down
+SELECT 'cc2_dn_choices:' || (SELECT string_agg(c ->> 'value', ',' ORDER BY ord) FROM directus_fields f, jsonb_array_elements(f.options::jsonb -> 'choices') WITH ORDINALITY AS t (c, ord)
+    WHERE f.collection = 'equipment' AND f.field = 'capabilities');
+ROLLBACK;
+SQL
+)
+cc2_check() { grep -qxF -- "$1" <<<"$cc2_out" && ok "$2" || bad "$2 (psql output: $cc2_out)"; }
+cc2_check "cc2_up_choices:machining,deformation,conform" "206: the capabilities dropdown gains the conform choice, after the existing ones"
+cc2_check "cc2_dn_choices:machining,deformation" "206 down: the conform choice is taken out of the dropdown again"
 
 echo "== Migration 207: conform_logs, conform_run_data, the run-window overlap guard, access (up, behaviour, down, up) =="
 CL_MIG=db/migrations/20261022000207_conform_logs_and_run_data.sql
@@ -8208,6 +8229,66 @@ cl_check "^cl_up2_rls:4$" "207 up again: the four row security policies are back
 cl_check "^cl_redown_tables:gone,gone$" "207 down runs again after up"
 else
 bad "the Conform logs and run data migration is missing ($CL_MIG)"
+fi
+
+echo "== Migration 208: the Conform group on the Operation form (block identical in configure_form_layout.sql, up, down, up) =="
+CF_MIG=db/migrations/20261022000208_conform_form_layout.sql
+if [[ -f "$CF_MIG" ]]; then
+cf_mig=$(sed -n '/^-- BEGIN CONFORM FORM LAYOUT/,/^-- END CONFORM FORM LAYOUT/p' "$CF_MIG")
+cf_cfg=$(sed -n '/^-- BEGIN CONFORM FORM LAYOUT/,/^-- END CONFORM FORM LAYOUT/p' scripts/configure_form_layout.sql)
+[[ -n "$cf_mig" && "$cf_mig" == "$cf_cfg" ]] && ok "scripts/configure_form_layout.sql repeats the Conform layout block of migration 208" \
+    || bad "scripts/configure_form_layout.sql and the Conform layout block of migration 208 differ (or a marker is missing)"
+cf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CF_MIG")
+cf_down=$(awk '/-- migrate:down/{f=1;next}f' "$CF_MIG")
+cf_fields="('conform_run_number','conform_feedstock','conform_feedstock_form','conform_feed_mass_g','conform_die_diameter_mm','conform_tooling_id','conform_wheel_speed_rpm','conform_ips_setpoint_c','conform_extrusion_length_mm','conform_extrusion_mass_g','conform_yield_pct','conform_flash_mass_g')"
+cf_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+SELECT 'cf_group:' || sort || '/' || options::text || '/' || (conditions::jsonb -> 0 ->> 'name') || '/' || (conditions::jsonb -> 0 -> 'rule' -> '_and' -> 0 -> 'process_category' ->> '_neq') || '/' || (conditions::jsonb -> 0 ->> 'hidden') || '/' || hidden || '/' || special || '/' || interface
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_conform';
+SELECT 'cf_between:' || (SELECT sort FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_sample_prep') || '<' || (SELECT sort FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_conform')
+  || '<' || (SELECT sort FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_notes_files');
+SELECT 'cf_order:' || string_agg(field || '=' || sort, ',' ORDER BY sort) FROM directus_fields WHERE collection = 'manufacturing_operations' AND "group" = 'grp_conform';
+SELECT 'cf_members:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND "group" = 'grp_conform' AND field IN $cf_fields AND width = 'half' AND hidden;
+SELECT 'cf_alias:' || "group" || '/' || hidden || '/' || (conditions::jsonb -> 0 ->> 'name') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_run';
+SELECT 'cf_alias_sort_free:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND "group" = 'grp_related'
+  AND sort = (SELECT sort FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_run') AND field <> 'conform_run';
+SELECT 'cf_tied_sorts:' || count(*) FROM (SELECT 1 FROM directus_fields WHERE collection = 'manufacturing_operations' AND "group" IN ('grp_conform', 'grp_related')
+  GROUP BY "group", sort HAVING count(*) > 1) t;
+SELECT 'cf_backup:' || (SELECT count(*) FROM d1_private.conform_form_layout_208_backup) || '/' || (obj_description('d1_private.conform_form_layout_208_backup'::regclass, 'pg_class') IS NOT NULL);
+$cf_down
+SELECT 'cf_dn_group_row:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_conform';
+SELECT 'cf_dn_fields:' || count(*) || '/' || count(*) FILTER (WHERE "group" IS NULL AND sort BETWEEN 600 AND 611 AND hidden) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field IN $cf_fields;
+SELECT 'cf_dn_alias:' || coalesce("group", 'none') || '/' || sort || '/' || hidden || '/' || (conditions IS NULL) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_run';
+SELECT 'cf_dn_backup:' || coalesce(to_regclass('d1_private.conform_form_layout_208_backup')::text, 'gone');
+$cf_up
+SELECT 'cf_up2_members:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND "group" = 'grp_conform';
+SELECT 'cf_up2_alias:' || "group" FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_run';
+$cf_up
+SELECT 'cf_up3_group_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_conform';
+$cf_down
+SELECT 'cf_redown_backup:' || coalesce(to_regclass('d1_private.conform_form_layout_208_backup')::text, 'gone');
+ROLLBACK;
+SQL
+)
+cf_check() { grep -qxF -- "$1" <<<"$cf_out" && ok "$2" || bad "$2 (psql output: $cf_out)"; }
+cf_check 'cf_group:105/{"start" : "open"}/Hide unless conform/conform/true/false/alias,no-data,group/group-detail' "208: grp_conform is a group-detail at sort 105, open, with the condition Hide unless conform (_neq conform hides it)"
+cf_check "cf_between:100<105<110" "208: it sits between Sample preparation (100) and Notes & files (110)"
+cf_check "cf_order:conform_run_number=10,conform_feedstock=20,conform_feedstock_form=30,conform_feed_mass_g=40,conform_die_diameter_mm=50,conform_tooling_id=60,conform_wheel_speed_rpm=70,conform_ips_setpoint_c=80,conform_extrusion_length_mm=90,conform_extrusion_mass_g=100,conform_yield_pct=110,conform_flash_mass_g=120" "208: the twelve fields are in the planned order inside it"
+cf_check "cf_members:12" "208: all twelve are half-width members of the group (and stay hidden at the base, shown by their own condition)"
+cf_check "cf_alias:grp_related/true/show when conform" "208: conform_run joins Related records, hidden unless it is a Conform run"
+cf_check "cf_alias_sort_free:0" "208: conform_run has a sort of its own in Related records"
+cf_check "cf_tied_sorts:0" "208: no tied sorts inside grp_conform or grp_related"
+cf_check "cf_backup:13/true" "208: the pre-image of the thirteen touched rows is kept in a commented private table"
+cf_check "cf_dn_group_row:0" "208 down: the group row is deleted"
+cf_check "cf_dn_fields:12/12" "208 down: the twelve fields are back outside any group at the sorts of migration 206"
+cf_check "cf_dn_alias:none/52/false/true" "208 down: conform_run is back outside any group, shown, with no condition (as migration 207 made it)"
+cf_check "cf_dn_backup:gone" "208 down: the backup table is dropped"
+cf_check "cf_up2_members:12" "208 up again: the twelve fields are back in the group"
+cf_check "cf_up2_alias:grp_related" "208 up again: conform_run is back in Related records"
+cf_check "cf_up3_group_rows:1" "208 up twice: still one grp_conform row"
+cf_check "cf_redown_backup:gone" "208 down runs again after up"
+else
+bad "the Conform form layout migration is missing ($CF_MIG)"
 fi
 
 echo "== Cleanup test rows =="
