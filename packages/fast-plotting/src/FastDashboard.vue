@@ -14,8 +14,9 @@ import { useFastHost } from './host';
 import type { SeriesMeta, Trace } from './fastCache';
 import { type ListRun, sampleKeyOf } from './fastSamples';
 import { type Tile, seedTiles, validTiles } from './fastTiles';
+import { windowZoom } from './runBands';
 import { fastProfile } from './profiles/fastProfile';
-import type { RunProfile, RunTab } from './profile';
+import type { RunProfile, RunTab, RunWindowBand } from './profile';
 
 // The profile carries everything specific to one kind of run (FAST by default): the list query, the run loader,
 // the figures, the wording and the layout key. See profile.ts.
@@ -127,12 +128,13 @@ let opGen = 0;
 async function selectOp(row: ListRun) {
 	const gen = ++opGen;
 	selectedId.value = row.id;
-	loadingDetail.value = true; detail.value = null; trace.value = null; runData.value = null; runError.value = null; traceLoading.value = false;
+	loadingDetail.value = true; detail.value = null; trace.value = null; runData.value = null; runError.value = null; traceLoading.value = false; bands.value = []; reloading.value = false;
 	try {
 		const res = await api.get(`/items/manufacturing_operations/${row.id}`, { params: { fields: profile.detailFields } });
 		if (gen !== opGen) return;
 		detail.value = res.data.data;
 		await loadRunData(row.id, gen);
+		if (gen === opGen) openOnWindow();
 	} catch (e: any) {
 		if (gen === opGen) runError.value = `Could not load this operation: ${errMsg(e, 'request failed')}`;
 	} finally { if (gen === opGen) loadingDetail.value = false; }
@@ -142,7 +144,7 @@ async function loadRunData(operationId: string, gen: number) {
 	const loaded = await profile.loadRun(api, operationId);
 	if (gen !== opGen) return;
 	runData.value = loaded;
-	await loadTraceData(gen);
+	await Promise.all([loadTraceData(gen), loadBands(gen)]);
 }
 
 async function loadTraceData(gen: number) {
@@ -160,6 +162,50 @@ async function loadTraceData(gen: number) {
 	} catch (e: any) { console.error('FAST trace load failed', e); if (gen === opGen) runError.value = 'Could not load the trace for this run.'; }
 	finally { if (gen === opGen) traceLoading.value = false; }
 }
+
+// ---------------------------------------------------------------- run windows (profiles that have them; FAST has none)
+const bands = ref<RunWindowBand[]>([]);
+const startMs = computed(() => profile.startMs?.(runData.value) ?? null);
+async function loadBands(gen: number) {
+	if (!profile.windows) return;
+	try {
+		const loaded = await profile.windows(api, runData.value);
+		if (gen === opGen) bands.value = loaded;
+	} catch (e: any) { console.warn('Run windows could not be loaded', e); }   // the plots work without the bands
+}
+// The plots open on the run's own window, with a little context either side.
+function openOnWindow() {
+	const t = trace.value, cur = bands.value.find((b) => b.current);
+	if (!t || t.n < 2 || !cur) return;
+	const z = windowZoom(cur, t.time[0], t.time[t.n - 1]);
+	if (z && (z.start > t.time[0] || z.end < t.time[t.n - 1])) onZoom(z);   // a window that is the whole log needs no zoom
+}
+
+// After an upload, a linked log or a new window: read the run again, in place (the column and its messages stay).
+const reloading = ref(false);
+async function reloadRun({ resetView }: { resetView: boolean }) {
+	const id = selectedId.value;
+	if (!id) return;
+	const gen = ++opGen;
+	reloading.value = true;
+	try {
+		const res = await api.get(`/items/manufacturing_operations/${id}`, { params: { fields: profile.detailFields } });
+		if (gen !== opGen) return;
+		detail.value = res.data.data;
+		const loaded = await profile.loadRun(api, id);
+		if (gen !== opGen) return;
+		runData.value = loaded;
+		if (resetView) onZoom(null);
+		await Promise.all([loadTraceData(gen), loadBands(gen)]);
+		if (gen !== opGen) return;
+		const q = profile.runQuality?.(loaded);
+		if (q) rows.value = rows.value.map((r) => (r.id === id ? { ...r, quality: q } : r));
+		if (resetView) openOnWindow();
+	} catch (e: any) {
+		if (gen === opGen) runError.value = `Could not reload this run: ${errMsg(e, 'request failed')}`;
+	} finally { if (gen === opGen) reloading.value = false; }
+}
+
 
 const catalog = computed<SeriesMeta[]>(() => profile.seriesOf(runData.value));
 const selectedRow = computed(() => rows.value.find((r) => r.id === selectedId.value) ?? null);
@@ -200,9 +246,9 @@ const openSample = () => { const id = detail.value?.sample_id?.sample_id; if (id
 				<FastLists v-model:sample="sample" :profile="profile" :rows="rows" :selected-id="selectedId" :folded="folded" @select="selectOp" />
 				<FastRunColumn v-model:tab="tab" :profile="profile" :code="detail?.pass_code ?? selectedRow?.pass_code ?? null" :quality="selectedRow?.quality ?? null"
 					:detail="detail" :run-data="runData" :trace="trace" :loading="loadingDetail || traceLoading" :message="runError"
-					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" :zoom-tool="zoomTool"
+					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" :zoom-tool="zoomTool" :busy="reloading" @run-changed="reloadRun"
 					@open-operation="openOperation" @open-recipe="openRecipe" @open-sample="openSample" @zoom="onZoom" @hover="hoverT = $event" />
-				<FastPlots v-model:tiles="tiles" v-model:zoom-tool="zoomTool" :trace="trace" :catalog="catalog" :message="plotMessage" :stacked="stacked"
+				<FastPlots v-model:tiles="tiles" v-model:zoom-tool="zoomTool" :trace="trace" :catalog="catalog" :message="plotMessage" :stacked="stacked" :bands="bands" :start-ms="startMs"
 					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" @zoom="onZoom" @hover="hoverT = $event" />
 			</div>
 		</div>

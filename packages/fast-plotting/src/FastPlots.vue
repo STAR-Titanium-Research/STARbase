@@ -10,11 +10,13 @@ import FastSeriesMenu from './FastSeriesMenu.vue';
 import { hasNoTileBelow, placeTiles, type TileSpan } from './chartMath';
 import type { SeriesMeta, Trace } from './fastCache';
 import { MAX_TILES, tilePeak, tileTitle, type Tile } from './fastTiles';
+import type { RunWindowBand } from './profile';
 
 const props = defineProps<{
 	trace: Trace | null; catalog: SeriesMeta[]; message: string;
 	zoomStart: number | null; zoomEnd: number | null; cursor: number | null;
 	stacked: boolean;
+	bands?: RunWindowBand[]; startMs?: number | null;   // Conform only: the run windows on the log, and the clock origin of the hover
 }>();
 const emit = defineEmits<{ (e: 'zoom', v: { start: number; end: number } | null): void; (e: 'hover', t: number | null): void }>();
 const tiles = defineModel<Tile[]>('tiles', { required: true });
@@ -116,7 +118,7 @@ onBeforeUnmount(() => { window.removeEventListener('click', away); window.remove
 				</header>
 				<div class="tbody">
 					<FastChart v-if="d.series.length" :time="trace.time" :series="d.series" :normalise="d.tile.normalise" :view-start="zoomStart" :view-end="zoomEnd"
-						:zoom-tool="zoomTool" :cursor="cursor" :x-labels="bottom(i)" @zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
+						:zoom-tool="zoomTool" :cursor="cursor" :x-labels="bottom(i)" :bands="bands" :start-ms="startMs" @zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
 					<button v-else class="empty-tile" @click.stop="openMenu($event, d.tile)">＋ Pick series</button>
 				</div>
 			</article>

@@ -6,6 +6,8 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import FastStatsTab from './FastStatsTab.vue';
+import RunSummaryTab from './RunSummaryTab.vue';
+import RunWindowActions from './RunWindowActions.vue';
 import type { Trace } from './fastCache';
 import { buildHeader, buildRecipe, type Quality } from './fastMeta';
 import type { RunProfile, RunTab } from './profile';
@@ -20,11 +22,12 @@ const ALL_TABS: Array<{ id: RunTab; name: string; icon: string }> = [
 const props = defineProps<{
 	profile: RunProfile; tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
 	detail: any | null; runData: any | null; trace: Trace | null; loading: boolean; message: string | null;
-	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean;
+	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean; busy?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'update:tab', v: RunTab): void; (e: 'open-operation'): void; (e: 'open-recipe'): void; (e: 'open-sample'): void;
 	(e: 'zoom', v: { start: number; end: number } | null): void; (e: 'hover', t: number | null): void;
+	(e: 'run-changed', v: { resetView: boolean }): void;
 }>();
 
 const header = computed(() => buildHeader(props.detail));
@@ -46,6 +49,10 @@ const recipeRows = computed(() => {
 	return all.filter(([, v]) => v !== null && v !== '').map(([label, value]) => ({ label, value: String(value), mono: label === 'Source' }));
 });
 const noTrace = computed(() => props.profile.noTraceMessage(props.runData));
+// a run with a log but no window has no figures yet: say how to get them
+const summaryEmpty = computed(() => (props.profile.traceReady(props.runData)
+	? 'No run window is set. Zoom the plots to the run, then use "Use this view as the run window".'
+	: noTrace.value));
 
 // Left and Right (and Home, End) move between the tabs, as a tab list does; the selected tab is the one in the tab order.
 const tablist = ref<HTMLElement | null>(null);
@@ -99,6 +106,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 						</div>
 					</div>
 				</template>
+				<RunWindowActions v-if="profile.setWindowFromView || profile.upload || profile.linkExisting" :profile="profile" :detail="detail" :run-data="runData" :trace="trace"
+					:zoom-start="zoomStart" :zoom-end="zoomEnd" :busy="!!busy" @changed="emit('run-changed', $event)" />
 			</div>
 			<div ref="tablist" class="tabs" role="tablist" aria-label="Run details" @keydown="onTabKey">
 				<button v-for="(t, i) in TABS" :id="`fd-tab-${t.id}`" :key="t.id" class="fd-tab" role="tab" :aria-selected="tab === t.id" :aria-controls="tab === t.id ? `fd-panel-${t.id}` : undefined"
@@ -108,7 +117,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 			</div>
 			<div :id="`fd-panel-${tab}`" class="tabbody" role="tabpanel" :aria-labelledby="`fd-tab-${tab}`">
 				<div v-if="message" class="fd-empty err" role="status">{{ message }}</div>
-				<template v-if="tab === 'stats'">
+				<template v-if="tab === 'stats' && profile.summaryTiles">
+					<RunSummaryTab :tiles="profile.summaryTiles(detail, runData)" :note="profile.summaryNote?.(runData) ?? null" :window="profile.windowLabel?.(runData) ?? null" :empty="summaryEmpty" />
+				</template>
+				<template v-else-if="tab === 'stats'">
 					<FastStatsTab v-if="trace" :trace="trace" :detail="detail" :zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="cursor" :zoom-tool="zoomTool"
 						@zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
 					<div v-else-if="profile.traceReady(runData) && loading" class="fd-spin"><v-progress-circular indeterminate small /> loading trace…</div>
