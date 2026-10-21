@@ -3538,7 +3538,7 @@ rl_check "files_create_columns_left_out:owner_person_id,owner_team_id" "directus
 rl_check "files_update_columns_left_out:owner_person_id,owner_team_id" "directus_files.update leaves out exactly the two provenance owner columns (migration 196)"
 rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
-rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
+rl_check "child_one_hop:12" "every child of a record reads through one bare hop to its parent's readers (12 collections, conform_run_data being the newest)"
 rl_check "update_delete_no_some:0" "no update or delete filter contains a _some (a legal _some would apply the readers table's own rule for the action)"
 rl_check "readers_tables_read:6" "Lab Member reads the six readers tables for their own rows only (user_id = the caller)"
 rl_check "open_set_read:1" "Lab Member reads operation_open_to_all without a filter"
@@ -3909,9 +3909,9 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates), 20261014000177 (batches) and 20261015000192 (surface_scans), custom-rows collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates), 20261014000177 (batches), 20261015000192 (surface_scans) and 20261022000207 (conform_logs, conform_run_data), custom-rows and new collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'surface_scans');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'surface_scans', 'conform_logs', 'conform_run_data');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3920,8 +3920,8 @@ $tr_down
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates, batches and surface_scans go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans');
+-- the replay's own rows for label_templates, batches, surface_scans and the Conform tables go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans', 'conform_logs', 'conform_run_data');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -5895,8 +5895,8 @@ ll_check "grant_public_usage:false" "168: PUBLIC still has no USAGE on d1_privat
 ll_check "ungranted_d1_private_tables:0" "168: no d1_private table is readable by the role (hidden_records and the backups stay ungranted)"
 ll_check "unprotected_tables:none" "168: every table granted to d1_llm_readonly has row security on or is a named reference table"
 ll_check "reference_tables:21" "168: the reference list is current (21 granted tables without row security, all named)"
-ll_check "rls_tables:21" "168: 21 granted tables have row security on, none is FORCEd"
-ll_check "rls_tables_with_both_policies:21" "168: each has the permissive FOR ALL TO PUBLIC policy and the restrictive FOR SELECT TO d1_llm_readonly one"
+ll_check "rls_tables:23" "168: 23 granted tables have row security on, none is FORCEd (the 21 of migration 168 and the two Conform tables of migration 207)"
+ll_check "rls_tables_with_both_policies:23" "168: each has the permissive FOR ALL TO PUBLIC policy and the restrictive FOR SELECT TO d1_llm_readonly one"
 ll_check "views_not_invoker:none" "168: every view granted to d1_llm_readonly is security_invoker (a CREATE OR REPLACE VIEW without WITH (security_invoker = true) fails here)"
 ll_check "granted_views:9" "168: nine views are granted to the role"
 ll_check "embedding_sources_not_in_policy:none" "168: every source v_embeddings_source_notes embeds is named in the semantic_embeddings policy"
@@ -5987,14 +5987,14 @@ SQL
 )
 lc_check() { grep -qxF -- "$1" <<<"$ll_cycle" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_cycle" | head -3 | tr '
 ' ' ' | cut -c1-300))"; }
-lc_check "dn_rls:0" "168 down: row security is off on every table"
-lc_check "dn_policies:0" "168 down: both policies are gone everywhere"
+lc_check "dn_rls:2" "168 down: row security is off on every table 168 enabled it on (the two Conform tables of migration 207 keep theirs)"
+lc_check "dn_policies:4" "168 down: both policies are gone everywhere 168 created them (the two Conform tables keep their four)"
 lc_check "dn_invoker_views:0" "168 down: the views are not security_invoker any more"
 lc_check "dn_usage:false" "168 down: the USAGE grant is revoked"
 lc_check "dn_execute:false" "168 down: the EXECUTE grant is revoked"
 lc_check "dn_grants_kept:true/true" "168 down: the table and view grants of migration 132 are untouched"
-lc_check "up2_rls:21" "168 up, twice: row security is on for the 21 record-bound tables"
-lc_check "up2_policies:42" "168 up, twice: 42 policies, no duplicates"
+lc_check "up2_rls:23" "168 up, twice: row security is on for the 21 record-bound tables and the two Conform tables"
+lc_check "up2_policies:46" "168 up, twice: 42 policies of 168 and the four of the Conform tables, no duplicates"
 lc_check "up2_invoker_views:9" "168 up, twice: the nine views are security_invoker again"
 lc_check "up2_samples:2" "168 up, twice: the role sees the same rows as before"
 lc_check "up2_embeddings:4" "168 up, twice: and the same embeddings"
@@ -6011,8 +6011,8 @@ ROLLBACK;
 SQL
 )
 lw_check() { grep -qxF -- "$1" <<<"$ll_norole" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_norole" | head -3 | tr '\n' ' ' | cut -c1-300))"; }
-lw_check "norole_policies:0" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy"
-lw_check "norole_rls:0" "168 on a database without d1_llm_readonly: enables no row security"
+lw_check "norole_policies:4" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy (the four of the Conform tables stay)"
+lw_check "norole_rls:2" "168 on a database without d1_llm_readonly: enables no row security (the two Conform tables keep theirs)"
 
 echo "== Sample stored values: form values migration (175) =="
 # The test database has already run 175's up, so run its down first, seed rows that carry legacy values, run up,
@@ -6153,11 +6153,11 @@ SELECT 'dn_comment_restored:' || (obj_description('d1_private.readers_of_sample(
 $lv_down
 SELECT 'dn_twice_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
 $lv_up
--- 185's up section is a snapshot: it knows nothing of the read row migration 192 added for surface_scans, so the replay is one short.
+-- 185's up section is a snapshot: it knows nothing of the read rows later migrations added (migration 192 for surface_scans, migration 207 for conform_logs and conform_run_data), so the replay is three short.
 SELECT 'up2_exact:' || count(*) FROM _vgen g JOIN directus_permissions p
   ON p.policy = '$VW' AND p.collection = g.collection AND p.action = g.action
  AND p.permissions::jsonb = g.permissions AND p.validation::jsonb = g.validation AND p.fields = g.fields
- WHERE g.collection <> 'surface_scans';
+ WHERE g.collection NOT IN ('surface_scans', 'conform_logs', 'conform_run_data');
 SELECT 'up2_stored:' || count(*) FROM directus_permissions WHERE policy = '$VW';
 SELECT 'up2_objects:' || (to_regclass('d1_private.v_viewers') IS NOT NULL) || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('directus_users_readers_lock','directus_users_readers_ins','directus_users_readers_upd','directus_users_readers_del'));
 SELECT 'up2_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
@@ -6195,8 +6195,8 @@ lvx_check "dn_functions_with_viewers:0" "down: no readers function lists the vie
 lvx_check "dn_drift:0" "down: readers_drift() is empty"
 lvx_check "dn_comment_restored:true" "down: the function comments are the old ones"
 lvx_check "dn_twice_functions_with_viewers:0" "down twice does nothing the second time"
-lvx_check "up2_exact:$((lvx_n - 1))" "up again: every generated row is back, exact (but the surface_scans row of migration 192)"
-lvx_check "up2_stored:$((lvx_n - 1))" "up again: no more and no fewer rows (but the surface_scans row of migration 192)"
+lvx_check "up2_exact:$((lvx_n - 3))" "up again: every generated row is back, exact (but the surface_scans row of migration 192 and the two Conform rows of migration 207)"
+lvx_check "up2_stored:$((lvx_n - 3))" "up again: no more and no fewer rows (but the surface_scans row of migration 192 and the two Conform rows of migration 207)"
 lvx_check "up2_objects:true/4" "up again: the view and four triggers are back"
 lvx_check "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
 lvx_check "up2_drift:0" "up again: readers_drift() is empty"
@@ -7955,7 +7955,7 @@ SELECT 'cc_machine:' || (SELECT capabilities FROM equipment WHERE equipment_name
 SELECT 'cc_uncommented:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'manufacturing_operations'
     AND c.column_name LIKE 'conform\_%' AND col_description('manufacturing_operations'::regclass, c.ordinal_position) IS NULL);
 SELECT 'cc_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'manufacturing_operations' AND column_name LIKE 'conform\_%';
-SELECT 'cc_field_rows:' || count(*) || '/' || count(*) FILTER (WHERE hidden AND conditions::text LIKE '%show when conform%' AND conditions::text LIKE '%"conform"%') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%';
+SELECT 'cc_field_rows:' || count(*) || '/' || count(*) FILTER (WHERE hidden AND conditions::text LIKE '%show when conform%' AND conditions::text LIKE '%"conform"%') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%' AND field <> 'conform_run';
 SELECT 'cc_form_dropdown:' || coalesce((SELECT (options::jsonb -> 'choices')::text FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_feedstock_form'), 'none');
 INSERT INTO physical_samples (sample_code, form) VALUES ('CFT-IN', 'powder'), ('CFT-OUT', 'rod'), ('CFT-IN2', 'powder'), ('CFT-OUT2', 'rod');
 INSERT INTO manufacturing_operations (sample_id, output_sample_id, method_id, equipment_id, operation_date, conform_run_number, conform_die_diameter_mm)
@@ -7985,7 +7985,7 @@ EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cc_form_check:refused'; END \$
 -- down: the operation goes back to deformation and keeps its code, the edge becomes derived_from, method CF stays while it is used
 $cc_down
 SELECT 'cc_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'manufacturing_operations' AND column_name LIKE 'conform\_%';
-SELECT 'cc_dn_field_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%';
+SELECT 'cc_dn_field_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%' AND field <> 'conform_run';
 SELECT 'cc_dn_op:' || process_category || ',' || pass_code FROM manufacturing_operations WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
 SELECT 'cc_dn_genealogy:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-OUT');
 SELECT 'cc_dn_method:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'gone');
@@ -8050,6 +8050,164 @@ cc_check "^cc_up2_machine:deformation,conform$" "206 up again: the machine has c
 cc_check "^cc_up2_code_fn:true$" "206 up again: operation_code_for has its conform branch"
 else
 bad "the Conform category migration is missing ($CC_MIG)"
+fi
+
+echo "== Migration 207: conform_logs, conform_run_data, the run-window overlap guard, access (up, behaviour, down, up) =="
+CL_MIG=db/migrations/20261022000207_conform_logs_and_run_data.sql
+if [[ -f "$CL_MIG" ]]; then
+cl_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CL_MIG")
+cl_down=$(awk '/-- migrate:down/{f=1;next}f' "$CL_MIG")
+CLK=c0f00000-0000-4000-8000-0000000000
+cl_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+SELECT 'cl_tables:' || (to_regclass('conform_logs') IS NOT NULL) || ',' || (to_regclass('conform_run_data') IS NOT NULL);
+SELECT 'cl_uncommented:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name IN ('conform_logs', 'conform_run_data')
+    AND col_description(format('%I.%I', c.table_schema, c.table_name)::regclass, c.ordinal_position) IS NULL);
+SELECT 'cl_table_comments:' || (SELECT count(*) FROM pg_description d JOIN pg_class k ON k.oid = d.objoid WHERE d.objsubid = 0 AND k.relname IN ('conform_logs', 'conform_run_data'));
+SELECT 'cl_triggers:' || string_agg(c.relname || '.' || t.tgname, ',' ORDER BY c.relname, t.tgname) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+    WHERE c.relname IN ('conform_logs', 'conform_run_data') AND NOT t.tgisinternal;
+SELECT 'cl_trigger_comments:' || (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname IN ('conform_logs', 'conform_run_data')
+    AND NOT t.tgisinternal AND obj_description(t.oid, 'pg_trigger') IS NULL);
+SELECT 'cl_llm:' || has_table_privilege('d1_llm_readonly', 'conform_logs', 'SELECT') || ',' || has_table_privilege('d1_llm_readonly', 'conform_run_data', 'SELECT');
+SELECT 'cl_rls:' || (SELECT count(*) FROM pg_class WHERE relname IN ('conform_logs', 'conform_run_data') AND relrowsecurity AND NOT relforcerowsecurity)
+    || ',' || (SELECT count(*) FROM pg_policies WHERE tablename IN ('conform_logs', 'conform_run_data') AND policyname IN ('a1a_open', 'a1a_llm_hide'));
+SELECT 'cl_collections:' || string_agg(collection || '/' || hidden || '/' || "group", ',' ORDER BY collection) FROM directus_collections WHERE collection IN ('conform_logs', 'conform_run_data');
+SELECT 'cl_field_rows:' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_logs')
+    || '/' || (SELECT count(*) FROM directus_fields WHERE collection = 'conform_logs')
+    || ',' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_run_data')
+    || '/' || (SELECT count(*) FROM directus_fields WHERE collection = 'conform_run_data')
+    || ',' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name IN ('conform_logs', 'conform_run_data')
+         AND NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = c.table_name AND f.field = c.column_name));
+SELECT 'cl_aliases:' || string_agg(collection || '.' || field || '=' || special, ',' ORDER BY collection) FROM directus_fields WHERE field IN ('conform_run', 'runs') AND collection IN ('manufacturing_operations', 'conform_logs');
+SELECT 'cl_relations:' || string_agg(many_collection || '.' || many_field || '>' || one_collection || coalesce('.' || one_field, ''), ',' ORDER BY many_collection, many_field)
+    FROM directus_relations WHERE many_collection IN ('conform_logs', 'conform_run_data');
+SELECT 'cl_perm_lm:' || string_agg(collection || '.' || action, ',' ORDER BY collection, action) FROM directus_permissions
+    WHERE policy = '20000002-0000-0000-0000-000000000002' AND collection IN ('conform_logs', 'conform_run_data');
+SELECT 'cl_perm_viewer:' || string_agg(collection || '.' || action, ',' ORDER BY collection, action) FROM directus_permissions
+    WHERE policy = '20000002-0000-0000-0000-000000000003' AND collection IN ('conform_logs', 'conform_run_data');
+-- fixture: a log 13:00-14:00 on the Conform machine, two Conform operations
+INSERT INTO directus_files (id) VALUES ('${CLK}f1');
+INSERT INTO physical_samples (sample_code, form) VALUES ('CLT-IN-1', 'powder'), ('CLT-IN-2', 'powder');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id, equipment_id, operation_date, conform_run_number)
+SELECT v.op::uuid, (SELECT sample_id FROM physical_samples WHERE sample_code = v.sc), (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'),
+       (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), '2025-03-17 13:00+00', v.run
+FROM (VALUES ('${CLK}a1', 'CLT-IN-1', 91), ('${CLK}a2', 'CLT-IN-2', 92)) AS v (op, sc, run);
+INSERT INTO conform_logs (log_id, directus_files_id, equipment_id, source_filename, log_start, log_end, n_rows, duration_s, series, totals, constants)
+VALUES ('${CLK}b1', '${CLK}f1', (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), 'TiSwarf.csv',
+        '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 3601, 3600, '[]', '{}', '{"version":1}');
+SELECT 'cl_log_defaults:' || version || ',' || (created_by IS NULL) || ',' || (created_at IS NOT NULL) FROM conform_logs WHERE log_id = '${CLK}b1';
+INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+VALUES ('${CLK}c1', '${CLK}a1', '${CLK}b1', '2025-03-17 13:10:00+00', '2025-03-17 13:20:00+00', 'done');
+SELECT 'cl_run_x:accepted';
+DO \$\$ BEGIN
+    INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+    VALUES ('${CLK}c2', '${CLK}a2', '${CLK}b1', '2025-03-17 13:15:00+00', '2025-03-17 13:30:00+00', 'done');
+    RAISE NOTICE 'cl_overlap:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_overlap:refused:%', SQLERRM; END \$\$;
+INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+VALUES ('${CLK}c2', '${CLK}a2', '${CLK}b1', '2025-03-17 13:20:00+00', '2025-03-17 13:30:00+00', 'done');
+SELECT 'cl_touching:accepted';
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET window_start = '2025-03-17 13:19:59+00' WHERE id = '${CLK}c2';
+    RAISE NOTICE 'cl_overlap_update:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_overlap_update:refused:%', SQLERRM; END \$\$;
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET window_start = '2025-03-17 12:50:00+00', window_end = '2025-03-17 13:05:00+00' WHERE id = '${CLK}c2';
+    RAISE NOTICE 'cl_outside_before:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_outside_before:refused:%', SQLERRM; END \$\$;
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET window_start = '2025-03-17 13:50:00+00', window_end = '2025-03-17 14:00:01+00' WHERE id = '${CLK}c2';
+    RAISE NOTICE 'cl_outside_after:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_outside_after:refused:%', SQLERRM; END \$\$;
+UPDATE conform_run_data SET window_start = '2025-03-17 13:50:00+00', window_end = '2025-03-17 14:00:00+00' WHERE id = '${CLK}c2';
+SELECT 'cl_ends_at_log_end:accepted,' || version FROM conform_run_data WHERE id = '${CLK}c2';
+UPDATE conform_run_data SET window_start = NULL, window_end = NULL, status = 'no_window' WHERE id = '${CLK}c2';
+SELECT 'cl_no_window:' || status FROM conform_run_data WHERE id = '${CLK}c2';
+UPDATE conform_run_data SET window_start = '2025-03-17 13:00:00+00', window_end = '2025-03-17 13:10:00+00', status = 'done' WHERE id = '${CLK}c2';
+SELECT 'cl_adjacent_before:accepted';
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET status = 'pending' WHERE id = '${CLK}c1';
+    RAISE NOTICE 'cl_status_check:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_status_check:refused'; END \$\$;
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET window_start = '2025-03-17 13:20:00+00', window_end = '2025-03-17 13:10:00+00' WHERE id = '${CLK}c1';
+    RAISE NOTICE 'cl_window_order_check:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cl_window_order_check:refused'; END \$\$;
+DO \$\$ BEGIN
+    INSERT INTO conform_run_data (operation_id, status) VALUES ('${CLK}a1', 'no_log');
+    RAISE NOTICE 'cl_one_per_operation:accepted';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'cl_one_per_operation:refused'; END \$\$;
+DO \$\$ BEGIN
+    DELETE FROM directus_files WHERE id = '${CLK}f1';
+    RAISE NOTICE 'cl_file_delete:accepted';
+EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'cl_file_delete:refused'; END \$\$;
+SELECT 'cl_audit:' || count(*) FROM audit_logs WHERE table_name = 'conform_run_data' AND record_id = '${CLK}c1';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'cl_llm_sees:' || (SELECT count(*) FROM conform_logs) || ',' || (SELECT count(*) FROM conform_run_data);
+RESET ROLE;
+-- the log goes: its runs keep their rows with log_id NULL
+DELETE FROM conform_logs WHERE log_id = '${CLK}b1';
+SELECT 'cl_log_delete_nulls:' || count(*) || ',' || count(*) FILTER (WHERE log_id IS NULL) FROM conform_run_data WHERE id IN ('${CLK}c1', '${CLK}c2');
+-- the operation goes: its run row goes with it
+DELETE FROM manufacturing_operations WHERE operation_id = '${CLK}a1';
+SELECT 'cl_op_delete_cascades:' || count(*) FROM conform_run_data WHERE id = '${CLK}c1';
+$cl_down
+SELECT 'cl_dn_tables:' || coalesce(to_regclass('conform_logs')::text, 'gone') || ',' || coalesce(to_regclass('conform_run_data')::text, 'gone');
+SELECT 'cl_dn_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('conform_logs', 'conform_run_data') OR (collection = 'manufacturing_operations' AND field = 'conform_run'))
+    || ',' || (SELECT count(*) FROM directus_collections WHERE collection IN ('conform_logs', 'conform_run_data'))
+    || ',' || (SELECT count(*) FROM directus_permissions WHERE collection IN ('conform_logs', 'conform_run_data'))
+    || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection IN ('conform_logs', 'conform_run_data') OR one_collection IN ('conform_logs', 'conform_run_data'));
+SELECT 'cl_dn_function:' || count(*) FROM pg_proc WHERE proname = 'conform_run_data_window_guard';
+$cl_up
+SELECT 'cl_up2_tables:' || (to_regclass('conform_logs') IS NOT NULL) || ',' || (to_regclass('conform_run_data') IS NOT NULL);
+SELECT 'cl_up2_perms:' || (SELECT count(*) FROM directus_permissions WHERE collection IN ('conform_logs', 'conform_run_data'));
+SELECT 'cl_up2_rls:' || (SELECT count(*) FROM pg_policies WHERE tablename IN ('conform_logs', 'conform_run_data'));
+$cl_down
+SELECT 'cl_redown_tables:' || coalesce(to_regclass('conform_logs')::text, 'gone') || ',' || coalesce(to_regclass('conform_run_data')::text, 'gone');
+ROLLBACK;
+SQL
+)
+cl_check() { grep -q "$1" <<<"$cl_out" && ok "$2" || bad "$2 (psql output: $cl_out)"; }
+cl_check "^cl_tables:true,true$" "207: conform_logs and conform_run_data exist"
+cl_check "^cl_uncommented:0$" "207: every column of both tables has a COMMENT"
+cl_check "^cl_table_comments:2$" "207: both tables have a COMMENT"
+cl_check "^cl_triggers:conform_logs.audit_conform_logs,conform_logs.occ_conform_logs,conform_run_data.audit_conform_run_data,conform_run_data.conform_run_data_window_guard,conform_run_data.occ_conform_run_data$" "207: audit, OCC and the window guard are attached"
+cl_check "^cl_trigger_comments:0$" "207: every trigger has a COMMENT"
+cl_check "^cl_llm:true,true$" "207: the Ask-the-database role can SELECT both tables"
+cl_check "^cl_rls:2,4$" "207: both tables have row security (not forced) with the open and the d1_llm_readonly policy"
+cl_check "^cl_collections:conform_logs/true/manufacturing_methods,conform_run_data/true/manufacturing_methods$" "207: both are hidden Directus collections grouped under manufacturing_methods"
+cl_check "^cl_field_rows:15/16,12/12,0$" "207: every column of both tables has a Directus field row (the aliases are extra)"
+cl_check "^cl_aliases:conform_logs.runs=o2m,manufacturing_operations.conform_run=o2m$" "207: the O2M aliases manufacturing_operations.conform_run and conform_logs.runs exist"
+cl_check "^cl_relations:conform_logs.created_by>directus_users,conform_logs.directus_files_id>directus_files,conform_logs.equipment_id>equipment,conform_run_data.log_id>conform_logs.runs,conform_run_data.operation_id>manufacturing_operations.conform_run$" "207: the five relations are registered"
+cl_check "^cl_perm_lm:conform_logs.create,conform_logs.delete,conform_logs.read,conform_run_data.create,conform_run_data.delete,conform_run_data.read,conform_run_data.update$" "207: Lab Member rows: logs create/read/delete, run data create/read/update/delete"
+cl_check "^cl_perm_viewer:conform_logs.read,conform_run_data.read$" "207: Lab Viewer reads both"
+cl_check "^cl_log_defaults:1,true,true$" "207: a new log starts at version 1 with created_at set"
+cl_check "^cl_run_x:accepted$" "207: run X with window 13:10-13:20 is accepted"
+cl_check "cl_overlap:refused:run window overlaps 17-03-25-CF-091" "207: run Y with 13:15-13:30 is refused and the message names run X's code"
+cl_check "^cl_touching:accepted$" "207: run Y with 13:20-13:30 is accepted (windows touch, half-open)"
+cl_check "cl_overlap_update:refused:run window overlaps 17-03-25-CF-091" "207: moving a window start one second into the other run is refused on update"
+cl_check "cl_outside_before:refused:run window lies outside the log" "207: a window starting before the log is refused (outside the log)"
+cl_check "cl_outside_after:refused:run window lies outside the log" "207: a window ending after the log is refused (outside the log)"
+cl_check "^cl_ends_at_log_end:accepted,[0-9]*$" "207: a window may end exactly at the log's last row"
+cl_check "^cl_no_window:no_window$" "207: a run can be put back to no window"
+cl_check "^cl_adjacent_before:accepted$" "207: a window touching the other one from before is accepted"
+cl_check "cl_status_check:refused" "207: status pending is refused by the CHECK"
+cl_check "cl_window_order_check:refused" "207: a window whose start is after its end is refused"
+cl_check "cl_one_per_operation:refused" "207: one run row per operation"
+cl_check "cl_file_delete:refused" "207: a file with a log row cannot be deleted before the log"
+cl_check "^cl_audit:1$" "207: the run insert was audited"
+cl_check "^cl_llm_sees:1,2$" "207: the Ask-the-database role sees the log and both runs of unrestricted operations"
+cl_check "^cl_log_delete_nulls:2,2$" "207: deleting the log keeps its runs with log_id NULL"
+cl_check "^cl_op_delete_cascades:0$" "207: deleting the operation deletes its run row"
+cl_check "^cl_dn_tables:gone,gone$" "207 down: both tables are dropped"
+cl_check "^cl_dn_meta:0,0,0,0$" "207 down: the Directus fields, collections, permissions and relations are removed"
+cl_check "^cl_dn_function:0$" "207 down: the guard function is dropped"
+cl_check "^cl_up2_tables:true,true$" "207 up again: both tables are back"
+cl_check "^cl_up2_perms:9$" "207 up again: the nine permission rows are back"
+cl_check "^cl_up2_rls:4$" "207 up again: the four row security policies are back"
+cl_check "^cl_redown_tables:gone,gone$" "207 down runs again after up"
+else
+bad "the Conform logs and run data migration is missing ($CL_MIG)"
 fi
 
 echo "== Cleanup test rows =="

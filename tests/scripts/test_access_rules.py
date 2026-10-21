@@ -727,6 +727,8 @@ def test_every_leaf_matches_the_signed_in_user_or_the_restricted_flag():
                 row["collection"] == "label_templates"
             ):  # migration 164: a member edits their own templates
                 allowed.add(("user_created", "$CURRENT_USER"))
+            if row["collection"] == "conform_logs":  # migration 207: the uploader reads and deletes their own log
+                allowed.add(("created_by", "$CURRENT_USER"))
             assert (key, value) in allowed, (
                 row["collection"],
                 row["action"],
@@ -1155,7 +1157,7 @@ def test_read_rules_are_the_membership_test_a_one_hop_child_rule_or_the_rollup()
     for collection, fk in (
         ("sample_co_owners", "sample_id"), ("sample_stock_provenance", "sample_id"), ("sample_data_files", "sample_id"),
         ("operation_data_files", "operation_id"), ("machining_force_analysis", "operation_id"),
-        ("fast_run_data", "operation_id"), ("operation_additional_operators", "operation_id"),
+        ("fast_run_data", "operation_id"), ("conform_run_data", "operation_id"), ("operation_additional_operators", "operation_id"),
         ("session_data_files", "session_id"), ("session_additional_operators", "session_id"),
         ("test_sessions_subject", "test_sessions_id"), ("project_investigators", "project_id"),
     ):  # fmt: skip
@@ -1775,6 +1777,7 @@ def _directus(drop=(), restricted=True):
         ("operation_data_files", "operation_id", "manufacturing_operations"),
         ("machining_force_analysis", "operation_id", "manufacturing_operations"),
         ("fast_run_data", "operation_id", "manufacturing_operations"),
+        ("conform_run_data", "operation_id", "manufacturing_operations"),
         ("session_data_files", "session_id", "test_sessions"),
         ("operation_additional_operators", "operation_id", "manufacturing_operations"),
         ("session_additional_operators", "session_id", "test_sessions"),

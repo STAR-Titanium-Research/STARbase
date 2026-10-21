@@ -147,6 +147,7 @@
     "operation_data_files": {"create": "any", "read": "reader.operation", "update": "operation.update", "delete": "operation.update"},
     "machining_force_analysis": {"create": "any", "read": "reader.operation", "update": "operation.update"},
     "fast_run_data": {"read": "reader.operation"},
+    "conform_run_data": {"create": "any", "read": "reader.operation", "update": "operation.update", "delete": "operation.update"},
     "session_data_files": {"create": "any", "read": "reader.session", "update": "session.update", "delete": "session.update"},
     "operation_additional_operators": {"create": "any", "read": "reader.operation", "update": "operation.update", "delete": "operation.update"},
     "session_additional_operators": {"create": "any", "read": "reader.session", "update": "session.update", "delete": "session.update"},
@@ -191,6 +192,11 @@
       "read": {},
       "update": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}, "fields": ["code", "batch_date", "notes", "owner_person_id"]},
       "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
+    },
+    "conform_logs": {
+      "create": {"fields": ["log_id", "directus_files_id", "equipment_id", "source_filename", "log_start", "log_end", "n_rows", "duration_s", "series", "totals", "constants"]},
+      "read": {"permissions": {"_or": [{"created_by": {"_eq": "$CURRENT_USER"}}, {"runs": {"_some": {"operation_id": {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}}}}}]}},
+      "delete": {"permissions": {"created_by": {"_eq": "$CURRENT_USER"}}}
     },
     "surface_scans": {
       "create": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id"]},
