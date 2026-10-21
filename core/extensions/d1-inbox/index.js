@@ -52,6 +52,9 @@
 //                                   feature's own dialog: asked up front, before any record is read; the table's unique constraints are the backstop),
 //                                   409 SURFACE_SCANS_UNAVAILABLE (no such table yet). Where the table exists, the summary and the new, older and open
 //                                   lists leave out undecided surface scan files that already have a scan (older databases use the plain queries).
+//                                   Who sees the new scan (ADR-0023): the row is visible as a locked placeholder (condition, date, operation); its file, notes and
+//                                   3D view only to the file's owner, the owner's team and administrators. A found file is always owned, and only its owner or an
+//                                   active member of its team can add it, so the caller always passes that rule.
 //                                   IMAGING SETTINGS (ADR-0022, spec 2026-10-16 section 5): every newly linked candidate of kind 'sem_image' (here, in accept-all and in
 //                                   auto-link) has its `extracted` passed to d1_private.save_sem_settings(file, extracted, 'inbox') in the same transaction. That
 //                                   function is the only place `extracted` becomes columns; this endpoint never maps it.
@@ -205,8 +208,10 @@ export const LINK_TARGETS = {
 };
 const isTarget = (name) => typeof name === 'string' && Object.hasOwn(LINK_TARGETS, name);
 
-// The surface scan (stream F1) is not a LINK_TARGETS entry: it makes a ROW of its own (no junction, no record-edit rule: scans are lab-wide reference
-// data, so Directus's own create permission on surface_scans decides) and needs a person-chosen condition. These are the collections a link item names.
+// The surface scan (stream F1) is not a LINK_TARGETS entry: it makes a ROW of its own (no junction, no record-edit rule: Directus's own create permission
+// on surface_scans decides, and ADR-0023 adds the file guard) and needs a person-chosen condition. The scan row is visible to the lab as a locked
+// placeholder; its file, notes and 3D view only to the file's owner, the owner's team and administrators (ADR-0023).
+// These are the collections a link item names.
 export const SURFACE_SCANS = 'surface_scans';
 export const LINK_COLLECTIONS = [...Object.keys(LINK_TARGETS), SURFACE_SCANS];
 // The edge a surface scan file's name points to (match_strength 'edge_code'): read as the caller so the list can name it, but never editable (a scan is
@@ -1183,7 +1188,7 @@ export function mount(router, context, deps = {}) {
         if (!isDenied(err)) throw err;
       }
     }
-    // A surface scan a row was added as: readable by the caller (reference data) or not named; its label is the insert or edge code and the condition.
+    // A surface scan a row was added as: readable by the caller (a locked placeholder still is, ADR-0023) or not named; its label is the insert or edge code and the condition.
     const scans = new Map();
     const scanIds = [...new Set(pairs.filter(([c, id]) => c === SURFACE_SCANS && isUuid(id)).map(([, id]) => String(id)))];
     if (scanIds.length) {

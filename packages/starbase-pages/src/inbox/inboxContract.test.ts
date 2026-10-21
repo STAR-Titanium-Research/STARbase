@@ -779,11 +779,11 @@ describe('adding a surface scan', () => {
 	});
 
 	it.each([
-		['link_surface_scan_ok', worn(), 'Added as a surface scan of H13A-#2. It is now visible to every lab member.'],
+		['link_surface_scan_ok', worn(), 'Added as a surface scan of H13A-#2. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.'],
 		[
 			'link_surface_scan_ok_edge',
 			{ item: edge, condition: 'cleaned', operationId: OP, date: '2026-10-14', conditionNote: 'ultrasonic bath', notes: 'after pass 3' } as ScanAddForm,
-			'Added as a surface scan of H13A-#2-fC. It is now visible to every lab member.',
+			'Added as a surface scan of H13A-#2-fC. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.',
 		],
 	])('%s: the client sends the fixture\'s request, key for key, and the answer is read as sent', async (name, form, said) => {
 		const f = fx(name);

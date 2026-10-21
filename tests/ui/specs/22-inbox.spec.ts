@@ -258,7 +258,7 @@ test('Add a surface scan: the dialog warns the whole lab will see the file, has 
 	await shot(page, 'scan-dialog-filled');
 	await dialog.locator('[data-test="scan-confirm"]').click();
 	await expect(dialog).toBeHidden();
-	await expect(page.locator('[data-test="notice"]')).toContainText(`Added as a surface scan of ${T.insertCode}. It is now visible to every lab member.`);
+	await expect(page.locator('[data-test="notice"]')).toContainText(`Added as a surface scan of ${T.insertCode}. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.`);
 	await expect.poll(() => names(page)).not.toContain('edge1.al3d');
 	expect(inbox.scans).toHaveLength(1);
 	expect(inbox.scans[0]).toMatchObject({ insert_id: T.insertId, edge_id: null, condition: 'worn' });

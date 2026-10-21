@@ -3,7 +3,7 @@
 //
 // Contract: spec 2026-10-15-found-files-inbox-design.md section 8 ("As built, stream F1") and core/extensions/d1-inbox/index.js (parseScanItem,
 // linkedItemOut). A surface scan is ADDED to an insert or an edge, never "linked" or "attached" (CONTEXT.md, Files on the share); "Link" is for samples,
-// operations and tests. The conditions, their labels, the validation and the lab-wide warning are the Alicona dialog's own
+// operations and tests. The conditions, their labels, the validation and the visibility warning are the Alicona dialog's own
 // (pages/surface/addScanModel.ts, scanModel.ts): one set of words for the same act.
 import { formProblems, todayIso, type ScanForm } from '../pages/surface/addScanModel';
 import type { ScanCondition } from '../pages/surface/scanModel';
@@ -132,7 +132,9 @@ export const SCAN_ALREADY_TEXT = 'That file was already added.';
 /** What a link to a sample, operation or test would be for a surface scan: the page never sends it, this is the answer if it is asked for. */
 export const SCAN_NOT_LINKED = 'A surface scan is added to an insert or an edge.';
 
-export const scanAddedText = (label: string): string => `Added as a surface scan of ${label}. It is now visible to every lab member.`;
+/** A found file is always owned (ADR-0022), so only its owner, the owner's team and administrators see the scan's file (ADR-0023). */
+export const scanAddedText = (label: string): string =>
+	`Added as a surface scan of ${label}. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.`;
 
 const FIELD_TEXT: Record<string, string> = {
 	condition: 'Choose the condition: new, worn, cleaned or other.',
