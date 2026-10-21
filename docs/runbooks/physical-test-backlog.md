@@ -2602,6 +2602,13 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   Viewer: the rules are listed, *Remove* is off with the reason, and there is no *Ignore this folder* and no add field.
   Since: ignored folders (STARbase, IC).
 
+- [ ] **IF90 — A pointer row made by a lab member first still gets the folder owner's stamp (real Directus and share).** As a Lab
+  Member B (not the owner), create a `directus_files` row for the exact path of a not-yet-seen `.al3d` in another person's
+  `Users/<alias>/` folder (id = uuid5 of that path relative to `star_group1`, storage `star`), and add a surface scan of it. Then run
+  a crawler scan of that person. Expect: the row's `owner_person_id` is the folder's person, a legacy file linked to a sample or
+  operation in the same folder stays unowned, and B no longer sees the file or its 3D view (needs the Alicona privacy change).
+  Since: the crawler stamp for scan-linked rows (this PR).
+
 ### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
 
 Needs the real share, real FEI/Thermo images and the crawler host. Spec:

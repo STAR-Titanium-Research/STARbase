@@ -727,16 +727,17 @@ class Store:
             + ")"
         )
 
-    def already_linked(self, files_ids: list[str]) -> set[str]:
+    def already_linked(self, files_ids: list[str], *, scans: bool = True) -> set[str]:
         """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
         picker or by the d1-inbox extension), or already a surface scan (added in the Alicona feature's own
         dialog, which offers every star .al3d, the crawler's included). Such a file is not a found file:
-        nobody needs to link it."""
+        nobody needs to link it. `scans=False` leaves the surface scans out (the owner stamp does, see
+        stamp_owners)."""
         if not files_ids:
             return set()
         scans = (
             " UNION SELECT directus_files_id::text FROM surface_scans WHERE directus_files_id = ANY(%s::uuid[])"
-            if self._has_surface_scans()
+            if scans and self._has_surface_scans()
             else ""
         )
         rows = self._all(
@@ -985,10 +986,16 @@ class Store:
 
     def stamp_owners(self, files_ids: list[str], owner: Owner) -> int:
         """Stamp the owner on these existing pointer rows (ADR-0022) and return how many changed. A row is
-        stamped only while BOTH owner columns are null and the file is not linked (`already_linked`: a linked
-        file stays unowned, like migration 196's back-fill), so a stamp is never overwritten, not by another
-        owner and not by the same one."""
-        todo = sorted(set(files_ids) - self.already_linked(files_ids))
+        stamped only while BOTH owner columns are null and the file is not linked to a sample, operation or
+        test (a file linked there stays unowned, like migration 196's back-fill), so a stamp is never
+        overwritten, not by another owner and not by the same one.
+
+        A file whose only link is a surface scan is stamped all the same. The crawler calls this for a file it
+        has just found on the share, under the owner's own folder: the path decides who it came from, and the
+        pointer row's id is derived from that path. Without this, a lab member who made the pointer row first
+        (the id is computable from a known path) and added a scan of it would keep the row unowned for good, and
+        the owner's file would be shown to the whole lab (the Alicona review's forged-pointer-row scenario)."""
+        todo = sorted(set(files_ids) - self.already_linked(files_ids, scans=False))
         if not todo:
             return 0
         col = "owner_person_id" if owner.kind == "person" else "owner_team_id"

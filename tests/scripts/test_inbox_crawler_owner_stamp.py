@@ -184,6 +184,83 @@ def test_a_file_linked_to_an_operation_or_a_session_is_not_stamped_either(world)
         assert owner_of(world, rel) == (None, None)
 
 
+# ---- a row whose only link is a surface scan is stamped (a forged pointer row) -------------------
+
+SURFACE_SCANS_STUB = (
+    "CREATE TABLE surface_scans (scan_id serial PRIMARY KEY, "
+    "directus_files_id uuid NOT NULL REFERENCES directus_files (id) ON DELETE CASCADE)"
+)
+
+
+def add_scan(world, rel):
+    world.q(
+        "INSERT INTO surface_scans (directus_files_id) VALUES (%s)",
+        (str(file_id(rel)),),
+    )
+
+
+def test_a_row_linked_only_by_a_surface_scan_is_stamped_when_the_crawler_finds_the_file(
+    world,
+):
+    """A lab member made the pointer row first (its id comes from a known path) and added a scan of it: the
+    row is unowned and linked. When the crawler then finds the file in the owner's folder the row takes the
+    owner's stamp, so the owner's file is not shown to the whole lab."""
+    pid, _ = world.person("abc12de")
+    world.q(SURFACE_SCANS_STUB)
+    rel = "Users/abc12de/scan.al3d"
+    indexer_row(world, rel)  # the forged row: unowned
+    add_scan(world, rel)
+    world.write(rel, b"AL3D" * 100)
+    settle(world)
+    world.commit()
+    run(world)
+    assert owner_of(world, rel) == (pid, None)
+
+
+def test_a_row_linked_to_a_sample_is_still_left_unowned_by_a_scan(world):
+    """The exception is for surface scans only: a legacy file linked to a sample stays visible as before."""
+    pid, _ = world.person("abc12de")
+    world.q(SURFACE_SCANS_STUB)
+    rel = "Users/abc12de/linked.png"
+    indexer_row(world, rel)
+    link(world, rel)
+    world.write(rel, png((1, 1, 1)))
+    settle(world)
+    world.commit()
+    run(world)
+    assert owner_of(world, rel) == (None, None)
+    # even with a scan on it as well
+    rel2 = "Users/abc12de/both.png"
+    indexer_row(world, rel2)
+    link(world, rel2)
+    add_scan(world, rel2)
+    world.write(rel2, png((2, 2, 2)))
+    settle(world)
+    world.commit()
+    run(world)
+    assert owner_of(world, rel2) == (None, None)
+    assert pid  # the person exists and owns nothing here
+
+
+def test_a_scan_linked_row_already_stamped_to_someone_else_is_not_restamped(world):
+    a, _ = world.person("aaa11")
+    b, _ = world.person("bbb22")
+    world.q(SURFACE_SCANS_STUB)
+    rel = "Users/bbb22/x.al3d"
+    indexer_row(world, rel)
+    world.q(
+        "UPDATE directus_files SET owner_person_id = %s WHERE id = %s",
+        (a, str(file_id(rel))),
+    )
+    add_scan(world, rel)
+    world.write(rel, b"AL3D" * 100)
+    settle(world)
+    world.commit()
+    run(world)
+    assert owner_of(world, rel) == (a, None)
+    assert b
+
+
 # ---- a stamp is never overwritten ----------------------------------------------------------------
 
 
