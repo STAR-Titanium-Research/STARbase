@@ -155,16 +155,21 @@ const shownValue = computed(() => {
 
 const showRefresh = computed(() => canRegenerate({ mode: mode.value, frozen: frozen.value }));
 const hintIsError = computed(() => !frozen.value && mode.value === 'auto' && previewFailed.value);
-const hint = computed(() =>
-	hintFor({
+const CONFORM_FORMAT = 'Format DD-MM-YY-CF-run-die dia.';
+const hint = computed(() => {
+	const conform = values.value?.process_category === 'conform';
+	const text = hintFor({
 		mode: mode.value,
 		frozen: frozen.value,
 		hidden: previewHidden.value,
 		failed: previewFailed.value,
 		noPreview: decided.value && preview.value == null && !previewHidden.value && !previewFailed.value,
-		sintering: values.value?.process_category === 'sintering',
-	}),
-);
+		// A Conform run, like a sintering run, has no code until its run number is set.
+		sintering: values.value?.process_category === 'sintering' || conform,
+	});
+	// Say what the automatic code looks like; a typed or imported code needs no format.
+	return conform && !frozen.value && mode.value === 'auto' && !previewFailed.value ? `${text} ${CONFORM_FORMAT}` : text;
+});
 
 function onType(val: string | null) {
 	const r = onTyped(val, preview.value);

@@ -25,7 +25,7 @@ const api = useApi();
 const CAT_LABEL: Record<string, string> = {
 	machining: 'Machining', sintering: 'Sintering (FAST / HIP)',
 	heat_treatment: 'Heat Treatment', deformation: 'Deformation', additive: 'Additive',
-	sample_prep: 'Sample Preparation',
+	sample_prep: 'Sample Preparation', conform: 'Conform (continuous extrusion)',
 };
 
 const isExisting = () => props.primaryKey != null && props.primaryKey !== '+';
