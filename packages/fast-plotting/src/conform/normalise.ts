@@ -1,9 +1,9 @@
 // Turn a parsed Conform log into the stored artefacts: the normalised CSV (column-aligned with `series`, the
 // layout fastCache.parseTrace reads), the series catalogue and the whole-log totals.
-import type { SeriesMeta } from '../fastCache';
+import type { SeriesMeta, Trace } from '../fastCache';
 import { POWER_CHANNELS, type ConformChannel } from './channels';
 import type { ParsedConformLog } from './parse';
-import { CONFORM_POWER_CONSTANTS, energyKwh, powerChannels, type EnergyKwh, type PowerPart } from './power';
+import { CONFORM_POWER_CONSTANTS, energyKwh, powerChannels, type EnergyKwh, type PowerChannels, type PowerPart } from './power';
 
 export interface ConformTotals { duration_s: number; energy_kwh: EnergyKwh; avg_demand_kw: number; missing: PowerPart[] }
 export interface NormalisedLog {
@@ -44,6 +44,17 @@ const meta = (c: ConformChannel, v: Float64Array): SeriesMeta => {
 const exact = (x: number): string => (Number.isFinite(x) ? String(x) : '');
 const derived = (x: number): string => (Number.isFinite(x) ? String(Number(x.toPrecision(9))) : '');
 
+function totalsOf(pw: PowerChannels, n: number, durationS: number): ConformTotals {
+	const energy = energyKwh(pw, 0, n);
+	return { duration_s: durationS, energy_kwh: energy, avg_demand_kw: n ? (energy.total * 3600) / n : 0, missing: pw.missing };
+}
+
+/** Whole-log totals recomputed from a stored trace with the current power constants (for "Recompute"). */
+export function wholeLogTotals(trace: Trace): ConformTotals {
+	const pw = powerChannels((k) => trace.series[k]?.values, trace.n);
+	return totalsOf(pw, trace.n, trace.n > 1 ? trace.time[trace.n - 1] - trace.time[0] : 0);
+}
+
 export function normaliseLog(log: ParsedConformLog): NormalisedLog {
 	const n = log.n;
 	const pw = powerChannels((k) => log.values[k], n);
@@ -64,11 +75,10 @@ export function normaliseLog(log: ParsedConformLog): NormalisedLog {
 	}
 
 	const durationS = log.time[n - 1] - log.time[0];
-	const energy = energyKwh(pw, 0, n);
 	return {
 		csvText: lines.join('\n') + '\n',
 		series: cols.map((c) => meta(c.channel, c.values)),
-		totals: { duration_s: durationS, energy_kwh: energy, avg_demand_kw: (energy.total * 3600) / n, missing: pw.missing },
+		totals: totalsOf(pw, n, durationS),
 		constants: { ...CONFORM_POWER_CONSTANTS },
 		logStart: new Date(log.startMs).toISOString(),
 		logEnd: new Date(log.endMs).toISOString(),

@@ -16,3 +16,9 @@ export function formatUkDateTime(t: string | number): string {
 	const ms = toMs(t);
 	return Number.isNaN(ms) ? '' : `${DATE.format(ms)} ${TIME.format(ms)}`;
 }
+
+/** `YYYY-MM-DD` in UK local time. Empty string for an invalid instant. */
+export function ukDate(t: string | number): string {
+	const ms = toMs(t);
+	return Number.isNaN(ms) ? '' : DATE.format(ms);
+}
