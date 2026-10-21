@@ -210,8 +210,10 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
   `Users/<alias>`: the person whose alias matches) or `owner_team_id` (under `Shared/<folder>`): the id of the owner
   the scan works for, never read from the path again, so an alias handed to someone else does not move the file.
   A pointer row that already exists (the indexer's, or one from before migration 196) with both owner columns null
-  and no link is stamped when the crawler meets it (a new candidate for it, or a known candidate in a folder the scan
-  lists). A stamp is never overwritten, not by another owner and not by the same one, and a linked file stays
+  and no link to a sample, operation or test is stamped when the crawler meets it (a new candidate for it, or a known
+  candidate in a folder the scan lists). A file whose only link is a surface scan is stamped too: its id comes from the
+  path, so a pointer row someone made first for a path in this folder is this file's (backlog IF90). A stamp is never
+  overwritten, not by another owner and not by the same one, and a file linked to a sample, operation or test stays
   unowned. Who may read an owned file is the Directus filter of migration 196, not the crawler.
 - **Recognition** looks for a short ID or an exact record code in the path below the owner's folder (an alias
   that looks like a short ID is not a match). Suggestions are refreshed for undecided files each scan.

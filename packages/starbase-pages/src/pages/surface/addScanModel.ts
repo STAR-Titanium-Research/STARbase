@@ -1,5 +1,5 @@
 // The "Add a surface scan" form's pure parts: which library files are offered, what a form must hold before it can
-// be sent, and the words of the lab-wide warning. No Vue.
+// be sent, and the words of the visibility warning. No Vue.
 
 import { formatDate, operationLabel, processLabel } from '@d1/ui';
 import { SCAN_CONDITIONS, type ScanCondition } from './scanModel';
@@ -18,9 +18,9 @@ export const TOPOGRAPHY_EXTENSIONS = [
 /** Only files on the archive share (a pointer row, `storage = 'star'`): the worker reads them by metadata.archive_path and refuses the rest. */
 export const ARCHIVE_STORAGE = 'star';
 
-/** The visible warning of the dialog (spec decision 6). */
+/** The visible warning of the dialog (spec 2026-10-21, "STARbase"): who sees a scan follows its file's owner (ADR-0023). */
 export const VISIBILITY_WARNING =
-	'Adding a surface scan makes this file visible to every lab member, whoever owns the file and whatever project it belongs to. Only add files the whole lab may see.';
+	"Only the file's owner (or its team) and administrators see this scan's file and 3D view; others see that the item has a scan. Files with no owner stay visible to every lab member.";
 
 export interface LibraryFile {
 	id: string;
@@ -28,7 +28,19 @@ export interface LibraryFile {
 	/** Where an archive file lives on the share, to tell apart files of the same name. */
 	path: string | null;
 	size: number | null;
+	/**
+	 * The file has an owner (a person or a team): only they and administrators see a scan of it (ADR-0023). False: every lab member does.
+	 * Always set by the library search (normaliseFile); left out where a caller builds a file without reading the owner (the inbox's form).
+	 */
+	owned?: boolean;
 }
+
+/** Said of the file the person picked (and under each hit), instead of the generic warning: which of the two cases applies. */
+export const UNOWNED_NOTE = 'No owner: every lab member will see this scan and its file.';
+export const OWNED_NOTE = "This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.";
+
+/** Who will see a scan of this file, in one sentence; the generic warning when the file's owner was not read. */
+export const visibilityNote = (file: Pick<LibraryFile, 'owned'>): string => (file.owned === undefined ? VISIBILITY_WARNING : file.owned ? OWNED_NOTE : UNOWNED_NOTE);
 
 /** The /files filter for the picker: an archive file with a topography extension, and the typed text in the name or title. */
 export function fileFilter(text: string): Record<string, unknown> {
@@ -41,7 +53,7 @@ export function fileFilter(text: string): Record<string, unknown> {
 	return { _and: clauses };
 }
 
-export const FILE_FIELDS = ['id', 'filename_download', 'title', 'filesize', 'metadata'];
+export const FILE_FIELDS = ['id', 'filename_download', 'title', 'filesize', 'metadata', 'owner_person_id', 'owner_team_id'];
 
 function archivePath(metadata: unknown): string | null {
 	let m = metadata;
@@ -62,7 +74,8 @@ export function normaliseFile(raw: any): LibraryFile | null {
 	const path = archivePath(raw?.metadata);
 	const name = (typeof raw?.filename_download === 'string' && raw.filename_download) || (typeof raw?.title === 'string' && raw.title) || path?.split('/').pop() || '(file)';
 	const size = typeof raw?.filesize === 'number' ? raw.filesize : typeof raw?.filesize === 'string' && /^\d+$/.test(raw.filesize) ? Number(raw.filesize) : null;
-	return { id, name, path, size };
+	const owned = (raw?.owner_person_id ?? null) !== null || (raw?.owner_team_id ?? null) !== null;
+	return { id, name, path, size, owned };
 }
 
 export function formatBytes(n: number | null): string {

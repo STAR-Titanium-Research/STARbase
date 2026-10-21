@@ -8,6 +8,8 @@ import requests
 from app.lib import directus_client as dc
 
 SCAN = "0b0a1c1e-5a53-4b0e-9a3c-0d6f6a0c9e11"
+FILE = "5d1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c01"
+OTHER_FILE = "9c1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c77"
 
 
 def _resp(status=200, body=None):
@@ -143,3 +145,193 @@ def test_a_server_error_reading_the_fingerprint_propagates(http):
     http.get.return_value = _resp(status=500)
     with pytest.raises(requests.HTTPError):
         dc.get_fingerprint("f1")
+
+
+# --- the result route (ADR-0023): the outcome is POSTed, never PATCHed ---------------------------
+
+
+def test_scan_fields_hold_only_public_columns():
+    fields = set(dc.SCAN_FIELDS.split(","))
+    assert fields == {
+        "scan_id",
+        "directus_files_id",
+        "render_status",
+        "version",
+        "updated_at",
+    }
+    assert not {"render_error", "cache_key"} & fields
+
+
+def test_post_result_posts_the_version_and_file_in_the_body_to_the_endpoint(http):
+    http.post.return_value = _resp(body={"data": {"scan_id": SCAN}})
+    out = dc.post_result(
+        SCAN, {"render_status": "failed", "render_error": "boom"}, 4, FILE
+    )
+    assert out == {"data": {"scan_id": SCAN}}
+    args, kwargs = http.post.call_args
+    assert args[0].endswith(f"/d1-surface-scan/{SCAN}/result")
+    assert kwargs["json"] == {
+        "render_status": "failed",
+        "render_error": "boom",
+        "version": 4,
+        "directus_files_id": FILE,
+    }
+    assert kwargs["headers"]["Authorization"].startswith("Bearer ")
+    assert kwargs["headers"]["X-Actor-Identity"] == "surface-scan-worker"
+    http.patch.assert_not_called()
+
+
+def test_post_result_does_not_mutate_the_payload(http):
+    http.post.return_value = _resp(body={"data": {}})
+    payload = {"render_status": "done", "columns": {"cache_key": "k"}}
+    dc.post_result(SCAN, payload, 1, FILE)
+    assert payload == {"render_status": "done", "columns": {"cache_key": "k"}}
+
+
+def test_a_409_from_the_result_route_is_a_version_conflict(http):
+    http.post.return_value = _resp(
+        status=409,
+        body={
+            "errors": [{"message": "stale", "extensions": {"code": "VERSION_CONFLICT"}}]
+        },
+    )
+    with pytest.raises(dc.VersionConflictError):
+        dc.post_result(SCAN, {"render_status": "done"}, 3, FILE)
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 500])
+def test_any_other_error_from_the_result_route_propagates(http, status):
+    http.post.return_value = _resp(status=status)
+    with pytest.raises(requests.HTTPError):
+        dc.post_result(SCAN, {"render_status": "done"}, 3, FILE)
+
+
+def test_report_result_rereads_and_retries_after_a_409(http):
+    http.get.side_effect = [
+        _resp(body={"data": _row(1)}),
+        _resp(body={"data": _row(2)}),
+    ]
+    http.post.side_effect = [_resp(status=409), _resp(body={"data": {"ok": 1}})]
+    out = dc.report_result(
+        SCAN, lambda row: {"render_status": "done"}, rendered_file_id=FILE
+    )
+    assert out == {"data": {"ok": 1}}
+    assert [c.kwargs["json"]["version"] for c in http.post.call_args_list] == [1, 2]
+    assert {
+        c.kwargs["json"]["directus_files_id"] for c in http.post.call_args_list
+    } == {FILE}
+    http.patch.assert_not_called()
+
+
+def test_report_result_gives_up_after_repeated_409s(http):
+    http.get.return_value = _resp(body={"data": _row(1)})
+    http.post.return_value = _resp(status=409)
+    with pytest.raises(dc.VersionConflictError, match="gave up"):
+        dc.report_result(
+            SCAN,
+            lambda row: {"render_status": "done"},
+            max_attempts=3,
+            rendered_file_id=FILE,
+        )
+    assert http.post.call_count == 3
+
+
+def _row(version, file_id=FILE, status="rendering"):
+    return {
+        "scan_id": SCAN,
+        "version": version,
+        "render_status": status,
+        "directus_files_id": file_id,
+    }
+
+
+def test_report_result_skips_a_row_that_now_points_at_another_file(http):
+    """The job rendered FILE; the scan was repointed (and is 'rendering' again): nothing is posted."""
+    http.get.return_value = _resp(body={"data": _row(5, file_id=OTHER_FILE)})
+    compute_calls = []
+
+    def compute(row):
+        compute_calls.append(row)
+        return {"render_status": "done"}
+
+    assert dc.report_result(SCAN, compute, rendered_file_id=FILE) is None
+    http.post.assert_not_called()
+    assert compute_calls == []  # decided before the caller's own check
+
+
+def test_report_result_skips_when_a_409_retry_finds_the_file_changed(http):
+    http.get.side_effect = [
+        _resp(body={"data": _row(1)}),
+        _resp(body={"data": _row(3, file_id=OTHER_FILE)}),
+    ]
+    http.post.side_effect = [_resp(status=409)]
+    assert (
+        dc.report_result(
+            SCAN, lambda row: {"render_status": "done"}, rendered_file_id=FILE
+        )
+        is None
+    )
+    assert http.post.call_count == 1
+
+
+def test_report_result_without_a_rendered_file_posts_the_row_s_own_file(http):
+    """The poller failing a stuck row: the file id is the one on the row as just read."""
+    http.get.return_value = _resp(body={"data": _row(7, file_id=OTHER_FILE)})
+    http.post.return_value = _resp(body={"data": {"ok": 1}})
+    dc.report_result(SCAN, lambda row: {"render_status": "failed"})
+    body = http.post.call_args.kwargs["json"]
+    assert body == {
+        "render_status": "failed",
+        "version": 7,
+        "directus_files_id": OTHER_FILE,
+    }
+
+
+def test_report_result_never_posts_without_a_file_id(http):
+    http.get.return_value = _resp(
+        body={"data": {"version": 1, "render_status": "rendering"}}
+    )
+    with pytest.raises(ValueError, match="directus_files_id"):
+        dc.report_result(SCAN, lambda row: {"render_status": "failed"})
+    http.post.assert_not_called()
+
+
+def test_report_result_with_nothing_to_write_does_not_post(http):
+    """A lost claim: compute sees a row that is no longer rendering and returns None."""
+    http.get.return_value = _resp(
+        body={"data": {"version": 1, "render_status": "pending"}}
+    )
+    assert dc.report_result(SCAN, lambda row: None) is None
+    http.post.assert_not_called()
+
+
+def test_report_result_never_writes_blind(http):
+    http.get.return_value = _resp(body={"data": {"render_status": "rendering"}})
+    with pytest.raises(ValueError, match="no version"):
+        dc.report_result(SCAN, lambda row: {"render_status": "done"})
+    http.post.assert_not_called()
+
+
+# --- the start-up token probe ----------------------------------------------------------------
+
+
+def test_probe_posts_a_harmless_failed_report_for_the_nil_scan(http):
+    http.post.return_value = _resp(status=409)
+    assert dc.probe_result_route() == 409
+    args, kwargs = http.post.call_args
+    nil = "00000000-0000-0000-0000-000000000000"
+    assert args[0].endswith(f"/d1-surface-scan/{nil}/result")
+    assert kwargs["json"] == {
+        "version": 1,
+        "directus_files_id": nil,
+        "render_status": "failed",
+        "render_error": "token probe",
+    }
+    assert kwargs["headers"]["Authorization"].startswith("Bearer ")
+    http.patch.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [403, 400, 404, 500])
+def test_probe_returns_the_status_instead_of_raising(http, status):
+    http.post.return_value = _resp(status=status)
+    assert dc.probe_result_route() == status

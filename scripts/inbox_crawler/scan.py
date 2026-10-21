@@ -596,7 +596,13 @@ class Scanner:
         batch = 0
         # A file already linked to a record is not a found file: do not register it at all.
         unknown = [f"{d}/{e.name}" for e in files if f"{d}/{e.name}" not in cands]
-        linked = store.already_linked([str(file_id(r)) for r in unknown])
+        unknown_ids = [str(file_id(r)) for r in unknown]
+        linked = store.already_linked(unknown_ids)
+        # A pointer row that exists already (someone made it before this scan met the file) and whose only link
+        # is a surface scan still gets the stamp of the folder it was found in: the id is derived from this
+        # path, so the row is this file's, and left unowned it would show the owner's file to the whole lab.
+        # stamp_owners leaves a stamped row, and one linked to a sample, operation or test, alone.
+        store.stamp_owners(sorted(linked.intersection(unknown_ids)), owner)
         # A folder that changed hands: files stamped to the old holder get no candidate (and are not read
         # again at every scan).
         handed = store.owned_by_other([str(file_id(r)) for r in unknown], owner)

@@ -345,7 +345,7 @@ describe('adding a surface scan', () => {
 		expect(sentLinks(fake)[0].body).toEqual({ items: [{ candidate_id: file().candidate_id, collection: 'surface_scans', edge_id: EDGE, condition: 'cleaned', operation_id: OP, scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: 'after pass 3' }] });
 		expect(fake.scans).toHaveLength(1);
 		expect(fake.scans[0]).toMatchObject({ edge_id: EDGE, insert_id: null, condition: 'cleaned', operation_id: OP });
-		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'Added as a surface scan of H13A-#2-fC. It is now visible to every lab member.', undo: { kind: 'batch' } });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'Added as a surface scan of H13A-#2-fC. If the file has an owner (you, or your team for a team folder), only the owner and administrators can see its file and 3D view; others see that the item has a scan.', undo: { kind: 'batch' } });
 		expect(inbox.main.value.rows.map((f) => f.candidate_id)).not.toContain(file().candidate_id);
 		expect(changed).toHaveBeenCalled();
 	});

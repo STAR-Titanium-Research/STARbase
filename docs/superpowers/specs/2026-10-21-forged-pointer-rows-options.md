@@ -4,11 +4,8 @@ Status: **decided 2026-10-21: the maintainer chose the recommendation (option 4 
 [ADR-0024](../../adr/0024-pointer-rows-are-written-only-by-the-archive-writers.md). Option 1b and the probe FP1 stay as listed below;
 FP1 to FP3 are in the physical-test backlog. (This paper was written as an investigation, before the choice.)
 Context: [ADR-0022](../../adr/0022-files-belong-to-their-provenance-owner.md) (decision 5: unowned and linked legacy files
-stay open); ADR-0023 (surface scans follow their file's owner; its "Forged pointer rows" known limit). **ADR-0023, the
-`d1-access-guard` surface-scan guard, the worker's `directus_client.py` and migration 205 are on the unmerged branch
-`origin/ccr-6b593491-4alqyj` (30 commits ahead of main), not on main.** Whatever is chosen has to be built on top of that
-branch once it merges (next free migration is then **206**), or it will collide on `scripts/access_rules.json`,
-`scripts/gen_access_rules.py` and the worker.
+stay open); ADR-0023 (surface scans follow their file's owner; its "Forged pointer rows" known limit). ADR-0023, the `d1-access-guard` surface-scan guard, the worker's `directus_client.py` and migration 205 were on the then-unmerged branch
+`ccr-6b593491-4alqyj` when this was written (they are on main now, PR 392), so the fix takes migration **206**.
 
 ## The hole in one paragraph
 
@@ -80,7 +77,7 @@ them except 3).
 
 ## What building 4 + 2b would involve (not started)
 
-- **Migration** `db/migrations/20261021000206_pointer_row_write_guard.sql` (after 205 merges), written with the
+- **Migration** `db/migrations/20261021000206_pointer_row_write_guard.sql` written with the
   `db-migration` skill: trigger function in `d1_private` or `public` per the repo's conventions, `COMMENT`s, reversible down
   (drop trigger and function), proven up/down/up.
 - **Tests:** Postgres-backed cases in `tests/phase1_schema.sh`: plain session inserting a star row fails; with the setting it

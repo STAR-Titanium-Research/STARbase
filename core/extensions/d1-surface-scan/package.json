@@ -2,7 +2,7 @@
   "name": "directus-extension-d1-surface-scan",
   "version": "1.0.0",
   "type": "module",
-  "description": "/d1-surface-scan: serves the rendered height grid, meta and thumbnail of a surface scan (insert or edge topography) from MinIO after reading the scan row with the caller's permissions, and queues a scan for render again.",
+  "description": "/d1-surface-scan: lists the surface scans of an insert or edge (a locked placeholder when the caller may not see the file, ADR-0023), serves the rendered height grid, meta and thumbnail from MinIO after the file's visibility check, queues a scan for render again, and takes the worker's render result (administrators only).",
   "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
   "directus:extension": {
     "type": "endpoint",

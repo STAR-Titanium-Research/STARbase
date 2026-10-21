@@ -44,8 +44,8 @@ def test_happy_path_renders_and_fills_the_row(world):
     job.render_scan(SCAN)
 
     assert world.statuses() == ["rendering", "done"]
-    row = world.rows[SCAN]
-    assert row["render_status"] == "done"
+    assert world.rows[SCAN]["render_status"] == "done"
+    row = world.renders[SCAN]
     assert row["render_error"] is None
     assert row["cache_key"] == SHA
     assert row["source_format"] == "al3d"
@@ -58,17 +58,50 @@ def test_happy_path_renders_and_fills_the_row(world):
     assert re.match(r"^\d{4}-\d\d-\d\dT", row["rendered_at"])
 
 
-def test_the_worker_only_writes_its_own_columns(world):
+def test_the_claim_patches_only_the_public_status(world):
+    """render_error and the render columns are not on the public row (ADR-0023): never PATCH them."""
     _scan_file(world)
     world.add_scan()
     job.render_scan(SCAN)
-    allowed = {
-        "render_status", "render_error", "rendered_at", "cache_key",
-        "source_format", "source_width", "source_height", "grid_width", "grid_height",
-        "pixel_pitch_x_um", "pixel_pitch_y_um", "z_min_um", "z_max_um",
-    }  # fmt: skip
-    for _, payload in world.history:
-        assert set(payload) <= allowed
+    assert world.history == [(SCAN, {"render_status": "rendering"})]
+
+
+RESULT_COLUMNS = {
+    "cache_key", "source_format", "source_width", "source_height", "grid_width", "grid_height",
+    "pixel_pitch_x_um", "pixel_pitch_y_um", "z_min_um", "z_max_um", "rendered_at",
+}  # fmt: skip
+
+
+def test_the_outcome_is_posted_to_the_result_route_with_the_version_read(world):
+    _scan_file(world)
+    world.add_scan()
+    job.render_scan(SCAN)
+    ((scan_id, body),) = world.results
+    assert scan_id == SCAN
+    # the claim moved the row from version 1 to 2; the result carries the version the poll re-read
+    assert body["version"] == 2
+    # ... and the id of the file it rendered (the row's, as claimed)
+    assert body["directus_files_id"] == FILE
+    assert set(body) == {"version", "directus_files_id", "render_status", "columns"}
+    assert body["render_status"] == "done"
+    assert set(body["columns"]) == RESULT_COLUMNS
+
+
+def test_a_failure_is_posted_with_its_error_and_no_columns(world):
+    world.add_file("rig/gone.al3d")
+    world.add_scan()
+    with pytest.raises(Exception):
+        job.render_scan(SCAN)
+    ((_, body),) = world.results
+    assert body["directus_files_id"] == FILE
+    assert set(body) == {
+        "version",
+        "directus_files_id",
+        "render_status",
+        "render_error",
+    }
+    assert body["render_status"] == "failed"
+    assert "moved or deleted" in body["render_error"]
 
 
 def test_the_three_objects_are_written_under_the_cache_key(world):
@@ -105,7 +138,7 @@ def test_a_large_scan_is_decimated_and_the_row_carries_the_grid_pitch(world):
     _scan_file(world, rows=1200, cols=2500, pixel_size_x_m=1e-6, pixel_size_y_m=1e-6)
     world.add_scan()
     job.render_scan(SCAN)
-    row = world.rows[SCAN]
+    row = world.renders[SCAN]
     assert (row["source_width"], row["source_height"]) == (2500, 1200)
     assert (row["grid_width"], row["grid_height"]) == (834, 400)
     assert row["pixel_pitch_x_um"] == pytest.approx(3.0)
@@ -118,8 +151,10 @@ def test_provisional_key_when_the_crawler_has_no_fingerprint(world):
     world.add_scan()
     job.render_scan(SCAN)
     st = path.stat()
-    assert world.rows[SCAN]["cache_key"] == f"p-{FILE}-{st.st_size}-{int(st.st_mtime)}"
-    assert _objects_under(world, world.rows[SCAN]["cache_key"])
+    assert (
+        world.renders[SCAN]["cache_key"] == f"p-{FILE}-{st.st_size}-{int(st.st_mtime)}"
+    )
+    assert _objects_under(world, world.renders[SCAN]["cache_key"])
 
 
 def test_provisional_key_when_the_fingerprint_is_not_done(world):
@@ -127,7 +162,7 @@ def test_provisional_key_when_the_fingerprint_is_not_done(world):
     world.add_scan()
     world.fingerprints[FILE] = {"status": "error", "content_sha256": SHA}
     job.render_scan(SCAN)
-    assert world.rows[SCAN]["cache_key"].startswith(f"p-{FILE}-")
+    assert world.renders[SCAN]["cache_key"].startswith(f"p-{FILE}-")
 
 
 def test_cache_hit_skips_reading_the_file(world, monkeypatch):
@@ -135,7 +170,7 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
     world.add_scan()
     world.current_fingerprint(FILE, SHA)
     job.render_scan(SCAN)
-    first = dict(world.rows[SCAN])
+    first = dict(world.renders[SCAN])
     writes = dict(world.objects)
 
     # The same bytes under another file id and name: same content hash.
@@ -150,8 +185,8 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
     monkeypatch.setattr(topography, "read_scan", boom)
     job.render_scan(OTHER_SCAN)
 
-    second = world.rows[OTHER_SCAN]
-    assert second["render_status"] == "done"
+    second = world.renders[OTHER_SCAN]
+    assert world.rows[OTHER_SCAN]["render_status"] == "done"
     assert second["cache_key"] == SHA
     for column in ("source_format", "source_width", "grid_width", "grid_height", "z_min_um", "z_max_um",
                    "pixel_pitch_x_um", "pixel_pitch_y_um"):  # fmt: skip
@@ -207,27 +242,165 @@ def test_a_render_again_during_the_render_is_not_overwritten(world, monkeypatch)
     assert world.rows[SCAN]["render_status"] == "pending"
 
 
-def test_a_stale_version_at_the_final_write_is_retried(world):
+def test_a_409_at_the_result_is_retried_with_the_version_read_again(world):
     _scan_file(world)
     world.add_scan()
-    real = world.patch_scan
-    calls = {"n": 0}
+    world.result_conflicts_to_inject = 2  # the row's version moves under both attempts
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
+    assert world.renders[SCAN]["cache_key"]
+    versions = [body["version"] for _, body in world.results]
+    assert versions == [
+        2,
+        3,
+        4,
+    ]  # each retry re-read the row and sent the version it found
 
-    def flaky(scan_id, payload, version=None):
-        calls["n"] += 1
-        if calls["n"] == 2:  # the terminal write, first attempt
-            world.rows[scan_id]["version"] += 1
-            raise VersionConflictError("stale")
-        return real(scan_id, payload, version)
+
+def test_a_lost_claim_at_the_result_is_skipped_not_overwritten(world, monkeypatch):
+    """Render again was pressed during the render: the row is pending, so nothing is posted."""
+    _scan_file(world)
+    world.add_scan()
+    real = topography.read_scan
+
+    def read_then_reset(path, expected=None):
+        scan = real(path, expected)
+        world.rows[SCAN]["render_status"] = "pending"
+        world.rows[SCAN]["version"] += 1
+        return scan
+
+    monkeypatch.setattr(topography, "read_scan", read_then_reset)
+    job.render_scan(SCAN)
+    assert world.results == []
+    assert SCAN not in world.renders
+    assert world.rows[SCAN]["render_status"] == "pending"
+
+
+def _repoint_and_reclaim(world, monkeypatch, step):
+    """While *step* of the job runs, the scan is repointed to another (unowned) file and claimed
+    again: 'rendering' once more, at a newer version, but of OTHER_FILE."""
+    real = getattr(topography, step)
+
+    def run_then_repoint(*args, **kwargs):
+        try:
+            return real(*args, **kwargs)
+        finally:
+            row = world.rows[SCAN]
+            row["directus_files_id"] = OTHER_FILE
+            row["render_status"] = "rendering"
+            row["version"] += 2
+
+    monkeypatch.setattr(topography, step, run_then_repoint)
+
+
+def test_a_done_render_of_a_file_the_scan_no_longer_points_at_is_not_posted(
+    world, monkeypatch
+):
+    """The old job's liveness check passed, but the scan was repointed and claimed again: the row is
+    'rendering' again, so only the file id tells the old job that it is not its row any more."""
+    _scan_file(world)
+    world.add_scan()
+    _repoint_and_reclaim(world, monkeypatch, "read_scan")
+    job.render_scan(SCAN)
+    assert world.results == []  # nothing posted: not even a failed
+    assert SCAN not in world.renders
+    row = world.rows[SCAN]
+    assert (row["directus_files_id"], row["render_status"]) == (OTHER_FILE, "rendering")
+
+
+def test_a_failed_render_of_a_file_the_scan_no_longer_points_at_is_not_posted(
+    world, monkeypatch
+):
+    _scan_file(world)
+    world.add_scan()
+    _repoint_and_reclaim(world, monkeypatch, "read_scan")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(job.grid, "decimate", boom)
+    with pytest.raises(RuntimeError):
+        job.render_scan(SCAN)
+    assert world.results == []
+    assert SCAN not in world.renders
+    assert world.rows[SCAN]["render_status"] == "rendering"
+
+
+def test_a_repoint_between_the_reread_and_the_post_is_refused_by_the_route(
+    world, monkeypatch
+):
+    """The re-read still saw the rendered file, then the row moved: the route's 409 (its claim also
+    needs the file id) makes the job re-read, see the other file, and stop."""
+    _scan_file(world)
+    world.add_scan()
+    real = world.post_result
+    calls = []
+
+    def repoint_then_post(scan_id, payload, version, files_id):
+        calls.append(files_id)
+        world.rows[scan_id]["directus_files_id"] = OTHER_FILE
+        return real(scan_id, payload, version, files_id)
+
+    monkeypatch.setattr(job.directus_client, "post_result", repoint_then_post)
+    job.render_scan(SCAN)
+    assert calls == [FILE]  # one post; the second read saw OTHER_FILE and skipped
+    assert SCAN not in world.renders
+    assert world.rows[SCAN]["render_status"] == "rendering"
+
+
+def test_a_claim_lost_during_the_retries_is_skipped(world):
+    """The first post answers 409 and the row was reset meanwhile: the re-read sees 'pending'."""
+    _scan_file(world)
+    world.add_scan()
+    real = world.post_result
+
+    def conflict_after_reset(scan_id, payload, version, files_id):
+        world.rows[scan_id]["render_status"] = "pending"
+        world.rows[scan_id]["version"] += 1
+        raise VersionConflictError("stale")
 
     import app.lib.directus_client as dc
 
-    dc.patch_scan = flaky
+    dc.post_result = conflict_after_reset
     try:
         job.render_scan(SCAN)
     finally:
-        dc.patch_scan = real
-    assert world.rows[SCAN]["render_status"] == "done"
+        dc.post_result = real
+    assert world.rows[SCAN]["render_status"] == "pending"
+    assert SCAN not in world.renders
+
+
+def test_giving_up_after_repeated_409s_on_a_done_result_raises(world):
+    _scan_file(world)
+    world.add_scan()
+    world.result_conflicts_to_inject = 99
+    with pytest.raises(VersionConflictError, match="gave up"):
+        job.render_scan(SCAN)
+    # OCC_MAX_ATTEMPTS posts of 'done', then the job's own failure path tries 'failed' as many times
+    assert [b["render_status"] for _, b in world.results] == ["done"] * 5 + [
+        "failed"
+    ] * 5
+    assert SCAN not in world.renders
+
+
+def test_a_rejected_done_result_raises_so_the_job_fails(world):
+    """A 403 (the token is not an administrator's) or a 400 must not be swallowed on success."""
+    _scan_file(world)
+    world.add_scan()
+    world.result_error = RuntimeError("403 Forbidden")
+    with pytest.raises(RuntimeError, match="403"):
+        job.render_scan(SCAN)
+    assert SCAN not in world.renders
+
+
+def test_a_failed_result_that_cannot_be_posted_does_not_hide_the_render_error(world):
+    world.add_file("rig/gone.al3d")
+    world.add_scan()
+    world.result_error = RuntimeError("directus down")
+    with pytest.raises(
+        Exception, match="moved or deleted"
+    ):  # the original error, not directus down
+        job.render_scan(SCAN)
 
 
 # --- failure paths: row goes to failed with a message, and the job re-raises -----------------------
@@ -236,10 +409,11 @@ def test_a_stale_version_at_the_final_write_is_retried(world):
 def _fails(world, match, error_contains=None):
     with pytest.raises(Exception, match=match):
         job.render_scan(SCAN)
-    row = world.rows[SCAN]
-    assert row["render_status"] == "failed"
-    assert row["render_error"]
-    assert error_contains is None or error_contains in row["render_error"]
+    assert world.rows[SCAN]["render_status"] == "failed"
+    error = world.renders[SCAN]["render_error"]
+    assert error
+    assert error_contains is None or error_contains in error
+    assert "columns" not in world.results[-1][1]
     assert world.statuses() == ["rendering", "failed"]
     assert world.objects == {}
 
@@ -309,9 +483,9 @@ def test_an_unexpected_error_fails_the_row_and_reraises_the_original(world):
     world.put_error = ConnectionError("minio down")
     with pytest.raises(ConnectionError, match="minio down"):
         job.render_scan(SCAN)
-    row = world.rows[SCAN]
-    assert row["render_status"] == "failed"
-    assert row["render_error"].startswith("Unexpected error: ConnectionError")
+    assert world.rows[SCAN]["render_status"] == "failed"
+    error = world.renders[SCAN]["render_error"]
+    assert error.startswith("Unexpected error: ConnectionError")
 
 
 def test_the_error_message_is_capped(world):
@@ -320,7 +494,7 @@ def test_the_error_message_is_capped(world):
     world.put_error = RuntimeError("x" * 5000)
     with pytest.raises(RuntimeError):
         job.render_scan(SCAN)
-    assert len(world.rows[SCAN]["render_error"]) <= 500
+    assert len(world.renders[SCAN]["render_error"]) <= 500
 
 
 def test_render_again_after_a_failure_clears_the_error(world):
@@ -328,12 +502,12 @@ def test_render_again_after_a_failure_clears_the_error(world):
     world.add_scan()
     with pytest.raises(Exception):
         job.render_scan(SCAN)
-    assert world.rows[SCAN]["render_error"]
+    assert world.renders[SCAN]["render_error"]
     write_al3d(world.root / "rig" / "later.al3d", ramp(3, 3))
     world.rows[SCAN]["render_status"] = "pending"  # what POST /render does
     job.render_scan(SCAN)
     assert world.rows[SCAN]["render_status"] == "done"
-    assert world.rows[SCAN]["render_error"] is None
+    assert world.renders[SCAN]["render_error"] is None
 
 
 def test_a_file_re_exported_in_place_is_not_served_from_the_old_hash(world):
@@ -342,7 +516,7 @@ def test_a_file_re_exported_in_place_is_not_served_from_the_old_hash(world):
     world.add_scan()
     world.current_fingerprint(FILE, SHA)
     job.render_scan(SCAN)
-    assert world.rows[SCAN]["cache_key"] == SHA
+    assert world.renders[SCAN]["cache_key"] == SHA
     old_surface = world.objects[f"surface-scans/{SHA}/grid.bin"][0]
 
     # Re-export in place: a different surface of the same size, a newer mtime; the fingerprint is old.
@@ -353,8 +527,8 @@ def test_a_file_re_exported_in_place_is_not_served_from_the_old_hash(world):
 
     job.render_scan(SCAN)
 
-    row = world.rows[SCAN]
-    assert row["render_status"] == "done"
+    row = world.renders[SCAN]
+    assert world.rows[SCAN]["render_status"] == "done"
     assert row["cache_key"] != SHA
     assert row["cache_key"].startswith(f"p-{FILE}-")
     new_surface = world.objects[f"surface-scans/{row['cache_key']}/grid.bin"][0]
@@ -367,7 +541,7 @@ def test_a_fingerprint_without_source_mtime_is_not_trusted_by_the_job(world):
     world.add_scan()
     world.current_fingerprint(FILE, SHA, source_mtime=None)
     job.render_scan(SCAN)
-    assert world.rows[SCAN]["cache_key"].startswith(f"p-{FILE}-")
+    assert world.renders[SCAN]["cache_key"].startswith(f"p-{FILE}-")
 
 
 def test_a_file_replaced_between_the_stat_and_the_read_fails_the_row(
@@ -386,7 +560,7 @@ def test_a_file_replaced_between_the_stat_and_the_read_fails_the_row(
     with pytest.raises(RenderError, match="changed on the share"):
         job.render_scan(SCAN)
     assert world.rows[SCAN]["render_status"] == "failed"
-    assert "changed on the share" in world.rows[SCAN]["render_error"]
+    assert "changed on the share" in world.renders[SCAN]["render_error"]
     assert world.objects == {}
 
 

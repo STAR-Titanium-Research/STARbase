@@ -35,7 +35,9 @@
     "'custom' holds the rows that need more than a filter: per collection and action, any of permissions, validation and",
     "fields (a list; written as the comma-separated text Directus stores). 'guards' lists the junctions whose rows grant",
     "visibility: Directus does not filter create, so the d1-access-guard hook (core/extensions/d1-access-guard) refuses",
-    "to create or repoint one unless the caller passes the parent's rule named by 'rule' (default update). A junction also counts when a column a",
+    "to create or repoint one unless the caller passes the parent's rule named by 'rule' (default update). A junction may be a 'custom' collection with",
+    "a custom create row, and a parent may be a 'custom' collection whose literal filter the guard ships (surface_scans.directus_files_id: the caller",
+    "must be able to read the file, 'rule': 'read' of directus_files; ADR-0023). A junction also counts when a column a",
     "read path uses is derived from it: test_sessions.sample_id is kept equal to the first sample of test_sessions_subject",
     "(migration 139), so adding a subject row to a test can change who reads that test. gen_access_rules.py writes that rule",
     "into core/extensions/d1-access-guard/rules.json. 'field' is the junction's FK to the parent, 'key' the parent's primary key.",
@@ -194,9 +196,9 @@
     },
     "surface_scans": {
       "create": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id"]},
-      "read": {},
-      "update": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id", "render_status", "render_error"]},
-      "delete": {}
+      "read": {"fields": ["scan_id", "insert_id", "edge_id", "condition", "scanned_on", "operation_id", "created_at", "updated_at", "version"]},
+      "update": {"permissions": {"_or": [{"_and": [{"directus_files_id": {"owner_person_id": {"_null": true}}}, {"directus_files_id": {"owner_team_id": {"_null": true}}}]}, {"directus_files_id": {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}}}]}, "fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id", "render_status"]},
+      "delete": {"permissions": {"_or": [{"_and": [{"directus_files_id": {"owner_person_id": {"_null": true}}}, {"directus_files_id": {"owner_team_id": {"_null": true}}}]}, {"directus_files_id": {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}}}]}}
     },
     "directus_files": {
       "create": {"fields": ["id", "storage", "filename_disk", "filename_download", "title", "type", "folder", "uploaded_by", "created_on", "modified_by", "modified_on", "charset", "filesize", "width", "height", "duration", "embed", "description", "location", "tags", "metadata", "focal_point_x", "focal_point_y", "tus_id", "tus_data", "uploaded_on"]},
@@ -213,7 +215,8 @@
       {"field": "campaign_id", "parent": "campaigns", "key": "campaign_id", "rule": "update"},
       {"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "update"}
     ],
-    "test_sessions_subject": [{"field": "test_sessions_id", "parent": "test_sessions", "key": "session_id", "rule": "update"}]
+    "test_sessions_subject": [{"field": "test_sessions_id", "parent": "test_sessions", "key": "session_id", "rule": "update"}],
+    "surface_scans": [{"field": "directus_files_id", "parent": "directus_files", "key": "id", "rule": "read"}]
   },
   "owner_guards": {
     "physical_samples": {"key": "sample_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]},
