@@ -31,6 +31,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0020](./0020-inbox-crawler-read-only-allow-listed.md) | The inbox crawler: read-only, allow-listed, and it only suggests | Proposed (2026-10-15) |
 | [0021](./0021-surface-scans-on-inserts-and-edges.md) | Surface scans belong to inserts and edges, not to Tests; rendered by a read-only worker | Proposed (2026-10-15) |
 | [0022](./0022-files-belong-to-their-provenance-owner.md) | A file belongs to its provenance owner: only they see it, link it or read its settings | Proposed (2026-10-16) |
+| [0024](./0024-pointer-rows-are-written-only-by-the-archive-writers.md) | A pointer row of the archive share is written only by the archive indexer and the inbox crawler | Proposed (2026-10-21) |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

@@ -1,6 +1,8 @@
 # Forged pointer rows: options for the maintainer
 
-Status: **investigation only, nothing is built. Waiting for the maintainer to choose** (a security-policy decision).
+Status: **decided 2026-10-21: the maintainer chose the recommendation (option 4 + 2b).** Built in migration 206 and recorded in
+[ADR-0024](../../adr/0024-pointer-rows-are-written-only-by-the-archive-writers.md). Option 1b and the probe FP1 stay as listed below;
+FP1 to FP3 are in the physical-test backlog. (This paper was written as an investigation, before the choice.)
 Context: [ADR-0022](../../adr/0022-files-belong-to-their-provenance-owner.md) (decision 5: unowned and linked legacy files
 stay open); ADR-0023 (surface scans follow their file's owner; its "Forged pointer rows" known limit). **ADR-0023, the
 `d1-access-guard` surface-scan guard, the worker's `directus_client.py` and migration 205 are on the unmerged branch

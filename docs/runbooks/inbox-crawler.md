@@ -347,6 +347,32 @@ are replaceable copies, never the original, and the table is outside Directus's 
   adopted. It keys on that candidate row, not on `directus_files.metadata.found_by`, which the indexer's next
   run overwrites and any Lab Member can edit. `--phase all` stays a superset of `--phase linked`.
 
+## Forged pointer rows
+
+A pointer row is a `directus_files` row with `storage = 'star'`. Since migration 206 (ADR-0024) only the archive indexer
+and this crawler can create one or change what it points at: both set the session setting `d1.archive_writer = 'on'` on
+their connections (`inbox_crawler.db.declare_archive_writer`, and the same two lines in `scripts/index_archive.py`), and
+Directus never does. A new script or migration that writes pointer rows must set it too, or Postgres refuses with
+*"Only the archive indexer and the inbox crawler can register a file of the archive share"*.
+
+Rows forged **before** the migration are not touched by it. To find them, on the real database (read-only), list the pointer
+rows a user created through Directus's API: the crawler and the indexer write by SQL and leave no `directus_activity` row.
+
+```sql
+SELECT f.id, f.metadata::jsonb ->> 'archive_path' AS archive_path, f.owner_person_id, f.owner_team_id,
+       a."user" AS created_by, a."timestamp" AS created_at
+  FROM directus_files f
+  JOIN directus_activity a ON a.collection = 'directus_files' AND a.item = f.id::text AND a.action = 'create'
+ WHERE f.storage = 'star'
+ ORDER BY a."timestamp";
+```
+
+Expect no rows. A row here was made by a person, not by the share: look at its `archive_path`, at the surface scans
+and links that use it (`surface_scans`, the three `*_data_files` junctions), and delete it (the crawler registers the real
+file again on its next pass and stamps the owner) or, if the file really is the person's own, stamp the owner by SQL as in
+"An alias handed to someone else". The query only sees as far back as Directus keeps its activity log
+(`ACTIVITY_RETENTION`, unset means for ever); if it is set, an older forged row is not listed.
+
 ## An alias handed to someone else
 
 A `uni_alias` (or `share_folder`) moved from person A to person B, or typed wrongly and corrected, leaves the files
