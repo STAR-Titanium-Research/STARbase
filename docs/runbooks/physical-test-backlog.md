@@ -1719,7 +1719,9 @@ below. "Since" is the surface scan privacy PR (pending).
 - [ ] **C4 — The PDF appendix prints.** Print the operation report (PDF) of the C1 run: the Conform appendix follows the
   summary, with four panels (wheel speed, motor torque, temperatures, IPS output) drawn over the run window only, the summary
   table (extruding time, energy total) and the steps table; the run window's clock times are UK local time. Check it on a
-  run that shares its log with another (only its own window is plotted). Since: Conform runs PR.
+  run that shares its log with another (only its own window is plotted). The plots prove `d1-report` read the CSV
+  through Directus's `AssetsService.getAsset` (only exercised against a fake in CI). As a reader of the run who cannot read
+  the log, the appendix shows "Conform log not visible to you" with the summary and steps still there. Since: Conform runs PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

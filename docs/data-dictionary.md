@@ -106,6 +106,10 @@ FAST sintering
   fast_run_data                normalised sintering trace per operation
   fast_recipes                 FAST 25 / 250 recipe definitions
 
+Conform (continuous extrusion)
+  conform_logs                 one uploaded Conform log (normalised CSV, channel catalogue, whole-log energy)
+  conform_run_data             one Conform run's log, run window, summary and steps
+
 Cross-cutting
   audit_logs                   append-only immutable change log
 
@@ -728,6 +732,34 @@ them by hand; the dumps leave their data out and a restore ends with `d1_private
 The public tables are hidden Directus collections and are not audited. They are listed in `v_schema_dictionary` like every public table, but `d1_llm_readonly` has no grant on them (and the plugin filters its prompt by privilege), so Ask-DB never offers or reads them.
 
 ---
+
+### Conform runs: `conform_*` columns, `conform_logs`, `conform_run_data`
+
+A **Conform run** is a `manufacturing_operations` row with `process_category = 'conform'` and method `CF`
+(migration `…206`, [ADR-0024](adr/0024-conform-is-its-own-process-category.md)). Its parameters are inline
+`conform_*` columns: `conform_run_number`, `conform_feedstock`, `conform_feedstock_form`
+(swarf / powder / granules / rod), `conform_feed_mass_g`, `conform_die_diameter_mm`, `conform_tooling_id`,
+`conform_extrusion_length_mm`, `conform_extrusion_mass_g`, `conform_yield_pct`, `conform_flash_mass_g`,
+`conform_wheel_speed_rpm` and `conform_ips_setpoint_c`. The last two are filled from the log's first step when
+empty. The code is `DD-MM-YY-CF-{run}-{die}dia`. A feedstock sample and its extrusion are linked as `extruded_from`.
+
+`conform_logs` (migration `…207`) is one uploaded machine log. It holds:
+- `directus_files_id`: the normalised CSV, `time_s` first, then the `series` catalogue order, ending with the
+  four derived `p_*_kw` power channels
+- `log_start` / `log_end`
+- `series`
+- `totals`: whole-log energy per component and average demand
+- `constants`: the power constants used
+
+Several runs can share one log. `conform_run_data` (one per operation) holds the run's `log_id`, its **run window**
+(`window_start`, `window_end`, half-open), `status` (`no_log`, `no_window`, `done`, `error`), and its `summary`
+and `steps` computed in the browser over the window only.
+- **Windows.** A trigger refuses a window that overlaps another run's window on the same log, or that lies
+  outside the log.
+- **Who can read a log.** The readers of any run linked to it, and its uploader. The run records stay private
+  to their own readers.
+
+Spec: [Conform runs](superpowers/specs/2026-10-21-conform-runs-design.md).
 
 ### `raw_stock_lots`
 
