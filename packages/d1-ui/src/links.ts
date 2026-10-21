@@ -23,6 +23,7 @@ const REPORT = /^\/d1-report\//;
 const PLOTS: [string, string][] = [
 	['/d1-force-dashboard', '/plot/force'],
 	['/d1-fast-dashboard', '/plot/fast'],
+	['/d1-conform-dashboard', '/plot/conform'],
 ];
 
 // STARbase's own pages that have no /home form (they never existed in Data Studio): written with the

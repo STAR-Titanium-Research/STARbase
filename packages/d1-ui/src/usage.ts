@@ -38,6 +38,7 @@ export const PAGE_KEYS: readonly string[] = [
 	'people',
 	'force-dashboard',
 	'fast-dashboard',
+	'conform-dashboard',
 	'build-process',
 	'action:register-sample',
 	'action:log-operation',
@@ -71,6 +72,7 @@ const EXTRA_PAGES: PageInfo[] = [
 	{ key: 'people', label: 'People', to: '/home/people' },
 	{ key: 'force-dashboard', label: 'Force dashboard', to: '/d1-force-dashboard' },
 	{ key: 'fast-dashboard', label: 'FAST dashboard', to: '/d1-fast-dashboard' },
+	{ key: 'conform-dashboard', label: 'Conform dashboard', to: '/d1-conform-dashboard' },
 	{ key: 'build-process', label: 'Build a process', to: '/map?edit=new' },
 	{ key: 'action:register-sample', label: 'Register a sample', to: '/content/physical_samples/+' },
 	{ key: 'action:log-operation', label: 'Log an operation', to: '/content/manufacturing_operations/+' },
@@ -88,7 +90,7 @@ export const SUGGESTED_PAGES: readonly string[] = ['samples', 'action:log-operat
 // Build a process is the Process map in edit mode: it has no /home/<slug> page (see pageTarget).
 const BUILD_PROCESS = 'build-process';
 const SLUG_PAGES = new Set(PAGE_KEYS.filter((k) => !k.includes(':') && !k.endsWith('-dashboard') && k !== BUILD_PROCESS));
-const DASHBOARD_PATHS: Record<string, string> = { '/d1-force-dashboard': 'force-dashboard', '/d1-fast-dashboard': 'fast-dashboard' };
+const DASHBOARD_PATHS: Record<string, string> = { '/d1-force-dashboard': 'force-dashboard', '/d1-fast-dashboard': 'fast-dashboard', '/d1-conform-dashboard': 'conform-dashboard' };
 const ACTION_PATHS: Record<string, string> = {
 	'/content/physical_samples/+': 'action:register-sample',
 	'/content/manufacturing_operations/+': 'action:log-operation',

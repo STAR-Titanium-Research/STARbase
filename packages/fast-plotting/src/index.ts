@@ -4,3 +4,6 @@ export { resetFastHost, setFastHost, useFastHost, type FastHost } from './host';
 export * from './fastCache';
 export * from './fastMeta';
 export * from './conform';
+export * from './profile';
+export { fastProfile } from './profiles/fastProfile';
+export { conformProfile, CONFORM_PEAK_LABELS, type ConformRunBundle } from './profiles/conformProfile';

@@ -17,6 +17,7 @@ describe('the Directus host (the default)', () => {
 		expect(directusLinks.resolve('/home?tab=2')).toEqual({ kind: 'external', href: '/d1-links/go?tab=2' });
 		expect(directusLinks.resolve('/d1-force-dashboard?operation=9')).toEqual({ kind: 'external', href: '/d1-links/go/p/plot/force?operation=9' });
 		expect(directusLinks.resolve('/d1-fast-dashboard')).toEqual({ kind: 'external', href: '/d1-links/go/p/plot/fast' });
+		expect(directusLinks.resolve('/d1-conform-dashboard?operation=9')).toEqual({ kind: 'external', href: '/d1-links/go/p/plot/conform?operation=9' });
 		expect(directusLinks.resolve('/content/equipment/e1')).toEqual({ kind: 'route', to: '/content/equipment/e1' });
 		expect(directusLinks.resolve('/homework')).toEqual({ kind: 'route', to: '/homework' });
 	});
@@ -56,6 +57,7 @@ describe('STARbase', () => {
 		use();
 		expect(resolveLink('/d1-force-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/force?operation=9' });
 		expect(resolveLink('/d1-fast-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/fast?operation=9' });
+		expect(resolveLink('/d1-conform-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/conform?operation=9' });
 		expect(resolveLink('/d1-force-dashboard')).toEqual({ kind: 'route', to: '/plot/force' });
 	});
 	it('keeps its own pages (Report a bug, Force crawler) as routes, not Data Studio pages', () => {
@@ -111,6 +113,7 @@ describe('STARbase', () => {
 		expect(canonicalPath('/samples?bookmark=3')).toBe('/home/samples?bookmark=3');
 		expect(canonicalPath('/plot/force?operation=9')).toBe('/d1-force-dashboard?operation=9');
 		expect(canonicalPath('/plot/fast')).toBe('/d1-fast-dashboard');
+		expect(canonicalPath('/plot/conform?operation=3')).toBe('/d1-conform-dashboard?operation=3');
 		expect(canonicalPath('/plotting')).toBe('/home/plotting');
 	});
 	it('round-trips every Explorer path', () => {
