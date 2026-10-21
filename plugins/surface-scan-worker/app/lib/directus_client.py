@@ -7,9 +7,11 @@ ways, both optimistic-concurrency guarded on the row's ``version`` (a stale vers
 * the claim (``pending`` to ``rendering``): a REST PATCH with ``filter[version][_eq]=<version read>``
   (:func:`patch_scan`), as the heavy-data worker does;
 * the outcome (``done`` or ``failed``, with the render's numbers or its error): ``POST
-  /d1-surface-scan/<id>/result`` with the version read in the body (:func:`post_result`). The render
-  columns and the error live in ``d1_private.surface_scan_renders`` (ADR-0023), which only that route
-  writes; the public row no longer has them, so the worker never PATCHes them.
+  /d1-surface-scan/<id>/result`` with the version read and the id of the file that was rendered in the
+  body (:func:`post_result`). The route claims the row only while it is still ``rendering`` at that
+  version AND still points at that file, so a job that outlived a repoint cannot store its render under
+  the new file. The render columns and the error live in ``d1_private.surface_scan_renders`` (ADR-0023),
+  which only that route writes; the public row no longer has them, so the worker never PATCHes them.
 
 Reads ``directus_files`` (where the file is) and ``file_fingerprints`` (the crawler's content hash,
 read-only for us: this worker never hashes a file and never writes that table).
@@ -95,17 +97,18 @@ def patch_scan(scan_id: str, payload: dict, version: int | None = None) -> dict:
     return body
 
 
-def post_result(scan_id: str, payload: dict, version: int) -> dict:
+def post_result(scan_id: str, payload: dict, version: int, files_id: str) -> dict:
     """``POST /d1-surface-scan/{id}/result``: record ``done`` or ``failed`` for a ``rendering`` row.
 
     *payload* is ``{render_status: 'done'|'failed', render_error?, columns?}``; the version we read goes
-    in the body as ``version``. A 409 (the endpoint's ``VERSION_CONFLICT``: the version moved, or the row
-    is no longer ``rendering``) raises :class:`VersionConflictError`; any other error status raises
+    in the body as ``version`` and *files_id* (the file that was rendered) as ``directus_files_id``. A 409
+    (the endpoint's ``VERSION_CONFLICT``: the version moved, the row is no longer ``rendering``, or it now
+    points at another file) raises :class:`VersionConflictError`; any other error status raises
     ``requests.HTTPError`` (403: the token is not an administrator's; 400: a body the endpoint refused).
     """
     resp = requests.post(
         f"{DIRECTUS_URL}{RESULT_ROUTE.format(scan_id=scan_id)}",
-        json={**payload, "version": version},
+        json={**payload, "version": version, "directus_files_id": files_id},
         headers=_headers(),
         timeout=30,
     )
@@ -118,14 +121,40 @@ def post_result(scan_id: str, payload: dict, version: int) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+#: The scan id and the file id of the start-up token probe: no such row exists.
+NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def probe_result_route() -> int:
+    """Ask the result route what it thinks of our token, writing nothing; returns the HTTP status.
+
+    Posts a syntactically valid ``failed`` report for the nil scan. An administrator's token gets
+    ``409 VERSION_CONFLICT`` (no such row, so nothing is claimed or written); any other user gets ``403``
+    before the body is even read. ``400`` would mean the route and the worker disagree about the body.
+    Connection errors propagate as ``requests.RequestException``.
+    """
+    resp = requests.post(
+        f"{DIRECTUS_URL}{RESULT_ROUTE.format(scan_id=NIL_UUID)}",
+        json={
+            "version": 1,
+            "directus_files_id": NIL_UUID,
+            "render_status": "failed",
+            "render_error": "token probe",
+        },
+        headers=_headers(),
+        timeout=30,
+    )
+    return resp.status_code
+
+
 def _occ_retry(
     scan_id: str,
     compute: Callable[[dict], dict | None],
-    write: Callable[[dict, int], dict],
+    write: Callable[[dict, int, dict], dict],
     max_attempts: int | None,
 ) -> dict | None:
-    """Read the row, let *compute* decide the payload, *write* it with the version read; on a version
-    conflict re-read and start again. A row without a ``version`` aborts: we never write blind."""
+    """Read the row, let *compute* decide the payload, *write* it with the version read (and the row
+    read, for a write that needs more of it); on a version conflict re-read and start again. A row without a ``version`` aborts: we never write blind."""
     attempts = max_attempts or OCC_MAX_ATTEMPTS
     for attempt in range(1, attempts + 1):
         current = get_scan(scan_id)
@@ -138,7 +167,7 @@ def _occ_retry(
         if not payload:
             return None
         try:
-            return write(payload, version)
+            return write(payload, version, current)
         except VersionConflictError:
             log.info("OCC conflict scan=%s attempt=%d", scan_id, attempt)
             if attempt < attempts:
@@ -161,7 +190,7 @@ def update_scan(
     return _occ_retry(
         scan_id,
         compute,
-        lambda payload, version: patch_scan(scan_id, payload, version=version),
+        lambda payload, version, _row: patch_scan(scan_id, payload, version=version),
         max_attempts,
     )
 
@@ -170,6 +199,7 @@ def report_result(
     scan_id: str,
     compute: Callable[[dict], dict | None],
     max_attempts: int | None = None,
+    rendered_file_id: str | None = None,
 ) -> dict | None:
     """Read the row, then post its outcome to the result route under OCC, retrying on a 409 exactly as
     :func:`update_scan` does.
@@ -177,13 +207,38 @@ def report_result(
     ``compute(current)`` returns the result payload (``render_status`` plus ``render_error`` or
     ``columns``), or None for "nothing to write": callers return None when the row is no longer
     ``rendering`` (someone reset it), which is how a lost claim is skipped.
+
+    *rendered_file_id* is the file a render job rendered. The row it is reported on must still point at
+    that file: when the re-read row's ``directus_files_id`` differs (the scan was repointed, and perhaps
+    claimed again, while the job ran), nothing is posted, exactly like a row that is no longer
+    ``rendering``. The id is what goes in the body, so the route refuses the report too if the row moves
+    between this read and the post. Without it (the poller failing a stuck row) the file id of the row as
+    read in this pass is posted.
     """
-    return _occ_retry(
-        scan_id,
-        compute,
-        lambda payload, version: post_result(scan_id, payload, version),
-        max_attempts,
-    )
+
+    def guarded(current: dict) -> dict | None:
+        if (
+            rendered_file_id is not None
+            and current.get("directus_files_id") != rendered_file_id
+        ):
+            log.info(
+                "skip result scan=%s: it now points at file=%s, not the rendered %s",
+                scan_id,
+                current.get("directus_files_id"),
+                rendered_file_id,
+            )
+            return None
+        return compute(current)
+
+    def write(payload: dict, version: int, current: dict) -> dict:
+        files_id = rendered_file_id or current.get("directus_files_id")
+        if not files_id:
+            raise ValueError(
+                f"surface scan {scan_id}: row has no directus_files_id; refusing blind write"
+            )
+        return post_result(scan_id, payload, version, files_id)
+
+    return _occ_retry(scan_id, guarded, write, max_attempts)
 
 
 def list_scans(

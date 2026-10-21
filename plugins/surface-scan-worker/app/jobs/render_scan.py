@@ -59,15 +59,20 @@ def render_scan(scan_id: str) -> None:
         log.info("skip scan=%s: claimed by another job", scan_id)
         return
 
-    log.info("start scan=%s file=%s", scan_id, row.get("directus_files_id"))
+    # The file this job renders: the one on the row it claimed. Every report carries it, and none is
+    # posted for a scan that has been repointed to another file meanwhile.
+    files_id = row["directus_files_id"]
+    log.info("start scan=%s file=%s", scan_id, files_id)
     try:
-        columns = _render(row["directus_files_id"])
-        _finish(scan_id, {"render_status": STATUS_DONE, "columns": columns})
+        columns = _render(files_id)
+        _finish(scan_id, files_id, {"render_status": STATUS_DONE, "columns": columns})
         log.info("done scan=%s key=%s", scan_id, columns["cache_key"])
     except Exception as err:
         log.exception("failed scan=%s", scan_id)
         _finish(
-            scan_id, {"render_status": STATUS_FAILED, "render_error": _message(err)}
+            scan_id,
+            files_id,
+            {"render_status": STATUS_FAILED, "render_error": _message(err)},
         )
         raise
 
@@ -81,15 +86,16 @@ def _message(err: Exception) -> str:
     return text[:_ERROR_LIMIT]
 
 
-def _finish(scan_id: str, payload: dict) -> None:
-    """Post the terminal state to ``POST /d1-surface-scan/<id>/result`` with the version read, unless
-    the row left ``rendering`` meanwhile (someone reset it). A 409 re-reads and tries again."""
+def _finish(scan_id: str, files_id: str, payload: dict) -> None:
+    """Post the terminal state to ``POST /d1-surface-scan/<id>/result`` with the version read and the
+    id of the file rendered, unless the row left ``rendering`` or now points at another file meanwhile
+    (someone reset or repointed it). A 409 re-reads and tries again."""
 
     def compute(current: dict) -> dict | None:
         return payload if current.get("render_status") == STATUS_RENDERING else None
 
     try:
-        directus_client.report_result(scan_id, compute)
+        directus_client.report_result(scan_id, compute, rendered_file_id=files_id)
     except Exception:
         log.exception("could not write the final state of scan=%s", scan_id)
         if payload.get("render_status") == STATUS_DONE:

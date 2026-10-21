@@ -84,12 +84,17 @@ already-linked legacy files stay open). Decision 6 left surface scans lab-wide u
   scan they would not see as a non-admin writes one `surface_scan_access_log` row.
 - `POST .../:id/render`: unchanged contract; the ItemsService update as the caller now enforces the file filter; clears the
   private `render_error` in the same transaction.
-- `POST .../:id/result` (new, **administrators only**; the worker's machine user is one): body `{version, render_status:
-  'done'|'failed', render_error?, columns?}` with `columns` = `{cache_key, source_format, source_width, source_height,
-  grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at?}`. One transaction: `UPDATE
-  surface_scans SET render_status ... WHERE scan_id=? AND version=? AND render_status='rendering'` (zero rows is `409
-  VERSION_CONFLICT`), then UPSERT `surface_scan_renders`. Validates types and `cache_key`, sets `d1.actor_identity`, clears the
-  Directus data cache. Non-admin is `403`.
+- `POST .../:id/result` (new, **administrators only**; the worker's machine user is one): body `{version, directus_files_id,
+  render_status: 'done'|'failed', render_error?, columns?}` with `columns` = `{cache_key, source_format, source_width,
+  source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at?}`.
+  `directus_files_id` is **required**: the uuid of the file the worker rendered (400 with `extensions.field` when missing or
+  malformed). One transaction: `UPDATE surface_scans SET render_status ... WHERE scan_id=? AND version=? AND
+  render_status='rendering' AND directus_files_id=?` (zero rows is `409 VERSION_CONFLICT`), then UPSERT
+  `surface_scan_renders`. Validates types and `cache_key`, sets `d1.actor_identity`, clears the Directus data cache.
+  Non-admin is `403`; unknown keys are refused. *Why the file id:* a worker job that outlived its liveness check could
+  otherwise report file F1's render after the scan was repointed to an unowned F2 and claimed again (status `rendering`
+  once more), and every member would see F1's grid under F2. The version moves on a repoint too, but only a job that
+  re-reads the row would notice; the id in the claim closes it for good.
 
 ## Worker (`plugins/surface-scan-worker`)
 
@@ -97,6 +102,19 @@ Stays a system actor on an administrator token with the share mounted `:ro`; no 
 loses `render_error` and `cache_key`. The claim (pending to rendering, REST PATCH with OCC) and `list_scans` are unchanged;
 `render_scan._finish` and the poller's failure of stuck rows post to `/d1-surface-scan/:id/result` with the version they read and
 retry on 409 as `update_scan` does. The cache-key scheme does not change.
+
+Every report carries the `directus_files_id` the job rendered (the one on the row it claimed, passed to `_render`). The re-read
+step of `directus_client.report_result` treats a row whose current `directus_files_id` differs as "someone repointed or reset
+it" and posts nothing, exactly like a row that is no longer `rendering`. The poller's failure of stuck, dead and swept rows posts
+the row's own `directus_files_id` as read in that pass.
+
+**Token probe.** A worker token that is not an administrator's gets `403` on every report, so rows would stay `rendering` and every
+reaper pass would log another 403. Before its loop the poller therefore posts one harmless report to `/d1-surface-scan/<nil
+uuid>/result` (`{version: 1, directus_files_id: <nil uuid>, render_status: 'failed', render_error: 'token probe'}`): an
+administrator gets `409 VERSION_CONFLICT` (no such row, nothing written), anyone else `403`. On `403` (or `401`, a token Directus
+does not know) it logs CRITICAL, naming `SURFACE_SCAN_DIRECTUS_TOKEN` / `WORKER_DIRECTUS_TOKEN` and the administrator requirement,
+and exits non-zero (`entrypoint.sh` then takes the container down, so the failure is visible). `409` and `400` carry on; a
+connection error, a `5xx` or a `404` (Directus still starting, endpoint not deployed yet) only log a warning.
 
 ## STARbase (`packages/starbase-pages/src/pages/surface`)
 
