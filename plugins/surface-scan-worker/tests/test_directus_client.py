@@ -143,3 +143,95 @@ def test_a_server_error_reading_the_fingerprint_propagates(http):
     http.get.return_value = _resp(status=500)
     with pytest.raises(requests.HTTPError):
         dc.get_fingerprint("f1")
+
+
+# --- the result route (ADR-0023): the outcome is POSTed, never PATCHed ---------------------------
+
+
+def test_scan_fields_hold_only_public_columns():
+    fields = set(dc.SCAN_FIELDS.split(","))
+    assert fields == {
+        "scan_id",
+        "directus_files_id",
+        "render_status",
+        "version",
+        "updated_at",
+    }
+    assert not {"render_error", "cache_key"} & fields
+
+
+def test_post_result_posts_the_version_in_the_body_to_the_endpoint(http):
+    http.post.return_value = _resp(body={"data": {"scan_id": SCAN}})
+    out = dc.post_result(SCAN, {"render_status": "failed", "render_error": "boom"}, 4)
+    assert out == {"data": {"scan_id": SCAN}}
+    args, kwargs = http.post.call_args
+    assert args[0].endswith(f"/d1-surface-scan/{SCAN}/result")
+    assert kwargs["json"] == {
+        "render_status": "failed",
+        "render_error": "boom",
+        "version": 4,
+    }
+    assert kwargs["headers"]["Authorization"].startswith("Bearer ")
+    assert kwargs["headers"]["X-Actor-Identity"] == "surface-scan-worker"
+    http.patch.assert_not_called()
+
+
+def test_post_result_does_not_mutate_the_payload(http):
+    http.post.return_value = _resp(body={"data": {}})
+    payload = {"render_status": "done", "columns": {"cache_key": "k"}}
+    dc.post_result(SCAN, payload, 1)
+    assert payload == {"render_status": "done", "columns": {"cache_key": "k"}}
+
+
+def test_a_409_from_the_result_route_is_a_version_conflict(http):
+    http.post.return_value = _resp(
+        status=409,
+        body={
+            "errors": [{"message": "stale", "extensions": {"code": "VERSION_CONFLICT"}}]
+        },
+    )
+    with pytest.raises(dc.VersionConflictError):
+        dc.post_result(SCAN, {"render_status": "done"}, 3)
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 500])
+def test_any_other_error_from_the_result_route_propagates(http, status):
+    http.post.return_value = _resp(status=status)
+    with pytest.raises(requests.HTTPError):
+        dc.post_result(SCAN, {"render_status": "done"}, 3)
+
+
+def test_report_result_rereads_and_retries_after_a_409(http):
+    http.get.side_effect = [
+        _resp(body={"data": {"version": 1, "render_status": "rendering"}}),
+        _resp(body={"data": {"version": 2, "render_status": "rendering"}}),
+    ]
+    http.post.side_effect = [_resp(status=409), _resp(body={"data": {"ok": 1}})]
+    out = dc.report_result(SCAN, lambda row: {"render_status": "done"})
+    assert out == {"data": {"ok": 1}}
+    assert [c.kwargs["json"]["version"] for c in http.post.call_args_list] == [1, 2]
+    http.patch.assert_not_called()
+
+
+def test_report_result_gives_up_after_repeated_409s(http):
+    http.get.return_value = _resp(body={"data": {"version": 1}})
+    http.post.return_value = _resp(status=409)
+    with pytest.raises(dc.VersionConflictError, match="gave up"):
+        dc.report_result(SCAN, lambda row: {"render_status": "done"}, max_attempts=3)
+    assert http.post.call_count == 3
+
+
+def test_report_result_with_nothing_to_write_does_not_post(http):
+    """A lost claim: compute sees a row that is no longer rendering and returns None."""
+    http.get.return_value = _resp(
+        body={"data": {"version": 1, "render_status": "pending"}}
+    )
+    assert dc.report_result(SCAN, lambda row: None) is None
+    http.post.assert_not_called()
+
+
+def test_report_result_never_writes_blind(http):
+    http.get.return_value = _resp(body={"data": {"render_status": "rendering"}})
+    with pytest.raises(ValueError, match="no version"):
+        dc.report_result(SCAN, lambda row: {"render_status": "done"})
+    http.post.assert_not_called()

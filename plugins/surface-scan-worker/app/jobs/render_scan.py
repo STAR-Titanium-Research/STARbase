@@ -3,8 +3,9 @@
 pending -> rendering -> done | failed. Resolves the file from ``directus_files.metadata.archive_path``
 under the read-only archive mount, reads it with SurfaceTopography, writes ``grid.bin``,
 ``thumb.png`` and ``meta.json`` (last, so its presence marks a complete render) under
-``surface-scans/<cache_key>/`` and fills the row's render columns. A cache hit on the key skips the
-read of the file altogether.
+``surface-scans/<cache_key>/`` and reports the render's columns (or its error) through the endpoint's
+``POST /d1-surface-scan/<id>/result`` (they live in a private table, not on the row). A cache hit on
+the key skips the read of the file altogether.
 """
 
 from __future__ import annotations
@@ -49,10 +50,10 @@ def render_scan(scan_id: str) -> None:
         log.info("skip scan=%s status=%s", scan_id, row.get("render_status"))
         return
     try:
+        # Only the public status: the private render_error is cleared by POST /render (and replaced by
+        # the result), the column is no longer on this row.
         directus_client.patch_scan(
-            scan_id,
-            {"render_status": STATUS_RENDERING, "render_error": None},
-            version=row["version"],
+            scan_id, {"render_status": STATUS_RENDERING}, version=row["version"]
         )
     except VersionConflictError:
         log.info("skip scan=%s: claimed by another job", scan_id)
@@ -61,9 +62,7 @@ def render_scan(scan_id: str) -> None:
     log.info("start scan=%s file=%s", scan_id, row.get("directus_files_id"))
     try:
         columns = _render(row["directus_files_id"])
-        _finish(
-            scan_id, {**columns, "render_status": STATUS_DONE, "render_error": None}
-        )
+        _finish(scan_id, {"render_status": STATUS_DONE, "columns": columns})
         log.info("done scan=%s key=%s", scan_id, columns["cache_key"])
     except Exception as err:
         log.exception("failed scan=%s", scan_id)
@@ -83,13 +82,14 @@ def _message(err: Exception) -> str:
 
 
 def _finish(scan_id: str, payload: dict) -> None:
-    """Write the terminal state, unless the row left ``rendering`` meanwhile (someone reset it)."""
+    """Post the terminal state to ``POST /d1-surface-scan/<id>/result`` with the version read, unless
+    the row left ``rendering`` meanwhile (someone reset it). A 409 re-reads and tries again."""
 
     def compute(current: dict) -> dict | None:
         return payload if current.get("render_status") == STATUS_RENDERING else None
 
     try:
-        directus_client.update_scan(scan_id, compute)
+        directus_client.report_result(scan_id, compute)
     except Exception:
         log.exception("could not write the final state of scan=%s", scan_id)
         if payload.get("render_status") == STATUS_DONE:

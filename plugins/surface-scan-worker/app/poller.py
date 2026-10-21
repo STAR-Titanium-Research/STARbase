@@ -72,7 +72,8 @@ def _fail(scan_id: str, message: str) -> bool:
             return None  # finished or reset since we listed it
         return {"render_status": STATUS_FAILED, "render_error": message}
 
-    return directus_client.update_scan(scan_id, compute) is not None
+    # The error text goes to the private render table through POST /d1-surface-scan/<id>/result.
+    return directus_client.report_result(scan_id, compute) is not None
 
 
 def fail_rendering(message: str, older_than: datetime | None = None) -> list[str]:
