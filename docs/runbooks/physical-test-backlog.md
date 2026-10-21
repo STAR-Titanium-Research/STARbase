@@ -2609,6 +2609,27 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   operation in the same folder stays unowned, and B no longer sees the file or its 3D view (needs the Alicona privacy change).
   Since: the crawler stamp for scan-linked rows (this PR).
 
+- [ ] **IF91 — An unowned pointer row in a personal or team folder is not rendered (real share, surface-scan worker).** With the
+  worker running against the real share: as Lab Member B, make the `directus_files` row for an `.al3d` that exists in another
+  person's `User/<alias>/` folder and that the crawler has not registered, and add a surface scan of it. Expect the scan to end
+  *failed* with "The file is in a personal folder but is not marked as its owner's", and nothing under `surface-scans/` in MinIO.
+  Run a crawler scan of that person: the row gets the owner stamp, and *Render again* then works for the owner (B still cannot
+  see it). Repeat with a file in a `Shared/<team folder>` that a team claims (`teams.share_folder`): same refusal. A scan of a file
+  elsewhere in the legacy archive still renders, and so does a `Shared/` folder no team claims. Check the worker's token can read
+  `teams` (no *Could not check whether this folder belongs to a team*). Last, find the scans this change stops rendering with the
+  query in `docs/runbooks/surface-scan-worker.md` ("Scans of unowned files in personal folders"), and run the crawler on those folders.
+  Since: forged pointer rows, worker refusal (this PR).
+- [ ] **IF92 — A member cannot create or repoint an archive pointer row (real Directus, `d1-access-guard` file filters).** As a Lab
+  Member: `POST /files` with JSON `{"id": "<uuid5>", "storage": "star", "metadata": {"archive_path": "User/x/y.al3d"}}` (and the
+  same through GraphQL `create_files_item`) answers 403 "Files on the archive share are registered by the system". Then check the
+  Directus log shows the filter ran (Directus names it `files.create`; `items.create` is registered as a fallback). A normal
+  upload through Data Studio and the Force App (multipart, `local` storage, with an image's EXIF) still works, as does editing the
+  title or description of an existing archive row in Data Studio. `PATCH /files/<archive row id>` with a different
+  `metadata.archive_path`, `storage` or `filename_disk` answers 403, and the same calls as an administrator succeed. The crawler
+  and `scripts/index_archive.py` still register files (they write by SQL). If Directus does not fire `files.*` filters on a
+  multipart upload, the guard does not cover that route: report it, do not widen the permission.
+  Since: forged pointer rows, d1-access-guard file filters (this PR).
+
 ### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
 
 Needs the real share, real FEI/Thermo images and the crawler host. Spec:

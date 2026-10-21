@@ -74,6 +74,8 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | `The file is not on the archive share ...` | The library file is a local upload, or has no `archive_path`. Only archive files are rendered. |
 | `... (moved or deleted)` | The path in the library no longer exists on the share. Re-run `make index-archive`, then Render again. |
 | `The file's archive_path does not match its id ...` | The file row's `metadata.archive_path` was edited after it was registered: the id of an archive pointer row is derived from its path (`scripts/index_archive.py` `file_id`, the same rule the crawler uses), so a mismatch means someone repointed the row at another file. This is refused on purpose, because every Lab Member can update `directus_files` and could otherwise publish any file under the share (for instance from a personal folder) as a scan. Register the real file (re-run the indexer or let the crawler find it) and add that one. |
+| `The file is in a personal folder but is not marked as its owner's ...` / `... in a team folder but is not marked as the team's ...` | The file row has no owner stamp but its path is under `User/<alias>` (`INBOX_PERSON_DIR`) or under a `Shared/<folder>` a team claims. The crawler stamps every file it finds in those folders (ADR-0022), so an unstamped row was made another way: by a Lab Member who knew the path (the hole this refusal closes), or by the indexer before migration 196 and never met by the crawler since. Run the crawler on that person or team (the scan stamps the row, which is safe: the id is derived from the path), then Render again. Section "Scans of unowned files in personal folders" lists the affected scans. |
+| `Could not check whether this folder belongs to a team` | The worker could not read `teams` (a 403 or Directus down) for a file under `Shared/`; it refuses rather than guess. Give the worker's user read access on `teams` and Render again. |
 | `The file resolves outside the archive` / `escapes the archive` | A bad `archive_path`; the worker refused it. Fix the file row. |
 | `The file could not be read as al3d: ...` | The file is corrupt, truncated or not what its extension says. |
 | `The file does not state its length unit` | The scale is unknown; the worker will not guess. |
@@ -86,6 +88,26 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 
 To re-render by hand: set the row's `render_status` back to `pending` (the "Render again" action does
 exactly this).
+
+### Scans of unowned files in personal folders
+
+The worker refuses these (the rows of section 4) until the crawler has stamped the file. To list the scans affected, for example after
+deploying the refusal or when a scan reports it:
+
+```sql
+SELECT s.scan_id, s.render_status, f.id AS file_id, f.metadata::jsonb->>'archive_path' AS archive_path
+  FROM surface_scans s
+  JOIN directus_files f ON f.id = s.directus_files_id
+ WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL
+   AND ( lower(split_part(f.metadata::jsonb->>'archive_path', '/', 1)) IN ('user', 'users')
+      OR (lower(split_part(f.metadata::jsonb->>'archive_path', '/', 1)) = 'shared'
+          AND lower(split_part(f.metadata::jsonb->>'archive_path', '/', 2))
+              IN (SELECT lower(share_folder) FROM teams WHERE share_folder IS NOT NULL)) );
+```
+
+A row here is either a legacy file nobody has stamped (run the crawler for that person or team) or a pointer row someone made by hand:
+if the row's file is in a folder whose owner did not add the scan, treat it as the second kind and tell the folder's owner. If your
+share's personal folder has another name than `User`/`Users`, add it to the first `IN` list (it is `INBOX_PERSON_DIR`).
 
 ## 5. Cleaning up
 

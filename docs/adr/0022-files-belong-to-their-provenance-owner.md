@@ -77,6 +77,16 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
   team-owned file by id through Directus. Migration 196 is already on main and is not changed; the difference is
   checked in physical-test item SEM19 and a later migration can align it (either way round).
 
+- **A pointer row for a path someone else owns cannot be made by hand, and is not rendered if it exists** (2026-10-21). Decision 5 leaves
+  linked and legacy files unowned, and the Lab Member field list for `directus_files` lets a member write `id`, `storage` and
+  `metadata`, so a member who knew a path could make its pointer row ahead of the crawler and add a surface scan of it. Two guards, neither
+  of which narrows a field list (that waits for SEM3): `d1-access-guard` refuses a non-admin write that creates a row with `storage = 'star'` or
+  `metadata.archive_path` or changes either on an existing row (`archivePointers.js`; the indexer, crawler and imports write by SQL and
+  are not affected), and the surface-scan worker refuses an unowned row whose path is under the personal folder or under a team's
+  `Shared/` folder (`archive.check_owner_stamped`). Legacy scans of unowned files in those folders stop rendering until the crawler has
+  stamped them (runbook `surface-scan-worker.md`, "Scans of unowned files in personal folders"). The crawler's own stamp of scan-linked rows
+  (commit 82c7f47) stays. Backlog IF91 and IF92.
+
 ## Verification
 
 Postgres-backed visibility tests (owner, non-owner, team member, administrator with the access log, unowned file,

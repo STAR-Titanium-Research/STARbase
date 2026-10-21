@@ -37,6 +37,12 @@ filtered list query, so an empty list means "no fingerprint" and a 403 means "no
   from the path again, so a link or file swapped in after the check cannot redirect the read.
 - `archive_path` must be a clean relative path that resolves, after symlinks, inside `ARCHIVE_ROOT`,
   which must be inside `ARCHIVE_MOUNT`.
+- A file below `User/<alias>` (`INBOX_PERSON_DIR`) or below a `Shared/<folder>` that a team claims
+  (`teams.share_folder`) is rendered only when its `directus_files` row carries the owner stamp the crawler
+  writes (`owner_person_id` / `owner_team_id`, ADR-0022). A Lab Member can create the row of a path they know
+  before the crawler has seen the file, and that row passes the id check; without a stamp it is refused, also
+  when a link in the archive leads into such a folder. A failed team lookup refuses a `Shared/` file. Files
+  elsewhere in the archive have no owner by design and render as before.
 - Only the extensions in `archive.ALLOWED_EXTENSIONS` are opened (36 topography instrument formats:
   `al3d opd opdx x3p ibw h5 datx sur plu apx plux vk3 vk4 vk6 vk7 lext zon os3d sdf frt mnt gwy mdt nms oir
   poir ezd nid bcr bcrf tmd zmg mi jpk qep spm`), intersected with the readers the installed

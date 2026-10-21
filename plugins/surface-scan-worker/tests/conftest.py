@@ -25,6 +25,7 @@ class FakeWorld:
         self.rows: dict[str, dict] = {}
         self.files: dict[str, dict] = {}
         self.fingerprints: dict[str, dict] = {}
+        self.team_folders: list[str] | Exception = ["Alloys"]
         self.objects: dict[str, tuple[bytes, str]] = {}
         self.history: list[tuple[str, dict]] = []  # every PATCH: (scan_id, payload)
         self.conflicts_to_inject = 0
@@ -50,6 +51,8 @@ class FakeWorld:
         file_id=FILE,
         storage="star",
         forged=False,
+        owner_person_id=None,
+        owner_team_id=None,
     ) -> None:
         """Register a file row under ``file_id`` (what the scan row points at).
 
@@ -61,7 +64,13 @@ class FakeWorld:
         row_id = file_id
         if relative_path is not None and not forged:
             row_id = archive.expected_file_id(relative_path)
-        self.files[file_id] = {"id": row_id, "storage": storage, "metadata": metadata}
+        self.files[file_id] = {
+            "id": row_id,
+            "storage": storage,
+            "metadata": metadata,
+            "owner_person_id": owner_person_id,
+            "owner_team_id": owner_team_id,
+        }
 
     def current_fingerprint(self, file_id: str, sha: str, **overrides) -> dict:
         """A ``done`` fingerprint that describes the file on disk right now (size and mtime)."""
@@ -98,6 +107,11 @@ class FakeWorld:
     def get_file(self, file_id):
         return self.files[file_id]
 
+    def get_team_folders(self):
+        if isinstance(self.team_folders, Exception):
+            raise self.team_folders
+        return list(self.team_folders)
+
     def get_fingerprint(self, file_id):
         return self.fingerprints.get(file_id)
 
@@ -126,7 +140,13 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(archive, "ARCHIVE_MOUNT", str(mount))
     monkeypatch.setattr(archive, "ARCHIVE_ROOT", str(root))
     w = FakeWorld(root)
-    for name in ("get_scan", "patch_scan", "get_file", "get_fingerprint"):
+    for name in (
+        "get_scan",
+        "patch_scan",
+        "get_file",
+        "get_fingerprint",
+        "get_team_folders",
+    ):
         monkeypatch.setattr(directus_client, name, getattr(w, name))
     for name in ("put_object", "object_exists", "get_object_bytes"):
         monkeypatch.setattr(minio_client, name, getattr(w, name))

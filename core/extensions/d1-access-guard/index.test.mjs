@@ -141,8 +141,8 @@ const denied = (re) => (err) => {
   return true;
 };
 
-test('registers the items.create, items.delete and items.update filters, and the three comment filters of the Lab Viewer', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'items.create', 'items.delete', 'items.update']);
+test('registers the items.create, items.delete and items.update filters, the three comment filters of the Lab Viewer and the three file filters (archive pointers)', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'files.create', 'files.update', 'files.upload', 'items.create', 'items.delete', 'items.update']);
 });
 
 test('the shipped rules guard exactly the four visibility junctions', () => {

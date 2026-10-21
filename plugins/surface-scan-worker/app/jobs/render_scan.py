@@ -9,8 +9,10 @@ read of the file altogether.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import os
 from datetime import UTC, datetime
 
 from app.lib import archive, directus_client, grid, minio_client, topography
@@ -105,7 +107,13 @@ def _render(directus_files_id: str) -> dict:
         )
     archive_path = (file_row.get("metadata") or {}).get("archive_path")
     archive.check_identity(file_row.get("id"), archive_path)
+    owner = (file_row.get("owner_person_id"), file_row.get("owner_team_id"))
+    team_folders = functools.cache(lambda: directus_client.get_team_folders())
+    archive.check_owner_stamped(archive_path, *owner, team_folders)
     path = archive.resolve(archive_path)
+    # A link inside the archive can lead from a harmless folder into someone's: check where it lands too.
+    root = os.path.realpath(archive.ARCHIVE_ROOT)
+    archive.check_owner_stamped(os.path.relpath(path, root), *owner, team_folders)
     st = archive.stat_file(path)
 
     key = cache_key(
