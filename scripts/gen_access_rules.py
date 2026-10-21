@@ -568,26 +568,43 @@ def migration_values(
 
 def hook_rules(doc: dict) -> dict:
     """What d1-access-guard enforces: per junction, the parents whose rule the caller must pass; per record,
-    the owner-only fields and their delete rule; the keys that move a record between restricted parents."""
+    the owner-only fields and their delete rule; the keys that move a record between restricted parents.
+
+    A guarded junction or parent may also be a "custom" collection (surface_scans guards directus_files_id with the read
+    row of directus_files, ADR-0023): the literal `permissions` filter of that custom row is shipped as it is."""
     sets, rules = doc["sets"], doc["rules"]
+    custom = doc.get("custom", {})
     guards: dict = {}
     for junction, checks in doc.get("guards", {}).items():
-        if "create" not in rules.get(junction, {}):
+        # a junction is a ruled collection with a create row, or a custom one (surface_scans, ADR-0023) with a custom create row
+        if "create" not in rules.get(junction, {}) and "create" not in custom.get(
+            junction, {}
+        ):
             raise RulesError(
-                f"guard {junction}: not a ruled collection with a create row"
+                f"guard {junction}: not a ruled or custom collection with a create row"
             )
         out = []
         for check in checks:
             parent, action = check["parent"], check.get("rule", "update")
             rule = rules.get(parent, {}).get(action)
-            if rule is None or rule == "any" or is_read_kind(rule):
+            if rule is None:
+                # a custom parent (directus_files): its row's literal filter is what the caller must pass
+                literal = custom.get(parent, {}).get(action, {}).get("permissions")
+                if not literal:
+                    raise RulesError(
+                        f"guard {junction}: {parent}.{action} has no filter"
+                    )
+                shipped = literal
+            elif rule == "any" or is_read_kind(rule):
                 raise RulesError(f"guard {junction}: {parent}.{action} has no filter")
+            else:
+                shipped = set_filter(sets, rule)
             out.append(
                 {
                     "field": check["field"],
                     "parent": parent,
                     "key": check["key"],
-                    "filter": set_filter(sets, rule),
+                    "filter": shipped,
                 }
             )
         guards[junction] = out

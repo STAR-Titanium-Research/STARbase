@@ -7,6 +7,9 @@
 - **Terms:** `CONTEXT.md` → *Files on the share* (Personal folder, Uni alias, Team folder, Found file, Inbox,
   Backlog, Link). The crawler is called the **inbox crawler**; the existing daemon stays the **force crawler**.
 
+
+> **Update 2026-10-21:** surface scan visibility now follows the scan's file owner ([ADR-0023](../../adr/0023-surface-scans-follow-their-files-owner.md), [spec](./2026-10-21-surface-scan-privacy-design.md)). Statements below that scans or their files are visible to every lab member are superseded for owned files; unowned files stay open.
+
 ## 1. What this is
 
 People save instrument output (SEM images, Alicona scans, force files, documents) in their own folder on the

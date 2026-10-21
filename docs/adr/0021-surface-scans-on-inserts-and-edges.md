@@ -4,6 +4,8 @@
 - **Date:** 2026-10-15
 - **Deciders:** Maintainer + Claude (design interview,
   [spec](../superpowers/specs/2026-10-15-surface-scans-design.md))
+- **Superseded in part by:** [ADR-0023](./0023-surface-scans-follow-their-files-owner.md): decision 4 ("Scans are visible
+  lab-wide") no longer holds. A scan follows its file's provenance owner; the other decisions stand.
 
 ## Context
 
@@ -22,7 +24,10 @@ finds new files on the share) needs somewhere to put a scan, and must not own re
    the caller can read the scan. STARbase draws the grid in three.js with the GPU doing the shading.
 3. **The crawler owns file hashes** (`file_fingerprints`); the worker only reads one as its cache key, with a
    provisional key when there is none. Neither session writes the other's tables.
-4. **Scans are visible lab-wide**, like inserts and edges (ADR-0011 reference data).
+4. ~~**Scans are visible lab-wide**, like inserts and edges (ADR-0011 reference data).~~ **Superseded by
+   [ADR-0023](./0023-surface-scans-follow-their-files-owner.md):** a scan's file is visible to its provenance owner,
+   the owner's team and administrators (and to everyone when the file has no owner); anyone else sees a locked
+   placeholder.
 
 ## Alternatives considered
 
@@ -39,7 +44,8 @@ finds new files on the share) needs somewhere to put a scan, and must not own re
 - A new compute service (the worker), a new Directus extension, a new table and a MinIO prefix to run.
 - A scan the crawler never saw has no content hash; its cache key can go stale if the file is overwritten in
   place (path, size or mtime change gives a new key).
-- Adding a scan publishes a file from someone's personal folder to every lab member; the UI says so.
+- ~~Adding a scan publishes a file from someone's personal folder to every lab member; the UI says so.~~ No longer
+  true (ADR-0023): adding a scan of an owned file does not publish it.
 - The old edge-subject Alicona Tests still exist until a later, guarded migration.
 - A pointer row's `archive_path` is editable by every Lab Member, so the worker renders a file only when its id
   equals the id derived from that path (`uuid5` of `file:<path>`, the indexer's and the crawler's rule); a

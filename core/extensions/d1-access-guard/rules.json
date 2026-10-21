@@ -262,6 +262,40 @@
           ]
         }
       }
+    ],
+    "surface_scans": [
+      {
+        "field": "directus_files_id",
+        "parent": "directus_files",
+        "key": "id",
+        "filter": {
+          "_or": [
+            {
+              "_and": [
+                {
+                  "owner_person_id": {
+                    "_null": true
+                  }
+                },
+                {
+                  "owner_team_id": {
+                    "_null": true
+                  }
+                }
+              ]
+            },
+            {
+              "readers": {
+                "_some": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     ]
   },
   "ownerGuards": {
