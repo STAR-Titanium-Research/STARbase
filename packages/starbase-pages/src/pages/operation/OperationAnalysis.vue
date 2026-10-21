@@ -1,16 +1,26 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import ConformRunSection from './ConformRunSection.vue';
+import type { ConformRunData } from './useOperationData';
 import { DataTable, LIST_CAP, LoadState, Section, StatusBadge, analysisLink, breakableParts, formatDate, formatQuantity, type SectionState } from '@d1/ui';
 
-// Analysis of the operation's data: the force analysis of each .mat file (machining) or the
-// imported FAST trace (sintering), with the dashboard that plots it. Cutting metrics stay in the
+// Analysis of the operation's data: the force analysis of each .mat file (machining), the
+// imported FAST trace (sintering) or the Conform run's log, window and summary (conform), with the dashboard that plots it. Cutting metrics stay in the
 // Force dashboard; this only says what state each file is in and why it failed.
 const props = defineProps<{
 	operationId: string;
 	category: string | null;
 	force: SectionState<any[]>;
 	fast: SectionState<any | null>;
+	/** A Conform run's row, log and whether the log is hidden from this reader (conform only). */
+	conform?: SectionState<ConformRunData | null>;
+	equipmentId?: string | null;
+	operationDate?: string | null;
+	/** The reader may change the run (upload a log, set the window); the server still decides. */
+	canEdit?: boolean;
 }>();
+const emit = defineEmits<{ changed: [] }>();
+const noConform: SectionState<ConformRunData | null> = { data: null, loading: false, error: '' };
 
 const link = computed(() => analysisLink(props.operationId, props.category));
 const capped = computed(() => props.force.data.length > LIST_CAP);
@@ -82,6 +92,16 @@ const isMachining = computed(() => props.category === 'machining');
 			</div>
 		</LoadState>
 	</Section>
+
+	<ConformRunSection
+		v-if="category === 'conform'"
+		:operation-id="operationId"
+		:equipment-id="equipmentId ?? null"
+		:operation-date="operationDate ?? null"
+		:state="conform ?? noConform"
+		:can-edit="canEdit ?? true"
+		@changed="emit('changed')"
+	/>
 </template>
 
 <style scoped>

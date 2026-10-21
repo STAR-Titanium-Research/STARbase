@@ -21,7 +21,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
-const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
+const { operation, loading, notVisible, error, params, force, fast, conform, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
 
 const editing = ref(false);
 // "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
@@ -78,6 +78,9 @@ const contents = computed<ContentsEntry[]>(() => {
 	}
 	if (o.process_category === 'sintering') {
 		entries.push({ id: 'fast-run', title: 'FAST run', count: fast.value.loading ? null : fast.value.data ? 1 : 0 });
+	}
+	if (o.process_category === 'conform') {
+		entries.push({ id: 'conform-run', title: 'Conform run', count: conform.value.loading ? null : conform.value.data?.run ? 1 : 0 });
 	}
 	entries.push({ id: 'files', title: 'Files', count: files.value.loading || shared.value.loading ? null : allFiles.value.length });
 	return entries;
@@ -155,7 +158,17 @@ providePagePin(pin);
 					/>
 
 					<!-- Full width, not beside the samples: the force table's file column needs the room. -->
-					<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
+					<OperationAnalysis
+						:operation-id="id"
+						:category="op.process_category"
+						:force="force"
+						:fast="fast"
+						:conform="conform"
+						:equipment-id="asRecord(op.equipment_id)?.equipment_id ?? null"
+						:operation-date="op.operation_date ?? null"
+						:can-edit="canUpdate !== false"
+						@changed="reload"
+					/>
 
 					<SampleFiles
 						id="files"
