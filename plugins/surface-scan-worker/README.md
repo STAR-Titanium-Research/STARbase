@@ -3,16 +3,32 @@
 Renders a topography scan (Alicona `.al3d`, or any format [SurfaceTopography](https://pypi.org/project/SurfaceTopography/)
 reads, MIT) of a cutting insert or an insert edge into a decimated height grid and a thumbnail in MinIO,
 for the STARbase 3D viewer. Design: `docs/superpowers/specs/2026-10-15-surface-scans-design.md`;
-decision: ADR-0021; operations: `docs/runbooks/surface-scan-worker.md`.
+decisions: ADR-0021 and ADR-0023 (scans follow their file's owner; the result route); operations: `docs/runbooks/surface-scan-worker.md`.
 
 Scaffolded from `plugins/plugin-template` (webhook + rq worker, `check_secret`, fail-closed secret),
 with `heavy-data-worker`'s OCC write pattern.
 
 ## Contract
 
-Row (`surface_scans`, owned by the server stream): the worker picks `render_status = 'pending'` rows,
-sets `rendering`, and writes only `render_status`, `render_error`, `rendered_at`, `cache_key`,
-`source_format`, `source_width/height`, `grid_width/height`, `pixel_pitch_x/y_um`, `z_min/max_um`.
+Row (`surface_scans`, owned by the server stream): the worker picks `render_status = 'pending'` rows and
+claims them. It is a **system actor on an administrator token**, with the archive mounted `:ro` and no
+database credential (ADR-0023), and it writes in exactly two ways:
+
+1. **The claim** (`pending` to `rendering`): `PATCH /items/surface_scans/<id>?filter[version][_eq]=<version read>`
+   with `{render_status: 'rendering'}` only. A stale version matches no row: another job has it, skip.
+2. **The outcome**: `POST /d1-surface-scan/<id>/result` (administrators only) with the version read in the body,
+   `{version, render_status: 'done' | 'failed', render_error?, columns?}`. `columns` is `cache_key,
+   source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um,
+   z_min_um, z_max_um, rendered_at`. The route writes them, and the error, to `d1_private.surface_scan_renders`
+   in one transaction with the status; the public row no longer has those columns, so **the worker never
+   PATCHes `render_error` or the render columns**, and `directus_client.SCAN_FIELDS` does not read them. A `409
+   VERSION_CONFLICT` (the version moved, or the row is no longer `rendering`) re-reads the row and tries again,
+   as `update_scan` does (up to `OCC_MAX_ATTEMPTS`, default 5); if the re-read row is no longer `rendering`
+   someone reset it (Render again) and the result is skipped, never overwritten. A `done` result that cannot be
+   posted fails the job (which then tries to post `failed`); a `failed` result that cannot be posted is only
+   logged, and the original error is raised.
+
+The poller fails stuck, dead and swept `rendering` rows through the same route.
 
 MinIO, `surface-scans/<cache_key>/`:
 
@@ -29,6 +45,12 @@ key. **The worker never hashes a file and never writes `file_fingerprints`** (it
 filtered list query, so an empty list means "no fingerprint" and a 403 means "no permission").
 
 ## Safety rules (each has a test)
+
+- The worker has no database credential and never hashes a file; the archive is read-only. The only
+  `surface_scans` write besides the claim is the result route, and `render_error` / `cache_key` are not in
+  any PATCH body nor in `SCAN_FIELDS`.
+- A file row's id must equal the id derived from its `archive_path` (`archive.check_identity`), so a row
+  repointed at another file under the share is refused, not rendered.
 
 - The archive is mounted `:ro`; the only open of a scan file is `archive.open_readonly`:
   `os.open(O_RDONLY | O_NOFOLLOW)` on the resolved path, then `fstat` on the descriptor, which must match
@@ -59,7 +81,8 @@ app/lib/archive.py    path and extension refusal, the read-only open
 app/lib/topography.py SurfaceTopography -> micrometre (rows, cols) array, top row first
 app/lib/grid.py       decimation, grid.bin / meta.json / thumb.png
 app/lib/cache_key.py  the key and the object names
-app/lib/directus_client.py, minio_client.py
+app/lib/directus_client.py  the claim (PATCH, OCC), post_result / report_result (POST /result, retry on 409), reads
+app/lib/minio_client.py
 tests/synthetic.py    writes small .al3d files; no real data is committed
 ```
 

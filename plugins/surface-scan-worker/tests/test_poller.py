@@ -64,8 +64,9 @@ def test_a_stuck_rendering_row_is_failed_after_timeout_plus_grace(world, monkeyp
     assert poller.reap_once(now) == [SCAN]
 
     assert world.rows[SCAN]["render_status"] == "failed"
-    assert "time limit" in world.rows[SCAN]["render_error"]
+    assert "time limit" in world.renders[SCAN]["render_error"]
     assert world.rows[OTHER_SCAN]["render_status"] == "rendering"
+    assert world.history == []  # the public row is never PATCHed with the error
 
 
 def test_a_row_that_finished_since_listing_is_left_alone(world, monkeypatch):
@@ -92,7 +93,7 @@ def test_the_startup_sweep_spares_rows_claimed_after_start(world, monkeypatch):
     mine["updated_at"] = (started + timedelta(seconds=3)).isoformat()
 
     assert poller.fail_rendering(poller.RESTART_MESSAGE, older_than=started) == [SCAN]
-    assert "Render again" in world.rows[SCAN]["render_error"]
+    assert "Render again" in world.renders[SCAN]["render_error"]
     assert world.rows[OTHER_SCAN]["render_status"] == "rendering"
 
 
@@ -100,15 +101,54 @@ def test_a_failing_row_does_not_stop_the_sweep(world, monkeypatch):
     _list_scans(world, monkeypatch)
     world.add_scan(SCAN, status="rendering")
     world.add_scan(OTHER_SCAN, status="rendering")
-    real = directus_client.patch_scan
+    real = directus_client.post_result
     calls = []
 
-    def flaky(scan_id, payload, version=None):
+    def flaky(scan_id, payload, version):
         calls.append(scan_id)
         if scan_id == SCAN:
             raise RuntimeError("directus hiccup")
         return real(scan_id, payload, version)
 
-    monkeypatch.setattr(directus_client, "patch_scan", flaky)
+    monkeypatch.setattr(directus_client, "post_result", flaky)
     assert poller.fail_rendering("x") == [OTHER_SCAN]
     assert set(calls) == {SCAN, OTHER_SCAN}
+
+
+def test_a_stuck_row_is_failed_through_the_result_route_with_the_version_read(
+    world, monkeypatch
+):
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, status="rendering")
+    world.rows[SCAN]["version"] = 7
+    assert poller.fail_rendering("too slow") == [SCAN]
+    assert world.results == [
+        (SCAN, {"version": 7, "render_status": "failed", "render_error": "too slow"})
+    ]
+    assert world.rows[SCAN]["render_status"] == "failed"
+    assert world.renders[SCAN] == {"render_error": "too slow"}
+
+
+def test_a_409_failing_a_stuck_row_is_retried(world, monkeypatch):
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, status="rendering")
+    world.result_conflicts_to_inject = 1  # the worker's own result raced the poller
+    assert poller.fail_rendering("x") == [SCAN]
+    assert [b["version"] for _, b in world.results] == [1, 2]
+
+
+def test_a_row_that_a_409_moved_out_of_rendering_is_left_alone(world, monkeypatch):
+    """The 409 was the job finishing: the re-read sees 'done', so the poller does not fail it."""
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, status="rendering")
+    real = world.post_result
+
+    def job_finishes_first(scan_id, payload, version):
+        world.rows[scan_id]["render_status"] = "done"
+        world.rows[scan_id]["version"] += 1
+        return real(scan_id, payload, version)  # 409: no longer rendering
+
+    monkeypatch.setattr(directus_client, "post_result", job_finishes_first)
+    assert poller.fail_rendering("x") == []
+    assert world.rows[SCAN]["render_status"] == "done"
+    assert SCAN not in world.renders

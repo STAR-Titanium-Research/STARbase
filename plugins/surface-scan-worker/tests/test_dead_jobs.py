@@ -54,11 +54,11 @@ def test_a_rendering_row_with_no_live_job_is_failed_with_the_memory_message(
     listed.add_scan(SCAN, status="rendering")
     queue.fetch_job.return_value = job
     assert poller.fail_killed(queue) == [SCAN]
-    row = listed.rows[SCAN]
-    assert row["render_status"] == "failed"
-    assert "out of memory" in row["render_error"]
-    assert "Render again" in row["render_error"]
-    assert "SURFACE_SCAN_MEMORY_LIMIT" in row["render_error"]
+    assert listed.rows[SCAN]["render_status"] == "failed"
+    error = listed.renders[SCAN]["render_error"]
+    assert "out of memory" in error
+    assert "Render again" in error
+    assert "SURFACE_SCAN_MEMORY_LIMIT" in error
     queue.fetch_job.assert_called_with(f"surface-scan-{SCAN}")
 
 
