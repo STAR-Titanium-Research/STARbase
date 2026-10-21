@@ -24,7 +24,7 @@
 |---|---|---|---|---|
 | A — schema & access | `d1-server-implementer` | `worktree-agent-a2b953fa458f61b01` | — | **merged** (phase1 1991/0 on the merged branch; 206–208 round-trip) |
 | B — log processing core | `directus-ui-implementer` | `worktree-agent-af20ca6ad2917a35b` | — | **merged** (136 tests pass) |
-| C — run plotter profiles | `directus-ui-implementer` | agent worktree (see `git worktree list`) | B merged | in progress |
+| C — run plotter profiles | `directus-ui-implementer` | `worktree-agent-ae27e8bda0ad913f5` | B merged | **merged** (fast-plotting 168, starbase-web 212) |
 | D — STARbase panels | `directus-ui-implementer` | agent worktree (see `git worktree list`) | B merged | in progress |
 | E — Data Studio interfaces & PDF | `d1-server-implementer` | `worktree-agent-a379d4c1b8b6358ad` | B merged | **merged** (d1-report 26/0) |
 | Review — whole branch | `directus-ui-reviewer` + `migration-review` (Opus) | — | all merged | not started |
