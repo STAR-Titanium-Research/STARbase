@@ -234,6 +234,38 @@ def test_patch_metadata_404_for_unfinalized_or_missing(client, tmp_path):
     assert client.patch("/captures/does-not-exist/metadata", json={"rpm": 1000}).status_code == 404
 
 
+@pytest.mark.parametrize("busy_set", ["_recovering", "_discarding"])
+def test_patch_metadata_refuses_a_capture_being_recovered_or_discarded(
+    client, tmp_path, monkeypatch, busy_set
+):
+    """Same guard as PUT /crop and DELETE: a recover/restore/discard owns the directory, and a
+    rewrite of summary.json from under it would race the finalize that is about to replace it."""
+    _make_capture(tmp_path, "busy-one", finalized=True)
+    monkeypatch.setattr(recovery, busy_set, {"busy-one"})
+
+    res = client.patch("/captures/busy-one/metadata", json={"rpm": 1000})
+
+    assert res.status_code == 409
+    assert "recovered, restored or discarded" in res.json()["detail"]
+
+
+def test_patch_metadata_refuses_the_recording_in_progress(client, tmp_path, monkeypatch):
+    """A session mid-finalize can already have a summary.json on disk (written before `state`
+    flips to done); an edit landing then would be overwritten or would corrupt the finalize."""
+    _make_capture(tmp_path, "live-one", finalized=True)
+
+    class _FakeSession:
+        id = "live-one"
+        state = "finalizing"
+
+    monkeypatch.setattr(main, "_session", _FakeSession())
+
+    res = client.patch("/captures/live-one/metadata", json={"rpm": 1000})
+
+    assert res.status_code == 409
+    assert "still in progress" in res.json()["detail"]
+
+
 def test_patch_metadata_rejects_path_traversal(client):
     res = client.patch("/captures/../../etc/metadata", json={"rpm": 1000})
     assert res.status_code in (

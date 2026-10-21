@@ -2406,6 +2406,11 @@ def patch_capture_metadata(cid: str, patch: CaptureMetadataPatch) -> dict:
     record and the database row are corrected together rather than one drifting from the other.
     """
     path = _capture_file(cid, "summary.json")
+    # Same guards as PUT /crop: a finalize can have written summary.json before the session's
+    # state flips to done, and a recover/restore/discard owns the directory while it runs.
+    if cid == _active_session_id():
+        raise HTTPException(409, "that recording is still in progress")
+    _refuse_if_capture_busy(cid)
     changed = patch.model_dump(exclude_unset=True)
 
     def apply(summary: dict) -> None:

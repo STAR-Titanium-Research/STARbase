@@ -147,6 +147,10 @@ export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<stri
 	if (!hasServerSession()) throw new Error(OFFLINE_SESSION_UPLOAD_MESSAGE);
 	const cfg = info.cfg || {};
 	const extra: Record<string, any> = cfg.extra_metadata || {};
+	// The rate the capture was actually recorded at: summary.fs, as the live-session upload path
+	// sends (workspace.ts captureFs()). config.sample_rate is what was asked for, and a replayed cut
+	// runs decimated below it, so the two differ there.
+	const sampleRate: number | null = Number(info.summary?.fs) || cfg.sample_rate || null;
 	const surface = Math.PI * (Number(cfg.diam) || 0) * (Number(cfg.rpm) || 0) / 1000;
 	const payload: Record<string, any> = {
 		// Resolved lookups, if this recording persisted them (see workspace.ts::metaObj — a real gap
@@ -176,7 +180,7 @@ export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<stri
 		machining_tacho_used: true,
 		machining_coolant_used: !!(extra.coolant && String(extra.coolant).trim()),
 		capture_software: 'force-app',
-		capture_frequency_khz: cfg.sample_rate ? Number((cfg.sample_rate / 1000).toFixed(3)) : null,
+		capture_frequency_khz: sampleRate ? Number((sampleRate / 1000).toFixed(3)) : null,
 		outcome_notes: extra.notes || null,
 		// Machining details (folded Directus form section) — same fields buildRunPayload() sends,
 		// previously missing here for the identical reason the relational IDs were.
@@ -269,7 +273,7 @@ export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<stri
 			directus_files_id: matFileId,
 			live_cache_file: cacheFileId,
 			status: 'done',
-			sample_rate: cfg.sample_rate ?? null,
+			sample_rate: sampleRate,
 			feed: cfg.feed ?? null,
 			cut_diameter: cfg.diam ?? null,
 			max_rpm: cfg.rpm ?? null,
