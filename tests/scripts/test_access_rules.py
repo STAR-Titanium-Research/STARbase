@@ -1304,6 +1304,145 @@ def test_every_path_ends_at_a_user_column(collection, action, paths):
 
 
 # =================================================================================================
+# Surface scans follow their file's provenance owner (ADR-0023)
+# =================================================================================================
+
+SCAN_PUBLIC = [
+    "scan_id", "insert_id", "edge_id", "condition", "scanned_on", "operation_id", "created_at", "updated_at", "version",
+]  # fmt: skip
+# what moved to d1_private.surface_scan_renders (migration 205) and what a scan keeps hidden from a member who cannot see its file
+SCAN_FILE_DERIVED = [
+    "render_error", "rendered_at", "cache_key", "source_format", "source_width", "source_height",
+    "grid_width", "grid_height", "pixel_pitch_x_um", "pixel_pitch_y_um", "z_min_um", "z_max_um",
+]  # fmt: skip
+
+
+def _prefixed(node, prefix):
+    """The directus_files filter `node` evaluated on the file a scan points at: every leaf path put behind `prefix` (a to-one hop),
+    so `_and` and `_or` stay at the top and no logical operator sits under the relation key."""
+    if (
+        isinstance(node, dict)
+        and len(node) == 1
+        and next(iter(node)) in ("_and", "_or")
+    ):
+        op = next(iter(node))
+        return {op: [_prefixed(child, prefix) for child in node[op]]}
+    return {prefix: node}
+
+
+def test_a_surface_scan_is_visible_as_a_placeholder_and_its_file_follows_the_files_owner():
+    """ADR-0023: every member (and viewer) reads the link facts of a scan, never the file id, notes, condition note, adder, render status
+    or anything derived from the file; update and delete need the file (unowned, or the caller is one of its readers), the same test as
+    directus_files update and delete seen through the scan's file; create is a field list and the access guard checks the file."""
+    read = BY_KEY[("surface_scans", "read")]
+    assert read["permissions"] == {} and read["fields"].split(",") == SCAN_PUBLIC
+    hidden = {
+        "directus_files_id",
+        "render_status",
+        "notes",
+        "condition_note",
+        "owner_person_id",
+        "owner",
+    }
+    assert not hidden & set(read["fields"].split(","))
+    assert not set(SCAN_FILE_DERIVED) & set(read["fields"].split(","))
+    # the Lab Viewer reads the same columns, unfiltered, and nothing else
+    viewer = {(r["collection"], r["action"]): r for r in VIEWER_ROWS}
+    assert viewer[("surface_scans", "read")]["fields"] == read["fields"]
+    assert viewer[("surface_scans", "read")]["permissions"] == {}
+    assert not [k for k in viewer if k[0] == "surface_scans" and k[1] != "read"]
+    file_filter = BY_KEY[("directus_files", "update")]["permissions"]
+    assert BY_KEY[("surface_scans", "update")]["permissions"] == _prefixed(
+        file_filter, "directus_files_id"
+    )
+    assert BY_KEY[("surface_scans", "delete")]["permissions"] == _prefixed(
+        file_filter, "directus_files_id"
+    )
+    for action in ("update", "delete"):
+        text = json.dumps(BY_KEY[("surface_scans", action)]["permissions"])
+        assert "_some" not in text, action
+        assert (
+            text.count('"readers"') == 1
+            and '"user_id": {"_eq": "$CURRENT_USER"}' in text
+        ), action
+    assert BY_KEY[("surface_scans", "delete")]["fields"] == "*"
+    # nothing a worker or the endpoint writes can be written by a member: no derived column, no render_error (the render route clears it
+    # through the private table), no cache_key; render_status stays (POST /render sets it back to pending as the caller)
+    for action in ("create", "update"):
+        listed = set(BY_KEY[("surface_scans", action)]["fields"].split(","))
+        assert not listed & set(SCAN_FILE_DERIVED), action
+        assert not listed & {
+            "scan_id",
+            "created_at",
+            "updated_at",
+            "version",
+            "owner",
+        }, action
+        assert {
+            "insert_id",
+            "edge_id",
+            "directus_files_id",
+            "condition",
+            "condition_note",
+            "scanned_on",
+            "operation_id",
+            "notes",
+        } <= listed
+    assert "render_status" in BY_KEY[("surface_scans", "update")]["fields"].split(",")
+    assert "render_status" not in BY_KEY[("surface_scans", "create")]["fields"].split(
+        ","
+    )
+    assert BY_KEY[("surface_scans", "create")]["permissions"] == {}
+
+
+def test_the_surface_scan_file_guard_is_the_files_read_rule():
+    """Creating a scan, or repointing its file, needs a file the caller can read (a missing file answers the same): the hook ships the
+    read filter of directus_files and runs it as the caller."""
+    rules = gen.hook_rules(DOC)["guards"]["surface_scans"]
+    assert rules == [
+        {
+            "field": "directus_files_id",
+            "parent": "directus_files",
+            "key": "id",
+            "filter": BY_KEY[("directus_files", "read")]["permissions"],
+        }
+    ]
+    assert "directus_files_id" in BY_KEY[("surface_scans", "create")]["fields"].split(
+        ","
+    )
+    assert "directus_files_id" in BY_KEY[("surface_scans", "update")]["fields"].split(
+        ","
+    )
+
+
+def test_a_guard_on_a_custom_collection_needs_a_create_row_and_a_custom_filter():
+    ok = {
+        "field": "directus_files_id",
+        "parent": "directus_files",
+        "key": "id",
+        "rule": "read",
+    }
+    with pytest.raises(gen.RulesError, match="create row"):
+        gen.hook_rules({**DOC, "guards": {"not_a_collection": [ok]}})
+    with pytest.raises(gen.RulesError, match="create row"):
+        # a custom collection without a create row cannot be a guarded junction
+        gen.hook_rules(
+            {
+                **DOC,
+                "guards": {"people_nope": [ok]},
+                "custom": {**DOC["custom"], "people_nope": {"read": {}}},
+            }
+        )
+    with pytest.raises(gen.RulesError, match="has no filter"):
+        # the custom parent's row names no filter (directus_files create is an unfiltered row)
+        gen.hook_rules({**DOC, "guards": {"surface_scans": [{**ok, "rule": "create"}]}})
+    with pytest.raises(gen.RulesError, match="has no filter"):
+        gen.hook_rules(
+            {**DOC, "guards": {"surface_scans": [{**ok, "parent": "nonexistent"}]}}
+        )
+
+
+# =================================================================================================
 # Guards, owner guards, the hook and endpoint rule files
 # =================================================================================================
 
@@ -1315,9 +1454,14 @@ def test_guards_cover_every_junction_that_grants_visibility():
     on them, the endpoint and the trigger functions write them."""
     assert set(DOC["guards"]) == {
         "sample_co_owners", "project_investigators", "campaign_samples", "test_sessions_subject",
+        "surface_scans",
     }  # fmt: skip
     for junction in DOC["guards"]:
-        assert "create" in DOC["rules"][junction], junction
+        # a ruled junction, or a custom one (surface_scans, ADR-0023: the link to a file the caller must be able to read)
+        assert (
+            "create" in DOC["rules"].get(junction, {})
+            or "create" in DOC["custom"][junction]
+        ), junction
     for table in (
         "sample_access", "operation_access", "test_access", "campaign_access", "project_access",
         "sample_readers", "operation_readers", "test_readers", "campaign_readers", "project_readers",
@@ -1333,6 +1477,9 @@ def test_guards_cover_every_junction_that_grants_visibility():
     assert [c["parent"] for c in rules["sample_co_owners"]] == ["physical_samples"]
     assert [c["parent"] for c in rules["project_investigators"]] == ["projects"]
     assert [c["parent"] for c in rules["test_sessions_subject"]] == ["test_sessions"]
+    assert [(c["field"], c["parent"], c["key"]) for c in rules["surface_scans"]] == [
+        ("directus_files_id", "directus_files", "id")
+    ]
     # the filter shipped to the hook is the parent's row named by the guard's `rule`, word for word
     for junction, checks in DOC["guards"].items():
         for check, shipped in zip(checks, rules[junction]):
@@ -1795,7 +1942,11 @@ def _directus(drop=(), restricted=True):
         "projects.project_id",
         "people.person_id",
         "teams.team_id",
+        "directus_files.id",
     }
+    m2o(
+        "surface_scans", "directus_files_id", "directus_files", None
+    )  # the guarded file link (ADR-0023)
     if restricted:
         cols |= {f"{t}.restricted" for t in RECORDS}
         cols.add("project_rollup.restricted")
@@ -2043,7 +2194,16 @@ def test_no_update_delete_or_manage_filter_contains_a_some():
             assert "_some" not in json.dumps(row["permissions"]), (collection, action)
     hook = gen.hook_rules(DOC)
     for junction, checks in hook["guards"].items():
-        for c in checks:
+        for c, declared in zip(checks, DOC["guards"][junction]):
+            if declared.get("rule") == "read":
+                # the one legal place: the parent's own READ rule runs at the root of that collection (the files' `readers`
+                # alias), where Directus accepts `_some`; the guard reads the parent as the caller, so it is exactly that rule
+                assert json.dumps(c["filter"]).count('"_some"') == 1, (
+                    junction,
+                    c["parent"],
+                )
+                assert c["filter"] == BY_KEY[(c["parent"], "read")]["permissions"]
+                continue
             assert "_some" not in json.dumps(c["filter"]), (junction, c["parent"])
     for collection, g in hook["ownerGuards"].items():
         assert "_some" not in json.dumps(g["filter"]), collection
