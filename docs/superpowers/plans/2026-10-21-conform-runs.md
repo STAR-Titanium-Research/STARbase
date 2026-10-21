@@ -22,8 +22,8 @@
 
 | Stream | Agent profile | Worktree / branch | Depends on | State |
 |---|---|---|---|---|
-| A — schema & access | `d1-server-implementer` | `conform-a-schema` | — | not started |
-| B — log processing core | `directus-ui-implementer` | `conform-b-core` | — | not started |
+| A — schema & access | `d1-server-implementer` | agent worktree (see `git worktree list`) | — | in progress |
+| B — log processing core | `directus-ui-implementer` | agent worktree (see `git worktree list`) | — | in progress |
 | C — run plotter profiles | `directus-ui-implementer` | `conform-c-plotter` | B merged | not started |
 | D — STARbase panels | `directus-ui-implementer` | `conform-d-panels` | B merged | not started |
 | E — Data Studio interfaces & PDF | `d1-server-implementer` | `conform-e-ext` | B merged | not started |
@@ -341,7 +341,7 @@ export const fastProfile: RunProfile;
   - `fastProfile.listQuery.category === 'sintering'`
   - `listQuery.fields` deep-equals the field list `FastDashboard.vue` uses today (copy it from the current source into the test)
   - `seedGroups` equals the current `SEED_GROUP_ORDER`
-- [ ] **Step 2:** Run it. Expected: FAIL. **Step 3:** Move the FAST-specific code behind `fastProfile` and leave the rendering untouched. **Step 4:** All existing fast-plotting tests plus the new one pass, and typecheck passes. `npm test -w @d1/starbase-web` (`apps/starbase/web`) passes. **Step 5:** Commit.
+- [ ] **Step 2:** Run it. Expected: FAIL. **Step 3:** Move the FAST-specific code behind `fastProfile` and leave the rendering untouched. **Step 4:** All existing fast-plotting tests plus the new one pass, and typecheck passes. `npm test -w starbase-web` passes. **Step 5:** Commit.
 
 ### Task C2: Conform profile, window bands, view-to-window, routing and nav
 
