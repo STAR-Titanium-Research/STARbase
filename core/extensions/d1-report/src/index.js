@@ -190,7 +190,9 @@ export default defineEndpoint({
 					accountability: req.accountability,
 					schema: req.schema ?? (await getSchema()),
 				});
-				const { stream } = await asset.getAsset(log.directus_files_id, {});
+				// An explicit empty transformation set: Directus resolves presets from
+				// transformationParams, which a bare {} lacks.
+				const { stream } = await asset.getAsset(log.directus_files_id, { transformationParams: {} });
 				const chunks = [];
 				for await (const chunk of stream) chunks.push(Buffer.from(chunk));
 				return parseConformCsv(Buffer.concat(chunks).toString('utf8'), log.series);
