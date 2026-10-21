@@ -703,4 +703,44 @@ WHERE collection = 'manufacturing_operations'
   )
   AND conditions IS NOT NULL;
 
+-- The Conform group of migration 20261022000208 (ADR-0024): the same SQL as the block below, which tests/phase1_schema.sh keeps
+-- identical to the one in that migration. It has its own markers because the "-- BEGIN FORM LAYOUT" block above stays
+-- byte-identical to migration 174. Idempotent.
+-- BEGIN CONFORM FORM LAYOUT (scripts/configure_form_layout.sql repeats this block exactly; tests/phase1_schema.sh compares them)
+-- The group. No unique key on (collection, field), so NOT EXISTS.
+INSERT INTO directus_fields (collection, field, special, interface, options, hidden, readonly, sort, width, translations, conditions, "group")
+SELECT 'manufacturing_operations', 'grp_conform', 'alias,no-data,group', 'group-detail', json_build_object('start', 'open'), false, false, 105, 'full',
+       '[{"language":"en-US","translation":"Conform"}]'::json,
+       '[{"name":"Hide unless conform","rule":{"_and":[{"process_category":{"_neq":"conform"}}]},"hidden":true}]'::json, NULL
+WHERE NOT EXISTS (SELECT 1 FROM directus_fields AS d WHERE d.collection = 'manufacturing_operations' AND d.field = 'grp_conform');
+
+-- Its members, in order.
+UPDATE directus_fields AS f
+SET "group" = 'grp_conform', sort = v.sort, width = 'half'
+FROM (VALUES
+    ('conform_run_number', 10),
+    ('conform_feedstock', 20),
+    ('conform_feedstock_form', 30),
+    ('conform_feed_mass_g', 40),
+    ('conform_die_diameter_mm', 50),
+    ('conform_tooling_id', 60),
+    ('conform_wheel_speed_rpm', 70),
+    ('conform_ips_setpoint_c', 80),
+    ('conform_extrusion_length_mm', 90),
+    ('conform_extrusion_mass_g', 100),
+    ('conform_yield_pct', 110),
+    ('conform_flash_mass_g', 120)
+) AS v (field, sort)
+WHERE f.collection = 'manufacturing_operations' AND f.field = v.field;
+
+-- The run-data alias goes into Related records at the next free sort there, hidden unless it is a Conform run.
+UPDATE directus_fields AS f
+SET "group" = 'grp_related',
+    sort = (SELECT coalesce(max(o.sort), 0) + 10 FROM directus_fields AS o
+            WHERE o.collection = 'manufacturing_operations' AND o."group" = 'grp_related' AND o.field <> 'conform_run'),
+    hidden = true,
+    conditions = '[{"name":"show when conform","rule":{"_and":[{"process_category":{"_eq":"conform"}}]},"hidden":false,"readonly":false,"required":false}]'::json
+WHERE f.collection = 'manufacturing_operations' AND f.field = 'conform_run';
+-- END CONFORM FORM LAYOUT
+
 COMMIT;

@@ -152,9 +152,18 @@ the parent's update rule:
 | `sample_genealogy` | read: either the child or the parent sample; update and delete: the child sample's update rule |
 | `campaign_samples` | read: the campaign's or the sample's read rule; update and delete: the campaign's owner or the sample's owner or co-owner; create (or repointing a key): the campaign's update rule **and** the sample's update rule (guard) |
 | `operation_data_files`, `machining_force_analysis`, `fast_run_data` | the operation (`operation_id`); `fast_run_data` has read only and `machining_force_analysis` has no delete, as before |
+| `conform_run_data` | the operation (`operation_id`): read follows the operation's read rule, create is open to every member (as `machining_force_analysis`), update and delete follow the operation's update rule |
 | `session_data_files`, `test_sessions_subject` | the test (`session_id`, `test_sessions_id`); creating a `test_sessions_subject` row (or repointing its test) needs the test's update rule (guard) |
 | `project_investigators` | read: the project's read rule; update and delete: the project's PI; create (or repointing the project): the project's update rule, i.e. the PI (guard) |
 | `project_rollup` (read only) | the project's PI and investigators only |
+
+**Conform logs are shared between runs, so they are not owned by one.** A `conform_logs` row (an uploaded machine log) is read
+by a reader of **any** run whose `conform_run_data.log_id` is that log (the filter `runs._some.operation_id.readers`), or by the
+member who uploaded it (`created_by`, so a member can read and delete the log they just uploaded before a run is linked to it).
+A log shared by runs with different readers therefore shows its whole file to each of them; the run records themselves
+(summary, steps, window) stay private to their own readers. This is accepted (maintainer decision, Conform runs design). Every
+member can insert a log; only its uploader can delete it (the browser removes the row, then the file, when an upload fails
+half-way); nobody edits a log after upload. Administrators are unfiltered.
 
 **Reference data stays readable (and writable, as before) by every member:** `materials`,
 `material_iso_classifications`, `alloying_elements`, `material_alloying_elements`, `equipment`,
