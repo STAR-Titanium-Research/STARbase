@@ -31,4 +31,19 @@ describe('FAST plotting stays host-neutral', () => {
 			expect(src, rel(f)).not.toMatch(/window\.open\(/);
 		}
 	});
+	it('keeps the Conform log modules pure: no Vue, no DOM globals, and /assets/ only in api.ts', () => {
+		const conform = files.filter((f) => rel(f).startsWith('conform/'));
+		const names = conform.map(rel);
+		for (const n of ['api.ts', 'channels.ts', 'parse.ts', 'power.ts', 'normalise.ts', 'summary.ts', 'steps.ts', 'clock.ts', 'index.ts']) {
+			expect(names, n).toContain(`conform/${n}`);
+		}
+		for (const f of conform) {
+			const src = readFileSync(f, 'utf8');
+			if (rel(f).includes('__fixtures__')) continue;   // test-only helpers read the fixture with node:fs
+			expect(src, rel(f)).not.toMatch(/from ['"](vue|vue-router)['"]/);
+			expect(src, rel(f)).not.toMatch(/\b(window|document|localStorage)\./);
+			expect(src, rel(f)).not.toMatch(/from ['"]node:/);
+			if (!rel(f).endsWith('api.ts')) expect(src, rel(f)).not.toContain('/assets/');
+		}
+	});
 });
