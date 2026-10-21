@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { InboxApiError } from './inboxApi';
+import { VISIBILITY_WARNING as SHARED_WARNING } from '../pages/surface/addScanModel';
 import { foundFile } from './fakeInboxServer';
 import {
 	CONDITION_LABEL, CONDITION_NOTE_MAX, NOTES_MAX, SCAN_ALREADY_TEXT, SCAN_ITEM_CHOICES, SCAN_CONDITIONS, VISIBILITY_WARNING, emptyScanAdd, isAddedScan, scanAddProblems, scanAddedText,
@@ -14,10 +15,10 @@ const insert: ScanItemOption = { kind: 'insert', id: INSERT, label: 'H13A-#2', d
 const edge: ScanItemOption = { kind: 'edge', id: EDGE, label: 'H13A-#2-fC', detail: 'Insert H13A-#2' };
 
 describe('the words are the Alicona dialog\'s own', () => {
-	it('the four conditions and their labels, and the lab-wide warning, are reused, not copied', () => {
+	it('the four conditions and their labels, and the visibility warning, are reused, not copied', () => {
 		expect([...SCAN_CONDITIONS]).toEqual(['new', 'worn', 'cleaned', 'other']);
 		expect(SCAN_CONDITIONS.map((c) => CONDITION_LABEL[c])).toEqual(['New', 'Worn', 'Cleaned', 'Other']);
-		expect(VISIBILITY_WARNING).toContain('Adding a surface scan makes this file visible to every lab member');
+		expect(VISIBILITY_WARNING).toBe(SHARED_WARNING);
 		expect(SCAN_ITEM_CHOICES).toEqual([{ value: 'insert', label: 'Insert' }, { value: 'edge', label: 'Edge' }]);
 	});
 });
@@ -142,7 +143,7 @@ describe('every refusal has words, and none says a surface scan is linked or att
 			...['condition', 'insert_id', 'edge_id', 'operation_id', 'scanned_on', 'condition_note', 'notes', 'candidate_id'].map((f) => scanErrorText(err('INVALID_PAYLOAD', 400, { field: f })).message),
 		].join(' ');
 		expect(all).not.toMatch(/\blink|attach/i);
-		expect(scanAddedText('H13A-#2')).toBe('Added as a surface scan of H13A-#2. It is now visible to every lab member.');
+		expect(scanAddedText('H13A-#2')).toBe('Added as a surface scan of H13A-#2. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.');
 		expect(SCAN_ALREADY_TEXT).toBe('That file was already added.');
 	});
 });

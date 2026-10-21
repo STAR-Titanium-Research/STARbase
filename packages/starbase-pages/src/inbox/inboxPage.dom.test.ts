@@ -9,6 +9,7 @@ import { configureLinks, resetLinks, setExplorerHostFactory, starbaseLinks, type
 import { setPageFrame } from '../frame';
 import InboxView from './InboxView.vue';
 import { createFakeInbox, exactMatch, foundFile, type FakeInboxOptions } from './fakeInboxServer';
+import { VISIBILITY_WARNING } from '../pages/surface/addScanModel';
 
 const Button = defineComponent({
 	props: { disabled: Boolean, loading: Boolean, title: String },
@@ -316,13 +317,13 @@ describe('the Inbox page', () => {
 	const confirm = () => dialog().querySelector<HTMLButtonElement>('[data-test="scan-confirm"]')!;
 	const sentLinks = () => fake.calls.filter((c) => c.path === '/d1-inbox/link');
 
-	it('the Add a surface scan dialog: the lab-wide warning, the four conditions with none chosen, and Confirm off until an item and a condition are set', async () => {
+	it('the Add a surface scan dialog: the visibility warning, the four conditions with none chosen, and Confirm off until an item and a condition are set', async () => {
 		await mount();
 		await openScanDialog();
 		const d = dialog();
 		expect(d.getAttribute('aria-labelledby')).toBe('add-scan-title');
 		expect(document.getElementById('add-scan-title')?.textContent).toBe('Add a surface scan: edge1.al3d');
-		expect(d.querySelector('[data-test="visibility-warning"]')?.textContent).toContain('Adding a surface scan makes this file visible to every lab member');
+		expect(d.querySelector('[data-test="visibility-warning"]')?.textContent).toBe(VISIBILITY_WARNING);
 		expect(d.querySelector('[data-test="scan-item-search"]')?.hasAttribute('autofocus')).toBe(true);
 		const conditions = [...d.querySelectorAll<HTMLInputElement>('input[name="scan-condition"]')];
 		expect(conditions.map((c) => c.parentElement?.textContent?.trim())).toEqual(['New', 'Worn', 'Cleaned', 'Other']);
@@ -349,7 +350,7 @@ describe('the Inbox page', () => {
 		await vi.waitFor(() => expect(names()).not.toContain('edge1.al3d'));
 		expect(document.querySelector('[data-test="add-scan-dialog"]')).toBeNull();
 		expect(sentLinks()[0].body).toEqual({ items: [{ candidate_id: fake.files[3].candidate_id, collection: 'surface_scans', insert_id: '00000000-0000-4000-8000-000000000201', condition: 'worn' }] });
-		expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('Added as a surface scan of H13A-#2. It is now visible to every lab member.');
+		expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('Added as a surface scan of H13A-#2. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.');
 		expect(fake.scans).toHaveLength(1);
 		click(document.querySelector('[data-test="undo"]'));
 		await vi.waitFor(() => expect(names()).toContain('edge1.al3d'));
