@@ -194,7 +194,10 @@ export async function uploadConformLog(
 	let log: ConformLogRow;
 	let run: ConformRunRow;
 	try {
+		// The id is chosen here, so the run can be linked (and a failed upload cleaned up)
+		// even if the create returns no body.
 		const logBody = {
+			log_id: globalThis.crypto.randomUUID(),
 			directus_files_id: fileId,
 			equipment_id: op.equipment_id,
 			source_filename: file.name,
