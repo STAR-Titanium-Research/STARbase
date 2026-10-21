@@ -17,10 +17,17 @@ describe('plotRequests', () => {
 		expect(reqs.map((r) => [r.key, r.path])).toEqual([
 			['force', '/items/machining_force_analysis'],
 			['fast', '/items/fast_run_data'],
+			['conform', '/items/conform_run_data'],
 		]);
 		const done = JSON.stringify({ _and: [{ operation_id: { _in: ids } }, { status: { _eq: 'done' } }] });
 		expect(reqs[0].params).toMatchObject({ filter: done, fields: ['operation_id', 'frm_fz'], limit: -1 });
 		expect(reqs[1].params).toMatchObject({ filter: done, fields: ['operation_id'], limit: -1 });
+		// A Conform run is plotted once a log is linked: there is no status to wait for.
+		expect(reqs[2].params).toMatchObject({
+			filter: JSON.stringify({ _and: [{ operation_id: { _in: ids } }, { log_id: { _nnull: true } }] }),
+			fields: ['operation_id'],
+			limit: -1,
+		});
 		expect(JSON.stringify(reqs)).not.toContain('_some');
 	});
 
@@ -58,6 +65,13 @@ describe('mergePlots (operations)', () => {
 		expect(plots.b).toEqual({ force: true, fast: false, frmFz: 'file-b' });
 		expect(plots.c).toEqual({ force: false, fast: true, frmFz: null });
 		expect(plots.d).toEqual({ force: false, fast: false, frmFz: null });
+	});
+
+	it('marks the Conform runs that have a log, and only those', () => {
+		const plots = mergePlots(op, ids, { conform: [{ operation_id: 'd' }] });
+		expect(plots.d).toEqual({ force: false, fast: false, conform: true, frmFz: null });
+		expect(plots.a).toEqual({ force: false, fast: false, frmFz: null });
+		expect(mergePlots(op, ids, { conform: null }).d.conform).toBeUndefined();
 	});
 
 	it('shows no buttons of a kind whose request failed (null) or did not run', () => {
