@@ -1,6 +1,6 @@
 ---
 name: migration-review
-description: Use after writing a D1-Database migration, or when reviewing a branch or PR that touches db/migrations/, db/seeds/ or tests/phase1_schema.sh. Reviews the new migrations in an isolated subagent against the repo's schema rules and returns only the findings.
+description: Use after writing a D1-Database migration, or when reviewing a branch or PR that touches db/migrations/, db/seeds/ or tests/schema/. Reviews the new migrations in an isolated subagent against the repo's schema rules and returns only the findings.
 argument-hint: [base-ref, default origin/main]
 context: fork
 agent: general-purpose
@@ -14,9 +14,9 @@ Review the migrations this branch adds. **Read-only**: report findings, change n
 Base ref: `$ARGUMENTS` (use `origin/main` if empty).
 
 New or changed migration files on this branch:
-!`git fetch -q origin main 2>/dev/null; git diff --name-status origin/main...HEAD -- db/ tests/phase1_schema.sh .github/workflows/ci.yml docs/data-dictionary.md`
+!`git fetch -q origin main 2>/dev/null; git diff --name-status origin/main...HEAD -- db/ tests/phase1_schema.sh tests/schema/ .github/workflows/ci.yml docs/data-dictionary.md`
 
-Uncommitted: !`git status --short -- db/ tests/phase1_schema.sh`
+Uncommitted: !`git status --short -- db/ tests/phase1_schema.sh tests/schema/`
 
 If both are empty, there's nothing to review. Say so and stop.
 
@@ -32,7 +32,7 @@ If both are empty, there's nothing to review. Say so and stop.
 4. **New mutable table without OCC + audit**: `version`/`updated_at` columns plus the `occ_<table>`
    and `audit_<table>` triggers (pattern: `20260628000047_campaigns.sql`).
 5. **Directus metadata untested.** `UPDATE/INSERT directus_*` matches nothing on CI's empty stubs,
-   so without a seeded test in `tests/phase1_schema.sh` it is unverified. Also flag writes to a
+   so without a seeded test under `tests/schema/` it is unverified. Also flag writes to a
    `directus_*` column that `20260624000030_directus_stubs.sql` doesn't create.
 6. **CI rollback bound.** Count `db/migrations/*.sql`; if it exceeds the `seq 1 N` bound in the
    `migrations` job of `.github/workflows/ci.yml`, the full rollback check will fail.

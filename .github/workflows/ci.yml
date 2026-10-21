@@ -138,6 +138,11 @@ jobs:
       - name: Run Phase 1 schema tests
         run: bash tests/phase1_schema.sh
 
+      # The readers mutation matrix: the trigger-maintained readers tables against the d1_private
+      # functions and the plain-SQL oracle, on copies of the migrated database (~2 min).
+      - name: Run readers matrix
+        run: bash tests/readers_matrix.sh
+
       - name: Run People admin function tests
         run: bash tests/people_admin.sh
 

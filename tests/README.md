@@ -7,7 +7,9 @@ the code they cover: each plugin's `tests/`, `apps/force-app/*/tests/`, and the
 | Suite | Covers | Run with | In CI |
 |---|---|---|---|
 | `phase0_smoke.sh` | Repository foundation: required files and directories, `.env.example` covers compose, no tracked `.env`, compose validates | `make smoke` | yes |
-| `phase1_schema.sh` | Core tables and views, seeds, code-generation functions, audit and OCC triggers, genealogy | `make schema-test` (needs `DATABASE_URL`) | yes |
+| `phase1_schema.sh` → `schema/*.sh` | The schema tests, one file per feature under `tests/schema/` (`010-core-…` to `900-cleanup`), run in filename order in one shell by `phase1_schema.sh`; the harness they share is `schema/lib.sh` (`run`, `run_eq`, `expect_line` / `expect_fixed` / `expect_match`, `migration NAME`, `migration_up` / `migration_down`). A new migration gets a new file, named for the feature, not the migration number. `ONLY=inbox bash tests/phase1_schema.sh` runs one file. | `make schema-test` (needs `DATABASE_URL`) | yes |
+| `readers_matrix.sh` | The record-readers tables against the `d1_private` functions and the plain-SQL oracle: the mutation matrix, the concurrency cases and the seeded randomised differential test, on copies of the migrated database | `bash tests/readers_matrix.sh` (needs `DATABASE_URL`; `MATRIX_SEEDS` / `MATRIX_STEPS` / `MATRIX_SEED0`) | yes |
+| `people_admin.sh`, `teams.sh` | The People admin attention and access functions; teams, the manager rule, history and team grants, on copies of the migrated database | `bash tests/<suite>.sh` (needs `DATABASE_URL`) | yes |
 | `phase6_text_to_sql.sh` | AI-readiness views and the read-only `d1_llm_readonly` role | `make ai-test` (superuser `DATABASE_URL`) | yes |
 | `phase7_traceability.sh` | Recursive lineage functions | `make traceability-test` | yes |
 | `phase3_api.sh` | Directus RBAC, machine-token auth, OCC and audit through the REST API | see the script header (running stack) | no |
