@@ -69,8 +69,8 @@ run "FAST method seeded" \
 # migration 129 back-fills process_category before the seed runs on a fresh install, so the seed carries it
 run_eq "seeded methods carry the process_category migration 129 maps" \
     "SELECT string_agg(method_code || '=' || COALESCE(process_category, 'NULL'), ',' ORDER BY method_code)
-       FROM manufacturing_methods WHERE method_code IN ('HT','MC','MF','MM','MO','MR')" \
-    "HT=heat_treatment,MC=machining,MF=sintering,MM=machining,MO=deformation,MR=deformation"
+       FROM manufacturing_methods WHERE method_code IN ('CF','HT','MC','MF','MM','MO','MR')" \
+    "CF=conform,HT=heat_treatment,MC=machining,MF=sintering,MM=machining,MO=deformation,MR=deformation"
 run "Equipment seeded" \
     "SELECT equipment_code FROM equipment WHERE equipment_code = 'NLX-2500'"
 echo "== Code-generation functions =="
@@ -106,7 +106,7 @@ echo "== Directus field metadata is complete =="
 run_eq "every inline parameter column has a directus_fields row" \
     "SELECT count(*) FROM information_schema.columns AS c
      WHERE c.table_schema = 'public'
-       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am|conform)_')
          OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
        AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name)" \
     "0"
@@ -7939,6 +7939,117 @@ ba_check "^ba_cascade:0$" "deleting an action deletes its rows"
 ba_check "^ba_redown_tables:gone,gone$" "down runs again after up"
 else
 bad "the bulk actions migration is missing ($BA_MIG)"
+fi
+
+echo "== Migration 206: the Conform category, method CF, lineage, code rule and inline columns (up, behaviour, down, up) =="
+CC_MIG=db/migrations/20261022000206_conform_category.sql
+if [[ -f "$CC_MIG" ]]; then
+cc_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CC_MIG")
+cc_down=$(awk '/-- migrate:down/{f=1;next}f' "$CC_MIG")
+# The migration is applied by the CI run already; down then up inside a rolled-back transaction proves both and leaves the database as it was.
+cc_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+SELECT 'cc_map:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'none');
+SELECT 'cc_method_name:' || (SELECT method_name FROM manufacturing_methods WHERE method_code = 'CF');
+SELECT 'cc_machine:' || (SELECT capabilities FROM equipment WHERE equipment_name = 'Conform');
+SELECT 'cc_uncommented:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'manufacturing_operations'
+    AND c.column_name LIKE 'conform\_%' AND col_description('manufacturing_operations'::regclass, c.ordinal_position) IS NULL);
+SELECT 'cc_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'manufacturing_operations' AND column_name LIKE 'conform\_%';
+SELECT 'cc_field_rows:' || count(*) || '/' || count(*) FILTER (WHERE hidden AND conditions::text LIKE '%show when conform%' AND conditions::text LIKE '%"conform"%') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%';
+SELECT 'cc_form_dropdown:' || coalesce((SELECT (options::jsonb -> 'choices')::text FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'conform_feedstock_form'), 'none');
+INSERT INTO physical_samples (sample_code, form) VALUES ('CFT-IN', 'powder'), ('CFT-OUT', 'rod'), ('CFT-IN2', 'powder'), ('CFT-OUT2', 'rod');
+INSERT INTO manufacturing_operations (sample_id, output_sample_id, method_id, equipment_id, operation_date, conform_run_number, conform_die_diameter_mm)
+SELECT (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN'), (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-OUT'),
+       (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'), (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'),
+       '2025-03-17 12:00+00', 12, 8;
+SELECT 'cc_category:' || process_category || ',' || pass_code FROM manufacturing_operations WHERE conform_run_number = 12 AND process_category = 'conform';
+SELECT 'cc_genealogy:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-OUT');
+UPDATE manufacturing_operations SET conform_die_diameter_mm = NULL WHERE conform_run_number = 12 AND process_category = 'conform';
+SELECT 'cc_code_no_die:' || pass_code FROM manufacturing_operations WHERE conform_run_number = 12 AND process_category = 'conform';
+UPDATE manufacturing_operations SET conform_run_number = 1234, conform_die_diameter_mm = 6.5 WHERE conform_run_number = 12 AND process_category = 'conform';
+SELECT 'cc_code_big_run:' || pass_code FROM manufacturing_operations WHERE conform_run_number = 1234;
+UPDATE manufacturing_operations SET conform_run_number = NULL WHERE conform_run_number = 1234;
+SELECT 'cc_code_no_run:' || pass_code FROM manufacturing_operations WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+UPDATE manufacturing_operations SET conform_run_number = 12, conform_die_diameter_mm = 8 WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+SELECT 'cc_code_rebuilt:' || pass_code FROM manufacturing_operations WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+DO \$\$ BEGIN
+    INSERT INTO manufacturing_operations (sample_id, method_id, equipment_id, operation_date, conform_run_number)
+    SELECT (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN2'), (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'),
+           (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), '2025-03-18 12:00+00', 12;
+    RAISE NOTICE 'cc_unique_run:accepted';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'cc_unique_run:refused'; END \$\$;
+DO \$\$ BEGIN
+    UPDATE manufacturing_operations SET conform_feedstock_form = 'slurry' WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+    RAISE NOTICE 'cc_form_check:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cc_form_check:refused'; END \$\$;
+-- down: the operation goes back to deformation and keeps its code, the edge becomes derived_from, method CF stays while it is used
+$cc_down
+SELECT 'cc_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'manufacturing_operations' AND column_name LIKE 'conform\_%';
+SELECT 'cc_dn_field_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field LIKE 'conform\_%';
+SELECT 'cc_dn_op:' || process_category || ',' || pass_code FROM manufacturing_operations WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+SELECT 'cc_dn_genealogy:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-OUT');
+SELECT 'cc_dn_method:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'gone');
+SELECT 'cc_dn_machine:' || (SELECT capabilities FROM equipment WHERE equipment_name = 'Conform');
+DO \$\$ BEGIN
+    UPDATE manufacturing_operations SET process_category = 'conform' WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+    RAISE NOTICE 'cc_dn_check:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cc_dn_check:refused'; END \$\$;
+DO \$\$ BEGIN
+    INSERT INTO sample_genealogy (child_sample_id, parent_sample_id, relationship_type)
+    SELECT (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-OUT2'), (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN2'), 'extruded_from';
+    RAISE NOTICE 'cc_dn_rel_check:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cc_dn_rel_check:refused'; END \$\$;
+-- the code functions are the originals again: no conform branch
+SELECT 'cc_dn_code_fn:' || (pg_get_functiondef('operation_code_for(manufacturing_operations, text)'::regprocedure) NOT LIKE '%conform%');
+SELECT 'cc_dn_trg_fn:' || (pg_get_functiondef('trg_mfg_op_set_code()'::regprocedure) NOT LIKE '%conform%');
+-- an unused method CF is removed by the down (up again first: the kept CF is adopted back under conform)
+$cc_up
+SELECT 'cc_re_up_map:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'none');
+DELETE FROM manufacturing_operations WHERE sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CFT-IN');
+$cc_down
+SELECT 'cc_dn_method_unused:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'gone');
+$cc_up
+SELECT 'cc_up2_map:' || coalesce((SELECT process_category FROM manufacturing_methods WHERE method_code = 'CF'), 'none');
+SELECT 'cc_up2_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'manufacturing_operations' AND column_name LIKE 'conform\_%';
+SELECT 'cc_up2_machine:' || (SELECT capabilities FROM equipment WHERE equipment_name = 'Conform');
+SELECT 'cc_up2_code_fn:' || (pg_get_functiondef('operation_code_for(manufacturing_operations, text)'::regprocedure) LIKE '%conform%');
+ROLLBACK;
+SQL
+)
+cc_check() { grep -q "$1" <<<"$cc_out" && ok "$2" || bad "$2 (psql output: $cc_out)"; }
+cc_check "^cc_map:conform$" "206: method CF maps to the conform category"
+cc_check "^cc_method_name:Conform (continuous extrusion)$" "206: method CF is named Conform (continuous extrusion)"
+cc_check "^cc_machine:deformation,conform$" "206: the Conform machine keeps deformation and gains conform"
+cc_check "^cc_uncommented:0$" "206: every conform_ column has a COMMENT"
+cc_check "^cc_columns:12$" "206: manufacturing_operations has the twelve conform_ columns"
+cc_check "^cc_field_rows:12/12$" "206: each conform_ column has a Directus field row, hidden at the base with the show-when-conform condition"
+cc_check '^cc_form_dropdown:\[{"text": "Swarf", "value": "swarf"}, {"text": "Powder", "value": "powder"}, {"text": "Granules", "value": "granules"}, {"text": "Rod", "value": "rod"}\]$' "206: the feedstock form is a dropdown of swarf, powder, granules, rod"
+cc_check "^cc_category:conform,17-03-25-CF-012-8dia$" "206: a CF operation takes the conform category and the code 17-03-25-CF-012-8dia"
+cc_check "^cc_genealogy:extruded_from$" "206: a CF operation with input and output writes an extruded_from edge"
+cc_check "^cc_code_no_die:17-03-25-CF-012$" "206: with the die empty the code is 17-03-25-CF-012"
+cc_check "^cc_code_big_run:17-03-25-CF-1234-6.5dia$" "206: a run number of 100 or more is written in full, the die as 6.5dia"
+cc_check "^cc_code_no_run:CFT-IN-1$" "206: without a run number the code falls back to the sample code and sequence"
+cc_check "^cc_code_rebuilt:17-03-25-CF-012-8dia$" "206: typing the run number and die again rebuilds the code (the trigger's fast exit sees the conform columns)"
+cc_check "cc_unique_run:refused" "206: two CF operations on one machine with run number 12 violate the unique index"
+cc_check "cc_form_check:refused" "206: an unknown feedstock form is refused by the CHECK"
+cc_check "^cc_dn_columns:0$" "206 down: the conform_ columns are dropped"
+cc_check "^cc_dn_field_rows:0$" "206 down: the conform_ field rows are deleted"
+cc_check "^cc_dn_op:deformation,17-03-25-CF-012-8dia$" "206 down: a conform operation goes back to deformation and keeps its code"
+cc_check "^cc_dn_genealogy:derived_from$" "206 down: an extruded_from edge becomes derived_from"
+cc_check "^cc_dn_method:deformation$" "206 down: method CF is kept (filed under deformation) while an operation uses it"
+cc_check "^cc_dn_machine:deformation$" "206 down: the Conform machine is back to deformation only"
+cc_check "cc_dn_check:refused" "206 down: the category CHECK refuses conform again"
+cc_check "cc_dn_rel_check:refused" "206 down: the relationship CHECK refuses extruded_from again"
+cc_check "^cc_dn_code_fn:true$" "206 down: operation_code_for has no conform branch again"
+cc_check "^cc_dn_trg_fn:true$" "206 down: trg_mfg_op_set_code is the original again"
+cc_check "^cc_re_up_map:conform$" "206: an up after a down that kept method CF adopts it back under conform"
+cc_check "^cc_dn_method_unused:gone$" "206 down: an unused method CF is removed"
+cc_check "^cc_up2_map:conform$" "206 up again: method CF is back under conform"
+cc_check "^cc_up2_columns:12$" "206 up again: the twelve columns are back"
+cc_check "^cc_up2_machine:deformation,conform$" "206 up again: the machine has conform again"
+cc_check "^cc_up2_code_fn:true$" "206 up again: operation_code_for has its conform branch"
+else
+bad "the Conform category migration is missing ($CC_MIG)"
 fi
 
 echo "== Cleanup test rows =="
