@@ -23,10 +23,10 @@
 | Stream | Agent profile | Worktree / branch | Depends on | State |
 |---|---|---|---|---|
 | A — schema & access | `d1-server-implementer` | agent worktree (see `git worktree list`) | — | in progress |
-| B — log processing core | `directus-ui-implementer` | agent worktree (see `git worktree list`) | — | in progress |
-| C — run plotter profiles | `directus-ui-implementer` | `conform-c-plotter` | B merged | not started |
-| D — STARbase panels | `directus-ui-implementer` | `conform-d-panels` | B merged | not started |
-| E — Data Studio interfaces & PDF | `d1-server-implementer` | `conform-e-ext` | B merged | not started |
+| B — log processing core | `directus-ui-implementer` | `worktree-agent-af20ca6ad2917a35b` | — | **merged** (136 tests pass) |
+| C — run plotter profiles | `directus-ui-implementer` | agent worktree (see `git worktree list`) | B merged | in progress |
+| D — STARbase panels | `directus-ui-implementer` | agent worktree (see `git worktree list`) | B merged | in progress |
+| E — Data Studio interfaces & PDF | `d1-server-implementer` | agent worktree (see `git worktree list`) | B merged | in progress |
 | Review — whole branch | `directus-ui-reviewer` + `migration-review` (Opus) | — | all merged | not started |
 
 The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it. Workers commit in their own worktree, and never push, merge or rebase.
