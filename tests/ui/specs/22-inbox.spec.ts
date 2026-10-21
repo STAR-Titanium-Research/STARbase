@@ -241,12 +241,12 @@ async function pickInsert(page: Page) {
 	await dialog.getByText(T.insertCode, { exact: true }).first().click();
 }
 
-test('Add a surface scan: the dialog warns the whole lab will see the file, has no condition chosen, and adds it to an insert; Recently linked says where, and Undo brings the file back', async ({ browser }) => {
+test('Add a surface scan: the dialog warns that only the file's owner and administrators will see it, has no condition chosen, and adds it to an insert; Recently linked says where, and Undo brings the file back', async ({ browser }) => {
 	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { scanItems });
 	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
 	const dialog = scanDialog(page);
 	await expect(dialog).toBeVisible();
-	await expect(dialog.locator('[data-test="visibility-warning"]')).toContainText('Adding a surface scan makes this file visible to every lab member');
+	await expect(dialog.locator('[data-test="visibility-warning"]')).toContainText("Only the file's owner (or its team) and administrators see this scan's file and 3D view");
 	await expect(dialog.locator('input[name="scan-condition"]')).toHaveCount(4);
 	await expect(dialog.locator('input[name="scan-condition"]:checked')).toHaveCount(0);
 	await expect(dialog.locator('[data-test="scan-confirm"]')).toBeDisabled();
