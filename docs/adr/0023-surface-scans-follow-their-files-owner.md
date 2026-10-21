@@ -41,4 +41,17 @@ grid without asking who owns the file, and a member can add someone else's owned
 - A person who owns files may add scans of them that others see only as placeholders; scans of unowned files stay lab-wide.
 - The inbox's wording "visible to every lab member" is wrong for owned files and is changed in the inbox session's files.
 - Existing scans whose adder cannot read their owned file are reported, not deleted.
+- **Known limits, accepted** (Opus review of this change):
+  - Inserts and edges are lab-wide reference data (ADR-0011), so any member can delete one, and its scans (and their private
+    render rows) go with it through `ON DELETE CASCADE`; a member can also move a scan to another insert by editing the edge's
+    `insert_id`. This is an integrity matter, not a confidentiality one, and is left as it is.
+  - The public columns `updated_at` and `version` of a scan stay readable to members and move when a render is claimed and
+    reported, so a non-owner can see roughly when a scan of an owned file was rendered. Nothing else about the render is exposed.
+  - **Forged pointer rows (predates this change, not fixed here).** The Lab Member rules on `directus_files` let a member write
+    `id`, `storage`, `filename_disk` and `metadata`, so a member who knows the exact path of a file in someone's personal folder
+    that the crawler has not registered yet can create a row with the id the indexer would derive (`uuid5('file:'+path)`),
+    add a scan of it (it is unowned, so the guard passes) and have the worker render it; the crawler's later insert conflicts and
+    its owner stamp skips a file that already has a scan. The worker's id-matches-path check (PR 312) cannot tell such a row from a
+    crawler-made one. It is tracked as its own task (provenance a member cannot write: member field lists, or the crawler
+    refusing or stamping a conflicting row) and is not part of this ADR.
 - Residual unverified behaviour of Directus on a live build is checked by physical-test items SS5 and SS6.

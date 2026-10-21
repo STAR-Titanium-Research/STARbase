@@ -1637,7 +1637,10 @@ below. "Since" is the surface scan privacy PR (pending).
   `surface_scans` (does it list the hidden fields?), and `surface_scans_aggregated`. `GET /utils/export/csv` (or json) of
   `surface_scans` with and without a `fields` list. A websocket subscription on `surface_scans` (`{"type":"subscribe","collection":
   "surface_scans"}`): events carry the nine columns only. Also `GET /assets/<A's file id>` and `GET /items/directus_files/<id>` as B
-  (ADR-0022: 403). These are the Directus behaviours the design could not check without a live build (dedupeAccess, whether filters,
+  (ADR-0022: 403). More routes that could expose a hidden column or its contents: `GET /items/surface_scans?search=<A's file id or a
+  word from the notes>` (a search must not match a field B cannot read: it would confirm a guessed path), `alias[x]=directus_files_id`,
+  `$FOLLOW(surface_scans,insert_id)` reverse-relation filters from `cutting_inserts` and `insert_edges` (if the build supports them),
+  and reads of `directus_revisions` and `directus_activity` (a revision's data holds the full old row). These are the Directus behaviours the design could not check without a live build (dedupeAccess, whether filters,
   sorts, aggregates and groupBy on a field the policy hides are blocked, and whether the m2o-then-bare-`readers` filter of update and
   delete is accepted); a leak found here is a bug to fix before release. Since: the surface scan privacy PR (pending).
 - [ ] **SS6 — Migration 205 on a copy of the live database.** On a restored copy (not the live one): `dbmate up` and note the time and
