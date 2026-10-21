@@ -6,7 +6,7 @@
 // to catalog[0..N-1]. We parse by POSITION using the catalog to assign each column its
 // stable series key.
 
-export interface SeriesMeta { key: string; label: string; unit: string; group: string; min: number | null; max: number | null; }
+export interface SeriesMeta { key: string; label: string; unit: string; group: string; min: number | null; max: number | null; flat?: boolean; }
 export interface Series extends SeriesMeta { values: Float64Array; }
 export interface Trace { time: Float64Array; n: number; series: Record<string, Series>; order: string[]; }
 
