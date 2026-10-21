@@ -111,6 +111,21 @@ backups.)
 
 Steps 3 and 4 were brought forward ahead of step 2 — see alternative (g).
 
+### Status note (2026-10-21)
+
+- **The Directus-hosted dashboard is gone.** `core/extensions/d1-force-dashboard`
+  (and `d1-fast-dashboard`) were deleted on 2026-10-13 (commit 293347db) once
+  STARbase became the only front end (ADR-0015). The two `ForceHost` adapters
+  are now STARbase (`apps/starbase/web/src/plot/plotHosts.ts`) and the
+  standalone force app (`apps/force-app/web/src/main.ts`); references above to
+  "the Directus module" describe the state before that.
+- **Alternative (c)'s revisit trigger has fired.** `ForceHost` was drawn with 4
+  members; it has 11, and the growth is auth transport (`authHeaders`,
+  `refreshAuth`, `fetchCredentials`), with both adapters re-implementing the
+  same 403 recovery. Narrowing it to one "authorized fetch" per adapter is a
+  named follow-up from the 2026-10-21 architecture review, not a reopening of
+  this ADR.
+
 ## Decision
 
 Agreed for planning purposes on 2026-08-09; see *Implementation status* for

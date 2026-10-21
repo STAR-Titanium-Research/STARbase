@@ -155,6 +155,34 @@ a much stronger guarantee than a document.
   a fix to the template does not automatically fix existing plugins. Each
   plugin must be updated manually.
 
+## Amendment (2026-10-21): a shared library replaces the verbatim copies
+
+The drift this ADR predicted has happened. Of the six `app/lib` files that
+plugins copy verbatim, only `redis_conn.py` is still identical across
+`plugin-template`, `analysis-worker`, `heavy-data-worker` and
+`surface-scan-worker`: `directus_client.py` is 35, 129, 129 and 184 lines in
+the four, `security.py`, `statuses.py` and `minio_client.py` each have three or
+four variants, and `job_config.py` differs in `surface-scan-worker`. The only
+drift guard is a hand-written test (`surface-scan-worker/tests/test_archive.py`).
+`scripts/inbox_crawler/fs_readonly.py` and `surface-scan-worker/app/lib/archive.py`
+are also two copies of the same allow-listed read-only open.
+
+The maintainer confirmed on 2026-10-21 that more plugins are coming, so the
+cost of copying now grows with every plugin. Decision:
+
+- The copy clause above is withdrawn. The Directus write-back client, the
+  status envelope, webhook authentication, the MinIO client and the read-only
+  file open move into one shared Python package that every plugin installs
+  (vendored into each image at build time, so plugins stay independently
+  deployable). Job logic stays per plugin.
+- The `plugin-template` keeps its scaffold role, but its `app/lib` becomes an
+  import of the shared package, not a set of files to copy.
+- Until the package lands, CI gets a drift check that fails when any two copies
+  of the same `app/lib` file differ, so the next divergence is visible.
+
+The SDK alternative rejected above was rejected for being premature at one
+plugin. At four, with a fifth planned, it no longer is.
+
 ## References
 
 - ADR-0006: Direct-to-MinIO heavy-data pipeline (first plugin)
