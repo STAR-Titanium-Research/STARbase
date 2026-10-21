@@ -1661,6 +1661,10 @@ below. "Since" is the surface scan privacy PR (pending).
   the worker mid-render and start it: the stuck row is failed through the result route and Render again requeues it. Call the result
   route as A (a member): `403`; as the administrator with a stale `version`: `409 VERSION_CONFLICT`; with a bad `cache_key` (`../x`):
   `400`. As B, press Render again on A's scan (API `POST /d1-surface-scan/<id>/render`): refused (403), and the scan is not re-queued.
+  Also as the administrator, `POST` a `failed` report for the scan's id while it is `rendering` but with another file's id as
+  `directus_files_id`: `409 VERSION_CONFLICT` and the row is unchanged; without `directus_files_id`: `400` naming the field. Start
+  the worker with a token of a non-administrator user: its log shows a CRITICAL line naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
+  `WORKER_DIRECTUS_TOKEN` and the container exits non-zero (with the administrator's token it starts and logs the probe's `409`).
   Since: the surface scan privacy PR (pending).
 
 ### Design system rollout: View rail, title pin, FAST plotter (PR #377)

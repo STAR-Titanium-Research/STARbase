@@ -48,17 +48,25 @@ endpoint reads and writes. So the worker writes `surface_scans` in two ways only
 | Step | Request | Notes |
 |---|---|---|
 | Claim | `PATCH /items/surface_scans/<id>?filter[version][_eq]=<v>` with `{"render_status": "rendering"}` | A stale version means another job has the row: skipped. |
-| Outcome | `POST /d1-surface-scan/<id>/result` with `{version, render_status: "done" \| "failed", render_error?, columns?}` | Administrators only; one transaction updates the status (only while it is `rendering`, at that `version`) and upserts the private row. |
+| Outcome | `POST /d1-surface-scan/<id>/result` with `{version, directus_files_id, render_status: "done" \| "failed", render_error?, columns?}` | Administrators only; one transaction updates the status (only while it is `rendering`, at that `version`, and still pointing at `directus_files_id`, the file the job rendered) and upserts the private row. |
 
-A `409 VERSION_CONFLICT` from the result route means the version moved or the row is no longer
-`rendering`. The worker re-reads the row and tries again (up to `OCC_MAX_ATTEMPTS`, default 5, with a short
-random back-off); if the re-read row is not `rendering` any more, someone pressed Render again, and the
-result is dropped rather than overwriting their reset. The poller fails stuck rows the same way (timeout
+A `409 VERSION_CONFLICT` from the result route means the version moved, the row is no longer
+`rendering`, or it now points at another file. The worker re-reads the row and tries again (up to
+`OCC_MAX_ATTEMPTS`, default 5, with a short random back-off); if the re-read row is not `rendering` any
+more, or its `directus_files_id` is no longer the file this job rendered (someone pressed Render again, or
+repointed the scan to another file and it was claimed afresh), the result is dropped rather than overwriting
+their reset or storing one file's grid under another. The poller fails stuck rows the same way (timeout
 sweep, dead job, startup sweep). The worker still never hashes a file and never writes `file_fingerprints`.
 
 The worker only reads `surface_scans` as an administrator, so its token sees `directus_files_id` and
 `render_status` whatever the file's owner; that is why it keeps the check that a file row's id matches
 its `archive_path` (section 4) and renders only archive files.
+
+**Token check at start-up.** Before its loop the poller probes the result route with a harmless `failed`
+report for a scan that does not exist (all-zero uuid): an administrator token gets `409`, a token that is not
+an administrator's gets `403`. On `403` it logs CRITICAL and exits non-zero, so the container stops (and
+restarts, if its policy says so) instead of failing every render silently. `409`/`400` carry on; Directus
+being unreachable, a `5xx` or a `404` (endpoint not deployed yet) only log a warning.
 
 ## 2. Start it
 
@@ -109,9 +117,12 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | Render again does nothing for a few minutes after a container kill | rq still lists the dead worker's job as started until the worker's key expires (its TTL, about 7 minutes); the poller then replaces the dead job and renders. |
 | `The render did not finish within the time limit` | Slow share or huge file. Raise `SURFACE_SCAN_JOB_TIMEOUT_SECONDS`. |
 | Rows stay `pending` | The container is not running (it is in the `archive` profile), or the worker's token cannot read `surface_scans`. `docker compose logs surface-scan-worker`. |
-| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` until the poller fails them | The worker's token is not an administrator's. The result route is administrators only; make the machine user an administrator (the claim works for lesser roles, the outcome does not). |
+| Log (CRITICAL, then the poller and the container exit): `the surface-scan worker's Directus token is not an administrator's (the result route answered 403)` | The start-up probe found that `SURFACE_SCAN_DIRECTUS_TOKEN` (or `WORKER_DIRECTUS_TOKEN`, when that is blank) belongs to a user that is not an administrator, so no outcome could ever be recorded. Put the static token of an **administrator** machine user there and `docker compose up -d surface-scan-worker`. A `401` in the same message means Directus does not know the token at all. |
+| Log: `token probe: Directus could not be reached` or `unexpected answer 404/5xx` | Directus was still starting, or the endpoint extension without `/result` is deployed. Only a warning; the worker carries on. If it stays, see the `404` row below. |
+| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` until the poller fails them | The worker's token is not an administrator's (the start-up probe should have stopped the poller; a role changed afterwards). The result route is administrators only; make the machine user an administrator (the claim works for lesser roles, the outcome does not). |
 | Same log with `404` on `/d1-surface-scan/<id>/result` | Directus is running the old endpoint extension (no `/result` route). Deploy the release as a whole: stop Directus and the worker, migrate, restart Directus and flush Redis. |
-| Same log with `400` | The endpoint refused the body (a bad `cache_key` or a wrongly typed column). A worker bug: the log line has Directus's message. |
+| Same log with `400` | The endpoint refused the body (a missing or malformed `directus_files_id`, a bad `cache_key` or a wrongly typed column). A worker bug: the log line has Directus's message. |
+| Log: `skip result scan=... it now points at file=...` | A job finished a render of a file the scan no longer points at (it was repointed, perhaps claimed again): the report was dropped on purpose and the new file is rendered by its own job. Nothing to do. |
 | Log: `gave up after 5 version conflicts` | The row's version kept moving under the result (someone repeatedly pressing Render again). The job fails; Render again once. |
 | Log: `OCC conflict scan=...` once or twice, then `done` | Normal: a webhook, the poller or Render again touched the row between the worker's read and its result. It re-read and retried. |
 | A scan is `failed` or stuck `rendering` and the reason is not shown | `render_error` is private now: it is shown by the endpoint to people who can open the scan (its file's owner, the owner's team, administrators), not to others who see a locked tile. Read it as an administrator, or in `d1_private.surface_scan_renders.render_error`. |

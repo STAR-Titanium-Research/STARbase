@@ -16,19 +16,28 @@ database credential (ADR-0023), and it writes in exactly two ways:
 
 1. **The claim** (`pending` to `rendering`): `PATCH /items/surface_scans/<id>?filter[version][_eq]=<version read>`
    with `{render_status: 'rendering'}` only. A stale version matches no row: another job has it, skip.
-2. **The outcome**: `POST /d1-surface-scan/<id>/result` (administrators only) with the version read in the body,
-   `{version, render_status: 'done' | 'failed', render_error?, columns?}`. `columns` is `cache_key,
+2. **The outcome**: `POST /d1-surface-scan/<id>/result` (administrators only) with the version read and the id of the file it rendered in the body,
+   `{version, directus_files_id, render_status: 'done' | 'failed', render_error?, columns?}`. `columns` is `cache_key,
    source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um,
    z_min_um, z_max_um, rendered_at`. The route writes them, and the error, to `d1_private.surface_scan_renders`
    in one transaction with the status; the public row no longer has those columns, so **the worker never
    PATCHes `render_error` or the render columns**, and `directus_client.SCAN_FIELDS` does not read them. A `409
-   VERSION_CONFLICT` (the version moved, or the row is no longer `rendering`) re-reads the row and tries again,
-   as `update_scan` does (up to `OCC_MAX_ATTEMPTS`, default 5); if the re-read row is no longer `rendering`
-   someone reset it (Render again) and the result is skipped, never overwritten. A `done` result that cannot be
+   VERSION_CONFLICT` (the version moved, the row is no longer `rendering`, or it now points at another file)
+   re-reads the row and tries again, as `update_scan` does (up to `OCC_MAX_ATTEMPTS`, default 5); if the re-read
+   row is no longer `rendering`, or its `directus_files_id` is not the file this job rendered, someone reset or
+   repointed it (Render again, a new file) and the result is skipped, never overwritten: a stale job can never
+   store one file's grid under another. A `done` result that cannot be
    posted fails the job (which then tries to post `failed`); a `failed` result that cannot be posted is only
    logged, and the original error is raised.
 
-The poller fails stuck, dead and swept `rendering` rows through the same route.
+The poller fails stuck, dead and swept `rendering` rows through the same route (with the row's own file id as
+read in that pass).
+
+**Token probe.** The result route is administrators only, so before its loop the poller posts one harmless
+`failed` report for the nil scan (`00000000-0000-0000-0000-000000000000`): an administrator token gets `409`,
+anything else `403`. On `403` (or `401`) it logs CRITICAL, naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
+`WORKER_DIRECTUS_TOKEN` and the administrator requirement, and exits non-zero (the container exits with it);
+`409`/`400` carry on; a connection error, `5xx` or `404` only warn.
 
 MinIO, `surface-scans/<cache_key>/`:
 
