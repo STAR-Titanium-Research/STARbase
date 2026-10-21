@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, ref, type App } from 'vue';
 import { setExplorerHostFactory } from '@d1/ui';
 import SurfaceScanViewer from './viewer/SurfaceScanViewer.vue';
-import { OBJECT_MISSING_MESSAGE } from './scanApi';
+import { FILE_LOCKED_MESSAGE, OBJECT_MISSING_MESSAGE } from './scanApi';
 
 const webgl2 = vi.hoisted(() => ({ on: true }));
 vi.mock('./viewer/webgl2', () => ({ hasWebGL2: () => webgl2.on }));
@@ -33,6 +33,7 @@ const Plain = (tag: string) => defineComponent({ inheritAttrs: true, setup: (_p,
 let app: App | null = null;
 let api: ReturnType<typeof fakeApi>;
 const rerendered = vi.fn();
+const locked = vi.fn();
 
 async function mountViewer(over: Parameters<typeof fakeApi>[0] = {}, viewer = false) {
 	api = fakeApi(over);
@@ -40,7 +41,7 @@ async function mountViewer(over: Parameters<typeof fakeApi>[0] = {}, viewer = fa
 		api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(false), adminKnown: ref(true),
 		canViewAllAccess: ref(viewer), user: ref({ id: 'u1', role: 'r1' }),
 	}));
-	app = createApp({ render: () => h(SurfaceScanViewer, { scanId: 's1', onRerendered: rerendered }) });
+	app = createApp({ render: () => h(SurfaceScanViewer, { scanId: 's1', onRerendered: rerendered, onLocked: locked }) });
 	app.component('v-button', defineComponent({ props: ['loading'], emits: ['click'], setup: (p, { slots, emit }) => () => h('button', { onClick: () => emit('click') }, slots.default?.()) }));
 	for (const n of ['v-icon', 'v-progress-circular']) app.component(n, Plain('span'));
 	const el = document.createElement('div');
@@ -55,6 +56,7 @@ beforeEach(() => {
 	document.body.innerHTML = '';
 	webgl2.on = true;
 	rerendered.mockClear();
+	locked.mockClear();
 });
 afterEach(() => {
 	app?.unmount();
@@ -112,5 +114,42 @@ describe('SurfaceScanViewer when the rendered data is missing', () => {
 		button(/Render again/)!.click();
 		await vi.waitFor(() => expect(text()).toContain('do not have permission'));
 		expect(rerendered).not.toHaveBeenCalled();
+		expect(locked).not.toHaveBeenCalled();
+	});
+
+	it('tells the panel when the file became private meanwhile (Render again refused with 403 FILE_LOCKED)', async () => {
+		await mountViewer({ get: () => { throw missing(); } });
+		await vi.waitFor(() => expect(button(/Render again/)).toBeDefined());
+		api.post.mockRejectedValueOnce(httpError(403, [{ extensions: { code: 'FILE_LOCKED' } }]));
+		button(/Render again/)!.click();
+		await vi.waitFor(() => expect(locked).toHaveBeenCalledTimes(1));
+		expect(text()).toContain(FILE_LOCKED_MESSAGE);
+		expect(rerendered).not.toHaveBeenCalled();
+	});
+});
+
+describe('SurfaceScanViewer on a scan whose file belongs to someone else', () => {
+	it('says so in words (403 FILE_LOCKED), offers no Render again, and shows no facts', async () => {
+		await mountViewer({ get: () => { throw httpError(403, [{ message: 'locked', extensions: { code: 'FILE_LOCKED' } }]); } });
+		await vi.waitFor(() => expect(document.querySelector('[data-phase="error"]')).not.toBeNull());
+		expect(text()).toContain("This scan's file belongs to someone else, so it cannot be shown.");
+		expect(text()).toContain(FILE_LOCKED_MESSAGE);
+		expect(text()).not.toContain('do not have permission');
+		expect(button(/Render again/)).toBeUndefined();
+		expect(document.querySelector('canvas')).toBeNull();
+		expect(locked).toHaveBeenCalledTimes(1); // the panel is told, to reload its list and show the row as a lock tile
+	});
+	it('says the same when only /grid is refused (its body is bytes), and tells the panel', async () => {
+		const bytes = httpError(403, []);
+		(bytes as any).response.data = new TextEncoder().encode(JSON.stringify({ errors: [{ message: 'locked', extensions: { code: 'FILE_LOCKED' } }] })).buffer;
+		await mountViewer({ get: (url) => { if (url.endsWith('/meta')) return { data: META }; throw bytes; } });
+		await vi.waitFor(() => expect(text()).toContain(FILE_LOCKED_MESSAGE));
+		expect(locked).toHaveBeenCalledTimes(1);
+	});
+	it('does not tell the panel of any other refusal or failure', async () => {
+		await mountViewer({ get: () => { throw httpError(403, [{ message: 'no', extensions: { code: 'FORBIDDEN' } }]); } });
+		await vi.waitFor(() => expect(document.querySelector('[data-phase="error"]')).not.toBeNull());
+		expect(text()).toContain('do not have permission');
+		expect(locked).not.toHaveBeenCalled();
 	});
 });

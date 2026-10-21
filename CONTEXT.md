@@ -376,7 +376,8 @@ _Avoid_: PCD box (for the insert), diamond insert
 **Surface scan**:
 One topography file (an Alicona scan, say) of one **cutting insert** or one **insert edge**, kept with the
 **condition** the item was in and, when known, the date and the operation that wore it. It shows on the
-insert's or edge's page as a 3D view. It is not a test.
+insert's or edge's page as a 3D view. It is not a test. Whoever cannot see its file sees only that the item has
+a scan (the **condition**, the date and the operation), as a **locked file**.
 _Avoid_: Alicona test (for a tool edge), scan test, attachment
 
 **Condition**:
@@ -385,8 +386,10 @@ _Avoid_: status, wear state
 
 **Add a surface scan**:
 To put a topography file on an insert or edge as a **surface scan**, from the file library or from a
-**found file** in the **inbox**. Adding it makes the file visible to every lab member, as the insert and edge
-are. It is the one verb for these files; **link** is for samples, operations and tests.
+**found file** in the **inbox**. Adding it does not publish the file: a file with a **provenance owner** stays
+visible only to that owner (and administrators), and everyone else sees the scan as a **locked file**; a file
+with no owner stays visible to every lab member. Only someone who can see the file can add a scan of it. It is
+the one verb for these files; **link** is for samples, operations and tests.
 _Avoid_: attach (that is the process map's word), link (for an insert or edge)
 
 ### Files on the share
@@ -447,7 +450,8 @@ _Avoid_: uploader, creator, folder owner
 
 **Locked file**:
 A file **linked** to a record someone can read, but whose **provenance owner** is somebody else. They see that
-the link exists and nothing about the file: no name, no **imaging settings**, no contents.
+the link exists and nothing about the file: no name, no **imaging settings**, no contents. A **surface scan** of
+such a file is a locked file too: its **condition**, date and operation show, its file, notes and 3D view do not.
 _Avoid_: private file, hidden file
 
 ## Relationships
@@ -477,6 +481,9 @@ _Avoid_: private file, hidden file
 - A **surface scan** belongs to exactly one **cutting insert** or one **insert edge**, and an edge's page also
   shows its insert's scans. A **surface scan** is never a **test**: an Alicona test on the surface of a
   **sample** stays a test.
+- A **surface scan** follows the **provenance owner** of its file: the owner, the owner's team and
+  administrators see the file and its 3D view, and anyone else sees a **locked file**. A scan of a file with no
+  owner is visible to every lab member.
 
 ## Flagged ambiguities
 

@@ -4,11 +4,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from app import poller
 from app.lib import directus_client
 
-from .conftest import OTHER_SCAN, SCAN
+from .conftest import OTHER_FILE, OTHER_SCAN, SCAN
 
 
 @pytest.fixture
@@ -64,8 +65,9 @@ def test_a_stuck_rendering_row_is_failed_after_timeout_plus_grace(world, monkeyp
     assert poller.reap_once(now) == [SCAN]
 
     assert world.rows[SCAN]["render_status"] == "failed"
-    assert "time limit" in world.rows[SCAN]["render_error"]
+    assert "time limit" in world.renders[SCAN]["render_error"]
     assert world.rows[OTHER_SCAN]["render_status"] == "rendering"
+    assert world.history == []  # the public row is never PATCHed with the error
 
 
 def test_a_row_that_finished_since_listing_is_left_alone(world, monkeypatch):
@@ -92,7 +94,7 @@ def test_the_startup_sweep_spares_rows_claimed_after_start(world, monkeypatch):
     mine["updated_at"] = (started + timedelta(seconds=3)).isoformat()
 
     assert poller.fail_rendering(poller.RESTART_MESSAGE, older_than=started) == [SCAN]
-    assert "Render again" in world.rows[SCAN]["render_error"]
+    assert "Render again" in world.renders[SCAN]["render_error"]
     assert world.rows[OTHER_SCAN]["render_status"] == "rendering"
 
 
@@ -100,15 +102,158 @@ def test_a_failing_row_does_not_stop_the_sweep(world, monkeypatch):
     _list_scans(world, monkeypatch)
     world.add_scan(SCAN, status="rendering")
     world.add_scan(OTHER_SCAN, status="rendering")
-    real = directus_client.patch_scan
+    real = directus_client.post_result
     calls = []
 
-    def flaky(scan_id, payload, version=None):
+    def flaky(scan_id, payload, version, files_id):
         calls.append(scan_id)
         if scan_id == SCAN:
             raise RuntimeError("directus hiccup")
-        return real(scan_id, payload, version)
+        return real(scan_id, payload, version, files_id)
 
-    monkeypatch.setattr(directus_client, "patch_scan", flaky)
+    monkeypatch.setattr(directus_client, "post_result", flaky)
     assert poller.fail_rendering("x") == [OTHER_SCAN]
     assert set(calls) == {SCAN, OTHER_SCAN}
+
+
+def test_a_stuck_row_is_failed_through_the_result_route_with_the_version_and_file_read(
+    world, monkeypatch
+):
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, file_id=OTHER_FILE, status="rendering")
+    world.rows[SCAN]["version"] = 7
+    assert poller.fail_rendering("too slow") == [SCAN]
+    assert (
+        world.results
+        == [
+            (
+                SCAN,
+                {
+                    "version": 7,
+                    "directus_files_id": OTHER_FILE,  # the row's own file, as read in that pass
+                    "render_status": "failed",
+                    "render_error": "too slow",
+                },
+            )
+        ]
+    )
+    assert world.rows[SCAN]["render_status"] == "failed"
+    assert world.renders[SCAN] == {"render_error": "too slow"}
+
+
+def test_a_409_failing_a_stuck_row_is_retried(world, monkeypatch):
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, status="rendering")
+    world.result_conflicts_to_inject = 1  # the worker's own result raced the poller
+    assert poller.fail_rendering("x") == [SCAN]
+    assert [b["version"] for _, b in world.results] == [1, 2]
+
+
+def test_a_row_that_a_409_moved_out_of_rendering_is_left_alone(world, monkeypatch):
+    """The 409 was the job finishing: the re-read sees 'done', so the poller does not fail it."""
+    _list_scans(world, monkeypatch)
+    world.add_scan(SCAN, status="rendering")
+    real = world.post_result
+
+    def job_finishes_first(scan_id, payload, version, files_id):
+        world.rows[scan_id]["render_status"] = "done"
+        world.rows[scan_id]["version"] += 1
+        return real(scan_id, payload, version, files_id)  # 409: no longer rendering
+
+    monkeypatch.setattr(directus_client, "post_result", job_finishes_first)
+    assert poller.fail_rendering("x") == []
+    assert world.rows[SCAN]["render_status"] == "done"
+    assert SCAN not in world.renders
+
+
+# --- the start-up token probe ----------------------------------------------------------------
+
+
+def _probe_says(monkeypatch, outcome):
+    """Make the probe answer an HTTP status, or raise the given exception."""
+
+    def probe():
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(directus_client, "probe_result_route", probe)
+
+
+@pytest.mark.parametrize("status", [403, 401])
+def test_a_refused_token_is_critical_and_stops_the_poller(monkeypatch, caplog, status):
+    _probe_says(monkeypatch, status)
+    with caplog.at_level("INFO", logger="poller"):
+        assert poller.verify_token() is False
+    (record,) = (r for r in caplog.records if r.levelname == "CRITICAL")
+    text = record.getMessage()
+    assert "SURFACE_SCAN_DIRECTUS_TOKEN" in text
+    assert "WORKER_DIRECTUS_TOKEN" in text
+    assert "ADMINISTRATOR" in text
+
+
+@pytest.mark.parametrize("status", [409, 400])
+def test_an_accepted_token_carries_on(monkeypatch, caplog, status):
+    """409: an administrator, the nil scan does not exist. 400: the route and the body drifted apart,
+    which is not the token's fault."""
+    _probe_says(monkeypatch, status)
+    with caplog.at_level("INFO", logger="poller"):
+        assert poller.verify_token() is True
+    assert not [r for r in caplog.records if r.levelno >= 30]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        requests.ConnectionError("connection refused"),
+        requests.Timeout("slow"),
+        500,
+        502,
+        503,
+        404,
+    ],
+)
+def test_directus_starting_or_the_endpoint_not_deployed_only_warns(
+    monkeypatch, caplog, outcome
+):
+    _probe_says(monkeypatch, outcome)
+    with caplog.at_level("INFO", logger="poller"):
+        assert poller.verify_token() is True
+    assert [r.levelname for r in caplog.records if r.levelno >= 30] == ["WARNING"]
+
+
+def test_the_poller_exits_non_zero_before_its_loop_on_a_refused_token(monkeypatch):
+    _probe_says(monkeypatch, 403)
+    touched = []
+    monkeypatch.setattr(poller, "get_redis", lambda: touched.append("redis"))
+    monkeypatch.setattr(poller.time, "sleep", lambda s: touched.append("sleep"))
+    with pytest.raises(SystemExit) as exit_info:
+        poller.run_forever()
+    assert exit_info.value.code == 1
+    assert touched == []  # it never got as far as Redis or a poll pass
+
+
+def test_the_poller_loop_starts_when_the_probe_is_inconclusive(monkeypatch):
+    _probe_says(monkeypatch, requests.ConnectionError("down"))
+    monkeypatch.setattr(poller, "get_redis", lambda: MagicMock())
+    monkeypatch.setattr(poller, "Queue", lambda *a, **k: MagicMock())
+    passes = []
+
+    class StopLoopError(Exception):
+        pass
+
+    def one_pass(queue):
+        passes.append(queue)
+        return []
+
+    def stop(_seconds):
+        raise StopLoopError
+
+    monkeypatch.setattr(poller, "fail_rendering", lambda *a, **k: [])
+    monkeypatch.setattr(poller, "fail_killed", one_pass)
+    monkeypatch.setattr(poller, "enqueue_pending", lambda q: 0)
+    monkeypatch.setattr(poller, "reap_once", lambda: [])
+    monkeypatch.setattr(poller.time, "sleep", stop)
+    with pytest.raises(StopLoopError):
+        poller.run_forever()
+    assert len(passes) == 1  # the loop ran its first pass

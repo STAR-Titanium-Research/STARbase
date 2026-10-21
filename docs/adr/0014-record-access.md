@@ -103,6 +103,23 @@ show a viewer everything with no special case:
   same id rule as the endpoints); the People and Teams pages show an administrator's reads for `isAdmin || canViewAllAccess` and keep every control that changes something
   off for a viewer.
 
+## Amendment (2026-10-21): write rules stay in Directus; the drop-Directus drill covers reads only
+
+Decision 3 leaves update, delete and manage as Directus filters and hook code
+(`d1-access-guard`, `d1-record-access`), with no SQL `may_update` /
+`may_manage` family beside the `readers_of_*` one. That means the
+"drop-Directus drill" of [ADR-0002](./0002-directus-as-swappable-adapter.md)
+can pass for who may *read* a record, but not for who may *change* one: a
+replacement for Directus would have to re-implement the write rules from
+`scripts/access_rules.json` and the guard.
+
+The maintainer confirmed on 2026-10-21 that Directus is staying. This is
+therefore accepted as permanent, not as a gap to close: the write rules have
+one versioned source (`access_rules.json` plus the guard's tests), and the
+generated filters cannot call SQL in any case (ADR-0016). A SQL write-access
+decision is **not** planned; architecture reviews should not re-suggest it
+unless the decision to keep Directus changes.
+
 ## Known gaps (accepted)
 
 - The A1a-to-A1b window: a restricted operation's files, force analyses' files and octrees are reachable by anyone who has their id.

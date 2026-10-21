@@ -4,6 +4,8 @@ Status: agreed with the maintainer in a design interview on 2026-10-15 (every de
 by them unless it says "default"). ADR: [0021](../../adr/0021-surface-scans-on-inserts-and-edges.md).
 Plan: [`2026-10-15-surface-scans.md`](../plans/2026-10-15-surface-scans.md).
 
+> **Update 2026-10-21:** surface scan visibility now follows the scan's file owner ([ADR-0023](../../adr/0023-surface-scans-follow-their-files-owner.md), [spec](./2026-10-21-surface-scan-privacy-design.md)). Statements below that scans or their files are visible to every lab member are superseded for owned files; unowned files stay open.
+
 ## Problem
 
 A topography scan (Alicona `.al3d`, or any file SurfaceTopography can read) of a cutting insert or an insert

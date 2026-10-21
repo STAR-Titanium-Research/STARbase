@@ -1133,7 +1133,9 @@ migration 141 prints about ownerless records.
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
 - [ ] **SCAN-UI1 — Surface scans panel and Add dialog on real data.** As a Lab Member, open a real cutting insert and
   its edge in STARbase. Expect: a **Surface scans** panel under Details (empty at first: "No surface scan of this
-  insert."). Press **Add a surface scan**: the dialog warns that the file becomes visible to every lab member; the
+  insert."). Press **Add a surface scan**: the dialog warns that only the file's owner (or its team) and administrators see
+  the scan's file and 3D view, that others see only that the item has a scan, and that files with no owner stay visible to
+  every lab member (ADR-0023; it used to say the file becomes visible to every lab member); the
   file list shows real `.al3d` files from the library (an archive file also shows its path on the share), a file that
   is already a scan of this item is greyed out, and Add is disabled until a file and a condition are chosen (and a
   note when the condition is *other*). Save one scan of an edge, with a date and one of its operations: the dialog
@@ -1142,8 +1144,11 @@ migration 141 prints about ownerless records.
   own and the insert's, the latter tagged *Insert*. Add the same file to the same edge again from another tab: the
   dialog says it is already a scan of this item. Add a file that cannot be read (a renamed text file with an
   allowed ending): the scan shows *Render failed* with the reason, and **Render again** puts it back to *Waiting to
-  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. Check light and dark and a phone
-  width. Since: surface scans, S3 (PR pending).
+  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. As a second member who is not the
+  file's owner (or in its team), a scan of an owned file shows as a lock tile ("A surface scan you cannot open: its file belongs
+  to someone else") with only its condition, date and operation: no Open, no Render again, no notes, no thumbnail, and it still
+  counts in the panel's scan count (SS4 runs the whole two-account check). Check light and dark and a phone
+  width. Since: surface scans, S3 (PR pending); amended by the surface scan privacy PR (ADR-0023).
 - [ ] **SCAN-UI2 — The surface viewer on a real scan and a real GPU.** On a lab PC, open a rendered real `.al3d` scan
   with **Open in 3D**. Expect: the surface draws within a second or two, with no jagged edge; dragging turns it
   smoothly and the wheel zooms (no panning, no way to lose the surface); the **vertical exaggeration** slider
@@ -1573,8 +1578,10 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
   file (the range will not match Sz exactly: it is the file's extremes, not a roughness value). In MinIO,
   `mc ls local/d1-files/surface-scans/<cache_key>/` lists `grid.bin`, `meta.json` and `thumb.png`. With a session cookie,
   `GET /d1-surface-scan/<scan_id>/grid` answers 200 with an `ETag` equal to the cache key and `Cache-Control: private, no-cache`; the
-  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a user who may not read the scan, and a request
-  without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
+  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a request without a session is refused, and so is a
+  member who may not see the scan's file, which since the surface scan privacy PR (ADR-0023) means "is not the file's owner, not in
+  its owning team, and the file has an owner": `403 FILE_LOCKED`, also when they send the right `If-None-Match` (the lock is checked
+  before the 304) and with no `ETag` (SS4 checks it with two accounts). The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
   volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
   and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
   key, one it has not gets `p-<file id>-<size>-<mtime>`. Also check the least-privilege reader on the real MinIO: set
@@ -1585,7 +1592,8 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
   with the `surface-scans/*` prefix condition; the viewer's "render again" message depends on it); `mc cp` of any file into
   `d1-files/surface-scans/`, `mc rm` of an object there, `mc ls reader/d1-files/` (no prefix), `mc cat` of an object under another prefix
   and any access to `d1-backups` are all refused (403). With the password empty, `GET /d1-surface-scan/<id>/grid` answers 503, not a
-  crash. Since: surface scans PR (pending).
+  crash. Since: surface scans PR (pending); amended by the surface scan privacy PR (the render result now arrives through
+  `POST /d1-surface-scan/<id>/result`, see SS7).
 - [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
   surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
   legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
@@ -1598,6 +1606,66 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
   and the same count of those that have a linked file. Write both numbers after this item. They size the later script that
   proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
   surface scans PR (pending).
+
+### Surface scans follow their file's owner (migration 205, ADR-0023)
+
+Needs the stack with the worker, MinIO, the archive share, two member accounts (A and B), one administrator, one Lab Viewer and a
+team folder. Every item below is code-complete and unit- and Postgres-tested; what only the real Directus and share can show is
+below. "Since" is the surface scan privacy PR (pending).
+
+- [ ] **SS4 — Two accounts, a team folder, an administrator and a Lab Viewer, end to end.** As A, with a personal folder, find an
+  `.al3d` of A's in the Inbox and **Add a surface scan** of a real edge. As A: the panel shows the scan with its thumbnail, notes and
+  Open in 3D. As B (a member who is not in A's team): the same edge shows a lock tile, "A surface scan you cannot open: its file
+  belongs to someone else", with the condition, date and operation only; no Open, no Render again, no notes, no thumbnail, no file
+  name; the count includes it. B's `GET /d1-surface-scan/<scan_id>/grid`, `/meta` and `/thumb` answer `403 FILE_LOCKED`, also with
+  `If-None-Match` set to the right cache key, and without an `ETag`. B cannot Render again, edit or delete it (Directus refuses).
+  B tries to add the same file as a scan through Data Studio or the API (`POST /items/surface_scans` with A's file id): refused 403
+  "You can only add a surface scan of a file you can see.", and the same text for a made-up file id. Repeat with a **team folder** file
+  (`Shared/<folder>`): every active member of the team opens it, an inactive member and an outsider see the lock tile. As the
+  administrator: the scan opens, and the grid read writes exactly one row in `d1_private.surface_scan_access_log` (a thumbnail read
+  writes none). As an administrator who owns the file: no log row. As the Lab Viewer: the lock tile for A's scan, the full scan for a
+  scan of an unowned file, and no Add and no Render again anywhere. A scan of an **unowned** file (a legacy archive file) stays open
+  to B. An administrator re-stamps A's file to B (`UPDATE directus_files SET owner_person_id = ...`): A loses the scan and B gains it
+  at once, with no sync. Check light and dark. Since: the surface scan privacy PR (pending).
+- [ ] **SS5 — Probe what a non-owner can still reach (REST, GraphQL, export, websocket).** As B (not the owner of A's file), against a
+  scan of A's owned file, try each of these and expect a 403 or a response with no private data; write down any that returns the file
+  id, the render values, the notes or the adder. REST: `GET /items/surface_scans?fields=*`; `fields=directus_files_id.*`;
+  `fields=*.*`; `filter[directus_files_id][_eq]=<A's file id>` and `filter[directus_files_id][id][_eq]=...`;
+  `filter[notes][_contains]=x`; `filter[render_status][_eq]=done`; `sort=directus_files_id`, `sort=notes`; `aggregate[count]=*` and
+  `groupBy=directus_files_id`, `groupBy=render_status`; `deep` on the relation. A request that merely lists the nine link columns
+  works for B. GraphQL: `surface_scans { directus_files_id { id } }`, `surface_scans { notes render_status }`, introspection of
+  `surface_scans` (does it list the hidden fields?), and `surface_scans_aggregated`. `GET /utils/export/csv` (or json) of
+  `surface_scans` with and without a `fields` list. A websocket subscription on `surface_scans` (`{"type":"subscribe","collection":
+  "surface_scans"}`): events carry the nine columns only. Also `GET /assets/<A's file id>` and `GET /items/directus_files/<id>` as B
+  (ADR-0022: 403). More routes that could expose a hidden column or its contents: `GET /items/surface_scans?search=<A's file id or a
+  word from the notes>` (a search must not match a field B cannot read: it would confirm a guessed path), `alias[x]=directus_files_id`,
+  `$FOLLOW(surface_scans,insert_id)` reverse-relation filters from `cutting_inserts` and `insert_edges` (if the build supports them),
+  and reads of `directus_revisions` and `directus_activity` (a revision's data holds the full old row). These are the Directus behaviours the design could not check without a live build (dedupeAccess, whether filters,
+  sorts, aggregates and groupBy on a field the policy hides are blocked, and whether the m2o-then-bare-`readers` filter of update and
+  delete is accepted); a leak found here is a bug to fix before release. Since: the surface scan privacy PR (pending).
+- [ ] **SS6 — Migration 205 on a copy of the live database.** On a restored copy (not the live one): `dbmate up` and note the time and
+  the `NOTICE` ("ADR-0023: N existing surface scan(s) point at an owned file their adder cannot read (M with no recorded adder)");
+  compare N with a count you make by hand (scans on a file with an owner whose adder has no `file_readers` row). Check that
+  `SELECT count(*) FROM d1_private.surface_scan_renders` equals the number of scans that had any of the twelve values, that
+  `surface_scans` has no `cache_key` column any more, that a scan that was `done` still serves its grid through the endpoint (the cache
+  key moved with it), and that the permission rows for `surface_scans` are the generated ones (phase1's drift check passes). Then
+  `dbmate down` and `dbmate up` again: the values come back in the old columns exactly (`md5` of the twelve values per scan, before and
+  after), `version` and `updated_at` of the scans did not move, and the second up gives the same N. Deploy order for the real thing:
+  stop Directus and the worker, migrate, restart Directus, flush Redis, then start the worker (the migration drops columns the old
+  endpoint, worker and panel read). Since: the surface scan privacy PR (pending).
+- [ ] **SS7 — The worker through the result route, and Render again by a non-owner refused.** With the worker on its administrator
+  token and the share mounted `:ro`: add a scan of a real `.al3d` as A. Expect `pending`, `rendering`, then `done` as SS1 (the
+  worker claims through Directus and reports through `POST /d1-surface-scan/<id>/result`, so there is no render value on the
+  `surface_scans` row and one row in `d1_private.surface_scan_renders`); the worker's log shows no database credential in use. Make a
+  render fail (a PDF renamed to `.al3d`): `done` is not reached, `render_status` is `failed` and the error shows to A, not to B. Stop
+  the worker mid-render and start it: the stuck row is failed through the result route and Render again requeues it. Call the result
+  route as A (a member): `403`; as the administrator with a stale `version`: `409 VERSION_CONFLICT`; with a bad `cache_key` (`../x`):
+  `400`. As B, press Render again on A's scan (API `POST /d1-surface-scan/<id>/render`): refused (403), and the scan is not re-queued.
+  Also as the administrator, `POST` a `failed` report for the scan's id while it is `rendering` but with another file's id as
+  `directus_files_id`: `409 VERSION_CONFLICT` and the row is unchanged; without `directus_files_id`: `400` naming the field. Start
+  the worker with a token of a non-administrator user: its log shows a CRITICAL line naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
+  `WORKER_DIRECTUS_TOKEN` and the container exits non-zero (with the administrator's token it starts and logs the probe's `409`).
+  Since: the surface scan privacy PR (pending).
 
 ### Design system rollout: View rail, title pin, FAST plotter (PR #377)
 
@@ -2369,7 +2437,8 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
   while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
   as failed; nothing else changes). Through the STARbase form (`/inbox`, **Add a surface scan**): the dialog warns
-  that the file becomes visible to every lab member, has **no condition chosen** and keeps *Add a surface scan*
+  that only the file's owner (or its team) and administrators see the scan's file and 3D view and that others see only that
+  the item has a scan (ADR-0023), has **no condition chosen** and keeps *Add a surface scan*
   off until an insert or edge (searched by its code) and a condition are set; the operation list offers only the
   operations run with the chosen edge, or any edge of the chosen insert; after the add the notice says *Added as a
   surface scan of <code>* and **Recently linked** shows the same line with a link to the insert or edge page and
@@ -2601,6 +2670,13 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   first to be refused (already ignored), the lookalike to be accepted, and the last to say to give it relative to your own folder. As a Lab
   Viewer: the rules are listed, *Remove* is off with the reason, and there is no *Ignore this folder* and no add field.
   Since: ignored folders (STARbase, IC).
+
+- [ ] **IF90 — A pointer row made by a lab member first still gets the folder owner's stamp (real Directus and share).** As a Lab
+  Member B (not the owner), create a `directus_files` row for the exact path of a not-yet-seen `.al3d` in another person's
+  `Users/<alias>/` folder (id = uuid5 of that path relative to `star_group1`, storage `star`), and add a surface scan of it. Then run
+  a crawler scan of that person. Expect: the row's `owner_person_id` is the folder's person, a legacy file linked to a sample or
+  operation in the same folder stays unowned, and B no longer sees the file or its 3D view (needs the Alicona privacy change).
+  Since: the crawler stamp for scan-linked rows (this PR).
 
 ### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
 

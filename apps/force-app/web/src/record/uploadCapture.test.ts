@@ -135,6 +135,28 @@ describe('uploadCaptureColdStart', () => {
 		expect(payload.machining_chips_collected).toBe(false);
 	});
 
+	it('sends the rate the capture was recorded at (summary.fs), not the configured one', async () => {
+		// A replayed cut is decimated to ~300k samples, so the recording runs at config.sample_rate /
+		// stride and summary.fs holds that lower rate. The live-session upload path already sends
+		// summary.fs; the cold path used to send config.sample_rate, so a later upload of the same
+		// capture recorded a rate the data was not sampled at.
+		await uploadCaptureColdStart({
+			...BASE_INFO,
+			cfg: { source: 'replay', sample_rate: 25600, extra_metadata: {} },
+			summary: { fs: 12800 },
+		});
+		const op = post.mock.calls.find(([url]) => url === '/items/manufacturing_operations')![1];
+		const analysis = post.mock.calls.find(([url]) => url === '/items/machining_force_analysis')![1];
+		expect(op.capture_frequency_khz).toBe(12.8);
+		expect(analysis.sample_rate).toBe(12800);
+	});
+
+	it('falls back to the configured rate when the summary carries none', async () => {
+		await uploadCaptureColdStart({ ...BASE_INFO, cfg: { source: 'nidaq', sample_rate: 25600, extra_metadata: {} } });
+		const analysis = post.mock.calls.find(([url]) => url === '/items/machining_force_analysis')![1];
+		expect(analysis.sample_rate).toBe(25600);
+	});
+
 	it('returns the created operation_id', async () => {
 		const opId = await uploadCaptureColdStart({ ...BASE_INFO, cfg: { source: 'nidaq', extra_metadata: {} } });
 		expect(opId).toBe('op-123');
