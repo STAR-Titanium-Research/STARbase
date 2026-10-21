@@ -80,7 +80,9 @@ def test_the_outcome_is_posted_to_the_result_route_with_the_version_read(world):
     assert scan_id == SCAN
     # the claim moved the row from version 1 to 2; the result carries the version the poll re-read
     assert body["version"] == 2
-    assert set(body) == {"version", "render_status", "columns"}
+    # ... and the id of the file it rendered (the row's, as claimed)
+    assert body["directus_files_id"] == FILE
+    assert set(body) == {"version", "directus_files_id", "render_status", "columns"}
     assert body["render_status"] == "done"
     assert set(body["columns"]) == RESULT_COLUMNS
 
@@ -91,7 +93,13 @@ def test_a_failure_is_posted_with_its_error_and_no_columns(world):
     with pytest.raises(Exception):
         job.render_scan(SCAN)
     ((_, body),) = world.results
-    assert set(body) == {"version", "render_status", "render_error"}
+    assert body["directus_files_id"] == FILE
+    assert set(body) == {
+        "version",
+        "directus_files_id",
+        "render_status",
+        "render_error",
+    }
     assert body["render_status"] == "failed"
     assert "moved or deleted" in body["render_error"]
 
@@ -268,13 +276,85 @@ def test_a_lost_claim_at_the_result_is_skipped_not_overwritten(world, monkeypatc
     assert world.rows[SCAN]["render_status"] == "pending"
 
 
+def _repoint_and_reclaim(world, monkeypatch, step):
+    """While *step* of the job runs, the scan is repointed to another (unowned) file and claimed
+    again: 'rendering' once more, at a newer version, but of OTHER_FILE."""
+    real = getattr(topography, step)
+
+    def run_then_repoint(*args, **kwargs):
+        try:
+            return real(*args, **kwargs)
+        finally:
+            row = world.rows[SCAN]
+            row["directus_files_id"] = OTHER_FILE
+            row["render_status"] = "rendering"
+            row["version"] += 2
+
+    monkeypatch.setattr(topography, step, run_then_repoint)
+
+
+def test_a_done_render_of_a_file_the_scan_no_longer_points_at_is_not_posted(
+    world, monkeypatch
+):
+    """The old job's liveness check passed, but the scan was repointed and claimed again: the row is
+    'rendering' again, so only the file id tells the old job that it is not its row any more."""
+    _scan_file(world)
+    world.add_scan()
+    _repoint_and_reclaim(world, monkeypatch, "read_scan")
+    job.render_scan(SCAN)
+    assert world.results == []  # nothing posted: not even a failed
+    assert SCAN not in world.renders
+    row = world.rows[SCAN]
+    assert (row["directus_files_id"], row["render_status"]) == (OTHER_FILE, "rendering")
+
+
+def test_a_failed_render_of_a_file_the_scan_no_longer_points_at_is_not_posted(
+    world, monkeypatch
+):
+    _scan_file(world)
+    world.add_scan()
+    _repoint_and_reclaim(world, monkeypatch, "read_scan")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(job.grid, "decimate", boom)
+    with pytest.raises(RuntimeError):
+        job.render_scan(SCAN)
+    assert world.results == []
+    assert SCAN not in world.renders
+    assert world.rows[SCAN]["render_status"] == "rendering"
+
+
+def test_a_repoint_between_the_reread_and_the_post_is_refused_by_the_route(
+    world, monkeypatch
+):
+    """The re-read still saw the rendered file, then the row moved: the route's 409 (its claim also
+    needs the file id) makes the job re-read, see the other file, and stop."""
+    _scan_file(world)
+    world.add_scan()
+    real = world.post_result
+    calls = []
+
+    def repoint_then_post(scan_id, payload, version, files_id):
+        calls.append(files_id)
+        world.rows[scan_id]["directus_files_id"] = OTHER_FILE
+        return real(scan_id, payload, version, files_id)
+
+    monkeypatch.setattr(job.directus_client, "post_result", repoint_then_post)
+    job.render_scan(SCAN)
+    assert calls == [FILE]  # one post; the second read saw OTHER_FILE and skipped
+    assert SCAN not in world.renders
+    assert world.rows[SCAN]["render_status"] == "rendering"
+
+
 def test_a_claim_lost_during_the_retries_is_skipped(world):
     """The first post answers 409 and the row was reset meanwhile: the re-read sees 'pending'."""
     _scan_file(world)
     world.add_scan()
     real = world.post_result
 
-    def conflict_after_reset(scan_id, payload, version):
+    def conflict_after_reset(scan_id, payload, version, files_id):
         world.rows[scan_id]["render_status"] = "pending"
         world.rows[scan_id]["version"] += 1
         raise VersionConflictError("stale")

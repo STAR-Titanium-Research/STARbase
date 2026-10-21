@@ -103,10 +103,11 @@ class FakeWorld:
         row["version"] += 1
         return {"data": dict(row)}
 
-    def post_result(self, scan_id, payload, version):
-        """The result route: one transaction, 409 unless the version matches and the row is rendering."""
+    def post_result(self, scan_id, payload, version, files_id):
+        """The result route: one transaction, 409 unless the version matches, the row is rendering and
+        it still points at the file the report names."""
         row = self.rows[scan_id]
-        body = {**payload, "version": version}
+        body = {**payload, "version": version, "directus_files_id": files_id}
         self.results.append((scan_id, body))
         if self.result_error:
             raise self.result_error
@@ -114,7 +115,11 @@ class FakeWorld:
             self.result_conflicts_to_inject -= 1
             row["version"] += 1
             raise VersionConflictError("stale")
-        if row["version"] != version or row["render_status"] != "rendering":
+        if (
+            row["version"] != version
+            or row["render_status"] != "rendering"
+            or row["directus_files_id"] != files_id
+        ):
             raise VersionConflictError("stale")
         assert payload["render_status"] in ("done", "failed")
         row["render_status"] = payload["render_status"]
