@@ -29,10 +29,13 @@
 //        transaction. From any state but pending: a scan stuck in 'rendering' (a worker that died) can be queued again too. Already
 //        pending: nothing is written.
 //   POST /d1-surface-scan/:id/result  -> 200 { data: { scan_id, render_status, version } }   ADMINISTRATORS ONLY (403 otherwise)
-//        The worker's report, { version, render_status: 'done'|'failed', render_error?, columns? } with columns = { cache_key, source_format,
-//        source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at? }.
-//        400 INVALID_PAYLOAD (extensions.field) for a wrong type or a cache_key that is not a plain name; 409 VERSION_CONFLICT when the row
-//        is not 'rendering' at that version. One transaction: the row is claimed, d1_private.surface_scan_renders is upserted.
+//        The worker's report, { version, directus_files_id, render_status: 'done'|'failed', render_error?, columns? } with columns = { cache_key,
+//        source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at? }.
+//        directus_files_id (a uuid, required) is the file the worker rendered: the claim also needs the scan to still point at it, so a render
+//        of a file the scan was repointed away from can never be stored under the new file.
+//        400 INVALID_PAYLOAD (extensions.field) for a missing or wrong-typed field, a malformed directus_files_id or a cache_key that is not a plain
+//        name; 409 VERSION_CONFLICT when the row is not 'rendering' at that version or no longer points at that file. One transaction: the row is
+//        claimed, d1_private.surface_scan_renders is upserted.
 //
 // THE visibility rule (ADR-0023, canSeeFile), used by every route: the caller may see a scan's file when they are an administrator, or the file
 // has no owner (directus_files.owner_person_id and owner_team_id both null), or file_readers has a row for (file, the caller's login).
@@ -109,8 +112,9 @@ export const SQL = {
 	scanDetail: `SELECT ${SCAN_COLUMNS}\n  ${SCAN_JOINS}\n WHERE s.scan_id = ?`,
 	accessLog: 'INSERT INTO d1_private.surface_scan_access_log (scan_id, directus_files_id, read_by_user, reason) VALUES (?, ?, ?, ?)',
 	// The worker's report: claim the row (only a row the worker still holds, 'rendering', at the version it read; the OCC trigger bumps version), then
-	// upsert the private row. Bindings: [render_status, scan, version] and [scan, ...RESULT_COLUMNS in order].
-	resultClaim: "UPDATE surface_scans SET render_status = ? WHERE scan_id = ? AND version = ? AND render_status = 'rendering' RETURNING scan_id, render_status, version",
+	// upsert the private row. The claim also needs the scan to still point at the file the worker rendered (a job that outlived a repoint must not
+	// store its grid under the new file). Bindings: [render_status, scan, version, directus_files_id] and [scan, ...RESULT_COLUMNS in order].
+	resultClaim: "UPDATE surface_scans SET render_status = ? WHERE scan_id = ? AND version = ? AND render_status = 'rendering' AND directus_files_id = ? RETURNING scan_id, render_status, version",
 	resultUpsert: `INSERT INTO d1_private.surface_scan_renders (scan_id, ${RESULT_COLUMNS.join(', ')}, updated_at)
 VALUES (?, ${RESULT_COLUMNS.map(() => '?').join(', ')}, now())
 ON CONFLICT (scan_id) DO UPDATE SET ${RESULT_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}, updated_at = now()`,
@@ -146,15 +150,17 @@ export function isViewerAccountability(acc) {
 const invalid = (message, field) => new HttpError(400, 'INVALID_PAYLOAD', message, field ? { field } : {});
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-// POST /:id/result body: { version, render_status: 'done'|'failed', render_error?, columns? }. Returns the values to store, in RESULT_COLUMNS order.
+// POST /:id/result body: { version, directus_files_id, render_status: 'done'|'failed', render_error?, columns? }. Returns the values to store, in RESULT_COLUMNS order.
 //   done:   columns required, with a valid cache_key; every other column optional (a number of the right kind, or null); render_error absent or null.
 //   failed: render_error optional text (kept to RENDER_ERROR_MAX characters), no columns; every derived value is stored as NULL.
 // Anything else (an unknown key, a string for a number, a negative size) is a 400 INVALID_PAYLOAD naming the field, so a worker bug fails loudly.
 export function parseResult(body, now = new Date()) {
 	if (!isObject(body)) throw invalid('Send a JSON object.');
-	const unknown = Object.keys(body).filter((k) => !['version', 'render_status', 'render_error', 'columns'].includes(k));
+	const unknown = Object.keys(body).filter((k) => !['version', 'directus_files_id', 'render_status', 'render_error', 'columns'].includes(k));
 	if (unknown.length) throw invalid(`Unknown field: ${unknown[0]}.`, unknown[0]);
 	if (!Number.isInteger(body.version) || body.version < 1 || body.version > INT_MAX) throw invalid('version must be the whole number you read.', 'version');
+	if (typeof body.directus_files_id !== 'string' || !UUID.test(body.directus_files_id)) throw invalid('directus_files_id must be the uuid of the file you rendered.', 'directus_files_id');
+	const fileId = body.directus_files_id.toLowerCase();
 	if (body.render_status !== 'done' && body.render_status !== 'failed') throw invalid("render_status must be 'done' or 'failed'.", 'render_status');
 	let error = null;
 	if (!isBlank(body.render_error)) {
@@ -165,7 +171,7 @@ export function parseResult(body, now = new Date()) {
 	if (body.render_status === 'failed') {
 		if (body.columns !== undefined && body.columns !== null) throw invalid('A failed render has no columns.', 'columns');
 		out.render_error = error;
-		return { version: body.version, render_status: 'failed', values: RESULT_COLUMNS.map((c) => out[c]) };
+		return { version: body.version, directus_files_id: fileId, render_status: 'failed', values: RESULT_COLUMNS.map((c) => out[c]) };
 	}
 	if (error !== null) throw invalid('A finished render has no render_error.', 'render_error');
 	const cols = body.columns;
@@ -195,7 +201,7 @@ export function parseResult(body, now = new Date()) {
 		if (!at || Number.isNaN(at.getTime())) throw invalid('rendered_at must be a time (ISO 8601).', 'columns.rendered_at');
 	}
 	out.rendered_at = at.toISOString();
-	return { version: body.version, render_status: 'done', values: RESULT_COLUMNS.map((c) => out[c]) };
+	return { version: body.version, directus_files_id: fileId, render_status: 'done', values: RESULT_COLUMNS.map((c) => out[c]) };
 }
 
 const fileName = (row) => (isBlank(row.filename_download) ? (isBlank(row.title) ? '(file)' : row.title) : row.filename_download);
@@ -455,16 +461,16 @@ export function mount(router, context, store) {
 
 	// POST /:id/result: the worker reports a render (done with its columns, or failed with an error), ADMINISTRATORS ONLY (the worker's machine
 	// user is one). The render columns are private now, so this is the only way they are written. One transaction names the actor, claims the row
-	// (render_status 'rendering' and the version the worker read, else 409 VERSION_CONFLICT: somebody queued it again, the worker rereads and
+	// (render_status 'rendering', the version the worker read and the file it rendered, else 409 VERSION_CONFLICT: somebody queued it again, the worker rereads and
 	// retries) and upserts d1_private.surface_scan_renders. The Directus data cache is cleared after the commit (render_status is a public column).
 	router.post('/:id/result', route(async ({ req, res, acc }) => {
 		if (acc.admin !== true) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator can report a render result.');
 		const id = idParam(req);
 		const result = parseResult(req.body);
 		const row = await inTransaction(acc.user, async (trx) => {
-			const [claimed] = rowsOf(await trx.raw(SQL.resultClaim, [result.render_status, id, result.version]));
+			const [claimed] = rowsOf(await trx.raw(SQL.resultClaim, [result.render_status, id, result.version, result.directus_files_id]));
 			if (!claimed) {
-				throw new HttpError(409, 'VERSION_CONFLICT', 'The scan changed since you read it (or is no longer rendering). Read it again.');
+				throw new HttpError(409, 'VERSION_CONFLICT', 'The scan changed since you read it (it is no longer rendering, or now points at another file). Read it again.');
 			}
 			await trx.raw(SQL.resultUpsert, [id, ...result.values]);
 			return claimed;

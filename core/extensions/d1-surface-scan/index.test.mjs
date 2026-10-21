@@ -169,9 +169,9 @@ function fakeKnex(world) {
 			return { rows: [] };
 		}
 		if (SQL.resultClaim && sql === SQL.resultClaim) {
-			const [status, scan, version] = bindings;
+			const [status, scan, version, file] = bindings;
 			const row = world.scans.get(scan);
-			if (!row || row.version !== version || row.render_status !== 'rendering') return { rows: [] };
+			if (!row || row.version !== version || row.render_status !== 'rendering' || row.directus_files_id !== file) return { rows: [] };
 			row.render_status = status;
 			row.version += 1;
 			return { rows: [{ scan_id: scan, render_status: status, version: row.version }] };
@@ -1038,7 +1038,7 @@ const COLUMNS = {
 	cache_key: HASH, source_format: 'al3d', source_width: 4096, source_height: 3072, grid_width: 1024, grid_height: 768,
 	pixel_pitch_x_um: 1.5, pixel_pitch_y_um: 1.5, z_min_um: -12.25, z_max_um: 40.5, rendered_at: '2026-10-21T09:30:00Z',
 };
-const DONE = { version: 3, render_status: 'done', columns: COLUMNS };
+const DONE = { version: 3, directus_files_id: FILE, render_status: 'done', columns: COLUMNS };
 // A scan the worker holds: rendering, at version 3.
 const claimed = (extra = {}) => setup({ row: { render_status: 'rendering', version: 3 }, render: { cache_key: null, grid_width: null, grid_height: null, rendered_at: null }, ...extra });
 
@@ -1050,21 +1050,21 @@ test('POST result: the worker reports a finished render: claimed and upserted in
 	assert.equal(world.txs, 1);
 	assert.deepEqual(world.raw.map((r) => r.sql), [SQL.setActor, SQL.resultClaim, SQL.resultUpsert]);
 	assert.deepEqual(world.raw[0].bindings, [ADMIN]);
-	assert.deepEqual(world.raw[1].bindings, ['done', SCAN, 3]);
+	assert.deepEqual(world.raw[1].bindings, ['done', SCAN, 3, FILE]);
 	assert.deepEqual(world.raw[2].bindings, [
 		SCAN, null, '2026-10-21T09:30:00.000Z', HASH, 'al3d', 4096, 3072, 1024, 768, 1.5, 1.5, -12.25, 40.5,
 	]);
 	assert.equal(world.scans.get(SCAN).render_status, 'done');
 	assert.equal(world.cacheCleared, 1);
 	// the SQL's own shape: a claim that only wins a 'rendering' row at the version read, and an upsert on the scan id
-	assert.match(SQL.resultClaim, /WHERE scan_id = \? AND version = \? AND render_status = 'rendering'/);
+	assert.match(SQL.resultClaim, /WHERE scan_id = \? AND version = \? AND render_status = 'rendering' AND directus_files_id = \?/);
 	assert.match(SQL.resultUpsert, /INSERT INTO d1_private\.surface_scan_renders \(scan_id, render_error, rendered_at, cache_key, source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, updated_at\)/);
 	assert.match(SQL.resultUpsert, /ON CONFLICT \(scan_id\) DO UPDATE SET/);
 });
 
 test('POST result: a finished render needs only a cache_key, and rendered_at defaults to now', async () => {
 	const { call, world } = claimed();
-	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'done', columns: { cache_key: `p-${FILE}-123-1760000000.5` } } });
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, directus_files_id: FILE, render_status: 'done', columns: { cache_key: `p-${FILE}-123-1760000000.5` } } });
 	assert.equal(res.statusCode, 200);
 	const [, rendered, key, ...rest] = world.raw[2].bindings.slice(1);
 	assert.match(rendered, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
@@ -1074,17 +1074,17 @@ test('POST result: a finished render needs only a cache_key, and rendered_at def
 
 test('POST result: a failed render stores its error and nothing derived', async () => {
 	const { call, world } = claimed();
-	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed', render_error: '  cannot read the file  ' } });
+	const res = await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, directus_files_id: FILE, render_status: 'failed', render_error: '  cannot read the file  ' } });
 	assert.equal(res.statusCode, 200);
 	assert.equal(res.body.data.render_status, 'failed');
 	assert.deepEqual(world.raw[2].bindings, [SCAN, 'cannot read the file', null, null, null, null, null, null, null, null, null, null, null]);
 	assert.equal(world.scans.get(SCAN).render_status, 'failed');
 	// no error text is fine too; a long one is cut
 	const bare = claimed();
-	await bare.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed' } });
+	await bare.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, directus_files_id: FILE, render_status: 'failed' } });
 	assert.equal(bare.world.raw[2].bindings[1], null);
 	const long = claimed();
-	await long.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'failed', render_error: 'x'.repeat(5000) } });
+	await long.call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, directus_files_id: FILE, render_status: 'failed', render_error: 'x'.repeat(5000) } });
 	assert.equal(long.world.raw[2].bindings[1].length, 2000);
 });
 
@@ -1130,6 +1130,43 @@ test('POST result: a stale version, a scan that is not rendering, and a scan tha
 	assert.equal((await claimed().call('POST', '/:id/result', { ...WHO.admin, id: 'nope', body: DONE })).statusCode, 404);
 });
 
+test('POST result: a render of a file the scan no longer points at is 409 with nothing written (a job that outlived a repoint)', async () => {
+	// The scan was repointed to another file and claimed again: it is 'rendering' at the version the old job read, but of file ID(31).
+	const { call, world } = claimed();
+	world.scans.get(SCAN).directus_files_id = ID(31);
+	for (const status of ['done', 'failed']) {
+		const body = status === 'done' ? DONE : { version: 3, directus_files_id: FILE, render_status: 'failed', render_error: 'x' };
+		const res = await call('POST', '/:id/result', { ...WHO.admin, body });
+		assert.equal(res.statusCode, 409, status);
+		assert.equal(res.body.errors[0].extensions.code, 'VERSION_CONFLICT');
+		assertUncacheable(res, '409');
+	}
+	assert.equal(world.results.length, 0);
+	assert.equal(world.scans.get(SCAN).render_status, 'rendering');
+	assert.equal(world.scans.get(SCAN).version, 3);
+	assert.equal(world.cacheCleared, 0);
+	// reporting the file it points at now wins
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: { ...DONE, directus_files_id: ID(31) } })).statusCode, 200);
+	// the file id is case-insensitive (a uuid), as the route's own id is
+	const upper = claimed();
+	assert.equal((await upper.call('POST', '/:id/result', { ...WHO.admin, body: { ...DONE, directus_files_id: FILE.toUpperCase() } })).statusCode, 200);
+});
+
+test('POST result: the probe the worker sends at start-up: an administrator gets 409 for the nil scan, a member 403', async () => {
+	const NIL = '00000000-0000-0000-0000-000000000000';
+	const probe = { version: 1, directus_files_id: NIL, render_status: 'failed', render_error: 'token probe' };
+	const admin = claimed();
+	const res = await admin.call('POST', '/:id/result', { ...WHO.admin, id: NIL, body: probe });
+	assert.equal(res.statusCode, 409);
+	assert.equal(res.body.errors[0].extensions.code, 'VERSION_CONFLICT');
+	assert.equal(admin.world.results.length, 0);
+	assert.equal(admin.world.scans.get(SCAN).render_status, 'rendering');
+	const member = claimed();
+	const denied = await member.call('POST', '/:id/result', { ...WHO.alice, id: NIL, body: probe });
+	assert.equal(denied.statusCode, 403);
+	assert.equal(member.world.raw.length, 0);
+});
+
 test('POST result: a report that arrives twice wins once (the second sees the new version)', async () => {
 	const { call, world } = claimed();
 	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: DONE })).statusCode, 200);
@@ -1170,9 +1207,17 @@ test('POST result: validation is a 400 INVALID_PAYLOAD naming the field, and not
 		[{ ...DONE, render_status: undefined }, 'render_status'],
 		[{ ...DONE, surprise: 1 }, 'surprise'],
 		[{ ...DONE, render_error: 'oops' }, 'render_error'],
-		[{ version: 3, render_status: 'failed', render_error: 5 }, 'render_error'],
-		[{ version: 3, render_status: 'failed', columns: COLUMNS }, 'columns'],
-		[{ version: 3, render_status: 'done' }, 'columns'],
+		[{ version: 3, directus_files_id: FILE, render_status: 'failed', render_error: 5 }, 'render_error'],
+		[{ version: 3, directus_files_id: FILE, render_status: 'failed', columns: COLUMNS }, 'columns'],
+		[{ version: 3, directus_files_id: FILE, render_status: 'done' }, 'columns'],
+		[{ ...DONE, directus_files_id: undefined }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: null }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: '' }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: 'not-a-uuid' }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: `${FILE}0` }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: 7 }, 'directus_files_id'],
+		[{ ...DONE, directus_files_id: [FILE] }, 'directus_files_id'],
+		[{ version: 3, render_status: 'failed' }, 'directus_files_id'],
 		[{ ...DONE, columns: null }, 'columns'],
 		[{ ...DONE, columns: [] }, 'columns'],
 		[withColumns({ cache_key: undefined }), 'columns.cache_key'],
@@ -1218,7 +1263,7 @@ test('POST result: validation is a 400 INVALID_PAYLOAD naming the field, and not
 test('POST result: null columns are stored as null, and z_min equal to z_max is fine', async () => {
 	const { call, world } = claimed();
 	const columns = { cache_key: HASH, source_format: null, source_width: null, pixel_pitch_x_um: null, z_min_um: 5, z_max_um: 5 };
-	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, render_status: 'done', columns } })).statusCode, 200);
+	assert.equal((await call('POST', '/:id/result', { ...WHO.admin, body: { version: 3, directus_files_id: FILE, render_status: 'done', columns } })).statusCode, 200);
 	assert.deepEqual(world.raw[2].bindings.slice(4), [null, null, null, null, null, null, null, 5, 5]);
 });
 
