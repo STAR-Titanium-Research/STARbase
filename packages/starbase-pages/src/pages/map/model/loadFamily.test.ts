@@ -320,6 +320,34 @@ describe('loadFamily', () => {
     expect(op.settings).toEqual({ sintering_max_temp_celsius: 1200 });
   });
 
+  it('reads a Conform run: its own category and its key settings', async () => {
+    const { api, calls } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/manufacturing_operations') {
+        return {
+          data: [
+            {
+              operation_id: 'o1',
+              pass_code: '17-03-25-CF-012-8dia',
+              process_category: 'conform',
+              sample_id: 'root',
+              method_id: { method_id: 'm1', method_name: 'Conform (continuous extrusion)' },
+              conform_die_diameter_mm: '8.000',
+              conform_wheel_speed_rpm: 5,
+              conform_ips_setpoint_c: null,
+            },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const [op] = (await loadFamily(api, 'root')).operations;
+    expect(op.category).toBe('conform');
+    expect(op.settings).toEqual({ conform_die_diameter_mm: '8.000', conform_wheel_speed_rpm: 5 });
+    const asked = calls.filter((c) => c.path === '/items/manufacturing_operations').flatMap((c) => String(JSON.stringify(c.params ?? {})));
+    expect(asked.join('')).toContain('conform_ips_setpoint_c');
+  });
+
   it('recipeKey falls back to the prep recipe, then to nothing', async () => {
     const { api } = fakeApi((path) => {
       if (path.startsWith('/d1-trace/')) return trace();
