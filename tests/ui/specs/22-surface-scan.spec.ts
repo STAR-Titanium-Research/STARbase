@@ -328,13 +328,20 @@ test('Add a surface scan: the warning about who sees it, a file from the library
 		"Only the file's owner (or its team) and administrators see this scan's file and 3D view; others see that the item has a scan. Files with no owner stay visible to every lab member.",
 	);
 	await expect(dialog).not.toContainText(/attach/i);
+	const UNOWNED = 'No owner: every lab member will see this scan and its file.';
+	const OWNED = "This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.";
 	const submit = dialog.getByRole('button', { name: 'Add surface scan' });
 	await expect(submit).toBeDisabled();
 
 	// The library lists topography files; a file this edge already has is not offered.
 	await expect(dialog.locator('.hit')).toHaveCount(2);
+	// Each file says which case applies to it: the first is an unowned legacy file, the second has an owner.
+	await expect(dialog.locator('.hit').filter({ hasText: 'after-12min' }).getByTestId('hit-owner')).toHaveText(UNOWNED);
+	await expect(dialog.locator('.hit').filter({ hasText: 'cleaned' }).getByTestId('hit-owner')).toHaveText(OWNED);
 	await dialog.locator('.hit').filter({ hasText: 'after-12min' }).click();
 	await expect(dialog.locator('.chosen')).toContainText('Alicona-edgeA-after-12min.al3d');
+	await expect(dialog.getByTestId('file-visibility')).toHaveText(UNOWNED);
+	await expect(dialog.getByTestId('visibility-warning')).toBeVisible(); // the generic warning stays above
 	await expect(submit).toBeDisabled(); // no condition yet
 	await dialog.locator('select').first().selectOption({ label: 'Other' });
 	await expect(dialog).toContainText('Say in the note what the condition is.');
@@ -363,6 +370,7 @@ test('Add a surface scan: the warning about who sees it, a file from the library
 	await panel(page).getByRole('button', { name: 'Add a surface scan' }).click();
 	await expect(dialog.locator('.hit').filter({ hasText: 'after-12min' })).toBeDisabled(); // already this edge's scan: not offered
 	await dialog.locator('.hit').filter({ hasText: 'cleaned' }).click();
+	await expect(dialog.getByTestId('file-visibility')).toHaveText(OWNED);
 	await dialog.locator('select').first().selectOption({ label: 'Cleaned' });
 	state.scans.refuseCreate = 'You do not have permission to access this.';
 	await dialog.getByRole('button', { name: 'Add surface scan' }).click();

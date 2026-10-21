@@ -8,7 +8,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useExplorerHost, useRequestGate } from '@d1/ui';
 import {
-	emptyForm, FILE_FIELDS, fileFilter, formatBytes, formProblems, normaliseFile, OPERATION_FIELDS, operationFilter, operationOption, todayIso, VISIBILITY_WARNING, type LibraryFile,
+	emptyForm, FILE_FIELDS, fileFilter, formatBytes, formProblems, normaliseFile, OPERATION_FIELDS, operationFilter, operationOption, todayIso, visibilityNote, VISIBILITY_WARNING, type LibraryFile,
 } from './addScanModel';
 import { createErrors, createScan } from './scanApi';
 import { CONDITION_LABEL, SCAN_CONDITIONS } from './scanModel';
@@ -159,6 +159,7 @@ async function add(): Promise<void> {
 									<span v-if="h.path" class="path">{{ h.path }}</span>
 									<span v-if="taken(h)" class="tag">already a surface scan here</span>
 									<span v-else-if="h.size !== null" class="size">{{ formatBytes(h.size) }}</span>
+									<span class="owner" :class="{ open: !h.owned }" data-testid="hit-owner" :data-owned="h.owned ? 'true' : 'false'">{{ visibilityNote(h) }}</span>
 								</button>
 							</li>
 						</ul>
@@ -167,6 +168,7 @@ async function add(): Promise<void> {
 					<div v-else class="chosen">
 						<strong>{{ form.file.name }}</strong><span v-if="form.file.path" class="path">{{ form.file.path }}</span>
 						<button type="button" class="link" @click="form.file = null">Change</button>
+						<p class="who" data-testid="file-visibility" :data-owned="form.file.owned ? 'true' : 'false'">{{ visibilityNote(form.file) }}</p>
 					</div>
 				</div>
 
@@ -230,5 +232,8 @@ async function add(): Promise<void> {
 .size { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .tag { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-warn); }
 .chosen { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.owner { flex-basis: 100%; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
+.owner.open { color: var(--d1-warn); }
+.who { flex-basis: 100%; margin: 2px 0 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .link { border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; cursor: pointer; }
 </style>

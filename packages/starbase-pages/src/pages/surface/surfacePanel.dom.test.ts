@@ -23,12 +23,21 @@ const FAILED = scan({ scan_id: 's-failed', edge_id: EDGE, insert_id: null, rende
 // What the endpoint sends for a scan whose file belongs to someone else: nothing but condition, date and operation.
 const LOCKED = { scan_id: 's-locked', insert_id: INSERT, edge_id: null, locked: true, condition: 'cleaned', scanned_on: '2026-08-15', operation: { id: 'op-9', label: 'OP-LOCK-9' } };
 
+// Library files the dialog lists: the first is a legacy file with no owner, the second is owned by a person, the third by a team.
+const FILES = [
+	{ id: 'f9', filename_download: 'new-scan.al3d', filesize: 2048, metadata: { archive_path: 'Alicona/new-scan.al3d' }, owner_person_id: null, owner_team_id: null },
+	{ id: 'f10', filename_download: 'mine.al3d', filesize: 4096, metadata: { archive_path: 'Alicona/mine.al3d' }, owner_person_id: 'p-1', owner_team_id: null },
+	{ id: 'f11', filename_download: 'team.al3d', filesize: 4096, metadata: { archive_path: 'Alicona/team.al3d' }, owner_person_id: null, owner_team_id: 't-1' },
+];
+const UNOWNED_SENTENCE = 'No owner: every lab member will see this scan and its file.';
+const OWNED_SENTENCE = "This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.";
+
 function fakeApi(rows: unknown[]) {
 	return {
 		get: vi.fn(async (url: string, _config?: unknown) => {
 			if (url === '/d1-surface-scan/scans') return { data: { data: rows } };
 			if (url.endsWith('/thumb')) return { data: new Blob(['png'], { type: 'image/png' }) };
-			if (url === '/files') return { data: { data: [{ id: 'f9', filename_download: 'new-scan.al3d', filesize: 2048, metadata: { archive_path: 'Alicona/new-scan.al3d' } }] } };
+			if (url === '/files') return { data: { data: FILES } };
 			return { data: { data: [] } };
 		}),
 		post: vi.fn(async () => ({ data: null })),
@@ -222,6 +231,27 @@ describe('Add a surface scan dialog', () => {
 		await vi.waitFor(() => expect(api.post).toHaveBeenCalled());
 		expect(api.post).toHaveBeenCalledWith('/items/surface_scans', { directus_files_id: 'f9', condition: 'worn', edge_id: EDGE });
 		await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+	});
+
+	it("asks for the files' owner columns and says per file whether it has an owner, in the list and under the chosen file", async () => {
+		await mountPanel([DONE], { insertId: INSERT, itemLabel: 'Insert CNMG12-1' });
+		button(/Add a surface scan/)!.click();
+		await vi.waitFor(() => expect(document.querySelectorAll('.hit')).toHaveLength(3));
+		const read = api.get.mock.calls.find(([u]) => u === '/files')![1] as any;
+		expect(read.params.fields).toEqual(expect.arrayContaining(['owner_person_id', 'owner_team_id']));
+		const hits = [...document.querySelectorAll('.hit')];
+		expect(hits.map((h) => h.querySelector('[data-testid="hit-owner"]')?.textContent)).toEqual([UNOWNED_SENTENCE, OWNED_SENTENCE, OWNED_SENTENCE]);
+		// nothing under a file yet: the sentence of the chosen one follows the pick, not the first hit
+		expect(document.querySelector('[data-testid="file-visibility"]')).toBeNull();
+		(hits[0] as HTMLButtonElement).click();
+		await nextTick();
+		expect(document.querySelector('[data-testid="file-visibility"]')?.textContent).toBe(UNOWNED_SENTENCE);
+		[...document.querySelectorAll('button')].find((b) => b.textContent === 'Change')!.click();
+		await nextTick();
+		(document.querySelectorAll('.hit')[2] as HTMLButtonElement).click(); // owned by a team
+		await nextTick();
+		expect(document.querySelector('[data-testid="file-visibility"]')?.textContent).toBe(OWNED_SENTENCE);
+		expect(document.querySelector('[data-testid="visibility-warning"]')?.textContent).toContain("Only the file's owner (or its team)"); // the generic warning stays
 	});
 
 	it('shows the database refusal of a file already added, and stays open', async () => {
