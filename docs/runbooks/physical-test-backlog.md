@@ -1694,6 +1694,24 @@ below. "Since" is the surface scan privacy PR (pending).
   a layout saved by the old page (`d1-fast-dashboard-v1`) still restores its tiles and run; unit strings print correctly
   ("C" shown as "°C"). Since: PR #377 (stream D).
 
+### Conform plotter (Conform runs plan, stream C)
+
+- [ ] **CP1 — FAST plotter unchanged after the run-profile refactor.** On real data open `/plot/fast`: the run list,
+  badges, peaks, statistics, tiles and hover look and behave as before DSR5/DSR6 describe, with no Conform controls
+  (no run window, no upload, no "Use this view as the run window"); the hover shows elapsed time only. A layout saved
+  before (`d1-fast-dashboard-v1`) still restores. Since: Conform runs plan, stream C.
+- [ ] **CP2 — Conform plotter on a real log and real Directus.** Open `/plot/conform?operation=<id>` for a Conform run with
+  no log: the plot area says no log has been uploaded. Upload the machine's real CSV (an Excel export with `Â°C`, `Column1`,
+  CRLF and a BOM too): the run opens on the whole log, the five tiles (speed, torque and current, temperatures, IPS,
+  power) draw, and the hover shows UK clock time with elapsed time beside it (compare a clock time with the Timestamp
+  column, in BST and in GMT). Zoom to the extrusion and press "Use this view as the run window": the run list badge
+  turns "Window set", the Statistics tab matches the spreadsheet (energy, extruding time), and reopening the run opens
+  zoomed to its window. Since: Conform runs plan, stream C.
+- [ ] **CP3 — Several runs on one log, and who sees what.** Link a second run to the same log with "Use a log already
+  uploaded" (it starts with no window): the first run's window shows as a faint labelled band; setting a window that
+  overlaps it is refused with the message naming the other run. A reader who can read the run but not the log sees the
+  figures and "Conform log not visible to you" in place of the plot. Since: Conform runs plan, stream C.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

@@ -81,7 +81,7 @@ watch(() => props.folded, () => { open.value = false; });
 					<label class="fd-search"><v-icon name="search" x-small /><input v-model="runRaw" placeholder="Search code / recipe" aria-label="Search runs by code or recipe" /></label>
 				</div>
 				<div class="list">
-					<button v-for="r in runs" :key="r.id" v-memo="[r.id === selectedId, sample === null]" class="fd-card" :class="{ active: r.id === selectedId }" :aria-current="r.id === selectedId || undefined" @click="pickRun(r)">
+					<button v-for="r in runs" :key="r.id" v-memo="[r.id === selectedId, sample === null, r.quality.label]" class="fd-card" :class="{ active: r.id === selectedId }" :aria-current="r.id === selectedId || undefined" @click="pickRun(r)">
 						<span class="fd-code">{{ r.pass_code || '—' }}</span>
 						<span class="fd-dim sub">{{ meta(r) }}</span>
 						<span class="fd-badge badge" :class="r.quality.level" :title="r.quality.hint">{{ r.quality.label }}</span>
