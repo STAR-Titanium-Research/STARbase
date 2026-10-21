@@ -35,6 +35,9 @@ documented so they could be reimplemented elsewhere.
   views, and OCC are native Postgres (ADR-0001, ADR-0003), Directus can be
   replaced by a thin FastAPI layer over the same schema. Phase 9 includes a
   "drop-Directus drill" to *prove* this remains true.
+  *Narrowed 2026-10-21:* the drill covers the schema and who may read a
+  record; who may change one is decided in Directus filters and hooks by
+  deliberate choice, see the amendment to [ADR-0014](./0014-record-access.md).
 
 ## Alternatives considered
 
