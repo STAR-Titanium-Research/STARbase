@@ -74,6 +74,10 @@ describe('the plot pages', () => {
 		const fast = resolveLink('/d1-fast-dashboard?operation=3');
 		expect(fast).toEqual({ kind: 'route', to: '/plot/fast?operation=3' });
 		if (fast.kind === 'route') expect(router.resolve(fast.to).name).toBe('plot-fast');
+		const conform = resolveLink('/d1-conform-dashboard?operation=x');
+		expect(conform).toEqual({ kind: 'route', to: '/plot/conform?operation=x' });
+		if (conform.kind === 'route') expect(router.resolve(conform.to).name).toBe('plot-conform');
+		expect(router.resolve('/plot/conform?operation=x').matched).toHaveLength(2);
 		expect(router.resolve('/plot/force').matched).toHaveLength(2);
 	});
 	// Carried decision (Task 8): a bare /plot is not a page. It would otherwise fall into the generic ':slug'
@@ -91,6 +95,7 @@ describe('the plot pages', () => {
 		configureLinks(starbaseLinks('https://d1-server.tail54eeb6.ts.net'));
 		expect(canonicalPath('/plot/force?operation=9')).toBe('/d1-force-dashboard?operation=9');
 		expect(canonicalPath('/plot/fast?operation=3')).toBe('/d1-fast-dashboard?operation=3');
+		expect(canonicalPath('/plot/conform?operation=3')).toBe('/d1-conform-dashboard?operation=3');
 		expect(routeTarget(canonicalPath('/plot'))).toBeNull();
 	});
 });

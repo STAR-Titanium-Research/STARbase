@@ -111,6 +111,7 @@ export const PAGE_KEYS = new Set([
     'people',
     'force-dashboard',
     'fast-dashboard',
+    'conform-dashboard',
     'build-process',
     'action:register-sample',
     'action:log-operation',
