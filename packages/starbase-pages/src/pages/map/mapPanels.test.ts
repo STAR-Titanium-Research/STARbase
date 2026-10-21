@@ -330,7 +330,7 @@ describe('DataThumb', () => {
         { key: 'tooling1_c', label: 'Tooling 1', unit: '°C', min: 100, max: 200, values: [100, 150, 200] },
       ],
     };
-    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/plot/conform?operation=o1', thumb }, link: true });
+    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1', thumb }, link: true });
     expect(text(html)).toContain('Conform run data');
     expect(text(html)).toContain('Open in Conform plotter');
     expect(html).not.toContain('<img');
@@ -340,7 +340,7 @@ describe('DataThumb', () => {
   });
 
   it('Conform run data without a trace (no window yet, or a log this person cannot read) is the words and the link only', async () => {
-    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/plot/conform?operation=o1' }, link: true });
+    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1' }, link: true });
     expect(text(html)).toContain('Conform run data');
     expect(html).not.toContain('<svg');
   });

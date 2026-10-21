@@ -14,8 +14,8 @@ describe('analysisLink', () => {
 	});
 
 	it('sends conform to the Conform plotter', () => {
-		expect(analysisLink('x', 'conform')).toEqual({ label: 'View Conform', to: '/plot/conform?operation=x' });
-		expect(analysisLink('a b', 'conform')?.to).toBe('/plot/conform?operation=a%20b');
+		expect(analysisLink('x', 'conform')).toEqual({ label: 'View Conform', to: '/d1-conform-dashboard?operation=x' });
+		expect(analysisLink('a b', 'conform')?.to).toBe('/d1-conform-dashboard?operation=a%20b');
 	});
 
 	it('has no link for the other categories or a missing one', () => {

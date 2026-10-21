@@ -82,7 +82,7 @@ function fakeApi({ readable = true, withWindow = true } = {}) {
 }
 
 describe('conformThumbs', () => {
-  const preview = (over: Partial<DataPreview> = {}): Record<string, DataPreview> => ({ c1: { kind: 'conform', plotterPath: '/plot/conform?operation=c1', ...over }, f1: { kind: 'fast', plotterPath: '/x' } });
+  const preview = (over: Partial<DataPreview> = {}): Record<string, DataPreview> => ({ c1: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=c1', ...over }, f1: { kind: 'fast', plotterPath: '/x' } });
 
   it('reads the window trace of each Conform run, and only of those', async () => {
     const { api, get } = fakeApi();
@@ -108,7 +108,7 @@ describe('dataPreview of a Conform run', () => {
   it('is kind conform with the Conform plotter path when the run has a log, and reads no file', async () => {
     const get = vi.fn(async (path: string) => ({ data: { data: path === '/items/conform_run_data' ? [{ operation_id: 'c1' }] : [] } }));
     const out = await dataPreview({ get } as unknown as HostApi, [op('c1'), op('x')]);
-    expect(out.c1).toEqual({ kind: 'conform', plotterPath: '/plot/conform?operation=c1' });
+    expect(out.c1).toEqual({ kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=c1' });
     expect(out.x.kind).toBe('none');
     for (const [path] of get.mock.calls) expect(String(path)).not.toContain('/assets/');
   });

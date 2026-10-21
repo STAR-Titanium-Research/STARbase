@@ -29,6 +29,6 @@ export function analysisLink(operationId: string, category: string | null | unde
 	const id = encodeURIComponent(operationId);
 	if (category === 'machining') return { label: 'View forces', to: `/d1-force-dashboard?operation=${id}` };
 	if (category === 'sintering') return { label: 'View FAST', to: `/d1-fast-dashboard?operation=${id}` };
-	if (category === 'conform') return { label: 'View Conform', to: `/plot/conform?operation=${id}` };
+	if (category === 'conform') return { label: 'View Conform', to: `/d1-conform-dashboard?operation=${id}` };
 	return null;
 }
