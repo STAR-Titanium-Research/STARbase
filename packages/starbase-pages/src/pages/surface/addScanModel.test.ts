@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-	emptyForm, fileFilter, formatBytes, formProblems, normaliseFile, operationFilter, todayIso, TOPOGRAPHY_EXTENSIONS, VISIBILITY_WARNING, type ScanForm,
+	emptyForm, fileFilter, FILE_FIELDS, formatBytes, formProblems, normaliseFile, operationFilter, OWNED_NOTE, todayIso, TOPOGRAPHY_EXTENSIONS, UNOWNED_NOTE, VISIBILITY_WARNING, visibilityNote, type ScanForm,
 } from './addScanModel';
 
-const FILE = { id: 'f1', name: 'edge-A.al3d', path: null, size: 10 };
+const FILE = { id: 'f1', name: 'edge-A.al3d', path: null, size: 10, owned: false };
 const ok = (o: Partial<ScanForm> = {}): ScanForm => ({ ...emptyForm(), file: FILE, condition: 'new', ...o });
 const TODAY = '2026-10-15';
 
@@ -36,13 +36,20 @@ describe('fileFilter', () => {
 describe('normaliseFile', () => {
 	it('reads a library row, with the archive path of a pointer row', () => {
 		expect(normaliseFile({ id: 'f1', filename_download: 'a.al3d', filesize: '2048', metadata: { archive_path: 'Alicona/2026/a.al3d' } }))
-			.toEqual({ id: 'f1', name: 'a.al3d', path: 'Alicona/2026/a.al3d', size: 2048 });
-		expect(normaliseFile({ id: 'f2', title: 'T', metadata: '{"archive_path":"x/y.al3d"}', filesize: 7 })).toEqual({ id: 'f2', name: 'T', path: 'x/y.al3d', size: 7 });
+			.toEqual({ id: 'f1', name: 'a.al3d', path: 'Alicona/2026/a.al3d', size: 2048, owned: false });
+		expect(normaliseFile({ id: 'f2', title: 'T', metadata: '{"archive_path":"x/y.al3d"}', filesize: 7 })).toEqual({ id: 'f2', name: 'T', path: 'x/y.al3d', size: 7, owned: false });
 	});
 	it('names a file by its archive path when it has no name, and skips a row with no id', () => {
 		expect(normaliseFile({ id: 'f3', metadata: { archive_path: 'x/z.al3d' } })?.name).toBe('z.al3d');
-		expect(normaliseFile({ id: 'f4', metadata: 'not json' })).toEqual({ id: 'f4', name: '(file)', path: null, size: null });
+		expect(normaliseFile({ id: 'f4', metadata: 'not json' })).toEqual({ id: 'f4', name: '(file)', path: null, size: null, owned: false });
 		expect(normaliseFile({ filename_download: 'a' })).toBeNull();
+	});
+	it('asks for both owner columns of the file, and says a file is owned when either is set', () => {
+		expect(FILE_FIELDS).toEqual(expect.arrayContaining(['owner_person_id', 'owner_team_id']));
+		expect(normaliseFile({ id: 'a', owner_person_id: 'p1', owner_team_id: null })?.owned).toBe(true);
+		expect(normaliseFile({ id: 'b', owner_person_id: null, owner_team_id: 't1' })?.owned).toBe(true);
+		expect(normaliseFile({ id: 'c', owner_person_id: null, owner_team_id: null })?.owned).toBe(false);
+		expect(normaliseFile({ id: 'd' })?.owned).toBe(false); // a row without the columns (no read of them) is shown as not owned
 	});
 	it('prints sizes briefly', () => {
 		expect([formatBytes(null), formatBytes(512), formatBytes(2048), formatBytes(5 * 1024 * 1024), formatBytes(300 * 1024 * 1024)]).toEqual(['', '512 B', '2.0 KB', '5.0 MB', '300 MB']);
@@ -82,5 +89,15 @@ describe('the rest', () => {
 		);
 		expect(VISIBILITY_WARNING).not.toMatch(/makes this file visible to every lab member/);
 		expect(VISIBILITY_WARNING.toLowerCase()).not.toContain('attach');
+	});
+	it('tells which case applies to a chosen file, and leaves the generic warning as it was', () => {
+		expect(visibilityNote({ owned: false })).toBe('No owner: every lab member will see this scan and its file.');
+		expect(visibilityNote({ owned: true })).toBe(
+			"This file has an owner: only the owner (or their team) and administrators will see this scan's file and 3D view; others see that the item has a scan.",
+		);
+		expect(visibilityNote({})).toBe(VISIBILITY_WARNING); // a file whose owner was not read: no claim either way
+		expect(UNOWNED_NOTE).toBe(visibilityNote({ owned: false }));
+		expect(OWNED_NOTE).toBe(visibilityNote({ owned: true }));
+		expect(VISIBILITY_WARNING).toContain('Files with no owner stay visible to every lab member.'); // the inbox dialog imports this one
 	});
 });

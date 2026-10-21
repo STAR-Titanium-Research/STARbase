@@ -21,11 +21,13 @@ export const STUB_TOOLING = {
 	edge3Id: '00000000-0000-4000-8000-0000000000e3',
 } as const;
 
+// Like Directus, a /files row carries both owner columns (a member may read every field). file-new-1 is a legacy file the indexer registered
+// (no owner: its scans stay visible to every lab member); file-new-2 is owned by a person (ADR-0022/0023). Never both set.
 export const STUB_LIBRARY = [
-	{ id: 'file-new-1', storage: 'star', filename_download: 'Alicona-edgeA-after-12min.al3d', filesize: 18_400_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-after-12min.al3d' } },
-	{ id: 'file-new-2', storage: 'star', filename_download: 'Alicona-edgeA-cleaned.al3d', filesize: 17_900_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-cleaned.al3d' } },
+	{ id: 'file-new-1', storage: 'star', filename_download: 'Alicona-edgeA-after-12min.al3d', filesize: 18_400_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-after-12min.al3d' }, owner_person_id: null, owner_team_id: null },
+	{ id: 'file-new-2', storage: 'star', filename_download: 'Alicona-edgeA-cleaned.al3d', filesize: 17_900_000, metadata: { archive_path: 'Alicona/2026/Alicona-edgeA-cleaned.al3d' }, owner_person_id: 'person-1', owner_team_id: null },
 	// An uploaded file (not on the archive share): the worker could not read it, so the dialog's filter (storage = star) must not list it.
-	{ id: 'file-upload-1', storage: 'local', filename_download: 'uploaded-by-hand.al3d', filesize: 1_000, metadata: null },
+	{ id: 'file-upload-1', storage: 'local', filename_download: 'uploaded-by-hand.al3d', filesize: 1_000, metadata: null, owner_person_id: null, owner_team_id: null },
 ];
 
 type Status = 'pending' | 'rendering' | 'done' | 'failed';
