@@ -18,7 +18,7 @@ import { cleanTemplateValues } from './templates';
 
 export function useEditSide(o: { host: Pick<ExplorerHost, 'api' | 'openDataStudio' | 'user' | 'isAdmin'>; edit: EditMode; map: ReturnType<typeof useProcessMap>; canvas: ReturnType<typeof useMapCanvas>; canvasEl: Ref<HTMLElement | null>; /** The page has the Finder open: the edit keys leave the keyboard to it. */ finderOpen?: () => boolean }) {
 	const { host, edit } = o;
-	const markDone = useMarkDone({ edit, map: o.map });
+	const markDone = useMarkDone({ edit, map: o.map, api: host.api });
 	// The templates (R7): read when building starts; a template is cleaned again against the form's fields when it is used.
 	const templates = useTemplates({
 		api: host.api,

@@ -3,7 +3,8 @@
 // The server's refusal (the required fields of a done record) comes back as Checks and is shown in the dialog.
 
 import { computed, ref, shallowRef } from 'vue';
-import type { Check } from '@d1/ui';
+import type { Check, HostApi } from '@d1/ui';
+import { conformWindowChecks, readConformRuns } from './conformChecks';
 import type { ContainerNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
 import type { EditMode } from './useEditMode';
@@ -14,6 +15,8 @@ export interface MarkTarget {
 	collection: 'manufacturing_operations' | 'test_sessions';
 	ids: string[];
 	title: string;
+	/** The card is Conform runs: the dialog warns about a run with a log and no window (it can still be marked done). */
+	conform?: true;
 }
 
 /** The card a Mark done applies to: a planned container of records, none of them still in a draft. Null for any other card. */
@@ -22,7 +25,7 @@ export function markTargetOf(node: { type: string } | undefined): MarkTarget | n
 	const c = node as ContainerNode;
 	if (!c.planned || c.draft || c.collapsed || !c.group.rowIds.length || c.group.rowIds.some((id) => id.startsWith('draft:'))) return null;
 	const name = c.stacked || c.group.batch ? c.title : c.code || c.title;
-	return { collection: c.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', ids: [...c.group.rowIds], title: `Mark ${c.kind === 'test' ? 'test' : 'operation'} ${name} done` };
+	return { collection: c.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', ids: [...c.group.rowIds], title: `Mark ${c.kind === 'test' ? 'test' : 'operation'} ${name} done`, ...(c.category === 'conform' ? { conform: true as const } : {}) };
 }
 
 export interface PlannedTarget {
@@ -43,7 +46,7 @@ export function plannedTargetOf(node: { type: string } | undefined): PlannedTarg
 	return { collection: c.kind === 'test' ? 'test_sessions' : 'manufacturing_operations', ids: [...c.group.rowIds], title: `Set ${c.kind === 'test' ? 'test' : 'operation'} ${name} back to planned` };
 }
 
-export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
+export function useMarkDone(o: { edit: EditMode; map: ProcessMap; /** Reads a Conform run's window for the warning; without it the dialog has none. */ api?: Pick<HostApi, 'get'> }) {
 	const { edit, map } = o;
 	const open = ref(false);
 	const busy = ref(false);
@@ -83,6 +86,13 @@ export function useMarkDone(o: { edit: EditMode; map: ProcessMap }) {
 		checks.value = [];
 		error.value = '';
 		open.value = true;
+		void warnAboutWindows(opened.value);
+	}
+	/** A Conform run with a log and no window: a warning in the dialog (the server never refuses it). Dropped if the dialog moved on. */
+	async function warnAboutWindows(t: MarkTarget | null): Promise<void> {
+		if (!t?.conform || !o.api) return;
+		const found = conformWindowChecks(await readConformRuns(o.api, t.ids));
+		if (found.length && open.value && opened.value === t && !busy.value && !checks.value.length) checks.value = found;
 	}
 	function cancel(): void {
 		if (busy.value) return;

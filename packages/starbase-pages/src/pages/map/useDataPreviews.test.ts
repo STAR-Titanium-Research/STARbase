@@ -16,12 +16,12 @@ describe('useDataPreviews', () => {
     const p = useDataPreviews(api);
     p.load([op('a'), op('b')]);
     await tick();
-    expect(get).toHaveBeenCalledTimes(2); // the force and the FAST read, for both operations together
+    expect(get).toHaveBeenCalledTimes(3); // the force, FAST and Conform reads, for both operations together
     expect(p.previews.value.a).toMatchObject({ kind: 'force', imageFileId: 'fz' });
     expect(p.previews.value.b.kind).toBe('none');
     void p.previews.value.a; // hovering reads the stored answer
     await tick();
-    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledTimes(3);
   });
 
   it('nothing to read makes no request', async () => {
@@ -38,18 +38,18 @@ describe('useDataPreviews', () => {
     const p = useDataPreviews(api);
     p.load([op('a'), op('b')]);
     await tick();
-    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledTimes(3);
     p.load([op('a'), op('b'), op('c')]); // the map grew by c
     await tick();
-    expect(get).toHaveBeenCalledTimes(4);
+    expect(get).toHaveBeenCalledTimes(6);
     const ids = (call: number) => JSON.stringify(get.mock.calls[call]);
-    expect(ids(2)).toContain('c');
-    expect(ids(2)).not.toContain('"a"');
+    expect(ids(3)).toContain('c');
+    expect(ids(3)).not.toContain('"a"');
     expect(p.previews.value.a).toMatchObject({ kind: 'force', imageFileId: 'fz' }); // not blanked while c is read
     expect(p.previews.value.c.kind).toBe('none');
     p.load([op('a'), op('b'), op('c')]); // nothing new: nothing asked
     await tick();
-    expect(get).toHaveBeenCalledTimes(4);
+    expect(get).toHaveBeenCalledTimes(6);
   });
 
   it('an old answer that arrives after the next expand still lands next to the new one', async () => {

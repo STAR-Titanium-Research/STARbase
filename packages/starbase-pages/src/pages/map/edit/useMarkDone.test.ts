@@ -44,7 +44,7 @@ describe('which card can be marked done', () => {
 	});
 });
 
-async function setup(selected: MapNode | undefined, available = true, extra: MapNode[] = []) {
+async function setup(selected: MapNode | undefined, available = true, extra: MapNode[] = [], api?: { get: (path: string, config?: unknown) => Promise<unknown> }) {
 	const server = fakeServer();
 	if (!available) server.s.listStatus = 404;
 	const route = reactive({ path: '/map', query: {} as Record<string, unknown> });
@@ -54,7 +54,7 @@ async function setup(selected: MapNode | undefined, available = true, extra: Map
 	const reload = vi.fn();
 	const selectedId = ref<string | null>(selected?.id ?? null);
 	const map = { graph: { value: { nodes: [...(selected ? [selected] : []), ...extra] } }, selectedId, reload } as never;
-	return { ...server, md: useMarkDone({ edit, map }), reload, selectedId };
+	return { ...server, md: useMarkDone({ edit, map, ...(api ? { api: api as never } : {}) }), reload, selectedId };
 }
 
 describe('Mark done', () => {
@@ -134,6 +134,49 @@ describe('Mark done', () => {
 		md.show();
 		await Promise.all([md.confirm({ date: '2026-10-15', personId: null }), md.confirm({ date: '2026-10-15', personId: null })]);
 		expect(s.bodies).toHaveLength(1);
+	});
+});
+
+describe('Mark done of a Conform run with a log and no window', () => {
+	const conformCard = (over: Partial<ContainerNode> = {}) => container({ category: 'conform', code: '17-03-25-CF-012', ...over });
+	const runs = (rows: unknown[]) => ({ get: vi.fn(async () => ({ data: { data: rows } })) });
+
+	it('marks a Conform card as one that can be warned about, and no other', () => {
+		expect(markTargetOf(conformCard())).toMatchObject({ ids: ['o1'], conform: true });
+		expect(markTargetOf(container())).not.toHaveProperty('conform');
+	});
+
+	it('warns in the dialog, and still marks it done', async () => {
+		const api = runs([{ operation_id: 'o1', log_id: 'l1', window_start: null, window_end: null }]);
+		const { md, s } = await setup(conformCard(), true, [], api);
+		md.show();
+		await settle();
+		expect(md.open.value).toBe(true);
+		expect(md.checks.value).toEqual([{ key: 'o1', level: 'warn', text: 'Conform run window not set' }]);
+		await md.confirm({ date: '2026-10-15', personId: null });
+		expect(s.bodies).toEqual([{ collection: 'manufacturing_operations', ids: ['o1'], date: '2026-10-15' }]);
+		expect(md.open.value).toBe(false);
+	});
+
+	it('says nothing when the run has its window, has no log, or this person cannot read runs', async () => {
+		const done = runs([{ operation_id: 'o1', log_id: 'l1', window_start: '2025-03-17T13:00:00Z', window_end: '2025-03-17T13:10:00Z' }]);
+		const a = await setup(conformCard(), true, [], done);
+		a.md.show();
+		await settle();
+		expect(a.md.checks.value).toEqual([]);
+		const refused = { get: vi.fn(async () => { throw Object.assign(new Error('HTTP 403'), { response: { status: 403 } }); }) };
+		const b = await setup(conformCard(), true, [], refused);
+		b.md.show();
+		await settle();
+		expect(b.md.checks.value).toEqual([]);
+	});
+
+	it('reads nothing for a card that is not a Conform run', async () => {
+		const api = runs([]);
+		const { md } = await setup(container(), true, [], api);
+		md.show();
+		await settle();
+		expect(api.get).not.toHaveBeenCalled();
 	});
 });
 
