@@ -4,7 +4,10 @@
 **Scope:** `plugins/surface-scan-worker` (render pipeline for `surface_scans`), its Directus Flow, its
 compose service and what to do when a scan will not render.
 **Design:** [`2026-10-15-surface-scans-design.md`](../superpowers/specs/2026-10-15-surface-scans-design.md),
-[ADR-0021](../adr/0021-surface-scans-on-inserts-and-edges.md).
+[ADR-0021](../adr/0021-surface-scans-on-inserts-and-edges.md),
+[ADR-0023](../adr/0023-surface-scans-follow-their-files-owner.md) (who can see a scan's file, and the
+private render table the worker reports into),
+[`2026-10-21-surface-scan-privacy-design.md`](../superpowers/specs/2026-10-21-surface-scan-privacy-design.md).
 
 ## 1. What it does
 
@@ -27,11 +30,35 @@ created `render_status = 'pending'`. The worker:
    `meta.json` and skips reading the file; otherwise reads the file read-only with SurfaceTopography,
    block-means it (NaN-aware) to at most 1024 cells on the longer side, and writes `grid.bin`,
    `thumb.png` and then `meta.json` to MinIO;
-5. fills `render_*`, `cache_key`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*` and sets `done`; any
-   failure sets `failed` with `render_error` (what STARbase shows next to "Render again").
+5. reports the outcome with `POST /d1-surface-scan/<id>/result` (see "How it writes" below): `done` with
+   `cache_key`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*` and `rendered_at`, or `failed` with
+   `render_error` (what STARbase shows, to people who can open the scan, next to "Render again").
 
 `z_min_um` / `z_max_um` are the range of the stored (decimated) grid, so they match what the viewer
 draws; the grid pitch is the source pitch times the block size.
+
+### How it writes (ADR-0023)
+
+The worker is a **system actor**: it runs on an **administrator** machine user's token, mounts the share
+`:ro` and holds no database credential. A scan's file can belong to one person or team, so the render
+columns (`cache_key`, `source_*`, `grid_*`, `pixel_pitch_*`, `z_*`, `rendered_at`) and `render_error` no
+longer live on the public `surface_scans` row. They are in `d1_private.surface_scan_renders`, which only the
+endpoint reads and writes. So the worker writes `surface_scans` in two ways only:
+
+| Step | Request | Notes |
+|---|---|---|
+| Claim | `PATCH /items/surface_scans/<id>?filter[version][_eq]=<v>` with `{"render_status": "rendering"}` | A stale version means another job has the row: skipped. |
+| Outcome | `POST /d1-surface-scan/<id>/result` with `{version, render_status: "done" \| "failed", render_error?, columns?}` | Administrators only; one transaction updates the status (only while it is `rendering`, at that `version`) and upserts the private row. |
+
+A `409 VERSION_CONFLICT` from the result route means the version moved or the row is no longer
+`rendering`. The worker re-reads the row and tries again (up to `OCC_MAX_ATTEMPTS`, default 5, with a short
+random back-off); if the re-read row is not `rendering` any more, someone pressed Render again, and the
+result is dropped rather than overwriting their reset. The poller fails stuck rows the same way (timeout
+sweep, dead job, startup sweep). The worker still never hashes a file and never writes `file_fingerprints`.
+
+The worker only reads `surface_scans` as an administrator, so its token sees `directus_files_id` and
+`render_status` whatever the file's owner; that is why it keeps the check that a file row's id matches
+its `archive_path` (section 4) and renders only archive files.
 
 ## 2. Start it
 
@@ -44,8 +71,8 @@ docker compose logs -f surface-scan-worker
 ```
 
 Settings (all optional, see `.env.example`): `SURFACE_SCAN_DIRECTUS_TOKEN` (blank uses
-`WORKER_DIRECTUS_TOKEN`; a machine user that can read and update `surface_scans` and read `directus_files`
-and `file_fingerprints`), `SURFACE_SCAN_CONCURRENCY` (1 or 2 renders at a time, default 1),
+`WORKER_DIRECTUS_TOKEN`; an **administrator** machine user: the result route accepts administrators only,
+and the worker has to read `surface_scans` and `directus_files` whoever owns the file), `SURFACE_SCAN_CONCURRENCY` (1 or 2 renders at a time, default 1),
 `SURFACE_SCAN_MEMORY_LIMIT` (default 2g), `SURFACE_SCAN_POLL_SECONDS`, `SURFACE_SCAN_JOB_TIMEOUT_SECONDS`.
 
 ## 3. The Directus Flow
@@ -82,10 +109,18 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | Render again does nothing for a few minutes after a container kill | rq still lists the dead worker's job as started until the worker's key expires (its TTL, about 7 minutes); the poller then replaces the dead job and renders. |
 | `The render did not finish within the time limit` | Slow share or huge file. Raise `SURFACE_SCAN_JOB_TIMEOUT_SECONDS`. |
 | Rows stay `pending` | The container is not running (it is in the `archive` profile), or the worker's token cannot read `surface_scans`. `docker compose logs surface-scan-worker`. |
+| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` until the poller fails them | The worker's token is not an administrator's. The result route is administrators only; make the machine user an administrator (the claim works for lesser roles, the outcome does not). |
+| Same log with `404` on `/d1-surface-scan/<id>/result` | Directus is running the old endpoint extension (no `/result` route). Deploy the release as a whole: stop Directus and the worker, migrate, restart Directus and flush Redis. |
+| Same log with `400` | The endpoint refused the body (a bad `cache_key` or a wrongly typed column). A worker bug: the log line has Directus's message. |
+| Log: `gave up after 5 version conflicts` | The row's version kept moving under the result (someone repeatedly pressing Render again). The job fails; Render again once. |
+| Log: `OCC conflict scan=...` once or twice, then `done` | Normal: a webhook, the poller or Render again touched the row between the worker's read and its result. It re-read and retried. |
+| A scan is `failed` or stuck `rendering` and the reason is not shown | `render_error` is private now: it is shown by the endpoint to people who can open the scan (its file's owner, the owner's team, administrators), not to others who see a locked tile. Read it as an administrator, or in `d1_private.surface_scan_renders.render_error`. |
 | Log: `the worker's token may not read file_fingerprints (403)` | A real permission gap (a missing fingerprint is just an empty list). Grant the worker's user read access on `file_fingerprints`; until then every scan gets a provisional cache key. |
 
-To re-render by hand: set the row's `render_status` back to `pending` (the "Render again" action does
-exactly this).
+To re-render by hand: use "Render again" in STARbase (`POST /d1-surface-scan/<id>/render`, which sets the row
+back to `pending` and clears the private error; it needs a person who can read the file, or an administrator).
+Setting `render_status` to `pending` directly (as an administrator) also works: the reset trigger on
+`surface_scans` deletes the row's private render data, so the next result starts clean.
 
 ## 5. Cleaning up
 
