@@ -46,7 +46,7 @@ function readersOf(file) {
 	const logins = new Set();
 	const user = (personId) => PEOPLE.find((p) => p.person_id === personId)?.user_id;
 	if (file.owner_person_id && user(file.owner_person_id)) logins.add(user(file.owner_person_id));
-	if (file.owner_team_id) for (const m of TEAM_MEMBERS) if (user(m)) logins.add(user(m));
+	if (file.owner_team_id) for (const m of TEAM_MEMBERS) if (user(m) && PEOPLE.find((p) => p.person_id === m)?.active) logins.add(user(m)); // migration 201: a team owner counts ACTIVE members only
 	return logins;
 }
 
@@ -914,12 +914,22 @@ test('POST render of a scan whose file the caller cannot see: 403 FILE_LOCKED, e
 });
 
 test('POST render: the file\'s owner, an active member of the owner team and an administrator may queue it again', async () => {
-	for (const [who, owner] of [[WHO.alice, { owner_person_id: P.alice }], [WHO.carol, { owner_team_id: TEAM }], [WHO.dave, { owner_team_id: TEAM }], [WHO.erin, { owner_person_id: P.erin }], [WHO.admin, { owner_person_id: P.alice }]]) {
+	for (const [who, owner] of [[WHO.alice, { owner_person_id: P.alice }], [WHO.carol, { owner_team_id: TEAM }], [WHO.erin, { owner_person_id: P.erin }], [WHO.admin, { owner_person_id: P.alice }]]) {
 		const { call, world } = setup({ row: { render_status: 'failed' }, file: owner });
 		const res = await call('POST', '/:id/render', who);
 		assert.equal(res.statusCode, 200, who.user);
 		assert.equal(world.ops.length, 1);
 	}
+});
+
+test('POST render of a team-owned file: an inactive team member is locked out (migration 201), an active one may queue it', async () => {
+	const dave = setup({ row: { render_status: 'failed' }, file: { owner_team_id: TEAM } });
+	const refused = await dave.call('POST', '/:id/render', WHO.dave);
+	assert.equal(refused.statusCode, 403);
+	assert.equal(refused.body.errors[0].extensions.code, 'FILE_LOCKED');
+	assert.equal(dave.world.ops.length, 0);
+	const carol = setup({ row: { render_status: 'failed' }, file: { owner_team_id: TEAM } });
+	assert.equal((await carol.call('POST', '/:id/render', WHO.carol)).statusCode, 200);
 });
 
 test('POST render: the update and the private clear are one transaction (a failed clear undoes the update)', async () => {
