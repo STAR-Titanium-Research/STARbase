@@ -67,7 +67,7 @@ const settingFields = (categories: (keyof typeof KEY_SETTING_FIELDS)[]): string[
     categories.flatMap((c) => KEY_SETTING_FIELDS[c].flatMap((d) => d.fields.map((f) => f.field))).filter((f) => f !== 'test_type'),
   );
 
-const OPERATION_SETTING_FIELDS = settingFields(['sintering', 'machining', 'heat_treatment', 'additive', 'deformation']);
+const OPERATION_SETTING_FIELDS = settingFields(['sintering', 'conform', 'machining', 'heat_treatment', 'additive', 'deformation']);
 const TEST_SETTING_FIELDS = settingFields(['test']);
 
 export const OPERATION_FIELDS = [
@@ -156,7 +156,7 @@ const SAMPLE_FACTS: { label: string; field: string; unit: string }[] = [
   { label: 'Length', field: 'length_mm', unit: 'mm' },
 ];
 
-const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
+const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'conform', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
 const TEST_CATEGORIES = ['nde', 'destructive', 'dynamic', 'other'] as const;
 
 export const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);

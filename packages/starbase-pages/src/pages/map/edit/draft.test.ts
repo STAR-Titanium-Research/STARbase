@@ -123,6 +123,10 @@ describe('addContainer', () => {
 		expect(newFromValues(record)).toEqual({ method_id: 'm', equipment_id: 'e', process_category: 'sintering', sintering_max_temp_celsius: 1450 });
 	});
 
+	it('new from leaves a Conform run number behind too (unique with its machine) and keeps the rest of the setup', () => {
+		expect(newFromValues({ method_id: 'cf', process_category: 'conform', conform_run_number: 12, conform_die_diameter_mm: 8 })).toEqual({ method_id: 'cf', process_category: 'conform', conform_die_diameter_mm: 8 });
+	});
+
 	it('new from copies an existing record without its date, sample, notes and code', () => {
 		const record = {
 			operation_id: 'op-1', method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2, operation_date: '2026-01-02', sample_id: 's', output_sample_id: 'o',

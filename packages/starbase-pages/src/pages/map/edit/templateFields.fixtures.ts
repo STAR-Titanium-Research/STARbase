@@ -45,6 +45,12 @@ export const OPERATION_DEFS: FieldDef[] = [
 	{ field: 'additional_operators', type: 'alias', schema: null, meta: { group: 'grp_who_where', special: ['m2m'], interface: 'list-m2m' } },
 	{ field: 'data_files', type: 'alias', schema: null, meta: { group: null, special: ['files'], interface: 'files' } },
 	grp('grp_what'), grp('grp_who_where'), grp('grp_cutting'), grp('grp_tooling'), grp('grp_legacy'), grp('grp_capture'), grp('grp_notes_files'), grp('grp_sample_prep'),
+	col('conform_run_number', { group: 'grp_conform', type: 'integer' }), col('conform_feedstock', { group: 'grp_conform' }), col('conform_feedstock_form', { group: 'grp_conform' }),
+	col('conform_feed_mass_g', { group: 'grp_conform', type: 'decimal' }), col('conform_die_diameter_mm', { group: 'grp_conform', type: 'decimal' }),
+	col('conform_tooling_id', { group: 'grp_conform' }), col('conform_wheel_speed_rpm', { group: 'grp_conform', type: 'decimal' }),
+	col('conform_ips_setpoint_c', { group: 'grp_conform', type: 'decimal' }), col('conform_extrusion_length_mm', { group: 'grp_conform', type: 'decimal' }),
+	col('conform_extrusion_mass_g', { group: 'grp_conform', type: 'decimal' }), col('conform_yield_pct', { group: 'grp_conform', type: 'decimal' }),
+	col('conform_flash_mass_g', { group: 'grp_conform', type: 'decimal' }), grp('grp_conform'),
 	grp('grp_heat_treatment'), grp('grp_deformation'), grp('grp_additive'), grp('grp_sintering'), grp('sintering_machine_group', 'grp_sintering'), grp('sintering_qa_group', 'grp_sintering'),
 ];
 

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { AppLink, assetThumbUrl } from '@d1/ui';
+import ConformTrace from './ConformTrace.vue';
 import type { DataPreview } from './model/dataPreview';
 
 // The small data picture of a record (spec §6.6): for a machining operation with a finished force
 // analysis, the Fz figure as the small image the index cards use (assetThumbUrl: Directus scales it; never the data file itself); for a FAST run
 // with finished run data, the words "FAST run data" (there is no cheap picture of it) and a link to the
-// plotter. Nothing for a record with no data, or while the answer is still on its way. In the hover card
+// plotter; for a Conform run with a log, "Conform run data" over a small trace of its window (wheel speed and Tooling 1, each on
+// its own scale, as in the plotter's overview), and a link to the Conform plotter. Nothing for a record with no data, or while the answer is still on its way. In the hover card
 // the plotter link is plain text (the card takes no pointer).
 const props = defineProps<{ preview?: DataPreview; link?: boolean }>();
 
@@ -16,8 +18,10 @@ const src = computed(() => (props.preview?.kind === 'force' && props.preview.ima
 const failed = ref(false);
 watch(src, () => void (failed.value = false));
 
-const caption = computed(() => (props.preview?.kind === 'fast' ? 'FAST run data' : 'Force data · Fz'));
-const action = computed(() => (props.preview?.kind === 'fast' ? 'Open in FAST plotter' : 'Open in Force dashboard'));
+const CAPTION = { fast: 'FAST run data', conform: 'Conform run data', force: 'Force data · Fz' } as const;
+const ACTION = { fast: 'Open in FAST plotter', conform: 'Open in Conform plotter', force: 'Open in Force dashboard' } as const;
+const caption = computed(() => CAPTION[props.preview?.kind === 'fast' || props.preview?.kind === 'conform' ? props.preview.kind : 'force']);
+const action = computed(() => ACTION[props.preview?.kind === 'fast' || props.preview?.kind === 'conform' ? props.preview.kind : 'force']);
 </script>
 
 <template>
@@ -27,6 +31,7 @@ const action = computed(() => (props.preview?.kind === 'fast' ? 'Open in FAST pl
 			<AppLink v-if="link && preview.plotterPath" :to="preview.plotterPath" class="open">{{ action }}</AppLink>
 			<span v-else-if="preview.plotterPath" class="open">{{ action }}</span>
 		</div>
+		<ConformTrace v-if="preview.kind === 'conform' && preview.thumb" class="trace" :thumb="preview.thumb" />
 		<img v-if="src && !failed" :src="src" :alt="`${caption} figure`" loading="lazy" decoding="async" @error="failed = true" />
 	</div>
 </template>
@@ -36,5 +41,6 @@ const action = computed(() => (props.preview?.kind === 'fast' ? 'Open in FAST pl
 .cap { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .open { color: var(--d1-accent, var(--theme--primary)); text-decoration: none; font-weight: 600; white-space: nowrap; }
 a.open:hover { text-decoration: underline; }
+.trace { margin-top: 4px; }
 img { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; height: auto; margin: 4px auto 0; object-fit: contain; }
 </style>

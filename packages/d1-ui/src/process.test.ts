@@ -13,6 +13,11 @@ describe('analysisLink', () => {
 		expect(analysisLink('op-1', 'sintering')).toEqual({ label: 'View FAST', to: '/d1-fast-dashboard?operation=op-1' });
 	});
 
+	it('sends conform to the Conform plotter', () => {
+		expect(analysisLink('x', 'conform')).toEqual({ label: 'View Conform', to: '/plot/conform?operation=x' });
+		expect(analysisLink('a b', 'conform')?.to).toBe('/plot/conform?operation=a%20b');
+	});
+
 	it('has no link for the other categories or a missing one', () => {
 		expect(analysisLink('op-1', 'heat_treatment')).toBeNull();
 		expect(analysisLink('op-1', 'sample_prep')).toBeNull();
@@ -23,6 +28,7 @@ describe('analysisLink', () => {
 describe('processLabel', () => {
 	it('names the known categories', () => {
 		expect(processLabel('sintering')).toBe('FAST sintering');
+		expect(processLabel('conform')).toBe('Conform');
 		expect(processLabel('sample_prep')).toBe('Sample preparation');
 	});
 	it('falls back for a new or missing category', () => {

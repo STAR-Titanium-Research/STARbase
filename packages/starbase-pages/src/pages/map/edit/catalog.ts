@@ -7,7 +7,7 @@ import type { ProcessCategory } from '../model/types';
 import type { CheckCollection, FieldDef, LoadedRecord } from './checks';
 import { OWNER_FIELDS } from './draft';
 
-export const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
+export const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'conform', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
 
 export interface MethodEntry {
 	id: string;

@@ -33,6 +33,27 @@ describe('a recorded FAST/SPS operation as a template (a second one must be crea
 	});
 });
 
+describe('a recorded Conform run as a template', () => {
+	const CONFORM_RECORD = {
+		method_id: 'cf', process_category: 'conform', equipment_id: 'conform1', conform_run_number: 12, conform_feedstock: 'Ti swarf', conform_feedstock_form: 'swarf',
+		conform_feed_mass_g: 410, conform_die_diameter_mm: 8, conform_tooling_id: 'AB-3', conform_wheel_speed_rpm: 5, conform_ips_setpoint_c: 300,
+		conform_extrusion_length_mm: 900, conform_extrusion_mass_g: 380, conform_yield_pct: 92.7, conform_flash_mass_g: 12,
+	};
+	const kept = templateValuesOf(op({}), CONFORM_RECORD, OPERATION_DEFS);
+
+	it('keeps the feedstock, die, tooling and setpoints', () => {
+		expect(kept).toEqual({
+			method_id: 'cf', process_category: 'conform', equipment_id: 'conform1', conform_feedstock: 'Ti swarf', conform_feedstock_form: 'swarf', conform_die_diameter_mm: 8,
+			conform_tooling_id: 'AB-3', conform_wheel_speed_rpm: 5, conform_ips_setpoint_c: 300,
+		});
+	});
+	it('never keeps the run number or what this run charged and produced', () => {
+		for (const f of ['conform_run_number', 'conform_feed_mass_g', 'conform_extrusion_length_mm', 'conform_extrusion_mass_g', 'conform_yield_pct', 'conform_flash_mass_g']) {
+			expect(kept, f).not.toHaveProperty(f);
+		}
+	});
+});
+
 describe('a done test as a template: results, status, files and codes never travel (one family at a time)', () => {
 	const RESULTS: Record<string, Record<string, unknown>> = {
 		tensile: { test_type: 'tensile', tensile_gauge_length_mm: 25, tensile_crosshead_speed_mm_per_min: 1, tensile_extensometer_used: true, tensile_yield_strength_mpa: 880, tensile_uts_mpa: 960, tensile_fracture_mode: 'cup-cone' },

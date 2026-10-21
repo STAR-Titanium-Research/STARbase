@@ -14,6 +14,7 @@ export type { LinkConfig, ResolvedLink } from './links';
 export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
+export { ukInputValue, ukLocalToMs } from './ukTime';
 export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';
 export { rollupOperationsFilter, ROLLUP_OPERATION_FIELDS, rollupTargets } from './rollupLinks';
 export type { RollupTarget } from './rollupLinks';

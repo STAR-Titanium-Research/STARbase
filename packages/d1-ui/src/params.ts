@@ -35,6 +35,7 @@ export interface ParamRow {
 export const OPERATION_PARAM_PREFIX: Record<string, string> = {
 	machining: 'machining_',
 	sintering: 'sintering_',
+	conform: 'conform_',
 	heat_treatment: 'ht_',
 	deformation: 'deform_',
 	additive: 'am_',

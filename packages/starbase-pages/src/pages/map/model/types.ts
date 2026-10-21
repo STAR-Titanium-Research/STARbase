@@ -20,6 +20,7 @@ export type Kind =
 export type ProcessCategory =
   | 'machining'
   | 'sintering'
+  | 'conform'
   | 'heat_treatment'
   | 'deformation'
   | 'additive'

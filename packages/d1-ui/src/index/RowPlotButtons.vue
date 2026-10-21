@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The small buttons at the end of an operation's or sample's list row (and in a card's footer):
-// Force opens the Force dashboard on the operation, FAST the FAST dashboard, and a sample's
+// Force opens the Force dashboard on the operation, FAST the FAST dashboard, Conform the Conform plotter, and a sample's
 // "Force (n)" the operations list narrowed to that sample's operations that have force data. A
 // button is only drawn when the row has that data; a row without any shows nothing. A click on a
 // button does not also open the row.
@@ -25,6 +25,7 @@ const props = defineProps<{
 const isSample = computed(() => props.collection === 'physical_samples');
 const force = computed(() => (!isSample.value && props.plots?.force ? analysisLink(props.id, 'machining') : null));
 const fast = computed(() => (!isSample.value && props.plots?.fast ? analysisLink(props.id, 'sintering') : null));
+const conform = computed(() => (!isSample.value && props.plots?.conform ? analysisLink(props.id, 'conform') : null));
 const who = computed(() => (props.label ? ` for ${props.label}` : ''));
 const sample = computed(() => {
 	const n = props.plots?.forceCount ?? 0;
@@ -34,9 +35,10 @@ const sample = computed(() => {
 </script>
 
 <template>
-	<span v-if="force || fast || sample" class="plots" :class="size === 'card' ? 's-card' : 's-row'">
+	<span v-if="force || fast || conform || sample" class="plots" :class="size === 'card' ? 's-card' : 's-row'">
 		<AppLink v-if="force" :to="force.to" class="plot" title="Open in the Force dashboard" :aria-label="`Force dashboard${who}`" @click.stop>Force</AppLink>
 		<AppLink v-if="fast" :to="fast.to" class="plot" title="Open in the FAST dashboard" :aria-label="`FAST dashboard${who}`" @click.stop>FAST</AppLink>
+		<AppLink v-if="conform" :to="conform.to" class="plot" title="Open in the Conform plotter" :aria-label="`Conform plotter${who}`" @click.stop>Conform</AppLink>
 		<AppLink v-if="sample" :to="sample.to" class="plot" title="Operations of this sample with force data" :aria-label="`${sample.label}: operations with force data${who}`" @click.stop>{{ sample.label }}</AppLink>
 	</span>
 </template>

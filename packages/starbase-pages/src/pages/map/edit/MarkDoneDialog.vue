@@ -73,6 +73,8 @@ function onChange(next: FormValues): void {
 const answer = computed(() => answerOf(values.value));
 const lead = computed(() => leadText(props.ids.length, props.collection));
 const refusals = computed(() => props.checks ?? []);
+// Only warnings (a Conform run with no window): Mark done still works, so the box does not say it was refused.
+const onlyWarnings = computed(() => refusals.value.length > 0 && refusals.value.every((c) => c.level === 'warn'));
 
 // Focus. On open it goes to the date; whenever the dialog closes (cancelled, or the page set `open` to false after a good Mark
 // done) it goes back to what had it, whoever closed it. Keys are read on the document while the dialog is open, so Tab cannot
@@ -163,8 +165,8 @@ function onKeydown(e: KeyboardEvent): void {
 				<div class="body">
 					<p :id="`${uid}-lead`" class="lead">{{ lead }}</p>
 					<FieldForm :collection="`markdone-${collection}`" :fields="fields" :model-value="values" :readonly="busy" @update:model-value="onChange" />
-					<div v-if="refusals.length" class="refused" role="alert">
-						<p class="why">Not marked done yet:</p>
+					<div v-if="refusals.length" class="refused" :class="{ warnings: onlyWarnings }" role="alert">
+						<p class="why">{{ onlyWarnings ? 'Worth a look, but you can still mark it done:' : 'Not marked done yet:' }}</p>
 						<ul>
 							<li v-for="(c, i) in refusals" :key="i" :class="c.level" :data-level="c.level">{{ c.text }}</li>
 						</ul>
@@ -205,6 +207,7 @@ function onKeydown(e: KeyboardEvent): void {
 .why { margin: 0 0 4px; font-weight: 650; color: var(--d1-bad); }
 .refused ul { margin: 0; padding-left: 18px; }
 .refused li.warn { color: var(--d1-warn); }
+.refused.warnings { border-color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 10%, var(--d1-surface)); }
 .foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--d1-line); }
 .grow { flex: 1; }
 .btn {
