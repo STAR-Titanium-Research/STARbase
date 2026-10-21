@@ -85,7 +85,7 @@ def test_an_archive_writer_can_create_a_pointer_row(world):
 @pytest.mark.parametrize(
     "change",
     [
-        "UPDATE directus_files SET metadata = '{\"archive_path\": \"Users/cd456/secret.al3d\"}'",
+        'UPDATE directus_files SET metadata = \'{"archive_path": "Users/cd456/secret.al3d"}\'',
         "UPDATE directus_files SET metadata = '{}'",
         "UPDATE directus_files SET storage = 'local'",
         "UPDATE directus_files SET filename_disk = 'Users/cd456/secret.al3d'",

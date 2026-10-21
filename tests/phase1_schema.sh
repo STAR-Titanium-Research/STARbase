@@ -3809,6 +3809,11 @@ sem_down=$(awk '/-- migrate:down/{f=1;next}f' "$SEM_MIG")
 # 20261016000201 (file owner follow-ups) replaces 196's readers function and people trigger and adds two guard triggers and their functions, so its down goes before everything else and it is not replayed.
 FOF_MIG=db/migrations/20261016000201_file_owner_followups.sql
 fof_down=$(awk '/-- migrate:down/{f=1;next}f' "$FOF_MIG")
+# 20261021000206 (pointer-row write guard) puts a trigger function in d1_private, which the replayed downs below drop, so its down goes before everything else and it is not replayed.
+PRG_MIG=db/migrations/20261021000206_pointer_row_write_guard.sql
+prg_down=$(awk '/-- migrate:down/{f=1;next}f' "$PRG_MIG")
+fof_down="$prg_down
+$fof_down"
 lv_down="$fof_down
 $sem_down
 $fpo_down
