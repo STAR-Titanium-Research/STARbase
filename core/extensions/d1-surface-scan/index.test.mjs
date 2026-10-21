@@ -415,7 +415,7 @@ const WHO = {
 };
 const CASES = [
 	['a file owned by Alice', { owner_person_id: P.alice }, { alice: true, bob: false, carol: false, dave: false, erin: false, admin: true, viewer: false }],
-	['a file owned by the team (active member Carol, inactive member Dave)', { owner_team_id: TEAM }, { alice: false, bob: false, carol: true, dave: true, erin: false, admin: true, viewer: false }],
+	['a file owned by the team (active member Carol; inactive member Dave does not count since migration 201)', { owner_team_id: TEAM }, { alice: false, bob: false, carol: true, dave: false, erin: false, admin: true, viewer: false }],
 	['a file owned by Erin, an inactive person who has a login', { owner_person_id: P.erin }, { alice: false, bob: false, carol: false, dave: false, erin: true, admin: true, viewer: false }],
 	['a file with no owner', {}, { alice: true, bob: true, carol: true, dave: true, erin: true, admin: true, viewer: true }],
 ];

@@ -143,7 +143,7 @@ describe('every refusal has words, and none says a surface scan is linked or att
 			...['condition', 'insert_id', 'edge_id', 'operation_id', 'scanned_on', 'condition_note', 'notes', 'candidate_id'].map((f) => scanErrorText(err('INVALID_PAYLOAD', 400, { field: f })).message),
 		].join(' ');
 		expect(all).not.toMatch(/\blink|attach/i);
-		expect(scanAddedText('H13A-#2')).toBe('Added as a surface scan of H13A-#2. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.');
+		expect(scanAddedText('H13A-#2')).toBe('Added as a surface scan of H13A-#2. If the file has an owner (you, or your team for a team folder), only the owner and administrators can see its file and 3D view; others see that the item has a scan.');
 		expect(SCAN_ALREADY_TEXT).toBe('That file was already added.');
 	});
 });

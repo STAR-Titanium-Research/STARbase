@@ -241,7 +241,7 @@ async function pickInsert(page: Page) {
 	await dialog.getByText(T.insertCode, { exact: true }).first().click();
 }
 
-test('Add a surface scan: the dialog warns that only the file's owner and administrators will see it, has no condition chosen, and adds it to an insert; Recently linked says where, and Undo brings the file back', async ({ browser }) => {
+test("Add a surface scan: the dialog warns that only the file's owner and administrators will see it, has no condition chosen, and adds it to an insert; Recently linked says where, and Undo brings the file back", async ({ browser }) => {
 	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { scanItems });
 	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
 	const dialog = scanDialog(page);
@@ -258,7 +258,7 @@ test('Add a surface scan: the dialog warns that only the file's owner and admini
 	await shot(page, 'scan-dialog-filled');
 	await dialog.locator('[data-test="scan-confirm"]').click();
 	await expect(dialog).toBeHidden();
-	await expect(page.locator('[data-test="notice"]')).toContainText(`Added as a surface scan of ${T.insertCode}. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.`);
+	await expect(page.locator('[data-test="notice"]')).toContainText(`Added as a surface scan of ${T.insertCode}. If the file has an owner (you, or your team for a team folder), only the owner and administrators can see its file and 3D view; others see that the item has a scan.`);
 	await expect.poll(() => names(page)).not.toContain('edge1.al3d');
 	expect(inbox.scans).toHaveLength(1);
 	expect(inbox.scans[0]).toMatchObject({ insert_id: T.insertId, edge_id: null, condition: 'worn' });

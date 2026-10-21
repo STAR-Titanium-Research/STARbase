@@ -119,8 +119,9 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 
 To re-render by hand: use "Render again" in STARbase (`POST /d1-surface-scan/<id>/render`, which sets the row
 back to `pending` and clears the private error; it needs a person who can read the file, or an administrator).
-Setting `render_status` to `pending` directly (as an administrator) also works: the reset trigger on
-`surface_scans` deletes the row's private render data, so the next result starts clean.
+Setting `render_status` to `pending` directly (as an administrator) also works: the next result report
+overwrites every private render column. (Only a change of the scan's file resets the private render data: the
+reset trigger on `surface_scans` fires on `directus_files_id` alone.)
 
 ## 5. Cleaning up
 

@@ -132,9 +132,9 @@ export const SCAN_ALREADY_TEXT = 'That file was already added.';
 /** What a link to a sample, operation or test would be for a surface scan: the page never sends it, this is the answer if it is asked for. */
 export const SCAN_NOT_LINKED = 'A surface scan is added to an insert or an edge.';
 
-/** A found file is always owned (ADR-0022), so only its owner, the owner's team and administrators see the scan's file (ADR-0023). */
+/** A found file is normally owned (ADR-0022), and then only its owner, the owner's team and administrators see the scan's file (ADR-0023); a legacy file that was linked before the stamp has no owner and stays open, so the text says "if". */
 export const scanAddedText = (label: string): string =>
-	`Added as a surface scan of ${label}. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.`;
+	`Added as a surface scan of ${label}. If the file has an owner (you, or your team for a team folder), only the owner and administrators can see its file and 3D view; others see that the item has a scan.`;
 
 const FIELD_TEXT: Record<string, string> = {
 	condition: 'Choose the condition: new, worn, cleaned or other.',

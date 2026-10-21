@@ -350,7 +350,7 @@ describe('the Inbox page', () => {
 		await vi.waitFor(() => expect(names()).not.toContain('edge1.al3d'));
 		expect(document.querySelector('[data-test="add-scan-dialog"]')).toBeNull();
 		expect(sentLinks()[0].body).toEqual({ items: [{ candidate_id: fake.files[3].candidate_id, collection: 'surface_scans', insert_id: '00000000-0000-4000-8000-000000000201', condition: 'worn' }] });
-		expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('Added as a surface scan of H13A-#2. Only you (or your team, for a team folder) and administrators can see its file and 3D view; others see that the item has a scan.');
+		expect(document.querySelector('[data-test="notice"]')?.textContent).toContain('Added as a surface scan of H13A-#2. If the file has an owner (you, or your team for a team folder), only the owner and administrators can see its file and 3D view; others see that the item has a scan.');
 		expect(fake.scans).toHaveLength(1);
 		click(document.querySelector('[data-test="undo"]'));
 		await vi.waitFor(() => expect(names()).toContain('edge1.al3d'));
