@@ -18,17 +18,27 @@ OTHER_FILE = "9c1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c77"
 
 
 class FakeWorld:
-    """In-memory stand-ins for Directus (rows with OCC, files, fingerprints) and MinIO."""
+    """In-memory stand-ins for Directus (rows with OCC, the private render table behind the result route,
+    files, fingerprints) and MinIO."""
 
     def __init__(self, root: Path):
         self.root = root
-        self.rows: dict[str, dict] = {}
+        self.rows: dict[str, dict] = {}  # public surface_scans rows
+        # d1_private.surface_scan_renders as the result route fills it: scan_id -> render_error + columns
+        self.renders: dict[str, dict] = {}
         self.files: dict[str, dict] = {}
         self.fingerprints: dict[str, dict] = {}
         self.team_folders: list[str] | Exception = ["Alloys"]
         self.objects: dict[str, tuple[bytes, str]] = {}
         self.history: list[tuple[str, dict]] = []  # every PATCH: (scan_id, payload)
-        self.conflicts_to_inject = 0
+        self.results: list[
+            tuple[str, dict]
+        ] = []  # every POST /result: (scan_id, body incl. version)
+        self.conflicts_to_inject = 0  # claim PATCHes that lose the race
+        self.result_conflicts_to_inject = (
+            0  # result POSTs answered 409 (the row moves on first)
+        )
+        self.result_error: Exception | None = None
         self.put_error: Exception | None = None
 
     # --- seeding -------------------------------------------------------------------------
@@ -37,8 +47,6 @@ class FakeWorld:
             "scan_id": scan_id,
             "directus_files_id": file_id,
             "render_status": status,
-            "render_error": None,
-            "cache_key": None,
             "version": 1,
             "updated_at": "2026-10-15T10:00:00+00:00",
         }
@@ -104,6 +112,34 @@ class FakeWorld:
         row["version"] += 1
         return {"data": dict(row)}
 
+    def post_result(self, scan_id, payload, version, files_id):
+        """The result route: one transaction, 409 unless the version matches, the row is rendering and
+        it still points at the file the report names."""
+        row = self.rows[scan_id]
+        body = {**payload, "version": version, "directus_files_id": files_id}
+        self.results.append((scan_id, body))
+        if self.result_error:
+            raise self.result_error
+        if self.result_conflicts_to_inject:
+            self.result_conflicts_to_inject -= 1
+            row["version"] += 1
+            raise VersionConflictError("stale")
+        if (
+            row["version"] != version
+            or row["render_status"] != "rendering"
+            or row["directus_files_id"] != files_id
+        ):
+            raise VersionConflictError("stale")
+        assert payload["render_status"] in ("done", "failed")
+        row["render_status"] = payload["render_status"]
+        row["version"] += 1
+        # A done result carries no error: the route stores NULL then, as it does for a missing one.
+        self.renders[scan_id] = {
+            "render_error": payload.get("render_error"),
+            **(payload.get("columns") or {}),
+        }
+        return {"data": dict(row)}
+
     def get_file(self, file_id):
         return self.files[file_id]
 
@@ -129,7 +165,9 @@ class FakeWorld:
         return item[0] if item else None
 
     def statuses(self) -> list[str]:
-        return [p["render_status"] for _, p in self.history if "render_status" in p]
+        """The statuses written, in order: the claim's PATCH, then the result's POST."""
+        patched = [p["render_status"] for _, p in self.history if "render_status" in p]
+        return patched + [body["render_status"] for _, body in self.results]
 
 
 @pytest.fixture
@@ -143,6 +181,7 @@ def world(tmp_path, monkeypatch):
     for name in (
         "get_scan",
         "patch_scan",
+        "post_result",
         "get_file",
         "get_fingerprint",
         "get_team_folders",

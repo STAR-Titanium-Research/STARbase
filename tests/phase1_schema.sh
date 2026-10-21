@@ -3563,9 +3563,16 @@ grep -qF "$guard_sql" core/extensions/d1-access-guard/index.js \
     && ok "d1-access-guard sends the 'inserted here and never updated' proof this test exercises" \
     || bad "d1-access-guard/index.js no longer contains: $guard_sql (update this test with it)"
 guard_parents=$(python3 -c "import json;print(' '.join(sorted({c['parent'] for v in json.load(open('core/extensions/d1-access-guard/rules.json'))['guards'].values() for c in v})))")
-[[ "$guard_parents" == "campaigns physical_samples projects test_sessions" ]] \
-    && ok "the guarded parents are exactly campaigns, physical_samples, projects and test_sessions" \
+[[ "$guard_parents" == "campaigns directus_files physical_samples projects test_sessions" ]] \
+    && ok "the guarded parents are exactly campaigns, directus_files, physical_samples, projects and test_sessions" \
     || bad "d1-access-guard now guards another parent ($guard_parents): give it a version column or fail it closed, and extend this test"
+# directus_files (the parent of surface_scans.directus_files_id, ADR-0023) is a Directus system table with no OCC version column, so the guard must
+# never ask it the "inserted here and never updated" question (the query would fail): index.js lists it in UNVERSIONED_PARENTS.
+run_eq "directus_files has no OCC version column (the guard skips the created-here proof for it)" \
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='directus_files' AND column_name='version'" "0"
+grep -qF "const UNVERSIONED_PARENTS = new Set(['directus_files']);" core/extensions/d1-access-guard/index.js \
+    && ok "d1-access-guard skips the created-here proof for exactly directus_files" \
+    || bad "d1-access-guard/index.js UNVERSIONED_PARENTS is no longer exactly directus_files (update this test with it)"
 run_eq "every guarded parent has the OCC version column" \
     "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','physical_samples','projects','test_sessions')" "4"
 run_eq "every guarded parent has its OCC trigger (version rises on every update)" \
@@ -3809,7 +3816,14 @@ sem_down=$(awk '/-- migrate:down/{f=1;next}f' "$SEM_MIG")
 # 20261016000201 (file owner follow-ups) replaces 196's readers function and people trigger and adds two guard triggers and their functions, so its down goes before everything else and it is not replayed.
 FOF_MIG=db/migrations/20261016000201_file_owner_followups.sql
 fof_down=$(awk '/-- migrate:down/{f=1;next}f' "$FOF_MIG")
-lv_down="$fof_down
+# 20261021000205 (surface scans follow their file's owner) adds three tables in d1_private, one of which references surface_scans, and replaces the surface_scans
+# rows it backed up, so its down goes before everything else (before 201's): without it d1_private is not empty at the end of the chain and migration 192's down
+# could not drop surface_scans. Only its permission rows are replayed (the marked block), after 196's, wherever the rows are compared with the generator.
+SSF_MIG=db/migrations/20261021000205_surface_scans_follow_file_owner.sql
+ssf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SSF_MIG")
+ssf_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$SSF_MIG")
+lv_down="$ssf_down
+$fof_down
 $sem_down
 $fpo_down
 $lv_down"
@@ -3817,7 +3831,8 @@ lv_up="$lv_up
 $fpo_up"
 fpo_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$FPO_MIG")
 tr_up="$tr_up
-$fpo_rules_up"
+$fpo_rules_up
+$ssf_rules_up"
 tr_down="$lv_down
 $tr_down"
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
@@ -3909,9 +3924,10 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates), 20261014000177 (batches) and 20261015000192 (surface_scans), custom-rows collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
+-- (the surface_scans rows come with tr_up: migration 205's rules block)
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'surface_scans');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -7242,6 +7258,8 @@ ss_down=$(awk '/-- migrate:down/{f=1;next}f' "$SS")
 SSB=c0000000-0000-4000-8000-0000000005
 ss_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+-- migration 205 (surface scans follow their file's owner) put a table in d1_private that references surface_scans and changed its columns: its down goes first
+$ssf_down
 $ss_down
 SELECT 'down_table:' || coalesce(to_regclass('surface_scans')::text, 'gone');
 SELECT 'down_function:' || count(*) FROM pg_proc WHERE proname = 'surface_scans_reset_render';
@@ -7371,6 +7389,277 @@ ss_check "file_delete_keeps_others:3" "deleting a file with no scan changes no s
 ss_check "edge_delete_cascades:0" "deleting an edge deletes its scans"
 ss_check "file_delete_cascades:0" "deleting a file deletes its scans"
 ss_check "redown_table:gone" "down runs again after up"
+
+echo "== Surface scans follow their file's owner (migration 205, ADR-0023) =="
+# Spec docs/superpowers/specs/2026-10-21-surface-scan-privacy-design.md. Everything runs in one rolled-back transaction (ids prefix d5000000-0000-4000-8000-0000000000).
+# The database is at the head, so migration 205 is applied: the head state is asserted first, then 205's down is run (the old, 192 shape comes back), scans with
+# render values are written in the old shape, and the up is replayed over them (the values move, the NOTICE counts the scans their adder cannot see), the down is run
+# again (the values come back, version, updated_at and the audit log do not move, the permission rows are exactly the old ones, ids included) and the up a last time.
+# The visibility rule (an administrator, an unowned file, or a file_readers row) is run as SQL against the real file_readers triggers.
+SSF_MIG=db/migrations/20261021000205_surface_scans_follow_file_owner.sql
+if [[ -f "$SSF_MIG" ]]; then
+ssf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$SSF_MIG")
+ssf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SSF_MIG")
+SF=d5000000-0000-4000-8000-0000000000
+SF_FILTER='{"_or":[{"_and":[{"directus_files_id":{"owner_person_id":{"_null":true}}},{"directus_files_id":{"owner_team_id":{"_null":true}}}]},{"directus_files_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}'
+SF_PUBLIC='scan_id,insert_id,edge_id,condition,scanned_on,operation_id,created_at,updated_at,version'
+SF_CREATE='insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id'
+SF_UPDATE='insert_id,edge_id,directus_files_id,condition,condition_note,scanned_on,operation_id,notes,owner_person_id,render_status'
+SF_COLS="render_error,rendered_at,cache_key,source_format,source_width,source_height,grid_width,grid_height,pixel_pitch_x_um,pixel_pitch_y_um,z_min_um,z_max_um"
+# the twelve values of a scan as one comparable text (NULLs included), and the same for a row of the private table
+sf_old_sum="SELECT md5(string_agg(jsonb_build_array(s.scan_id, s.render_error, s.rendered_at, s.cache_key, s.source_format, s.source_width, s.source_height, s.grid_width, s.grid_height, s.pixel_pitch_x_um, s.pixel_pitch_y_um, s.z_min_um, s.z_max_um)::text, ',' ORDER BY s.scan_id)) FROM surface_scans s WHERE s.scan_id::text LIKE 'd5000000-%' AND num_nonnulls(s.render_error, s.rendered_at, s.cache_key, s.source_format, s.source_width, s.source_height, s.grid_width, s.grid_height, s.pixel_pitch_x_um, s.pixel_pitch_y_um, s.z_min_um, s.z_max_um) > 0"
+sf_new_sum="SELECT md5(string_agg(jsonb_build_array(r.scan_id, r.render_error, r.rendered_at, r.cache_key, r.source_format, r.source_width, r.source_height, r.grid_width, r.grid_height, r.pixel_pitch_x_um, r.pixel_pitch_y_um, r.z_min_um, r.z_max_um)::text, ',' ORDER BY r.scan_id)) FROM d1_private.surface_scan_renders r WHERE r.scan_id::text LIKE 'd5000000-%'"
+sf_structure() { # sf_structure <prefix>: the shape of surface_scans, as lines <prefix>_...
+    cat <<SQL
+SELECT '$1_columns:' || count(*) || '/' || count(*) FILTER (WHERE column_name IN ('render_error','rendered_at','cache_key','source_format','source_width','source_height','grid_width','grid_height','pixel_pitch_x_um','pixel_pitch_y_um','z_min_um','z_max_um')) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'surface_scans';
+SELECT '$1_field_rows:' || (SELECT count(*) FROM directus_fields WHERE collection = 'surface_scans')
+  || '/' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'surface_scans' AND NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = 'surface_scans' AND f.field = c.column_name))
+  || '/' || (SELECT count(*) FROM directus_fields f WHERE f.collection = 'surface_scans' AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'surface_scans' AND c.column_name = f.field));
+SELECT '$1_file_note:' || note FROM directus_fields WHERE collection = 'surface_scans' AND field = 'directus_files_id';
+SELECT '$1_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'surface_scans'::regclass AND NOT tgisinternal;
+SELECT '$1_reset_function:' || (prosrc LIKE '%surface_scan_renders%') || ',' || (prosrc LIKE '%cache_key%') FROM pg_proc WHERE proname = 'surface_scans_reset_render';
+SELECT '$1_comments:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'surface_scans' AND col_description('public.surface_scans'::regclass, c.ordinal_position::int) IS NULL)
+  || ',' || (obj_description('public.surface_scans'::regclass) IS NOT NULL) || ',' || (obj_description('public.surface_scans'::regclass) LIKE '%locked placeholder%')
+  || ',' || (col_description('public.surface_scans'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.surface_scans'::regclass AND attname = 'owner_person_id')) LIKE '%Informational only%');
+SELECT '$1_member_perms:' || string_agg(action || '=' || permissions::text || '/' || fields, ';' ORDER BY action) FROM directus_permissions WHERE collection = 'surface_scans' AND policy = '20000002-0000-0000-0000-000000000002';
+SELECT '$1_viewer_perms:' || string_agg(action || '=' || permissions::text || '/' || fields, ';' ORDER BY action) FROM directus_permissions WHERE collection = 'surface_scans' AND policy = '20000002-0000-0000-0000-000000000003';
+SQL
+}
+sf_private() { # sf_private <prefix>: the private objects
+    cat <<SQL
+SELECT '$1_private:' || concat_ws(',', to_regclass('d1_private.surface_scan_renders') IS NOT NULL, to_regclass('d1_private.surface_scan_access_log') IS NOT NULL, to_regclass('d1_private.surface_scans_rules_backup') IS NOT NULL);
+SQL
+}
+sf_sees() { # sf_sees <label> <user>: the fixture scans whose file this user may see (the one rule: unowned, or a file_readers row; administrators see all)
+    printf "SELECT '%s:' || coalesce(string_agg(right(s.scan_id::text, 2), ',' ORDER BY s.scan_id), '') FROM surface_scans s JOIN directus_files f ON f.id = s.directus_files_id WHERE s.scan_id::text LIKE 'd5000000-%%' AND ((f.owner_person_id IS NULL AND f.owner_team_id IS NULL) OR EXISTS (SELECT 1 FROM file_readers r WHERE r.directus_files_id = f.id AND r.user_id = '%s'));\n" "$1" "$2"
+}
+sf_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+-- the head: migration 205 is applied
+$(sf_private sf_head)
+$(sf_structure sf_head)
+SELECT 'sf_head_backup_rows:' || count(*) FROM d1_private.surface_scans_rules_backup;
+SELECT 'sf_head_private_privileges:' || (CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly')
+  THEN has_table_privilege('d1_llm_readonly', 'd1_private.surface_scan_renders', 'SELECT') OR has_table_privilege('d1_llm_readonly', 'd1_private.surface_scan_access_log', 'SELECT') OR has_table_privilege('d1_llm_readonly', 'd1_private.surface_scans_rules_backup', 'SELECT')
+  ELSE false END)
+  || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name LIKE 'surface\_scan\_%' AND object_name NOT IN ('surface_scans'))
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection LIKE 'surface\_scan\_%' AND collection <> 'surface_scans');
+SELECT 'sf_head_private_comments:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'd1_private' AND c.table_name IN ('surface_scan_renders', 'surface_scan_access_log', 'surface_scans_rules_backup')
+    AND col_description((quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass, c.ordinal_position::int) IS NULL)
+  || ',' || (SELECT count(*) FROM pg_class WHERE oid IN ('d1_private.surface_scan_renders'::regclass, 'd1_private.surface_scan_access_log'::regclass, 'd1_private.surface_scans_rules_backup'::regclass) AND obj_description(oid, 'pg_class') IS NOT NULL);
+
+-- back to migration 192's shape
+$ssf_down
+$(sf_private sf_down1)
+$(sf_structure sf_down1)
+
+-- fixtures in the old shape: people with logins (P3 and P4 inactive), a team of P2 and P3, files, inserts, an edge, five scans
+INSERT INTO directus_users (id) VALUES ('${SF}a1'), ('${SF}a2'), ('${SF}a3'), ('${SF}a4'), ('${SF}a5'), ('${SF}a6');
+INSERT INTO people (person_id, full_name, user_id, active) VALUES
+  ('${SF}b1', 'SSF Owner', '${SF}a1', true), ('${SF}b2', 'SSF Active Member', '${SF}a2', true), ('${SF}b3', 'SSF Inactive Member', '${SF}a3', false),
+  ('${SF}b4', 'SSF Inactive Owner', '${SF}a4', false), ('${SF}b5', 'SSF New Owner', '${SF}a5', true), ('${SF}b6', 'SSF Stranger', '${SF}a6', true);
+INSERT INTO teams (team_id, name) VALUES ('${SF}c1', 'SSF Team');
+INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('${SF}c1', '${SF}b2', true), ('${SF}c1', '${SF}b3', false);
+INSERT INTO directus_files (id, owner_person_id, owner_team_id) VALUES
+  ('${SF}d1', '${SF}b1', NULL), ('${SF}d2', NULL, '${SF}c1'), ('${SF}d3', '${SF}b4', NULL), ('${SF}d4', NULL, NULL), ('${SF}d5', '${SF}b1', NULL), ('${SF}d6', '${SF}b1', NULL);
+UPDATE directus_files SET owner_person_id = '${SF}b5' WHERE id = '${SF}d5';
+INSERT INTO tool_boxes (tool_box_id, tool_box_code) VALUES ('${SF}e0', 'TEST-SSF-BOX');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id) VALUES ('${SF}e1', 'TEST-SSF-BOX-1', '${SF}e0'), ('${SF}e2', 'TEST-SSF-BOX-2', '${SF}e0'),
+  ('${SF}e3', 'TEST-SSF-BOX-3', '${SF}e0'), ('${SF}e4', 'TEST-SSF-BOX-4', '${SF}e0');
+INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier) VALUES ('${SF}e5', 'TEST-SSF-BOX-1A', '${SF}e1', 'A');
+INSERT INTO surface_scans (scan_id, insert_id, edge_id, directus_files_id, condition, owner_person_id, render_status, render_error, rendered_at, cache_key, source_format,
+    source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um) VALUES
+  ('${SF}f1', '${SF}e1', NULL, '${SF}d1', 'new', '${SF}b1', 'done', NULL, '2026-10-01 12:00:00+00', 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789', 'al3d', 2048, 1536, 1024, 768, 1.5, 1.25, -12.5, 31.75),
+  ('${SF}f2', '${SF}e2', NULL, '${SF}d2', 'worn', '${SF}b6', 'done', NULL, '2026-10-02 09:30:00+00', 'p-${SF}d2-123456-1700000000.5', 'al3d', 100, 80, 100, 80, 0.5, 0.5, 0, 9.5),
+  ('${SF}f3', '${SF}e3', NULL, '${SF}d4', 'cleaned', '${SF}b6', 'failed', 'cannot read this file', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  ('${SF}f4', '${SF}e4', NULL, '${SF}d3', 'other', NULL, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  ('${SF}f5', NULL, '${SF}e5', '${SF}d5', 'worn', '${SF}b1', 'done', NULL, NULL, 'k5', NULL, NULL, NULL, 64, NULL, NULL, NULL, NULL, NULL);
+CREATE TEMP TABLE _sf_old_rules AS SELECT * FROM directus_permissions WHERE collection = 'surface_scans';
+SELECT 'sf_old_rule_rows:' || count(*) FROM _sf_old_rules;
+CREATE TEMP TABLE _sf_old_state AS SELECT s.scan_id, s.version, s.updated_at FROM surface_scans s WHERE s.scan_id::text LIKE 'd5000000-%';
+CREATE TEMP TABLE _sf_old_audit AS SELECT count(*) AS n FROM audit_logs WHERE table_name = 'surface_scans';
+SELECT 'sf_old_sum:' || ($sf_old_sum);
+
+-- the up, over those scans
+$ssf_up
+$(sf_private sf_up1)
+$(sf_structure sf_up1)
+SELECT 'sf_up1_moved:' || count(*) FROM d1_private.surface_scan_renders WHERE scan_id::text LIKE 'd5000000-%';
+SELECT 'sf_up1_sum:' || ($sf_new_sum);
+SELECT 'sf_up1_backup_rows:' || count(*) FROM d1_private.surface_scans_rules_backup;
+SELECT 'sf_up1_backup_exact:' || count(*) FROM ((SELECT policy, action, permissions::text, validation::text, fields FROM _sf_old_rules EXCEPT SELECT policy, action, permissions::text, validation::text, fields FROM d1_private.surface_scans_rules_backup)
+  UNION ALL (SELECT policy, action, permissions::text, validation::text, fields FROM d1_private.surface_scans_rules_backup EXCEPT SELECT policy, action, permissions::text, validation::text, fields FROM _sf_old_rules)) x;
+SELECT 'sf_up1_rule_ids:' || count(*) FROM _sf_old_rules o JOIN directus_permissions p ON p.id = o.id AND p.collection = 'surface_scans' AND p.policy = o.policy AND p.action = o.action;
+SELECT 'sf_up1_scans_kept:' || count(*) FROM surface_scans WHERE scan_id::text LIKE 'd5000000-%';
+SELECT 'sf_up1_status:' || string_agg(right(scan_id::text, 2) || '=' || render_status, ',' ORDER BY scan_id) FROM surface_scans WHERE scan_id::text LIKE 'd5000000-%';
+
+-- and the down again: the values, version, updated_at and the audit log are exactly as before, the rules are the old rows (ids included)
+$ssf_down
+$(sf_private sf_down2)
+$(sf_structure sf_down2)
+SELECT 'sf_down2_sum:' || ($sf_old_sum);
+SELECT 'sf_down2_state:' || count(*) FROM _sf_old_state o JOIN surface_scans s ON s.scan_id = o.scan_id AND s.version = o.version AND s.updated_at = o.updated_at;
+SELECT 'sf_down2_audit:' || ((SELECT count(*) FROM audit_logs WHERE table_name = 'surface_scans') - (SELECT n FROM _sf_old_audit));
+SELECT 'sf_down2_rules_exact:' || count(*) FROM ((SELECT to_jsonb(o) FROM _sf_old_rules o EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.collection = 'surface_scans')
+  UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.collection = 'surface_scans' EXCEPT SELECT to_jsonb(o) FROM _sf_old_rules o)) x;
+SELECT 'sf_down2_triggers_enabled:' || count(*) FROM pg_trigger WHERE tgrelid = 'surface_scans'::regclass AND NOT tgisinternal AND tgenabled = 'O';
+-- a second down does no harm
+$ssf_down
+SELECT 'sf_redown:ok';
+
+-- the up a last time (up, down, up): the same values land in the private table
+$ssf_up
+$(sf_structure sf_up2)
+SELECT 'sf_up2_sum:' || ($sf_new_sum);
+SELECT 'sf_up2_moved:' || count(*) FROM d1_private.surface_scan_renders WHERE scan_id::text LIKE 'd5000000-%';
+
+-- the visibility rule against the real readers triggers (P1 owns F1; F2 is the team's; F3 belongs to an inactive person; F4 is unowned; F5 was re-stamped from P1 to P5)
+$(sf_sees sf_sees_owner "${SF}a1")
+$(sf_sees sf_sees_member "${SF}a2")
+$(sf_sees sf_sees_inactive_member "${SF}a3")
+$(sf_sees sf_sees_inactive_owner "${SF}a4")
+$(sf_sees sf_sees_new_owner "${SF}a5")
+$(sf_sees sf_sees_stranger "${SF}a6")
+UPDATE directus_files SET owner_person_id = '${SF}b6' WHERE id = '${SF}d1';
+$(sf_sees sf_restamp_old_owner "${SF}a1")
+$(sf_sees sf_restamp_stranger "${SF}a6")
+
+-- the reset trigger: a change of file sets pending and deletes the private row; any other change keeps it
+UPDATE surface_scans SET notes = 'edited', condition = 'cleaned' WHERE scan_id = '${SF}f2';
+UPDATE surface_scans SET directus_files_id = directus_files_id WHERE scan_id = '${SF}f2';
+SELECT 'sf_keep:' || render_status || '/' || (SELECT count(*) FROM d1_private.surface_scan_renders WHERE scan_id = '${SF}f2') FROM surface_scans WHERE scan_id = '${SF}f2';
+UPDATE surface_scans SET directus_files_id = '${SF}d4' WHERE scan_id = '${SF}f2';
+SELECT 'sf_reset:' || render_status || '/' || (SELECT count(*) FROM d1_private.surface_scan_renders WHERE scan_id = '${SF}f2') || '/' || notes FROM surface_scans WHERE scan_id = '${SF}f2';
+SELECT 'sf_reset_other_kept:' || count(*) FROM d1_private.surface_scan_renders WHERE scan_id IN ('${SF}f1', '${SF}f5');
+-- the worker's claim still works on the public row (render_status keeps its CHECK and partial index)
+UPDATE surface_scans SET render_status = 'rendering' WHERE scan_id = '${SF}f2' AND render_status = 'pending';
+SELECT 'sf_claim:' || render_status || '/' || version FROM surface_scans WHERE scan_id = '${SF}f2';
+SELECT 'sf_status_index:' || (SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_surface_scans_render_status') || ',' || (SELECT count(*) FROM pg_constraint WHERE conname = 'surface_scans_render_status_check');
+
+-- the private table's own rules (f1 has a private row, f4 has none: the cache key checks are written on f4 so only the CHECK can refuse them)
+SAVEPOINT s1;
+INSERT INTO d1_private.surface_scan_renders (scan_id) VALUES ('${SF}f1');
+SELECT 'sf_pk:accepted';
+ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1;
+INSERT INTO d1_private.surface_scan_renders (scan_id) VALUES ('${SF}ff');
+SELECT 'sf_fk:accepted';
+ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', '../x'); SELECT 'sf_ck_dotdot:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', 'a/b'); SELECT 'sf_ck_slash:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', '.hidden'); SELECT 'sf_ck_dot:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', 'x..y'); SELECT 'sf_ck_inner_dotdot:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', ''); SELECT 'sf_ck_empty:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', repeat('a', 201)); SELECT 'sf_ck_long:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', repeat('a', 200)); SELECT 'sf_ck_200:accepted'; ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s1; INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key) VALUES ('${SF}f4', 'p-${SF}d4-99-1700000000.25'); SELECT 'sf_ck_provisional:accepted'; ROLLBACK TO SAVEPOINT s1;
+-- a result written the way the endpoint does: an upsert
+INSERT INTO d1_private.surface_scan_renders (scan_id, cache_key, grid_width, grid_height) VALUES ('${SF}f3', 'ff00', 8, 8)
+  ON CONFLICT (scan_id) DO UPDATE SET cache_key = EXCLUDED.cache_key, grid_width = EXCLUDED.grid_width, grid_height = EXCLUDED.grid_height, updated_at = now();
+SELECT 'sf_upsert:' || cache_key || '/' || grid_width FROM d1_private.surface_scan_renders WHERE scan_id = '${SF}f3';
+-- the access log: a reason is required, and the log outlives the scan
+SAVEPOINT s1;
+INSERT INTO d1_private.surface_scan_access_log (scan_id, directus_files_id, read_by_user, reason) VALUES ('${SF}f1', '${SF}d1', '${SF}a6', '   ');
+SELECT 'sf_log_blank:accepted';
+ROLLBACK TO SAVEPOINT s1;
+INSERT INTO d1_private.surface_scan_access_log (scan_id, directus_files_id, read_by_user, reason) VALUES ('${SF}f1', '${SF}d1', '${SF}a6', 'administrator read of a scan whose file belongs to someone else');
+-- cascades: the private row goes with the scan (and a scan goes with its file), the log row stays
+DELETE FROM surface_scans WHERE scan_id = '${SF}f1';
+SELECT 'sf_cascade_scan:' || count(*) FROM d1_private.surface_scan_renders WHERE scan_id = '${SF}f1';
+SELECT 'sf_log_kept:' || count(*) FROM d1_private.surface_scan_access_log WHERE scan_id = '${SF}f1';
+DELETE FROM directus_files WHERE id = '${SF}d5';
+SELECT 'sf_cascade_file:' || (SELECT count(*) FROM surface_scans WHERE scan_id = '${SF}f5') || ',' || (SELECT count(*) FROM d1_private.surface_scan_renders WHERE scan_id = '${SF}f5');
+SELECT 'sf_done:1';
+ROLLBACK;
+SQL
+)
+sf_check() { grep -qxF -- "$1" <<<"$sf_out" && ok "$2" || bad "$2 (psql output: $sf_out)"; }
+sf_check "sf_done:1" "migration 205: the replay ran to its end"
+# no ON_ERROR_STOP here (the refusals below are errors on purpose, each inside a savepoint; the SELECT after a refused INSERT then answers "transaction is aborted"):
+# the only errors allowed are the nine constraint refusals and those follow-ups
+[[ "$(grep -c '^ERROR:.*violates' <<<"$sf_out")" == "9" && -z "$(grep '^ERROR:' <<<"$sf_out" | grep -v -e 'violates' -e 'current transaction is aborted')" ]] \
+    && ok "migration 205: the replay raised exactly the nine expected refusals and no other error" \
+    || bad "migration 205: unexpected errors in the replay (psql output: $(grep '^ERROR:' <<<"$sf_out"))"
+# the head
+sf_check "sf_head_private:t,t,t" "head: the render table, the access log and the rules backup exist in d1_private"
+sf_check "sf_head_columns:15/0" "head: surface_scans has 15 columns and none of the twelve file-derived ones"
+sf_check "sf_head_field_rows:15/0/0" "head: every surface_scans column has a Directus field row and no field row is left over"
+sf_check "sf_head_triggers:audit_surface_scans,occ_surface_scans,surface_scans_reset_render" "head: audit, OCC and render-reset triggers are attached"
+sf_check "sf_head_reset_function:true,false" "head: the reset function deletes the private row and no longer names the moved columns"
+sf_check "sf_head_comments:0,true,true,false" "head: every surface_scans column and the table carry a COMMENT, and the lab-wide wording is gone"
+sf_check "sf_head_private_comments:0,3" "head: every column and the table of the three d1_private tables carry a COMMENT"
+sf_check "sf_head_private_privileges:false,0,0" "head: the text-to-SQL role cannot read the private tables, they are not in v_schema_dictionary and not Directus collections"
+sf_check "sf_head_backup_rows:5" "head: the backup holds the five rows migration 192 made (four Lab Member, one Lab Viewer)"
+sf_check "sf_head_file_note:The topography file from the library. Only the file's owner (or their team) and administrators can see the file and its 3D view; other lab members see that the item has a scan. A file with no owner stays visible to everyone in the lab." "head: the file field's note no longer says the file is visible to everyone"
+sf_check "sf_head_member_perms:create={}/$SF_CREATE;delete=$SF_FILTER/*;read={}/$SF_PUBLIC;update=$SF_FILTER/$SF_UPDATE" "head: a Lab Member reads only the nine link columns, creates as before, and updates and deletes only scans whose file is unowned or readable by them (update without render_error)"
+sf_check "sf_head_viewer_perms:read={}/$SF_PUBLIC" "head: a Lab Viewer reads the same nine columns"
+# the down
+sf_check "sf_down1_private:f,f,f" "down: the private tables and the backup are dropped"
+sf_check "sf_down1_columns:27/12" "down: surface_scans has its 27 columns again, twelve of them the file-derived ones"
+sf_check "sf_down1_field_rows:27/0/0" "down: every column has a Directus field row again (migration 192's twelve)"
+sf_check "sf_down1_file_note:The topography file from the library. Adding it makes the file visible to everyone in the lab." "down: the file field's note is migration 192's"
+sf_check "sf_down1_reset_function:false,true" "down: the reset function is migration 192's (clears the columns of the row)"
+sf_check "sf_down1_comments:0,true,false,true" "down: every column carries a COMMENT again, with migration 192's texts"
+sf_check "sf_down1_triggers:audit_surface_scans,occ_surface_scans,surface_scans_reset_render" "down: the three triggers are still there"
+sf_check "sf_down1_member_perms:create={}/$SF_CREATE;delete={}/*;read={}/*;update={}/$SF_UPDATE,render_error" "down: the Lab Member rows are migration 192's again"
+sf_check "sf_down1_viewer_perms:read={}/*" "down: the Lab Viewer row is migration 192's again"
+sf_check "sf_old_rule_rows:5" "(setup) the old shape has five surface_scans permission rows"
+# the up over real values
+sf_old=$(grep -o '^sf_old_sum:.*' <<<"$sf_out" | cut -d: -f2)
+[[ -n "$sf_old" && "$sf_old" != "" ]] && ok "(setup) the values of the old shape have a checksum" || bad "no checksum of the old shape (psql output: $sf_out)"
+sf_check "sf_up1_moved:4" "up: the four scans that have any file-derived value get a private row (the pending one with none does not)"
+sf_check "sf_up1_sum:$sf_old" "up: every moved value is exactly what the column held (checksum of all twelve values, NULLs included)"
+sf_check "sf_up1_columns:15/0" "up: the twelve columns are dropped"
+sf_check "sf_up1_field_rows:15/0/0" "up: the twelve field rows are deleted, every remaining column has one"
+sf_check "sf_up1_scans_kept:5" "up: no scan is deleted"
+sf_check "sf_up1_status:f1=done,f2=done,f3=failed,f4=pending,f5=done" "up: render_status stays on the public row"
+sf_check "sf_up1_backup_rows:5" "up: the backup holds the five old rows"
+sf_check "sf_up1_backup_exact:0" "up: the backup rows are exactly the old rows"
+sf_check "sf_up1_rule_ids:5" "up: the permission rows keep their ids (updated in place)"
+sf_check "sf_up1_member_perms:create={}/$SF_CREATE;delete=$SF_FILTER/*;read={}/$SF_PUBLIC;update=$SF_FILTER/$SF_UPDATE" "up: the Lab Member rows are the generated ones"
+sf_check "sf_up1_viewer_perms:read={}/$SF_PUBLIC" "up: the Lab Viewer row is the generated one"
+grep -qF "NOTICE:  ADR-0023: 3 existing surface scan(s) point at an owned file their adder cannot read (1 with no recorded adder)." <<<"$sf_out" \
+    && ok "up: the NOTICE counts the scans whose owned file their adder cannot read (a non-member, an unknown adder, a re-stamped file) and not the others" \
+    || bad "up: the NOTICE count is wrong or missing (psql output: $sf_out)"
+# the down after real data
+sf_check "sf_down2_sum:$sf_old" "down: every value is copied back exactly"
+sf_check "sf_down2_state:5" "down: version and updated_at of every scan are untouched (the OCC trigger is off for the copy)"
+sf_check "sf_down2_audit:0" "down: the copy writes no audit row"
+sf_check "sf_down2_rules_exact:0" "down: the permission rows are exactly the old rows, ids included"
+sf_check "sf_down2_triggers_enabled:3" "down: the OCC, audit and reset triggers are enabled again"
+sf_check "sf_down2_private:f,f,f" "down: the private tables and the backup are gone again"
+sf_check "sf_redown:ok" "down runs again after down without an error"
+sf_check "sf_up2_sum:$sf_old" "up, down, up: the same values land in the private table again"
+sf_check "sf_up2_moved:4" "up again: four private rows"
+sf_check "sf_up2_columns:15/0" "up again: the columns are gone again"
+# the visibility rule
+sf_check "sf_sees_owner:f1,f3" "visibility: the owner sees the scan of their file and the scan of an unowned file, not the team's, the inactive person's or the re-stamped file's"
+sf_check "sf_sees_member:f2,f3" "visibility: an active team member sees the team file's scan"
+sf_check "sf_sees_inactive_member:f3" "visibility: an inactive team member sees only the unowned file's scan (migration 201)"
+sf_check "sf_sees_inactive_owner:f3,f4" "visibility: an inactive person keeps seeing the scan of the files they own"
+sf_check "sf_sees_new_owner:f3,f5" "visibility: the new owner of a re-stamped file sees its scan"
+sf_check "sf_sees_stranger:f3" "visibility: a member who owns nothing sees only the unowned file's scan"
+sf_check "sf_restamp_old_owner:f3" "visibility follows a re-stamp live: the former owner loses the scan of the file"
+sf_check "sf_restamp_stranger:f1,f3" "visibility follows a re-stamp live: the new owner gains it"
+# the trigger, the tables
+sf_check "sf_keep:done/1" "a change to notes, condition, or writing the same file again keeps the render and its private row"
+sf_check "sf_reset:pending/0/edited" "changing the file sets the scan pending and deletes its private row"
+sf_check "sf_reset_other_kept:2" "...and leaves every other scan's private row"
+sf_check "sf_claim:rendering/5" "the worker's claim (pending to rendering) still works on the public row, and bumps the version"
+sf_check "sf_status_index:1,1" "render_status keeps its partial index and its CHECK"
+for sf_refused in sf_pk sf_fk sf_ck_dotdot sf_ck_slash sf_ck_dot sf_ck_inner_dotdot sf_ck_empty sf_ck_long sf_log_blank; do
+    ! grep -qx "$sf_refused:accepted" <<<"$sf_out" && ok "refused: $sf_refused" || bad "accepted although it must be refused: $sf_refused"
+done
+for sf_accepted in sf_ck_200 sf_ck_provisional; do
+    grep -qx "$sf_accepted:accepted" <<<"$sf_out" && ok "accepted: $sf_accepted (a cache key is a name: a sha256, or the provisional p-<file>-<size>-<mtime>)" || bad "refused although valid: $sf_accepted"
+done
+sf_check "sf_upsert:ff00/8" "the result route's upsert (INSERT ... ON CONFLICT (scan_id) DO UPDATE) works"
+sf_check "sf_cascade_scan:0" "deleting a scan deletes its private row"
+sf_check "sf_log_kept:1" "the access log row outlives the scan (no foreign key)"
+sf_check "sf_cascade_file:0,0" "deleting a file deletes its scans and their private rows"
+else
+    bad "the surface scans follow file owner migration is missing ($SSF_MIG)"
+fi
 
 echo "== File provenance owner on directus_files (migration 196, ADR-0022) =="
 # ADR-0022 / spec docs/superpowers/specs/2026-10-16-sem-data-bar-reader-design.md section 3 and 4. Every check runs in a rolled-back

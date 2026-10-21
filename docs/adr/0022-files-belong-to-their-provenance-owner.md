@@ -7,6 +7,8 @@
 - **Relates to:** [ADR-0011](./0011-row-level-visibility.md), [ADR-0014](./0014-record-access.md),
   [ADR-0016](./0016-teams.md), [ADR-0020](./0020-inbox-crawler-read-only-allow-listed.md),
   [ADR-0021](./0021-surface-scans-on-inserts-and-edges.md)
+- **Decision 6 fulfilled by:** [ADR-0023](./0023-surface-scans-follow-their-files-owner.md) (surface scans now follow
+  their file's provenance owner; ADR-0021's lab-wide decision is superseded)
 
 ## Context
 
@@ -40,7 +42,8 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
    are not linked yet are owned: the migration stamps the ones the (already live) crawler registered, from the
    owner it recorded in `d1_private.file_candidates`, and the crawler stamps new ones.
 6. **Surface scans** are brought under the rule by a separate stream that supersedes the lab-wide decision in
-   ADR-0021. Until it lands, ADR-0021 stands.
+   ADR-0021. Until it lands, ADR-0021 stands. **Fulfilled by
+   [ADR-0023](./0023-surface-scans-follow-their-files-owner.md)** (migration 205).
 
 ## Alternatives considered
 
@@ -65,7 +68,9 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
   contents and settings are not.
 - Files in the legacy archive and already-linked files remain readable by every member until A1b, so the lab's
   privacy statement stays "for files registered after this change".
-- Surface scans stay lab-wide until the separate stream lands; ADR-0021 is then marked superseded.
+- Surface scans stay lab-wide until the separate stream lands; ADR-0021 is then marked superseded. That stream is
+  [ADR-0023](./0023-surface-scans-follow-their-files-owner.md): scans follow their file's owner, and ADR-0021 decision 4
+  is marked superseded.
 - The crawler becomes the stamp writer for owned files; the indexer still registers unowned legacy files.
 - A folder that changes hands (an alias given to someone else or corrected) leaves the files stamped to the person
   they came from: the new holder's Inbox does not list them and `d1-inbox` refuses a candidate whose file is stamped to
