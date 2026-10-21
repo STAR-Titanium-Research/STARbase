@@ -25,7 +25,7 @@ Run each command above. Where one fails:
 ## Before you call it done
 
 - **Tests ship with the change.** If behaviour changed and no test changed, write one. Schema
-  goes in `tests/phase1_schema.sh`, plugins in `plugins/<name>/tests/`, scripts in `tests/scripts/`.
+  goes in a file under `tests/schema/` (run by `tests/phase1_schema.sh`), plugins in `plugins/<name>/tests/`, scripts in `tests/scripts/`.
 - **Docs that describe what changed are updated** in the same change: `docs/data-dictionary.md`
   for schema, the spec's Status line and its `docs/superpowers/README.md` row when a feature ships,
   the `plan.md` status tracker when a phase completes, and an ADR for a hard-to-reverse decision
