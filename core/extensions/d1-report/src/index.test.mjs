@@ -10,12 +10,16 @@ import { test } from 'node:test';
 
 import endpoint from './index.js';
 import { readFileSync } from 'node:fs';
-import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport } from './render.js';
+import { Readable } from 'node:stream';
+import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport, conformAppendix, parseConformCsv } from './render.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const OP_A = '22222222-2222-4222-8222-222222222222';
 const OP_B = '33333333-3333-4333-8333-333333333333';
 const TEST_ID = '44444444-4444-4444-8444-444444444444';
+const OP_CF = '88888888-8888-4888-8888-888888888888';
+const LOG_CF = '99999999-9999-4999-8999-999999999999';
+const FILE_CF = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PERSON = '55555555-5555-4555-8555-555555555555';
 const PROJ_A = '66666666-6666-4666-8666-666666666666';
 const PROJ_B = '77777777-7777-4777-8777-777777777777';
@@ -43,6 +47,8 @@ const DATA = {
 	equipment: [],
 	machining_force_analysis: [],
 	fast_run_data: [],
+	conform_run_data: [], // filled in with the Conform fixtures below
+	conform_logs: [],
 };
 
 const PK = {
@@ -51,6 +57,8 @@ const PK = {
 	manufacturing_operations: 'operation_id',
 	test_sessions: 'session_id',
 	projects: 'project_id',
+	conform_logs: 'log_id',
+	conform_run_data: 'id',
 };
 
 // `allowed` maps collection -> predicate(row) | true. Unlisted collections are forbidden.
@@ -82,6 +90,18 @@ function harness(allowed, env_override) {
 					return true;
 				});
 			return rows.filter((r) => (filter ? match(r, filter) : true));
+		}
+	}
+
+	// Directus's AssetsService, as d1-report uses it for the Conform CSV: getAsset(id) -> {stream}.
+	const assetCalls = [];
+	class AssetsService {
+		constructor(opts) {
+			this.opts = opts;
+		}
+		async getAsset(id) {
+			assetCalls.push({ id, accountability: this.opts.accountability });
+			return { stream: Readable.from([Buffer.from(cfCsv())]) };
 		}
 	}
 
@@ -131,10 +151,10 @@ function harness(allowed, env_override) {
 		database,
 		env,
 		logger,
-		services: { ItemsService },
+		services: { ItemsService, AssetsService },
 		getSchema: async () => ({ collections: {} }),
 	});
-	return { routes, dbCalls, constructed };
+	return { routes, dbCalls, constructed, assetCalls };
 }
 
 async function get(routes, route, id, accountability) {
@@ -396,4 +416,119 @@ test('the PDF shows choice labels, not stored codes', () => {
 	});
 	assert.ok(op.includes('Milling – Drilling'));
 	assert.ok(!op.includes('MM-D'));
+});
+
+// ---------------------------------------------------------------------------
+// Conform run appendix
+// ---------------------------------------------------------------------------
+
+// 300 one-second rows. The run window is rows 60..239 (three 60 s steps), so the
+// first and last 60 rows must not be plotted. 2025-07-01 is BST: 12:00Z = 13:00 UK.
+const CF_START = '2025-07-01T12:00:00.000Z';
+const CF_SERIES = [
+	{ key: 'wheel_speed_rpm', label: 'Wheel speed', unit: 'rpm', group: 'speed' },
+	{ key: 'wheel_speed_demand_rpm', label: 'Wheel speed demand', unit: 'rpm', group: 'speed' },
+	{ key: 'motor_torque_pct', label: 'Motor torque', unit: '%', group: 'torque' },
+	{ key: 'tooling1_c', label: 'Tooling 1 (behind abutment)', unit: '°C', group: 'temp' },
+	{ key: 'tooling2_c', label: 'Tooling 2 (die exit)', unit: '°C', group: 'temp' },
+	{ key: 'wheel_temp_c', label: 'Wheel temperature', unit: '°C', group: 'temp' },
+	{ key: 'ips_output_pct', label: 'IPS output', unit: '%', group: 'ips' },
+];
+function cfCsv(series = CF_SERIES) {
+	const lines = ['time_s,' + series.map((c) => c.key).join(',')];
+	for (let i = 0; i < 300; i++) {
+		const step = Math.floor(i / 100);
+		const v = { wheel_speed_rpm: 5 + step, wheel_speed_demand_rpm: 5 + step, motor_torque_pct: 30 + (i % 7), tooling1_c: 400 + step * 20 + i / 50, tooling2_c: 380 + step * 10, wheel_temp_c: 200 + i / 30, ips_output_pct: 40 + step };
+		lines.push(i + ',' + series.map((c) => v[c.key]).join(','));
+	}
+	return lines.join('\r\n') + '\r\n';
+}
+const CF_RANGE = (min, max) => ({ min, max, range: max - min });
+const CF_RUN = {
+	status: 'done',
+	window_start: '2025-07-01T12:01:00.000Z',
+	window_end: '2025-07-01T12:04:00.000Z',
+	summary: {
+		duration_s: 179, extruding_s: 175, mean_wheel_speed_rpm: 6, mean_torque_pct: 33, mean_tooling1_c: 430, peak_torque_pct: 36,
+		peak_motor_current_a: 41.2, peak_tooling1_c: 462, peak_wheel_temp_c: 207, ips_setpoint_c: 450,
+		energy_kwh: { motor: 1.5, ips: 2.25, cooling: 0.25, total: 4 }, avg_demand_kw: 80.4, missing: [],
+	},
+	steps: [0, 1, 2].map((k) => ({
+		start: new Date(Date.parse(CF_START) + (60 + k * 60) * 1000).toISOString(),
+		end: new Date(Date.parse(CF_START) + (119 + k * 60) * 1000).toISOString(),
+		duration_s: 60, ips_setpoint_c: 450, wheel_speed_rpm: 5 + k, wheel_temp_c: CF_RANGE(200, 204), tooling1_c: CF_RANGE(410, 420), tooling2_c: null,
+		mean_torque_pct: 33, energy_kwh: 1.3,
+	})),
+};
+const CF_LOG = { log_start: CF_START, series: CF_SERIES };
+
+test('conformAppendix: four panels, summary, three steps, window rows only', () => {
+	const trace = parseConformCsv(cfCsv(), CF_SERIES);
+	assert.equal(trace.time.length, 300);
+	const { toggles, blocks } = conformAppendix(CF_RUN, CF_LOG, trace);
+	for (const t of ['Wheel speed', 'Motor torque', 'Temperatures', 'IPS output']) assert.ok(blocks.includes(`>${t}<`), `panel ${t}`);
+	assert.ok(blocks.includes('Extruding time') && blocks.includes('Energy (total)'));
+	const stepsTable = blocks.split('class="tbl cf-steps"')[1].split('</table>')[0];
+	assert.equal((stepsTable.match(/<tr>/g) || []).length - 1, 3, 'header row + 3 step rows');
+	// Window is 12:01:00 to 12:04:00, i.e. rows 60..239: 180 points per line.
+	assert.deepEqual([...blocks.matchAll(/data-rows="(\d+)"/g)].map((m) => m[1]), ['180', '180', '180', '180']);
+	// UK local time (BST), not UTC.
+	assert.ok(blocks.includes('13:01:00') && !blocks.includes('12:01:00'));
+	assert.ok(toggles.includes('data-block="conform-trace"'));
+});
+
+test('conformAppendix: a missing channel drops its line, a missing panel its box', () => {
+	const series = CF_SERIES.filter((c) => c.key !== 'ips_output_pct' && c.key !== 'tooling2_c');
+	const trace = parseConformCsv(cfCsv(series), series);
+	const { blocks } = conformAppendix(CF_RUN, { ...CF_LOG, series }, trace);
+	assert.ok(!blocks.includes('>IPS output<'));
+	assert.ok(!blocks.includes('Tooling 2'));
+	assert.ok(blocks.includes('>Temperatures<'));
+});
+
+test('conformAppendix: an unreadable log still shows the summary and steps', () => {
+	const { blocks } = conformAppendix(CF_RUN, null, null);
+	assert.ok(blocks.includes('Conform log not visible to you'));
+	assert.ok(blocks.includes('Extruding time'));
+	assert.ok(!blocks.includes('data-rows'));
+	assert.deepEqual(conformAppendix(null, CF_LOG, null), { toggles: '', blocks: '' });
+	assert.deepEqual(conformAppendix({ ...CF_RUN, status: 'no_window' }, CF_LOG, null), { toggles: '', blocks: '' });
+});
+
+test('conformAppendix: missing power channels are named', () => {
+	const run = { ...CF_RUN, summary: { ...CF_RUN.summary, energy_kwh: { motor: 1, ips: null, cooling: null, total: 1 }, missing: ['ips', 'cooling'] } };
+	const { blocks } = conformAppendix(run, null, null);
+	assert.ok(/not measured: ips, cooling/i.test(blocks));
+});
+
+test('parseConformCsv: blank cells are NaN, column i+1 follows series[i]', () => {
+	const t = parseConformCsv('time_s,a,b\n0,1,\n1,,4\n', [{ key: 'a' }, { key: 'b' }]);
+	assert.deepEqual(t.time, [0, 1]);
+	assert.equal(t.cols.a[0], 1);
+	assert.ok(Number.isNaN(t.cols.a[1]) && Number.isNaN(t.cols.b[0]));
+	assert.equal(t.cols.b[1], 4);
+});
+
+DATA.manufacturing_operations.push({ operation_id: OP_CF, sample_id: null, campaign_id: null, project_id: PROJ_A, process_category: 'conform', pass_code: '01-07-25-CF-001-8dia' });
+DATA.conform_run_data.push({ id: 1, operation_id: OP_CF, log_id: LOG_CF, ...CF_RUN });
+DATA.conform_logs.push({ log_id: LOG_CF, directus_files_id: FILE_CF, ...CF_LOG });
+const conformHarness = (over = {}) => harness({ manufacturing_operations: true, conform_run_data: true, conform_logs: true, ...over });
+
+test('operation report: a conform op renders the Conform appendix (log fetched through the caller)', async () => {
+	const h = conformHarness();
+	const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
+	assert.equal(out.status, 200);
+	assert.ok(out.body.includes('Conform (continuous extrusion)'), 'category label');
+	assert.ok(out.body.includes('>Wheel speed<') && out.body.includes('Energy (total)'));
+	assert.deepEqual([...out.body.matchAll(/data-rows="(\d+)"/g)].map((m) => m[1]), ['180', '180', '180', '180']);
+	assert.deepEqual(h.assetCalls, [{ id: FILE_CF, accountability: user }]);
+});
+
+test('operation report: a conform log the caller cannot read gives the placeholder, not an error', async () => {
+	const h = conformHarness({ conform_logs: false });
+	const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
+	assert.equal(out.status, 200);
+	assert.ok(out.body.includes('Conform log not visible to you'));
+	assert.ok(out.body.includes('Extruding time'));
+	assert.equal(h.assetCalls.length, 0);
 });
