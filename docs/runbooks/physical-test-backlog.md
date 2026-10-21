@@ -2430,7 +2430,8 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
   while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
   as failed; nothing else changes). Through the STARbase form (`/inbox`, **Add a surface scan**): the dialog warns
-  that the file becomes visible to every lab member, has **no condition chosen** and keeps *Add a surface scan*
+  that only the file's owner (or its team) and administrators see the scan's file and 3D view and that others see only that
+  the item has a scan (ADR-0023), has **no condition chosen** and keeps *Add a surface scan*
   off until an insert or edge (searched by its code) and a condition are set; the operation list offers only the
   operations run with the chosen edge, or any edge of the chosen insert; after the add the notice says *Added as a
   surface scan of <code>* and **Recently linked** shows the same line with a link to the insert or edge page and
