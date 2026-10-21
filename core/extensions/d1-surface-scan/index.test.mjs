@@ -948,3 +948,75 @@ test('POST render clears the Directus data cache after the commit when it is on'
 	await off.call('POST', '/:id/render');
 	assert.equal(off.world.cacheCleared, 0);
 });
+
+// ---- the administrator access log ------------------------------------------------------------------------------------
+
+test('an administrator opening the grid of a scan they could not read as a member: one log row, written after the actor is named, before the data is sent', async () => {
+	const { call, world, store } = setup({ file: { owner_person_id: P.alice } });
+	const res = await call('GET', '/:id/grid', WHO.admin);
+	assert.equal(res.statusCode, 200);
+	assert.deepEqual(res.bytes, GRID);
+	assert.deepEqual(world.accessLog, [{ scan: SCAN, file: FILE, user: ADMIN, reason: 'admin_read' }]);
+	const writes = world.raw.filter((r) => r.sql === SQL.setActor || r.sql === SQL.accessLog);
+	assert.deepEqual(writes.map((w) => w.sql), [SQL.setActor, SQL.accessLog]);
+	assert.deepEqual(writes[0].bindings, [ADMIN]);
+	assert.equal(world.txs, 1);
+	assert.equal(store.calls.length, 1);
+	// each open is its own row
+	await call('GET', '/:id/grid', WHO.admin);
+	assert.equal(world.accessLog.length, 2);
+});
+
+test('a team-owned file an administrator is not a reader of is logged too', async () => {
+	const { call, world } = setup({ file: { owner_team_id: TEAM } });
+	assert.equal((await call('GET', '/:id/grid', WHO.admin)).statusCode, 200);
+	assert.equal(world.accessLog.length, 1);
+});
+
+test('nothing is logged when the administrator could have read it as a member: their own file, an unowned file, a file of their team', async () => {
+	const own = setup({ file: { owner_person_id: P.alice } });
+	own.world.readers.add(`${FILE}|${ADMIN}`); // the administrator is a reader (the owner, or a member of the owner team)
+	assert.equal((await own.call('GET', '/:id/grid', WHO.admin)).statusCode, 200);
+	assert.equal(own.world.accessLog.length, 0);
+	assert.equal(own.world.txs, 0, 'no transaction is opened for nothing');
+	const open = setup();
+	assert.equal((await open.call('GET', '/:id/grid', WHO.admin)).statusCode, 200);
+	assert.equal(open.world.accessLog.length, 0);
+});
+
+test('only the grid read is logged: meta and thumb are not, and neither is a member\'s read', async () => {
+	const { call, world } = setup({ file: { owner_person_id: P.alice } });
+	assert.equal((await call('GET', '/:id/meta', WHO.admin)).statusCode, 200);
+	assert.equal((await call('GET', '/:id/thumb', WHO.admin)).statusCode, 200);
+	assert.equal((await call('GET', '/scans', { ...WHO.admin, query: { insert_id: INSERT } })).statusCode, 200);
+	assert.equal(world.accessLog.length, 0);
+	assert.equal((await call('GET', '/:id/grid', WHO.alice)).statusCode, 200);
+	assert.equal(world.accessLog.length, 0, 'the owner is not logged');
+	assert.equal((await call('GET', '/:id/grid', WHO.bob)).statusCode, 403);
+	assert.equal(world.accessLog.length, 0, 'a refused member is not logged');
+});
+
+test('the 304 of an administrator\'s grid read is logged as well (it confirms a read); a read that serves nothing is not', async () => {
+	const notModified = setup({ file: { owner_person_id: P.alice } });
+	const res = await notModified.call('GET', '/:id/grid', { ...WHO.admin, headers: { 'if-none-match': `"${HASH}"` } });
+	assert.equal(res.statusCode, 304);
+	assert.equal(notModified.world.accessLog.length, 1);
+	const pending = setup({ row: { render_status: 'pending' }, render: { cache_key: null }, file: { owner_person_id: P.alice } });
+	assert.equal((await pending.call('GET', '/:id/grid', WHO.admin)).statusCode, 404);
+	assert.equal(pending.world.accessLog.length, 0);
+	const unset = setup({ store: null, file: { owner_person_id: P.alice } });
+	assert.equal((await unset.call('GET', '/:id/grid', WHO.admin)).statusCode, 503);
+	assert.equal(unset.world.accessLog.length, 0);
+});
+
+test('a log row that cannot be written is a 500 and no data (the store is not even asked)', async () => {
+	const { call, world, store } = setup({ file: { owner_person_id: P.alice } });
+	world.failAccessLog = true;
+	const res = await call('GET', '/:id/grid', WHO.admin);
+	assert.equal(res.statusCode, 500);
+	assert.equal(res.body.errors[0].extensions.code, 'INTERNAL_SERVER_ERROR');
+	assert.equal(res.bytes.length, 0);
+	assert.equal(res.headers['Cache-Control'], 'no-store');
+	assert.equal(store.calls.length, 0);
+	assert.equal(world.accessLog.length, 0);
+});

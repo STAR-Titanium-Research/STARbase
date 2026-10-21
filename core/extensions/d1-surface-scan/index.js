@@ -20,6 +20,9 @@
 //        about the render; 404 while render_status is not 'done', and for a scan the caller cannot read at all (the same answer, so it
 //        does not say which scans exist); 502 when MinIO cannot be reached or refuses the reader; 503 while MinIO is not configured on
 //        this server. Every error reply carries Cache-Control: no-store and no ETag.
+//        ACCESS LOG: an administrator's GRID read (the 3D open) of a scan a member in their place could not read (the file is owned, and they are
+//        not one of its readers) writes one row in d1_private.surface_scan_access_log (scan, file, administrator, reason admin_read) before
+//        anything is sent; a failed log row is a 500 and no data. Not a general audit: meta, thumb, the list, /assets and Data Studio are not logged.
 //   POST /d1-surface-scan/:id/render  -> 200 { data: { scan_id, render_status: 'pending' } }
 //        "Render again": sets render_status = 'pending' as the caller (needs update permission on the scan, which carries the file
 //        filter, 403 otherwise; 403 FILE_LOCKED first for a file they may not see) and clears the PRIVATE render_error in the same
@@ -91,9 +94,13 @@ const SCAN_JOINS = `FROM surface_scans s
 export const SQL = {
 	setActor: "SELECT set_config('d1.actor_identity', ?, true)",
 	scanDetail: `SELECT ${SCAN_COLUMNS}\n  ${SCAN_JOINS}\n WHERE s.scan_id = ?`,
+	accessLog: 'INSERT INTO d1_private.surface_scan_access_log (scan_id, directus_files_id, read_by_user, reason) VALUES (?, ?, ?, ?)',
 	renderErrorClear: 'UPDATE d1_private.surface_scan_renders SET render_error = NULL, updated_at = now() WHERE scan_id = ?',
 	scanDetails: `SELECT ${SCAN_COLUMNS}\n  ${SCAN_JOINS}\n WHERE s.scan_id = ANY(string_to_array(?, ',')::uuid[])`,
 };
+
+// Why an access-log row was written (the d1-inbox sem-settings log says the same).
+export const ADMIN_READ_REASON = 'admin_read';
 
 const isBlank = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 const rowsOf = (out) => out?.rows ?? [];
@@ -226,6 +233,12 @@ export function mount(router, context, store) {
 		}
 		return labels;
 	}
+	// Every write transaction names the person first, so the audit trigger knows who.
+	const inTransaction = (userId, work) =>
+		database.transaction(async (trx) => {
+			await trx.raw(SQL.setActor, [String(userId)]);
+			return work(trx);
+		});
 	const isDenied = (e) => e?.status === 403 || e?.code === 'FORBIDDEN';
 	const schemaOf = async (req) => req.schema ?? (await getSchema());
 	const itemsFor = (schema, acc, knex) =>
@@ -301,6 +314,13 @@ export function mount(router, context, store) {
 			if (!key) throw new HttpError(404, 'NOT_RENDERED', 'That surface scan has no rendered data.', { render_status: scan.render_status });
 			if (!store) throw new HttpError(503, 'STORE_UNCONFIGURED', 'The object store is not configured on this server (MINIO_ENDPOINT).');
 
+			// An administrator opening (the grid of) a scan a member in their place could not read is logged BEFORE anything is sent, the 304 included
+			// (it confirms a read): a failed log is a 500 and no data. Only the grid read is logged, which is the 3D open; the thumbnail, the meta,
+			// the list, /assets and Data Studio are not (ADR-0023 decision 5: not a general audit).
+			if (object === 'grid' && isAdminOverride(acc.admin === true, scan)) {
+				await inTransaction(acc.user, (trx) => trx.raw(SQL.accessLog, [id, scan.directus_files_id, String(acc.user), ADMIN_READ_REASON]));
+			}
+
 			// ETag and Cache-Control private go on the 200 and the 304 only (an error reply must not be cached).
 			const etag = etagOf(scan.cache_key);
 			if (matchesEtag(req.headers?.['if-none-match'], etag)) {
@@ -345,8 +365,7 @@ export function mount(router, context, store) {
 		if (scan.render_status !== 'pending') {
 			try {
 				const schema = await schemaOf(req);
-				await database.transaction(async (trx) => {
-					await trx.raw(SQL.setActor, [String(acc.user)]);
+				await inTransaction(acc.user, async (trx) => {
 					await itemsFor(schema, acc, trx).updateOne(id, { render_status: 'pending' });
 					// the error of the last render is private (d1_private.surface_scan_renders): cleared in the same transaction
 					await trx.raw(SQL.renderErrorClear, [id]);
