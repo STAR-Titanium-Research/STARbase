@@ -210,7 +210,7 @@ export async function handleScanRoute(c: RouteCtx): Promise<boolean> {
 			return answer(json({ errors: [{ message, extensions: { code: 'FORBIDDEN' } }] }, 403));
 		}
 		const file = STUB_LIBRARY.find((f) => f.id === body.directus_files_id);
-		if (scans.rows.some((r) => r.directus_files_id.id === body.directus_files_id && (r.edge_id ?? r.insert_id) === (body.edge_id ?? body.insert_id))) {
+		if (scans.rows.some((r) => r.file.id === body.directus_files_id && (r.edge_id ?? r.insert_id) === (body.edge_id ?? body.insert_id))) {
 			return answer(json({ errors: [{ message: 'Value for field "directus_files_id" in collection "surface_scans" has to be unique.', extensions: { code: 'RECORD_NOT_UNIQUE' } }] }, 400));
 		}
 		const row: StubScanRow = {
