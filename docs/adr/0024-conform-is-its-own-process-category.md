@@ -1,4 +1,4 @@
-# ADR-0023 — Conform is its own process category
+# ADR-0024 — Conform is its own process category
 
 - **Status:** Accepted
 - **Date:** 2026-10-21
@@ -66,7 +66,7 @@ Spec: [`2026-10-21-conform-runs-design.md`](../superpowers/specs/2026-10-21-conf
 
 ## References
 
-- Migrations `20261021000205_conform_category.sql`, `…206_conform_logs_and_run_data.sql`,
-  `…207_conform_form_layout.sql`
+- Migrations `20261022000206_conform_category.sql`, `…207_conform_logs_and_run_data.sql`,
+  `…208_conform_form_layout.sql`
 - ADR-0004 (JSONB for dynamic method parameters, superseded by the inline columns)
 - `CONTEXT.md`: Conform run, Conform log, Run window, Step

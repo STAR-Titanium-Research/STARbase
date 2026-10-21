@@ -16,7 +16,7 @@
 
 **Tech Stack:** Postgres/dbmate migrations, Directus metadata, Vue 3 + TypeScript (vitest, vue-tsc), plain-ESM Directus extensions (node:test).
 
-**Spec:** [`docs/superpowers/specs/2026-10-21-conform-runs-design.md`](../specs/2026-10-21-conform-runs-design.md). Read it before starting. ADR-0023 and the `CONTEXT.md` terms (Conform run, Conform log, Run window, Step, Feedstock, Extrusion) are binding.
+**Spec:** [`docs/superpowers/specs/2026-10-21-conform-runs-design.md`](../specs/2026-10-21-conform-runs-design.md). Read it before starting. ADR-0024 and the `CONTEXT.md` terms (Conform run, Conform log, Run window, Step, Feedstock, Extrusion) are binding.
 
 ## Status
 
@@ -34,7 +34,7 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
 ## Global Constraints
 
 - Process category value is `conform`; method code `CF`; method name "Conform (continuous extrusion)"; lineage relation `extruded_from`.
-- Migration numbers: `20261021000205_conform_category.sql`, `20261021000206_conform_logs_and_run_data.sql`, `20261021000207_conform_form_layout.sql`. Each is reversible: up, then down, then up again.
+- Migration numbers: `20261022000206_conform_category.sql`, `20261022000207_conform_logs_and_run_data.sql`, `20261022000208_conform_form_layout.sql`. Each is reversible: up, then down, then up again.
 - Power constants (one exported object, `CONFORM_POWER_CONSTANTS`): `{ voltage_v: 400, cos_phi_motor: 0.85, k_ips: 0.95, cos_phi_cooling: 0.80, version: 1 }`.
 - "Extruding" means a row with wheel speed ≥ 1 rpm **and** motor torque > 10 %.
 - A step is keyed by `(IPS setpoint, round(wheel speed demand × 2) / 2)`. A run of rows shorter than 60 is dropped.
@@ -87,10 +87,10 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
 
 ---
 
-### Task A1: Category, method, machine, lineage, code rule, inline columns (migration 205)
+### Task A1: Category, method, machine, lineage, code rule, inline columns (migration 206)
 
 **Files:**
-- Create: `db/migrations/20261021000205_conform_category.sql`
+- Create: `db/migrations/20261022000206_conform_category.sql`
 - Modify: `tests/phase1_schema.sh` (method → category map; `extruded_from`; code rule)
 
 **Interfaces:**
@@ -102,7 +102,7 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
   - A CF operation dated 2025-03-17, with `conform_run_number = 12` and `conform_die_diameter_mm = 8`, gets the code `17-03-25-CF-012-8dia`. With the die empty it gets `17-03-25-CF-012`.
   - Two CF operations on the same machine with run number 12 violate the unique index.
 - [ ] **Step 2:** Run `make test-schema` (or `bash tests/phase1_schema.sh` as the skill describes). It is expected to FAIL on the new assertions.
-- [ ] **Step 3:** Write migration 205.
+- [ ] **Step 3:** Write migration 206.
   - Follow the CHECK-replace pattern of migration 129 for both `process_category` CHECKs and the `relationship_type` CHECK.
   - Update `mfg_op_link_genealogy` and `operation_code_for()` with `CREATE OR REPLACE`, copied from their latest definitions (migrations 034/136 and 156/158) with only the conform branch added.
   - Add `conform` to the capabilities of `equipment_name = 'Conform'` and to the capabilities field's choices.
@@ -111,10 +111,10 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
 - [ ] **Step 4:** Apply up, down, up, then run the schema tests. Expected: PASS.
 - [ ] **Step 5:** Run the `migration-review` skill, fix what it finds, and commit.
 
-### Task A2: `conform_logs`, `conform_run_data`, overlap trigger, access (migration 206)
+### Task A2: `conform_logs`, `conform_run_data`, overlap trigger, access (migration 207)
 
 **Files:**
-- Create: `db/migrations/20261021000206_conform_logs_and_run_data.sql`
+- Create: `db/migrations/20261022000207_conform_logs_and_run_data.sql`
 - Modify: `scripts/access_rules.json`, `tests/phase1_schema.sh`, and the access doc that lists `fast_run_data` (grep `docs/` for `fast_run_data` read rules)
 
 **Interfaces:**
@@ -130,16 +130,16 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
   - `conform_run_data.status` rejects `'pending'`.
   - Deleting the operation deletes its `conform_run_data`. Deleting the log sets `log_id` to null.
 - [ ] **Step 2:** Run the schema tests. Expected: FAIL.
-- [ ] **Step 3:** Write migration 206.
+- [ ] **Step 3:** Write migration 207.
   - Mirror every cross-cutting row that `fast_run_data` has: audit trigger (121), OCC `version` (010/122 pattern), LLM allow list (132) and row security (168), Lab Member visibility (141), readers rules (166), Lab Viewer (185).
   - Mirror `fast_run_data` in `scripts/access_rules.json`, and add the `conform_logs` "any linked run" reader rule.
   - Document the shared-log visibility in the access doc, in one paragraph.
 - [ ] **Step 4:** Apply up, down, up, then run the schema tests. Expected: PASS. Then run `migration-review`, fix, and commit.
 
-### Task A3: Form layout (migration 207) + backlog item
+### Task A3: Form layout (migration 208) + backlog item
 
 **Files:**
-- Create: `db/migrations/20261021000207_conform_form_layout.sql`
+- Create: `db/migrations/20261022000208_conform_form_layout.sql`
 - Modify: `scripts/configure_form_layout.sql` (the BEGIN/END block, byte-identical), `docs/runbooks/physical-test-backlog.md`
 
 - [ ] **Step 1:** Add `grp_conform` ("Conform", sort 105, condition `Hide unless conform` with `_neq` → `hidden:true`).
@@ -425,6 +425,6 @@ export const fastProfile: RunProfile;
 
 ### Task R: Whole-branch review (coordinator, Opus)
 
-- [ ] Run `directus-ui-reviewer` on the UI diff and `migration-review` on migrations 205–207, both on Opus. Fix the CONFIRMED findings in a follow-up commit per finding.
+- [ ] Run `directus-ui-reviewer` on the UI diff and `migration-review` on migrations 206–208, both on Opus. Fix the CONFIRMED findings in a follow-up commit per finding.
 - [ ] Run the `ci-local` skill on the merged branch, and fix until clean.
 - [ ] Update this plan's Status table and the spec's Status line. Push, open the PR, and watch CI.

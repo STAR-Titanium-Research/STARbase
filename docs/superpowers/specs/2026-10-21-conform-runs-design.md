@@ -1,7 +1,7 @@
 # Conform runs — design
 
 **Date:** 2026-10-21
-**Status:** design agreed in the maintainer's design interview (all answers below are binding). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0023](../../adr/0023-conform-is-its-own-process-category.md).
+**Status:** design agreed in the maintainer's design interview (all answers below are binding). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0024](../../adr/0024-conform-is-its-own-process-category.md).
 
 ## Why
 
@@ -44,7 +44,7 @@ These are in `CONTEXT.md`: **Conform run**, **Feedstock**, **Extrusion**, **Conf
 
 ### Process category, method, machine, lineage
 
-Migration `20261021000205_conform_category.sql`:
+Migration `20261022000206_conform_category.sql`:
 
 - **Category.** Add `conform` to both `process_category` CHECKs: `manufacturing_operations` (migration 031) and `manufacturing_methods` (migration 129).
 - **Method.** Insert method `CF`, "Conform (continuous extrusion)", with `process_category = 'conform'`.
@@ -76,7 +76,7 @@ Migration `20261021000205_conform_category.sql`:
 
 ### Conform logs and run data
 
-Migration `20261021000206_conform_logs_and_run_data.sql`:
+Migration `20261022000207_conform_logs_and_run_data.sql`:
 
 ```
 conform_logs
@@ -130,7 +130,7 @@ conform_run_data
 
 ### Form layout
 
-Migration `20261021000207_conform_form_layout.sql` adds `grp_conform` ("Conform") at sort **105**, between `grp_sample_prep` (100) and `grp_notes_files` (110), with the condition `Hide unless conform` (base not hidden; the condition hides it, which is the group convention).
+Migration `20261022000208_conform_form_layout.sql` adds `grp_conform` ("Conform") at sort **105**, between `grp_sample_prep` (100) and `grp_notes_files` (110), with the condition `Hide unless conform` (base not hidden; the condition hides it, which is the group convention).
 
 - The fields come in this order: run number, feedstock, feedstock form, feed mass, die diameter, tooling, then wheel speed and IPS setpoint, then extrusion length, extrusion mass, yield, flash.
 - The `-- BEGIN FORM LAYOUT` / `-- END FORM LAYOUT` block in `scripts/configure_form_layout.sql` is updated byte-identically. `tests/phase1_schema.sh` enforces this.
