@@ -740,7 +740,7 @@ run_eq "every column, index and the table of inbox_measurements has a comment (w
 # save two shapes, list them, read one, count, rename (also under the wrong file: nothing changes) and delete.
 if command -v node >/dev/null 2>&1; then
     im_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1 | grep -i '^PREPARE measure')
-    [[ "$(grep -c '^PREPARE ' <<<"$im_prep")" == "7" ]] && ok "sql_check.mjs prints the seven measurement statements" || bad "sql_check.mjs did not print seven measurement statements"
+    [[ "$(grep -c '^PREPARE ' <<<"$im_prep")" == "8" ]] && ok "sql_check.mjs prints the eight measurement statements" || bad "sql_check.mjs did not print eight measurement statements"
     im_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 INSERT INTO directus_users (id) VALUES ('$FI_U1');
