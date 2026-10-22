@@ -3,9 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick, ref, type App } from 'vue';
 import {
-	ConformLogError, ConformLogHiddenError, CONFORM_POWER_CONSTANTS, linkExistingLog, listCandidateLogs, loadLogTrace, recomputeRun, setRunWindow, stepsToCsv,
-	unlinkLog, uploadConformLog,
-	type CandidateLog, type ConformLogRow, type ConformRunBundle, type ConformRunRow, type ConformStep, type ConformSummary,
+	ConformLogError, ConformLogHiddenError, CONFORM_POWER_CONSTANTS, candidateLabel, linkExistingLog, listCandidateLogs, loadLogTrace, recomputeRun, setRunWindow, stepsToCsv,
+	parseTrace, unlinkLog, uploadConformLog,
+	type CandidateLog, type ConformLogRow, type ConformRunBundle, type ConformRunRow, type ConformStep, type ConformSummary, type SeriesMeta,
 } from '@d1/fast-plotting';
 import { setExplorerHostFactory } from '@d1/ui';
 import ConformRunSection from './ConformRunSection.vue';
@@ -84,15 +84,33 @@ afterEach(() => {
 describe('status', () => {
 	it('says the run window is not set for a run with a log and no window', async () => {
 		await mount(data({ run: run({ status: 'no_window', window_start: null, window_end: null, summary: null, steps: null }) }));
-		expect(text()).toContain('Run window not set');
+		expect(el.querySelector('.d1-badge')?.textContent).toBe('No run window');
+		expect(el.querySelector('.d1-badge')?.className).toContain('tone--warning');
 		expect(text()).toContain('Set the run window to see its summary, energy and steps.');
 		expect(el.querySelectorAll('tr.step')).toHaveLength(0);
 	});
 
 	it('shows the processing error of a run that failed', async () => {
 		await mount(data({ run: run({ status: 'error', error_message: 'The log has no Timestamp column.' }) }));
-		expect(text()).toContain('Could not be processed');
-		expect(text()).toContain('The log has no Timestamp column.');
+		expect(el.querySelector('.d1-badge')?.textContent).toBe('Failed');
+		expect(el.querySelector('.d1-badge')?.className).toContain('tone--danger');
+		expect(el.querySelector('.d1-note.bad')?.textContent).toBe('The log has no Timestamp column.');
+	});
+
+	it('words a done run as "Window set" and a run with no log as "No log", in the one badge', async () => {
+		await mount(data());
+		expect(el.querySelector('.d1-badge')?.textContent).toBe('Window set');
+		app?.unmount();
+		document.body.innerHTML = '';
+		await mount({ run: null, log: null, logHidden: false });
+		expect(el.querySelector('.d1-badge')?.textContent).toBe('No log');
+	});
+
+	it('a reader who cannot edit is told there is no window, not to press a button they do not have', async () => {
+		await mount(data({ run: run({ status: 'no_window', window_start: null, window_end: null, summary: null, steps: null }) }), { canEdit: false });
+		expect(text()).toContain('No run window is set.');
+		expect(text()).not.toContain('Set the run window');
+		expect(button('Set run window')).toBeUndefined();
 	});
 });
 
@@ -103,7 +121,7 @@ describe('summary', () => {
 		expect(text()).toContain('13:45:00');
 		expect(text()).toContain('7.67 kWh');
 		expect(text()).toContain('30.70 kW');
-		expect(text()).toContain('450.2 °C');
+		expect(text()).toContain('450 °C');   // from 100, whole numbers
 		expect(text()).toContain('25.5 %');
 		expect(text()).toContain('11 min 40 s'); // extruding time, 700 s
 	});
@@ -131,7 +149,7 @@ describe('steps', () => {
 		expect(rows).toHaveLength(2);
 		expect(rows[0].textContent).toContain('250 °C');
 		expect(rows[1].textContent).toContain('8 rpm');
-		expect(rows[1].textContent).toContain('430.0–480.0 (50.0)');
+		expect(rows[1].textContent).toContain('430–480 °C (50)');
 	});
 
 	it('copies the steps as CSV', async () => {
@@ -215,7 +233,8 @@ const cand = (l: ConformLogRow, windows: CandidateLog['windows'] = []): Candidat
 describe('where the log comes from', () => {
 	it('offers an upload and "Use a log already uploaded" when the run does not exist yet', async () => {
 		await mount({ run: null, log: null, logHidden: false });
-		expect(text()).toContain('No Conform log yet');
+		expect(text()).toContain('This run has no Conform log yet.');
+		expect(text().match(/no Conform log yet/gi)).toHaveLength(1);   // one line, not a status line and a lead saying the same
 		expect(el.querySelector('input[type=file]')).toBeTruthy();
 		expect(button('Use a log already uploaded')).toBeTruthy();
 	});
@@ -275,7 +294,7 @@ describe('where the log comes from', () => {
 		await settle();
 		expect(listCandidateLogs).toHaveBeenCalledWith(expect.anything(), 'e1', '2025-03-17T00:00:00Z');
 		const select = el.querySelector<HTMLSelectElement>('select')!;
-		expect([...select.options].map((o) => o.textContent)).toEqual(['TiSwarf.csv · 2025-03-17 13:00:00', 'Other.csv · 2025-03-17 13:00:00']);
+		expect([...select.options].map((o) => o.textContent)).toEqual([candidateLabel(LOG), candidateLabel({ ...LOG, source_filename: 'Other.csv' })]);
 		select.value = 'l2';
 		select.dispatchEvent(new Event('change', { bubbles: true }));
 		await nextTick();
@@ -434,6 +453,37 @@ describe('unlink and replace', () => {
 		expect(text()).not.toContain('This clears the run window');
 	});
 
+	it('the confirm is a labelled group announced politely, with focus on Cancel and the destructive button in the danger style', async () => {
+		await mount(data());
+		const opener = button('Unlink log')!;
+		opener.click();
+		await settle();
+		const group = el.querySelector('[role=group]')!;
+		expect(group.getAttribute('aria-label')).toBe('Unlink the log');
+		expect(group.parentElement?.getAttribute('aria-live')).toBe('polite');
+		expect(document.activeElement).toBe(button('Cancel'));
+		const go = button('Unlink')!;
+		expect(go.className).toContain('danger');
+		expect(go.getAttribute('aria-label')).toBe('Unlink the log');
+		button('Cancel')!.click();
+		await settle();
+		expect(el.querySelector('[role=group]')).toBeNull();
+		expect(document.activeElement).toBe(opener);   // back where the person was
+	});
+
+	it('names the other mode for Replace log, and Escape closes the confirm', async () => {
+		await mount(data());
+		button('Replace log')!.click();
+		await settle();
+		const group = el.querySelector('[role=group]')!;
+		expect(group.getAttribute('aria-label')).toBe('Replace the log');
+		expect(button('Unlink and replace')!.getAttribute('aria-label')).toBe('Unlink and replace the log');
+		group.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+		await settle();
+		expect(el.querySelector('[role=group]')).toBeNull();
+		expect(unlinkLog).not.toHaveBeenCalled();
+	});
+
 	it('Replace log unlinks, and the chooser then opens by itself once the run has no log', async () => {
 		vi.mocked(unlinkLog).mockResolvedValue({ logRemoved: false });
 		vi.mocked(listCandidateLogs).mockResolvedValue([cand(LOG)]);
@@ -514,12 +564,62 @@ describe('a file that is already uploaded', () => {
 		Object.defineProperty(input, 'files', { value: [new File(['x'], 'again.csv')], configurable: true });
 		input.dispatchEvent(new Event('change', { bubbles: true }));
 		await settle();
-		expect(text()).toContain('This file is already uploaded as old.csv · 2025-03-17 13:00:00');
+		expect(text()).toContain(`This file is already uploaded as ${candidateLabel({ ...LOG, source_filename: 'old.csv' })}`);
 		expect(changed).toBe(0);
 		button('Use that log')!.click();
 		await settle();
 		expect(linkExistingLog).toHaveBeenCalledWith(expect.anything(), OP, 'l1');
 		expect(changed).toBe(1);
+	});
+});
+
+describe('a file that is already uploaded: what is on that log', () => {
+	const upload = async (out: unknown) => {
+		vi.mocked(uploadConformLog).mockResolvedValue(out as never);
+		await mount({ run: null, log: null, logHidden: false });
+		const input = el.querySelector<HTMLInputElement>('input[type=file]')!;
+		Object.defineProperty(input, 'files', { value: [new File(['x'], 'again.csv')], configurable: true });
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		await settle();
+	};
+	const W = [{ operation_id: 'o1', label: 'Ti swarf', readable: true, start: '2025-03-17T13:00:00Z', end: '2025-03-17T15:00:00Z' }];
+
+	it('lists the windows the result carries and the whole-log note before "Use that log", and focuses Cancel', async () => {
+		await upload({ existing: { ...LOG, source_filename: 'old.csv' }, existingWindows: W });
+		const group = el.querySelector('[role=group]')!;
+		expect(group.querySelector('ul')?.textContent).toContain('Ti swarf: 13:00:00 – 15:00:00');
+		expect(group.querySelector('.d1-note.warn')?.textContent).toBe("The whole log is Ti swarf's window: narrow that run's window first");
+		expect(group.querySelector('ul')!.compareDocumentPosition(button('Use that log')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();   // the windows come first
+		expect(group.parentElement?.getAttribute('aria-live')).toBe('polite');
+		expect(document.activeElement).toBe(button('Cancel'));
+	});
+
+	it('works the windows out from the log row when the result does not carry them, and shows no note for a log with room', async () => {
+		await upload({ existing: { ...LOG, source_filename: 'old.csv', run_windows: [{ operation_id: 'o1', start: '2025-03-17T13:10:00Z', end: '2025-03-17T13:20:00Z' }] } });
+		const group = el.querySelector('[role=group]')!;
+		expect(group.querySelectorAll('li')).toHaveLength(1);
+		expect(group.querySelector('.d1-note')).toBeNull();
+	});
+});
+
+describe('the trace of the window', () => {
+	it('is dashed on the second line and has a key naming both', async () => {
+		const series: SeriesMeta[] = [
+			{ key: 'wheel_speed_rpm', label: 'Wheel speed', unit: 'rpm', group: 'speed', min: 0, max: 12 },
+			{ key: 'tooling1_c', label: 'Tooling 1 (behind abutment)', unit: '°C', group: 'temp', min: 100, max: 160 },
+		];
+		const lines = ['time_s,wheel_speed_rpm,tooling1_c'];
+		for (let t = 0; t < 600; t++) lines.push(`${t},${5 + (t % 7)},${100 + t * 0.1}`);
+		vi.mocked(loadLogTrace).mockResolvedValue(parseTrace(lines.join('\n') + '\n', series));
+		await mount(data({ run: run({ window_start: '2025-03-17T13:05:00Z', window_end: '2025-03-17T13:09:00Z' }), log: { ...LOG, log_end: '2025-03-17T13:09:59Z' } }));
+		await settle();
+		expect(el.querySelectorAll('svg.trace polyline')[0]?.getAttribute('stroke-dasharray')).toBeNull();
+		const dashed = [...el.querySelectorAll('svg.trace polyline')].filter((p) => p.getAttribute('stroke-dasharray') === '4 3');
+		expect(dashed.length).toBeGreaterThan(0);
+		expect(el.querySelector('.tkey')?.textContent).toContain('Wheel speed');
+		expect(el.querySelector('.tkey')?.textContent).toContain('Tooling 1');
+		expect(el.querySelectorAll('.tkey line[stroke-dasharray="4 3"]')).toHaveLength(1);
+		vi.mocked(loadLogTrace).mockImplementation(async () => { throw new Error('no trace in these tests'); });
 	});
 });
 

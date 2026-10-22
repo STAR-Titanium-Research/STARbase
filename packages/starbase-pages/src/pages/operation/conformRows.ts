@@ -3,7 +3,7 @@
 // @d1/fast-plotting's summary, steps and totals; no Vue, no I/O.
 
 import {
-	CONFORM_POWER_CONSTANTS, DASH, formatClockRange, formatDuration, formatKw, formatKwh, formatUkTime,
+	CONFORM_FIGURES, CONFORM_POWER_CONSTANTS, DASH, formatClockRange, formatFigure, formatUkDate, formatUkDateTimeDisplay, formatUkTime, niceNumber,
 	type ConformRange, type ConformRunRow, type ConformStep, type ConformSummary, type ConformTotals, type EnergyKwh, type PowerPart,
 } from '@d1/fast-plotting';
 
@@ -13,11 +13,7 @@ export interface TextRow {
 }
 
 const isNum = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
-
-/** `450.2 °C`: the number to `digits` places, then the unit; a dash for no reading. Energy and demand use the shared `formatKwh` / `formatKw`. */
-export function withUnit(n: number | null | undefined, digits: number, unit: string): string {
-	return isNum(n) ? `${n.toFixed(digits)}${unit ? ` ${unit}` : ''}` : DASH;
-}
+const row = (key: keyof typeof CONFORM_FIGURES, value: number | null | undefined): TextRow => ({ label: CONFORM_FIGURES[key].label, value: formatFigure(key, value) });
 
 const MISSING_WORDS: Record<PowerPart, string> = { motor: 'motor current', ips: 'IPS coil', cooling: 'wheel cooling pump current' };
 
@@ -28,40 +24,45 @@ export function missingText(missing: readonly PowerPart[] | undefined): string {
 	return `This log has no ${names.join(' or ')} channel, so ${missing.length === 1 ? 'that part' : 'those parts'} of the energy ${missing.length === 1 ? 'is' : 'are'} left out.`;
 }
 
-/** The energy of a window or a whole log: each component present, the total, and the average demand. */
+/** The energy of a window or a whole log: each component present, the total, and the average demand (labels and formats from `CONFORM_FIGURES`). */
 export function energyRows(energy: EnergyKwh, avgDemandKw: number): TextRow[] {
 	const rows: TextRow[] = [];
-	if (isNum(energy.motor)) rows.push({ label: 'Motor', value: formatKwh(energy.motor) });
-	if (isNum(energy.ips)) rows.push({ label: 'IPS', value: formatKwh(energy.ips) });
-	if (isNum(energy.cooling)) rows.push({ label: 'Cooling', value: formatKwh(energy.cooling) });
-	rows.push({ label: 'Total', value: formatKwh(energy.total) });
-	rows.push({ label: 'Average demand', value: formatKw(avgDemandKw) });
+	if (isNum(energy.motor)) rows.push(row('energy_motor', energy.motor));
+	if (isNum(energy.ips)) rows.push(row('energy_ips', energy.ips));
+	if (isNum(energy.cooling)) rows.push(row('energy_cooling', energy.cooling));
+	rows.push(row('energy_total', energy.total));
+	rows.push(row('avg_demand_kw', avgDemandKw));
 	return rows;
 }
 
 /** The run summary (window only): times, speed, torque and temperatures. Energy has its own rows. */
 export function summaryRows(s: ConformSummary): TextRow[] {
 	return [
-		{ label: 'Window length', value: formatDuration(s.duration_s) },
-		{ label: 'Extruding time', value: formatDuration(s.extruding_s) },
-		{ label: 'Mean wheel speed', value: withUnit(s.mean_wheel_speed_rpm, 1, 'rpm') },
-		{ label: 'Mean torque', value: withUnit(s.mean_torque_pct, 1, '%') },
-		{ label: 'Mean Tooling 1', value: withUnit(s.mean_tooling1_c, 1, '°C') },
-		{ label: 'Peak torque', value: withUnit(s.peak_torque_pct, 1, '%') },
-		{ label: 'Peak motor current', value: withUnit(s.peak_motor_current_a, 1, 'A') },
-		{ label: 'Peak Tooling 1', value: withUnit(s.peak_tooling1_c, 1, '°C') },
-		{ label: 'Peak wheel temperature', value: withUnit(s.peak_wheel_temp_c, 1, '°C') },
-		{ label: 'IPS setpoint', value: withUnit(s.ips_setpoint_c, 0, '°C') },
+		row('duration_s', s.duration_s),
+		row('extruding_s', s.extruding_s),
+		row('mean_wheel_speed_rpm', s.mean_wheel_speed_rpm),
+		row('mean_torque_pct', s.mean_torque_pct),
+		row('mean_tooling1_c', s.mean_tooling1_c),
+		row('peak_torque_pct', s.peak_torque_pct),
+		row('peak_motor_current_a', s.peak_motor_current_a),
+		row('peak_tooling1_c', s.peak_tooling1_c),
+		row('peak_wheel_temp_c', s.peak_wheel_temp_c),
+		row('ips_setpoint_c', s.ips_setpoint_c),
 	];
 }
 
 /** The whole-log totals, shown beside the run's own: length of the log and its energy. */
 export function totalsRows(t: ConformTotals): TextRow[] {
-	return [{ label: 'Log length', value: formatDuration(t.duration_s) }, ...energyRows(t.energy_kwh, t.avg_demand_kw)];
+	return [{ label: 'Log length', value: formatFigure('duration_s', t.duration_s) }, ...energyRows(t.energy_kwh, t.avg_demand_kw)];
 }
 
-const range = (r: ConformRange | null): string => (r ? `${r.min.toFixed(1)}–${r.max.toFixed(1)} (${r.range.toFixed(1)})` : DASH);
-const trimmed = (n: number): string => String(Math.round(n * 10) / 10);
+/** `400–430 °C (30)`: the low and high, then the spread in brackets (the header says "range"); a dash for no reading. */
+const range = (r: ConformRange | null, unit: string): string => {
+	const lo = r ? niceNumber(r.min) : null;
+	const hi = r ? niceNumber(r.max) : null;
+	const spread = r ? niceNumber(r.range) : null;
+	return lo === null || hi === null || spread === null ? DASH : `${lo}–${hi} ${unit} (${spread})`;
+};
 
 export const STEP_COLUMNS = ['Start', 'Length', 'IPS setpoint', 'Wheel speed', 'Wheel temp (range)', 'Tooling 1 (range)', 'Tooling 2 (range)', 'Mean torque', 'Energy'] as const;
 
@@ -69,15 +70,22 @@ export const STEP_COLUMNS = ['Start', 'Length', 'IPS setpoint', 'Wheel speed', '
 export function stepCells(s: ConformStep): string[] {
 	return [
 		formatUkTime(s.start),
-		formatDuration(s.duration_s),
-		withUnit(s.ips_setpoint_c, 0, '°C'),
-		`${trimmed(s.wheel_speed_rpm)} rpm`,
-		range(s.wheel_temp_c),
-		range(s.tooling1_c),
-		range(s.tooling2_c),
-		withUnit(s.mean_torque_pct, 1, '%'),
-		formatKwh(s.energy_kwh),
+		formatFigure('duration_s', s.duration_s),
+		formatFigure('ips_setpoint_c', s.ips_setpoint_c),
+		formatFigure('mean_wheel_speed_rpm', s.wheel_speed_rpm),
+		range(s.wheel_temp_c, '°C'),
+		range(s.tooling1_c, '°C'),
+		range(s.tooling2_c, '°C'),
+		formatFigure('mean_torque_pct', s.mean_torque_pct),
+		formatFigure('energy_total', s.energy_kwh),
 	];
+}
+
+/** The log's span in the display form: `17 Mar 2025, 13:38:20 – 14:50:01`, or both dates when it crosses midnight. */
+export function logSpanText(start: string | null | undefined, end: string | null | undefined): string {
+	if (!start || !end) return '';
+	const first = formatUkDateTimeDisplay(start);
+	return formatUkDate(start) === formatUkDate(end) ? `${first} – ${formatUkTime(end)}` : `${first} – ${formatUkDateTimeDisplay(end)}`;
 }
 
 /** The run window as UK clock times, `13:38:20 – 13:53:19`; empty when there is none. */
@@ -98,13 +106,3 @@ export function needsRecompute(run: ConformRunRow | null | undefined): boolean {
 
 /** True when the run can take a log: none is linked yet. */
 export const needsLog = (run: Pick<ConformRunRow, 'status' | 'log_id'> | null | undefined): boolean => !run || run.status === 'no_log' || !run.log_id;
-
-/** The one line under the section's heading. */
-export function statusText(run: Pick<ConformRunRow, 'status'> | null | undefined): string {
-	switch (run?.status) {
-		case 'done': return 'Done';
-		case 'no_window': return 'Run window not set';
-		case 'error': return 'Could not be processed';
-		default: return 'No Conform log yet';
-	}
-}
