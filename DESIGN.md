@@ -191,6 +191,7 @@ All in `@d1/ui` (`packages/d1-ui/src/components`, `.../nav`). Pages compose thes
 | `PeopleStack` | Component | Everyone with access as faces | Six full, then three fading; opens Who has access (`AccessDialog`) |
 | `ExplorerNav`: `SidebarExpanded`, `SidebarRail`, `NavHoverMenu` | Pattern | The dark sidebar: Find, Home, Inbox, pins, five sections | expanded (224px), rail (60px icons, tooltips, 224px hover menus) |
 | `PlainFrame` (STARbase) | Template | Sticky page header: title, breadcrumb, actions | 44px, one row (PR 356); static on phones |
+| `.d1-btn`, `.d1-btn.pri`, `.d1-btn.danger`, `.d1-input` (`tokens.css`) | Primitive | Buttons and inputs of a page's own action rows and forms, next to `.d1-note` | 8px radius, 30px tall, 40px under 700px page width; hover border accent; `.danger` (ink and border `--d1-bad`) for the destructive action |
 
 **Added in PR #377** (designs on the "STARbase list page layouts" canvas):
 - `ViewRail` / `ViewRailSection` (kit), `RecordViewRail`, `IndexViewRail`, `TitlePin` (STARbase), `providePagePin`.
@@ -444,6 +445,8 @@ Values outside these bands (9999, 20000) are drift. Consolidate them into a z-in
 - Keep empty sections to one line, as a lid with a zero count and a sentence such as "Every operation of this project that you can see is in a campaign." This includes charts: an empty chart is a one-line panel, not an empty plot.
 - On index pages, put search and filters in the toolbar above the table and every viewing setting (count, layout, density, sort, grouping, page size, columns) in the View rail on the right, starting level with the table.
 - Mark links in tables and the header with an underline (dotted for record codes). In light mode the accent is near-black, so colour alone does not show a link.
+- Make an inline confirm a `role="group"` inside an `aria-live="polite"` region: focus moves to Cancel when it opens
+  and back to the opener when it closes, and the destructive action is `.d1-btn.danger`.
 
 ### Don't
 - Don't use raw hex in a page or component. The sidebar set in `tokens.css` and `theme.css` are the only places hex lives.
