@@ -18,7 +18,7 @@ import type { SurfaceScene } from './surfaceScene'; // type only: erased, three.
 const props = defineProps<{ scanId: string; title?: string }>();
 // The scan was sent to be rendered again (after "the rendered data is missing"): the panel reloads its list.
 // The scan's file got an owner after the list was read (the endpoint answered 403 FILE_LOCKED): the panel reloads its list, so the row becomes a lock tile.
-const emit = defineEmits<{ (e: 'rerendered'): void; (e: 'locked'): void }>();
+const emit = defineEmits<{ (e: 'rerendered'): void; (e: 'locked', scanId: string): void }>();
 
 const host = useExplorerHost();
 const gate = useRequestGate();
@@ -71,7 +71,7 @@ async function load(): Promise<void> {
 		error.value = scanErrorText(e);
 		missing.value = isObjectMissing(e);
 		phase.value = 'error';
-		if (isFileLocked(e)) emit('locked');
+		if (isFileLocked(e)) emit('locked', props.scanId);
 	}
 }
 
@@ -123,12 +123,15 @@ async function renderThisAgain(): Promise<void> {
 	if (rendering.value) return;
 	rendering.value = true;
 	renderError.value = '';
+	// The scan this request is for: the user may open another scan while it is in flight, and a refusal for
+	// this one must not close or reload that one.
+	const id = props.scanId;
 	try {
-		await renderAgain(host.api, props.scanId);
+		await renderAgain(host.api, id);
 		emit('rerendered');
 	} catch (e) {
 		renderError.value = scanErrorText(e);
-		if (isFileLocked(e)) emit('locked');
+		if (isFileLocked(e)) emit('locked', id);
 	} finally {
 		rendering.value = false;
 	}

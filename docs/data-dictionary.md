@@ -736,7 +736,7 @@ The public tables are hidden Directus collections and are not audited. They are 
 ### Conform runs: `conform_*` columns, `conform_logs`, `conform_run_data`
 
 A **Conform run** is a `manufacturing_operations` row with `process_category = 'conform'` and method `CF`
-(migration `…206`, [ADR-0024](adr/0024-conform-is-its-own-process-category.md)). Its parameters are inline
+(migration `…206`, [ADR-0025](adr/0025-conform-is-its-own-process-category.md)). Its parameters are inline
 `conform_*` columns: `conform_run_number`, `conform_feedstock`, `conform_feedstock_form`
 (swarf / powder / granules / rod), `conform_feed_mass_g`, `conform_die_diameter_mm`, `conform_tooling_id`,
 `conform_extrusion_length_mm`, `conform_extrusion_mass_g`, `conform_yield_pct`, `conform_flash_mass_g`,

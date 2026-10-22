@@ -1,7 +1,7 @@
 # Conform runs — design
 
 **Date:** 2026-10-21
-**Status:** design agreed in the maintainer's design interview (all answers below are binding). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0024](../../adr/0024-conform-is-its-own-process-category.md).
+**Status:** design agreed in the maintainer's design interview (all answers below are binding). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0025](../../adr/0025-conform-is-its-own-process-category.md).
 
 ## Why
 

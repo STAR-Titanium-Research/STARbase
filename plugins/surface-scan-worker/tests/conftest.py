@@ -28,12 +28,13 @@ class FakeWorld:
         self.renders: dict[str, dict] = {}
         self.files: dict[str, dict] = {}
         self.fingerprints: dict[str, dict] = {}
+        self.team_folders: list[str] | Exception = ["Alloys"]
         self.objects: dict[str, tuple[bytes, str]] = {}
-        self.history: list[tuple[str, dict]] = []  # every PATCH: (scan_id, payload)
+        self.history: list[tuple[str, dict]] = []  # every claim: (scan_id, payload)
         self.results: list[
             tuple[str, dict]
         ] = []  # every POST /result: (scan_id, body incl. version)
-        self.conflicts_to_inject = 0  # claim PATCHes that lose the race
+        self.conflicts_to_inject = 0  # claims that lose the race
         self.result_conflicts_to_inject = (
             0  # result POSTs answered 409 (the row moves on first)
         )
@@ -58,6 +59,8 @@ class FakeWorld:
         file_id=FILE,
         storage="star",
         forged=False,
+        owner_person_id=None,
+        owner_team_id=None,
     ) -> None:
         """Register a file row under ``file_id`` (what the scan row points at).
 
@@ -69,7 +72,13 @@ class FakeWorld:
         row_id = file_id
         if relative_path is not None and not forged:
             row_id = archive.expected_file_id(relative_path)
-        self.files[file_id] = {"id": row_id, "storage": storage, "metadata": metadata}
+        self.files[file_id] = {
+            "id": row_id,
+            "storage": storage,
+            "metadata": metadata,
+            "owner_person_id": owner_person_id,
+            "owner_team_id": owner_team_id,
+        }
 
     def current_fingerprint(self, file_id: str, sha: str, **overrides) -> dict:
         """A ``done`` fingerprint that describes the file on disk right now (size and mtime)."""
@@ -89,19 +98,26 @@ class FakeWorld:
     def get_scan(self, scan_id):
         return dict(self.rows[scan_id])
 
-    def patch_scan(self, scan_id, payload, version=None):
+    def claim_scan(self, scan_id, version):
+        """The claim route: 409 unless the row is still pending at the version read."""
         row = self.rows[scan_id]
-        self.history.append((scan_id, dict(payload)))
+        self.history.append(
+            (scan_id, {"render_status": "rendering", "claim_version": version})
+        )
         if self.conflicts_to_inject:
             self.conflicts_to_inject -= 1
             row["version"] += 1
             raise VersionConflictError("stale")
-        if version is not None and row["version"] != version:
+        if row["version"] != version or row["render_status"] != "pending":
             raise VersionConflictError("stale")
-        assert "version" not in payload  # never in the body
-        row.update(payload)
+        row["render_status"] = "rendering"
         row["version"] += 1
-        return {"data": dict(row)}
+        return {
+            "scan_id": scan_id,
+            "render_status": "rendering",
+            "version": row["version"],
+            "directus_files_id": row["directus_files_id"],
+        }
 
     def post_result(self, scan_id, payload, version, files_id):
         """The result route: one transaction, 409 unless the version matches, the row is rendering and
@@ -134,6 +150,11 @@ class FakeWorld:
     def get_file(self, file_id):
         return self.files[file_id]
 
+    def get_team_folders(self):
+        if isinstance(self.team_folders, Exception):
+            raise self.team_folders
+        return list(self.team_folders)
+
     def get_fingerprint(self, file_id):
         return self.fingerprints.get(file_id)
 
@@ -151,7 +172,7 @@ class FakeWorld:
         return item[0] if item else None
 
     def statuses(self) -> list[str]:
-        """The statuses written, in order: the claim's PATCH, then the result's POST."""
+        """The statuses written, in order: the claim's POST, then the result's POST."""
         patched = [p["render_status"] for _, p in self.history if "render_status" in p]
         return patched + [body["render_status"] for _, body in self.results]
 
@@ -166,10 +187,11 @@ def world(tmp_path, monkeypatch):
     w = FakeWorld(root)
     for name in (
         "get_scan",
-        "patch_scan",
+        "claim_scan",
         "post_result",
         "get_file",
         "get_fingerprint",
+        "get_team_folders",
     ):
         monkeypatch.setattr(directus_client, name, getattr(w, name))
     for name in ("put_object", "object_exists", "get_object_bytes"):

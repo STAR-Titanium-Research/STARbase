@@ -168,6 +168,14 @@ function fakeKnex(world) {
 			if (render) render.render_error = null;
 			return { rows: [] };
 		}
+		if (SQL.claim && sql === SQL.claim) {
+			const [scan, version] = bindings;
+			const row = world.scans.get(scan);
+			if (!row || row.version !== version || row.render_status !== 'pending') return { rows: [] };
+			row.render_status = 'rendering';
+			row.version += 1;
+			return { rows: [{ scan_id: scan, render_status: 'rendering', version: row.version, directus_files_id: row.directus_files_id }] };
+		}
 		if (SQL.resultClaim && sql === SQL.resultClaim) {
 			const [status, scan, version, file] = bindings;
 			const row = world.scans.get(scan);
@@ -630,7 +638,7 @@ test('GET /scans: an administrator reading a locked scan\'s list is not logged (
 test('mounts the list, the three objects, render and result at /d1-surface-scan', () => {
 	assert.equal(endpoint.id, 'd1-surface-scan');
 	const { router } = setup();
-	assert.deepEqual([...router.routes.keys()], ['GET /scans', 'GET /:id/grid', 'GET /:id/meta', 'GET /:id/thumb', 'POST /:id/render', 'POST /:id/result']);
+	assert.deepEqual([...router.routes.keys()], ['GET /scans', 'GET /:id/grid', 'GET /:id/meta', 'GET /:id/thumb', 'POST /:id/render', 'POST /:id/claim', 'POST /:id/result']);
 });
 
 test('GET grid streams the object with its ETag, Cache-Control private and its content type', async () => {
@@ -1041,6 +1049,47 @@ const COLUMNS = {
 const DONE = { version: 3, directus_files_id: FILE, render_status: 'done', columns: COLUMNS };
 // A scan the worker holds: rendering, at version 3.
 const claimed = (extra = {}) => setup({ row: { render_status: 'rendering', version: 3 }, render: { cache_key: null, grid_width: null, grid_height: null, rendered_at: null }, ...extra });
+
+test('POST claim: an administrator takes a pending scan at the version read, in one transaction that names the actor first', async () => {
+	const { call, world } = setup({ row: { render_status: 'pending', version: 2 } });
+	const res = await call('POST', '/:id/claim', { ...WHO.admin, body: { version: 2 } });
+	assert.equal(res.statusCode, 200);
+	assert.deepEqual(res.body, { data: { scan_id: SCAN, render_status: 'rendering', version: 3, directus_files_id: FILE } });
+	assert.deepEqual(world.raw.map((r) => r.sql), [SQL.setActor, SQL.claim]);
+	assert.deepEqual(world.raw[1].bindings, [SCAN, 2]);
+	assert.equal(world.scans.get(SCAN).render_status, 'rendering');
+	assert.match(SQL.claim, /WHERE scan_id = \? AND version = \? AND render_status = 'pending'/);
+});
+
+test('POST claim: a second claim, a stale version, a scan that is not pending and a missing scan are 409 VERSION_CONFLICT with nothing written', async () => {
+	const { call, world } = setup({ row: { render_status: 'pending', version: 2 } });
+	assert.equal((await call('POST', '/:id/claim', { ...WHO.admin, body: { version: 2 } })).statusCode, 200);
+	const again = await call('POST', '/:id/claim', { ...WHO.admin, body: { version: 2 } });
+	assert.equal(again.statusCode, 409);
+	assert.equal(again.body.errors[0].extensions.code, 'VERSION_CONFLICT');
+	assert.equal(world.scans.get(SCAN).version, 3);
+	for (const state of ['rendering', 'done', 'failed']) {
+		const w = setup({ row: { render_status: state, version: 2 } });
+		assert.equal((await w.call('POST', '/:id/claim', { ...WHO.admin, body: { version: 2 } })).statusCode, 409, state);
+	}
+	const stale = setup({ row: { render_status: 'pending', version: 2 } });
+	assert.equal((await stale.call('POST', '/:id/claim', { ...WHO.admin, body: { version: 1 } })).statusCode, 409);
+	assert.equal((await stale.call('POST', '/:id/claim', { ...WHO.admin, id: ID(99), body: { version: 2 } })).statusCode, 409);
+});
+
+test('POST claim: only an administrator, a signed-in caller and a plain { version } body', async () => {
+	for (const who of [WHO.alice, WHO.bob, WHO.viewer]) {
+		const w = setup({ row: { render_status: 'pending', version: 2 } });
+		assert.equal((await w.call('POST', '/:id/claim', { ...who, body: { version: 2 } })).statusCode, 403);
+		assert.equal(w.world.scans.get(SCAN).render_status, 'pending');
+	}
+	assert.equal((await setup({ row: { render_status: 'pending', version: 2 } }).call('POST', '/:id/claim', { user: null, body: { version: 2 } })).statusCode, 401);
+	for (const body of [undefined, null, [], {}, { version: '2' }, { version: 0 }, { version: 1.5 }, { version: 2, render_status: 'done' }]) {
+		const res = await setup({ row: { render_status: 'pending', version: 2 } }).call('POST', '/:id/claim', { ...WHO.admin, body });
+		assert.equal(res.statusCode, 400, JSON.stringify(body));
+		assert.equal(res.body.errors[0].extensions.code, 'INVALID_PAYLOAD');
+	}
+});
 
 test('POST result: the worker reports a finished render: claimed and upserted in one transaction that names the actor first, then the cache is cleared', async () => {
 	const { call, world } = claimed({ env: { CACHE_ENABLED: 'true' } });

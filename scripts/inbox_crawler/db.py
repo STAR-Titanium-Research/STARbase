@@ -50,8 +50,20 @@ HEARTBEAT_STATEMENT_TIMEOUT_MS = 5_000
 HEARTBEAT_CONNECT_TIMEOUT_S = 5
 
 
+# Migration 206 lets only a session that sets d1.archive_writer = 'on' create or repoint a directus_files row of the
+# archive share (storage 'star'), so a user cannot forge a pointer row through Directus (ADR-0023). The crawler
+# registers pointer rows, so every connection it writes with declares itself an archive writer.
+def declare_archive_writer(conn) -> None:
+    """Set d1.archive_writer = 'on' for this session (not just this transaction: it survives later rollbacks)
+    and commit, so the setting is in place before the first write."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('d1.archive_writer', 'on', false)")
+    conn.commit()
+
+
 def connect(dsn: str, private_schema: str = "d1_private"):
-    """A connection with the private schema first on the search path. Never logs the DSN."""
+    """A connection with the private schema first on the search path, declared as an archive writer
+    (declare_archive_writer). Never logs the DSN."""
     import psycopg2
     from psycopg2 import sql
 
@@ -64,6 +76,7 @@ def connect(dsn: str, private_schema: str = "d1_private"):
             )
         )
     conn.commit()
+    declare_archive_writer(conn)
     return conn
 
 

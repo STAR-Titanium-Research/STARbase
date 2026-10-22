@@ -142,7 +142,7 @@ function onAdded(): void {
 				<span class="spacer" />
 				<v-button small secondary @click="openId = null">Close</v-button>
 			</div>
-			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" @rerendered="onRerendered" @locked="onLocked(opened.id)" />
+			<SurfaceScanViewer :scan-id="opened.id" :title="fileName(opened)" @rerendered="onRerendered" @locked="onLocked" />
 		</div>
 	</Section>
 

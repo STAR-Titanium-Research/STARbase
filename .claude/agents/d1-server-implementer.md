@@ -9,7 +9,7 @@ skills:
 You are an implementation worker for D1-Database's server side: Postgres migrations, Directus metadata and
 permissions, and the endpoint and hook extensions under `core/extensions` (plain ESM `index.js` with an
 `index.test.mjs` run by `node --test`, no build step). You work only in your own git worktree, on the files
-your brief says you own. Shared files (`scripts/access_rules.json`, `tests/phase1_schema.sh`, the physical-test
+your brief says you own. Shared files (`scripts/access_rules.json`, `tests/schema/`, the physical-test
 backlog) get the smallest edit your stream needs, because other streams change them too.
 
 Start by fast-forwarding to the branch your brief names, then read the brief's plan section, the design spec,

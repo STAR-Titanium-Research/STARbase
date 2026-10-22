@@ -29,6 +29,7 @@ FINGERPRINTS = ROOT / "db/migrations/20261010000159_file_fingerprints.sql"
 INBOX = ROOT / "db/migrations/20261015000193_found_files_inbox.sql"
 PROVENANCE = ROOT / "db/migrations/20261016000196_file_provenance_owner.sql"
 SEM_SETTINGS = ROOT / "db/migrations/20261016000197_sem_image_settings.sql"
+POINTER_GUARD = ROOT / "db/migrations/20261021000206_pointer_row_write_guard.sql"
 IGNORED = (
     ROOT / "db/migrations/20261016000199_inbox_ignored_dirs.sql"
 )  # stream IA of the ignored folders plan
@@ -215,7 +216,13 @@ def world(tmp_path):
         cur.execute(migration_up(SEM_SETTINGS, schema))
         cur.execute(migration_up(THUMBNAILS, schema))
         cur.execute(migration_up(IGNORED, schema))
+        # the pointer-row write guard of 206 (ADR-0023): a pointer row is written only by a session that declared itself an archive
+        # writer, as the crawler's own connection does (db.connect), so the Store tests below run under the real guard
+        cur.execute(migration_up(POINTER_GUARD, schema))
         conn.commit()
+        from inbox_crawler import db as crawler_db
+
+        crawler_db.declare_archive_writer(conn)
         yield World(conn, schema, str(root), DSN)
     finally:
         conn.rollback()

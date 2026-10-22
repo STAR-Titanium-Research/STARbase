@@ -1624,6 +1624,23 @@ Needs migrations 206 to 208 applied (the `conform` category, `conform_logs`, `co
 
 ### Surface scans follow their file's owner (migration 205, ADR-0023)
 
+> **Scratch-stack run, 2026-10-22 (does not tick the items below).** Run in a cloud session on a scratch stack, not the lab's: Directus
+> 11.17.4 from npm with all of `core/extensions`, Postgres 16 with migrations 1 to 213, MinIO built from source with the repo's
+> `infra/minio/surface_reader.sh` policy, the worker (rq + poller) on a copy of a real `.al3d` (27 MB, 1840 x 1840 px, rendered to 920 x 920
+> in the viewer's grid format), and three accounts (owner, other member, Lab Viewer) plus an administrator. Results: SS4 and SS5 hold at
+> the API for every route listed (REST fields, filters, sorts, `aggregate`/`groupBy`, `search`, `alias`, `$FOLLOW`, `directus_revisions`,
+> `directus_activity`, GraphQL incl. introspection and `_aggregated`, `/utils/export` csv and json with hidden fields, websocket
+> subscribe); a team-owned file is visible to an active member and not to an inactive one; SS6's NOTICE count matched a hand count and the
+> `down`/`up` round trip kept every value (md5 of the twelve); SS7's token probe answered `409` for an administrator and exited `1` for a
+> member and for an unknown token, and warned (no exit) with Directus unreachable; the endpoint served grid, meta and thumb with 403 answered
+> before 304, an administrator's read wrote one `admin_read` log row, a missing object answered `OBJECT_MISSING`, and Render
+> again re-rendered. **It found one bug, fixed in the same PR:** on Directus 11.17 a `filter[version][_eq]` on a single-item `PATCH` does
+> not gate the write (the filter only applies to the read-back, the answer is an empty `204`), so the worker's claim crashed on its first
+> real render and could not have been a compare-and-set; the claim is now `POST /d1-surface-scan/<id>/claim` (8 parallel claims: one `200`,
+> seven `409`). **Not covered, still to do on the lab stack:** the Docker image `directus/directus:11` (floating tag) and the lab's data,
+> STARbase in a browser (the panel, the add dialog, the 3D view on a GPU: SS1, SS2, SCAN-UI1/2), the SMB share and its read-only mount,
+> the inbox crawler stamping, and the worker's webhook path (only the poller was running).
+
 Needs the stack with the worker, MinIO, the archive share, two member accounts (A and B), one administrator, one Lab Viewer and a
 team folder. Every item below is code-complete and unit- and Postgres-tested; what only the real Directus and share can show is
 below. "Since" is the surface scan privacy PR (pending).
@@ -1670,7 +1687,7 @@ below. "Since" is the surface scan privacy PR (pending).
   endpoint, worker and panel read). Since: the surface scan privacy PR (pending).
 - [ ] **SS7 — The worker through the result route, and Render again by a non-owner refused.** With the worker on its administrator
   token and the share mounted `:ro`: add a scan of a real `.al3d` as A. Expect `pending`, `rendering`, then `done` as SS1 (the
-  worker claims through Directus and reports through `POST /d1-surface-scan/<id>/result`, so there is no render value on the
+  worker claims through `POST /d1-surface-scan/<id>/claim` and reports through `POST /d1-surface-scan/<id>/result`, so there is no render value on the
   `surface_scans` row and one row in `d1_private.surface_scan_renders`); the worker's log shows no database credential in use. Make a
   render fail (a PDF renamed to `.al3d`): `done` is not reached, `render_status` is `failed` and the error shows to A, not to B. Stop
   the worker mid-render and start it: the stuck row is failed through the result route and Render again requeues it. Call the result
@@ -1680,7 +1697,26 @@ below. "Since" is the surface scan privacy PR (pending).
   `directus_files_id`: `409 VERSION_CONFLICT` and the row is unchanged; without `directus_files_id`: `400` naming the field. Start
   the worker with a token of a non-administrator user: its log shows a CRITICAL line naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
   `WORKER_DIRECTUS_TOKEN` and the container exits non-zero (with the administrator's token it starts and logs the probe's `409`).
-  Since: the surface scan privacy PR (pending).
+  Cold start: with the non-administrator token, bring the whole stack up at once (`docker compose --profile archive up -d`, or reboot the
+  host) so the worker starts while Directus is still booting: the log shows `token probe: Directus could not be reached ... will ask
+  again`, then, once Directus answers, the same CRITICAL line and a non-zero exit (the poller re-asks at the end of each poll pass
+  until it gets a definite answer; with the administrator's token it stops asking after the first `409`).
+  Since: the surface scan privacy PR (#392); the cold-start check: its follow-up (#394).
+- [ ] **SS8 — The claim route and the webhook path on the lab stack.** On the lab's Docker stack (the floating `directus/directus:11` image,
+  not the scratch Directus 11.17.4 of the 2026-10-22 run): add a scan of a real `.al3d` and watch the worker log. Expect `start scan=...`
+  then `done scan=...` with no `JSONDecodeError`, and `render_status` `pending`, `rendering`, `done`. Call the claim route twice at once
+  as the administrator on a `pending` scan (`POST /d1-surface-scan/<id>/claim` with `{"version": <v>}`, two shells): one `200`, one `409`.
+  As a member: `403`. Then the webhook: the Directus Flow that posts to the worker on a new scan should start the render at once, not after
+  the poller's 60 s pass (the scratch run only had the poller). Record the Directus image version (`docker compose exec directus npx
+  directus --version` or the admin About page). Since: the claim PR (#395).
+- [ ] **SS9 — A version filter on a PATCH on the lab stack (heavy-data-worker, analysis-worker).** On the lab's Directus, with a throwaway
+  tool box: `PATCH /items/tool_boxes/<id>?filter[version][_eq]=99` with `{"notes":"x"}` while its `version` is 1 (administrator token). On
+  the scratch Directus 11.17.4 this wrote the row anyway, bumped `version` and answered an empty `204`. If the lab's Directus does the same,
+  `heavy-data-worker` and `analysis-worker` (their `patch_test_session` / OCC write-back, `docs/api-contract.md` 7.2) fail to parse the
+  empty answer on every versioned write and cannot detect a stale version: file a fix (an endpoint compare-and-set as in #395, or
+  re-read and verify) and fix `docs/api-contract.md` 7.2 and their stubs. Also run one real session through both workers and look for
+  `JSONDecodeError` in their logs. If the answer is a JSON body with `data: null` for the stale write, tick it and correct the note in 7.2.
+  Since: the claim PR (#395).
 
 ### Design system rollout: View rail, title pin, FAST plotter (PR #377)
 
@@ -1709,7 +1745,7 @@ below. "Since" is the surface scan privacy PR (pending).
   a layout saved by the old page (`d1-fast-dashboard-v1`) still restores its tiles and run; unit strings print correctly
   ("C" shown as "°C"). Since: PR #377 (stream D).
 
-### Conform runs (migrations 206 to 208, ADR-0024)
+### Conform runs (migrations 206 to 208, ADR-0025)
 
 - [ ] **C1 — Conform log upload and energy.** On a real Directus (migrations 206 to 208 applied, Directus restarted), create a
   Conform run (method **CF**, the Conform machine, a real input sample, a date, run number 12, die 8 mm) and upload the real
@@ -2755,6 +2791,27 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   operation in the same folder stays unowned, and B no longer sees the file or its 3D view (needs the Alicona privacy change).
   Since: the crawler stamp for scan-linked rows (this PR).
 
+- [ ] **IF91 — An unowned pointer row in a personal or team folder is not rendered (real share, surface-scan worker).** With the
+  worker running against the real share: as Lab Member B, make the `directus_files` row for an `.al3d` that exists in another
+  person's `User/<alias>/` folder and that the crawler has not registered, and add a surface scan of it. Expect the scan to end
+  *failed* with "The file is in a personal folder but is not marked as its owner's", and nothing under `surface-scans/` in MinIO.
+  Run a crawler scan of that person: the row gets the owner stamp, and *Render again* then works for the owner (B still cannot
+  see it). Repeat with a file in a `Shared/<team folder>` that a team claims (`teams.share_folder`): same refusal. A scan of a file
+  elsewhere in the legacy archive still renders, and so does a `Shared/` folder no team claims. Check the worker's token can read
+  `teams` (no *Could not check whether this folder belongs to a team*). Last, find the scans this change stops rendering with the
+  query in `docs/runbooks/surface-scan-worker.md` ("Scans of unowned files in personal folders"), and run the crawler on those folders.
+  Since: forged pointer rows, worker refusal (this PR).
+- [ ] **IF92 — A member cannot create or repoint an archive pointer row (real Directus, `d1-access-guard` file filters).** As a Lab
+  Member: `POST /files` with JSON `{"id": "<uuid5>", "storage": "star", "metadata": {"archive_path": "User/x/y.al3d"}}` (and the
+  same through GraphQL `create_files_item`) answers 403 "Files on the archive share are registered by the system". Then check the
+  Directus log shows the filter ran (Directus names it `files.create`; `items.create` is registered as a fallback). A normal
+  upload through Data Studio and the Force App (multipart, `local` storage, with an image's EXIF) still works, as does editing the
+  title or description of an existing archive row in Data Studio. `PATCH /files/<archive row id>` with a different
+  `metadata.archive_path`, `storage` or `filename_disk` answers 403, and the same calls as an administrator succeed. The crawler
+  and `scripts/index_archive.py` still register files (they write by SQL). If Directus does not fire `files.*` filters on a
+  multipart upload, the guard does not cover that route: report it, do not widen the permission.
+  Since: forged pointer rows, d1-access-guard file filters (this PR).
+
 ### SEM data-bar reader (2026-10-16, OCR tier: sem-reader plan, stream B)
 
 Needs the real share, real FEI/Thermo images and the crawler host. Spec:
@@ -3071,6 +3128,26 @@ records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actio
   `pending` -> `sent`); undo after the restart (still inside the window) cancels it. Apply, restart AFTER the due time without the endpoint having sent it (stop Directus before the 62 s, start it later): the
   sweep sends it on start, once. With no `getSchema`-dependent failure in the log: the timer and the sweep have no request, so `MailService` is given the schema from `getSchema()`; confirm the mail renders and
   arrives (if the transport needs the schema, this is where it would show). Since: bulk actions, PR 2.
+
+### Pointer-row write guard (2026-10-21, migration 206, ADR-0024, d1-server)
+
+Closes the forged pointer row hole (docs/superpowers/specs/2026-10-21-forged-pointer-rows-options.md). The Postgres tests prove the trigger; what only the real stack
+shows is how Directus reaches it, which Directus release is running, and that the indexer and the crawler still register files. Run on a copy of the stack, with two Lab
+Member accounts (A, B) and an administrator.
+
+- [ ] **FP1 — Does the real Directus accept a member-written `star` row, and what does the guard answer?** Note the Directus version (`GET /server/info`). **Before migration 206
+  is applied** (or on a copy that does not have it yet), as B: `POST /files` with JSON `{"id": "<uuid5('file:'+path)>", "storage": "star", "type": "image/tiff",
+  "filename_download": "x.al3d", "metadata": {"archive_path": "<path>"}}` for a path of A's that the crawler has not registered, and the same through GraphQL `create_files_item`; then, on
+  a file B uploaded, `PATCH /files/<id>` with `{"storage": "star"}`. Expect a refusal (*Storage location "star" doesn't exist*) if this Directus release validates the location; if the
+  row is created, the hole was live: record the version and the date, run **FP3**, and do not wait for the rest. **After** migration 206 the same three calls must all fail (a 500 whose message
+  names the archive indexer and the inbox crawler; nothing created or changed). Since: forged pointer rows, ADR-0024.
+- [ ] **FP2 — The indexer and the crawler still write, Directus still edits.** After `make migrate`, a crawler restart and a Directus restart: run `make inbox-crawler-once` and the indexer
+  (`make index-archive`) against a folder with a new `.al3d`: the rows appear (`storage = 'star'`), the crawler stamps the owner, no `insufficient_privilege` in either log. As A in
+  Data Studio: rename a pointer row's title, move it to another folder, add a tag: all work; try to edit its `metadata` JSON so `archive_path` changes: refused. A normal upload (image) and
+  "Replace file" on it, as a Lab Member, still work. A surface scan of a registered file still renders (the worker is unchanged). Since: forged pointer rows, ADR-0024.
+- [ ] **FP3 — Forged rows already in the database (the detection query).** On a copy of the live database run the query in `docs/runbooks/inbox-crawler.md` ("Forged pointer rows"). Expect no
+  rows. For any row, record who made it and when, what scans or links use it, and what you did. Also check `ACTIVITY_RETENTION` in Directus's environment: if it is set, say how far back
+  `directus_activity` goes, since an older row would not be listed. Since: forged pointer rows, ADR-0024.
 
 ## Done
 

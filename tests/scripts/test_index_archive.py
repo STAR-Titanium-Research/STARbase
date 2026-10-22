@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 
 import index_archive as ia  # noqa: E402
+from test_inbox_crawler_world import POINTER_GUARD, migration_up  # noqa: E402
 
 # ---- is_confident_move ----------------------------------------------------------
 
@@ -309,6 +310,10 @@ def sweep_env(tmp_path, monkeypatch):
         "CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid)"
     )
     cur.execute(_fingerprints_ddl())
+    # the pointer-row write guard of migration 206 (ADR-0023): only a session that set d1.archive_writer = 'on' writes a pointer row. The
+    # test's own connection (which seeds rows with _row) declares itself one; index_archive.main() opens its own and must do the same.
+    cur.execute(migration_up(POINTER_GUARD, schema))
+    cur.execute("SELECT set_config('d1.archive_writer', 'on', false)")
     conn.commit()
     root = tmp_path / "star_group1"
     root.mkdir()
@@ -460,3 +465,19 @@ def test_carry_owner_stamp_is_a_no_op_before_the_owner_columns_exist(sweep_env):
     conn, cur, _root = sweep_env
     old, new = _row(cur, "Users/a/z.tif", ".tif"), _row(cur, "Projects/p/z.tif", ".tif")
     ia.carry_owner_stamp(cur, old, new)  # must not raise
+
+
+def test_the_indexer_registers_a_pointer_row_under_the_write_guard(
+    sweep_env, monkeypatch
+):
+    """Migration 206 refuses a storage 'star' insert from a session that is not an archive writer: the indexer's own connection must be one."""
+    conn, cur, root = sweep_env
+    (root / "Users/x").mkdir(parents=True)
+    (root / "Users/x/new.pdf").write_bytes(b"%PDF")
+    monkeypatch.setattr(sys, "argv", ["index_archive.py", "--root", str(root)])
+    assert ia.main() == 0
+    conn.commit()
+    cur.execute(
+        "SELECT storage, metadata::jsonb ->> 'archive_path' FROM directus_files"
+    )
+    assert cur.fetchall() == [("star", "Users/x/new.pdf")]

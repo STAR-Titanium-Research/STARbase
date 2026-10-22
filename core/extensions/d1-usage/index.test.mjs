@@ -361,10 +361,10 @@ test('every statement sent is one of the constant SQL strings, and a lock comes 
     for (const tx of db.txLog) assert.equal(tx[0], SQL.lock, 'each transaction locks the user first');
 });
 
-test('the schema test (tests/phase1_schema.sh) runs the same SQL strings as index.js', () => {
+test('the schema test (tests/schema/120-fingerprints-usage-pins.sh) runs the same SQL strings as index.js', () => {
     // The shell file keeps each statement on one line, with \" for a double quote; compare as the shell sees it.
-    const sh = readFileSync(new URL('../../../tests/phase1_schema.sh', import.meta.url), 'utf8').replaceAll('\\"', '"');
-    for (const [name, sql] of Object.entries(SQL)) assert.ok(sh.includes(sql), `phase1_schema.sh is missing SQL.${name}: ${sql}`);
+    const sh = readFileSync(new URL('../../../tests/schema/120-fingerprints-usage-pins.sh', import.meta.url), 'utf8').replaceAll('\\"', '"');
+    for (const [name, sql] of Object.entries(SQL)) assert.ok(sh.includes(sql), `tests/schema/120-fingerprints-usage-pins.sh is missing SQL.${name}: ${sql}`);
 });
 
 // -- visit, list, decay -------------------------------------------------------------------------

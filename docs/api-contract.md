@@ -430,6 +430,11 @@ caller must:
 2. Re-apply the intended change to the fresh data.
 3. Retry the `PATCH` with the new `version`.
 
+> **Checked 2026-10-22 on Directus 11.17.4 (scratch stack): this guard does not hold for a single-item `PATCH`.** The filter only applies to the
+> read-back after the write, so a stale `version` is still written and the response is an empty `204` for a stale and a matching version alike
+> (no `{ "data": null }`, no body to parse). Do not rely on it for a compare-and-set or parse the response as JSON; the surface-scan worker claims
+> through a SQL route instead (ADR-0023). `heavy-data-worker` and `analysis-worker` still send the filter and are not yet fixed.
+
 ### 7.3 Version field is read-only to callers
 
 Never include `"version"` in a `POST` or `PATCH` body. It is exclusively

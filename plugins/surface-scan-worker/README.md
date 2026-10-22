@@ -6,7 +6,7 @@ for the STARbase 3D viewer. Design: `docs/superpowers/specs/2026-10-15-surface-s
 decisions: ADR-0021 and ADR-0023 (scans follow their file's owner; the result route); operations: `docs/runbooks/surface-scan-worker.md`.
 
 Scaffolded from `plugins/plugin-template` (webhook + rq worker, `check_secret`, fail-closed secret),
-with `heavy-data-worker`'s OCC write pattern.
+with `heavy-data-worker`'s result retry pattern (its claim differs: Directus ignores a version filter on a PATCH, see below).
 
 ## Contract
 
@@ -14,8 +14,11 @@ Row (`surface_scans`, owned by the server stream): the worker picks `render_stat
 claims them. It is a **system actor on an administrator token**, with the archive mounted `:ro` and no
 database credential (ADR-0023), and it writes in exactly two ways:
 
-1. **The claim** (`pending` to `rendering`): `PATCH /items/surface_scans/<id>?filter[version][_eq]=<version read>`
-   with `{render_status: 'rendering'}` only. A stale version matches no row: another job has it, skip.
+1. **The claim** (`pending` to `rendering`): `POST /d1-surface-scan/<id>/claim` (administrators only) with `{version}`, the
+   version read. One `UPDATE ... WHERE render_status = 'pending' AND version = ?`, so two jobs never both win; a `409
+   VERSION_CONFLICT` means another job has the row: skip. It is not a PATCH on purpose: on Directus 11.17 a
+   `filter[version][_eq]` on `PATCH /items/<collection>/<id>` only filters the read-back (the answer is an empty 204 and
+   the write goes through whatever the version), so it cannot be a compare-and-set (checked on a live build, 2026-10-22).
 2. **The outcome**: `POST /d1-surface-scan/<id>/result` (administrators only) with the version read and the id of the file it rendered in the body,
    `{version, directus_files_id, render_status: 'done' | 'failed', render_error?, columns?}`. `columns` is `cache_key,
    source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um,
@@ -23,7 +26,7 @@ database credential (ADR-0023), and it writes in exactly two ways:
    in one transaction with the status; the public row no longer has those columns, so **the worker never
    PATCHes `render_error` or the render columns**, and `directus_client.SCAN_FIELDS` does not read them. A `409
    VERSION_CONFLICT` (the version moved, the row is no longer `rendering`, or it now points at another file)
-   re-reads the row and tries again, as `update_scan` does (up to `OCC_MAX_ATTEMPTS`, default 5); if the re-read
+   re-reads the row and tries again (up to `OCC_MAX_ATTEMPTS`, default 5); if the re-read
    row is no longer `rendering`, or its `directus_files_id` is not the file this job rendered, someone reset or
    repointed it (Render again, a new file) and the result is skipped, never overwritten: a stale job can never
    store one file's grid under another. A `done` result that cannot be
@@ -37,7 +40,8 @@ read in that pass).
 `failed` report for the nil scan (`00000000-0000-0000-0000-000000000000`): an administrator token gets `409`,
 anything else `403`. On `403` (or `401`) it logs CRITICAL, naming `SURFACE_SCAN_DIRECTUS_TOKEN` /
 `WORKER_DIRECTUS_TOKEN` and the administrator requirement, and exits non-zero (the container exits with it);
-`409`/`400` carry on; a connection error, `5xx` or `404` only warn.
+`409`/`400` carry on; a connection error, `5xx` or `404` only warn, and the probe is asked again at the end of every
+poll pass until it gets a definite answer (a cold start of the whole stack reaches the worker before Directus is up).
 
 MinIO, `surface-scans/<cache_key>/`:
 
@@ -68,6 +72,12 @@ filtered list query, so an empty list means "no fingerprint" and a 403 means "no
   from the path again, so a link or file swapped in after the check cannot redirect the read.
 - `archive_path` must be a clean relative path that resolves, after symlinks, inside `ARCHIVE_ROOT`,
   which must be inside `ARCHIVE_MOUNT`.
+- A file below `User/<alias>` (`INBOX_PERSON_DIR`) or below a `Shared/<folder>` that a team claims
+  (`teams.share_folder`) is rendered only when its `directus_files` row carries the owner stamp the crawler
+  writes (`owner_person_id` / `owner_team_id`, ADR-0022). A Lab Member can create the row of a path they know
+  before the crawler has seen the file, and that row passes the id check; without a stamp it is refused, also
+  when a link in the archive leads into such a folder. A failed team lookup refuses a `Shared/` file. Files
+  elsewhere in the archive have no owner by design and render as before.
 - Only the extensions in `archive.ALLOWED_EXTENSIONS` are opened (36 topography instrument formats:
   `al3d opd opdx x3p ibw h5 datx sur plu apx plux vk3 vk4 vk6 vk7 lext zon os3d sdf frt mnt gwy mdt nms oir
   poir ezd nid bcr bcrf tmd zmg mi jpk qep spm`), intersected with the readers the installed
@@ -90,7 +100,7 @@ app/lib/archive.py    path and extension refusal, the read-only open
 app/lib/topography.py SurfaceTopography -> micrometre (rows, cols) array, top row first
 app/lib/grid.py       decimation, grid.bin / meta.json / thumb.png
 app/lib/cache_key.py  the key and the object names
-app/lib/directus_client.py  the claim (PATCH, OCC), post_result / report_result (POST /result, retry on 409), reads
+app/lib/directus_client.py  claim_scan (POST /claim), post_result / report_result (POST /result, retry on 409), reads
 app/lib/minio_client.py
 tests/synthetic.py    writes small .al3d files; no real data is committed
 ```

@@ -123,6 +123,7 @@ describe('SurfaceScanViewer when the rendered data is missing', () => {
 		api.post.mockRejectedValueOnce(httpError(403, [{ extensions: { code: 'FILE_LOCKED' } }]));
 		button(/Render again/)!.click();
 		await vi.waitFor(() => expect(locked).toHaveBeenCalledTimes(1));
+		expect(locked).toHaveBeenCalledWith('s1'); // the id of the scan the request was for, not of whatever is open later
 		expect(text()).toContain(FILE_LOCKED_MESSAGE);
 		expect(rerendered).not.toHaveBeenCalled();
 	});
@@ -138,6 +139,7 @@ describe('SurfaceScanViewer on a scan whose file belongs to someone else', () =>
 		expect(button(/Render again/)).toBeUndefined();
 		expect(document.querySelector('canvas')).toBeNull();
 		expect(locked).toHaveBeenCalledTimes(1); // the panel is told, to reload its list and show the row as a lock tile
+		expect(locked).toHaveBeenCalledWith('s1');
 	});
 	it('says the same when only /grid is refused (its body is bytes), and tells the panel', async () => {
 		const bytes = httpError(403, []);

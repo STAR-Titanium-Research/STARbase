@@ -1,6 +1,6 @@
 -- migrate:up
 -- Conform runs, part 1 of 3: the `conform` process category, method CF, the machine, the lineage link, the code rule and
--- the inline parameter columns (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Data model"; ADR-0024, "Conform is
+-- the inline parameter columns (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Data model"; ADR-0025, "Conform is
 -- its own process category"; plan docs/superpowers/plans/2026-10-21-conform-runs.md, task A1). Part 2 is the next migration
 -- (conform_logs, conform_run_data, access), part 3 the form layout.
 --

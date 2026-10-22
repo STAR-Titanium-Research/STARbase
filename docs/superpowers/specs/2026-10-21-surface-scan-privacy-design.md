@@ -114,7 +114,9 @@ uuid>/result` (`{version: 1, directus_files_id: <nil uuid>, render_status: 'fail
 administrator gets `409 VERSION_CONFLICT` (no such row, nothing written), anyone else `403`. On `403` (or `401`, a token Directus
 does not know) it logs CRITICAL, naming `SURFACE_SCAN_DIRECTUS_TOKEN` / `WORKER_DIRECTUS_TOKEN` and the administrator requirement,
 and exits non-zero (`entrypoint.sh` then takes the container down, so the failure is visible). `409` and `400` carry on; a
-connection error, a `5xx` or a `404` (Directus still starting, endpoint not deployed yet) only log a warning.
+connection error, a `5xx` or a `404` (Directus still starting, endpoint not deployed yet) only log a warning, and the poller asks
+again at the end of every poll pass until it gets a definite answer (a cold start of the whole stack reaches the worker before
+Directus is up, and a non-administrator token must still be caught).
 
 ## STARbase (`packages/starbase-pages/src/pages/surface`)
 

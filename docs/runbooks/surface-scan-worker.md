@@ -47,7 +47,7 @@ endpoint reads and writes. So the worker writes `surface_scans` in two ways only
 
 | Step | Request | Notes |
 |---|---|---|
-| Claim | `PATCH /items/surface_scans/<id>?filter[version][_eq]=<v>` with `{"render_status": "rendering"}` | A stale version means another job has the row: skipped. |
+| Claim | `POST /d1-surface-scan/<id>/claim` with `{version}` | Administrators only; one SQL compare-and-set (`pending` at that `version`). A 409 means another job has the row: skipped. Not a PATCH: Directus 11.17 ignores a `filter[version]` on a single-item PATCH (answers 204 and writes anyway). |
 | Outcome | `POST /d1-surface-scan/<id>/result` with `{version, directus_files_id, render_status: "done" \| "failed", render_error?, columns?}` | Administrators only; one transaction updates the status (only while it is `rendering`, at that `version`, and still pointing at `directus_files_id`, the file the job rendered) and upserts the private row. |
 
 A `409 VERSION_CONFLICT` from the result route means the version moved, the row is no longer
@@ -64,9 +64,12 @@ its `archive_path` (section 4) and renders only archive files.
 
 **Token check at start-up.** Before its loop the poller probes the result route with a harmless `failed`
 report for a scan that does not exist (all-zero uuid): an administrator token gets `409`, a token that is not
-an administrator's gets `403`. On `403` it logs CRITICAL and exits non-zero, so the container stops (and
-restarts, if its policy says so) instead of failing every render silently. `409`/`400` carry on; Directus
-being unreachable, a `5xx` or a `404` (endpoint not deployed yet) only log a warning.
+an administrator's gets `403`. On `403` (or `401`, a token Directus does not know or a blank one) it logs
+CRITICAL and exits non-zero, so the container stops (and restarts, if its policy says so) instead of failing
+every render silently. `409`/`400` carry on; Directus being unreachable, a `5xx` or a `404` (endpoint not
+deployed yet) only log a warning and the probe is **asked again at the end of every poll pass until it gets
+a definite answer** (on a cold start of the whole stack the worker usually starts before Directus is up, and
+a wrong token must still be caught).
 
 ## 2. Start it
 
@@ -109,6 +112,8 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | `The file is not on the archive share ...` | The library file is a local upload, or has no `archive_path`. Only archive files are rendered. |
 | `... (moved or deleted)` | The path in the library no longer exists on the share. Re-run `make index-archive`, then Render again. |
 | `The file's archive_path does not match its id ...` | The file row's `metadata.archive_path` was edited after it was registered: the id of an archive pointer row is derived from its path (`scripts/index_archive.py` `file_id`, the same rule the crawler uses), so a mismatch means someone repointed the row at another file. This is refused on purpose, because every Lab Member can update `directus_files` and could otherwise publish any file under the share (for instance from a personal folder) as a scan. Register the real file (re-run the indexer or let the crawler find it) and add that one. |
+| `The file is in a personal folder but is not marked as its owner's ...` / `... in a team folder but is not marked as the team's ...` | The file row has no owner stamp but its path is under `User/<alias>` (`INBOX_PERSON_DIR`) or under a `Shared/<folder>` a team claims. The crawler stamps every file it finds in those folders (ADR-0022), so an unstamped row was made another way: by a Lab Member who knew the path (the hole this refusal closes), or by the indexer before migration 196 and never met by the crawler since. Run the crawler on that person or team (the scan stamps the row, which is safe: the id is derived from the path), then Render again. Section "Scans of unowned files in personal folders" lists the affected scans. |
+| `Could not check whether this folder belongs to a team` | The worker could not read `teams` (a 403 or Directus down) for a file under `Shared/`; it refuses rather than guess. Give the worker's user read access on `teams` and Render again. |
 | `The file resolves outside the archive` / `escapes the archive` | A bad `archive_path`; the worker refused it. Fix the file row. |
 | `The file could not be read as al3d: ...` | The file is corrupt, truncated or not what its extension says. |
 | `The file does not state its length unit` | The scale is unknown; the worker will not guess. |
@@ -118,8 +123,8 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | `The render did not finish within the time limit` | Slow share or huge file. Raise `SURFACE_SCAN_JOB_TIMEOUT_SECONDS`. |
 | Rows stay `pending` | The container is not running (it is in the `archive` profile), or the worker's token cannot read `surface_scans`. `docker compose logs surface-scan-worker`. |
 | Log (CRITICAL, then the poller and the container exit): `the surface-scan worker's Directus token is not an administrator's (the result route answered 403)` | The start-up probe found that `SURFACE_SCAN_DIRECTUS_TOKEN` (or `WORKER_DIRECTUS_TOKEN`, when that is blank) belongs to a user that is not an administrator, so no outcome could ever be recorded. Put the static token of an **administrator** machine user there and `docker compose up -d surface-scan-worker`. A `401` in the same message means Directus does not know the token at all. |
-| Log: `token probe: Directus could not be reached` or `unexpected answer 404/5xx` | Directus was still starting, or the endpoint extension without `/result` is deployed. Only a warning; the worker carries on. If it stays, see the `404` row below. |
-| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` until the poller fails them | The worker's token is not an administrator's (the start-up probe should have stopped the poller; a role changed afterwards). The result route is administrators only; make the machine user an administrator (the claim works for lesser roles, the outcome does not). |
+| Log: `token probe: Directus could not be reached` or `unexpected answer 404/5xx` | Directus was still starting, or the endpoint extension without `/result` is deployed. Only a warning; the worker carries on and asks again at the end of each poll pass until it gets a definite answer. If it stays, see the `404` row below. |
+| Log: `could not write the final state of scan=...` with `403 Forbidden` on `/d1-surface-scan/<id>/result`; rows stay `rendering` (the poller's own failure report goes to the same administrators-only route and is refused too) | The worker's token is not an administrator's (the start-up probe stops the poller as soon as Directus answers; a role changed afterwards would get here). The result route is administrators only; make the machine user an administrator. A non-administrator token cannot even claim a row any more (a member cannot read `render_status` or `directus_files_id`, migration 205), so a token that was never an administrator's shows up as the CRITICAL probe line first. |
 | Same log with `404` on `/d1-surface-scan/<id>/result` | Directus is running the old endpoint extension (no `/result` route). Deploy the release as a whole: stop Directus and the worker, migrate, restart Directus and flush Redis. |
 | Same log with `400` | The endpoint refused the body (a missing or malformed `directus_files_id`, a bad `cache_key` or a wrongly typed column). A worker bug: the log line has Directus's message. |
 | Log: `skip result scan=... it now points at file=...` | A job finished a render of a file the scan no longer points at (it was repointed, perhaps claimed again): the report was dropped on purpose and the new file is rendered by its own job. Nothing to do. |
@@ -133,6 +138,26 @@ back to `pending` and clears the private error; it needs a person who can read t
 Setting `render_status` to `pending` directly (as an administrator) also works: the next result report
 overwrites every private render column. (Only a change of the scan's file resets the private render data: the
 reset trigger on `surface_scans` fires on `directus_files_id` alone.)
+
+### Scans of unowned files in personal folders
+
+The worker refuses these (the rows of section 4) until the crawler has stamped the file. To list the scans affected, for example after
+deploying the refusal or when a scan reports it:
+
+```sql
+SELECT s.scan_id, s.render_status, f.id AS file_id, f.metadata::jsonb->>'archive_path' AS archive_path
+  FROM surface_scans s
+  JOIN directus_files f ON f.id = s.directus_files_id
+ WHERE f.owner_person_id IS NULL AND f.owner_team_id IS NULL
+   AND ( lower(split_part(f.metadata::jsonb->>'archive_path', '/', 1)) IN ('user', 'users')
+      OR (lower(split_part(f.metadata::jsonb->>'archive_path', '/', 1)) = 'shared'
+          AND lower(split_part(f.metadata::jsonb->>'archive_path', '/', 2))
+              IN (SELECT lower(share_folder) FROM teams WHERE share_folder IS NOT NULL)) );
+```
+
+A row here is either a legacy file nobody has stamped (run the crawler for that person or team) or a pointer row someone made by hand:
+if the row's file is in a folder whose owner did not add the scan, treat it as the second kind and tell the folder's owner. If your
+share's personal folder has another name than `User`/`Users`, add it to the first `IN` list (it is `INBOX_PERSON_DIR`).
 
 ## 5. Cleaning up
 

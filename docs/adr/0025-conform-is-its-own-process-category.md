@@ -1,4 +1,4 @@
-# ADR-0024 — Conform is its own process category
+# ADR-0025 — Conform is its own process category
 
 - **Status:** Accepted
 - **Date:** 2026-10-21

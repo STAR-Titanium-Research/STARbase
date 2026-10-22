@@ -16,7 +16,7 @@
 
 **Tech Stack:** Postgres/dbmate migrations, Directus metadata, Vue 3 + TypeScript (vitest, vue-tsc), plain-ESM Directus extensions (node:test).
 
-**Spec:** [`docs/superpowers/specs/2026-10-21-conform-runs-design.md`](../specs/2026-10-21-conform-runs-design.md). Read it before starting. ADR-0024 and the `CONTEXT.md` terms (Conform run, Conform log, Run window, Step, Feedstock, Extrusion) are binding.
+**Spec:** [`docs/superpowers/specs/2026-10-21-conform-runs-design.md`](../specs/2026-10-21-conform-runs-design.md). Read it before starting. ADR-0025 and the `CONTEXT.md` terms (Conform run, Conform log, Run window, Step, Feedstock, Extrusion) are binding.
 
 ## Status
 

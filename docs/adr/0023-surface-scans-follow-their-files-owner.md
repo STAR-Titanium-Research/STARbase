@@ -37,7 +37,7 @@ grid without asking who owns the file, and a member can add someone else's owned
 ## Consequences
 
 - One release: the migration drops columns the current endpoint, worker and panel read.
-- A new admin-only route is the worker's only write path for render results; the worker token is an administrator machine user.
+- Two new admin-only routes are the worker's only write path: `POST /:id/claim` (a SQL compare-and-set, because Directus 11.17 ignores a version filter on a single-item PATCH) and `POST /:id/result`; the worker token is an administrator machine user.
 - A person who owns files may add scans of them that others see only as placeholders; scans of unowned files stay lab-wide.
 - The inbox's wording "visible to every lab member" is wrong for owned files and is changed in the inbox session's files.
 - Existing scans whose adder cannot read their owned file are reported, not deleted.
@@ -47,11 +47,13 @@ grid without asking who owns the file, and a member can add someone else's owned
     `insert_id`. This is an integrity matter, not a confidentiality one, and is left as it is.
   - The public columns `updated_at` and `version` of a scan stay readable to members and move when a render is claimed and
     reported, so a non-owner can see roughly when a scan of an owned file was rendered. Nothing else about the render is exposed.
-  - **Forged pointer rows (predates this change, not fixed here).** The Lab Member rules on `directus_files` let a member write
+  - **Forged pointer rows (predates this change, not fixed here; closed afterwards, see ADR-0022's consequence of 2026-10-21: the
+    worker refuses an unowned row in a personal or tied team folder, and `d1-access-guard` refuses a member's write of
+    `archive_path` or `storage = 'star'`).** The Lab Member rules on `directus_files` let a member write
     `id`, `storage`, `filename_disk` and `metadata`, so a member who knows the exact path of a file in someone's personal folder
     that the crawler has not registered yet can create a row with the id the indexer would derive (`uuid5('file:'+path)`),
     add a scan of it (it is unowned, so the guard passes) and have the worker render it; the crawler's later insert conflicts and
     its owner stamp skips a file that already has a scan. The worker's id-matches-path check (PR 312) cannot tell such a row from a
-    crawler-made one. It is tracked as its own task (provenance a member cannot write: member field lists, or the crawler
-    refusing or stamping a conflicting row) and is not part of this ADR.
+    crawler-made one. It is not part of this ADR: [ADR-0024](./0024-pointer-rows-are-written-only-by-the-archive-writers.md)
+    closes it (a database trigger so only the indexer and the crawler write pointer rows, migration 206).
 - Residual unverified behaviour of Directus on a live build is checked by physical-test items SS5 and SS6.

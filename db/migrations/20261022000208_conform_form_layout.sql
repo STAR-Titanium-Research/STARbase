@@ -1,6 +1,6 @@
 -- migrate:up
 -- Conform runs, part 3 of 3: the Conform field group on the Operation form
--- (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Form layout"; ADR-0024; plan task A3). Directus metadata only:
+-- (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Form layout"; ADR-0025; plan task A3). Directus metadata only:
 -- no stored value changes. Follows the form layout of migration 20261014000174 and its group conventions.
 --
 -- `grp_conform` ("Conform") sits at sort 105 on manufacturing_operations, between Sample preparation (100) and Notes & files

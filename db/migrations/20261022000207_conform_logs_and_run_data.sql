@@ -1,6 +1,6 @@
 -- migrate:up
 -- Conform runs, part 2 of 3: `conform_logs` and `conform_run_data`, the run-window overlap guard and their access rules
--- (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Conform logs and run data"; ADR-0024; plan task A2). Part 1 is
+-- (docs/superpowers/specs/2026-10-21-conform-runs-design.md, "Conform logs and run data"; ADR-0025; plan task A2). Part 1 is
 -- the previous migration (the `conform` category), part 3 the form layout.
 --
 -- A Conform log is the machine's 1 Hz CSV of one session, uploaded once, processed in the browser and stored normalised
