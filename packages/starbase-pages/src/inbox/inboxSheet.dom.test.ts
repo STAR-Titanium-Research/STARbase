@@ -387,3 +387,48 @@ describe('the View rail', () => {
 		}
 	});
 });
+
+describe('the saved measurements', () => {
+	const shape = (n: number) => ({ measurement_id: `a000000${n}-0000-4000-8000-000000000000`, kind: 'line' as const, points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], label: '', created_at: `2026-10-22T09:00:0${n}.000Z`, author_name: 'Ann Lee', can_edit: true });
+
+	it('the sheet says only how many shapes were saved on the file, and follows the selected file', async () => {
+		const a = withThumb(A);
+		const b = withThumb(B);
+		const c = withThumb(C);
+		await mount([a, b, c], { measurements: { [a.candidate_id]: [shape(1), shape(2)], [b.candidate_id]: [shape(1)] } });
+		thumbButton('3fa9c1d2').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('2 saved measurements'));
+		expect(document.querySelector('[data-test="rail-measurements"]')).toBeNull(); // the list itself is the view box's
+		thumbButton('9ab3c4d5').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('1 saved measurement'));
+		thumbButton('5cd6e7f8').click();
+		await vi.waitFor(() => expect(sheetName()).toBe('5cd6e7f8_C3.tif'));
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')).toBeNull()); // none saved: no line
+	});
+
+	it('reads the count again when the window is looked at again (a save in the view box), keeping the old number until the answer', async () => {
+		const a = withThumb(A);
+		await mount([a], { measurements: { [a.candidate_id]: [shape(1)] } });
+		thumbButton('3fa9c1d2').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('1 saved measurement'));
+		const before = fake.calls.filter((x) => x.path.endsWith('/measurements')).length;
+		fake.measurements.get(a.candidate_id)!.push(shape(2));
+		window.dispatchEvent(new Event('focus'));
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('2 saved measurements'));
+		expect(fake.calls.filter((x) => x.path.endsWith('/measurements')).length).toBe(before + 1);
+	});
+
+	it('says nothing when the count cannot be read, and asks nothing for a file with no picture', async () => {
+		const a = withThumb(A);
+		const doc = withThumb(B, { has_thumbnail: false });
+		await mount([a, doc], { measureFails: true });
+		thumbButton('3fa9c1d2').click();
+		await vi.waitFor(() => expect(sheet()).not.toBeNull());
+		await vi.waitFor(() => expect(fake.calls.some((x) => x.path.endsWith('/measurements'))).toBe(true));
+		expect(document.querySelector('[data-test="sheet-measurements"]')).toBeNull();
+		const asked = fake.calls.filter((x) => x.path.endsWith('/measurements')).length;
+		nameButton('9ab3c4d5').click();
+		await vi.waitFor(() => expect(sheetName()).toBe('9ab3c4d5_B2.tif'));
+		expect(fake.calls.filter((x) => x.path.endsWith('/measurements')).length).toBe(asked);
+	});
+});

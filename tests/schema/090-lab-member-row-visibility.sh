@@ -525,6 +525,7 @@ DROP TABLE IF EXISTS d1_private.inbox_prefs;
 DROP TABLE IF EXISTS d1_private.inbox_crawler_state;
 DROP TABLE IF EXISTS d1_private.inbox_scan_requests;
 DROP TABLE IF EXISTS d1_private.inbox_ignored_dirs;
+DROP TABLE IF EXISTS d1_private.inbox_measurements;
 DROP TABLE IF EXISTS d1_private.inbox_dirs;
 DROP TABLE IF EXISTS d1_private.file_thumbnails;
 DROP TABLE IF EXISTS d1_private.file_candidates;
