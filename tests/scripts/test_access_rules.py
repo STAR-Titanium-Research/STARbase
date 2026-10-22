@@ -727,7 +727,9 @@ def test_every_leaf_matches_the_signed_in_user_or_the_restricted_flag():
                 row["collection"] == "label_templates"
             ):  # migration 164: a member edits their own templates
                 allowed.add(("user_created", "$CURRENT_USER"))
-            if row["collection"] == "conform_logs":  # migration 207: the uploader reads and deletes their own log
+            if (
+                row["collection"] == "conform_logs"
+            ):  # migration 207: the uploader reads and deletes their own log
                 allowed.add(("created_by", "$CURRENT_USER"))
             assert (key, value) in allowed, (
                 row["collection"],
