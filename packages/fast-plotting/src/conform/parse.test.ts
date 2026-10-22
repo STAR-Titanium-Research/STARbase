@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { excelVariant, fixtureText } from './__fixtures__/load';
 import { ConformLogError } from './channels';
-import { parseConformCsv } from './parse';
+import { decodeLogBytes, parseConformCsv } from './parse';
 
 const EXPECTED_KEYS = [
 	'wheel_speed_rpm', 'wheel_speed_demand_rpm', 'motor_current_a', 'motor_torque_pct', 'tooling1_c', 'tooling2_c',
@@ -40,6 +40,32 @@ describe('parseConformCsv', () => {
 		expect(x.startMs).toBe(clean.startMs);
 		expect(x.channels.find((c) => c.key === 'tooling2_c')!.note).toBe('Die exit');
 		expect(x.values.tooling2_c[10]).toBe(clean.values.tooling2_c[10]);
+	});
+
+	it('reads a Windows-1252 export (Excel "CSV (Comma delimited)") to the same channel keys', () => {
+		// Latin-1 bytes: a degree sign is the single byte 0xB0, which is not valid UTF-8.
+		const bytes = Uint8Array.from(Buffer.from(excelVariant(fixtureText).replace(/^\uFEFF/, '').replace(/Â°/g, '°'), 'latin1'));
+		expect(() => new TextDecoder('utf-8', { fatal: true }).decode(bytes)).toThrow();
+		const decoded = decodeLogBytes(bytes.buffer);
+		expect(decoded).toContain('Tooling Temperature 1 (°C)');
+		const p = parseConformCsv(decoded);
+		const clean = parseConformCsv(fixtureText);
+		expect(p.channels.map((c) => c.key)).toEqual(clean.channels.map((c) => c.key));
+		expect(p.channels.map((c) => c.unit)).toEqual(clean.channels.map((c) => c.unit));
+		expect(p.channels.map((c) => c.key)).toEqual(expect.arrayContaining(['tooling1_c', 'tooling2_c', 'wheel_temp_c']));
+	});
+
+	it('round-trips a UTF-8 file, with or without a BOM', () => {
+		const utf8 = new TextEncoder().encode(fixtureText);
+		expect(decodeLogBytes(utf8)).toBe(fixtureText);
+		expect(decodeLogBytes(utf8.buffer)).toBe(fixtureText);
+		const withBom = Uint8Array.from([0xef, 0xbb, 0xbf, ...utf8]);
+		expect(parseConformCsv(decodeLogBytes(withBom)).n).toBe(900);
+	});
+
+	it('maps a replacement character before C to the degree sign', () => {
+		const csv = ['Timestamp,Tooling Temperature 1 (\uFFFDC)', '2025-01-15T10:00:00Z,300', '2025-01-15T10:00:01Z,301'].join('\n');
+		expect(parseConformCsv(csv).channels.map((c) => c.key)).toEqual(['tooling1_c']);
 	});
 
 	it('maps annotated headers and passes a unit-bearing unknown header through', () => {

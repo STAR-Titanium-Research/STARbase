@@ -27,6 +27,20 @@ export function parseIsoMs(s: string): number {
 	return ms;
 }
 
+/**
+ * The text of an uploaded log, from its raw bytes. UTF-8 when the bytes are valid UTF-8 (a BOM is dropped); otherwise
+ * Windows-1252, which is what Excel's "CSV (Comma delimited)" writes (a degree sign is the single byte 0xB0).
+ * Reading such a file as UTF-8 text would turn every degree sign into U+FFFD and lose the temperature channels.
+ */
+export function decodeLogBytes(buf: ArrayBuffer | ArrayBufferView): string {
+	const bytes = ArrayBuffer.isView(buf) ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : new Uint8Array(buf);
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+	} catch {
+		return new TextDecoder('windows-1252').decode(bytes);
+	}
+}
+
 function splitLine(line: string): string[] {
 	if (!line.includes('"')) return line.split(',');
 	const out: string[] = [];

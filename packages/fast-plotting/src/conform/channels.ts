@@ -58,6 +58,7 @@ export function cleanHeader(raw: string): string {
 		.replace(/^﻿/, '')
 		.replace(/Â(?=[°º])/g, '')
 		.replace(/º/g, '°')
+		.replace(/\uFFFD(?=C)/g, '°')   // a degree sign a lossy decode replaced
 		.replace(/\s+/g, ' ')
 		.trim();
 }
