@@ -17,6 +17,23 @@ export function updateAccess(body: unknown): boolean | null {
 	return typeof access === 'boolean' ? access : null;
 }
 
+// Ask Directus whether the signed-in user may update this record: true / false, or null when the answer does not say (or the
+// request failed: the caller then offers the control and the server decides). A Lab Viewer is false without asking. The one
+// place that asks, shared by `useCanUpdate` (the pages) and by hosts that answer it for a plotter (STARbase's Conform plotter).
+export async function fetchCanUpdate(
+	api: { get(url: string, config?: any): Promise<any> },
+	collection: string,
+	id: string,
+	viewer?: boolean | null,
+): Promise<boolean | null> {
+	if (viewer) return false;
+	try {
+		return updateAccess((await api.get(itemPermissionsUrl(collection, id))).data);
+	} catch {
+		return null;
+	}
+}
+
 // A Lab Viewer (migration 185) reads everything and changes nothing, so no page offers it a control that changes something, whatever
 // Directus answers about one record. `viewer` is host.canViewAllAccess (known from the first frame, read off the account role), so the
 // control is never on screen while the answer is still on its way. Directus would refuse the write anyway (the viewer's policy has no write
