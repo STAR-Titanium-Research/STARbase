@@ -30,11 +30,11 @@ class FakeWorld:
         self.fingerprints: dict[str, dict] = {}
         self.team_folders: list[str] | Exception = ["Alloys"]
         self.objects: dict[str, tuple[bytes, str]] = {}
-        self.history: list[tuple[str, dict]] = []  # every PATCH: (scan_id, payload)
+        self.history: list[tuple[str, dict]] = []  # every claim: (scan_id, payload)
         self.results: list[
             tuple[str, dict]
         ] = []  # every POST /result: (scan_id, body incl. version)
-        self.conflicts_to_inject = 0  # claim PATCHes that lose the race
+        self.conflicts_to_inject = 0  # claims that lose the race
         self.result_conflicts_to_inject = (
             0  # result POSTs answered 409 (the row moves on first)
         )
@@ -101,7 +101,9 @@ class FakeWorld:
     def claim_scan(self, scan_id, version):
         """The claim route: 409 unless the row is still pending at the version read."""
         row = self.rows[scan_id]
-        self.history.append((scan_id, {"render_status": "rendering"}))
+        self.history.append(
+            (scan_id, {"render_status": "rendering", "claim_version": version})
+        )
         if self.conflicts_to_inject:
             self.conflicts_to_inject -= 1
             row["version"] += 1
@@ -170,7 +172,7 @@ class FakeWorld:
         return item[0] if item else None
 
     def statuses(self) -> list[str]:
-        """The statuses written, in order: the claim's PATCH, then the result's POST."""
+        """The statuses written, in order: the claim's POST, then the result's POST."""
         patched = [p["render_status"] for _, p in self.history if "render_status" in p]
         return patched + [body["render_status"] for _, body in self.results]
 
