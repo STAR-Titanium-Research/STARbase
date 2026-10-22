@@ -166,7 +166,7 @@ function onKeydown(e: KeyboardEvent): void {
 					<p :id="`${uid}-lead`" class="lead">{{ lead }}</p>
 					<FieldForm :collection="`markdone-${collection}`" :fields="fields" :model-value="values" :readonly="busy" @update:model-value="onChange" />
 					<div v-if="refusals.length" class="refused" :class="{ warnings: onlyWarnings }" role="alert">
-						<p class="why">{{ onlyWarnings ? 'Worth a look, but you can still mark it done:' : 'Not marked done yet:' }}</p>
+						<p class="why">{{ onlyWarnings ? 'You can still mark these done:' : 'Not marked done yet:' }}</p>
 						<ul>
 							<li v-for="(c, i) in refusals" :key="i" :class="c.level" :data-level="c.level">{{ c.text }}</li>
 						</ul>
@@ -203,11 +203,11 @@ function onKeydown(e: KeyboardEvent): void {
 .x:hover:not([aria-disabled='true']) { background: var(--d1-tile); }
 .body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .lead { margin: 0; font-size: var(--fs-md, 13px); color: var(--d1-dim); }
-.refused { max-height: 30vh; overflow-y: auto; padding: 8px 12px; border: 1px solid var(--d1-bad); border-radius: 8px; background: color-mix(in srgb, var(--theme--danger) 10%, var(--d1-surface)); font-size: var(--fs-sm, 12px); }
+.refused { max-height: 30vh; overflow-y: auto; padding: 8px 12px; border: 1px solid var(--d1-bad); border-radius: 8px; background: color-mix(in srgb, var(--theme--danger) 14%, var(--d1-surface)); font-size: var(--fs-sm, 12px); }
 .why { margin: 0 0 4px; font-weight: 650; color: var(--d1-bad); }
 .refused ul { margin: 0; padding-left: 18px; }
 .refused li.warn { color: var(--d1-warn); }
-.refused.warnings { border-color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 10%, var(--d1-surface)); }
+.refused.warnings { border-color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 18%, var(--d1-surface)); }
 .foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--d1-line); }
 .grow { flex: 1; }
 .btn {

@@ -4,7 +4,7 @@
 
 import { computed, ref, shallowRef } from 'vue';
 import type { Check, HostApi } from '@d1/ui';
-import { conformWindowChecks, readConformRuns } from './conformChecks';
+import { conformWindowChecks, readConformRuns, readPassCodes } from './conformChecks';
 import type { ContainerNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
 import type { EditMode } from './useEditMode';
@@ -91,7 +91,10 @@ export function useMarkDone(o: { edit: EditMode; map: ProcessMap; /** Reads a Co
 	/** A Conform run with a log and no window: a warning in the dialog (the server never refuses it). Dropped if the dialog moved on. */
 	async function warnAboutWindows(t: MarkTarget | null): Promise<void> {
 		if (!t?.conform || !o.api) return;
-		const found = conformWindowChecks(await readConformRuns(o.api, t.ids));
+		const runs = await readConformRuns(o.api, t.ids);
+		const lacking = conformWindowChecks(runs);
+		if (!lacking.length) return;
+		const found = conformWindowChecks(runs, await readPassCodes(o.api, lacking.map((c) => c.key)));
 		if (found.length && open.value && opened.value === t && !busy.value && !checks.value.length) checks.value = found;
 	}
 	function cancel(): void {

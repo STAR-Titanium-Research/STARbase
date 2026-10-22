@@ -139,7 +139,9 @@ describe('Mark done', () => {
 
 describe('Mark done of a Conform run with a log and no window', () => {
 	const conformCard = (over: Partial<ContainerNode> = {}) => container({ category: 'conform', code: '17-03-25-CF-012', ...over });
-	const runs = (rows: unknown[]) => ({ get: vi.fn(async () => ({ data: { data: rows } })) });
+	const runs = (rows: unknown[]) => ({
+		get: vi.fn(async (path: string) => ({ data: { data: path === '/items/manufacturing_operations' ? [{ operation_id: 'o1', pass_code: '17-03-25-CF-012' }] : rows } })),
+	});
 
 	it('marks a Conform card as one that can be warned about, and no other', () => {
 		expect(markTargetOf(conformCard())).toMatchObject({ ids: ['o1'], conform: true });
@@ -152,7 +154,7 @@ describe('Mark done of a Conform run with a log and no window', () => {
 		md.show();
 		await settle();
 		expect(md.open.value).toBe(true);
-		expect(md.checks.value).toEqual([{ key: 'o1', level: 'warn', text: 'Conform run window not set' }]);
+		expect(md.checks.value).toEqual([{ key: 'o1', level: 'warn', text: '17-03-25-CF-012: no run window, so no summary, energy or steps.' }]);
 		await md.confirm({ date: '2026-10-15', personId: null });
 		expect(s.bodies).toEqual([{ collection: 'manufacturing_operations', ids: ['o1'], date: '2026-10-15' }]);
 		expect(md.open.value).toBe(false);
