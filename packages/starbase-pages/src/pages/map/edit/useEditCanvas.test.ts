@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, ref } from 'vue';
-import type { DraftBody } from '@d1/ui';
+import type { Check, DraftBody } from '@d1/ui';
 import type { MapNode, RecordNode } from '../model/types';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { fakeServer, settle } from './fakeBuildServer';
@@ -44,7 +44,7 @@ function setupDom(sockets: ReturnType<typeof socketEl>[], over: { empty?: boolea
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 
-async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef, socketId: string | null) => boolean) {
+async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [], dom: { empty?: boolean } = {}, dropWire?: (s: SocketRef, socketId: string | null) => boolean, canvasOver: Record<string, unknown> = {}) {
 	const server = fakeServer();
 	server.s.seed('d', body);
 	const route = reactive({ path: '/map', query: { edit: 'd' } as Record<string, unknown> });
@@ -55,7 +55,7 @@ async function setup(body: DraftBody, sockets: ReturnType<typeof socketEl>[] = [
 	const opened: MenuTarget[] = [];
 	const nodes: MapNode[] = [];
 	const map = { graph: reactive({ value: { nodes } }), clearHover: vi.fn() } as never;
-	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 10, y: y - 20 }), remeasure: async () => undefined } as never;
+	const canvas = { toFlow: (x: number, y: number) => ({ x: x - 10, y: y - 20 }), remeasure: async () => undefined, ...canvasOver } as never;
 	const connecting: MenuTarget[] = [];
 	const ec = useEditCanvas({ edit, map, canvas, canvasEl, openMenu: (t) => void opened.push(t), openConnect: (t) => void connecting.push(t), dropWire });
 	return { edit, ec, opened, connecting, style, server, map: map as { clearHover: ReturnType<typeof vi.fn> } };
@@ -313,28 +313,72 @@ describe('badges and ＋ output', () => {
 	const container = (rowId: string, extra: Record<string, unknown> = {}): MapNode =>
 		({ id: `c:${rowId}`, type: 'container', kind: 'operation', group: { id: `c:${rowId}`, kind: 'operation', rowIds: [rowId], batch: null }, title: 'x', code: '', category: null, rows: [], slots: [], settings: [], bundled: false, probable: false, ...extra }) as MapNode;
 
-	it('count what blocks Create on a card, with the words', async () => {
+	it('counts what is still to fill in on a card (amber `fill`), with the words', async () => {
 		const { ec } = await setup(twoCards());
 		const op = container('draft:n3');
-		expect(ec.mapEdit.badge(op)).toMatchObject({ count: 1, level: 'block' });
+		expect(ec.mapEdit.badge(op)).toMatchObject({ level: 'fill' });
 		expect(ec.mapEdit.badge(op)!.text).toMatch(/needs a sample/);
+		expect(ec.mapEdit.badge(op)!.count).toBeGreaterThanOrEqual(1);
 		expect(ec.mapEdit.badge(container('recorded'))).toBeNull();
 	});
 
-	it('show an amber badge, not a red one, on a card with only warnings (an operation with no machine yet)', async () => {
+	it('an operation with no machine yet is "fill", not "refused"', async () => {
 		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' } }, { type: 'wire', from: { key: 'n1' }, to: { key: 'n2' } }]);
 		const { ec } = await setup(body);
 		const badge = ec.mapEdit.badge(container('draft:n3'));
-		expect(badge).toMatchObject({ level: 'warn' });
+		expect(badge).toMatchObject({ level: 'fill' });
 		expect(badge!.count).toBeGreaterThan(0);
 		expect(badge!.text).toMatch(/No machine yet/);
 	});
 
-	it('show only a warning on a card that is not blocking (a sample whose record changed since it was added)', async () => {
+	it('is "refused" only for what the server alone can tell (SERVER_ONLY_CODES), and then counts only those', async () => {
+		const { ec, edit } = await setup(twoCards());
+		const op = container('draft:n3');
+		const mine = (edit.checks as { value: Check[] }).value;
+		expect(mine.length).toBeGreaterThan(0);
+		const server: Check[] = [{ key: 'n2', level: 'block', text: 'You may not change this operation.', code: 'PERMISSION' }];
+		(edit as { checks: unknown }).checks = { value: [...mine, ...server] };
+		expect(ec.mapEdit.badge(op)).toEqual({ count: 1, text: 'You may not change this operation.', level: 'refused' });
+		// a code the client's own checks cover (REQUIRED, STRUCTURE) is not the server's alone
+		(edit as { checks: unknown }).checks = { value: [{ key: 'n2', level: 'block', text: 'Fill in it.', code: 'REQUIRED' }] };
+		expect(ec.mapEdit.badge(op)).toMatchObject({ level: 'fill' });
+	});
+
+	it('a card that has only a warning of its own (a sample whose record changed since it was added) is "fill"', async () => {
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }]);
 		const { ec } = await setup(body);
 		const card = { id: 's:s1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's1', code: 'PS-001' }, ins: [], outs: [] } as MapNode;
-		expect(ec.mapEdit.badge(card)).toMatchObject({ level: 'warn', text: expect.stringMatching(/Changed since you added it/) });
+		expect(ec.mapEdit.badge(card)).toMatchObject({ level: 'fill', text: expect.stringMatching(/Changed since you added it/) });
+	});
+
+	it('hands a card its fields: a new sample, a new operation once its kind is chosen, nothing in view mode or for a recorded one', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' } }]);
+		const { ec, edit } = await setup(body);
+		const sampleNode = { id: 's:draft:n1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 'draft:n1', code: 'New sample' }, ins: [], outs: [], draft: true } as MapNode;
+		expect(ec.mapEdit.fieldsOf?.(sampleNode)?.key).toBe('n1');
+		expect(ec.mapEdit.fieldsOf?.(container('draft:n3'))).toBeNull(); // no kind chosen yet: the header and the dropdown only
+		expect(ec.mapEdit.fieldsOf?.(container('draft:n5'))?.key).toBe('n4');
+		expect(ec.mapEdit.fieldsOf?.(container('recorded'))).toBeNull();
+		(edit as { editing: unknown }).editing = { value: false };
+		expect(ec.mapEdit.fieldsOf?.(sampleNode)).toBeNull();
+	});
+
+	it('when a card grows it is measured, then room is made round it', async () => {
+		const calls: string[] = [];
+		const { ec } = await setup(twoCards(), [], {}, undefined, { remeasure: async (id: string) => void calls.push(`remeasure ${id}`), reflow: async () => void calls.push('reflow') });
+		ec.mapEdit.grew?.('op:b');
+		await new Promise((r) => setTimeout(r, 0));
+		expect(calls).toEqual(['remeasure op:b', 'reflow']);
+	});
+
+	it('several cards growing in one tick (a saved draft opening) are measured together and the room is made once', async () => {
+		const calls: string[] = [];
+		const { ec } = await setup(twoCards(), [], {}, undefined, { remeasure: async (...ids: string[]) => void calls.push(`remeasure ${ids.join(',')}`), reflow: async () => void calls.push('reflow') });
+		ec.mapEdit.grew?.('op:b');
+		ec.mapEdit.grew?.('s:a');
+		ec.mapEdit.grew?.('op:b');
+		await new Promise((r) => setTimeout(r, 0));
+		expect(calls).toEqual(['remeasure op:b,s:a', 'reflow']);
 	});
 
 	it('lists the sockets of a card that have a wire, from the drawn graph', async () => {

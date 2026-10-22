@@ -11,13 +11,14 @@
 // anywhere else it does nothing. (A wire's end dragged off an input that has one and dropped on empty canvas takes the wire off.) No gesture needs dragging: Enter on a focused socket opens its menu too, and C its "Connect to…" (E21).
 
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
-import type { DraftKey } from '@d1/ui';
+import type { DraftItem, DraftKey } from '@d1/ui';
 import type { KindPick, MapEdit } from '../nodes/actions';
 import { nodeOfSocket } from '../model/sockets';
 import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
-import { blocking, warnings } from './checks';
+import { cardItemOf } from './cardFields';
+import { SERVER_ONLY_CODES } from './checks';
 import type { MenuTarget } from './menuTarget';
 import { onEmptyCanvas, socketSpots } from './canvasHits';
 import type { DraftAction } from './draft';
@@ -262,16 +263,17 @@ export function useEditCanvas(o: {
 	}
 
 	// ---- badges and ＋ output ---------------------------------------------------------------------------------------
-	const blockers = computed(() => blocking(edit.checks.value));
-	const warned = computed(() => warnings(edit.checks.value));
-	/** What a card says about its checks: the things that block Create (red), else the warnings (amber); nothing when it has none. */
-	function badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null {
+	/**
+	 * What a card says about its checks (K8): what the person can still fill in is "missing" (`fill`, amber); only what the server alone can tell
+	 * (a record gone, a permission, a version that moved: `SERVER_ONLY_CODES`) is "refused" (red), and says only that. Nothing when it has none.
+	 */
+	function badge(node: MapNode): { count: number; text: string; level: 'fill' | 'refused' } | null {
 		const keys = draftKeysOfNode(edit.body.value, node);
 		if (!keys.length) return null;
-		const mine = blockers.value.filter((c) => keys.includes(c.key));
-		if (mine.length) return { count: mine.length, text: mine.map((c) => c.text).join(' '), level: 'block' };
-		const soft = warned.value.filter((c) => keys.includes(c.key));
-		return soft.length ? { count: soft.length, text: soft.map((c) => c.text).join(' '), level: 'warn' } : null;
+		const mine = edit.checks.value.filter((c) => keys.includes(c.key));
+		const refused = mine.filter((c) => !!c.code && SERVER_ONLY_CODES.has(c.code));
+		const [list, level] = refused.length ? ([refused, 'refused'] as const) : ([mine, 'fill'] as const);
+		return list.length ? { count: list.length, text: list.map((c) => c.text).join(' '), level } : null;
 	}
 	/** The sockets of a card that have a wire: the rest are spare, and a card shows at most one free one per side (R5). */
 	function wiredSockets(node: MapNode): ReadonlySet<string> {
@@ -294,7 +296,25 @@ export function useEditCanvas(o: {
 		return { kind: item.kind, value: typeof chosen === 'string' && chosen ? chosen : null, methods: edit.catalog.methods.value, testTypes: edit.catalog.testTypes.value, choose: (choice) => edit.setKind(keys, choice) };
 	}
 
-	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets, kind };
+	/** The draft item whose required fields and key settings are typed on this card (K4); nothing in view mode. */
+	const fieldsOf = (node: MapNode): DraftItem | null => (edit.editing.value ? cardItemOf(edit.body.value, node) : null);
+	/**
+	 * The card grew (its fields appeared, or its kind changed them): measure it, then make room round it; cards the person dragged stay where they
+	 * are. A saved draft with several new cards mounts them together: they are measured in one go and the room is made once.
+	 */
+	const grown = new Set<string>();
+	function grew(id: string): void {
+		if (grown.size === 0) {
+			queueMicrotask(() => {
+				const ids = [...grown];
+				grown.clear();
+				void canvas.remeasure(...ids).then(() => canvas.reflow());
+			});
+		}
+		grown.add(id);
+	}
+
+	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets, kind, fieldsOf, grew };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

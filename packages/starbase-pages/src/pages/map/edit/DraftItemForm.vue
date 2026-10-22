@@ -29,8 +29,14 @@ const props = withDefaults(
 		readonly?: boolean;
 		/** Mark every required field that is empty (after a failed Create), not only those the person has been into. */
 		showMissing?: boolean;
+		/** Fields to mark amber as still to fill in (a card's own checks, see FieldForm `flagged`). */
+		flagged?: string[];
+		/** Fields shown but not typed in, among the rest that are (a card's "Made by" on a sample an operation makes). */
+		readonlyFields?: string[];
+		/** Names this form's input ids when the same item is drawn twice (on its card and in the rail), so the labels find their own inputs. */
+		idScope?: string;
 	}>(),
-	{ inherited: undefined, current: undefined, compact: false, keyFields: undefined, readonly: false, showMissing: false },
+	{ inherited: undefined, current: undefined, compact: false, keyFields: undefined, readonly: false, showMissing: false, flagged: undefined, readonlyFields: undefined, idScope: undefined },
 );
 const emit = defineEmits<{
 	/**
@@ -48,8 +54,9 @@ const model = computed(() => (editsRecord.value ? existingModel(props.item, prop
 function onUpdate(next: Record<string, unknown>) {
 	emit('update', editsRecord.value ? existingPatch(props.item, props.current!, next) : patchOf(props.item, next));
 }
+const overrides = computed(() => ({ ...TEXT_OVERRIDES, ...Object.fromEntries((props.readonlyFields ?? []).map((f) => [f, { ...TEXT_OVERRIDES[f], readonly: true, required: false }])) }));
 const fields = computed(() =>
-	toFormFields(formDefsFor(props.fieldDefs, props.item, { compact: props.compact, keyFields: props.keyFields }) as FieldDef[], { override: TEXT_OVERRIDES }),
+	toFormFields(formDefsFor(props.fieldDefs, props.item, { compact: props.compact, keyFields: props.keyFields }) as FieldDef[], { override: overrides.value }),
 );
 </script>
 
@@ -57,12 +64,13 @@ const fields = computed(() =>
 	<FieldForm
 		:key="item.key"
 		:class="['pm-item-form', { compact }]"
-		:collection="`${collection}-${item.key}`"
+		:collection="`${collection}-${item.key}${idScope ? `-${idScope}` : ''}`"
 		:fields="fields"
 		:model-value="model as FormValues"
 		:inherited="(editsRecord ? undefined : inheritedFor(item, inherited)) as FormValues | undefined"
 		:readonly="readonly"
 		:show-missing="showMissing"
+		:flagged="flagged"
 		:external-hint="item.existing ? undefined : NEW_RECORD_EXTERNAL"
 		@update:model-value="onUpdate($event)"
 		@open-external="emit('openExternal', $event)"

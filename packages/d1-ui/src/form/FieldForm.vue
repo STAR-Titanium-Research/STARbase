@@ -25,12 +25,14 @@ const props = withDefaults(
 		readonly?: boolean;
 		/** Mark every required field that is empty (set after a failed Create), not only those the person has been into. */
 		showMissing?: boolean;
+		/** Fields the caller's own checks say are missing: their rows get class `flag` (and a "missing" mark), for the caller's CSS to colour. */
+		flagged?: readonly string[];
 		/** What `$CURRENT_USER` and `$NOW` in a field's conditions mean; without it a rule using one never matches. */
 		context?: RuleContext;
 		/** Said in place of "Open in Data Studio" on a field it cannot draw, for a record that does not exist yet ("Opens in Data Studio after Create"). */
 		externalHint?: string;
 	}>(),
-	{ inherited: undefined, readonly: false, showMissing: false, context: undefined, externalHint: undefined },
+	{ inherited: undefined, readonly: false, showMissing: false, flagged: undefined, context: undefined, externalHint: undefined },
 );
 provide(EXTERNAL_HINT, computed(() => props.externalHint ?? null));
 const emit = defineEmits<{
@@ -46,6 +48,7 @@ const formFields = computed<FormField[]>(() => {
 const tree = computed(() => formTree(formFields.value));
 // Conditions read what is shown: the person's value, else the inherited one.
 const views = computed(() => fieldViews(formFields.value, effectiveValues(props.modelValue, props.inherited), { context: props.context }));
+const flags = computed(() => new Set(props.flagged ?? []));
 const touched = reactive(new Set<string>());
 const idPrefix = `d1-form-${props.collection}`;
 
@@ -65,6 +68,7 @@ function change(field: FormField, value: unknown): void {
 			:inherited="inherited"
 			:readonly="readonly"
 			:show-missing="showMissing"
+			:flagged="flags"
 			:touched="touched"
 			:id-prefix="idPrefix"
 			:level="0"

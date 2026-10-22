@@ -164,7 +164,8 @@ export const KEY_SETTING_FIELDS: Record<NonNullable<ProcessCategory> | 'test', S
   ],
 };
 
-const MAX_SETTINGS = 4;
+/** The most key settings a card shows (the Inside tray, and the fields typed on a draft card). */
+export const MAX_SETTINGS = 4;
 
 /** Shows a value the way the form would; null for "nothing to show". */
 function formatValue(value: unknown, unit: string | undefined): string | null {

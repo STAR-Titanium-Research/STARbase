@@ -6,9 +6,10 @@ import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode } from '../model/types';
 import { railSockets, socketOwners, SHOWN_WHEN_FOLDED, type RailSocketModel } from '../model/railSockets';
 import { isBundleSocket } from '../model/sockets';
-import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
+import { activating, badgeText, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
+import CardFields from '../edit/CardFields.vue';
 import KindPicker from '../edit/KindPicker.vue';
 import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
@@ -78,6 +79,10 @@ const freeProps = (recordId: string | null, side: EndSide, add?: true) => (edit 
 const kindPick = computed(() => (editable.value ? (edit?.kind?.(props.data) ?? null) : null));
 const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+/** A new operation or test whose kind is chosen types its machine, date and key settings on the card (K4); with them the Inside tray and the settings list would only say them again. */
+const cardItem = computed(() => (editable.value ? (edit?.fieldsOf?.(props.data) ?? null) : null));
+/** Nothing is missing on a card that draws its fields: it says so (K8). */
+const ready = computed(() => !badge.value && !!cardItem.value);
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 /** Planned or done at Create (R9): a new operation or test wears a chip that says which, and flips it. */
@@ -165,7 +170,8 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
 			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
-			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
+			<span v-if="badge" class="chk" :class="badge.level" role="img" :aria-label="badge.text" :title="badge.text">{{ badgeText(badge) }}</span>
+			<span v-else-if="ready" class="chk ready" role="img" aria-label="Nothing is missing" title="Nothing is missing">ready</span>
 			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
 		<KindPicker v-if="kindPick" :kind="kindPick.kind" :value="kindPick.value" :methods="kindPick.methods" :test-types="kindPick.testTypes" @choose="kindPick.choose" />
@@ -226,7 +232,9 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</template>
 		</div>
 
-		<div v-if="data.slots.length && !data.collapsed" class="slots" @click.stop>
+		<CardFields v-if="cardItem" :item="cardItem" @grew="edit?.grew?.(id)" />
+
+		<div v-if="data.slots.length && !data.collapsed && !cardItem" class="slots" @click.stop>
 			<SlotRow v-for="s in majors" :key="s.field" :item="s" />
 			<template v-if="moreShown">
 				<SlotRow v-for="s in minors" :key="s.field" :item="s" />
@@ -236,7 +244,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 		</div>
 
-		<dl v-if="data.settings.length && !data.collapsed" class="params">
+		<dl v-if="data.settings.length && !data.collapsed && !cardItem" class="params">
 			<div v-for="s in data.settings" :key="s.label">
 				<dt>{{ s.label }}</dt>
 				<dd>{{ s.value }}</dd>

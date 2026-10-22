@@ -184,21 +184,25 @@
 .d1-process-map .sock.drop-bad,
 .d1-process-map .sock.drop-bad:hover { background: var(--d1-bad); border-color: var(--d1-surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--d1-bad) 30%, transparent); transform: translate(-50%, -50%) scale(1.35); }
 
-/* The red badge of a card whose checks block Create: how many things. A card with only warnings (a stale version) gets an amber one. */
+/* The badge of a card in edit mode (K8): amber "N missing" for what can still be filled in, red "N refused" only for what the server would refuse,
+   green "ready" when nothing is. The words say it as well as the colour. */
 .d1-process-map .node .chk {
 	flex: none;
 	min-width: 20px;
-	padding: 0 6px;
+	padding: 0 7px;
 	border-radius: 99px;
-	background: var(--theme--danger);
-	color: var(--theme--foreground-inverted, var(--d1-surface));
+	background: color-mix(in srgb, var(--theme--background), var(--theme--warning) 12%);
+	color: color-mix(in srgb, var(--theme--warning) 72%, var(--theme--foreground));
+	box-shadow: inset 0 0 0 1px var(--theme--warning);
 	font-size: var(--fs-xs, 11px);
 	font-weight: 700;
 	line-height: 20px;
 	text-align: center;
+	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
 }
-.d1-process-map .node .chk.warn { background: color-mix(in srgb, var(--theme--background), var(--theme--warning) 12%); color: var(--theme--warning); box-shadow: inset 0 0 0 1px var(--theme--warning); }
+.d1-process-map .node .chk.refused { background: var(--theme--danger); color: var(--theme--foreground-inverted, var(--d1-surface)); box-shadow: none; }
+.d1-process-map .node .chk.ready { background: color-mix(in srgb, var(--theme--background), var(--d1-ok) 14%); color: color-mix(in srgb, var(--d1-ok) 72%, var(--theme--foreground)); box-shadow: inset 0 0 0 1px var(--d1-ok); }
 /* The Planned / Done chip of a new operation or test (R9): a small button in the title bar; Done is filled, Planned is an outline. */
 .d1-process-map .node .wchip {
 	flex: none;

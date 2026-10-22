@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSSRApp, defineComponent, h, ref, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import type { DraftBody } from '@d1/ui';
+import { setExplorerHostFactory, type DraftBody, type DraftItem, type ExplorerHost } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from '../edit/draft';
+import { EDIT_MODE_KEY, type EditMode } from '../edit/useEditMode';
 import { draftKeysOfNode, newOperationOf } from '../edit/socketRefs';
 import { toGraph } from '../edit/toGraph';
 import { buildGraph } from '../model/buildGraph';
@@ -62,8 +63,29 @@ function edit(over: Partial<MapEdit> = {}): MapEdit & { calls: unknown[][] } {
 	};
 }
 
-async function render(component: Component, props: Record<string, unknown>, e?: MapEdit): Promise<string> {
+setExplorerHostFactory(() => ({ api: { get: async () => ({ data: { data: [] } }) } }) as unknown as ExplorerHost);
+const defOf = (field: string, sort: number, meta: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({ field, type: 'string', schema: { data_type: 'text', is_nullable: true }, meta: { interface: 'input', sort, width: 'half', ...meta }, ...extra });
+/** What the fields on a card read of edit mode: its draft, its checks and the form's field definitions. */
+function fakeEditMode(body: DraftBody, _item?: DraftItem): EditMode {
+	return {
+		body: ref(body),
+		checks: ref([]),
+		setValues: () => undefined,
+		catalog: {
+			rawFields: ref({
+				physical_samples: [defOf('nickname', 1), defOf('material_id', 2), defOf('form', 3), defOf('primary_method_id', 4)],
+				manufacturing_operations: [defOf('equipment_id', 1), defOf('planned_date', 2), defOf('machining_feed_mm_per_rev', 3)],
+				test_sessions: [],
+			}),
+			ctx: () => ({}),
+			methodById: ref(new Map()),
+		},
+	} as unknown as EditMode;
+}
+
+async function render(component: Component, props: Record<string, unknown>, e?: MapEdit, editMode?: EditMode): Promise<string> {
 	const app = createSSRApp(component, props);
+	if (editMode) app.provide(EDIT_MODE_KEY, editMode);
 	app.component('v-icon', VIcon);
 	app.provide(MAP_ACTIONS, noop);
 	app.provide(MAP_VIEW, { direction: ref<'RIGHT' | 'DOWN'>('RIGHT'), moreOpen: ref(new Set<string>()), selectedRef: ref(null), selectedId: ref(props.selected ? (props.id as string) : null) });
@@ -153,10 +175,30 @@ describe('a sample card in edit mode', () => {
 		}
 	});
 
-	it('wears the red badge with the number of things that block Create', async () => {
+	it('says how many things are missing in amber, with the words for a screen reader', async () => {
 		const [s] = samples(run([{ type: 'addSample' }]));
-		const html = await render(RecordNode, { id: s.id, data: s }, edit({ badge: () => ({ count: 2, text: 'Choose the material. Choose the method.', level: 'block' as const }) }));
-		expect(html).toMatch(/class="chk"[^>]*aria-label="Choose the material\. Choose the method\."[^>]*>2</);
+		const html = await render(RecordNode, { id: s.id, data: s }, edit({ badge: () => ({ count: 2, text: 'Choose the material. Choose the method.', level: 'fill' as const }) }));
+		expect(html).toMatch(/class="(?:chk fill|fill chk)"[^>]*aria-label="Choose the material\. Choose the method\."[^>]*>2 missing</);
+	});
+
+	it('says "ready" in green on a new sample whose fields are drawn and nothing is missing, and nothing on one with no fields', async () => {
+		const [s] = samples(run([{ type: 'addSample' }]));
+		const item = run([{ type: 'addSample' }]).items[0];
+		expect(await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => item }))).toMatch(/class="chk ready"[^>]*>ready</);
+		expect(await render(RecordNode, { id: s.id, data: s }, edit())).not.toContain('class="chk');
+		// something is missing: the count, not "ready"
+		const missing = await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => item, badge: () => ({ count: 1, text: 'x', level: 'fill' as const }) }));
+		expect(missing).not.toContain('ready');
+	});
+
+	it('draws the card\'s fields below its header once edit mode gives it an item', async () => {
+		const body = run([{ type: 'addSample' }]);
+		const [s] = samples(body);
+		const html = await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => body.items[0] }), fakeEditMode(body));
+		expect(html).toContain('class="card-fields nodrag nopan nowheel"');
+		expect(html).toContain('data-field="nickname"');
+		expect(html).toContain('data-field="primary_method_id"');
+		expect(await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => body.items[0] }))).not.toContain('card-fields'); // no edit mode provided: nothing to type into
 	});
 });
 
@@ -236,16 +278,37 @@ describe('a container in edit mode', () => {
 		expect(picked).toEqual(['row|draft:n3|in', 'row|draft:n3|in|add', 'row|draft:n3|out', 'row|draft:n3|out|add']);
 	});
 
-	it('wears an amber badge when there are only warnings', async () => {
+	it('wears an amber "N missing" for what can still be filled in', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
-		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 1, text: 'No machine yet.', level: 'warn' as const }) }));
-		expect(html).toMatch(/class="(?:chk warn|warn chk)"[^>]*aria-label="No machine yet\."[^>]*>1</);
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 1, text: 'No machine yet.', level: 'fill' as const }) }));
+		expect(html).toMatch(/class="(?:chk fill|fill chk)"[^>]*aria-label="No machine yet\."[^>]*>1 missing</);
 	});
 
-	it('wears the red badge', async () => {
+	it('wears a red "N refused" only for what the server would refuse', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
-		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 3, text: 'Choose the method of this operation.', level: 'block' as const }) }));
-		expect(html).toMatch(/class="chk"[^>]*>3</);
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ badge: () => ({ count: 3, text: 'Not allowed.', level: 'refused' as const }) }));
+		expect(html).toMatch(/class="(?:chk refused|refused chk)"[^>]*>3 refused</);
+	});
+
+	it('says "ready" on a new operation with its fields drawn and nothing missing', async () => {
+		const body = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]);
+		const [c] = containers(body);
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ fieldsOf: () => body.items[0] }))).toMatch(/class="chk ready"[^>]*>ready</);
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit())).not.toContain('ready');
+	});
+
+	it('draws the fields typed on the card in place of the Inside tray and the settings list, which would only say them again', async () => {
+		const body = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]);
+		const [c] = containers(body);
+		const item = { ...body.items[0], values: { ...body.items[0].values, process_category: 'machining' } } as DraftItem;
+		const full: ContainerData = { ...c, slots: [{ field: 'equipment_id', role: 'Machine', ref: { collection: 'equipment', id: 'e', code: 'M1' }, major: true }], settings: [{ label: 'Feed', value: '0.2 mm/rev' }] };
+		const withFields = await render(ContainerNode, { id: c.id, data: full }, edit({ fieldsOf: () => item }), fakeEditMode(run([]), item));
+		expect(withFields).toContain('class="card-fields nodrag nopan nowheel"');
+		expect(withFields).not.toContain('class="slots"');
+		expect(withFields).not.toContain('class="params"');
+		const without = await render(ContainerNode, { id: c.id, data: full }, edit());
+		expect(without).toContain('class="slots"');
+		expect(without).toContain('class="params"');
 	});
 
 	it('wears the Planned / Done chip of a new operation (R9), and none without edit mode or when the page offers none', async () => {
@@ -265,7 +328,7 @@ describe('a container in edit mode', () => {
 		const html = await render(ContainerNode, { id: c.id, data: c });
 		expect(socks(html)).toEqual([]);
 		expect(freeButtons(html)).toHaveLength(0);
-		expect(html).not.toContain('class="chk"');
+		expect(html).not.toContain('class="chk');
 		const recorded: ContainerData = { ...c, id: 'op:x', draft: undefined, group: { ...c.group, rowIds: ['x'] }, rows: [{ recordId: 'x', in: 'op:x:in:0', out: 'op:x:out:0' }] };
 		expect(socks(await render(ContainerNode, { id: recorded.id, data: recorded }, edit()))).toEqual([]);
 	});

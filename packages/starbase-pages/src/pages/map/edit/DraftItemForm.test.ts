@@ -160,3 +160,26 @@ describe('DraftItemForm', () => {
 		expect(b).toContain('id="d1-form-physical_samples-n7-nickname"');
 	});
 });
+
+describe('DraftItemForm: on a card (K4, K8)', () => {
+	it('flagged marks those rows amber-ready (class flag) and nothing else', async () => {
+		const html = await render({ item: sample(), fieldDefs: SAMPLE_DEFS, compact: true, keyFields: ['nickname', 'form'], flagged: ['nickname'] });
+		expect(html).toMatch(/class="[^"]*flag[^"]*" data-field="nickname"/);
+		expect(html).not.toMatch(/class="[^"]*flag[^"]*" data-field="form"/);
+	});
+
+	it('readonlyFields disables those inputs only, and never asks for them', async () => {
+		const defs = [...SAMPLE_DEFS, def('primary_method_id', { required: true, sort: 5 })];
+		const html = await render({ item: sample(), fieldDefs: defs, compact: true, keyFields: ['nickname', 'primary_method_id'], readonlyFields: ['primary_method_id'], inherited: { primary_method_id: 'turning' } });
+		expect(row(html, 'primary_method_id')).toContain('disabled');
+		expect(row(html, 'primary_method_id')).not.toContain('class="req"');
+		expect(row(html, 'nickname')).not.toContain('disabled');
+	});
+
+	it('idScope gives the same item drawn twice (card and panel) input ids of its own', async () => {
+		const plain = await render({ item: sample({}, { key: 'n1' }), fieldDefs: SAMPLE_DEFS });
+		const card = await render({ item: sample({}, { key: 'n1' }), fieldDefs: SAMPLE_DEFS, idScope: 'card0' });
+		expect(plain).toContain('id="d1-form-physical_samples-n1-nickname"');
+		expect(card).toContain('id="d1-form-physical_samples-n1-card0-nickname"');
+	});
+});
