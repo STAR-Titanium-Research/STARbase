@@ -8,6 +8,10 @@
 import { buildGeometry } from './geometry';
 // The labels of the coded dropdowns (never the stored codes). A synced copy of packages/d1-ui/src/choiceLabels.ts.
 import { choiceLabel } from './choiceLabels';
+import { esc, niceNum } from './util.js';
+import { conformAppendix } from './conform.js';
+
+export { esc };
 
 // Collections that have an Explorer page (the `home` module). This is the same mapping as
 // recordRoute() in packages/d1-ui; d1-report is built on its own and cannot import the kit, so
@@ -34,11 +38,6 @@ export function recordLink(publicUrl, collection, id) {
 	return `${base}/d1-links/go/r/${collection}/${encodeURIComponent(String(id))}`;
 }
 
-export const esc = (v) =>
-	v === null || v === undefined
-		? ''
-		: String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
 const dash = (v) => (v === null || v === undefined || v === '' ? '—' : esc(v));
 
 function fmtDate(v) {
@@ -59,17 +58,6 @@ function num(v, digits = 3) {
 	if (v === null || v === undefined || v === '') return '—';
 	const n = Number(v);
 	return isNaN(n) ? esc(v) : n.toLocaleString('en-GB', { maximumFractionDigits: digits });
-}
-
-function niceNum(v) {
-	const a = Math.abs(v);
-	if (a === 0) return '0';
-	if (a >= 1000) return `${(v / 1000).toFixed(1)}k`;
-	if (a >= 100) return v.toFixed(0);
-	if (a >= 10) return v.toFixed(1);
-	if (a >= 1) return v.toFixed(2);
-	if (a >= 0.01) return v.toFixed(3);
-	return v.toExponential(0);
 }
 
 // A "nice" step (1/2/5 * 10^n) so evenly-spaced ticks land on round numbers.
@@ -853,197 +841,8 @@ function fastAppendix(fastRun) {
 	return { toggles, blocks };
 }
 
-// ---------------------------------------------------------------------------
-// Conform (continuous extrusion) run appendix.
-//
-// Unlike the FAST appendix (hydrated in the browser), the endpoint reads the
-// stored CSV through the caller's accountability and hands `conformAppendix` the
-// parsed trace, so the plots are plain server-rendered SVG, and a reader who
-// cannot read the log sees a placeholder with the run summary still shown.
-// The CSV is the normalised file written by packages/fast-plotting/src/conform:
-// header row, first column `time_s` (seconds from log_start), then one column
-// per entry of conform_logs.series, in order.
-// ---------------------------------------------------------------------------
-
-/** Parse the normalised Conform CSV: {time: number[], cols: {key: number[]}} (blank cell = NaN). */
-export function parseConformCsv(text, series) {
-	const keys = (series || []).map((c) => c.key);
-	const time = [];
-	const cols = {};
-	for (const k of keys) cols[k] = [];
-	const lines = String(text || '').split(/\r?\n/);
-	for (let r = 1; r < lines.length; r++) {
-		if (!lines[r]) continue;
-		const cells = lines[r].split(',');
-		const t = Number(cells[0]);
-		if (!Number.isFinite(t)) continue;
-		time.push(t);
-		for (let i = 0; i < keys.length; i++) {
-			const c = cells[i + 1];
-			cols[keys[i]].push(c === undefined || c === '' ? NaN : Number(c));
-		}
-	}
-	return { time, cols };
-}
-
-const UK_TIME = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-const UK_DATE = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: '2-digit', year: 'numeric' });
-const toMs = (t) => (typeof t === 'number' ? t : Date.parse(t));
-/** HH:MM:SS in UK local time (Europe/London); '' for an invalid instant. */
-const ukTime = (t) => { const ms = toMs(t); return Number.isFinite(ms) ? UK_TIME.format(ms) : ''; };
-const ukDateTime = (t) => { const ms = toMs(t); return Number.isFinite(ms) ? `${UK_DATE.format(ms)} ${UK_TIME.format(ms)}` : ''; };
-
-const CONFORM_COLORS = ['#dc2626', '#2563eb', '#16a34a', '#d97706'];
-const CONFORM_DEFAULT_LABEL = {
-	wheel_speed_rpm: 'Wheel speed', wheel_speed_demand_rpm: 'Wheel speed demand', motor_torque_pct: 'Motor torque',
-	tooling1_c: 'Tooling 1 (behind abutment)', tooling2_c: 'Tooling 2 (die exit)', wheel_temp_c: 'Wheel temperature', ips_output_pct: 'IPS output',
-};
-const CONFORM_PANELS = [
-	{ title: 'Wheel speed', keys: ['wheel_speed_rpm', 'wheel_speed_demand_rpm'] },
-	{ title: 'Motor torque', keys: ['motor_torque_pct'] },
-	{ title: 'Temperatures', keys: ['tooling1_c', 'tooling2_c', 'wheel_temp_c'] },
-	{ title: 'IPS output', keys: ['ips_output_pct'] },
-];
-
-// Rows [from, to) with start <= t < end; a window that reaches the last row includes it
-// (same rule as windowRows in packages/fast-plotting/src/conform/summary.ts).
-function conformWindowRows(time, logStartMs, startMs, endMs) {
-	const n = time.length;
-	if (!n) return [0, 0];
-	const t0 = (startMs - logStartMs) / 1000;
-	const t1 = (endMs - logStartMs) / 1000;
-	let from = 0;
-	while (from < n && time[from] < t0) from++;
-	let to = from;
-	while (to < n && time[to] < t1) to++;
-	if (t1 >= time[n - 1] && to === n - 1) to = n;
-	return [from, Math.max(from, to)];
-}
-
-function conformPanelSvg(lines, time, logStartMs, from, to) {
-	const W = 300, H = 148, ML = 36, MR = 6, MT = 8, MB = 15;
-	let lo = Infinity, hi = -Infinity;
-	for (const l of lines) for (let i = from; i < to; i++) { const v = l.values[i]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
-	if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
-	if (lo === hi) { lo -= 1; hi += 1; }
-	const t0 = time[from], t1 = time[to - 1];
-	const plotW = W - ML - MR, plotH = H - MT - MB;
-	const sx = (x) => ML + ((x - t0) / (t1 - t0 || 1)) * plotW;
-	const sy = (v) => MT + (1 - (v - lo) / (hi - lo)) * plotH;
-	const stride = Math.max(1, Math.floor((to - from) / 400));
-	const ln = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#94a3b8" stroke-width="0.7"/>`;
-	let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${ln(ML, MT, ML, H - MB)}${ln(ML, H - MB, W - MR, H - MB)}`;
-	for (const v of [hi, (lo + hi) / 2, lo]) svg += `<text x="${ML - 3}" y="${(sy(v) + 2).toFixed(1)}" text-anchor="end" class="fp-tick">${esc(niceNum(v))}</text>`;
-	[[t0, ML, 'start'], [t1, W - MR, 'end']].forEach(([t, x, anchor]) => {
-		svg += `<text x="${x}" y="${H - 3}" text-anchor="${anchor}" class="fp-tick">${esc(ukTime(logStartMs + t * 1000).slice(0, 5))}</text>`;
-	});
-	lines.forEach((l, k) => {
-		let d = '', pen = false;
-		for (let i = from; i < to; i += stride) {
-			const v = l.values[i];
-			if (!Number.isFinite(v)) { pen = false; continue; }
-			d += `${pen ? 'L' : 'M'}${sx(time[i]).toFixed(1)},${sy(v).toFixed(1)} `;
-			pen = true;
-		}
-		svg += `<path d="${d}" fill="none" stroke="${CONFORM_COLORS[k % CONFORM_COLORS.length]}" stroke-width="1"/>`;
-	});
-	return `${svg}</svg>`;
-}
-
-function fmtDuration(s) {
-	if (s === null || s === undefined || !Number.isFinite(Number(s))) return '—';
-	const t = Math.round(Number(s));
-	const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
-	return h ? `${h} h ${String(m).padStart(2, '0')} min ${String(sec).padStart(2, '0')} s` : `${m} min ${String(sec).padStart(2, '0')} s`;
-}
-const fx = (v, d = 1) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(d));
-
-function conformSummaryTable(sm) {
-	const e = sm.energy_kwh || {};
-	const missing = Array.isArray(sm.missing) ? sm.missing : [];
-	const rows = [
-		['Duration', fmtDuration(sm.duration_s)],
-		['Extruding time', fmtDuration(sm.extruding_s)],
-		['Mean wheel speed', `${fx(sm.mean_wheel_speed_rpm)} rpm`],
-		['Mean motor torque', `${fx(sm.mean_torque_pct)} %`],
-		['Mean Tooling 1 (behind abutment)', `${fx(sm.mean_tooling1_c)} °C`],
-		['Peak motor torque', `${fx(sm.peak_torque_pct)} %`],
-		['Peak motor current', `${fx(sm.peak_motor_current_a)} A`],
-		['Peak Tooling 1 (behind abutment)', `${fx(sm.peak_tooling1_c)} °C`],
-		['Peak wheel temperature', `${fx(sm.peak_wheel_temp_c)} °C`],
-		['IPS setpoint', `${fx(sm.ips_setpoint_c, 0)} °C`],
-		['Energy (motor)', `${fx(e.motor, 3)} kWh`],
-		['Energy (IPS)', `${fx(e.ips, 3)} kWh`],
-		['Energy (cooling)', `${fx(e.cooling, 3)} kWh`],
-		['Energy (total)', `${fx(e.total, 3)} kWh`],
-		['Average demand', `${fx(sm.avg_demand_kw, 1)} kW`],
-	];
-	return `<table class="tbl cf-sum"><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${esc(v)}</td></tr>`).join('')}</tbody></table>${
-		missing.length ? `<p class="cf-note">Not measured: ${missing.map(esc).join(', ')}. Energy excludes these.</p>` : ''
-	}`;
-}
-
-function conformStepsTable(steps) {
-	const list = Array.isArray(steps) ? steps : [];
-	if (!list.length) return '<p class="cf-note">No steps were found in this window.</p>';
-	// A range column appears only when some step has that channel.
-	const rangeCols = [['wheel_temp_c', 'Wheel temp'], ['tooling1_c', 'Tooling 1'], ['tooling2_c', 'Tooling 2']].filter(([k]) => list.some((s) => s[k]));
-	const range = (r) => (r ? `${fx(r.min)}–${fx(r.max)} (${fx(r.range)})` : '—');
-	const head = ['Start', 'End', 'Duration', 'IPS °C', 'Wheel rpm', ...rangeCols.map(([, l]) => `${l} °C min–max (range)`), 'Mean torque %', 'Energy kWh'];
-	const numFrom = 3; // the first three columns are text
-	const th = head.map((h, i) => `<th${i >= numFrom ? ' class="n"' : ''}>${esc(h)}</th>`).join('');
-	const body = list.map((s) => {
-		const cells = [
-			ukTime(s.start), ukTime(s.end), `${s.duration_s} s`, fx(s.ips_setpoint_c, 0), fx(s.wheel_speed_rpm),
-			...rangeCols.map(([k]) => range(s[k])), fx(s.mean_torque_pct), fx(s.energy_kwh, 3),
-		];
-		return `<tr>${cells.map((c, i) => `<td${i >= numFrom ? ' class="n"' : ''}>${esc(c)}</td>`).join('')}</tr>`;
-	}).join('');
-	return `<table class="tbl cf-steps"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
-}
-
-// The Conform trace appendix. `run` is the conform_run_data row, `log` the conform_logs
-// row and `trace` the parsed CSV ({time, cols}); `log` / `trace` are null when the caller
-// cannot read them. Returns {toggles, blocks}, both '' unless the run is 'done'.
-export function conformAppendix(run, log, trace) {
-	if (!run || run.status !== 'done') return { toggles: '', blocks: '' };
-	const logStartMs = Date.parse(log?.log_start);
-	const startMs = Date.parse(run.window_start);
-	const endMs = Date.parse(run.window_end);
-
-	let panels = '';
-	if (trace?.time?.length && Number.isFinite(logStartMs) && Number.isFinite(startMs) && Number.isFinite(endMs)) {
-		const [from, to] = conformWindowRows(trace.time, logStartMs, startMs, endMs);
-		const meta = {};
-		for (const c of Array.isArray(log.series) ? log.series : []) meta[c.key] = c;
-		if (to - from > 1) {
-			panels = CONFORM_PANELS.map((p) => {
-				const lines = p.keys
-					.filter((k) => trace.cols?.[k])
-					.map((k) => ({ values: trace.cols[k], label: meta[k]?.label || CONFORM_DEFAULT_LABEL[k] || k, unit: meta[k]?.unit || '' }));
-				if (!lines.length) return '';
-				const legend = lines.map((l, i) => `<span><i style="background:${CONFORM_COLORS[i % CONFORM_COLORS.length]}"></i>${esc(l.label)}${l.unit ? ` ${esc(l.unit)}` : ''}</span>`).join('');
-				return `<div class="fp-plot" data-rows="${to - from}"><div class="fp-title">${esc(p.title)}</div>${conformPanelSvg(lines, trace.time, logStartMs, from, to)}<div class="fp-legend">${legend}</div></div>`;
-			}).join('');
-		}
-	}
-	const plots = panels ? `<div class="cf-plots">${panels}</div>` : '<div class="fp-msg">Conform log not visible to you.</div>';
-
-	const win = Number.isFinite(startMs) && Number.isFinite(endMs) ? `<p class="cf-window">Run window ${esc(ukDateTime(startMs))} to ${esc(ukTime(endMs))} (UK time)</p>` : '';
-	const blocks = `<section data-block="conform-trace">
-		<h2>Conform run</h2>
-		${win}
-		${plots}
-		<div class="cf-sub">Summary</div>
-		${run.summary ? conformSummaryTable(run.summary) : ''}
-		<div class="cf-sub">Steps</div>
-		${conformStepsTable(run.steps)}
-	</section>`;
-	return { toggles: '<label><input type="checkbox" data-block="conform-trace" checked /> Conform run</label>', blocks };
-}
-
 export function renderOperationReport(d) {
-	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun, conformRun, conformLog, conformTrace } = d;
+	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun, conformRun, conformLog, conformTrace, conformLoadError } = d;
 	const shortId = String(o.operation_id).split('-')[0];
 	const sampleUrl = recordLink(publicUrl, 'physical_samples', o.sample_id);
 	const catLabel = CATEGORY_LABEL[o.process_category] || (o.process_category ? esc(o.process_category) : 'Operation');
@@ -1072,7 +871,7 @@ export function renderOperationReport(d) {
 	const app = o.process_category === 'sintering'
 		? fastAppendix(fastRun)
 		: o.process_category === 'conform'
-			? conformAppendix(conformRun, conformLog, conformTrace)
+			? conformAppendix(conformRun, conformLog, conformTrace, conformLoadError)
 			: forceAppendix(fa, publicUrl);
 	const { toggles: extraToggles, blocks: extraBlocks } = app;
 

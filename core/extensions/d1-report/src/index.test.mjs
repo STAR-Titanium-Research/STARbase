@@ -11,7 +11,8 @@ import { test } from 'node:test';
 import endpoint from './index.js';
 import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport, conformAppendix, parseConformCsv } from './render.js';
+import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport } from './render.js';
+import { conformAppendix, parseConformCsv, fmtDuration } from './conform.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const OP_A = '22222222-2222-4222-8222-222222222222';
@@ -63,7 +64,8 @@ const PK = {
 
 // `allowed` maps collection -> predicate(row) | true. Unlisted collections are forbidden.
 // `env_override` is passed to endpoint.handler's env param.
-function harness(allowed, env_override) {
+// `assetError`, when given, is thrown by the fake AssetsService instead of serving the CSV.
+function harness(allowed, env_override, assetError) {
 	const constructed = [];
 	class ItemsService {
 		constructor(collection, opts) {
@@ -101,6 +103,7 @@ function harness(allowed, env_override) {
 		}
 		async getAsset(id) {
 			assetCalls.push({ id, accountability: this.opts.accountability });
+			if (assetError) throw assetError;
 			return { stream: Readable.from([Buffer.from(cfCsv())]) };
 		}
 	}
@@ -486,6 +489,64 @@ test('conformAppendix: a missing channel drops its line, a missing panel its box
 	assert.ok(blocks.includes('>Temperatures<'));
 });
 
+test('conformAppendix: summary and steps use the shared formats (kWh and kW to 2 decimals, "12 min 05 s", UK clock times)', () => {
+	const { blocks } = conformAppendix(CF_RUN, null, null);
+	const sum = blocks.split('class="tbl cf-sum"')[1].split('</table>')[0];
+	assert.ok(sum.includes('2 min 59 s'), 'duration 179 s');
+	assert.ok(sum.includes('2 min 55 s'), 'extruding 175 s');
+	for (const kwh of ['1.50 kWh', '2.25 kWh', '0.25 kWh', '4.00 kWh']) assert.ok(sum.includes(kwh), kwh);
+	assert.ok(sum.includes('80.40 kW'), 'average demand to 2 decimals');
+	assert.ok(!sum.includes('4.000') && !sum.includes('80.4 kW'));
+	const steps = blocks.split('class="tbl cf-steps"')[1].split('</table>')[0];
+	assert.ok(steps.includes('1 min 00 s') && !steps.includes('60 s'), 'a 60 s step');
+	assert.equal((steps.match(/>1\.30</g) || []).length, 3, 'step energy to 2 decimals');
+	assert.ok(steps.includes('13:02:00') && steps.includes('13:02:59'), 'HH:MM:SS UK time');
+});
+
+test('fmtDuration: under an hour "12 min 05 s", from an hour "1 h 23 min", a dash for nothing', () => {
+	assert.equal(fmtDuration(725), '12 min 05 s');
+	assert.equal(fmtDuration(0), '0 min 00 s');
+	assert.equal(fmtDuration(59.6), '1 min 00 s', 'whole seconds first');
+	assert.equal(fmtDuration(3599), '59 min 59 s');
+	assert.equal(fmtDuration(3600), '1 h 00 min');
+	assert.equal(fmtDuration(4985), '1 h 23 min', '83 min 05 s: the seconds are dropped, not rounded up');
+	assert.equal(fmtDuration(4999), '1 h 23 min');
+	assert.equal(fmtDuration(36000 + 61), '10 h 01 min');
+	for (const bad of [null, undefined, '', 'x', NaN, -5]) assert.equal(fmtDuration(bad), '—');
+});
+
+test('conformAppendix: a window of fewer than 2 rows says "Run window too short to plot", 2 rows plot', () => {
+	const trace = parseConformCsv(cfCsv(), CF_SERIES);
+	const short = { ...CF_RUN, window_start: '2025-07-01T12:01:00.000Z', window_end: '2025-07-01T12:01:01.000Z' }; // row 60 only
+	const out = conformAppendix(short, CF_LOG, trace).blocks;
+	assert.ok(out.includes('Run window too short to plot'));
+	assert.ok(!out.includes('data-rows') && !out.includes('not visible') && !out.includes('Could not load'));
+	assert.ok(out.includes('Extruding time'), 'the summary is still there');
+	const two = { ...CF_RUN, window_start: '2025-07-01T12:01:00.000Z', window_end: '2025-07-01T12:01:02.000Z' };
+	assert.deepEqual([...conformAppendix(two, CF_LOG, trace).blocks.matchAll(/data-rows="(\d+)"/g)].map((m) => m[1]), ['2', '2', '2', '2']);
+	const none = { ...CF_RUN, window_start: '2025-07-01T12:30:00.000Z', window_end: '2025-07-01T12:31:00.000Z' }; // after the last row
+	assert.ok(conformAppendix(none, CF_LOG, trace).blocks.includes('Run window too short to plot'));
+});
+
+test('conformAppendix: "not visible to you" only for a forbidden read; any other failure says "Could not load the Conform log"', () => {
+	const trace = parseConformCsv(cfCsv(), CF_SERIES);
+	const hidden = conformAppendix(CF_RUN, CF_LOG, null, 'forbidden').blocks;
+	assert.ok(hidden.includes('Conform log not visible to you') && !hidden.includes('Could not load'));
+	const failed = conformAppendix(CF_RUN, CF_LOG, null, 'failed').blocks;
+	assert.ok(failed.includes('Could not load the Conform log') && !failed.includes('not visible'));
+	// worked out when the caller does not say: a log row that came back empty is forbidden, a log with no trace failed
+	assert.ok(conformAppendix(CF_RUN, null, null).blocks.includes('not visible to you'));
+	assert.ok(conformAppendix(CF_RUN, CF_LOG, null).blocks.includes('Could not load the Conform log'));
+	assert.ok(conformAppendix(CF_RUN, CF_LOG, { time: [], cols: {} }).blocks.includes('Could not load the Conform log'), 'an empty CSV');
+	// a trace in hand wins over nothing: no note at all
+	const ok = conformAppendix(CF_RUN, CF_LOG, trace).blocks;
+	assert.ok(!ok.includes('not visible') && !ok.includes('Could not load') && !ok.includes('too short'));
+	// a log without any plottable channel says so rather than blaming the caller
+	const series = [{ key: 'something_else', label: 'x', unit: '' }];
+	const odd = conformAppendix(CF_RUN, { ...CF_LOG, series }, parseConformCsv(cfCsv(series), series)).blocks;
+	assert.ok(odd.includes('none of the channels the plots use') && !odd.includes('not visible'));
+});
+
 test('conformAppendix: an unreadable log still shows the summary and steps', () => {
 	const { blocks } = conformAppendix(CF_RUN, null, null);
 	assert.ok(blocks.includes('Conform log not visible to you'));
@@ -522,6 +583,29 @@ test('operation report: a conform op renders the Conform appendix (log fetched t
 	assert.ok(out.body.includes('>Wheel speed<') && out.body.includes('Energy (total)'));
 	assert.deepEqual([...out.body.matchAll(/data-rows="(\d+)"/g)].map((m) => m[1]), ['180', '180', '180', '180']);
 	assert.deepEqual(h.assetCalls, [{ id: FILE_CF, accountability: user }]);
+});
+
+const FORBIDDEN_ASSET = Object.assign(new Error('You do not have permission to access this.'), { code: 'FORBIDDEN', status: 403 });
+
+test('operation report: the log file read refused with 403 says "not visible to you"', async () => {
+	const h = harness({ manufacturing_operations: true, conform_run_data: true, conform_logs: true }, undefined, FORBIDDEN_ASSET);
+	const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
+	assert.equal(out.status, 200);
+	assert.ok(out.body.includes('Conform log not visible to you'));
+	assert.ok(!out.body.includes('Could not load the Conform log'));
+	assert.ok(out.body.includes('Extruding time'));
+	assert.equal(h.assetCalls.length, 1);
+});
+
+test('operation report: any other failure reading the log file says "Could not load the Conform log", not "not visible"', async () => {
+	for (const err of [Object.assign(new Error('file gone'), { code: 'ENOENT' }), Object.assign(new Error('storage down'), { status: 500 })]) {
+		const h = harness({ manufacturing_operations: true, conform_run_data: true, conform_logs: true }, undefined, err);
+		const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
+		assert.equal(out.status, 200, 'the report is still produced');
+		assert.ok(out.body.includes('Could not load the Conform log'), err.message);
+		assert.ok(!out.body.includes('not visible to you'), err.message);
+		assert.ok(out.body.includes('Extruding time'));
+	}
 });
 
 test('operation report: a conform log the caller cannot read gives the placeholder, not an error', async () => {
