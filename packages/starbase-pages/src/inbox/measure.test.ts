@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NO_SCALE_REASON, distanceUm, formatArea, formatLength, lineUm, measureScale, measureText, pixelDistance, polygonArea, previewRatio, selfIntersects, shapeUm, type MeasureShape, type Pt } from './measure';
+import { NO_SCALE_REASON, distanceUm, formatArea, formatLength, measureScale, measureText, pixelDistance, polygonArea, previewRatio, selfIntersects, shapeUm, type MeasureShape, type Pt } from './measure';
 
 describe('what Measure needs', () => {
 	it('needs both the pixel size and the original width, and no fallback', () => {
@@ -47,14 +47,18 @@ describe('the maths', () => {
 	it('measures a line given as fractions of the picture, on the preview size: a synthetic picture', () => {
 		// a 1000 x 800 preview of a 2000 px wide original (ratio 2) at 100 nm per original pixel: a line over a quarter of the width is 250 preview px, 500 original px, 50 µm
 		const scale = { pixelSizeNm: 100, originalWidthPx: 2000 };
-		const um = lineUm({ x: 0.1, y: 0.5 }, { x: 0.35, y: 0.5 }, { width: 1000, height: 800 }, scale)!;
+		const len = (a: Pt, b: Pt, size: { width: number; height: number }, sc: typeof scale | null): number | null => {
+			const m = shapeUm({ kind: 'line', a, b }, size, sc);
+			return m?.kind === 'line' ? m.length : null;
+		};
+		const um = len({ x: 0.1, y: 0.5 }, { x: 0.35, y: 0.5 }, { width: 1000, height: 800 }, scale)!;
 		expect(Math.abs(um - 50)).toBeLessThan(0.1);
 		// the same line drawn at any screen size has the same fractions, so the same length; a diagonal uses the preview's own aspect
-		const diag = lineUm({ x: 0, y: 0 }, { x: 0.3, y: 0.375 }, { width: 1000, height: 800 }, scale)!;
+		const diag = len({ x: 0, y: 0 }, { x: 0.3, y: 0.375 }, { width: 1000, height: 800 }, scale)!;
 		expect(diag).toBeCloseTo((Math.hypot(300, 300) * 2 * 100) / 1000, 6);
 		// no scale, or a preview of no size yet: nothing
-		expect(lineUm({ x: 0, y: 0 }, { x: 1, y: 0 }, { width: 1000, height: 800 }, null)).toBeNull();
-		expect(lineUm({ x: 0, y: 0 }, { x: 1, y: 0 }, { width: 0, height: 0 }, scale)).toBeNull();
+		expect(len({ x: 0, y: 0 }, { x: 1, y: 0 }, { width: 1000, height: 800 }, null)).toBeNull();
+		expect(len({ x: 0, y: 0 }, { x: 1, y: 0 }, { width: 0, height: 0 }, scale)).toBeNull();
 	});
 });
 
@@ -69,6 +73,9 @@ describe('the length as text', () => {
 	it('is in nm below 1 µm', () => {
 		expect(formatLength(0.43)).toBe('430 nm');
 		expect(formatLength(0.0085)).toBe('8.5 nm');
+		expect(formatLength(0.9994)).toBe('999 nm');
+		expect(formatLength(0.9995)).toBe('1 µm'); // never "1,000 nm"
+		expect(formatLength(0.9999)).toBe('1 µm');
 		expect(formatLength(0)).toBe('0 nm');
 	});
 	it('is empty for something that is not a length', () => {
@@ -113,7 +120,6 @@ describe('measuring a shape', () => {
 		expect(m.length).toBeCloseTo(194.2708, 4);
 		expect(formatLength(m.length)).toBe('194.27 µm');
 		expect(measureText(m)).toBe('194.27 µm');
-		expect(m.length).toBeCloseTo(lineUm(f(100, 100), f(300, 100), size, scale)!, 9); // the same as lineUm
 	});
 
 	it('circle: a radius of 100 preview px has the diameter 2r, the circumference 2 pi r and the area pi r squared', () => {
@@ -204,6 +210,14 @@ describe('measuring a shape', () => {
 		expect(m.kind === 'polygon' && m.selfIntersects).toBe(true);
 		expect(measureText(m)).toMatch(/ · check the outline$/);
 		expect(measureText(shapeUm(poly(rect(0, 0, 100, 50)), size, scale))).not.toMatch(/check the outline/);
+	});
+
+	it('a closed polygon with its corners on one line has no area but a perimeter, and says both; with all corners on one spot, nothing', () => {
+		const flat = shapeUm(poly([f(0, 0), f(100, 0), f(200, 0)]), size, scale)!;
+		if (flat.kind !== 'polygon') throw new Error('not a polygon');
+		expect(flat.area).toBe(0);
+		expect(measureText(flat)).toBe(`area 0 µm² · perimeter ${formatLength(400 * um)}`);
+		expect(measureText(shapeUm(poly([f(5, 5), f(5, 5), f(5, 5)]), size, scale))).toBe('');
 	});
 
 	it('has no words for a shape with no size yet', () => {

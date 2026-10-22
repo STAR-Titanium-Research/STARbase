@@ -64,20 +64,13 @@ export function distanceUm(previewPx: number, pixelSizeNm: number | null | undef
 	return (previewPx * ratio * pixelSizeNm) / 1000;
 }
 
-/** The length in µm of a line given as fractions of the picture, on a preview of this natural size; null when the scale or the size is unknown. */
-export function lineUm(a: Pt, b: Pt, previewSize: { width: number; height: number }, scale: MeasureScale | null): number | null {
-	if (!scale || !finitePositive(previewSize.width) || !finitePositive(previewSize.height)) return null;
-	const px = pixelDistance({ x: a.x * previewSize.width, y: a.y * previewSize.height }, { x: b.x * previewSize.width, y: b.y * previewSize.height });
-	return distanceUm(px, scale.pixelSizeNm, previewRatio(scale.originalWidthPx, previewSize.width));
-}
-
 const GB = 'en-GB';
 const fixed = (n: number, digits: number): string => n.toLocaleString(GB, { minimumFractionDigits: 0, maximumFractionDigits: digits });
 
 /** "194.27 µm"; under 1 µm in nanometres ("430 nm", "8.5 nm"). Always a sensible number of decimals: 2 for µm, none from 10 nm up. */
 export function formatLength(um: number): string {
 	if (!Number.isFinite(um) || um < 0) return '';
-	if (um < 1) {
+	if (um < 0.9995) { // 0.9995 µm and up would round to "1,000 nm": it is "1 µm"
 		const nm = um * 1000;
 		return `${fixed(nm, nm < 10 ? 1 : 0)} nm`;
 	}
@@ -153,11 +146,11 @@ export function shapeUm(shape: MeasureShape, previewSize: { width: number; heigh
 	return { kind: 'polygon', area: polygonArea(pts) * um * um, perimeter: polygonPerimeter(pts) * um, selfIntersects: selfIntersects(pts) };
 }
 
-/** The words in the pill on the picture: "212 µm", "Ø 212 µm · area 35,299 µm²", "area 12,400 µm² · perimeter 460 µm" (plus "check the outline" when sides cross). Empty when there is nothing to say yet. */
+/** The words in the pill on the picture: "212 µm", "Ø 212 µm · area 35,299 µm²", "area 12,400 µm² · perimeter 460 µm" (also "area 0 µm²" for corners on one straight line; plus "check the outline" when sides cross). Empty when there is nothing to say yet. */
 export function measureText(m: ShapeMeasure | null): string {
 	if (!m) return '';
 	if (m.kind === 'line') return m.length > 0 ? formatLength(m.length) : '';
 	if (m.kind === 'circle') return m.radius > 0 ? `Ø ${formatLength(m.diameter)} · area ${formatArea(m.area)}` : '';
-	if (!(m.area > 0) && !m.selfIntersects) return '';
+	if (!(m.perimeter > 0)) return ''; // all corners on one spot; corners on one straight line (area 0) still have a perimeter, so they say "area 0 µm²" and it
 	return `area ${formatArea(m.area)} · perimeter ${formatLength(m.perimeter)}${m.selfIntersects ? ' · check the outline' : ''}`;
 }

@@ -55,6 +55,9 @@ const follow = (from: 'a' | 'b', at: Pt) => {
 	if (props.linkZoom) (from === 'a' ? paneB : paneA).value?.setScroll(at);
 };
 
+// a polygon half-drawn in one pane is dropped when the other pane is pressed (one shape at a time)
+const otherPress = (from: 'a' | 'b') => (from === 'a' ? paneB : paneA).value?.cancelDraft();
+
 // ---- measure: the shape belongs to the pane it was drawn in ----
 const shapeFor = (side: 'a' | 'b') => (props.measure?.side === side ? props.measure.shape : null);
 const onMeasure = (side: 'a' | 'b', shape: MeasureShape | null) => emit('measure', shape ? { shape, side } : null);
@@ -81,6 +84,7 @@ const onMeasure = (side: 'a' | 'b', shape: MeasureShape | null) => emit('measure
 					side="a"
 					@state="emit('state', $event)"
 					@measure="onMeasure('a', $event)"
+					@press="otherPress('a')"
 					@scroll="follow('a', $event)"
 				/>
 			</div>
@@ -108,6 +112,7 @@ const onMeasure = (side: 'a' | 'b', shape: MeasureShape | null) => emit('measure
 					:shape="shapeFor('b')"
 					side="b"
 					@measure="onMeasure('b', $event)"
+					@press="otherPress('b')"
 					@scroll="follow('b', $event)"
 				/>
 				<div v-else-if="partner.state === 'locked'" class="blank locked" data-test="compare-locked">

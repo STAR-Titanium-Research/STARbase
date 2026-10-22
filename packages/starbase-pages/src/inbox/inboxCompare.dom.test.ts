@@ -320,6 +320,45 @@ describe('Measure shapes', () => {
 		await vi.waitFor(() => expect(text('[data-test="box-measure"]')).toBe('area 50 µm² · perimeter 34.14 µm')); // a right-angled triangle with 50 px (10 µm) legs
 	});
 
+	it('polygon: the second press of a double-click (detail 2) adds no corner and starts no new polygon; the double-click closes', async () => {
+		await measuring();
+		key('3');
+		await vi.waitFor(() => expect(tool('Polygon').getAttribute('aria-checked')).toBe('true'));
+		const press = (at: [number, number], detail: number) => layer().dispatchEvent(new MouseEvent('pointerdown', { clientX: at[0], clientY: at[1], detail, bubbles: true, cancelable: true }));
+		// a double-click away from the first corner: one corner, then the dblclick closes (no duplicate corner)
+		press([10, 10], 1);
+		press([60, 10], 1);
+		press([60, 60], 1);
+		press([66, 66], 2); // a few pixels off, so only the detail says it is the second press
+		await flush();
+		expect(vertices()).toBe(3);
+		pointer(layer(), 'dblclick', 60, 60);
+		await vi.waitFor(() => expect(text('[data-test="box-measure"]')).toBe('area 50 µm² · perimeter 34.14 µm'));
+		expect(vertices()).toBe(3);
+		// a double-click on the first corner of a new polygon: the first press closes it, the second does not begin another
+		for (const c of RECT_CORNERS) press(c, 1);
+		press([101, 101], 1); // closes
+		press([101, 101], 2); // the second press of the double-click
+		await vi.waitFor(() => expect(text('[data-test="box-measure"]')).toBe('area 800 µm² · perimeter 120 µm'));
+		expect(vertices()).toBe(4); // the finished polygon only: no one-corner draft
+		expect(q('[data-test="box-line"] polygon')).not.toBeNull();
+	});
+
+	it('Clear shows whenever a shape is on the picture, also with Measure off, and removes it', async () => {
+		await measuring();
+		key('1');
+		await vi.waitFor(() => expect(tool('Line').getAttribute('aria-checked')).toBe('true'));
+		drag(layer(), [0, 0], [250, 0]);
+		await vi.waitFor(() => expect(text('[data-test="box-measure"]')).toBe('50 µm'));
+		key('m');
+		await vi.waitFor(() => expect(q('[data-test="box-layer"]')).toBeNull());
+		expect(text('[data-test="box-measure"]')).toBe('50 µm'); // the shape stays drawn
+		expect(q('[data-test="clear-line"]')).not.toBeNull();
+		q('[data-test="clear-line"]')!.click();
+		await vi.waitFor(() => expect(q('[data-test="box-measure"]')).toBeNull());
+		expect(q('[data-test="clear-line"]')).toBeNull();
+	});
+
 	it('polygon: Backspace takes the last corner off; an area is the same whichever way round the corners were clicked', async () => {
 		await measuring();
 		key('3');
@@ -400,6 +439,29 @@ describe('Measure shapes', () => {
 		q('[data-test="clear-line"]')!.click();
 		await vi.waitFor(() => expect(q('[data-test="box-measure"]')).toBeNull());
 		expect(vertices()).toBe(0);
+	});
+
+	it('Compare: pressing in pane B drops the unfinished polygon in pane A, and the other way round', async () => {
+		fakeLayout();
+		await mount([withThumb(A), withThumb(B)], atWith(0, 1));
+		await vi.waitFor(() => expect(q('[data-test="b-image"]')).not.toBeNull());
+		key('m');
+		key('3');
+		await vi.waitFor(() => expect(q('[data-test="b-layer"]')).not.toBeNull());
+		const vtx = (side: string) => qa(`[data-test="${side}-vertex"]`).length;
+		const click = (side: string, at: [number, number]) => {
+			pointer(q(`[data-test="${side}-layer"]`)!, 'pointerdown', ...at);
+			pointer(q(`[data-test="${side}-layer"]`)!, 'pointerup', ...at);
+		};
+		click('a', [10, 10]);
+		click('a', [60, 10]);
+		await vi.waitFor(() => expect(vtx('a')).toBe(2));
+		click('b', [10, 10]);
+		await vi.waitFor(() => expect(vtx('b')).toBe(1));
+		expect(vtx('a')).toBe(0); // A's half-drawn polygon is gone
+		click('a', [200, 200]);
+		await vi.waitFor(() => expect(vtx('a')).toBe(1));
+		expect(vtx('b')).toBe(0); // and B's
 	});
 
 	it('Compare: each pane keeps its own shape', async () => {

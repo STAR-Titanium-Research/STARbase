@@ -232,7 +232,7 @@ function clearPartner(): void {
 // ---- Measure: one shape (a line, a circle or a polygon) at a time, on a picture whose scale the file says ----
 const measureWanted = ref(false);
 const measure = ref<CompareMeasure | null>(null);
-const canMeasure = computed(() => !!file.value && hasPicture.value && (!!measureScale(file.value.extracted) || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
+const canMeasure = computed(() => !!file.value && hasPicture.value && (hasScale.value || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
 const measureOn = computed(() => measureWanted.value && canMeasure.value);
 watch(() => props.candidateId, () => (measure.value = null));
 watch(partnerId, () => {

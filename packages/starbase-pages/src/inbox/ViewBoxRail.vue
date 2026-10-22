@@ -99,8 +99,8 @@ const checked = (e: Event) => (e.target as HTMLInputElement).checked;
 						</div>
 						<p class="hint" data-test="tool-hint">{{ TOOL_HINT[tool] }}</p>
 						<p class="hint">One shape at a time. Keys 1 2 3 pick the tool; Esc cancels.</p>
-						<button v-if="hasShape" type="button" class="lf-link" data-test="clear-line" @click="emit('clear-shape')">Clear</button>
 					</template>
+					<button v-if="hasShape" type="button" class="lf-link" data-test="clear-line" @click="emit('clear-shape')">Clear</button>
 					<label class="check"><input type="checkbox" :checked="contrast" data-test="toggle-contrast" @change="emit('update:contrast', checked($event))" /><span>Contrast stretch</span></label>
 					<p class="hint">Contrast stretch only changes how the picture is drawn here.</p>
 				</section>

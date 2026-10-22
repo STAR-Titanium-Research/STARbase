@@ -38,6 +38,8 @@ const emit = defineEmits<{
 	(e: 'measure', shape: MeasureShape | null): void;
 	/** The pane was scrolled: where it is, as fractions (0 to 1) of what can scroll (so a linked pane can follow). */
 	(e: 'scroll', at: Pt): void;
+	/** A press started on this pane's picture while Measure was drawing here: the Compare stage drops the other pane's unfinished polygon. */
+	(e: 'press'): void;
 }>();
 
 const host = useExplorerHost();
@@ -117,13 +119,23 @@ function addCorner(p: Pt): void {
 	draft.value = { kind: 'polygon', pts: [...pts, p], closed: false };
 	hover.value = p;
 }
+const DOUBLE_MS = 500; // a second press this soon, on the same spot, is a double-click's
+let lastPress: { at: Pt; t: number } | null = null;
 function down(e: PointerEvent): void {
 	if (!interactive.value || (e.button ?? 0) > 0) return;
 	const p = fraction(e);
 	if (!p) return;
 	tick.value += 1;
 	e.preventDefault();
-	if (props.tool === 'polygon') return addCorner(p);
+	emit('press');
+	// the second press of a double-click adds no corner: the double-click itself closes the polygon (a press on the first corner has just closed it, and must not start a new one)
+	// (a pointerdown's `detail` is 0 in some browsers, so a quick second press on the same spot counts too)
+	const again = !!lastPress && Date.now() - lastPress.t < DOUBLE_MS && onScreen(p, lastPress.at) < CLICK_PX;
+	lastPress = { at: p, t: Date.now() };
+	if (props.tool === 'polygon') {
+		if (e.detail < 2 && !again) addCorner(p);
+		return;
+	}
 	drag = { pointer: e.pointerId };
 	(e.currentTarget as Element | null)?.setPointerCapture?.(e.pointerId);
 	draft.value = props.tool === 'circle' ? { kind: 'circle', c: p, r: p } : { kind: 'line', a: p, b: p };
@@ -226,7 +238,7 @@ function setScroll(at: Pt): void {
 	el.scrollLeft = want.x;
 	el.scrollTop = want.y;
 }
-defineExpose({ setScroll });
+defineExpose({ setScroll, cancelDraft: dropDraft });
 </script>
 
 <template>
@@ -290,7 +302,7 @@ defineExpose({ setScroll });
 .line .rubber { opacity: 0.55; }
 /* A small round handle on each end, centre, rim point or corner; a polygon's first corner grows once a click on it would close the shape. */
 .vtx {
-	position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; box-sizing: border-box; border-radius: 50%; pointer-events: none;
+	position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; box-sizing: border-box; border-radius: 99px; pointer-events: none;
 	background: var(--theme--background); border: 2px solid var(--d1-accent, var(--theme--primary));
 }
 .vtx.first { width: 14px; height: 14px; margin: -7px 0 0 -7px; }
