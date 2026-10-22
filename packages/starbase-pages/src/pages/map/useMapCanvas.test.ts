@@ -6,7 +6,7 @@ import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import { nodeOfSocket } from './model/sockets';
 import type { ContainerNode as ContainerData, MapNode, ProcessData } from './model/types';
-import { MIN_ZOOM, screenPixel, useMapCanvas, type CanvasEdit } from './useMapCanvas';
+import { MIN_ZOOM, boundsOf, fitViewport, framedBounds, outsideView, projectFrameLabel, screenPixel, useMapCanvas, type CanvasEdit } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
@@ -23,7 +23,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], fitAt: [] as number[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, elk: null as null | ((graph: FakeGraph, shown: Set<string>, dir: 'RIGHT' | 'DOWN') => Record<string, { x: number; y: number }>), tall: new Map<string, number>(), moves: [] as { id: string; from: { x: number; y: number }; position: { x: number; y: number } }[], selects: [] as { id: string; selected: boolean }[], internals: [] as (string[] | undefined)[], fitAt: [] as number[], viewports: [] as { x: number; y: number; zoom: number }[], dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[], dragStarts: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -35,12 +35,13 @@ vi.mock('@vue-flow/core', async (orig) => {
     getNodes: nodes,
     getEdges: edges,
     viewport: vref({ zoom: 1 }),
+    dimensions: vref({ width: 1000, height: 600 }),
     findNode: (id: string) => nodes.value.find((n) => n.id === id),
     setNodes: (list: { id: string; position: { x: number; y: number }; data: unknown }[]) => {
       nodes.value = list.map((n) => {
         const old = nodes.value.find((o) => o.id === n.id);
         // A node keeps its measured size until it is measured again (a collapsed container that opened is taller).
-        return { ...n, dimensions: old?.dimensions ?? { width: 310, height: 40 } };
+        return Object.defineProperty({ ...n, dimensions: old?.dimensions ?? { width: 310, height: 40 } }, 'computedPosition', { get() { return this.position; } });
       });
     },
     setEdges: (list: { id: string }[]) => void (edges.value = list),
@@ -66,6 +67,7 @@ vi.mock('@vue-flow/core', async (orig) => {
     screenToFlowCoordinate: (p: { x: number; y: number }) => ({ x: p.x - 10, y: p.y - 20 }),
     fitView: async () => (store.fitAt.push(store.layouts), true),
     setCenter: async () => true,
+    setViewport: async (t: { x: number; y: number; zoom: number }) => (store.viewports.push(t), true),
   };
   return { ...(await orig<typeof import('@vue-flow/core')>()), useVueFlow: () => vf };
 });
@@ -915,6 +917,125 @@ describe('screenPixel: dashed outlines keep their on-screen width', () => {
     expect(screenPixel(1.6)).toBeCloseTo(0.625);
     expect(screenPixel(0.01)).toBeCloseTo(1 / MIN_ZOOM); // below the minimum zoom counts as the minimum
     expect(screenPixel(Number.NaN)).toBeCloseTo(1 / MIN_ZOOM);
+  });
+});
+
+describe('useMapCanvas: a chain dims softly', () => {
+  it('the cards off a hovered chain are "dim soft" (so is the wire), and the hover leaving puts them back', async () => {
+    const { map } = await open();
+    map.hover('op:u0');
+    await settle();
+    const off = nodesOf().filter((n) => n.id !== 'op:u0' && n.id !== 't:t1' && n.class);
+    expect(off.length).toBeGreaterThan(0);
+    for (const n of off) expect(n.class, n.id).toBe('dim soft');
+    map.hover(null);
+    await settle();
+    for (const n of nodesOf()) expect(n.class, n.id).toBeUndefined();
+  });
+});
+
+describe('a fit keeps the project frame tab in view', () => {
+  const view = { width: 1000, height: 600 };
+  const box = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const node = (x: number, y: number, width = 100, height = 40) => ({ computedPosition: { x, y }, dimensions: { width, height } });
+
+  it('boundsOf is the box round the measured nodes; null with none', () => {
+    expect(boundsOf([node(0, 0), node(300, 200, 100, 40), node(-50, -20, 0, 0)])).toEqual(box(0, 0, 400, 240)); // the unmeasured one is not drawn
+    expect(boundsOf([])).toBeNull();
+  });
+
+  it('a fit of everything is the frame: the margin all round and the label tab on top', () => {
+    const all = box(0, 0, 400, 240);
+    expect(framedBounds(all, all)).toEqual(box(-28, -58, 456, 326));
+  });
+
+  it('a fit of the top cards is raised for the tab; a fit of the middle ones is not widened by a frame far away', () => {
+    const all = box(0, 0, 400, 600);
+    expect(framedBounds(box(0, 0, 400, 100), all)).toEqual(box(-28, -58, 456, 158)); // top, left and right edges, not the bottom
+    expect(framedBounds(box(100, 200, 100, 100), all)).toEqual(box(100, 200, 100, 100));
+  });
+
+  it('the tab is on screen after the fit, and a small family still fills the canvas up to the zoom cap', () => {
+    expect(fitViewport(framedBounds(box(0, 0, 200, 40), box(0, 0, 200, 40)), view).zoom).toBeCloseTo(1.4);
+    const all = box(0, 0, 200, 520); // tall: the zoom is set by its height, so the tab is what the bare fit would cut off
+    const framed = framedBounds(all, all);
+    const t = fitViewport(framed, view);
+    expect(t.y + framed.y * t.zoom, 'the tab top edge').toBeGreaterThanOrEqual(0);
+    expect(t.y + (framed.y + framed.height) * t.zoom, 'the frame bottom edge').toBeLessThanOrEqual(view.height);
+    const bare = fitViewport(all, view);
+    expect(bare.y + (all.y - 58) * bare.zoom, 'without the room for it').toBeLessThan(0);
+  });
+
+  it('a big family fits at less than the cap, and never below the minimum zoom', () => {
+    expect(fitViewport(box(0, 0, 4000, 2000), view).zoom).toBeLessThan(0.3);
+    expect(fitViewport(box(0, 0, 1e6, 1e6), view).zoom).toBe(MIN_ZOOM);
+  });
+
+  it('the frame label is the project code and name, and empty (no frame) without a code', () => {
+    expect(projectFrameLabel({ code: 'P-1', label: 'Ti study' })).toBe('P-1 · Ti study');
+    expect(projectFrameLabel({ code: 'P-1' })).toBe('P-1');
+    expect(projectFrameLabel({ code: '' })).toBe('');
+    expect(projectFrameLabel(null)).toBe('');
+  });
+});
+
+describe('outsideView: when the minimap is worth drawing', () => {
+  const view = { width: 1000, height: 600 };
+  const v = { x: 0, y: 0, zoom: 1 };
+
+  it('a card inside the canvas is not outside; one a few pixels over the edge is not either (no flicker)', () => {
+    expect(outsideView({ x: 100, y: 100, width: 200, height: 100 }, v, view)).toBe(false);
+    expect(outsideView({ x: -3, y: 0, width: 200, height: 100 }, v, view)).toBe(false);
+    expect(outsideView({ x: 900, y: 500, width: 103, height: 100 }, v, view)).toBe(false);
+  });
+
+  it('a card more than that over any edge is outside, at any zoom and pan', () => {
+    expect(outsideView({ x: -10, y: 0, width: 200, height: 100 }, v, view)).toBe(true);
+    expect(outsideView({ x: 0, y: -10, width: 200, height: 100 }, v, view)).toBe(true);
+    expect(outsideView({ x: 900, y: 0, width: 110, height: 100 }, v, view)).toBe(true);
+    expect(outsideView({ x: 0, y: 550, width: 200, height: 100 }, v, view)).toBe(true);
+    expect(outsideView({ x: 400, y: 100, width: 200, height: 100 }, { x: 0, y: 0, zoom: 2 }, view)).toBe(true); // 800..1200 on screen
+    expect(outsideView({ x: 400, y: 100, width: 200, height: 100 }, { x: -300, y: 0, zoom: 2 }, view)).toBe(false);
+  });
+});
+
+describe('useMapCanvas: Fit with the project frame drawn', () => {
+  const inProject = () => {
+    const proj = { collection: 'projects', id: 'p1', code: 'PRJ-1', label: 'Titanium study' };
+    return mkData({
+      samples: [mkSample('a', { projectId: 'p1' }), mkSample('b', { projectId: 'p1' })],
+      operations: [mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', relations: { project_id: proj }, projectId: 'p1' })],
+    });
+  };
+
+  it('frames the cards with the room of the frame and its tab, by the viewport, at no more than the fit zoom cap', async () => {
+    vi.mocked(loadFamily).mockResolvedValue(inProject());
+    const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: '1' } as Record<string, unknown> });
+    const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+    const canvas = useMapCanvas(map);
+    await settle();
+    expect(map.project.value?.code).toBe('PRJ-1');
+    store.viewports.length = 0;
+    store.fitAt.length = 0;
+    await canvas.fit();
+    expect(store.fitAt, 'the frame is part of the fit, so the own fit of Vue Flow is not used').toEqual([]);
+    expect(store.viewports).toHaveLength(1);
+    const [v] = store.viewports;
+    expect(v.zoom).toBeLessThanOrEqual(1.4);
+    const frame = canvas.frame.value!;
+    expect(v.y + frame.y * v.zoom, 'the tab is on the canvas').toBeGreaterThanOrEqual(0);
+    expect(v.x + frame.x * v.zoom).toBeGreaterThanOrEqual(0);
+    expect(v.x + (frame.x + frame.width) * v.zoom).toBeLessThanOrEqual(1000);
+    expect(v.y + (frame.y + frame.height) * v.zoom).toBeLessThanOrEqual(600);
+  });
+
+  it('with no project known (no frame drawn) the fit is the own fit of Vue Flow, of the cards', async () => {
+    const { canvas } = await open();
+    store.viewports.length = 0;
+    store.fitAt.length = 0;
+    await canvas.fit();
+    expect(store.fitAt).toHaveLength(1);
+    expect(store.viewports).toEqual([]);
   });
 });
 

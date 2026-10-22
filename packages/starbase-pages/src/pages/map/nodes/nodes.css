@@ -81,6 +81,7 @@
    the "Planned" one above and comes after it. */
 .d1-process-map .node.removing { opacity: 0.6; border-style: dashed; border-color: var(--d1-bad); }
 .d1-process-map .node.removing .code,
+.d1-process-map .node.removing .nick,
 .d1-process-map .node.removing .n,
 .d1-process-map .node.removing .meta,
 .d1-process-map .node.removing .d { text-decoration: line-through; }

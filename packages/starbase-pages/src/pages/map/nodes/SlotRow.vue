@@ -53,7 +53,7 @@ const toggleFan = stopping(() => {
 		<div class="slot nodrag nopan" :class="{ focal, one: !!single }" :style="{ '--k': color }" v-bind="chip">
 			<span class="si k-ink k-tint"><v-icon :name="icon" x-small /></span>
 			<span class="sr" :class="{ vh: !!single }">{{ item.role }}</span>
-			<span v-if="single" class="sc" :title="`${item.role}: ${slotText(single)}`">{{ slotText(single) }}</span>
+			<span v-if="single" class="sc">{{ slotText(single) }}</span>
 			<button v-else-if="many" type="button" class="vals" :aria-expanded="expanded" @click.stop="expanded = !expanded">{{ summary }}</button>
 			<span v-else class="sc none">none</span>
 			<span v-if="item.partial" class="part">some rows</span>

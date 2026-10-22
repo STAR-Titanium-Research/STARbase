@@ -25,6 +25,7 @@ describe('chainFocus', () => {
   it('both (the default): back through its own row of the cut, on to what came after; siblings stay dim', () => {
     const f = chainFocus(g, 's:c0')!;
     expect(f.dim).toBe(true);
+    expect(f.soft).toBe(true); // a chain dims lightly: "not on this chain", not "disabled"
     expect(sorted(f.nodes)).toEqual([...new Set([...behind, ...ahead])].sort());
     expect(f.nodes.has('s:c1')).toBe(false);
     expect(f.nodes.has('s:e')).toBe(false);
@@ -76,6 +77,7 @@ describe('hoverFocus', () => {
   it('a slot record: the cards that hold it with their neighbours and wires', () => {
     const f = hoverFocus(graph, 'equipment:e1')!;
     expect(f.dim).toBe(true);
+    expect(f.soft).toBeUndefined(); // hovering a record in a tray dims strongly
     expect(f.nodes.has(op('o1'))).toBe(true);
     expect(f.nodes.has('s:p')).toBe(true);
     expect(f.nodes.has(op('o2'))).toBe(false);

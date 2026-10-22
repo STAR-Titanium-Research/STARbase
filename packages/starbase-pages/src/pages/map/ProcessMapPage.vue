@@ -31,7 +31,7 @@ import MapTitleActions from './MapTitleActions.vue';
 import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
-import { MIN_ZOOM, miniMapColor, useMapCanvas } from './useMapCanvas';
+import { MIN_ZOOM, miniMapColor, projectFrameLabel, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { useMaterialComposition } from './useMaterialComposition';
@@ -129,10 +129,12 @@ const finderOpen = ref(false);
 const recent = useRecentRecords(host.api);
 watch(() => map.status.value, (s) => { if (s === 'empty') recent.load().catch(() => {}); }, { immediate: true });
 
-const frameLabel = computed(() => {
-	const p = map.project.value;
-	return p?.code ? [p.code, p.label].filter(Boolean).join(' · ') : '';
-});
+const frameLabel = computed(() => projectFrameLabel(map.project.value));
+// The minimap is drawn while some card is outside the canvas, and kept while the pointer is on it (zooming out on it
+// until everything fits must not remove it from under the pointer). Not on a phone.
+const overMiniMap = ref(false);
+const showMiniMap = computed(() => !phone.value && (canvas.outgrowsView.value || overMiniMap.value));
+watch(showMiniMap, (shown) => { if (!shown) overMiniMap.value = false; }); // gone with no leave event (a phone-sized window)
 const frameStyle = computed(() => {
 	const f = canvas.frame.value;
 	return f ? { left: `${f.x}px`, top: `${f.y}px`, width: `${f.width}px`, height: `${f.height}px` } : null;
@@ -342,7 +344,7 @@ const tipHint = computed(() => {
 										</div>
 									</template>
 									<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-									<MiniMap v-if="!phone && canvas.outgrowsView.value" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+									<MiniMap v-if="showMiniMap" pannable zoomable @pointerenter="overMiniMap = true" @pointerleave="overMiniMap = false" :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
 									<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 								</VueFlow>
 								<EmptyDraftHint v-if="emptyDraft" />
