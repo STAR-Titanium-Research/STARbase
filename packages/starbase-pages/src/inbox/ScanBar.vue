@@ -28,7 +28,7 @@ const detail = computed(() => (props.measure.pct === null ? `${props.measure.lab
 </template>
 
 <style scoped>
-.bar { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 3px 10px; min-width: 0; --bar-ink: var(--d1-accent, var(--theme--primary)); }
+.bar { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 3px 10px; min-width: 0; --bar-ink: var(--d1-dim); }
 .bar.bare { grid-template-columns: 1fr; justify-items: end; gap: 3px; }
 .label { font-size: var(--fs-sm, 12px); color: var(--d1-dim); min-width: 0; }
 .value { font-size: var(--fs-md, 13px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--theme--foreground); white-space: nowrap; }
