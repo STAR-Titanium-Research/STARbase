@@ -555,3 +555,131 @@ Two Opus reviews (front end and migrations) were run on the merged branch. The m
     - Fix the stale comment at `packages/d1-ui/src/process.ts:26`.
 14. **Lab stats.** `LabStats.vue` stops counting Conform runs as "Machining". Count them under their own label, or leave them out of that split with a test.
 15. **Folder id.** Use `CONFORM_LOGS_FOLDER_ID` from the contract, and remove the lookup by name.
+
+---
+
+## Review round 2: DESIGN.md audit + fix review (Opus)
+
+The maintainer asked that the GUI follow `DESIGN.md`.
+- An Opus design audit and an Opus correctness review of round 1 ran. The correctness review found round 1 ready to merge, with six should-fix items. The design audit found 2 must-fix and 19 should-fix deviations.
+- Main was merged in. It took ADR-0024 and migration `20261021000206`, so the Conform ADR is now **ADR-0025**. Main also split `tests/phase1_schema.sh` into `tests/schema/<NNN>-<feature>.sh` files.
+
+| Stream | Agent profile | Owns | State |
+|---|---|---|---|
+| G1 — schema renumber, phase1 port, hook, PDF | `d1-server-implementer` | `db/`, `tests/schema/`, `scripts/`, `core/extensions/`, docs for those | in progress |
+| G2a — plotter | `directus-ui-implementer` | `packages/fast-plotting/**`, `apps/starbase/web/**` | in progress |
+| G2b — Operation page, map, kit | `directus-ui-implementer` | `packages/d1-ui/**`, `packages/starbase-pages/**` | in progress |
+
+### Shared decisions (binding for G1, G2a and G2b)
+
+- **Figures.** `packages/fast-plotting/src/conform/format.ts` (already committed) defines:
+  - `CONFORM_FIGURES` (labels in sentence case, units, number kind)
+  - `formatFigure(key, value)` and `figureNumber(key, value)`
+  - `niceNumber`, which follows DESIGN 5b: integers from 100, one decimal from 10, up to two below, no trailing zeros
+  - energy and demand to 2 decimals; durations `12 min 05 s` / `1 h 23 min`
+  - `DASH = '—'`, the em dash for no reading, printed with no unit
+  - `CONFORM_STATUS`: no_log → "No log" (neutral), no_window → "No run window" (warning), done → "Window set" (success), error → "Failed" (danger)
+
+  Every surface uses these labels and formats. d1-report keeps a mirrored copy of the table, the way it mirrors choice labels.
+- **Dates.** Display dates as `formatUkDate` → "17 Mar 2025", and date with time as `formatUkDateTimeDisplay` → "17 Mar 2025, 13:38:20", both in `clock.ts`. ISO dates only in inputs. Clock times are `HH:MM:SS`, marked "(UK time)" where it matters.
+- **Time axis on Conform plots** (DESIGN 5b, option b):
+  - The axis keeps elapsed minutes and is titled "Time since log start (min)".
+  - The hover badge on the axis shows elapsed time. The tooltip may add the UK clock time.
+  - Window texts in the run column use one unit: clock times.
+  - FAST's axis is unchanged.
+- **Run-window bands:**
+  - Other runs' windows: a foreground wash at 5 %. The current run: an accent wash at 10 %.
+  - When the view lies within 10 % of the current window (the usual case, since the plot opens on it), the current window is drawn as two 1 px accent edge lines and no wash.
+  - Labels go in the top margin above the plot area, only on the top row of tiles, cut with an ellipsis, with a surface-coloured halo (`paint-order: stroke`).
+- **Buttons, inputs and notes** (DESIGN 4, 6 and 7):
+  - Buttons copy the kit's `IndexActions` `.btn` / `.pri` rules: 8 px radius, 30 px tall, `--d1-tile` background, foreground text, accent border on hover. No pill buttons.
+  - Inputs use `--theme--form--field--input--background` and `1px solid var(--theme--border-color)`, as `.fd-search` does.
+  - Notes use the kit's `.d1-note`, `.d1-note.warn` and `.d1-note.bad`. Error ink is `--d1-bad` and warning ink is `--d1-warn`, never the raw theme fills.
+  - Font sizes are always `var(--fs-*, Npx)`, with the px fallback.
+  - Under 700 px, touch targets are at least 40 px tall.
+- **Inline confirms:**
+  - `role="group"` plus an `aria-live="polite"` sentence.
+  - Focus moves to Cancel when the confirm opens.
+  - The destructive action is drawn as danger (ink and border `--d1-bad`).
+  - Aria labels name the action ("Unlink the log", "Replace the log").
+- **Words** (DESIGN 11, `CONTEXT.md`):
+  - The plotter heading is "Conform plotter".
+  - "Could not load the Conform runs".
+  - The search placeholder is "Search code / feedstock", and the search includes `conform_feedstock`.
+  - The run column's figure tiles are titled "Key figures": three tiles, or 2×2, never a lone tile.
+  - A reader who cannot edit sees "No run window is set." and no instruction to press a hidden button.
+  - Empty sections are one line.
+  - MarkDone warnings read "You can still mark these done:" and "<code>: no run window, so no summary, energy or steps."
+- **Hook refusals.** Show `errors[0].extensions.reason` only when the error comes from `d1-conform-guard` or `d1-access-guard`. G1 makes the conform hook set `extensions.source: 'd1-conform-guard'`; mirror how the kit's `guardRefusal` recognises `d1-access-guard`. Otherwise show a plain sentence, such as "You can't change this Conform run." for a 403, or "Could not save the run window." for anything else, never Directus's developer text.
+- **"Already uploaded" prompt.** `uploadConformLog`'s `{ existing }` result also carries `existingWindows` (labelled, via `labelWindows`). Both prompts list those windows and show `wholeLogNote` before "Use that log".
+
+### G1 (d1-server-implementer)
+
+1. **Renumber the Conform migrations to follow main's 206.**
+   - `20261022000206_conform_category` → `20261022000207_conform_category`
+   - `…207_conform_logs_and_run_data` → `…208_…`
+   - `…208_conform_form_layout` → `…209_…`
+   - `…209_conform_review_fixes` → `…210_…`
+
+   Use `git mv` in reverse order. Update every reference: the files' own comments and cross-references, `scripts/configure_form_layout.sql` (the CONFORM block must stay byte-identical), `scripts/access_rules.json` and the generated files, `tests/scripts/test_access_rules.py`, `core/extensions/d1-conform-guard`, `d1-access-guard`, docs (ADR-0011, ADR-0025, data dictionary, backlog, spec, plan), and `packages/fast-plotting/src/conform/api.ts`'s comment. Only Conform references; main's migration 206 is the pointer-row guard.
+2. **Port the Conform checks into section files.** Port our changes to the old single-file `tests/phase1_schema.sh` into `tests/schema/` section files: a new `200-conform.sh`, plus edits to the existing sections our diff changed (the counts for migration 168 and the Lab Viewer replay, the guarded-parents proof, the form-layout checks and so on).
+   - Get the diff with `git diff d666f8693de0010993aae33bc21cad7b43a9b8cb 61112df0bf7466d7855abb2c53be2dfb0fc26adb -- tests/phase1_schema.sh`.
+   - Then apply the renumbering.
+   - The whole suite must pass on a fresh database with main's 205/206 and our 207–210.
+3. **`d1-conform-guard`:**
+   - Every refusal carries `extensions.source: 'd1-conform-guard'`.
+   - A new `files.update` filter refuses a non-admin update of any `directus_files` row referenced by `conform_logs.directus_files_id`, with "A Conform log's file can't be changed after upload."
+   - Add tests for both.
+4. **PDF (d1-report):**
+   - Must-fix: move the Conform appendix CSS (`.cf-plots`, `.cf-window`, `.tbl`, `.cf-sum`, `.cf-sub`, `.cf-note`) into `datasheetHtml`'s `<style>`, after `.fast-plots`, so the plots sit two across like FAST's. Add a test that the operation HTML contains `.cf-plots {`.
+   - Use the mirrored figure table: labels, `niceNumber`, em dash with no unit.
+   - Missing parts are worded ("IPS, cooling"), not raw keys.
+   - "No step of a minute or more at one IPS setpoint and wheel speed in this window."
+   - 5–6 nice ticks per axis, with axis titles that include units.
+   - Keep the report's series palette (it matches the FAST appendix). G1 notes that palette as a deliberate exception in its report.
+5. **Backlog.** C5 also covers the `files.update` refusal.
+6. **Checks.**
+   - `bash tests/phase1_schema.sh` all-pass on a fresh scratch cluster: `SCRATCH_PG_PORT=54333`, `SCRATCH_PG_DIR=/tmp/d1-scratch-pg5`, database created UTF8 from template0, `/tmp/gobin/dbmate`.
+   - `migration_roundtrip.sh`, `gen_access_rules --check`, `pytest tests/scripts -q` with `REQUIRE_DB_TESTS=1`.
+   - `node --test core/extensions/*/index.test.mjs`, d1-report tests, `pre-commit`.
+
+### G2a (directus-ui-implementer): plotter
+
+These are the audit's items 2, 3 (plotter words via `CONFORM_STATUS`), 7, 9, 10, 11, 12, 13, 14, 15, 16 and 20 for the plotter files, plus review items 1, 2 (plotter and api), 3, 4 and 6 (the candidates cache):
+
+- `RunWindowActions`:
+  - drop `role="listitem"` from the buttons;
+  - error and warning ink from the tokens;
+  - confirm pattern as above;
+  - clear `candidates` after every action;
+  - show the view text in clock time.
+- `FastRunColumn` `.err` uses the token.
+- Bands and labels as specified above.
+- Axis titled "Time since log start (min)", with elapsed time on the badge.
+- `conformProfile`:
+  - figures from `CONFORM_FIGURES`;
+  - a "Key figures" title through a new profile field `peaksTitle`;
+  - 2×2 tiles;
+  - the Statistics tab grid two columns wide, so labels aren't cut;
+  - heading "Conform plotter";
+  - a `runNoun` profile field;
+  - placeholder and feedstock search.
+- `api.ts`:
+  - `logId` set from `logBody.log_id` before the POST;
+  - `existingWindows` on the existing-log result;
+  - the guard-only `reason` rule.
+- `hash.ts`: a pure-JS SHA-256 fallback when `crypto.subtle` is missing (plain HTTP on the LAN), tested against `crypto.subtle` output for the fixture.
+- Phone width: touch targets as above. Fix the Plots lid overflow at 390 px if it's in fast-plotting.
+- FAST unchanged: `fastProfile.test.ts` stays as it is and passes.
+
+### G2b (directus-ui-implementer): Operation page, map, kit
+
+These are the audit's items 3, 4, 5, 6, 7, 8, 9, 12, 13, 17, 18, 19 and 20 for the Operation-page and map files, plus the nits, review item 2 (`ConformLogSource`) and review item 6 (`conformThumbs` retrying a run that already has a note):
+
+- `packages/d1-ui/src/status.ts` gains a `conform` `StatusKind` with the `CONFORM_STATUS` words and tones. `ConformRunSection` shows `<StatusBadge kind="conform">`.
+- `conformRows.ts` is rebuilt on `formatFigure` and `CONFORM_FIGURES`. Its 2 failing tests on the branch head come from the em-dash change; fix them by asserting the new formats.
+- `FactList` replaces the hand-built `dl`.
+- Buttons, inputs, notes and font fallbacks as above; spacing on the scale; the step start time not in mono.
+- `ConformTrace` draws its second series dashed (`4 3`) and has a one-line key in the DataThumb caption and on the Operation page.
+- MarkDone wording as above, and its warning tint at 18 %.
+- Dates in the display form.
