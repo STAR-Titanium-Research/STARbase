@@ -38,7 +38,7 @@ gen = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gen)
 
 DOC = gen.load()
-CONFORM_LOGS_FOLDER_ID = "c04f1000-0000-4000-8000-000000000001"  # migration 209
+CONFORM_LOGS_FOLDER_ID = "c04f1000-0000-4000-8000-000000000001"  # migration 210
 ROWS = gen.build_rows(DOC)
 VIEWER_ROWS = gen.viewer_rows(DOC, ROWS)
 BY_KEY = {(r["collection"], r["action"]): r for r in ROWS}
@@ -730,11 +730,11 @@ def test_every_leaf_matches_the_signed_in_user_or_the_restricted_flag():
                 allowed.add(("user_created", "$CURRENT_USER"))
             if (
                 row["collection"] == "conform_logs"
-            ):  # migration 207: the uploader deletes their own log
+            ):  # migration 208: the uploader deletes their own log
                 allowed.add(("created_by", "$CURRENT_USER"))
             if (
                 row["collection"] == "directus_folders"
-            ):  # migration 209: members read the one "Conform Logs" folder
+            ):  # migration 210: members read the one "Conform Logs" folder
                 allowed.add(("id", CONFORM_LOGS_FOLDER_ID))
             assert (key, value) in allowed, (
                 row["collection"],

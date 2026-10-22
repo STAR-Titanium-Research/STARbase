@@ -36,7 +36,7 @@ export interface ConformRunBundle { run: ConformRunRow | null; log: ConformLogRo
 /** A log offered in a picker, with the windows already on it. */
 export interface CandidateLog extends ConformLogRow { windows: LogWindow[] }
 
-/** The fixed id of the Directus folder "Conform Logs" (seeded by migration 209). Uploads go into it with no lookup by name. */
+/** The fixed id of the Directus folder "Conform Logs" (seeded by migration 210). Uploads go into it with no lookup by name. */
 export const CONFORM_LOGS_FOLDER_ID = 'c04f1000-0000-4000-8000-000000000001';
 /** What a refused duplicate says (the database's unique error on `source_sha256`). */
 export const ALREADY_UPLOADED = 'This log is already uploaded: use “Use a log already uploaded”.';

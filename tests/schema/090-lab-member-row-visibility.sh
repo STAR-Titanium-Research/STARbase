@@ -162,7 +162,7 @@ expect_fixed rl_out "files_create_columns_left_out:owner_person_id,owner_team_id
 expect_fixed rl_out "files_update_columns_left_out:owner_person_id,owner_team_id" "directus_files.update leaves out exactly the two provenance owner columns (migration 196)"
 expect_fixed rl_out "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
 expect_fixed rl_out "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
-expect_fixed rl_out "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
+expect_fixed rl_out "child_one_hop:12" "every child of a record reads through one bare hop to its parent's readers (12 collections, conform_run_data being the newest)"
 expect_fixed rl_out "update_delete_no_some:0" "no update or delete filter contains a _some (a legal _some would apply the readers table's own rule for the action)"
 expect_fixed rl_out "readers_tables_read:6" "Lab Member reads the six readers tables for their own rows only (user_id = the caller)"
 expect_fixed rl_out "open_set_read:1" "Lab Member reads operation_open_to_all without a filter"
@@ -187,8 +187,8 @@ grep -qF "$guard_sql" core/extensions/d1-access-guard/index.js \
     && ok "d1-access-guard sends the 'inserted here and never updated' proof this test exercises" \
     || bad "d1-access-guard/index.js no longer contains: $guard_sql (update this test with it)"
 guard_parents=$(python3 -c "import json;print(' '.join(sorted({c['parent'] for v in json.load(open('core/extensions/d1-access-guard/rules.json'))['guards'].values() for c in v})))")
-[[ "$guard_parents" == "campaigns directus_files physical_samples projects test_sessions" ]] \
-    && ok "the guarded parents are exactly campaigns, directus_files, physical_samples, projects and test_sessions" \
+[[ "$guard_parents" == "campaigns conform_logs directus_files manufacturing_operations physical_samples projects test_sessions" ]] \
+    && ok "the guarded parents are exactly campaigns, conform_logs, directus_files, manufacturing_operations, physical_samples, projects and test_sessions" \
     || bad "d1-access-guard now guards another parent ($guard_parents): give it a version column or fail it closed, and extend this test"
 # directus_files (the parent of surface_scans.directus_files_id, ADR-0023) is a Directus system table with no OCC version column, so the guard must
 # never ask it the "inserted here and never updated" question (the query would fail): index.js lists it in UNVERSIONED_PARENTS.
@@ -198,9 +198,9 @@ grep -qF "const UNVERSIONED_PARENTS = new Set(['directus_files']);" core/extensi
     && ok "d1-access-guard skips the created-here proof for exactly directus_files" \
     || bad "d1-access-guard/index.js UNVERSIONED_PARENTS is no longer exactly directus_files (update this test with it)"
 run_eq "every guarded parent has the OCC version column" \
-    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','physical_samples','projects','test_sessions')" "4"
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','conform_logs','manufacturing_operations','physical_samples','projects','test_sessions')" "6"
 run_eq "every guarded parent has its OCC trigger (version rises on every update)" \
-    "SELECT count(*) FROM pg_trigger WHERE tgfoid='occ_update_trigger_function'::regproc AND NOT tgisinternal AND tgrelid IN ('campaigns'::regclass,'physical_samples'::regclass,'projects'::regclass,'test_sessions'::regclass)" "4"
+    "SELECT count(*) FROM pg_trigger WHERE tgfoid='occ_update_trigger_function'::regproc AND NOT tgisinternal AND tgrelid IN ('campaigns'::regclass,'conform_logs'::regclass,'manufacturing_operations'::regclass,'physical_samples'::regclass,'projects'::regclass,'test_sessions'::regclass)" "6"
 XP=c0000000-0000-4000-8000-00000000f0
 # The "existing" parents are committed first (a transaction cannot be both old and new), then removed.
 $PSQL -q >/dev/null 2>&1 <<SQL
@@ -208,6 +208,10 @@ INSERT INTO projects (project_id, project_code, project_name) VALUES ('${XP}01',
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${XP}02', 'XMIN-OLD-S');
 INSERT INTO campaigns (campaign_id, project_id, campaign_type, name) VALUES ('${XP}03', '${XP}01', 'testing_campaign', 'xmin old campaign');
 INSERT INTO test_sessions (session_id) VALUES ('${XP}04');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id) VALUES ('${XP}05', '${XP}02', (SELECT min(method_id::text)::uuid FROM manufacturing_methods));
+INSERT INTO directus_files (id) VALUES ('${XP}06');
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+  VALUES ('${XP}07', '${XP}06', 'xmin.csv', repeat('b', 64), '2025-03-17 13:00+00', '2025-03-17 14:00+00', 1, 0, '[]', '{}', '{}');
 SQL
 xmin_out=$($PSQL 2>&1 <<SQL
 BEGIN;
@@ -216,27 +220,39 @@ INSERT INTO projects (project_id, project_code, project_name) VALUES ('${XP}11',
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${XP}12', 'XMIN-NEW-S');
 INSERT INTO campaigns (campaign_id, project_id, campaign_type, name) VALUES ('${XP}13', '${XP}01', 'testing_campaign', 'xmin new campaign');
 INSERT INTO test_sessions (session_id) VALUES ('${XP}14');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id) VALUES ('${XP}15', '${XP}12', (SELECT min(method_id::text)::uuid FROM manufacturing_methods));
+INSERT INTO directus_files (id) VALUES ('${XP}16');
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+  VALUES ('${XP}17', '${XP}16', 'xmin2.csv', repeat('c', 64), '2025-03-17 13:00+00', '2025-03-17 14:00+00', 1, 0, '[]', '{}', '{}');
 SELECT 'old_before_update:' || (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND xmin = pg_current_xact_id()::xid AND version = 1);
 -- pre-existing parents updated by this transaction (same xmin as ours, version raised by the OCC trigger)
 UPDATE projects SET project_name = 'touched' WHERE project_id = '${XP}01';
 UPDATE physical_samples SET notes = 'touched' WHERE sample_id = '${XP}02';
 UPDATE campaigns SET name = 'touched' WHERE campaign_id = '${XP}03';
 UPDATE test_sessions SET notes = 'touched' WHERE session_id = '${XP}04';
+UPDATE manufacturing_operations SET outcome_notes = 'touched' WHERE operation_id = '${XP}05';
+UPDATE conform_logs SET source_filename = 'touched' WHERE log_id = '${XP}07';
 SELECT 'updated_here_xmin_alone:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND xmin = pg_current_xact_id()::xid)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}02' AND xmin = pg_current_xact_id()::xid)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}03' AND xmin = pg_current_xact_id()::xid)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND xmin = pg_current_xact_id()::xid));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND xmin = pg_current_xact_id()::xid)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}05' AND xmin = pg_current_xact_id()::xid)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}07' AND xmin = pg_current_xact_id()::xid));
 SELECT 'updated_here_guard:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND $guard_sql)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}02' AND $guard_sql)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}03' AND $guard_sql)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND $guard_sql));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND $guard_sql)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}05' AND $guard_sql)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}07' AND $guard_sql));
 SELECT 'inserted_here_guard:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}11' AND $guard_sql)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}12' AND $guard_sql)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}13' AND $guard_sql)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}14' AND $guard_sql));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}14' AND $guard_sql)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}15' AND $guard_sql)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}17' AND $guard_sql));
 -- a new row that is then updated in the same transaction no longer qualifies either (fails closed)
 UPDATE projects SET project_name = 'touched' WHERE project_id = '${XP}11';
 SELECT 'inserted_then_updated_guard:' || count(*) FROM projects WHERE project_id='${XP}11' AND $guard_sql;
@@ -244,15 +260,18 @@ ROLLBACK;
 SQL
 )
 $PSQL -q >/dev/null 2>&1 <<SQL
+DELETE FROM conform_logs WHERE log_id = '${XP}07';
+DELETE FROM directus_files WHERE id = '${XP}06';
+DELETE FROM manufacturing_operations WHERE operation_id = '${XP}05';
 DELETE FROM test_sessions WHERE session_id = '${XP}04';
 DELETE FROM campaigns WHERE campaign_id = '${XP}03';
 DELETE FROM physical_samples WHERE sample_id = '${XP}02';
 DELETE FROM projects WHERE project_id = '${XP}01';
 SQL
 expect_fixed xmin_out "old_before_update:0" "a pre-existing parent is not 'created here' (xmin differs)"
-expect_fixed xmin_out "updated_here_xmin_alone:4" "xmin alone matches all four pre-existing parents once updated in the transaction (why version = 1 is needed)"
-expect_fixed xmin_out "updated_here_guard:0" "the guard's proof refuses a pre-existing parent updated in the same transaction (samples, tests, campaigns, projects)"
-expect_fixed xmin_out "inserted_here_guard:4" "the guard's proof accepts a parent inserted by the transaction (samples, tests, campaigns, projects)"
+expect_fixed xmin_out "updated_here_xmin_alone:6" "xmin alone matches all six pre-existing parents once updated in the transaction (why version = 1 is needed)"
+expect_fixed xmin_out "updated_here_guard:0" "the guard's proof refuses a pre-existing parent updated in the same transaction (samples, tests, campaigns, projects, operations, Conform logs)"
+expect_fixed xmin_out "inserted_here_guard:6" "the guard's proof accepts a parent inserted by the transaction (samples, tests, campaigns, projects, operations, Conform logs)"
 expect_fixed xmin_out "inserted_then_updated_guard:0" "a parent inserted and then updated in the same transaction is refused (fails closed)"
 
 # Every path of every rule must resolve against the Directus metadata: a filter on owner_person_id.user_id
@@ -495,10 +514,11 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
--- migrations 143 and 175 keep a ledger in d1_private; drop them (rolled back) so 141's down can drop the empty schema
+-- migrations 143, 175 and 209 keep a ledger or backup in d1_private; drop them (rolled back) so 141's down can drop the empty schema
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DROP TABLE IF EXISTS d1_private.form_values_175_backup;
+DROP TABLE IF EXISTS d1_private.conform_form_layout_209_backup;
 DROP TABLE IF EXISTS d1_private.process_templates;
 DROP TABLE IF EXISTS d1_private.process_drafts;
 DROP TABLE IF EXISTS d1_private.inbox_prefs;
@@ -551,10 +571,10 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates), 20261014000177 (batches), 20261022000208 (conform_logs, conform_run_data) and 20261022000210 (conform_logs again, directus_folders), custom-rows and new collections, run after these and add their rows, which are the generated ones
 -- (the surface_scans rows come with tr_up: migration 205's rules block)
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'conform_logs', 'conform_run_data', 'directus_folders');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -563,8 +583,8 @@ $tr_down
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates, batches and surface_scans go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans');
+-- the replay's own rows for label_templates, batches, surface_scans, the Conform tables and the Conform Logs folder go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans', 'conform_logs', 'conform_run_data', 'directus_folders');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;

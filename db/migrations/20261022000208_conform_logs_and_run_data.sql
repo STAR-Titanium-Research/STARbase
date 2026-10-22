@@ -187,7 +187,7 @@ DECLARE
     r record;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly') THEN
-        RAISE NOTICE 'role d1_llm_readonly does not exist: no grants or row security policies created (migration 207)';
+        RAISE NOTICE 'role d1_llm_readonly does not exist: no grants or row security policies created (migration 208)';
         RETURN;
     END IF;
     GRANT SELECT ON conform_logs, conform_run_data TO d1_llm_readonly;
@@ -251,7 +251,7 @@ FROM (VALUES
     ('conform_run_data', 'created_at', NULL, 'datetime', NULL, 'datetime', NULL, true, true, 30, 'half', NULL, NULL),
     ('conform_run_data', 'updated_at', NULL, 'datetime', NULL, 'datetime', NULL, true, true, 31, 'half', NULL, NULL),
     ('conform_run_data', 'version', NULL, 'input', NULL, 'raw', NULL, true, true, 32, 'half', NULL, NULL),
-    -- the O2M back-reference on the operation form (migration 208 files it under Related records)
+    -- the O2M back-reference on the operation form (migration 209 files it under Related records)
     ('manufacturing_operations', 'conform_run', 'o2m', 'list-o2m', '{"template":"{{status}}","enableCreate":false,"enableSelect":false}', 'related-values', '{"template":"{{status}}"}', false, false, 52, 'full', '[{"language":"en-US","translation":"Conform run"}]', NULL)
 ) v (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, translations, note)
 WHERE NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = v.collection AND f.field = v.field);

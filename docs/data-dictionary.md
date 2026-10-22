@@ -736,14 +736,14 @@ The public tables are hidden Directus collections and are not audited. They are 
 ### Conform runs: `conform_*` columns, `conform_logs`, `conform_run_data`
 
 A **Conform run** is a `manufacturing_operations` row with `process_category = 'conform'` and method `CF`
-(migration `…206`, [ADR-0025](adr/0025-conform-is-its-own-process-category.md)). Its parameters are inline
+(migration `…207`, [ADR-0025](adr/0025-conform-is-its-own-process-category.md)). Its parameters are inline
 `conform_*` columns: `conform_run_number`, `conform_feedstock`, `conform_feedstock_form`
 (swarf / powder / granules / rod), `conform_feed_mass_g`, `conform_die_diameter_mm`, `conform_tooling_id`,
 `conform_extrusion_length_mm`, `conform_extrusion_mass_g`, `conform_yield_pct`, `conform_flash_mass_g`,
 `conform_wheel_speed_rpm` and `conform_ips_setpoint_c`. The last two are filled from the log's first step when
 empty. The code is `DD-MM-YY-CF-{run}-{die}dia`. A feedstock sample and its extrusion are linked as `extruded_from`.
 
-`conform_logs` (migration `…207`) is one uploaded machine log. It holds:
+`conform_logs` (migration `…208`) is one uploaded machine log. It holds:
 - `directus_files_id`: the normalised CSV, `time_s` first, then the `series` catalogue order, ending with the
   four derived `p_*_kw` power channels
 - `log_start` / `log_end`
@@ -751,7 +751,7 @@ empty. The code is `DD-MM-YY-CF-{run}-{die}dia`. A feedstock sample and its extr
 - `totals`: whole-log energy per component and average demand
 - `constants`: the power constants used
 - `source_sha256`: SHA-256 (lowercase hex) of the uploaded file's raw bytes, unique, so the same file is never uploaded
-  twice (migration `…209`)
+  twice (migration `…210`)
 - `run_windows`: the run windows on this log, `[{operation_id, start, end}]` sorted by start (UTC ISO-8601 with
   milliseconds), only runs with both window ends; kept by a trigger on `conform_run_data`, never written by a member
 
@@ -760,7 +760,7 @@ Several runs can share one log. `conform_run_data` (one per operation) holds the
 and `steps` computed in the browser over the window only.
 - **Windows.** A trigger refuses a window that overlaps another run's window on the same log, or that lies
   outside the log.
-- **Who can read a log.** Every Lab Member and Lab Viewer (migration `…209`). The run records stay private to their
+- **Who can read a log.** Every Lab Member and Lab Viewer (migration `…210`). The run records stay private to their
   own readers; `run_windows` shows the other windows, a run the reader cannot see being "Other run". Only the uploader
   can delete a log, and not while a run uses it (unlink it first). The "Conform Logs" folder of Directus Files has the
   fixed id `c04f1000-0000-4000-8000-000000000001`.

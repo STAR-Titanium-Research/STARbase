@@ -12,7 +12,8 @@ import endpoint from './index.js';
 import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport } from './render.js';
-import { conformAppendix, parseConformCsv, fmtDuration } from './conform.js';
+import { conformAppendix, parseConformCsv, fmtDuration, niceTicks, tickLabel } from './conform.js';
+import { CONFORM_FIGURES, DASH, figureNumber, formatFigure, niceNumber } from './conformFigures.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const OP_A = '22222222-2222-4222-8222-222222222222';
@@ -470,7 +471,7 @@ test('conformAppendix: four panels, summary, three steps, window rows only', () 
 	assert.equal(trace.time.length, 300);
 	const { toggles, blocks } = conformAppendix(CF_RUN, CF_LOG, trace);
 	for (const t of ['Wheel speed', 'Motor torque', 'Temperatures', 'IPS output']) assert.ok(blocks.includes(`>${t}<`), `panel ${t}`);
-	assert.ok(blocks.includes('Extruding time') && blocks.includes('Energy (total)'));
+	assert.ok(blocks.includes('Extruding time') && blocks.includes('Total energy'));
 	const stepsTable = blocks.split('class="tbl cf-steps"')[1].split('</table>')[0];
 	assert.equal((stepsTable.match(/<tr>/g) || []).length - 1, 3, 'header row + 3 step rows');
 	// Window is 12:01:00 to 12:04:00, i.e. rows 60..239: 180 points per line.
@@ -497,9 +498,17 @@ test('conformAppendix: summary and steps use the shared formats (kWh and kW to 2
 	for (const kwh of ['1.50 kWh', '2.25 kWh', '0.25 kWh', '4.00 kWh']) assert.ok(sum.includes(kwh), kwh);
 	assert.ok(sum.includes('80.40 kW'), 'average demand to 2 decimals');
 	assert.ok(!sum.includes('4.000') && !sum.includes('80.4 kW'));
+	// DESIGN 5b numbers: integers from 100, one decimal from 10, up to two below, no trailing zeros; labels in sentence case
+	for (const text of ['>6 rpm<', '>33 %<', '>430 °C<', '>41.2 A<', '>462 °C<', '>207 °C<', '>450 °C<']) assert.ok(sum.includes(text), text);
+	for (const label of ['Mean wheel speed', 'Mean tooling 1', 'Peak tooling 1', 'Motor energy', 'IPS energy', 'Cooling energy', 'Total energy', 'Average demand']) {
+		assert.ok(sum.includes(`>${label}<`), label);
+	}
+	assert.ok(!sum.includes('Energy (') && !sum.includes('(behind abutment)'));
 	const steps = blocks.split('class="tbl cf-steps"')[1].split('</table>')[0];
 	assert.ok(steps.includes('1 min 00 s') && !steps.includes('60 s'), 'a 60 s step');
 	assert.equal((steps.match(/>1\.30</g) || []).length, 3, 'step energy to 2 decimals');
+	assert.ok(steps.includes('>410–420 (10)<') || steps.includes('>410–420 (10)</td>') || steps.includes('410–420 (10)'), 'ranges by the nice-number rule');
+	assert.ok(steps.includes('>450<') && !steps.includes('450.0'), 'the IPS setpoint is an integer');
 	assert.ok(steps.includes('13:02:00') && steps.includes('13:02:59'), 'HH:MM:SS UK time');
 });
 
@@ -559,7 +568,8 @@ test('conformAppendix: an unreadable log still shows the summary and steps', () 
 test('conformAppendix: missing power channels are named', () => {
 	const run = { ...CF_RUN, summary: { ...CF_RUN.summary, energy_kwh: { motor: 1, ips: null, cooling: null, total: 1 }, missing: ['ips', 'cooling'] } };
 	const { blocks } = conformAppendix(run, null, null);
-	assert.ok(/not measured: ips, cooling/i.test(blocks));
+	assert.ok(blocks.includes('Not measured: IPS, cooling. Energy excludes these.'), 'worded parts, not the raw keys');
+	assert.ok(!/Not measured: ips/.test(blocks));
 });
 
 test('parseConformCsv: blank cells are NaN, column i+1 follows series[i]', () => {
@@ -580,7 +590,7 @@ test('operation report: a conform op renders the Conform appendix (log fetched t
 	const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
 	assert.equal(out.status, 200);
 	assert.ok(out.body.includes('Conform (continuous extrusion)'), 'category label');
-	assert.ok(out.body.includes('>Wheel speed<') && out.body.includes('Energy (total)'));
+	assert.ok(out.body.includes('>Wheel speed<') && out.body.includes('Total energy'));
 	assert.deepEqual([...out.body.matchAll(/data-rows="(\d+)"/g)].map((m) => m[1]), ['180', '180', '180', '180']);
 	assert.deepEqual(h.assetCalls, [{ id: FILE_CF, accountability: user }]);
 });
@@ -615,4 +625,114 @@ test('operation report: a conform log the caller cannot read gives the placehold
 	assert.ok(out.body.includes('Conform log not visible to you'));
 	assert.ok(out.body.includes('Extruding time'));
 	assert.equal(h.assetCalls.length, 0);
+});
+
+test('conformAppendix: no reading is an em dash with no unit (never "— rpm")', () => {
+	const run = { ...CF_RUN, summary: { ...CF_RUN.summary, mean_wheel_speed_rpm: null, peak_motor_current_a: undefined, ips_setpoint_c: NaN, avg_demand_kw: null } };
+	const sum = conformAppendix(run, null, null).blocks.split('class="tbl cf-sum"')[1].split('</table>')[0];
+	assert.equal((sum.match(/>—</g) || []).length, 4);
+	assert.ok(!/— (rpm|A|°C|kW)/.test(sum));
+});
+
+test('conformAppendix: an empty step list says why in words', () => {
+	const { blocks } = conformAppendix({ ...CF_RUN, steps: [] }, null, null);
+	assert.ok(blocks.includes('No step of a minute or more at one IPS setpoint and wheel speed in this window.'));
+	assert.ok(!blocks.includes('No steps were found'));
+});
+
+test('conformAppendix: the run window line is "17 Mar 2025, 13:38:20 to 13:53:19 (UK time)"', () => {
+	const run = { ...CF_RUN, window_start: '2025-03-17T13:38:20.000Z', window_end: '2025-03-17T13:53:19.000Z' };
+	assert.ok(conformAppendix(run, null, null).blocks.includes('Run window 17 Mar 2025, 13:38:20 to 13:53:19 (UK time)'));
+});
+
+// ---- the plots: DESIGN 5b chart rules --------------------------------------------------------------------------------------
+
+const panelSvgs = (blocks) => [...blocks.matchAll(/<svg [\s\S]*?<\/svg>/g)].map((m) => m[0]);
+const tickTexts = (svg) => [...svg.matchAll(/<text [^>]*class="fp-tick"[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+
+test('niceTicks: steps of 1, 2, 2.5 or 5 x 10^n, 5 or 6 of them, and the top tick above the data on a y axis', () => {
+	for (const [lo, hi] of [[0, 10], [3.2, 7.9], [20, 61.3], [398, 463], [0.0012, 0.0057], [-3, 8], [5, 7], [0, 1000], [30, 36.4], [200, 207]]) {
+		const { ticks, step } = niceTicks(lo, hi, { cover: true });
+		assert.ok(ticks.length >= 5 && ticks.length <= 6, `${lo}..${hi}: ${ticks.length} ticks`);
+		assert.ok(ticks[0] <= lo + 1e-9 && ticks[ticks.length - 1] >= hi - 1e-9, `${lo}..${hi}: the ticks cover the data`);
+		const m = step / 10 ** Math.floor(Math.log10(step) + 1e-9);
+		assert.ok([1, 2, 2.5, 5].some((k) => Math.abs(k - m) < 1e-9), `${lo}..${hi}: step ${step} is a nice one`);
+	}
+	assert.deepEqual(niceTicks(0, 10, { cover: true }).ticks, [0, 2, 4, 6, 8, 10]);
+	assert.deepEqual(niceTicks(0, 7.9, { cover: true }).ticks, [0, 2, 4, 6, 8]);
+	// a time axis never runs past its window: every tick is inside it
+	const x = niceTicks(1.0, 4.0);
+	assert.ok(x.ticks.every((v) => v >= 1 - 1e-9 && v <= 4 + 1e-9) && x.ticks.length >= 4 && x.ticks.length <= 7, x.ticks.join());
+	const wide = niceTicks(1, 3.98);
+	assert.deepEqual(wide.ticks, [1, 1.5, 2, 2.5, 3, 3.5]);
+});
+
+test('tickLabel: one number of decimals per axis, real minus signs', () => {
+	assert.deepEqual([0, 0.5, 1, 1.5].map((v) => tickLabel(v, 0.5)), ['0.0', '0.5', '1.0', '1.5']);
+	assert.deepEqual([0, 2.5, 5].map((v) => tickLabel(v, 2.5)), ['0.0', '2.5', '5.0']);
+	assert.deepEqual([400, 420, 440].map((v) => tickLabel(v, 20)), ['400', '420', '440']);
+	assert.equal(tickLabel(-5, 5), '−5');
+	assert.equal(tickLabel(-0.0000000001, 1), '0');
+});
+
+test('conformAppendix: every plot has 5 to 6 ticks per axis, solid gridlines, outward ticks and axis titles with units', () => {
+	const trace = parseConformCsv(cfCsv(), CF_SERIES);
+	const svgs = panelSvgs(conformAppendix(CF_RUN, CF_LOG, trace).blocks);
+	assert.equal(svgs.length, 4);
+	for (const svg of svgs) {
+		const labels = tickTexts(svg);
+		assert.ok(labels.length >= 9 && labels.length <= 13, `ticks on both axes: ${labels.join(' ')}`);
+		assert.ok(svg.includes('>Time since log start (min)<'), 'the x axis title has its unit');
+		assert.ok(!/stroke-dasharray/.test(svg), 'gridlines are solid');
+		assert.ok(svg.includes('stroke="#edf0f2"'), 'hairline gridlines');
+		assert.ok(!svg.includes('preserveAspectRatio'));
+	}
+	// the y axis carries the unit of its series above the axis
+	assert.deepEqual(svgs.map((svg) => (svg.match(/class="fp-axis">([^<]*)<\/text>/g) || []).map((t) => t.replace(/.*">|<\/text>/g, '')).filter((t) => t !== 'Time since log start (min)')), [['rpm'], ['%'], ['°C'], ['%']]);
+	// elapsed minutes: the window is 1..4 min after the log start, so no clock times on the axis
+	assert.ok(tickTexts(svgs[0]).includes('1.0') || tickTexts(svgs[0]).includes('1'), tickTexts(svgs[0]).join());
+	assert.ok(!svgs[0].includes('13:0'));
+});
+
+test('conformAppendix: the plot areas sit two across, as the FAST appendix does (the CSS is in the datasheet <style>)', async () => {
+	const h = conformHarness();
+	const { out } = await get(h.routes, '/operation/:id', OP_CF, user);
+	const html = out.body;
+	assert.ok(html.includes('.cf-plots {'), 'the operation datasheet carries the Conform appendix CSS');
+	const style = html.split('<style>')[1].split('</style>')[0];
+	assert.ok(style.indexOf('.fast-plots {') < style.indexOf('.cf-plots {'), '.cf-plots follows .fast-plots');
+	assert.match(style, /\.cf-plots \{[^}]*grid-template-columns:1fr 1fr/);
+	for (const rule of ['.cf-window {', '.tbl {', '.cf-sum {', '.cf-sub {', '.cf-note {', '.fp-plot .fp-axis {']) assert.ok(style.includes(rule), rule);
+	// the sample report is another template and does not carry them
+	assert.ok(!renderSampleReport.toString().includes('.cf-plots'));
+});
+
+// ---- the mirrored figure table ---------------------------------------------------------------------------------------------
+
+test('the mirrored figure table equals packages/fast-plotting/src/conform/format.ts (labels, units, kinds, the number rule)', () => {
+	const ts = readFileSync(new URL('../../../../packages/fast-plotting/src/conform/format.ts', import.meta.url), 'utf8');
+	const body = ts.split('export const CONFORM_FIGURES = {')[1].split('} as const')[0];
+	const upstream = {};
+	for (const m of body.matchAll(/^\s*(\w+): \{ label: '([^']*)', unit: ([^,]+), kind: '(\w+)' \},?$/gm)) {
+		const unit = m[3] === 'KWH_UNIT' ? 'kWh' : m[3] === 'KW_UNIT' ? 'kW' : m[3].replace(/^'|'$/g, '');
+		upstream[m[1]] = { label: m[2], unit, kind: m[4] };
+	}
+	assert.equal(Object.keys(upstream).length, 15, 'parsed every figure of format.ts');
+	assert.deepEqual(CONFORM_FIGURES, upstream);
+	assert.match(ts, /const digits = a >= 100 \? 0 : a >= 10 \? 1 : 2;/, 'niceNumber rule');
+	assert.match(ts, /export const DASH = '—';/);
+});
+
+test('niceNumber / formatFigure: integers from 100, one decimal from 10, up to two below, no trailing zeros; a dash with no unit', () => {
+	assert.deepEqual([402.4, 99.96, 45.25, 10, 8.04, 7.5, 0.5, 0.004, 0, -12.34].map(niceNumber), ['402', '100', '45.3', '10', '8.04', '7.5', '0.5', '0', '0', '-12.3']);
+	assert.equal(niceNumber(null), null);
+	assert.equal(niceNumber(NaN), null);
+	assert.equal(formatFigure('mean_tooling1_c', 450.2), '450 °C');
+	assert.equal(formatFigure('energy_total', 7.5), '7.50 kWh');
+	assert.equal(formatFigure('avg_demand_kw', 30.7), '30.70 kW');
+	assert.equal(formatFigure('duration_s', 725), '12 min 05 s');
+	for (const key of Object.keys(CONFORM_FIGURES)) {
+		assert.equal(formatFigure(key, null), DASH, key);
+		assert.equal(figureNumber(key, undefined), null, key);
+	}
 });

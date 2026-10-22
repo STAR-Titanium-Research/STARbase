@@ -44,7 +44,7 @@ These are in `CONTEXT.md`: **Conform run**, **Feedstock**, **Extrusion**, **Conf
 
 ### Process category, method, machine, lineage
 
-Migration `20261022000206_conform_category.sql`:
+Migration `20261022000207_conform_category.sql`:
 
 - **Category.** Add `conform` to both `process_category` CHECKs: `manufacturing_operations` (migration 031) and `manufacturing_methods` (migration 129).
 - **Method.** Insert method `CF`, "Conform (continuous extrusion)", with `process_category = 'conform'`.
@@ -76,7 +76,7 @@ Migration `20261022000206_conform_category.sql`:
 
 ### Conform logs and run data
 
-Migration `20261022000207_conform_logs_and_run_data.sql`:
+Migration `20261022000208_conform_logs_and_run_data.sql`:
 
 ```
 conform_logs
@@ -91,8 +91,8 @@ conform_logs
   series            jsonb not null                    -- [{key,label,unit,group,min,max,flat?}]
   totals            jsonb not null                    -- whole-log energy (see Energy)
   constants         jsonb not null                    -- the power constants used
-  source_sha256     text not null unique              -- SHA-256 (lowercase hex) of the uploaded file's bytes; migration 209
-  run_windows       jsonb not null default '[]'       -- [{operation_id,start,end}] sorted by start, kept by a trigger; migration 209
+  source_sha256     text not null unique              -- SHA-256 (lowercase hex) of the uploaded file's bytes; migration 210
+  run_windows       jsonb not null default '[]'       -- [{operation_id,start,end}] sorted by start, kept by a trigger; migration 210
   created_by        uuid, created_at timestamptz, version integer   -- OCC like every business table
 
 conform_run_data
@@ -124,7 +124,7 @@ conform_run_data
   - readers rules (166)
   - the Lab Viewer role (185)
   - `scripts/access_rules.json`
-- **Access** (review round 1, migration `20261022000209_conform_review_fixes.sql`).
+- **Access** (review round 1, migration `20261022000210_conform_review_fixes.sql`).
   - `conform_run_data` follows `fast_run_data`: `{"read": "reader.operation"}`. Create, update and delete need edit rights on the operation: update and delete are policy filters, create is the `d1-access-guard` rule `guards.conform_run_data` (the operation's update rule, and the log must exist), because Directus does not filter create.
   - `conform_logs` is **readable by every Lab Member and Lab Viewer**. The run records stay private; the log's `run_windows` is what shows the other runs' windows (a run the caller cannot read is "Other run"). Any member can create a log, only its uploader can delete it, nobody updates it. A log a run still uses cannot be deleted (trigger, and a readable refusal from the `d1-conform-guard` hook). The same file is never uploaded twice (`source_sha256` unique).
   - The "Conform Logs" folder of Directus Files has the fixed id `c04f1000-0000-4000-8000-000000000001`, is seeded by the migration and is readable by members and viewers.
@@ -133,7 +133,7 @@ conform_run_data
 
 ### Form layout
 
-Migration `20261022000208_conform_form_layout.sql` adds `grp_conform` ("Conform") at sort **105**, between `grp_sample_prep` (100) and `grp_notes_files` (110), with the condition `Hide unless conform` (base not hidden; the condition hides it, which is the group convention).
+Migration `20261022000209_conform_form_layout.sql` adds `grp_conform` ("Conform") at sort **105**, between `grp_sample_prep` (100) and `grp_notes_files` (110), with the condition `Hide unless conform` (base not hidden; the condition hides it, which is the group convention).
 
 - The fields come in this order: run number, feedstock, feedstock form, feed mass, die diameter, tooling, then wheel speed and IPS setpoint, then extrusion length, extrusion mass, yield, flash.
 - The `-- BEGIN FORM LAYOUT` / `-- END FORM LAYOUT` block in `scripts/configure_form_layout.sql` is updated byte-identically. `tests/phase1_schema.sh` enforces this.
