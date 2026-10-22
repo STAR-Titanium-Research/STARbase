@@ -17,6 +17,8 @@ const props = defineProps<{
 	tab: 'new' | 'older' | 'linked' | 'dismissed';
 	showOwner: boolean;
 	busy: boolean;
+	/** The scale bar over the picture is on (the per-person "Scale bar" setting of the View rail). */
+	scaleBar?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'close'): void;
@@ -60,7 +62,7 @@ const linkLabel = computed(() => {
 			<template v-if="withPicture">
 				<div v-if="state === 'ready' && url" class="pic">
 					<img :src="url" :alt="`Preview of ${name}`" draggable="false" data-test="sheet-image" />
-					<ScaleBar v-if="bar" :bar="bar" data-test="sheet-scalebar" />
+					<ScaleBar v-if="bar && scaleBar !== false" :bar="bar" data-test="sheet-scalebar" />
 				</div>
 				<div v-else-if="state === 'failed'" class="blank err" role="alert" data-test="sheet-error">
 					<span>The preview could not be loaded.</span>
