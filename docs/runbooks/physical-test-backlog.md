@@ -1806,6 +1806,15 @@ below. "Since" is the surface scan privacy PR (pending).
   uploaded" (it starts with no window): the first run's window shows as a faint labelled band; setting a window that
   overlaps it is refused with the message naming the other run. A reader who can read the run but not the log sees the
   figures and "Conform log not visible to you" in place of the plot. Since: Conform runs plan, stream C.
+- [ ] **CP4 — Conform plotter review round 2 (plain-HTTP upload, bands, phone).** (a) Open STARbase over plain HTTP on the
+  LAN (not localhost, so `crypto.subtle` is missing) and upload a real log: it works (the pure-JS SHA-256 hashes it), and
+  uploading the same file again offers "Use that log" with the windows already on it (and "The whole log is X's window" when
+  one covers it). (b) On `/plot/conform` the run's own window shows as two thin accent lines, not a grey wash; other runs'
+  windows are a faint wash with their labels above the top row of plots only; the time axis reads "Time since log start (min)"
+  and the hover badge shows elapsed time with the UK clock time in the tooltip. (c) A refusal by the Conform hook shows its
+  sentence; any other failure shows a plain one ("You can't change this Conform run."), never Directus's own text. (d) On a
+  phone (390 px) the Plots header does not run off the panel and every button is at least 40 px tall. Since: Conform runs
+  plan, review round 2, stream G2a.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

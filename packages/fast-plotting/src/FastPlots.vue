@@ -146,4 +146,10 @@ onBeforeUnmount(() => { window.removeEventListener('click', away); window.remove
 .tbody { flex: 1 1 auto; min-height: 0; padding: 0 8px 2px 4px; }
 .empty-tile { width: 100%; height: 100%; border: 0; background: transparent; color: var(--fd-dim); font: inherit; font-size: var(--fs-sm, 12px); cursor: pointer; }
 .empty-tile:hover { color: var(--theme--foreground); }
+/* phones: a tile's icon buttons are touch targets of 40px */
+@container (max-width: 700px) {
+	.fd-ib { width: 40px; height: 40px; }
+	.peak { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }   /* the peak gives way before the title does */
+	.thead { flex-wrap: nowrap; }   /* a tile title shortens with an ellipsis rather than pushing its buttons to a second row */
+}
 </style>

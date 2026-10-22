@@ -3,7 +3,7 @@
 import type { AxiosInstance } from 'axios';
 import {
 	CONFORM_FIGURES, CONFORM_STATUS, ConformLogError, LOG_LOAD_FAILED, candidateLabel, candidatesEmptyText, figureNumber, formatClockRange,
-	formatUkDate, formatUkDateTimeDisplay, labelWindows, linkExistingLog, listCandidateLogs, loadConformRun, loadLogTrace, setRunWindow,
+	formatUkDate, formatUkDateTimeDisplay, formatUkTime, labelWindows, linkExistingLog, listCandidateLogs, loadConformRun, loadLogTrace, setRunWindow,
 	unlinkLog, uploadConformLog, windowLine, wholeLogNote, DASH,
 	type ConformFigureKey, type ConformLogRow, type ConformRunBundle, type ConformStatus, type ConformSummary,
 } from '../conform';
@@ -120,7 +120,8 @@ export const conformProfile: RunProfile = {
 	headerFacts(op) {
 		const rows = opRows(op);
 		const get = (k: string) => String(rows.find(([l]) => l === k)?.[1] ?? '');
-		const d = op?.operation_date ? formatUkDateTimeDisplay(op.operation_date) : '';
+		// date and time to the minute, as FAST's header has it: it has to fit half the run column
+		const d = op?.operation_date ? `${formatUkDate(op.operation_date)}, ${formatUkTime(op.operation_date).slice(0, 5)}` : '';
 		return [['Date', d], ['Machine', get('Machine')], ['Operator', get('Operator')], ['Feedstock', get('Feedstock')]];
 	},
 	detailRows(op, run): DetailRow[] {

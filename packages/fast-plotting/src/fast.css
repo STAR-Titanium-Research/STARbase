@@ -68,3 +68,17 @@
 .fd-fig .lab { display: block; font-size: var(--fs-xs, 11px); color: var(--fd-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fd-fig.key { border-color: var(--theme--foreground); background: var(--fd-surface); }
 .fd-tag { display: inline-block; margin-left: 4px; padding: 0 6px; border: 1px dashed var(--theme--border-color); border-radius: 99px; font-size: var(--fs-xs, 11px); font-weight: 400; color: var(--fd-dim); }
+
+/* Phones (the page's own width under 700px): touch targets of at least 40px (DESIGN 8), and a lid whose buttons do not fit wraps
+   to a second row instead of running off the panel. */
+@container (max-width: 700px) {
+	.fd-lid { flex-wrap: wrap; row-gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+	.fd-chip { white-space: nowrap; }
+	.fd-btn { height: auto; min-height: 40px; }
+	.fd-btn.icon { width: 40px; }
+	.fd-tab { height: 44px; }
+	.fd-seg button { min-height: 40px; }
+	.fd-search { height: 40px; }
+	.fd-card { min-height: 40px; }
+	.fd-link { display: inline-flex; align-items: center; min-height: 40px; }
+}

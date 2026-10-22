@@ -73,7 +73,7 @@ describe('RunWindowActions semantics', () => {
 
 	it('words the view in UK clock times, as the saved window above it', () => {
 		mount(fakeProfile(), { log: {} });
-		expect(byText('Use this view as the run window').textContent).toContain('(09:01:02 – 09:02:04)');
+		expect(byText('Use this view as the run window').textContent).toContain('09:01:02 – 09:02:04');
 	});
 });
 

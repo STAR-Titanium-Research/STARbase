@@ -141,6 +141,14 @@ describe('conformProfile figures', () => {
 	});
 });
 
+describe('conformProfile header and detail dates', () => {
+	it('words the run date as a display date to the minute in UK time, and the log start with its seconds', () => {
+		const op = { operation_date: '2025-07-01T12:30:45Z', equipment_id: { equipment_name: 'Conform' }, operator_name: 'Ada', conform_feedstock: 'Ti swarf' };
+		expect(conformProfile.headerFacts(op)).toEqual([['Date', '1 Jul 2025, 13:30'], ['Machine', 'Conform'], ['Operator', 'Ada'], ['Feedstock', 'Ti swarf']]);
+		expect(conformProfile.detailRows(op, run()).find((r) => r.label === 'Log starts')?.value).toBe('17 Mar 2025, 09:00:00 (UK time)');
+	});
+});
+
 describe('conformProfile list and states', () => {
 	it('badges a run by its window status', () => {
 		const q = (status?: string) => conformProfile.quality({ conform_run: status ? [{ status }] : [] });

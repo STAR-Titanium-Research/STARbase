@@ -136,8 +136,10 @@ function cancelConfirm() {
 	<div class="act" aria-label="Run window and log">
 		<div class="head"><b>Run window</b><span class="fd-dim">{{ windowText ?? (hasLog ? 'not set' : 'no log yet') }}</span></div>
 		<div v-if="editable" class="btns">
-			<button v-if="profile.setWindowFromView && trace" class="btn" :disabled="disabled || !view"
-				title="Save the time range now shown on the plots as this run's window" @click="useView">Use this view as the run window<span v-if="viewText" class="fd-dim vt"> ({{ viewText }})</span></button>
+			<button v-if="profile.setWindowFromView && trace" class="btn stack" :disabled="disabled || !view"
+				title="Save the time range now shown on the plots as this run's window" @click="useView">
+				<span>Use this view as the run window</span><span v-if="viewText" class="fd-dim vt">{{ viewText }}</span>
+			</button>
 			<label v-if="profile.upload && !hasLog" class="btn" :class="{ off: disabled }">
 				Upload a log (.csv)
 				<input class="file" type="file" accept=".csv,text/csv,text/plain" :disabled="disabled" @change="onFile" />
@@ -203,7 +205,8 @@ function cancelConfirm() {
 .btn:focus-visible { outline: 2px solid var(--fd-accent); outline-offset: 1px; }
 .btn.danger { color: var(--d1-bad, var(--theme--danger)); border-color: var(--d1-bad, var(--theme--danger)); }
 .btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--d1-bad, var(--theme--danger)) 12%, var(--fd-tile)); border-color: var(--d1-bad, var(--theme--danger)); }
-.vt { margin-left: 4px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.btn.stack { flex-direction: column; gap: 0; }
+.vt { font-weight: 400; font-variant-numeric: tabular-nums; }
 .file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
 label.btn { position: relative; }
 label.btn:focus-within { outline: 2px solid var(--fd-accent); outline-offset: 1px; }
