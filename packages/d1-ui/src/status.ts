@@ -6,6 +6,7 @@
 //   machining_force_analysis.status work-queue state (pending -> processing -> done | error | skipped)
 //   machining_force_analysis.diag_status  null | pending | processing | done | error
 //   physical_samples.current_status active | consumed | destroyed | archived
+//   conform_runs.status             no_log | no_window | done | error (the plotting package's CONFORM_STATUS)
 //   campaigns.status                free TEXT; the Data Studio form offers planned | active | complete |
 //                                   on_hold, other values show humanised and neutral
 
@@ -16,7 +17,7 @@ export interface StatusStyle {
 	tone: Tone;
 }
 
-export type StatusKind = 'test' | 'force' | 'diag' | 'sample' | 'campaign';
+export type StatusKind = 'test' | 'force' | 'diag' | 'sample' | 'campaign' | 'conform';
 
 // The test-session lifecycle, defined once: every list below (chip order, "done" statuses, the
 // matrix's worst-first rank and cell glyph, the badge styles) is derived from this table.
@@ -81,12 +82,22 @@ export const CAMPAIGN_STATUS: Record<string, StatusStyle> = {
 	on_hold: { label: 'On hold', tone: 'warning' },
 };
 
+// A Conform run's state (conform_runs.status). The kit does not import the plotting package, so this is a mirror of its
+// `CONFORM_STATUS` (packages/fast-plotting/src/conform/format.ts): starbase-pages' conformRows.test.ts checks the two agree.
+export const CONFORM_STATUS: Record<string, StatusStyle> = {
+	no_log: { label: 'No log', tone: 'neutral' },
+	no_window: { label: 'No run window', tone: 'warning' },
+	done: { label: 'Window set', tone: 'success' },
+	error: { label: 'Failed', tone: 'danger' },
+};
+
 const VOCABULARIES: Record<StatusKind, Record<string, StatusStyle>> = {
 	test: TEST_STATUS,
 	force: FORCE_STATUS,
 	diag: DIAG_STATUS,
 	sample: SAMPLE_STATUS,
 	campaign: CAMPAIGN_STATUS,
+	conform: CONFORM_STATUS,
 };
 
 // "pending_processing" -> "Pending processing"
