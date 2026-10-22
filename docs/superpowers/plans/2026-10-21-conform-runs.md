@@ -22,7 +22,7 @@
 
 | Stream | Agent profile | Worktree / branch | Depends on | State |
 |---|---|---|---|---|
-| A — schema & access | `d1-server-implementer` | `worktree-agent-a2b953fa458f61b01` | — | **merged** (phase1 1991/0 on the merged branch; 206–208 round-trip) |
+| A — schema & access | `d1-server-implementer` | `worktree-agent-a2b953fa458f61b01` | — | **merged** (phase1 1991/0 on the merged branch; round-trip — since renumbered 207–209 after main's 206) |
 | B — log processing core | `directus-ui-implementer` | `worktree-agent-af20ca6ad2917a35b` | — | **merged** (136 tests pass) |
 | C — run plotter profiles | `directus-ui-implementer` | `worktree-agent-ae27e8bda0ad913f5` | B merged | **merged** (fast-plotting 168, starbase-web 212) |
 | D — STARbase panels | `directus-ui-implementer` | `worktree-agent-ab055b90f6766c20a` | B merged | **merged** (d1-ui 2158, starbase-pages 3233) |
@@ -566,8 +566,8 @@ The maintainer asked that the GUI follow `DESIGN.md`.
 
 | Stream | Agent profile | Owns | State |
 |---|---|---|---|
-| G1 — schema renumber, phase1 port, hook, PDF | `d1-server-implementer` | `db/`, `tests/schema/`, `scripts/`, `core/extensions/`, docs for those | in progress |
-| G2a — plotter | `directus-ui-implementer` | `packages/fast-plotting/**`, `apps/starbase/web/**` | in progress |
+| G1 — schema renumber, phase1 port, hook, PDF | `d1-server-implementer` | `db/`, `tests/schema/`, `scripts/`, `core/extensions/`, docs for those | **merged** (phase1 2069/0, roundtrip 218, pytest 2016, extensions 1122, d1-report 41) |
+| G2a — plotter | `directus-ui-implementer` | `packages/fast-plotting/**`, `apps/starbase/web/**` | **merged** (fast-plotting 257, starbase-web 214) |
 | G2b — Operation page, map, kit | `directus-ui-implementer` | `packages/d1-ui/**`, `packages/starbase-pages/**` | in progress |
 
 ### Shared decisions (binding for G1, G2a and G2b)
