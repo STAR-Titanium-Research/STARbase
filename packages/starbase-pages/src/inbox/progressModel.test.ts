@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { progressFolder } from './fakeInboxServer';
 import {
-	FOLDERS_KNOWN_HELP, allComplete, barTone, countText, formatPercent, isComplete, loginText, measuresOf, percent, sortFolders,
+	FOLDERS_KNOWN_HELP, allComplete, barTone, countText, formatPercent, isComplete, loginText, measuresOf, overallPct, percent, sortFolders, stripName, stripParts, updatedText,
 } from './progressModel';
 
 describe('percent', () => {
@@ -114,5 +114,31 @@ describe('the help text', () => {
 	it('says that folders known are the ones the crawler has seen', () => {
 		expect(FOLDERS_KNOWN_HELP).toMatch(/seen so far/);
 		expect(FOLDERS_KNOWN_HELP).toMatch(/100%/);
+	});
+});
+
+describe('the strip line', () => {
+	const NOW = new Date('2026-10-15T20:00:00');
+	it('overallPct is the lowest bar, ignores a bar with nothing to measure, and is null for a folder not seen yet or with nothing to measure', () => {
+		expect(overallPct(progressFolder())).toBe(100);
+		expect(overallPct(progressFolder({ images: 1000, images_read: 1000, images_with_thumb: 998 }))).toBeCloseTo(99.8);
+		expect(overallPct(progressFolder({ images: 100, images_read: 40, images_with_thumb: 60 }))).toBe(40);
+		expect(overallPct(progressFolder({ sem: 0, sem_with_scale: 0 }))).toBe(100);
+		expect(overallPct(progressFolder({ folders_known: 0, folders_listed: 0, images: 0, images_read: 0, images_with_thumb: 0, sem: 0, sem_with_scale: 0 }))).toBeNull();
+	});
+	it('updatedText is the time today, the day and time otherwise, and empty before a scan has finished', () => {
+		expect(updatedText('2026-10-15T16:38:00', NOW)).toBe('16:38');
+		expect(updatedText('2026-10-12T09:05:00', NOW)).toBe('12 Oct, 09:05');
+		expect(updatedText(null, NOW)).toBe('');
+		expect(updatedText('not a date', NOW)).toBe('');
+	});
+	it('stripParts gives the percentage, images read, SEM and when; or says not scanned yet', () => {
+		expect(stripParts(progressFolder({ images_read: 2222, images: 2222, images_with_thumb: 2222, sem: 11, sem_with_scale: 11 }), '2026-10-15T16:38:00', NOW)).toEqual(['100%', '2,222 images read', '11 SEM', 'updated 16:38']);
+		expect(stripParts(progressFolder(), null, NOW).at(-1)).toBe('no scan has finished yet');
+		expect(stripParts(progressFolder({ folders_known: 0 }), null, NOW)).toEqual(['not scanned yet']);
+	});
+	it('stripName is the folder alias, or "<team> team"', () => {
+		expect(stripName(progressFolder())).toBe('ab1cd');
+		expect(stripName(progressFolder({ owner: { kind: 'team', name: 'SEM' } }))).toBe('SEM team');
 	});
 });

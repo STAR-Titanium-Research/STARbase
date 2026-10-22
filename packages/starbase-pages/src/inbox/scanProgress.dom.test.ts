@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The scan progress, on screen: the "Scan progress" card on the Inbox page (the person's own folders; closed when everything is at 100%, open otherwise, left out
+// The scan progress, on screen: the "Scan progress" strip on the Inbox page (one closed line per folder of the person's, the four bars behind an arrow, left out
 // when the person has no folder) and the "Folders" table of the Inbox crawler tab (every folder, largest first, with the login and the same bars).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, ref, type App } from 'vue';
@@ -70,6 +70,7 @@ const FINISHED = '2026-10-15T11:45:00.000Z';
 
 beforeEach(() => {
 	document.body.innerHTML = '';
+	localStorage.clear();
 });
 afterEach(() => {
 	app?.unmount();
@@ -78,7 +79,11 @@ afterEach(() => {
 	resetLinks();
 });
 
-describe('the Scan progress card on the Inbox page', () => {
+describe('the Scan progress strip on the Inbox page', () => {
+	const KEY = 'd1.list.inbox.scan.u-me';
+	const lineText = (el: Element | null) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+	const own = () => progressFolder({ images: 2222, images_read: 2222, images_with_thumb: 2222, sem: 11, sem_with_scale: 11, owner: { folder: 'mtp21dp', root: 'Users/mtp21dp' } });
+
 	it('is left out when the person has no folder', async () => {
 		await mountPage({ progress: { folders: [], last_scan_finished_at: FINISHED } });
 		expect(q('[data-test="scan-progress"]')).toBeNull();
@@ -103,61 +108,103 @@ describe('the Scan progress card on the Inbox page', () => {
 		expect(q('[data-test="scan-progress"]')).toBeNull();
 	});
 
-	it('is open when something is short: one row per folder, four labelled bars, the percentages, and when the scan finished', async () => {
+	it('is one closed line per folder, even at 100%: name, the lowest bar, images read, SEM and when the scan finished', async () => {
+		await mountPage({ progress: { folders: [own()], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(q('[data-test="scan-progress"]')).not.toBeNull());
+		const lines = qa('[data-test="scan-folder"]');
+		expect(lines).toHaveLength(1);
+		expect(lineText(lines[0])).toMatch(/^mtp21dp 100% · 2,222 images read · 11 SEM · updated (\d{2}:\d{2}|\d+ \w+, \d{2}:\d{2})$/);
+		expect(qa('[data-test="scan-bar"]')).toHaveLength(0);
+		const toggle = q('[data-test="scan-toggle"]');
+		expect(toggle?.tagName).toBe('BUTTON');
+		expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+		expect(q('[data-test="scan-overall"]')?.getAttribute('title')).toMatch(/lowest of the four bars/);
+	});
+
+	it('shows the lowest bar as the percentage, one line per folder, a team by its name', async () => {
 		await mountPage({
 			progress: {
 				folders: [
 					progressFolder({ images: 1000, images_read: 1000, images_with_thumb: 998, sem: 120, sem_with_scale: 120 }),
-					progressFolder({ owner: { kind: 'team', id: 't1', name: 'SEM team', folder: 'SEM', root: 'Shared/SEM', has_login: null }, folders_known: 4, folders_listed: 2, images: 10, images_read: 3, images_with_thumb: 0, sem: 0, sem_with_scale: 0 }),
+					progressFolder({ owner: { kind: 'team', id: 't1', name: 'SEM', folder: 'SEM', root: 'Shared/SEM', has_login: null }, folders_known: 4, folders_listed: 2, images: 10, images_read: 3, images_with_thumb: 0, sem: 0, sem_with_scale: 0 }),
 				],
 				last_scan_finished_at: FINISHED,
 			},
 		});
-		await vi.waitFor(() => expect(q('[data-test="scan-progress"]')).not.toBeNull());
-		const folders = qa('[data-test="scan-folder"]');
-		expect(folders).toHaveLength(2);
-		expect(folders[0].textContent).toContain('My folder');
-		expect(folders[0].textContent).toContain('Users/ab1cd');
-		expect(folders[1].textContent).toContain('SEM team team folder');
-		expect(folders[1].textContent).toContain('Shared/SEM');
-		for (const label of ['Folders listed', 'Images read', 'Thumbnails', 'SEM images with a scale']) expect(folders[0].textContent).toContain(label);
-		expect(pcts(folders[0])).toEqual(['100%', '100%', '99.8%', '100%']);
-		expect(pcts(folders[1])).toEqual(['50%', '30%', '0%', '—']);
-		expect(q('[data-test="scan-updated"]')?.textContent).toMatch(/^Updated .*2026/);
-		expect(q('[data-test="scan-progress"]')?.textContent).toContain(FOLDERS_KNOWN_HELP);
-	});
-
-	it('is closed when every folder is at 100%, and opens on a click on its title', async () => {
-		await mountPage({ progress: { folders: [progressFolder(), progressFolder({ owner: { id: 'p2', kind: 'team', name: 'Team', folder: 'T', root: 'Shared/T', has_login: null } })], last_scan_finished_at: FINISHED } });
-		await vi.waitFor(() => expect(q('[data-test="scan-progress"]')).not.toBeNull());
-		expect(q('[data-test="scan-progress"]')?.textContent).toContain('Scan progress');
-		expect(q('[data-test="scan-updated"]')?.textContent).toMatch(/^Updated /);
-		expect(qa('[data-test="scan-folder"]')).toHaveLength(0);
-		q('[data-test="scan-progress"] header')?.click();
 		await vi.waitFor(() => expect(qa('[data-test="scan-folder"]')).toHaveLength(2));
-		expect(pcts(q('[data-test="scan-progress"]') as HTMLElement).every((p) => p === '100%')).toBe(true);
+		const [a, b] = qa('[data-test="scan-folder"]');
+		expect(lineText(a)).toContain('ab1cd 99.8% · 1,000 images read · 120 SEM');
+		expect(lineText(b)).toContain('SEM team 0% · 3 images read · 0 SEM');
 	});
 
-	it('says a folder that has not been scanned yet is waiting, with dashes, and no scan finished yet', async () => {
+	it('opens the four labelled bars from the arrow, with the percentages and the counts, and closes again', async () => {
+		await mountPage({ progress: { folders: [progressFolder({ images: 1000, images_read: 998, images_with_thumb: 1000, sem: 120, sem_with_scale: 60 })], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(q('[data-test="scan-toggle"]')).not.toBeNull());
+		q('[data-test="scan-toggle"]')?.click();
+		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
+		expect(q('[data-test="scan-toggle"]')?.getAttribute('aria-expanded')).toBe('true');
+		const folder = q('[data-test="scan-folder"]') as HTMLElement;
+		for (const label of ['Folders listed', 'Images read', 'Thumbnails', 'SEM images with a scale']) expect(folder.textContent).toContain(label);
+		expect(folder.textContent).toContain('Users/ab1cd');
+		expect(pcts(folder)).toEqual(['100%', '99.8%', '100%', '50%']);
+		expect(qa('[data-test="scan-bar"]')[1].getAttribute('title')).toBe('Images read: 998 of 1,000');
+		expect(q('[data-test="scan-help"]')?.textContent).toContain(FOLDERS_KNOWN_HELP);
+		q('[data-test="scan-toggle"]')?.click();
+		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(0));
+	});
+
+	it('remembers what is open per person, and starts closed for someone else', async () => {
+		await mountPage({ progress: { folders: [progressFolder()], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(q('[data-test="scan-toggle"]')).not.toBeNull());
+		q('[data-test="scan-toggle"]')?.click();
+		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
+		expect(JSON.parse(localStorage.getItem(KEY) ?? 'null')).toEqual(['p1']);
+		app?.unmount();
+		document.body.innerHTML = '';
+		await mountPage({ progress: { folders: [progressFolder()], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
+		expect(q('[data-test="scan-toggle"]')?.getAttribute('aria-expanded')).toBe('true');
+		localStorage.setItem('d1.list.inbox.scan.someone-else', '[]');
+		localStorage.removeItem(KEY);
+		app?.unmount();
+		document.body.innerHTML = '';
+		await mountPage({ progress: { folders: [progressFolder()], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(q('[data-test="scan-toggle"]')).not.toBeNull());
+		expect(qa('[data-test="scan-bar"]')).toHaveLength(0);
+	});
+
+	it('works with blocked storage: it opens, it just is not remembered', async () => {
+		const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+			throw new Error('blocked');
+		});
+		try {
+			await mountPage({ progress: { folders: [progressFolder()], last_scan_finished_at: FINISHED } });
+			await vi.waitFor(() => expect(q('[data-test="scan-toggle"]')).not.toBeNull());
+			q('[data-test="scan-toggle"]')?.click();
+			await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it('says a folder that has not been scanned yet is waiting, with dashes in its bars', async () => {
 		await mountPage({
 			progress: { folders: [progressFolder({ folders_known: 0, folders_listed: 0, files: 0, images: 0, images_read: 0, images_with_thumb: 0, sem: 0, sem_with_scale: 0 })], last_scan_finished_at: null },
 		});
 		await vi.waitFor(() => expect(qa('[data-test="scan-folder"]')).toHaveLength(1));
-		expect(q('[data-test="scan-folder"]')?.textContent).toContain('Not scanned yet');
+		expect(lineText(q('[data-test="scan-folder"]'))).toBe('ab1cd not scanned yet');
+		q('[data-test="scan-toggle"]')?.click();
+		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
 		expect(pcts(q('[data-test="scan-folder"]') as HTMLElement)).toEqual(['—', '—', '—', '—']);
-		expect(q('[data-test="scan-updated"]')?.textContent).toBe('No scan has finished yet');
 	});
 
-	it('colours by meaning: green at 100%, amber only below 50% once a scan has finished', async () => {
+	it('colours the bars by meaning: green at 100%, amber only below 50% once a scan has finished', async () => {
 		await mountPage({ progress: { folders: [progressFolder({ images: 100, images_read: 40, images_with_thumb: 60, sem: 10, sem_with_scale: 10 })], last_scan_finished_at: FINISHED } });
+		await vi.waitFor(() => expect(q('[data-test="scan-toggle"]')).not.toBeNull());
+		q('[data-test="scan-toggle"]')?.click();
 		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
 		expect(qa('[data-test="scan-bar"]').map((b) => ['tone-ok', 'tone-warn', 'tone-neutral'].find((t) => b.classList.contains(t)))).toEqual(['tone-ok', 'tone-warn', 'tone-neutral', 'tone-ok']);
-	});
-
-	it('gives each bar the exact counts as its tooltip', async () => {
-		await mountPage({ progress: { folders: [progressFolder({ images: 1000, images_read: 998 })], last_scan_finished_at: FINISHED } });
-		await vi.waitFor(() => expect(qa('[data-test="scan-bar"]')).toHaveLength(4));
-		expect(qa('[data-test="scan-bar"]')[1].getAttribute('title')).toBe('Images read: 998 of 1,000');
+		expect(q('[data-test="scan-overall"]')?.classList.contains('tone-warn')).toBe(true);
 	});
 });
 

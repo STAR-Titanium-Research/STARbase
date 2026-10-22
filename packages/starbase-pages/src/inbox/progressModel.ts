@@ -53,6 +53,39 @@ export function isComplete(c: ProgressCounts): boolean {
 	return c.folders_known > 0 && measuresOf(c).every((m) => m.pct === null || m.pct >= 100);
 }
 
+/**
+ * The one number on a folder's strip: the LOWEST of its four bars (not the mean), so 100% means every bar is full and nothing is left to read. A bar with
+ * nothing to measure (no SEM images) does not count; a folder with nothing to measure at all, or one the crawler has not seen yet, has none (null).
+ */
+export function overallPct(c: ProgressCounts): number | null {
+	if (c.folders_known <= 0) return null;
+	const all = measuresOf(c).map((m) => m.pct).filter((p): p is number => p !== null);
+	return all.length ? Math.min(...all) : null;
+}
+
+/** The tooltip of the strip's percentage: says it is the lowest bar. */
+export const OVERALL_HELP = 'The lowest of the four bars, so 100% means everything is done.';
+
+/** When the last scan finished, for the strip: "16:38" today, "12 Oct, 16:38" on another day, "" before the first scan ends. */
+export function updatedText(iso: string | null | undefined, now: Date = new Date()): string {
+	if (!iso) return '';
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return '';
+	const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+	if (d.toDateString() === now.toDateString()) return time;
+	return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+/** The pieces of a folder's one line, after its name: "100%", "2,222 images read", "11 SEM", "updated 16:38" (or "not scanned yet"). */
+export function stripParts(c: ProgressCounts, updatedAt: string | null, now: Date = new Date()): string[] {
+	if (c.folders_known <= 0) return ['not scanned yet'];
+	const when = updatedText(updatedAt, now);
+	return [formatPercent(overallPct(c)), `${c.images_read.toLocaleString('en-GB')} images read`, `${c.sem.toLocaleString('en-GB')} SEM`, when ? `updated ${when}` : 'no scan has finished yet'];
+}
+
+/** What a folder is called on its line: the person's folder alias ("mtp21dp"), or "SEM team" for a team folder. */
+export const stripName = (f: ProgressFolder): string => (f.owner.kind === 'team' ? `${f.owner.name} team` : f.owner.folder);
+
 /** True when every folder is complete. No folder at all is complete too (there is nothing to wait for; the page hides itself then). */
 export const allComplete = (folders: ProgressFolder[]): boolean => folders.every(isComplete);
 

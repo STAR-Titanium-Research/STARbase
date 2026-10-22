@@ -12,7 +12,7 @@ import InboxSheet from './InboxSheet.vue';
 import InboxTabs from './InboxTabs.vue';
 import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
-import ScanProgressCard from './ScanProgressCard.vue';
+import ScanProgressStrip from './ScanProgressStrip.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
 import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
@@ -52,7 +52,7 @@ const ig = createIgnoredFolders({
 	},
 });
 
-// Scan progress (the card under the lead): the person's own folders. Read once when the page opens; it leaves itself out when there is no folder.
+// Scan progress (the strip under the lead): the person's own folders. Read once when the page opens; it leaves itself out when there is no folder.
 const progress = createScanProgress(host.api);
 
 onMounted(() => {
@@ -329,7 +329,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			</v-button>
 		</div>
 
-		<ScanProgressCard v-if="progress.loaded.value && progress.folders.value.length" :folders="progress.folders.value" :updated-at="progress.lastScanFinishedAt.value" />
+		<ScanProgressStrip v-if="progress.loaded.value && progress.folders.value.length" :folders="progress.folders.value" :updated-at="progress.lastScanFinishedAt.value" />
 
 		<InboxTabs :filters="filters" :counts="tabCount" />
 

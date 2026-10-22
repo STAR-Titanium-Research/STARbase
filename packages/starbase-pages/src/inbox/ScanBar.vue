@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { barTone, countText, formatPercent, type Measure } from './progressModel';
 
-// One measure of the scan progress: a thin bar and its percentage, the same in the Inbox page's card and in the admin table. The label is optional (the table's
+// One measure of the scan progress: a thin bar and its percentage, the same in the Inbox page's strip and in the admin table. The label is optional (the table's
 // column head says it). Green at 100%, amber below 50% after a scan has finished, neutral otherwise; the exact counts are the tooltip and the screen reader's.
 const props = defineProps<{
 	measure: Measure;
@@ -28,14 +28,15 @@ const detail = computed(() => (props.measure.pct === null ? `${props.measure.lab
 </template>
 
 <style scoped>
-.bar { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 3px 10px; min-width: 0; --bar-ink: var(--d1-dim); }
-.bar.bare { grid-template-columns: 1fr; justify-items: end; gap: 3px; }
+.bar { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px 10px; min-width: 0; --bar-ink: var(--d1-dim); }
+.bar.bare { grid-template-columns: 1fr; justify-items: end; gap: 4px; }
 .label { font-size: var(--fs-sm, 12px); color: var(--d1-dim); min-width: 0; }
 .value { font-size: var(--fs-md, 13px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--theme--foreground); white-space: nowrap; }
 .bar.tone-ok .value { color: var(--d1-ok); }
 .bar.tone-warn .value { color: var(--d1-warn); }
-.track { grid-column: 1 / -1; width: 100%; height: 4px; border-radius: 99px; background: var(--theme--background-normal); overflow: hidden; }
-.fill { height: 100%; border-radius: 99px; background: var(--bar-ink); }
+.track { grid-column: 1 / -1; width: 100%; height: 6px; border-radius: 99px; background: var(--theme--background-normal); overflow: hidden; }
+.fill { height: 100%; border-radius: 99px; background: var(--bar-ink); transition: width 0.25s ease; }
+@media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
 .bar.tone-ok { --bar-ink: var(--d1-ok); }
 .bar.tone-warn { --bar-ink: var(--d1-warn); }
 .bar.bare .track { min-width: 72px; }

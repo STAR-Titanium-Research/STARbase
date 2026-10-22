@@ -24,7 +24,7 @@
 // were open at once. `pictureHangs` makes a request that never answers: like axios it fails with ECONNABORTED when the request carries a `timeout`, and
 // stays open forever when it does not.
 // Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
-// Scan progress (GET /d1-inbox/progress[?all=1]): the `progress` option is the caller's own folders (default: none, so the Inbox page shows no card) and
+// Scan progress (GET /d1-inbox/progress[?all=1]): the `progress` option is the caller's own folders (default: none, so the Inbox page shows no strip) and
 // `progressAll` is what an administrator's all=1 reads (default: the same); `progressAllowed: false` makes all=1 403 FORBIDDEN, as for a person who is no administrator.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
