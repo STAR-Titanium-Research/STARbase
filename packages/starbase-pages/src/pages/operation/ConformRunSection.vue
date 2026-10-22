@@ -217,7 +217,7 @@ const statusHint = computed(() => CONFORM_STATUS[statusKey.value as keyof typeof
 					<p v-if="logHidden" class="d1-note">Conform log not visible to you</p>
 					<p v-else-if="logLine" class="d1-note">Conform log: {{ logLine }}</p>
 
-					<div class="window">
+					<div v-if="canEdit || windowLine" class="window">
 						<template v-if="canEdit && !logHidden">
 							<label>Run window start <input v-model="startLocal" class="d1-input" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window start (UK time)" /></label>
 							<label>end <input v-model="endLocal" class="d1-input" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window end (UK time)" /></label>
@@ -231,7 +231,7 @@ const statusHint = computed(() => CONFORM_STATUS[statusKey.value as keyof typeof
 							<button ref="replaceBtn" type="button" class="d1-btn" :aria-disabled="!!busy" title="Unlink this log, then upload another or pick one" @click="ask('replace')">Replace log</button>
 						</template>
 					</div>
-					<div aria-live="polite">
+					<div class="live" aria-live="polite">
 						<div v-if="confirming" class="confirm" role="group" :aria-label="CONFIRM_TEXT[confirming].label" @keydown.esc="cancelConfirm">
 							<span>{{ CONFIRM_TEXT[confirming].sentence }}</span>
 							<span class="row">
@@ -246,7 +246,7 @@ const statusHint = computed(() => CONFORM_STATUS[statusKey.value as keyof typeof
 						<ul><li v-for="w in otherWindows" :key="w.operation_id + w.start">{{ windowItem(w) }}</li></ul>
 					</div>
 
-					<div v-if="thumb" class="trace"><ConformTrace :thumb="thumb" :height="72" /><ConformTraceKey :thumb="thumb" /></div>
+					<div v-if="thumb" class="trace-card"><ConformTrace :thumb="thumb" :height="72" /><ConformTraceKey :thumb="thumb" /></div>
 					<p v-else-if="traceNote && !logHidden" class="d1-note">{{ traceNote }}</p>
 
 					<div v-if="summary" class="cols">
@@ -296,10 +296,12 @@ const statusHint = computed(() => CONFORM_STATUS[statusKey.value as keyof typeof
 .window label { display: inline-flex; align-items: center; gap: 6px; }
 .win-text { font-variant-numeric: tabular-nums; }
 .confirm { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); font-size: var(--fs-sm, 12px); }
+/* The live region is always there (so what the confirm says is announced); empty, it takes no gap. */
+.live:empty { margin-top: -10px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; }
 .others h3 { margin-top: 0; }
 .others ul { margin: 0; padding-left: 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); font-variant-numeric: tabular-nums; }
-.trace { padding: 6px 8px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); }
+.trace-card { padding: 6px 8px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 28px; }
 h3 { margin: 0 0 4px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); text-transform: none; }
 .count { font-weight: 400; margin-left: 4px; }

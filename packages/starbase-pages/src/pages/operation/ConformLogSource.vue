@@ -117,7 +117,7 @@ onMounted(() => { if (props.openPicker) void showPicker(); });
 			</label>
 			<button v-if="!picking" type="button" class="d1-btn" :disabled="!!busy" @click="showPicker">Use a log already uploaded</button>
 		</div>
-		<div aria-live="polite">
+		<div class="live" aria-live="polite">
 			<div v-if="duplicate" class="dup" role="group" aria-label="Use the log already uploaded" @keydown.esc="cancelDuplicate">
 				<span>This file is already uploaded as {{ duplicate.label }}. Use that log for this run?</span>
 				<ul v-if="duplicate.windows.length" class="wins" aria-label="Run windows already on this log">
@@ -152,6 +152,7 @@ onMounted(() => { if (props.openPicker) void showPicker(); });
 <style scoped>
 .source { display: grid; gap: 8px; }
 .lead { margin: 0; font-size: var(--fs-md, 13px); }
+.live:empty { margin-top: -8px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .pick { display: grid; gap: 6px; }
 .dup { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); font-size: var(--fs-sm, 12px); }
