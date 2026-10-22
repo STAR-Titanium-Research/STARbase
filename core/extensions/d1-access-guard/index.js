@@ -83,6 +83,9 @@
 // created, or repointed to another file, only by a caller who can read that file (the read rule of directus_files, run as the caller, so the owner,
 // the owning team's members and an administrator pass and an unowned file is open); a file id that does not exist is refused with the same
 // words. directus_files has no OCC `version` column, so the created-in-this-transaction shortcut above never applies to it.
+// A sixth is not a visibility grant either (Conform runs, plan 2026-10-21-conform-runs, review round 1): conform_run_data.operation_id (the caller must
+// pass the operation's update rule: Directus does not filter create, and the Lab Member create row is `{}`) and conform_run_data.log_id (the log must exist;
+// logs are readable by every member, so its rule is an empty filter).
 //
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
@@ -194,6 +197,10 @@ const JUNCTION_MESSAGES = {
     'You can only change the samples of a test you own, or of a test on a sample you own or co-own.',
   // ADR-0023: the same words for a file that does not exist, so the answer does not say which file ids are real
   'surface_scans.directus_files_id': 'You can only add a surface scan of a file you can see.',
+  // Conform runs (plan 2026-10-21-conform-runs, review round 1): a run row is written by whoever may edit its operation; the log is lab-wide (its
+  // rule is an empty filter), so that guard only asks that the log exists
+  'conform_run_data.operation_id': 'You can only record a Conform run on an operation you can edit.',
+  'conform_run_data.log_id': 'You can only link a Conform log that exists.',
 };
 // Guarded parents that have no OCC `version` column (a Directus system table), so the "inserted by this transaction" shortcut cannot be
 // asked of them: the caller either passes the parent's rule or is refused.
@@ -284,7 +291,8 @@ export default ({ filter }, { services }) => {
         filter: {
           _and: [
             { [check.key]: list.length === 1 ? { _eq: list[0] } : { _in: list } },
-            substitute(check.filter, user),
+            // an empty filter (conform_logs.read: every member reads every log) asks only that the row exists
+            ...(Object.keys(check.filter ?? {}).length ? [substitute(check.filter, user)] : []),
           ],
         },
         limit: list.length,

@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-conform-guard",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Says in words why a Conform run window is refused (overlap with another run, outside the log) or why a log in use cannot be deleted, before the database triggers do (Directus turns their error into a 500).",
+  "keywords": ["directus", "directus-extension", "directus-custom-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
