@@ -1,0 +1,27 @@
+{
+  "description": "the caller cannot edit the new record: the file stays on its old one",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/relink",
+    "body": {
+      "candidate_id": "00000000-0000-4000-8000-000000001008",
+      "collection": "physical_samples",
+      "record_id": "00000000-0000-4000-8000-000000000105"
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "You can only link a file to a record you can edit.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001008",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000105",
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

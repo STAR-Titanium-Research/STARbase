@@ -178,7 +178,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 			<span v-if="badge" class="chk" :class="badge.level" role="img" :aria-label="badge.text" :title="badge.text">{{ badgeText(badge) }}</span>
 			<span v-else-if="ready" class="chk ready" role="img" aria-label="Nothing is missing" title="Nothing is missing">ready</span>
-			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
+			<button v-if="!data.draft" class="xbtn nodrag nopan" :class="{ quiet: !open }" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
 		<KindPicker v-if="kindPick" :kind="kindPick.kind" :value="kindPick.value" :methods="kindPick.methods" :test-types="kindPick.testTypes" @choose="kindPick.choose" />
 		<div class="oname">

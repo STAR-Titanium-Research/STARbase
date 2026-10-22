@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { AppLink } from '@d1/ui';
-import type { FoundFile } from './inboxApi';
+import type { FoundFile, SavedMeasurement } from './inboxApi';
 import { hasThumbnail, nameOf } from './inboxModel';
-import type { MeasureLine } from './measure';
+import type { MeasureShape, MeasureTool } from './measure';
+import type { PreviewSize } from './measurements';
 import ViewPane from './ViewPane.vue';
 import type { ZoomMode } from './viewBoxModel';
 import type { PictureState } from './usePicture';
@@ -11,7 +12,7 @@ import type { PictureState } from './usePicture';
 // The stage of the view box page (spec 2026-10-20-inbox-file-viewer-design.md decisions 1, 4 and 8): the file's name, where it is in the list the person came
 // from ("3 of 120", previous / next), Close back to that list, and the picture (ViewPane): the stored preview (about 1600 px; the original stays on the share),
 // drawn to Fit the stage or at 1:1 of the original's pixels, with a scale bar when the file says its pixel size, an optional contrast stretch and, with Measure
-// on, a line to drag. In Compare the page fills the stage with the two panes instead (the `stage` slot); the header stays the open file's. It only reports what
+// on, a line, a circle or a polygon to draw. In Compare the page fills the stage with the two panes instead (the `stage` slot); the header stays the open file's. It only reports what
 // was asked (prev, next); the page does it.
 const props = defineProps<{
 	file: FoundFile;
@@ -22,9 +23,14 @@ const props = defineProps<{
 	zoom: ZoomMode;
 	scaleBar: boolean;
 	contrast: boolean;
-	/** Measure is on, and the line drawn so far. */
+	/** Measure is on, and the shape drawn so far. */
 	measureOn?: boolean;
-	line?: MeasureLine | null;
+	shape?: MeasureShape | null;
+	/** The shapes saved on this file, and the one highlighted: drawn on the picture while Measure is on. */
+	saved?: readonly SavedMeasurement[];
+	selectedId?: string | null;
+	/** What Measure draws: a line, a circle or a polygon. */
+	tool?: MeasureTool;
 	/** Compare is showing: the `stage` slot replaces the single picture. */
 	compare?: boolean;
 }>();
@@ -33,7 +39,9 @@ const emit = defineEmits<{
 	(e: 'next'): void;
 	/** The preview's state, so the page's View rail knows whether there is a picture to adjust. */
 	(e: 'state', s: PictureState): void;
-	(e: 'measure', line: MeasureLine | null): void;
+	/** The preview's natural size once it is in (saving a drawn shape needs it), null while it is not known. */
+	(e: 'size', s: PreviewSize | null): void;
+	(e: 'measure', shape: MeasureShape | null): void;
 }>();
 
 const withPicture = computed(() => hasThumbnail(props.file));
@@ -66,9 +74,13 @@ const name = computed(() => nameOf(props.file.rel_path));
 				:scale-bar="scaleBar"
 				:contrast="contrast"
 				:measure-on="measureOn"
-				:line="line"
+				:tool="tool"
+				:shape="shape"
+				:saved="saved"
+				:selected-id="selectedId"
 				side="box"
 				@state="onState"
+				@size="emit('size', $event)"
 				@measure="emit('measure', $event)"
 			/>
 		</div>

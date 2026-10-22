@@ -45,7 +45,7 @@ describe('the imaging settings in an Inbox row', () => {
 		const labels = [...el.querySelectorAll('[data-field] dt')].map((d) => d.textContent);
 		expect(labels.slice(0, 8)).toEqual(['kV', 'working distance', 'magnification', 'spot', 'detector', 'mode', 'scale bar', 'taken']);
 		expect(field(el, 'kv')!.textContent).toContain('15 kV');
-		expect(field(el, 'kv')!.querySelector('[data-test="setting-source"]')!.textContent).toBe('metadata');
+		expect(field(el, 'kv')!.querySelector('[data-test="setting-source"]')).toBeNull(); // metadata is the norm: no pill
 		expect(field(el, 'working_distance_mm')!.textContent).toContain('8.5 mm');
 		expect(field(el, 'magnification')!.textContent).toContain('×5,000');
 		expect(field(el, 'magnification')!.querySelector('[data-test="setting-source"]')!.textContent).toBe('derived');

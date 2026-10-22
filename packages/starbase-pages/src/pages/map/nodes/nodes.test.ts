@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { createSSRApp, defineComponent, h, ref, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
@@ -208,9 +209,12 @@ describe('SlotRow', () => {
 	});
 
 	it('a plain slot shows role and code', async () => {
-		const t = text(await render(SlotRow, { item: machine('NLX-1') }));
-		expect(t).toContain('Machine');
+		const html = await render(SlotRow, { item: machine('NLX-1') });
+		const t = text(html);
+		expect(t).toContain('Machine'); // still read out: visually hidden, the icon says it
 		expect(t).toContain('NLX-1');
+		expect(html).toMatch(/class="(?:vh sr|sr vh)"[^>]*>Machine</);
+		expect(html).not.toContain('title='); // the hover card names the record; the role stays in the hidden word
 	});
 });
 
@@ -224,9 +228,22 @@ describe('RecordNode', () => {
 		expect(t).toContain('S-0412-A');
 		expect(t).toContain('Active');
 		expect(t).toContain('Ti-6Al-4V');
-		expect(html).toContain('class="xbtn nodrag nopan"');
+		expect(html).toMatch(/class="(?:[^"]* )?xbtn nodrag nopan(?: [^"]*)?"/);
 		expect(html).toContain('aria-label="Expand"');
 		expect(ids(html)).toEqual(['s:s1:in:0', 's:s1:out:0']);
+	});
+
+	it('the ＋ is quiet (shown on hover, focus or selection) while closed', async () => {
+		expect(await render(RecordNode, { id: sample.id, data: sample })).toMatch(/<button class="(?:[^"]* )?quiet(?: [^"]*)?"[^>]*aria-label="Expand"/);
+	});
+
+	it('a sample with a name leads with it, its code under it; without a name, the code alone', async () => {
+		const named: RecordData = { ...sample, ref: { ...sample.ref, label: 'F1E Cutoff Section B' } };
+		const html = await render(RecordNode, { id: named.id, data: named });
+		expect(html.indexOf('F1E Cutoff Section B')).toBeLessThan(html.indexOf('S-0412-A'));
+		expect(html).toMatch(/class="nick lead"[^>]*>F1E Cutoff Section B</);
+		expect(html).toMatch(/class="code sub"[^>]*>S-0412-A</);
+		expect(await render(RecordNode, { id: sample.id, data: sample })).toMatch(/<div class="code" [^>]*>S-0412-A</);
 	});
 
 	it('a material card shows its name as the title, with its code on the meta line; without a name, its code', async () => {
@@ -582,7 +599,7 @@ describe('controls inside cards do not start a Vue Flow drag or pan', () => {
 
 	it('the ＋ button of a record card and every slot row', async () => {
 		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
-		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="xbtn[^"]*"/);
+		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="(?:[^"]* )?xbtn[^"]*"/);
 		noDrag(await render(SlotRow, { item: machine('NLX-1') }), /class="slot [^"]*"/);
 	});
 });
@@ -805,6 +822,25 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 		expect(calls).toEqual([['collapse', c.id], ['expand', c.id]]);
 		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
 		expect(await render(RecordNode, { id: rec.id, data: rec }, { expanded: ref(new Set(['s:a'])) })).toContain('aria-label="Collapse"');
+	});
+
+	it('a card\'s ＋ is quiet while the card is closed, and plain once it is open', async () => {
+		const [c] = containers(cutOf(1));
+		expect(await render(ContainerNode, { id: c.id, data: c })).toMatch(/<button class="(?:[^"]* )?quiet(?: [^"]*)?"[^>]*aria-label="Expand"/);
+		const open = await render(ContainerNode, { id: c.id, data: c }, { expanded: ref(new Set([c.id])) });
+		expect(open).toContain('aria-label="Collapse"');
+		expect(open).not.toMatch(/xbtn[^"]*\bquiet\b/);
+	});
+
+	it('a card being removed strikes its name through too (the nick of a named sample, not only its code)', async () => {
+		const named: RecordData = { id: 's:s1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's1', code: 'S-1', label: 'Section B' }, ins: [], outs: [], removing: true };
+		const html = await render(RecordNode, { id: named.id, data: named });
+		expect(html).toMatch(/class="(?:[^"]* )?removing\b/);
+		expect(html).toMatch(/class="nick lead"/);
+		// The line is drawn by one rule in nodes.css: every text a card can lead with is in its selector list.
+		const nodesCss = readFileSync(new URL('./nodes.css', import.meta.url), 'utf8');
+		const rule = /\.node\.removing \.code,[^{]*\{[^}]*line-through/.exec(nodesCss)?.[0] ?? '';
+		for (const part of ['.code', '.nick', '.n', '.meta', '.d']) expect(rule, part).toContain(`.node.removing ${part}`);
 	});
 
 	it('a slot is one chip: the whole chip is the record, a tool shows its name', async () => {

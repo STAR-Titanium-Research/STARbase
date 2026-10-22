@@ -6,7 +6,7 @@
 // layout waits for `onNodesInitialized` (and elkInput treats a non-positive size as unmeasured).
 
 import { computed, getCurrentScope, markRaw, nextTick, onScopeDispose, ref, watch } from 'vue';
-import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject, type Styles } from '@vue-flow/core';
+import { getTransformForBounds, useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject, type Styles } from '@vue-flow/core';
 import { nodeOfSocket } from './model/sockets';
 import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
@@ -47,6 +47,55 @@ export const screenPixel = (zoom: number): number => 1 / (Number.isFinite(zoom) 
 const FRAME_PAD = 28;
 const FRAME_LABEL = 30;
 const FIT_PADDING = 0.12;
+/** How far a fit may zoom in: past 1, so a small family fills the canvas instead of sitting small in its middle. */
+const FIT_MAX_ZOOM = 1.4;
+/** A card counts as outside the canvas (the minimap is worth drawing) only when more than this many screen pixels of it are cut off. */
+const OUTSIDE_SLACK = 4;
+
+/** The label the project frame wears: the project's code and name; empty when the project is unknown, and then no frame is drawn. */
+export const projectFrameLabel = (project: { code?: string; label?: string } | null | undefined): string => (project?.code ? [project.code, project.label].filter(Boolean).join(' · ') : '');
+
+/** The box round `nodes` (their drawn places and measured sizes); null when none is measured yet. */
+export function boundsOf(nodes: { computedPosition: { x: number; y: number }; dimensions: { width: number; height: number } }[]): Box | null {
+  const drawn = nodes.filter((n) => n.dimensions.width > 0);
+  if (!drawn.length) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const n of drawn) {
+    const { x, y } = n.computedPosition;
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x + n.dimensions.width);
+    y1 = Math.max(y1, y + n.dimensions.height);
+  }
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * `fitted` with the project frame's room added on each side where it reaches the edge of `all` (what is drawn): the
+ * frame's margin, and on top the label's tab. So a fit of the top-most cards keeps that tab on screen, and a fit of
+ * some middle cards is not widened by a frame that is far away. With `fitted` = `all` this is the frame itself.
+ */
+export function framedBounds(fitted: Box, all: Box): Box {
+  const EDGE = 1;
+  const top = fitted.y <= all.y + EDGE ? FRAME_PAD + FRAME_LABEL : 0;
+  const bottom = fitted.y + fitted.height >= all.y + all.height - EDGE ? FRAME_PAD : 0;
+  const left = fitted.x <= all.x + EDGE ? FRAME_PAD : 0;
+  const right = fitted.x + fitted.width >= all.x + all.width - EDGE ? FRAME_PAD : 0;
+  return { x: fitted.x - left, y: fitted.y - top, width: fitted.width + left + right, height: fitted.height + top + bottom };
+}
+
+/** The viewport that frames `box` in a canvas of `view` size, with the fit's padding, zooming in no further than FIT_MAX_ZOOM nor out further than MIN_ZOOM. */
+export const fitViewport = (box: Box, view: { width: number; height: number }) => getTransformForBounds(box, view.width, view.height, MIN_ZOOM, FIT_MAX_ZOOM, FIT_PADDING);
+
+/** More than `slack` screen pixels of `box` (flow coordinates) lie outside the canvas at viewport `v`. */
+export function outsideView(box: Box, v: { x: number; y: number; zoom: number }, view: { width: number; height: number }, slack = OUTSIDE_SLACK): boolean {
+  const left = box.x * v.zoom + v.x;
+  const top = box.y * v.zoom + v.y;
+  return left < -slack || top < -slack || left + box.width * v.zoom > view.width + slack || top + box.height * v.zoom > view.height + slack;
+}
 /** Nodes of a used-in fan the first view frames: its record and the first few items. */
 const FAN_FIT = 9;
 
@@ -201,11 +250,11 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   function applyFocus(): void {
     const f = map.focusOfHover.value;
     for (const n of vf.getNodes.value) {
-      const cls = f?.dim && !f.nodes.has(n.id) ? 'dim' : undefined;
+      const cls = f?.dim && !f.nodes.has(n.id) ? (f.soft ? 'dim soft' : 'dim') : undefined;
       if (n.class !== cls) n.class = cls;
     }
     for (const e of vf.getEdges.value) {
-      const cls = f?.wires.has(e.id) ? 'hi' : f?.dim ? 'dim' : undefined;
+      const cls = f?.wires.has(e.id) ? 'hi' : f?.dim ? (f.soft ? 'dim soft' : 'dim') : undefined;
       if (e.class !== cls) e.class = cls;
     }
   }
@@ -474,7 +523,12 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   // ---- viewport ---------------------------------------------------------------------------------
   const fitIds = (ids: string[] | undefined, animate = true) => {
     const present = ids?.filter((id) => vf.findNode(id));
-    return vf.fitView({ padding: FIT_PADDING, maxZoom: 1, duration: animate && !reducedMotion() ? 300 : 0, ...(present?.length ? { nodes: present } : {}) });
+    const duration = animate && !reducedMotion() ? 300 : 0;
+    // The project frame hangs its name's tab above the top card: fit that too, or the higher zoom puts the tab off the top of the canvas.
+    const all = projectFrameLabel(map.project.value) ? boundsOf(vf.getNodes.value) : null;
+    const fitted = all && boundsOf(present?.length ? present.flatMap((id) => vf.findNode(id) ?? []) : vf.getNodes.value);
+    if (all && fitted) return vf.setViewport(fitViewport(framedBounds(fitted, all), vf.dimensions.value), { duration });
+    return vf.fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM, duration, ...(present?.length ? { nodes: present } : {}) });
   };
   /** Frame the focus and what is one process step around it (not the whole family at a tiny zoom). */
   function fitFocus(animate = true): Promise<boolean> {
@@ -619,24 +673,23 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   // ---- the project frame (spec D13) -----------------------------------------------------------------
   /** A box round every drawn node, in flow coordinates; null with nothing drawn or measured. */
   const frame = computed(() => {
-    const nodes = vf.getNodes.value.filter((n) => n.dimensions.width > 0);
-    if (!nodes.length) return null;
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (const n of nodes) {
-      const { x, y } = n.computedPosition;
-      x0 = Math.min(x0, x);
-      y0 = Math.min(y0, y);
-      x1 = Math.max(x1, x + n.dimensions.width);
-      y1 = Math.max(y1, y + n.dimensions.height);
-    }
-    return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
+    const all = boundsOf(vf.getNodes.value);
+    return all && framedBounds(all, all);
   });
 
   /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
   const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
+  /** Some card is outside the canvas (by more than a few pixels, so one on its edge does not flicker the minimap): it is worth drawing. Nothing measured yet counts as fitting. */
+  const outgrowsView = computed(() => {
+    const v = vf.viewport.value;
+    const view = vf.dimensions.value;
+    if (!view.width || !view.height) return false;
+    return vf.getNodes.value.some((n) => {
+      const { x, y } = n.computedPosition;
+      const { width, height } = n.dimensions;
+      return !!width && !!height && outsideView({ x, y, width, height }, v, view);
+    });
+  });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy: settle.tidy, canTidy: settle.canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy: settle.tidy, canTidy: settle.canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, outgrowsView, whenSettled, toFlow };
 }

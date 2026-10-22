@@ -1,22 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
-import type { FoundFile } from './inboxApi';
+import { loadMeasurements, type FoundFile } from './inboxApi';
 import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, primaryAction, settingsOf, suggestionOf } from './inboxModel';
+import LinkCard from './LinkCard.vue';
+import LinkedSiblings from './LinkedSiblings.vue';
+import { hasSiblings } from './linkedModel';
 import ScaleBar from './ScaleBar.vue';
 import SemSettingsList from './SemSettingsList.vue';
 import { sheetScaleBar } from './sheetScale';
 import { usePicture } from './usePicture';
+import { useSiblings } from './useSiblings';
 
 // The sheet beside the Inbox list (spec 2026-10-20-inbox-file-viewer-design.md decision 2): the selected file's picture (the stored preview, with a scale bar
 // over it when the file says its pixel size), what the crawler read, and Link to..., Dismiss and Open in view box. It only reports what was asked; the page
-// does it. A file with no picture still shows its facts; a picture still loading shimmers, a failed one says so and offers Retry (decision 8).
+// does it. A linked file also shows its Link card and the strip of the other pictures on its record (LinkCard, LinkedSiblings), between the picture and the
+// facts. A file with no picture still shows its facts; a picture still loading shimmers, a failed one says so and offers Retry (decision 8).
 const props = defineProps<{
 	file: FoundFile;
 	/** The page's tab: New and Older files offer Link to... and Dismiss; Dismissed offers Restore; Recently linked offers neither. */
 	tab: 'new' | 'older' | 'linked' | 'dismissed';
 	showOwner: boolean;
 	busy: boolean;
+	/** An Undo is running (the page's one at a time): the Link card cannot be pressed. */
+	undoing?: boolean;
+	/** The scale bar over the picture is on (the per-person "Scale bar" setting of the View rail). */
+	scaleBar?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'close'): void;
@@ -24,11 +33,51 @@ const emit = defineEmits<{
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
 	(e: 'open-box'): void;
+	/** The Link card: Open the record's page, Change… (the Link dialog), Undo link. */
+	(e: 'open-record', route: string): void;
+	(e: 'change'): void;
+	(e: 'undo'): void;
+	/** The strip: a picture of the same record was chosen (open it) or chosen to compare with. */
+	(e: 'open-sibling', candidateId: string): void;
+	(e: 'compare-sibling', candidateId: string): void;
 }>();
 
 const host = useExplorerHost();
+const siblings = useSiblings(host.api, () => (hasSiblings(props.file) ? props.file.candidate_id : null));
 const withPicture = computed(() => hasThumbnail(props.file));
 const { state, url, retry } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'preview', () => true, { priority: true });
+
+// How many shapes were saved on the file in the view box (decision 6): the sheet only says the count, the shapes are the view box's. Read per file the sheet shows
+// (the answer of an earlier file is dropped); a count that cannot be read is no count. A save in the view box (another tab or window) is picked up when this one
+// is looked at again: the count is read anew on focus, keeping the old number on screen until the answer comes.
+const saved = ref<number | null>(null);
+let seq = 0;
+const countFor = () => (withPicture.value ? props.file.candidate_id : null);
+async function readCount(id: string | null, keep: boolean) {
+	const mine = ++seq;
+	if (!keep) saved.value = null;
+	if (id === null) return;
+	try {
+		const got = await loadMeasurements(host.api, id);
+		if (mine === seq) saved.value = got.measurements.length;
+	} catch {
+		/* no count */
+	}
+}
+watch(countFor, (id) => void readCount(id, false), { immediate: true });
+const looked = () => {
+	if (typeof document === 'undefined' || document.visibilityState === 'hidden') return;
+	void readCount(countFor(), true);
+};
+onMounted(() => {
+	window.addEventListener('focus', looked);
+	document.addEventListener('visibilitychange', looked);
+});
+onBeforeUnmount(() => {
+	seq += 1;
+	window.removeEventListener('focus', looked);
+	document.removeEventListener('visibilitychange', looked);
+});
 
 const name = computed(() => nameOf(props.file.rel_path));
 const folder = computed(() => folderText(props.file.rel_path));
@@ -60,7 +109,7 @@ const linkLabel = computed(() => {
 			<template v-if="withPicture">
 				<div v-if="state === 'ready' && url" class="pic">
 					<img :src="url" :alt="`Preview of ${name}`" draggable="false" data-test="sheet-image" />
-					<ScaleBar v-if="bar" :bar="bar" data-test="sheet-scalebar" />
+					<ScaleBar v-if="bar && scaleBar !== false" :bar="bar" data-test="sheet-scalebar" />
 				</div>
 				<div v-else-if="state === 'failed'" class="blank err" role="alert" data-test="sheet-error">
 					<span>The preview could not be loaded.</span>
@@ -81,8 +130,14 @@ const linkLabel = computed(() => {
 			<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
 		</div>
 
+		<template v-if="file.state === 'linked'">
+			<LinkCard :file="file" :busy="busy || !!undoing" @open="emit('open-record', $event)" @change="emit('change')" @undo="emit('undo')" />
+			<LinkedSiblings :file="file" :rows="siblings.rows.value" :total="siblings.total.value" @open="emit('open-sibling', $event)" @compare="emit('compare-sibling', $event)" />
+		</template>
+
 		<SemSettingsList v-if="settings.length" :rows="settings" />
 		<p v-else-if="read" class="read" data-test="sheet-read">{{ read }}</p>
+		<p v-if="saved" class="read" data-test="sheet-measurements">{{ saved }} saved {{ saved === 1 ? 'measurement' : 'measurements' }}</p>
 		<p v-if="suggestion" class="why" data-test="sheet-suggestion">Looks like <strong class="rec">{{ suggestion.record }}</strong>: <span class="reason">{{ suggestion.text }}</span></p>
 
 		<div class="actions">

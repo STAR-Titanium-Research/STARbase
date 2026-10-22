@@ -25,6 +25,9 @@
 .d1-process-map .vue-flow__node { transition: opacity 0.15s; }
 .d1-process-map .vue-flow__node.dim { opacity: 0.3; }
 .d1-process-map .vue-flow__edge.dim { opacity: 0.2; }
+/* A chain (right-click: upstream, downstream, both) dims the rest less: off the chain, not disabled. */
+.d1-process-map .vue-flow__node.dim.soft { opacity: 0.6; }
+.d1-process-map .vue-flow__edge.dim.soft { opacity: 0.4; }
 .d1-process-map .vue-flow__edge .wire { transition: stroke-width 0.15s; }
 .d1-process-map .vue-flow__edge.hi .wire { stroke: var(--k); stroke-width: 3.2px; }
 .d1-process-map .vue-flow__edge.hi .wire.stackable { stroke-width: 5px; }

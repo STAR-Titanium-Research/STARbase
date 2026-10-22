@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue';
 import { useRequestGate, type HostApi } from '@d1/ui';
 import {
-	InboxApiError, acceptAll, dismissFiles, linkFiles, loadFiles, rescan, restoreFiles, undoBatch,
+	InboxApiError, acceptAll, dismissFiles, linkFiles, loadFiles, relinkFile, rescan, restoreFiles, undoBatch,
 	type FilesQuery, type FoundFile, type LinkItem, type Skipped,
 } from './inboxApi';
 import {
@@ -399,6 +399,29 @@ export function createInbox(deps: InboxDeps) {
 		}
 	}
 
+	/**
+	 * Change the record a LINKED file is on: ONE request (POST /relink), which undoes that file's link and links it to the new record in a single transaction, so a
+	 * refusal (a record the person may not edit, one that is gone, a link that is not theirs to undo) changes nothing: the file stays where it was, with its
+	 * imaging corrections. The page offers it only for a batch of one. Choosing the record the file is already on does nothing.
+	 */
+	async function relink(file: FoundFile, collection: string, recordId: string): Promise<Outcome> {
+		if (!file.link_batch_id) return { ok: false, message: 'This file has no link to change.' };
+		if (file.linked_collection === collection && file.linked_record_id === recordId) return { ok: true };
+		return run([file.candidate_id], async () => {
+			try {
+				const r = await relinkFile(api, { candidate_id: file.candidate_id, collection, record_id: recordId });
+				say({ tone: 'ok', text: linkResultText(r.linked), undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
+				// the file is on its new record: the Recently linked list names it there
+				await load();
+				deps.onChanged?.();
+				return { ok: true } as const;
+			} catch (e) {
+				const race = teamRaceText(file, e);
+				return failed(e, 'Could not change the link.', race ? { message: race, field: null } : undefined);
+			}
+		});
+	}
+
 	async function rescanNow(): Promise<Outcome> {
 		rescanning.value = true;
 		try {
@@ -421,7 +444,7 @@ export function createInbox(deps: InboxDeps) {
 	return {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
 		preview, acceptCount, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
-		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
+		load, toggleOther, loadMoreMain, loadMoreOther, link, relink, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
 		say,
 		dismissNotice: () => say(null),
 		cancel: () => {

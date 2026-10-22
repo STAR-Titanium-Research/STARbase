@@ -1,0 +1,21 @@
+{
+  "description": "GET /d1-inbox/siblings for a file that is the only picture on its record (or is not linked to a record)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/siblings",
+    "query": {
+      "file": "00000000-0000-4000-8000-000000001015",
+      "limit": "7"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": [],
+    "meta": {
+      "total": 0,
+      "limit": 7,
+      "offset": 0,
+      "acceptable": null
+    }
+  }
+}

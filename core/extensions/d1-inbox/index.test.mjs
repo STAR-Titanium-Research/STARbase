@@ -4,10 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import endpoint, {
-  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
-  parseIgnoredFolder, parseScanItem, safeEqual, semAccess, shapeSemSettings, shapeSummary, unfit,
+  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, canUndoRow, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
+  parseIgnoredFolder, parseMeasurement, parseScanItem, safeEqual, semAccess, shapeSemSettings, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -106,6 +107,8 @@ function newWorld() {
     dirs: [],
     // ignored folders (d1_private.inbox_ignored_dirs): { ignored_id, owner_person_id, owner_team_id, rel_folder, created_at, created_by }
     ignored: [], skipIgnoredFind: false,
+    // saved measurements (d1_private.inbox_measurements): { measurement_id, candidate_id, kind, points, label, created_by, created_at }
+    measurements: [],
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
       daemon_started_at: new Date('2026-10-15T08:00:00.000Z'), current_activity: 'idle', last_scan_started_at: new Date('2026-10-15T11:30:00.000Z'),
@@ -152,10 +155,10 @@ const underIgnoredRule = (w, c) => {
 };
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), settings: copy(w.settings), settingsLog: copy(w.settingsLog), ignored: copy(w.ignored) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), settings: copy(w.settings), settingsLog: copy(w.settingsLog), ignored: copy(w.ignored), measurements: copy(w.measurements) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog; w.ignored = s.ignored;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog; w.ignored = s.ignored; w.measurements = s.measurements;
 };
 
 // the pointer row's owner columns say another owner than the candidate's (a folder that changed hands, C1): the loaders of d1-inbox leave such a candidate out
@@ -351,6 +354,7 @@ function statement(w, sql, b, txId) {
       }
       return gone;
     }
+    case 'measureTableExists': return [{ available: w.measureTable !== false }];
     case 'semTableExists': return [{ available: w.semTable !== false }];
     case 'semFile': return w.files.has(b[0]) ? [copy(w.files.get(b[0]))] : [];
     case 'semSettingsGet': return w.settings.has(b[0]) ? [copy(w.settings.get(b[0]))] : [];
@@ -373,7 +377,63 @@ function statement(w, sql, b, txId) {
       row.corrected_at = w.now.toISOString();
       return [];
     }
+    // saved measurements: the file as the picture routes read it (the file-owner predicate), then d1_private.inbox_measurements
+    case 'measureFile': {
+      const c = w.candidates.get(b[0]);
+      return c && !restamped(w, c) ? [{ candidate_id: c.candidate_id, owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, state: c.state }] : [];
+    }
+    case 'measureList': case 'measureOne': {
+      const rows = w.measurements.filter((m) => (name === 'measureList' ? m.candidate_id === b[0] : m.measurement_id === b[0] && m.candidate_id === b[1]));
+      rows.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)) || x.measurement_id.localeCompare(y.measurement_id));
+      return copy(rows.map((m) => ({ ...m, author_name: w.people.find((p) => p.user_id === m.created_by)?.full_name ?? null })));
+    }
+    case 'measureCount': return [{ n: w.measurements.filter((m) => m.candidate_id === b[0]).length }];
+    case 'measureInsert': {
+      const [candidateId, kind, json, label, user] = b;
+      const row = { measurement_id: ID(9500 + w.measurements.length + 1), candidate_id: candidateId, kind, points: JSON.parse(json), label, created_by: user, created_at: new Date(w.now.getTime() + w.measurements.length * 1000).toISOString() };
+      w.measurements.push(row);
+      return [{ measurement_id: row.measurement_id }];
+    }
+    case 'measureLabel': {
+      const row = w.measurements.find((m) => m.measurement_id === b[1] && m.candidate_id === b[2]);
+      if (row) row.label = b[0];
+      return row ? [{ measurement_id: row.measurement_id }] : [];
+    }
+    case 'measureDelete': {
+      const at = w.measurements.findIndex((m) => m.measurement_id === b[0] && m.candidate_id === b[1]);
+      return at < 0 ? [] : [{ measurement_id: w.measurements.splice(at, 1)[0].measurement_id }];
+    }
     case 'adminState': return [copy(w.crawlerState)];
+    // scan progress: the same grouping the SQL does (not gone, not under an owner's ignored rule, the file-owner predicate), by owner
+    case 'progressOwners': return copy([
+      ...w.people.filter((p) => p.uni_alias).map((p) => ({ kind: 'person', owner_id: p.person_id, name: p.full_name, folder: p.uni_alias, has_login: p.user_id !== null })),
+      ...w.teams.filter((t) => t.share_folder).map((t) => ({ kind: 'team', owner_id: t.team_id, name: t.name, folder: t.share_folder, has_login: null })),
+    ].sort((x, y) => x.name.localeCompare(y.name)));
+    case 'progressDirs': case 'progressFiles': {
+      const people = csv(b[0]);
+      const teams = csv(b[1]);
+      const mine = (r) => people.includes(r.owner_person_id) || teams.includes(r.owner_team_id);
+      const groups = new Map();
+      const rows = name === 'progressDirs'
+        ? w.dirs.filter((d) => mine(d) && !underIgnoredRule(w, { ...d, rel_path: `${d.rel_path}/` }))
+        : [...w.candidates.values()].filter((c) => c.state !== 'gone' && mine(c) && !restamped(w, c) && !underIgnoredRule(w, c));
+      for (const r of rows) {
+        const key = `${r.owner_person_id}|${r.owner_team_id}`;
+        const g = groups.get(key) ?? { owner_person_id: r.owner_person_id ?? null, owner_team_id: r.owner_team_id ?? null, rows: [] };
+        g.rows.push(r);
+        groups.set(key, g);
+      }
+      return [...groups.values()].map(({ rows: rs, ...owner }) => {
+        if (name === 'progressDirs') return { ...owner, folders_known: rs.length, folders_listed: rs.filter((d) => d.last_listed_at).length };
+        const images = rs.filter((c) => ['image', 'sem_image'].includes(c.kind));
+        const sem = rs.filter((c) => c.kind === 'sem_image');
+        return {
+          ...owner, files: rs.length, images: images.length, images_read: images.filter((c) => c.classified_by).length,
+          images_with_thumb: images.filter((c) => w.thumbs.has(c.candidate_id)).length, sem: sem.length, sem_with_scale: sem.filter((c) => c.extracted?.pixel_size_nm != null).length,
+        };
+      });
+    }
+    case 'progressScan': return [{ last_scan_finished_at: w.crawlerState.last_scan_finished_at }];
     case 'adminPeopleWithoutAlias': return copy(w.people.filter((p) => p.active && !p.uni_alias).map((p) => ({ person_id: p.person_id, full_name: p.full_name, has_login: p.user_id !== null })));
     case 'adminFailedRequests': return copy(w.scanRequests.filter((r) => r.status === 'failed').map((r) => ({ at: r.finished_at ?? r.requested_at, error: r.error })));
     case 'adminTotals': return copy(w.totals);
@@ -693,7 +753,7 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   // an owner replaces the default scope
   const me = buildListQuery(scope, parseFileFilters({ owner: 'me' }));
   assert.match(me.sql, /c\.owner_person_id = \?/);
-  assert.doesNotMatch(me.sql, /owner_team_id = ANY/);
+  assert.doesNotMatch(me.sql.slice(me.sql.indexOf(' FROM d1_private.file_candidates c ')), /owner_team_id = ANY/, 'the owner scope of the rows is only the person');
   assert.ok(me.bindings.includes(P.alice));
   const one = buildListQuery(scope, parseFileFilters({ owner: `team:${TEAM}` }));
   assert.match(one.sql, /c\.owner_team_id = \?/);
@@ -773,9 +833,11 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
 // ---- the wrapper: sign-in, Directus-shaped errors, Lab Viewer ------------------------------------------------------------
 
 const USER_ROUTES = [
-  'GET /summary', 'GET /files', 'POST /link', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
+  'GET /summary', 'GET /files', 'POST /link', 'POST /relink', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
   'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /sem-settings', 'PATCH /sem-settings/:file',
-  'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id',
+  'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id', 'GET /progress',
+  'GET /files/:candidate_id/measurements', 'POST /files/:candidate_id/measurements',
+  'PATCH /files/:candidate_id/measurements/:measurement_id', 'DELETE /files/:candidate_id/measurements/:measurement_id',
 ];
 
 test('every route but auto-link needs a signed-in user: 401, Directus-shaped, source d1-inbox', async () => {
@@ -808,9 +870,11 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
   const { call } = setup(w);
   const writes = [
     ['POST /link', { items: [link(c)] }], ['POST /accept-all', { filter: {} }], ['POST /dismiss', { candidate_ids: [c.candidate_id] }],
-    ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
+    ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /relink', { candidate_id: c.candidate_id, collection: 'physical_samples', record_id: S1 }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
     ['PATCH /sem-settings/:file', { field: 'kv', value: 10 }],
     ['POST /ignored-folders', { folder: 'x' }], ['DELETE /ignored-folders/:id', undefined],
+    ['POST /files/:candidate_id/measurements', { kind: 'line', points: [{ x: 1, y: 1 }, { x: 5, y: 5 }] }], ['PATCH /files/:candidate_id/measurements/:measurement_id', { label: 'x' }],
+    ['DELETE /files/:candidate_id/measurements/:measurement_id', undefined],
   ];
   for (const [key, body] of writes) {
     const res = await call(key, { user: U.viewer, role: LAB_VIEWER_ROLE_ID, body });
@@ -4191,6 +4255,252 @@ test('DELETE /ignored-folders/:id: two removals of A and of A/B at once cannot b
   for (const l of locks) assert.ok(w.log.findIndex((x) => x === l) < w.log.findIndex((x) => x.tx === l.tx && x.name === 'ignoredDelete'), 'the lock comes first');
 });
 
+/// ---- saved measurements (migration 211) ------------------------------------------------------------------------------------------
+
+const LINE = { kind: 'line', points: [{ x: 100, y: 200 }, { x: 400, y: 600 }] };
+const CIRCLE = { kind: 'circle', points: [{ x: 500, y: 500 }, { x: 560, y: 500 }], label: 'pore' };
+const POLY = { kind: 'polygon', points: [{ x: 10, y: 10 }, { x: 110, y: 10 }, { x: 60, y: 90 }] };
+const mKey = (verb, withId) => `${verb} /files/:candidate_id/measurements${withId ? '/:measurement_id' : ''}`;
+const getM = (call, c, who) => call(mKey('GET', false), { ...who, params: { candidate_id: c.candidate_id } });
+const postM = (call, c, body, who) => call(mKey('POST', false), { ...who, body, params: { candidate_id: c.candidate_id } });
+const patchM = (call, c, id, body, who) => call(mKey('PATCH', true), { ...who, body, params: { candidate_id: c.candidate_id, measurement_id: id } });
+const deleteM = (call, c, id, who) => call(mKey('DELETE', true), { ...who, params: { candidate_id: c.candidate_id, measurement_id: id } });
+
+test('parseMeasurement: a line, a circle or a polygon with corners in original pixels; anything else is a 400 that names the field', () => {
+  assert.deepEqual(parseMeasurement(LINE), { kind: 'line', points: LINE.points, label: '' });
+  assert.deepEqual(parseMeasurement(CIRCLE), { kind: 'circle', points: CIRCLE.points, label: 'pore' });
+  assert.deepEqual(parseMeasurement({ ...POLY, label: '  grain A  ' }).label, 'grain A', 'the label is trimmed');
+  assert.deepEqual(parseMeasurement({ ...LINE, points: [{ x: 1.23456, y: 2 }, { x: 3, y: 4.5555 }] }).points, [{ x: 1.235, y: 2 }, { x: 3, y: 4.556 }], 'kept to a thousandth of a pixel');
+  const field = (body) => { try { parseMeasurement(body); } catch (e) { return `${e.status} ${e.code} ${e.extra.field ?? ''}`.trim(); } return 'accepted'; };
+  assert.equal(field({ ...LINE, kind: 'spline' }), '400 INVALID_PAYLOAD kind');
+  assert.equal(field({ ...LINE, kind: undefined }), '400 INVALID_PAYLOAD kind');
+  assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...CIRCLE, points: [...CIRCLE.points, { x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...POLY, points: POLY.points.slice(0, 2) }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...POLY, points: Array.from({ length: 201 }, (_, i) => ({ x: i, y: i % 7 })) }), '400 INVALID_PAYLOAD points', 'at most 200 corners');
+  assert.equal(field({ ...POLY, points: Array.from({ length: 200 }, (_, i) => ({ x: i, y: i % 7 })) }), 'accepted');
+  assert.equal(field({ ...LINE, points: 'x' }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }, { x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points', 'a line of no length is not a shape');
+  assert.equal(field({ ...CIRCLE, points: [{ x: 5, y: 5 }, { x: 5, y: 5 }] }), '400 INVALID_PAYLOAD points', 'a circle of no size is not a shape');
+  for (const bad of [{ x: -1, y: 0 }, { x: 0, y: 1_000_001 }, { x: NaN, y: 0 }, { x: Infinity, y: 0 }, { x: '3', y: 0 }, { x: 1 }, { x: 1, y: 2, z: 3 }, null, 5]) {
+    assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }, bad] }), '400 INVALID_PAYLOAD points', JSON.stringify(bad));
+  }
+  assert.equal(field({ ...LINE, label: 'x'.repeat(121) }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, label: 'x'.repeat(120) }), 'accepted');
+  assert.equal(field({ ...LINE, label: 5 }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, label: 'a\nb' }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, created_by: U.bob }), '400 INVALID_PAYLOAD', 'no other key is taken (the author is the caller, never the body)');
+  assert.equal(field(null), '400 INVALID_PAYLOAD');
+  assert.equal(field([]), '400 INVALID_PAYLOAD');
+});
+
+test('POST /files/:id/measurements: the owner saves a shape as its author; 201 with the row; one transaction that starts with the actor', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const res = await postM(call, c, LINE, ALICE);
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { measurement_id: w.measurements[0].measurement_id, kind: 'line', points: LINE.points, label: '', created_at: w.measurements[0].created_at, author_name: 'Alice A', can_edit: true } });
+  assert.deepEqual(w.measurements.map((m) => [m.candidate_id, m.kind, m.created_by]), [[c.candidate_id, 'line', U.alice]]);
+  const tx = w.log.find((l) => l.name === 'measureInsert').tx;
+  assert.ok(tx, 'inside a transaction');
+  assert.equal(w.log.find((l) => l.tx === tx && l.name === 'setActor').bindings[0], U.alice);
+  assert.ok(w.log.findIndex((l) => l.tx === tx && l.name === 'lock') < w.log.findIndex((l) => l.name === 'measureCount'), 'the per-file lock comes before the count');
+  assert.deepEqual(w.log.find((l) => l.name === 'lock' && l.tx === tx).bindings, [`inbox-measure:${c.candidate_id}`]);
+  // the insert binds the kind, the points as JSON text and the label; the JSON is text for ?::jsonb
+  assert.deepEqual(w.log.find((l) => l.name === 'measureInsert').bindings, [c.candidate_id, 'line', JSON.stringify(LINE.points), '', U.alice]);
+});
+
+test('POST /files/:id/measurements: a member of the owner team may save on a team file; the author is the caller', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  assert.equal((await postM(call, c, POLY, BOB)).statusCode, 201);
+  assert.equal(w.measurements[0].created_by, U.bob);
+});
+
+test('POST /files/:id/measurements: nobody else saves: an administrator who is not the owner is 403 (they read, never change), someone outside is the same 404 as a file that is not there; nothing is written', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const gone = add(w, cand({ state: 'gone' }));
+  const { call } = setup(w);
+  const asAdmin = await postM(call, c, LINE, ADMIN);
+  assert.equal(asAdmin.statusCode, 403);
+  assert.equal(codeOf(asAdmin), 'FORBIDDEN');
+  for (const [file, who] of [[c, CAROL], [c, BOB], [gone, ALICE], [{ candidate_id: MISSING }, ALICE], [{ candidate_id: 'nope' }, ALICE]]) {
+    const res = await postM(call, file, LINE, who);
+    assert.equal(res.statusCode, 404, file.candidate_id);
+    assert.equal(codeOf(res), 'NOT_FOUND');
+    assert.equal(errorOf(res).message, 'That file is not in your inbox.', 'the same words for every reason');
+    assert.equal(errorOf(res).extensions.candidate_id, undefined, 'no id is echoed');
+  }
+  assert.equal(w.measurements.length, 0);
+});
+
+test('POST /files/:id/measurements: a restamped file (its folder changed hands) is the same 404 for its old holder', async () => {
+  const w = newWorld();
+  const c = stampTo(w, add(w, cand()), OWNED_BY.other);
+  const { call } = setup(w);
+  assert.equal((await postM(call, c, LINE, ALICE)).statusCode, 404);
+  assert.equal(w.measurements.length, 0);
+});
+
+test('POST /files/:id/measurements: a bad body is 400 before anything is read; at 200 a file is full (409 TOO_MANY_MEASUREMENTS) and nothing is added', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const bad = await postM(call, c, { ...LINE, kind: 'blob' }, ALICE);
+  assert.equal(bad.statusCode, 400);
+  assert.equal(errorOf(bad).extensions.field, 'kind');
+  assert.equal(w.log.length, 0, 'nothing was read');
+  for (let i = 0; i < 200; i++) w.measurements.push({ measurement_id: ID(20000 + i), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.alice, created_at: NOW.toISOString() });
+  const full = await postM(call, c, LINE, ALICE);
+  assert.equal(full.statusCode, 409);
+  assert.equal(codeOf(full), 'TOO_MANY_MEASUREMENTS');
+  assert.equal(errorOf(full).extensions.limit, 200);
+  assert.equal(w.measurements.length, 200);
+  // another file has its own count
+  const other = add(w, cand());
+  assert.equal((await postM(call, other, LINE, ALICE)).statusCode, 201);
+});
+
+test('GET /files/:id/measurements: whoever sees the file reads its shapes, oldest first, with the author and whether they may edit each; an administrator reads and cannot add', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  await postM(call, c, LINE, ALICE);
+  await postM(call, c, CIRCLE, BOB);
+  await postM(call, c, POLY, ALICE);
+  const mine = await getM(call, c, ALICE);
+  assert.equal(mine.statusCode, 200);
+  assert.deepEqual(mine.body.data.map((m) => [m.kind, m.label, m.author_name, m.can_edit]), [['line', '', 'Alice A', true], ['circle', 'pore', 'Bob B', true], ['polygon', '', 'Alice A', true]], 'a team member may edit all of a team file\'s shapes');
+  assert.deepEqual(mine.body.meta, { total: 3, can_change: true });
+  assert.deepEqual(mine.body.data[1].points, CIRCLE.points);
+  const admin = await getM(call, c, ADMIN);
+  assert.equal(admin.statusCode, 200);
+  assert.deepEqual(admin.body.meta, { total: 3, can_change: false });
+  assert.deepEqual(admin.body.data.map((m) => m.can_edit), [false, false, false], 'an administrator who is not the owner or the author edits none');
+  assert.equal((await getM(call, c, CAROL)).statusCode, 404, 'a person outside the team does not even learn the file exists');
+});
+
+test('GET /files/:id/measurements: a Lab Viewer who owns the file reads it (reads are allowed) but is offered nothing to change, not even their own old shapes; an empty file is an empty list', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: P.viewer }));
+  const { call } = setup(w);
+  const viewer = { user: U.viewer, role: LAB_VIEWER_ROLE_ID };
+  const res = await getM(call, c, viewer);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { data: [], meta: { total: 0, can_change: false } });
+  w.measurements.push({ measurement_id: ID(9801), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.viewer, created_at: NOW.toISOString() });
+  const again = await getM(call, c, viewer);
+  assert.deepEqual(again.body.data.map((m) => m.can_edit), [false]);
+  assert.deepEqual(again.body.meta, { total: 1, can_change: false });
+  for (const res2 of [await postM(call, c, LINE, viewer), await patchM(call, c, ID(9801), { label: 'x' }, viewer), await deleteM(call, c, ID(9801), viewer)]) {
+    assert.equal(res2.statusCode, 403);
+    assert.equal(codeOf(res2), 'READ_ONLY_ROLE');
+  }
+  assert.equal(w.measurements.length, 1);
+});
+
+test('measurements before migration 211 (no table): GET is an empty list the caller cannot add to, a write is 503, nothing is read; once applied it works at once', async () => {
+  const w = newWorld();
+  w.measureTable = false;
+  const c = add(w, cand({ owner_person_id: P.alice }));
+  const { call } = setup(w);
+  const got = await getM(call, c, ALICE);
+  assert.equal(got.statusCode, 200);
+  assert.deepEqual(got.body, { data: [], meta: { total: 0, can_change: false } });
+  for (const res of [await postM(call, c, LINE, ALICE), await patchM(call, c, ID(9801), { label: 'x' }, ALICE), await deleteM(call, c, ID(9801), ALICE)]) {
+    assert.equal(res.statusCode, 503);
+    assert.equal(codeOf(res), 'MEASUREMENTS_UNAVAILABLE');
+  }
+  assert.equal(w.log.some((l) => /^measure(List|One|Count|Insert|Label|Delete)$/.test(l.name)), false, 'the missing table is never queried');
+  w.measureTable = true;
+  assert.equal((await postM(call, c, LINE, ALICE)).statusCode, 201);
+  assert.equal((await getM(call, c, ALICE)).body.meta.total, 1);
+});
+
+test('PATCH /files/:id/measurements/:id renames: the owner, a team member, or the author may; everyone else is 403 or 404; the label is trimmed, may be cleared and is checked', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  const made = (await postM(call, c, LINE, ALICE)).body.data.measurement_id;
+  const ok = await patchM(call, c, made, { label: '  grain A ' }, BOB);
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.data.label, 'grain A');
+  assert.equal(w.measurements[0].label, 'grain A');
+  assert.equal(ok.body.data.measurement_id, made);
+  assert.equal((await patchM(call, c, made, { label: '' }, ALICE)).body.data.label, '', 'a blank label clears the name');
+  assert.equal(errorOf(await patchM(call, c, made, { label: 'x'.repeat(121) }, ALICE)).extensions.field, 'label');
+  for (const body of [{}, { label: 'a', kind: 'circle' }, { kind: 'circle' }, undefined]) assert.equal((await patchM(call, c, made, body, ALICE)).statusCode, 400, JSON.stringify(body));
+  assert.equal(w.measurements[0].label, '');
+  const adminTry = await patchM(call, c, made, { label: 'mine' }, ADMIN);
+  assert.equal(adminTry.statusCode, 403, 'an administrator who is neither owner nor author');
+  assert.equal(codeOf(adminTry), 'FORBIDDEN');
+  assert.equal((await patchM(call, c, made, { label: 'x' }, CAROL)).statusCode, 404);
+  assert.equal((await patchM(call, c, ID(9999), { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal((await patchM(call, c, 'not-an-id', { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal(w.measurements[0].label, '');
+  // a measurement is addressed through ITS file: the id of another file's shape under this file's path is a 404
+  const other = add(w, cand());
+  const theirs = (await postM(call, other, LINE, ALICE)).body.data.measurement_id;
+  assert.equal((await patchM(call, c, theirs, { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal(w.measurements.find((m) => m.measurement_id === theirs).label, '');
+});
+
+test('PATCH and DELETE: the author may change their own shape on a file they can still see even when they do not own it', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  // a shape saved by the administrator, who could once change this file (a row the endpoint would not make today)
+  w.measurements.push({ measurement_id: ID(9701), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.admin, created_at: NOW.toISOString() });
+  assert.equal((await patchM(call, c, ID(9701), { label: 'kept' }, ADMIN)).statusCode, 200, 'the author renames');
+  assert.equal((await deleteM(call, c, ID(9701), ADMIN)).statusCode, 200, 'the author deletes');
+  assert.equal(w.measurements.length, 0);
+});
+
+test('DELETE /files/:id/measurements/:id: the owner or the author deletes it; someone outside is 404; it answers the id', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const a = (await postM(call, c, LINE, ALICE)).body.data.measurement_id;
+  const b = (await postM(call, c, CIRCLE, ALICE)).body.data.measurement_id;
+  assert.equal((await deleteM(call, c, a, CAROL)).statusCode, 404);
+  assert.equal((await deleteM(call, c, a, ADMIN)).statusCode, 403, 'an administrator who is neither owner nor author');
+  assert.equal(w.measurements.length, 2);
+  const res = await deleteM(call, c, a, ALICE);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { data: { measurement_id: a } });
+  assert.deepEqual(w.measurements.map((m) => m.measurement_id), [b]);
+  assert.equal((await deleteM(call, c, a, ALICE)).statusCode, 404, 'twice is a 404');
+  assert.ok(w.log.some((l) => l.name === 'measureDelete' && l.tx), 'a delete runs in a transaction');
+  assert.equal(actorsOf(w).at(-1).bindings[0], U.alice);
+});
+
+test('a failure inside a measurement write rolls it back (the count and the insert go together)', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call, errors } = setup(w);
+  const real = w.measurements.push.bind(w.measurements);
+  w.measurements.push = (row) => { real(row); throw new Error('disk full'); };
+  const res = await postM(call, c, LINE, ALICE);
+  assert.equal(res.statusCode, 500);
+  assert.equal(w.measurements.length, 0, 'rolled back');
+  assert.equal(errors.length, 1);
+});
+
+test('the measurement SQL: every statement is parameterised, in d1_private, and casts what it does not compare to a typed column', () => {
+  const names = ['measureFile', 'measureList', 'measureOne', 'measureCount', 'measureInsert', 'measureLabel', 'measureDelete'];
+  for (const n of names) {
+    assert.equal(typeof SQL[n], 'string', n);
+    assert.match(SQL[n], /d1_private\./, n);
+    const params = SQL[n].match(/\?/g)?.length ?? 0;
+    const casts = SQL[n].match(/\?::(uuid|text|jsonb)/g)?.length ?? 0;
+    assert.equal(casts, params, `${n}: every ? is cast, so PREPARE can type it`);
+  }
+  assert.match(SQL.measureFile, /NOT EXISTS \(SELECT 1 FROM directus_files pf/, 'the file-owner predicate, as every candidate read');
+});
+
 // ---- wiring ------------------------------------------------------------------------------------------------------------------
 
 test('the default export is the endpoint: id d1-inbox, a handler that registers every route', () => {
@@ -4198,10 +4508,12 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   const router = fakeRouter();
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
-    'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs',
-    'GET /sem-settings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
-    'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
-  ]);
+    'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs', 'GET /progress',
+    'GET /sem-settings', 'GET /siblings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
+    'POST /link', 'POST /relink', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
+    'DELETE /files/:candidate_id/measurements/:measurement_id', 'GET /files/:candidate_id/measurements', 'PATCH /files/:candidate_id/measurements/:measurement_id',
+    'POST /files/:candidate_id/measurements',
+  ].sort());
 });
 
 test('no route reads or writes anything outside d1_private, the three junction and record tables, and (stream F1) surface_scans', () => {
@@ -4214,7 +4526,7 @@ test('no route reads or writes anything outside d1_private, the three junction a
 });
 
 test('sql_check.mjs (run on a real Postgres by tests/schema/160-inbox.sh) prepares every statement the endpoint has, and the phase1 block names the checks', () => {
-  const printed = execFileSync(process.execPath, [new URL('./sql_check.mjs', import.meta.url).pathname], { encoding: 'utf8' });
+  const printed = execFileSync(process.execPath, [fileURLToPath(new URL('./sql_check.mjs', import.meta.url))], { encoding: 'utf8' });
   const names = new Set([...printed.matchAll(/^PREPARE (\w+) AS /gm)].map((m) => m[1]));
   for (const [key, value] of Object.entries(SQL)) {
     const wanted = typeof value === 'string' ? [key.toLowerCase()] : Object.keys(value).map((sub) => `${key}_${sub}`.toLowerCase());
@@ -4224,7 +4536,7 @@ test('sql_check.mjs (run on a real Postgres by tests/schema/160-inbox.sh) prepar
   assert.doesNotMatch(printed, /\?/, 'every ? is numbered');
   const phase1 = readFileSync(new URL('../../../tests/schema/160-inbox.sh', import.meta.url), 'utf8');
   assert.match(phase1, /core\/extensions\/d1-inbox\/sql_check\.mjs/);
-  for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
+  for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert', 'progressdirs', 'progressfiles']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
 });
 
 // ---- C1: a folder that changed hands; the new holder neither sees nor links the old owner's files -------------------------------------------
@@ -4363,4 +4675,413 @@ test('POST /undo notices a 197 applied while the server runs (a negative answer 
   const second = (await call('POST /link', { user: U.alice, body: { items: [link(b)] } })).body.data.link_batch_id;
   await call('POST /undo', { user: U.alice, body: { link_batch_id: second } });
   assert.equal(w.log.filter((l) => l.name === 'deleteUnlinkedSemSettings').length, 1);
+});
+
+// ---- the linked-file view: a linked row's title and batch size, and the siblings of its record ---------------------------------------------
+
+test('GET /files: a linked row carries its record\'s title (a sample\'s nickname, a test\'s type, none for an operation) and the size of its link batch', async () => {
+  const w = newWorld();
+  const c = cand({ state: 'linked' });
+  w.listRows = [
+    listRow(c, { state: 'linked', link_kind: 'bulk', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77), link_batch_size: 3 }),
+    listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'manufacturing_operations', linked_record_id: O1, link_batch_id: ID(78), link_batch_size: 1 }),
+    listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S2, link_batch_id: ID(79), link_batch_size: 1 }),
+    listRow(cand(), { state: 'new' }),
+  ];
+  const { call } = setup(w);
+  const [sample, operation, hidden, fresh] = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.equal(sample.linked_title, `CODE-${S1.slice(-4)}`, 'the nickname, read as the caller');
+  assert.equal(sample.link_batch_size, 3);
+  assert.equal(operation.linked_title, null, 'an operation has no second line');
+  assert.equal(operation.link_batch_size, 1);
+  assert.equal(hidden.linked_title, null, 'a record the caller cannot read is not named, nor titled');
+  assert.equal(fresh.linked_title, null);
+  assert.equal(fresh.link_batch_size, null, 'only a linked row has a batch');
+  const titleReads = w.items.filter((i) => i.op === 'read' && i.query.fields?.includes('nickname'));
+  assert.equal(titleReads.length, 1, 'one extra read, for the samples the linked rows name');
+  assert.deepEqual(titleReads[0].query.filter.sample_id._in, [S1], 'only readable linked records are asked for a title');
+});
+
+test('GET /files: a title the caller\'s permissions refuse costs only the title, not the record\'s code', async () => {
+  const w = newWorld();
+  const c = cand({ state: 'linked' });
+  w.listRows = [listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77), link_batch_size: 1 })];
+  const { call, context } = setup(w);
+  const real = context.services.ItemsService;
+  context.services.ItemsService = class extends real {
+    async readByQuery(query) {
+      if (query.fields?.includes('nickname')) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      return super.readByQuery(query);
+    }
+  };
+  const [row] = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.equal(row.linked_label, `CODE-${S1.slice(-4)}`);
+  assert.equal(row.linked_title, null);
+});
+
+test('buildListQuery: the record option lists the files linked to one record through its junction row, without the sj / oj / tj joins, and leaves one file out', () => {
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  const f = parseFileFilters({ tab: 'linked', kind: 'sem_image,image', limit: '7' });
+  for (const [collection, t] of Object.entries(LINK_TARGETS)) {
+    const record = { collection, id: S1, exclude: ID(1) };
+    for (const opts of [{ record }, { record, count: true }]) {
+      const q = buildListQuery(scope, f, opts);
+      // driven from the record's side: the files in the record's junction rows (its unique index), then their candidates; the second test keeps a file only when the
+      // junction row ITS link made is on that record, so the answer is what it was before
+      assert.match(q.sql, new RegExp(`c\\.linked_collection = \\? AND c\\.directus_files_id IN \\(SELECT ri\\.directus_files_id FROM ${t.junction} ri WHERE ri\\.${t.fk} = \\?::uuid\\)`
+        + ` AND EXISTS \\(SELECT 1 FROM ${t.junction} rj WHERE rj\\.id = c\\.linked_junction_id AND rj\\.${t.fk} = \\?::uuid\\) AND c\\.candidate_id <> \\?::uuid`));
+      assert.equal(q.bindings.filter((b) => b === S1).length, 2, 'the record id is bound for the junction subquery and for the exactness test');
+      assert.ok(q.bindings.includes(S1) && q.bindings.includes(ID(1)) && q.bindings.includes(collection), 'the record, the excluded file and the collection are bindings');
+      assert.doesNotMatch(q.sql, new RegExp(`${S1}|${ID(1)}`), 'no id in the text');
+      assert.match(q.sql, /c\.state = 'linked'/);
+    }
+  }
+  assert.doesNotMatch(buildListQuery(scope, f).sql, /rj\./, 'no record option, no record clause');
+  // the bindings stay in the order of the placeholders: the clause comes after link_kind and before the paging
+  const q = buildListQuery(scope, parseFileFilters({ tab: 'linked', link_kind: 'auto', limit: '5' }), { record: { collection: 'physical_samples', id: S1, exclude: ID(1) } });
+  assert.equal(q.sql.match(/\?/g).length, q.bindings.length);
+  assert.deepEqual(q.bindings.slice(-7), ['auto', 'physical_samples', S1, S1, ID(1), 5, 0]);
+});
+
+// the file and the junction row its link made, on a world with Alice's sample S1
+function linkedWorld() {
+  const w = newWorld();
+  const self = add(w, cand({ state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_junction_id: ID(5001), link_batch_id: ID(77) }));
+  w.junctions.sample_data_files.push({ id: ID(5001), sample_id: S1, directus_files_id: self.directus_files_id });
+  const other = (n) => listRow(cand({ state: 'linked' }), { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(80 + n), link_batch_size: 1, has_thumbnail: true });
+  w.listRows = [other(1), other(2)];
+  w.listTotal = 9;
+  return { w, self };
+}
+const listSql = (w) => w.log.filter((l) => l.name === null && /^SELECT c\.candidate_id, c\.directus_files_id/.test(l.sql));
+
+test('GET /siblings: the other pictures linked to the same record, with the list\'s rows, their total and the list\'s own scope', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  const res = await call('GET /siblings', { user: U.alice, query: { file: self.candidate_id, limit: '2' } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.meta, { total: 9, limit: 2, offset: 0, acceptable: null });
+  assert.equal(res.body.data.length, 2);
+  assert.equal(res.body.data[0].linked_record_id, S1);
+  assert.equal(res.body.data[0].linked_label, `CODE-${S1.slice(-4)}`);
+  assert.equal(res.body.data[0].has_thumbnail, true);
+  const [page] = listSql(w);
+  assert.match(page.sql, /c\.state = 'linked'/);
+  assert.match(page.sql, /c\.kind = ANY\(/);
+  assert.match(page.sql, /rj\.sample_id = \?::uuid/);
+  assert.ok(page.bindings.includes('sem_image,image') && page.bindings.includes(S1) && page.bindings.includes(self.candidate_id), 'the record comes from the file\'s own junction row');
+  assert.ok(page.bindings.includes(P.alice), 'the caller\'s own folders, as in the list');
+  assert.deepEqual(page.bindings.slice(-2), [2, 0]);
+});
+
+test('GET /siblings: nothing for a file that is not linked to a sample, operation or test, or whose link is gone, or a record the caller cannot read', async () => {
+  const { w } = linkedWorld();
+  const { call } = setup(w);
+  const empty = async (id) => {
+    const res = await call('GET /siblings', { user: U.alice, query: { file: id } });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.data, []);
+    assert.equal(res.body.meta.total, 0);
+  };
+  await empty(add(w, cand()).candidate_id);
+  await empty(add(w, cand({ state: 'linked', kind: 'surface_scan', linked_collection: 'surface_scans', linked_junction_id: ID(6001), link_batch_id: ID(90) })).candidate_id);
+  // the junction row was removed in Data Studio, or repointed at another file
+  const orphan = add(w, cand({ state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5002), link_batch_id: ID(91) }));
+  await empty(orphan.candidate_id);
+  w.junctions.sample_data_files.push({ id: ID(5002), sample_id: S1, directus_files_id: ID(1) });
+  await empty(orphan.candidate_id);
+  // Alice cannot read the Restricted sample S2
+  const hidden = add(w, cand({ state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5003), link_batch_id: ID(92) }));
+  w.junctions.sample_data_files.push({ id: ID(5003), sample_id: S2, directus_files_id: hidden.directus_files_id });
+  await empty(hidden.candidate_id);
+  assert.equal(listSql(w).length, 0, 'none of these ran the list query');
+});
+
+test('GET /siblings: a file the caller cannot see, or an id that is not one, is 404; a bad limit is 400; no login is 401', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  for (const [file, user] of [[self.candidate_id, U.bob], [ID(999), U.alice], ['nope', U.alice], [undefined, U.alice]]) {
+    const res = await call('GET /siblings', { user, query: { file } });
+    assert.equal(res.statusCode, 404, String(file));
+    assert.equal(codeOf(res), 'NOT_FOUND');
+  }
+  assert.equal((await call('GET /siblings', { user: U.alice, query: { file: self.candidate_id, limit: 'many' } })).statusCode, 400);
+  assert.equal((await call('GET /siblings', { query: { file: self.candidate_id } })).statusCode, 401);
+  assert.equal(listSql(w).length, 0);
+});
+
+test('GET /siblings: an administrator reading someone else\'s file sees that owner\'s siblings; a team file lists the team\'s', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  const asAdmin = await call('GET /siblings', { user: U.admin, admin: true, query: { file: self.candidate_id } });
+  assert.equal(asAdmin.statusCode, 200);
+  const [page] = listSql(w);
+  assert.match(page.sql, /c\.owner_person_id = \?/);
+  assert.ok(page.bindings.includes(P.alice), 'the file\'s owner, not the administrator');
+  assert.deepEqual(page.bindings.slice(0, 3), [true, P.admin, ''], 'the batch size counts what the administrator can see');
+  assert.ok(!page.bindings.slice(3).includes(P.admin), 'the rows are the file owner, not the administrator');
+  // a team's file read by a team member: the member's default scope already holds the team
+  const teamFile = add(w, cand({ owner_person_id: null, owner_team_id: TEAM, state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5004), link_batch_id: ID(93) }));
+  w.junctions.sample_data_files.push({ id: ID(5004), sample_id: S1, directus_files_id: teamFile.directus_files_id });
+  await call('GET /siblings', { user: U.alice, query: { file: teamFile.candidate_id } });
+  const second = listSql(w).at(-1);
+  assert.match(second.sql, /c\.owner_team_id = ANY/);
+  assert.ok(second.bindings.includes(TEAM));
+});
+
+// ---- Change: POST /relink is one transaction; can_undo; the batch size the caller can see -----------------------------------------------------
+
+const relinkBody = (c, collection = 'manufacturing_operations', record = O1) => ({ candidate_id: c.candidate_id, collection, record_id: record });
+
+test('POST /relink: the file\'s own link is undone and the new one made in ONE transaction; its settings, a manual correction included, are never deleted', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(c)] } })).body.data;
+  w.settings.get(c.directus_files_id).sources.kv = 'manual';
+  w.settings.get(c.directus_files_id).kv = '99';
+  const before = w.txCount;
+  const logFrom = w.log.length;
+  const res = await call('POST /relink', { user: U.alice, body: relinkBody(c) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(w.txCount - before, 1, 'undo and link share one transaction');
+  assert.equal(res.body.data.linked, 1);
+  assert.notEqual(res.body.data.link_batch_id, first.link_batch_id, 'a new batch of one');
+  assert.deepEqual(res.body.data.items.map((i) => [i.candidate_id, i.collection, i.record_id]), [[c.candidate_id, 'manufacturing_operations', O1]]);
+  assert.equal(w.junctions.sample_data_files.length, 0, 'the old junction row is gone');
+  assert.deepEqual(w.junctions.operation_data_files.map((j) => [j.operation_id, j.directus_files_id]), [[O1, c.directus_files_id]]);
+  assert.equal(c.state, 'linked');
+  assert.equal(c.linked_collection, 'manufacturing_operations');
+  assert.equal(c.link_batch_id, res.body.data.link_batch_id);
+  assert.equal(c.decided_by, U.alice);
+  assert.equal(c.link_kind, 'manual');
+  const names = w.log.slice(logFrom).map((l) => l.name);
+  assert.ok(!names.includes('deleteUnlinkedSemSettings'), 'the file stays linked, so its settings are not touched');
+  assert.ok(!names.includes('relistDirs'), 'the file does not go back to the inbox');
+  assert.equal(w.settings.get(c.directus_files_id).kv, '99', 'the manual correction survives');
+  assert.equal(w.settings.get(c.directus_files_id).sources.kv, 'manual');
+  assert.ok(writesTo(w, 'sample_data_files').some((i) => i.op === 'delete' && i.accountability.user === U.alice), 'the old row was deleted as the caller');
+  assert.ok(writesTo(w, 'operation_data_files').every((i) => i.accountability.user === U.alice && i.knex?.isTransaction));
+});
+
+test('POST /relink: a new link that is refused changes NOTHING: the file stays on its old record, its settings stay', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(c)] } })).body.data;
+  w.settings.get(c.directus_files_id).sources.kv = 'manual';
+  w.settings.get(c.directus_files_id).kv = '99';
+  const junction = copy(w.junctions.sample_data_files);
+  const logFrom = w.log.length;
+  // S3 is a sample Alice may not edit (Dave's)
+  const refused = await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', S3) });
+  assert.equal(refused.statusCode, 403);
+  assert.equal(codeOf(refused), 'FORBIDDEN');
+  assert.equal(c.state, 'linked');
+  assert.equal(c.link_batch_id, first.link_batch_id, 'the old batch still stands');
+  assert.equal(c.linked_collection, 'physical_samples');
+  assert.deepEqual(w.junctions.sample_data_files, junction, 'the old junction row is back');
+  assert.equal(w.junctions.operation_data_files.length, 0);
+  assert.equal(w.settings.get(c.directus_files_id).kv, '99');
+  assert.equal(w.settings.get(c.directus_files_id).sources.kv, 'manual');
+  assert.ok(!w.log.slice(logFrom).some((l) => l.name === 'deleteUnlinkedSemSettings'), 'a relink never deletes the settings');
+  // a Restricted record the caller cannot read, and one that does not exist, are refused the same way
+  assert.equal((await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', S2) })).statusCode, 403);
+  const gone = await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', MISSING) });
+  assert.ok([403, 404].includes(gone.statusCode), String(gone.statusCode));
+  assert.equal(c.link_batch_id, first.link_batch_id);
+  assert.equal(w.junctions.sample_data_files.length, 1);
+});
+
+test('POST /relink: only that file of its batch moves; the others stay linked to the old record', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  const res = await call('POST /relink', { user: U.alice, body: relinkBody(a) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(a.linked_collection, 'manufacturing_operations');
+  assert.equal(b.state, 'linked');
+  assert.equal(b.link_batch_id, batch, 'the other file keeps its batch');
+  assert.deepEqual(w.junctions.sample_data_files.map((j) => j.directus_files_id), [b.directus_files_id]);
+});
+
+test('POST /relink: the rules of undo and link: the linker only, an administrator who is not the owner is read-only, a file that is not linked to a record is 409, a bad body is 400', async () => {
+  const w = newWorld();
+  const team = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const fresh = add(w, cand());
+  const { call } = setup(w);
+  await call('POST /link', { user: U.alice, body: { items: [link(team)] } });
+  const batch = team.link_batch_id;
+  const unchanged = () => assert.ok(team.state === 'linked' && team.link_batch_id === batch && w.junctions.sample_data_files.length === 1, 'nothing changed');
+  const bob = await call('POST /relink', { user: U.bob, body: relinkBody(team, 'physical_samples', S1) });
+  assert.equal(bob.statusCode, 403, 'a teammate sees the file, but the link is the linker\'s');
+  unchanged();
+  const admin = await call('POST /relink', { user: U.admin, admin: true, role: ID(80), body: relinkBody(team) });
+  assert.equal(admin.statusCode, 403);
+  assert.equal(codeOf(admin), 'FORBIDDEN');
+  unchanged();
+  assert.equal((await call('POST /relink', { user: U.carol, body: relinkBody(team) })).statusCode, 404, 'not Carol\'s to see');
+  const notLinked = await call('POST /relink', { user: U.alice, body: relinkBody(fresh) });
+  assert.equal(notLinked.statusCode, 409);
+  assert.equal(codeOf(notLinked), 'NOT_LINKED');
+  assert.equal(fresh.state, 'new');
+  const scan = add(w, cand({ kind: 'surface_scan', state: 'linked', link_batch_id: ID(990), linked_collection: 'surface_scans', linked_junction_id: ID(6100), decided_by: U.alice }));
+  assert.equal(codeOf(await call('POST /relink', { user: U.alice, body: relinkBody(scan) })), 'NOT_LINKED');
+  assert.equal(codeOf(await call('POST /relink', { user: U.alice, body: relinkBody({ candidate_id: ID(9999) }) })), 'NOT_FOUND');
+  const txs = w.txCount;
+  for (const body of [undefined, {}, { ...relinkBody(team), record_id: 'x' }, { ...relinkBody(team), candidate_id: 'x' }, { ...relinkBody(team), collection: 'surface_scans' }, { ...relinkBody(team), collection: 'nope' }]) {
+    assert.equal((await call('POST /relink', { user: U.alice, body })).statusCode, 400);
+  }
+  assert.equal(w.txCount, txs, 'no transaction for a bad body');
+  assert.equal((await call('POST /relink', { body: relinkBody(team) })).statusCode, 401);
+  // an administrator who is a member of the owner team may, as for undo
+  w.teamMembers.push({ team_id: TEAM, person_id: P.admin });
+  w.editable[U.admin] = { physical_samples: new Set(), manufacturing_operations: new Set([O1]), test_sessions: new Set() };
+  assert.equal((await call('POST /relink', { user: U.admin, admin: true, role: ID(80), body: relinkBody(team) })).statusCode, 200);
+});
+
+test('FoundFile.can_undo: true only for a linked row the caller could undo (they linked it, or are an administrator who may change the file); false for every other row', async () => {
+  const w = newWorld();
+  const mine = listRow(cand({ state: 'linked' }), { state: 'linked', decided_by: U.alice, link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77) });
+  const teammates = listRow(cand({ state: 'linked' }), { state: 'linked', decided_by: U.bob, owner_person_id: null, owner_team_id: TEAM, link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(78) });
+  const fresh = listRow(cand(), { state: 'new', decided_by: null });
+  w.listRows = [mine, teammates, fresh];
+  const { call } = setup(w);
+  const asAlice = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.deepEqual(asAlice.map((r) => r.can_undo), [true, false, false], 'Alice may undo what she linked, not what Bob linked in the team folder, and a new file has nothing to undo');
+  assert.ok(asAlice.every((r) => typeof r.can_undo === 'boolean'));
+  const asBob = (await call('GET /files', { user: U.bob, query: { tab: 'linked' } })).body.data;
+  assert.deepEqual(asBob.map((r) => r.can_undo), [false, true, false], 'Alice\'s own file is not Bob\'s to change; the team file he linked is his to undo');
+  // an administrator reads Alice's file and may not change it, so may not undo it
+  const asAdmin = (await call('GET /files', { user: U.admin, admin: true, query: { tab: 'linked', owner: `person:${P.alice}` } })).body.data;
+  assert.equal(asAdmin[0].can_undo, false);
+  // the same rule as the routes apply, for the same rows
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  for (const [row, want] of [[mine, true], [teammates, false], [fresh, false]]) assert.equal(canUndoRow(scope, row, U.alice), want);
+  assert.equal(canUndoRow(scope, mine, undefined), false, 'no user id, no undo');
+  assert.equal(fileOut(mine, { readable: new Set(), labels: new Map(), editable: new Set() }).can_undo, false, 'no viewer given: fails closed');
+});
+
+test('buildListQuery: link_batch_size counts only the batch files the caller can see (their folders and teams, everything for an administrator); the count query does not carry it', () => {
+  const alice = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
+  const admin = { personId: P.admin, teamIds: [], admin: true };
+  const f = parseFileFilters({ tab: 'linked' });
+  const q = buildListQuery(alice, f);
+  assert.match(q.sql, /\(SELECT count\(\*\)::int FROM d1_private\.file_candidates bc WHERE bc\.link_batch_id = c\.link_batch_id AND bc\.state = 'linked' AND NOT EXISTS \(SELECT 1 FROM directus_files pf WHERE pf\.id = bc\.directus_files_id .* AND \(\?::boolean OR bc\.owner_person_id = \? OR bc\.owner_team_id = ANY\(string_to_array\(\?, ','\)::uuid\[\]\)\)\) END AS link_batch_size/);
+  assert.deepEqual(q.bindings.slice(0, 3), [false, P.alice, `${TEAM},${OTHER_TEAM}`], 'the three bindings of the batch count come first');
+  assert.equal(q.sql.match(/\?/g).length, q.bindings.length);
+  assert.deepEqual(buildListQuery(admin, f).bindings.slice(0, 3), [true, P.admin, '']);
+  assert.deepEqual(buildListQuery({ personId: null, teamIds: [], admin: false }, f).bindings.slice(0, 3), [false, null, ''], 'a login with no person counts nothing');
+  assert.doesNotMatch(buildListQuery(alice, f, { count: true }).sql, /bc\./);
+  assert.match(q.sql, /c\.decided_by,/, 'the row says who linked it (can_undo)');
+});
+
+// ---- scan progress (GET /progress) -----------------------------------------------------------------------------------------------
+
+const pgDir = (rel, owner, listed = true) => ({ rel_path: rel, ...owner, dir_mtime: null, last_listed_at: listed ? '2026-10-15T11:00:00.000Z' : null });
+const READ = 'sem-2';
+
+function progressWorld() {
+  const w = newWorld();
+  // Alice: 3 folders known, 2 listed; 2 plain images (1 read), 2 SEM images (both read, 1 with a scale), a document and a gone file; 2 pictures (one a failure marker)
+  w.dirs.push(pgDir('Users/ali1', OWNED_BY.alice), pgDir('Users/ali1/sem', OWNED_BY.alice), pgDir('Users/ali1/new', OWNED_BY.alice, false), pgDir('Users/car3', OWNED_BY.other));
+  const a1 = add(w, cand({ classified_by: READ, extracted: { pixel_size_nm: 2.5 } }));
+  const a2 = add(w, cand({ classified_by: READ, extracted: {} }));
+  add(w, cand({ kind: 'image', classified_by: READ }));
+  add(w, cand({ kind: 'image', classified_by: null }));
+  add(w, cand({ kind: 'document' }), cand({ state: 'gone', classified_by: READ }));
+  w.thumbs.set(a1.candidate_id, { thumb: Buffer.from('a'), preview: Buffer.from('b') });
+  w.thumbs.set(a2.candidate_id, { thumb: null, preview: null });
+  // the SEM team's folder: one folder, listed; one image, read, with a picture
+  w.dirs.push(pgDir('Shared/SEM', OWNED_BY.team));
+  const t1 = add(w, cand({ ...OWNED_BY.team, rel_path: 'Shared/SEM/t.tif', classified_by: READ, extracted: { pixel_size_nm: 1 } }));
+  w.thumbs.set(t1.candidate_id, { thumb: Buffer.from('a'), preview: Buffer.from('b') });
+  // Carol's: one unread image
+  add(w, cand({ ...OWNED_BY.other, rel_path: 'Users/car3/c.tif' }));
+  return w;
+}
+const ALICE_FOLDER = { folders_known: 3, folders_listed: 2, files: 5, images: 4, images_read: 3, images_with_thumb: 2, sem: 2, sem_with_scale: 1 };
+
+test('GET /progress: a person reads their own folder and the folder of each team they are an active member of, with the counts the client turns into percentages', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  const res = await call('GET /progress', { user: U.alice });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.data.folders, [
+    { owner: { kind: 'person', id: P.alice, name: 'Alice A', folder: 'ali1', root: 'Users/ali1', has_login: true }, ...ALICE_FOLDER },
+    { owner: { kind: 'team', id: TEAM, name: 'SEM team', folder: 'SEM', root: 'Shared/SEM', has_login: null },
+      folders_known: 1, folders_listed: 1, files: 1, images: 1, images_read: 1, images_with_thumb: 1, sem: 1, sem_with_scale: 1 },
+  ]);
+  assert.equal(res.body.data.last_scan_finished_at, '2026-10-15T11:45:00.000Z');
+  assert.deepEqual(w.log.filter((l) => l.name?.startsWith('progress')).map((l) => l.name), ['progressDirs', 'progressFiles', 'progressScan'], 'one statement per kind of answer');
+  assert.equal(w.log.some((l) => /INSERT|UPDATE|DELETE/i.test(l.sql)), false, 'read only');
+});
+
+test('GET /progress: nobody else\'s folder; no alias and no team means no folder; a Former person has their own folder and no team', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  const bob = await call('GET /progress', { user: U.bob });
+  assert.deepEqual(bob.body.data.folders.map((f) => f.owner.name), ['SEM team', 'Bob B'], 'the team folder has files, his own has none');
+  assert.deepEqual(bob.body.data.folders.find((f) => f.owner.kind === 'person'), {
+    owner: { kind: 'person', id: P.bob, name: 'Bob B', folder: 'bob2', root: 'Users/bob2', has_login: true },
+    folders_known: 0, folders_listed: 0, files: 0, images: 0, images_read: 0, images_with_thumb: 0, sem: 0, sem_with_scale: 0,
+  });
+  assert.deepEqual((await call('GET /progress', { user: U.dave })).body.data.folders, []);
+  assert.deepEqual((await call('GET /progress', { user: U.carol })).body.data.folders.map((f) => f.owner.name), ['Carol C', 'Other team']);
+  assert.deepEqual((await call('GET /progress', { user: U.former })).body.data.folders.map((f) => f.owner.name), ['Fay Former']);
+  assert.deepEqual((await call('GET /progress', { user: U.nobody })).body.data.folders, [], 'a login with no person');
+});
+
+test('GET /progress: all=1 is for administrators (403 otherwise): every folder with an alias or a share folder, people without a login included, largest first', async () => {
+  const w = progressWorld();
+  w.people.push({ person_id: ID(19), full_name: 'Eve E', active: true, uni_alias: 'eve5', user_id: null });
+  const { call } = setup(w);
+  const denied = await call('GET /progress', { user: U.alice, query: { all: '1' } });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(codeOf(denied), 'FORBIDDEN');
+  assert.equal((await call('GET /progress', { user: U.alice, query: { all: '0' } })).statusCode, 200, 'all=0 is the caller\'s own');
+  const res = await call('GET /progress', { user: U.admin, admin: true, query: { all: '1' } });
+  assert.equal(res.statusCode, 200);
+  const folders = res.body.data.folders;
+  assert.deepEqual(folders.map((f) => f.owner.name), ['Alice A', 'Carol C', 'SEM team', 'Ada Admin', 'Bob B', 'Eve E', 'Fay Former', 'Other team', 'Vic Viewer'], 'files desc, then name');
+  assert.equal(folders.find((f) => f.owner.name === 'Eve E').owner.has_login, false);
+  assert.equal(folders.find((f) => f.owner.name === 'Other team').owner.has_login, null);
+  assert.equal(folders.find((f) => f.owner.name === 'Alice A').files, ALICE_FOLDER.files);
+  assert.deepEqual((await call('GET /progress', { user: U.admin, admin: true })).body.data.folders.map((f) => f.owner.name), ['Ada Admin'], 'without all=1 an administrator reads their own');
+});
+
+test('GET /progress: anything under the owner\'s ignored folders is left out, so 100% can be reached; the person folder follows INBOX_PERSON_DIR', async () => {
+  const w = progressWorld();
+  w.dirs.push(pgDir('Users/ali1/Skip', OWNED_BY.alice, false), pgDir('users/ali1/skip/deeper', OWNED_BY.alice, false));
+  add(w, cand({ rel_path: 'Users/ali1/Skip/x.tif', classified_by: null }));
+  w.ignored.push({ ignored_id: ID(7100), owner_person_id: P.alice, owner_team_id: null, rel_folder: 'Skip', created_at: '2026-10-14T10:00:00.000Z', created_by: U.alice });
+  const before = process.env.INBOX_PERSON_DIR;
+  process.env.INBOX_PERSON_DIR = 'User';
+  try {
+    const { call } = setup(w);
+    const mine = (await call('GET /progress', { user: U.alice })).body.data.folders[0];
+    assert.equal(mine.owner.root, 'User/ali1');
+    assert.deepEqual({ ...mine, owner: undefined }, { owner: undefined, ...ALICE_FOLDER }, 'the ignored folders and the file under them do not count');
+  } finally {
+    if (before === undefined) delete process.env.INBOX_PERSON_DIR; else process.env.INBOX_PERSON_DIR = before;
+  }
+});
+
+test('GET /progress: a file whose pointer row is stamped to another owner is not counted for the folder (a folder that changed hands)', async () => {
+  const w = progressWorld();
+  stampTo(w, add(w, cand({ rel_path: 'Users/ali1/old.tif' })), OWNED_BY.other);
+  const { call } = setup(w);
+  assert.equal((await call('GET /progress', { user: U.alice })).body.data.folders[0].files, ALICE_FOLDER.files);
+});
+
+test('GET /progress: a Lab Viewer may read it; every statement takes its owners as bindings (never text)', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  assert.equal((await call('GET /progress', { user: U.viewer, role: LAB_VIEWER_ROLE_ID })).statusCode, 200);
+  assert.equal(SQL.progressDirs.split('?').length - 1, 2);
+  assert.equal(SQL.progressFiles.split('?').length - 1, 2);
+  assert.match(SQL.progressDirs, /inbox_ignored_dirs/);
+  assert.match(SQL.progressFiles, /inbox_ignored_dirs/);
 });

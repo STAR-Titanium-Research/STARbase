@@ -10,6 +10,8 @@ import { refKey } from '../nodes/actions';
 export interface HoverFocus {
   /** True when everything outside `nodes` dims (a card or slot is hovered). */
   dim: boolean;
+  /** A chain (the selected or hovered card's): the rest dims lightly, so it reads as "not on this chain", not "disabled". */
+  soft?: boolean;
   /** Nodes that stay bright. */
   nodes: Set<string>;
   /** Wires drawn highlighted. */
@@ -121,7 +123,7 @@ export function chainFocus(graph: ProcessGraph, id: string | null, dir: ChainDir
   };
   if (dir !== 'down') walk('up');
   if (dir !== 'up') walk('down');
-  return { dim: true, nodes, wires };
+  return { dim: true, soft: true, nodes, wires };
 }
 
 /**

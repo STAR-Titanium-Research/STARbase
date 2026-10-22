@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VIEW, VIEW_KEY, readViewSettings, useViewSettings, writeViewSettings } from './useViewSettings';
+import { DEFAULT_VIEW, VIEW_KEY, readOpenScanFolders, readViewSettings, scanStripKey, useViewSettings, writeOpenScanFolders, writeViewSettings } from './useViewSettings';
 
 /** A Storage that holds strings in a Map, for the tests. */
 function memory(initial: Record<string, string> = {}): Storage & { map: Map<string, string> } {
@@ -27,13 +27,13 @@ describe('the Inbox view settings', () => {
 	it('uses the key d1.list.inbox and defaults to the sheet and an open rail', () => {
 		expect(VIEW_KEY).toBe('d1.list.inbox');
 		expect(DEFAULT_VIEW).toEqual({
-			preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false, compareList: false, compare: 'off', linkZoom: true, commonScale: true,
+			preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false, compareList: false, compare: 'off', linkZoom: true, commonScale: true, measureTool: 'line',
 		});
 		expect(readViewSettings(memory())).toEqual(DEFAULT_VIEW);
 	});
 
 	it('reads what was stored', () => {
-		const all = { preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false };
+		const all = { preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false, measureTool: 'polygon' };
 		const s = memory({ [VIEW_KEY]: JSON.stringify(all) });
 		expect(readViewSettings(s)).toEqual(all);
 	});
@@ -64,6 +64,21 @@ describe('the Inbox view settings', () => {
 		expect(readViewSettings(old)).toMatchObject({ compare: 'off', compareList: false, linkZoom: true, commonScale: true, zoom: 'actual' });
 	});
 
+	it('remembers the Measure tool, checks it, and falls back to Line for an unknown one', () => {
+		for (const tool of ['line', 'circle', 'polygon'] as const) {
+			expect(readViewSettings(memory({ [VIEW_KEY]: JSON.stringify({ measureTool: tool }) })).measureTool).toBe(tool);
+		}
+		for (const bad of ['square', 2, null, '', ['circle']]) {
+			expect(readViewSettings(memory({ [VIEW_KEY]: JSON.stringify({ measureTool: bad, preview: 'box' }) }))).toEqual({ ...DEFAULT_VIEW, preview: 'box' });
+		}
+		const old = memory({ [VIEW_KEY]: JSON.stringify({ zoom: 'actual' }) }); // stored before the shapes existed
+		expect(readViewSettings(old).measureTool).toBe('line');
+		const s = memory();
+		useViewSettings(s).set({ measureTool: 'circle' });
+		expect(JSON.parse(s.map.get(VIEW_KEY)!).measureTool).toBe('circle');
+		expect(readViewSettings(s).measureTool).toBe('circle');
+	});
+
 	it('saves a compare change through useViewSettings', () => {
 		const s = memory();
 		const v = useViewSettings(s);
@@ -81,7 +96,7 @@ describe('the Inbox view settings', () => {
 	it('writes every field under the key and reads them back', () => {
 		const s = memory();
 		const v = {
-			preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false,
+			preview: 'box', railOpen: false, boxRailOpen: false, zoom: 'actual', scaleBar: false, contrast: true, compareList: true, compare: 'side', linkZoom: false, commonScale: false, measureTool: 'circle',
 		} as const;
 		writeViewSettings(v, s);
 		expect(JSON.parse(s.map.get(VIEW_KEY)!)).toEqual(v);
@@ -100,5 +115,21 @@ describe('the Inbox view settings', () => {
 		expect(blocked.settings).toEqual(DEFAULT_VIEW);
 		blocked.set({ preview: 'box' });
 		expect(blocked.settings.preview).toBe('box');
+	});
+});
+
+describe('the open scan progress folders', () => {
+	it('is per person, starts empty and remembers what was written', () => {
+		const s = memory();
+		expect(scanStripKey('u1')).toBe('d1.list.inbox.scan.u1');
+		expect(readOpenScanFolders('u1', s)).toEqual([]);
+		writeOpenScanFolders('u1', ['p1', 't2'], s);
+		expect(readOpenScanFolders('u1', s)).toEqual(['p1', 't2']);
+		expect(readOpenScanFolders('u2', s)).toEqual([]);
+	});
+	it('gives none for a broken value and does not throw on blocked storage', () => {
+		for (const raw of ['{x', '"p1"', '{"a":1}', '[1,"p1",null]']) expect(readOpenScanFolders('u1', memory({ [scanStripKey('u1')]: raw }))).toEqual(raw === '[1,"p1",null]' ? ['p1'] : []);
+		expect(readOpenScanFolders('u1', throwing())).toEqual([]);
+		expect(() => writeOpenScanFolders('u1', ['p1'], throwing())).not.toThrow();
 	});
 });

@@ -115,6 +115,54 @@ describe('linking', () => {
 	});
 });
 
+describe('changing the record of a linked file', () => {
+	const linkedFile = () => exactMatch({ state: 'linked', link_kind: 'manual', link_batch_id: 'b1', linked_collection: 'physical_samples', linked_record_id: 'old', linked_label: 'S-0001', decided_at: '2026-10-22T14:05:00.000Z' });
+	const posts = (fake: { calls: Array<{ method: string; path: string }> }) => fake.calls.filter((c) => c.method === 'post').map((c) => c.path);
+	it('is ONE request: the server undoes the link of the file and links it to the other record; the list names it there, with one Undo for the new link', async () => {
+		const f = linkedFile();
+		const { inbox, fake, changed } = setup([f]);
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toEqual({ ok: true });
+		expect(posts(fake)).toEqual(['/d1-inbox/relink']);
+		expect(fake.calls.find((c) => c.path === '/d1-inbox/relink')?.body).toEqual({ candidate_id: f.candidate_id, collection: 'physical_samples', record_id: 'new-record' });
+		expect(fake.files.find((x) => x.candidate_id === f.candidate_id)).toMatchObject({ state: 'linked', linked_record_id: 'new-record' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'Linked 1 found file.', undo: { kind: 'batch' } });
+		expect(changed).toHaveBeenCalled();
+	});
+
+	it('a link that is refused changes nothing: the file stays on its old record, the notice says why, and no half-done outcome exists', async () => {
+		const f = linkedFile();
+		const { inbox, fake } = setup([f], undefined, { editable: () => false });
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toEqual({ ok: false, message: 'You can only link a file to a record you can edit.' });
+		expect(posts(fake)).toEqual(['/d1-inbox/relink']);
+		expect(fake.files.find((x) => x.candidate_id === f.candidate_id)).toMatchObject({ state: 'linked', linked_record_id: 'old', link_batch_id: 'b1' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'You can only link a file to a record you can edit.' });
+	});
+
+	it('a link that is not for the caller to undo is refused in the words of the server, and nothing else is sent', async () => {
+		const f = linkedFile();
+		const { inbox, fake } = setup([f], undefined, { undoByLinkerOnly: true });
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toMatchObject({ ok: false, message: 'Only the person who linked these files can undo it.' });
+		expect(posts(fake)).toEqual(['/d1-inbox/relink']);
+	});
+
+	it('choosing the record the file is already on does nothing: no request, no notice', async () => {
+		const f = linkedFile();
+		const { inbox, fake } = setup([f]);
+		expect(await inbox.relink(f, 'physical_samples', 'old')).toEqual({ ok: true });
+		expect(fake.calls.filter((c) => c.method === 'post')).toEqual([]);
+		expect(inbox.notice.value).toBeNull();
+	});
+
+	it('a file with no link batch has nothing to change', async () => {
+		const { inbox, fake } = setup([exactMatch()]);
+		expect(await inbox.relink(exactMatch(), 'physical_samples', 'x')).toMatchObject({ ok: false });
+		expect(fake.calls.filter((c) => c.method === 'post')).toEqual([]);
+	});
+});
+
 describe('dismissing', () => {
 	it('moves a file to Dismissed with an Undo that restores it', async () => {
 		const { inbox, setFilters } = setup();

@@ -1,5 +1,6 @@
 import { reactive } from 'vue';
 import { browserStorage } from '@d1/ui';
+import { MEASURE_TOOLS, type MeasureTool } from './measure';
 import { ZOOM_MODES, type ZoomMode } from './viewBoxModel';
 
 // How the Inbox is shown, kept per person in this browser (spec 2026-10-20-inbox-file-viewer-design.md decision 7). These are preferences of the person, not of
@@ -31,13 +32,15 @@ export interface InboxViewSettings {
 	linkZoom: boolean;
 	/** Compare: both pictures at the same micrometres per screen pixel (when both files say their scale). */
 	commonScale: boolean;
+	/** The view box: what Measure draws, a line, a circle or a polygon (keys 1, 2, 3). */
+	measureTool: MeasureTool;
 }
 
 export const VIEW_KEY = 'd1.list.inbox';
 export const PREVIEW_MODES: readonly PreviewMode[] = ['sheet', 'box'];
 export const COMPARE_MODES: readonly CompareMode[] = ['off', 'side'];
 export const DEFAULT_VIEW: Readonly<InboxViewSettings> = {
-	preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false, compareList: false, compare: 'off', linkZoom: true, commonScale: true,
+	preview: 'sheet', railOpen: true, boxRailOpen: true, zoom: 'fit', scaleBar: true, contrast: false, compareList: false, compare: 'off', linkZoom: true, commonScale: true, measureTool: 'line',
 };
 
 /** The stored settings. Each field is checked on its own, so a good one survives a bad one; nothing stored, a broken value or blocked storage gives the default. */
@@ -59,6 +62,7 @@ export function readViewSettings(storage: Storage | null = browserStorage()): In
 			if (COMPARE_MODES.includes(r.compare as CompareMode)) out.compare = r.compare as CompareMode;
 			if (typeof r.linkZoom === 'boolean') out.linkZoom = r.linkZoom;
 			if (typeof r.commonScale === 'boolean') out.commonScale = r.commonScale;
+			if (MEASURE_TOOLS.includes(r.measureTool as MeasureTool)) out.measureTool = r.measureTool as MeasureTool;
 		}
 	} catch {
 		// broken value or blocked storage: the defaults stand
@@ -72,7 +76,7 @@ export function writeViewSettings(s: InboxViewSettings, storage: Storage | null 
 			VIEW_KEY,
 			JSON.stringify({
 				preview: s.preview, railOpen: s.railOpen, boxRailOpen: s.boxRailOpen, zoom: s.zoom, scaleBar: s.scaleBar, contrast: s.contrast,
-				compareList: s.compareList, compare: s.compare, linkZoom: s.linkZoom, commonScale: s.commonScale,
+				compareList: s.compareList, compare: s.compare, linkZoom: s.linkZoom, commonScale: s.commonScale, measureTool: s.measureTool,
 			}),
 		);
 	} catch {
@@ -88,4 +92,28 @@ export function useViewSettings(storage: Storage | null = browserStorage()) {
 		writeViewSettings(settings, storage);
 	}
 	return { settings, set };
+}
+
+/**
+ * Which folders' scan progress bars the person has opened on the Inbox strip, kept per person (key d1.list.inbox.scan.<person id>, in the d1.list. family so
+ * "Forget my list views" clears it) as a list of folder owner ids. Closed by default. Wrapped like the settings above: blocked storage or a broken value is
+ * just "none open", and a choice is simply not remembered.
+ */
+export const scanStripKey = (personId: string | null | undefined): string => `d1.list.inbox.scan.${personId || 'anon'}`;
+
+export function readOpenScanFolders(personId: string | null | undefined, storage: Storage | null = browserStorage()): string[] {
+	try {
+		const v: unknown = JSON.parse(storage?.getItem(scanStripKey(personId)) ?? 'null');
+		return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+export function writeOpenScanFolders(personId: string | null | undefined, open: string[], storage: Storage | null = browserStorage()): void {
+	try {
+		storage?.setItem(scanStripKey(personId), JSON.stringify(open));
+	} catch {
+		// private mode, a full disk or blocked storage: the choice just is not remembered
+	}
 }

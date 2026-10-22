@@ -29,16 +29,45 @@ files side by side and measure on them.
    the whole list). Only files the person can already see are offered. A locked file (not theirs, not shareable) shows the existing lock card: no picture,
    no name. Side by side adds a facts diff under the stage; rows whose values differ are highlighted. Linked zoom/pan on by default. "Common scale"
    (default on) scales both pictures to the same µm per screen pixel when both have `pixel_size_nm`; otherwise it is disabled with a reason.
-6. **Measure** draws a line on the picture and shows its length in µm (or nm below 1 µm) from `pixel_size_nm` (stored per image, source `metadata` or
-   `derived`). On an image with no known pixel size Measure is **disabled with the tooltip "no scale known for this image"**. A manual scale-bar
-   entry is not built now.
+6. **Measure** (the full-size view box only; the sheet and the list do not have it) has three tools, chosen by a Line | Circle | Polygon control under
+   Overlay > Measure (default Line; kept per person as `measureTool` in `localStorage`), with a hint for each and a Clear button. One shape at a time: a
+   new one replaces the old. Each is kept as fractions (0 to 1) of the picture, so it holds at Fit, at 1:1 and when the picture is resized, and what it
+   measures is worked out on the preview's own size from `pixel_size_nm` (stored per image, source `metadata` or `derived`) and the original's width.
+   - **Line** (drag): its length, in µm (or nm below 1 µm): `212 µm`.
+   - **Circle** (drag from the centre to the edge): diameter and area: `Ø 212 µm · area 35,299 µm²` (the radius and the circumference are worked out too).
+   - **Polygon** (click the corners; close it by a click on the first corner, a double-click or Enter; Backspace takes the last corner off; at least 3
+     corners): the area by the shoelace formula (the same whichever way round) and the perimeter: `area 12,400 µm² · perimeter 460 µm`. If two sides
+     cross, the pill adds "check the outline" (the area is then not the area of one shape).
+   Lengths are in µm (nm below 1 µm). Areas are in µm² (thousands separated, fewer decimals as they grow) and in mm² from 1 mm² up; never nm².
+   Esc drops the shape being drawn (and, with nothing being drawn, still closes the view box). On an image with no known pixel size Measure is
+   **disabled with the tooltip "no scale known for this image"** and has no tools. In Compare each pane keeps its own shape (still one at a time). A manual
+   scale-bar entry is not built now.
+
+   **Measurements (saved shapes).** A drawn shape is a *draft* until the person presses Save (or Enter); Clear and Esc drop it. Saved shapes are kept per
+   file on the server, unit-free: the corners in pixels of the **original** image (`d1_private.inbox_measurements`, migration 211; the micrometres are worked out
+   when shown, so a corrected pixel size re-measures them all). They are listed under **Measurements** in the View rail as `1 Line 212 µm`, `2 Circle Ø 88 µm`,
+   `3 Polygon 12,400 µm²`, numbered in saving order: click a row to highlight its shape on the picture, the pencil renames it in place, the bin deletes it
+   (after a question), **Copy CSV** puts `n, label, kind, length_um, diameter_um, perimeter_um, area_um2` on the clipboard as plain decimals. While Measure is
+   on, saved shapes are drawn on the picture dimmer than the live one, each with its number (the selected one at full strength, with its size). Who: whoever
+   can see the file reads them; its owner (the person, or a member of the owner team) saves; the owner and the shape's author rename and delete; an
+   administrator who is not the owner only reads. In Compare, Save works on the open file (A) only; a shape drawn in pane B is not saved. The Inbox sheet
+   shows only a count ("3 saved measurements").
 7. **Where settings live:** the right-rail settings (Fit/1:1, overlays, Compare mode, Preview mode, Layout, Density, Group by) are kept per person in
    `localStorage` under `d1.list.inbox` (wrapped in try/catch; the page works without it). Only the file and the compare partner are in the URL.
 8. **Kinds without a picture** (documents, other files, images whose thumbnail is not made yet): the sheet shows the facts and the existing placeholder
    or the shimmer, never a broken image. The view box page for them shows the facts and "No preview yet".
 9. **Keyboard** (sheet and view box): `ArrowUp/ArrowDown` or `ArrowLeft/ArrowRight` previous/next,
-   `Enter` opens the view box, `M` Measure, `F` Fit, `C` Compare, `Esc` closes. Every control has a visible `:focus-visible` ring.
+   `Enter` opens the view box, `M` Measure (then `1` `2` `3` pick Line, Circle, Polygon; in a polygon `Enter` closes it and `Backspace` removes the last
+   corner), `F` Fit, `C` Compare, `Esc` closes (or, while a shape is being drawn, cancels it). Every control has a visible `:focus-visible` ring.
 10. **Nothing writes** except the existing link / dismiss actions, which keep their endpoints and their rules (an administrator can read but not change).
+
+## A linked file (added 2026-10-22)
+
+The maintainer chose the **Link card** and the **linked record strip with siblings** for a file that is linked. One shared `LinkCard.vue` and `LinkedSiblings.vue` appear in the sheet (between the picture and the facts) and in the view box page's left panel (`InboxFileRail`, under the actions, with "Linked to" under On this page); an unlinked file shows neither.
+
+- **Card.** "Linked to S-0042" (the record code is a mono, bold, dotted link), under it the record's second line (a sample's nickname, a test's type), who linked it, how and when; **Open sample / operation / test** (a surface scan opens its insert or edge), **Change…** (the Link dialog) and **Undo link** (an inline confirm). A record the person cannot read is not named.
+- **Undo takes the whole link batch.** The confirm says how many files go back (`link_batch_size`, counting only the files the caller can see). **Change…** is one request, `POST /d1-inbox/relink`: the server undoes that file's link and links it to the new record in a single transaction, so a refusal (not editable, gone, already on it) changes nothing and the old link and the file's imaging corrections stay. The page offers it only for a batch of one; the reason shows otherwise. Undo and Change show only when the server says the caller may undo the link (`can_undo`: the person who linked it, or an administrator who owns the file). Imaging corrections made by hand go with an Undo (the settings follow the link) but not with a Change.
+- **Strip.** "Linked to S-0042 · 12 images", up to six small pictures of the OTHER images on the same record (`GET /d1-inbox/siblings`, the list's visibility, so only the files the person could list anyway), "+N" for the rest. A click opens that picture (in the sheet when the list holds it, else its own page found under Recently linked); **Compare with…** makes the next click start Compare with it.
 
 ## Out of scope
 

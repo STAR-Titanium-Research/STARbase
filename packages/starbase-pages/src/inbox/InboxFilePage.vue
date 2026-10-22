@@ -22,11 +22,15 @@ import {
 } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { canCommonScale } from './commonScale';
-import { measureScale, type MeasureLine } from './measure';
+import { MEASURE_TOOLS, measureScale, type MeasureShape } from './measure';
+import { measurementRows, measurementsToCsv, shapeToNew, type PreviewSize } from './measurements';
 import type { PictureState } from './usePicture';
 import { createInbox, type Outcome } from './useInbox';
+import { createMeasurements } from './useMeasurements';
 import { useViewSettings, type CompareMode } from './useViewSettings';
-import { listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
+import { hasSiblings } from './linkedModel';
+import { useSiblings } from './useSiblings';
+import { TEXT_ENTRY, listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
 
 // The view box page (/inbox/file/:candidateId, spec 2026-10-20-inbox-file-viewer-design.md decisions 4, 8, 9 and 10): one found file on a RecordLayout page. Left,
 // its detail panel (InboxFileRail); centre, the stage with the preview (ViewBox) and where the file is; right, the viewer's View rail (ViewBoxRail).
@@ -67,6 +71,8 @@ async function reload(): Promise<void> {
 }
 // The list as far as it has been read: the pages that held the file, and any read since (a Next off the last row read reads the page after it).
 const file = computed<FoundFile | null>(() => (located.value ? rows.value.find((f) => f.candidate_id === props.candidateId) ?? null : null));
+// The other pictures on this file's record (the Link card's strip); Compare finds its second file among them too, and a person can open one from the strip.
+const siblings = useSiblings(host.api, () => (file.value && hasSiblings(file.value) ? file.value.candidate_id : null));
 const around = computed(() => (located.value ? neighbours(rows.value.map((f) => f.candidate_id), props.candidateId) : null));
 /** Whether a file follows this one: its row is in hand, or the list goes on past what was read (the server's total, under the page's row cap). */
 const hasNext = computed(() => !!around.value && (!!around.value.next || (!!located.value && !exhausted.value && around.value.index < located.value.total - 1 && rows.value.length < LOCATE_MAX_ROWS)));
@@ -87,6 +93,7 @@ onBeforeUnmount(() => {
 	inbox.cancel();
 	document.removeEventListener('keydown', onKey);
 	clearTimeout(copyTimer);
+	clearTimeout(copyShapesTimer);
 });
 watch(filtersKey, () => void reload());
 // Previous / next change the file in the same page: the list is already in hand. Only a file it does not hold (an address typed in) asks again.
@@ -94,6 +101,7 @@ watch(
 	() => props.candidateId,
 	() => {
 		copied.value = false;
+		copiedShapes.value = false;
 		if (!file.value) void reload();
 	},
 );
@@ -183,13 +191,14 @@ async function resolvePartner(): Promise<void> {
 		partner.value = { state: 'none' };
 		return;
 	}
-	const hit = rows.value.find((f) => f.candidate_id === id);
+	// in the list, or one of this file's siblings (a picture of the same record, which the list's filters may not hold)
+	const hit = rows.value.find((f) => f.candidate_id === id) ?? siblings.rows.value.find((f) => f.candidate_id === id);
 	if (hit) {
 		partner.value = { state: 'ready', file: hit };
 		return;
 	}
 	partner.value = { state: 'loading' };
-	if (!located.value) return; // the list is still coming: this runs again when it is in
+	if (!located.value || siblings.loading.value) return; // the list, or the siblings, are still coming: this runs again when they are in
 	try {
 		const got = await locateFile(host.api, filters.value, id, () => mine !== partnerToken);
 		if (mine !== partnerToken) return;
@@ -205,7 +214,7 @@ async function resolvePartner(): Promise<void> {
 	}
 }
 // The lookup waits for the list to be there; a reload or `leave()` swapping it for a new object must not run it again.
-watch([partnerId, () => !!located.value], () => void resolvePartner(), { immediate: true });
+watch([partnerId, () => !!located.value, () => siblings.loading.value], () => void resolvePartner(), { immediate: true });
 const partnerFile = computed(() => (partner.value.state === 'ready' ? partner.value.file : null));
 /** The files the picker offers: pictures in the list, never the open file. */
 const candidates = computed(() => rows.value.filter((f) => f.candidate_id !== props.candidateId && IMAGE_KINDS.includes(f.kind)));
@@ -229,16 +238,56 @@ function clearPartner(): void {
 	if (measure.value?.side === 'b') measure.value = null;
 }
 
-// ---- Measure: one line at a time, on a picture whose scale the file says ----
+// ---- Measure: one shape (a line, a circle or a polygon) at a time, on a picture whose scale the file says ----
 const measureWanted = ref(false);
 const measure = ref<CompareMeasure | null>(null);
-const canMeasure = computed(() => !!file.value && hasPicture.value && (!!measureScale(file.value.extracted) || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
+const canMeasure = computed(() => !!file.value && hasPicture.value && (hasScale.value || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
 const measureOn = computed(() => measureWanted.value && canMeasure.value);
 watch(() => props.candidateId, () => (measure.value = null));
 watch(partnerId, () => {
 	if (measure.value?.side === 'b') measure.value = null;
 });
-const singleLine = computed<MeasureLine | null>(() => measure.value?.line ?? null);
+const singleShape = computed<MeasureShape | null>(() => measure.value?.shape ?? null);
+
+// ---- Measurements: the shapes saved on this file (the rail's list; drawn on the picture while Measure is on), and Save for the one just drawn ----
+// A drawn shape is a draft (`measure`) until Save (the rail's button, or Enter). What is kept is unit-free: its corners in pixels of the ORIGINAL image, worked out from
+// the draft's fractions of the preview, the preview's natural size (reported by the picture) and the file's scale. The list is read only for a file with a picture.
+const measurements = createMeasurements(host.api);
+const scale = computed(() => (file.value ? measureScale(file.value.extracted) : null));
+const previewSize = ref<PreviewSize | null>(null);
+const measurementList = computed(() => measurementRows(measurements.list.value, scale.value));
+watch(() => (file.value && hasThumbnail(file.value) ? props.candidateId : null), (id) => void measurements.load(id), { immediate: true });
+watch(() => props.candidateId, () => (previewSize.value = null));
+/** What Save would keep: the drawn shape in original pixels, or null (nothing drawn, drawn in the second pane, the polygon not finished, the size or the scale not known). */
+const draftToSave = computed(() => (measure.value?.side === 'a' ? shapeToNew(measure.value.shape, previewSize.value, scale.value) : null));
+const canSave = computed(() => !!draftToSave.value && measurements.canChange.value && measurements.status.value === 'ready');
+const saveWhy = computed(() => {
+	if (!measure.value || measurements.status.value !== 'ready') return '';
+	if (measure.value.side === 'b') return 'Shapes are saved on the open file (A), not on the second one.';
+	return measurements.canChange.value ? '' : 'Only the owner of the file can save measurements on it.';
+});
+async function saveDraft(): Promise<void> {
+	const drawn = measure.value;
+	const input = draftToSave.value;
+	if (!drawn || !input || !canSave.value || measurements.busy.value !== null) return;
+	const r = await measurements.save(input);
+	// the draft goes once it is kept; a shape drawn while it was being saved stays
+	if (r.ok && measure.value === drawn) measure.value = null;
+}
+const renameShape = (id: string, label: string) => void measurements.rename(id, label);
+const removeShape = (id: string) => void measurements.remove(id);
+const copiedShapes = ref(false);
+let copyShapesTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyShapes(): Promise<void> {
+	try {
+		await navigator.clipboard.writeText(measurementsToCsv(measurementList.value));
+		copiedShapes.value = true;
+		clearTimeout(copyShapesTimer);
+		copyShapesTimer = setTimeout(() => (copiedShapes.value = false), 2000);
+	} catch {
+		inbox.say({ tone: 'warn', text: 'Could not copy the measurements. Select them in the list instead.' });
+	}
+}
 
 /** A file left the list (linked, dismissed, restored): go on to the next one, else the one before, else back to the list. */
 function leave(): void {
@@ -283,7 +332,9 @@ async function choose(rec: { collection: string; id: string }) {
 	if (!f || dialogBusy.value) return;
 	dialogBusy.value = true;
 	dialogError.value = '';
-	const r = await act(() => inbox.link(f, rec.collection, rec.id));
+	// a file that is already linked is changed to another record: it stays in this list, so the page reads it again instead of moving on
+	const r = f.state === 'linked' ? await inbox.relink(f, rec.collection, rec.id) : await act(() => inbox.link(f, rec.collection, rec.id));
+	if (r.ok && f.state === 'linked') await reload();
 	dialogBusy.value = false;
 	if (r.ok) dialogOpen.value = false;
 	else dialogError.value = r.message;
@@ -302,6 +353,19 @@ async function addScan(form: ScanAddForm) {
 		scanField.value = r.field ?? '';
 	}
 }
+// The Link card: Open the record's page, Change… (the Link dialog), Undo link (the card has asked; the file and its whole link batch go back to the Inbox).
+const openRecord = (to: string) => openLink(to, router);
+function changeLink(): void {
+	dialogError.value = '';
+	dialogOpen.value = true;
+}
+const undoLink = () => file.value?.link_batch_id && void act(() => inbox.undo({ kind: 'batch', id: file.value?.link_batch_id as string }));
+// The strip: a picture of the same record opens in this page (in place when this list holds it, else found under the Recently linked list); Compare with… sets it beside this one.
+function openSibling(id: string): void {
+	if (rows.value.some((f) => f.candidate_id === id)) return go(id);
+	void router.replace({ path: swapCandidate(route.path, id), query: { tab: 'linked' } });
+}
+const compareSibling = (id: string) => pickPartner(id);
 const dismiss = () => file.value && void act(() => inbox.dismiss(file.value as FoundFile));
 const restore = () => file.value && void act(() => inbox.restore(file.value as FoundFile));
 async function undo(u: NonNullable<NonNullable<typeof notice.value>['undo']>) {
@@ -324,11 +388,12 @@ async function copyPath(): Promise<void> {
 	}
 }
 
-// ---- the keys: left / right (and up / down) previous and next, F fits the picture, M measures, C compares, Esc closes ----
+// ---- the keys: left / right (and up / down) previous and next, F fits the picture, M measures (1 2 3: line, circle, polygon), C compares, Esc closes ----
 // The arrow keys also stay out of a focused segmented control or checkbox (they move inside it); the letter keys only stay out of fields that take text, so F, M and C
 // keep working right after a click on a Fit / 1:1 button or a rail checkbox.
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
-const TEXT_ENTRY = 'input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable=""], [contenteditable="true"]';
+// what takes Enter for itself (it presses a button or follows a link, or is typing): Enter there does not also save a drawn shape
+const ENTER_OWN = `${TYPING}, button, a[href], summary, [role="button"], [role="link"], [role="checkbox"]`;
 function onKey(e: KeyboardEvent): void {
 	if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
 	if (dialogOpen.value || scanOpen.value) return;
@@ -352,10 +417,20 @@ function onKey(e: KeyboardEvent): void {
 		if (t?.closest(TEXT_ENTRY) || !canMeasure.value) return;
 		e.preventDefault();
 		measureWanted.value = !measureWanted.value;
+	} else if (e.key === '1' || e.key === '2' || e.key === '3') {
+		// with Measure on, 1 2 3 pick what it draws: Line, Circle, Polygon
+		if (t?.closest(TEXT_ENTRY) || !measureOn.value) return;
+		e.preventDefault();
+		view.set({ measureTool: MEASURE_TOOLS[Number(e.key) - 1] });
 	} else if (e.key === 'c' || e.key === 'C') {
 		if (t?.closest(TEXT_ENTRY)) return;
 		e.preventDefault();
 		toggleCompare();
+	} else if (e.key === 'Enter') {
+		// Enter saves the shape just drawn (a polygon's own Enter, which closes it, has already been taken: defaultPrevented). Not on a button, link or field: Enter there is theirs.
+		if (e.repeat || e.shiftKey || t?.closest(ENTER_OWN) || !measureOn.value || !canSave.value) return;
+		e.preventDefault();
+		void saveDraft();
 	}
 }
 
@@ -364,6 +439,7 @@ const pageTitle = computed(() => (file.value ? nameOf(file.value.rel_path) : 'Fo
 const hasImaging = computed(() => !!file.value && (settingsOf(file.value).length > 0 || !!extractedText(file.value.extracted)));
 const contents = computed<ContentsEntry[]>(() => [
 	{ id: 'picture', title: 'Picture', count: null },
+	...(file.value?.state === 'linked' ? [{ id: 'linked', title: 'Linked to', count: null }] : []),
 	...(hasImaging.value ? [{ id: 'imaging', title: 'Imaging settings', count: null }] : []),
 	{ id: 'where', title: 'Where it is', count: null },
 ]);
@@ -409,10 +485,18 @@ const whereFacts = computed<Fact[]>(() => {
 							:busy="busy"
 							:copied="copied"
 							:contents="contents"
+							:siblings="siblings.rows.value"
+							:siblings-total="siblings.total.value"
+							:undoing="inbox.undoing.value !== null"
 							@link="link"
 							@dismiss="dismiss"
 							@restore="restore"
 							@copy="copyPath"
+							@open-record="openRecord"
+							@change="changeLink"
+							@undo="undoLink"
+							@open-sibling="openSibling"
+							@compare-sibling="compareSibling"
 						/>
 					</template>
 
@@ -435,12 +519,16 @@ const whereFacts = computed<Fact[]>(() => {
 									:scale-bar="view.settings.scaleBar"
 									:contrast="view.settings.contrast"
 									:measure-on="measureOn"
-									:line="singleLine"
+									:tool="view.settings.measureTool"
+									:shape="singleShape"
+									:saved="measurements.list.value"
+									:selected-id="measurements.selectedId.value"
 									:compare="compareOn"
 									@prev="prev"
 									@next="next"
 									@state="pictureState = $event"
-									@measure="measure = $event ? { line: $event, side: 'a' } : null"
+									@size="previewSize = $event"
+									@measure="measure = $event ? { shape: $event, side: 'a' } : null"
 								>
 									<template #stage>
 										<CompareStage
@@ -452,8 +540,12 @@ const whereFacts = computed<Fact[]>(() => {
 											:link-zoom="view.settings.linkZoom"
 											:common-scale="view.settings.commonScale"
 											:measure-on="measureOn"
+											:tool="view.settings.measureTool"
 											:measure="measure"
+											:saved="measurements.list.value"
+											:selected-id="measurements.selectedId.value"
 											@state="pictureState = $event"
+											@size="previewSize = $event"
 											@measure="measure = $event"
 										/>
 									</template>
@@ -468,7 +560,16 @@ const whereFacts = computed<Fact[]>(() => {
 						<ViewBoxRail
 							:measure="measureWanted"
 							:can-measure="canMeasure"
-							:has-line="!!measure"
+							:tool="view.settings.measureTool"
+							:has-shape="!!measure"
+							:rows="measurementList"
+							:selected-id="measurements.selectedId.value"
+							:list-status="measurements.status.value"
+							:list-error="measurements.error.value"
+							:busy-id="measurements.busy.value"
+							:can-save="canSave"
+							:save-why="saveWhy"
+							:copied="copiedShapes"
 							:compare="compareMode"
 							:link-zoom="view.settings.linkZoom"
 							:common-scale="view.settings.commonScale"
@@ -493,7 +594,14 @@ const whereFacts = computed<Fact[]>(() => {
 							@update:compare="setCompare"
 							@update:link-zoom="view.set({ linkZoom: $event })"
 							@update:common-scale="view.set({ commonScale: $event })"
-							@clear-line="measure = null"
+							@update:tool="view.set({ measureTool: $event })"
+							@clear-shape="measure = null"
+							@save-shape="saveDraft"
+							@select-measurement="measurements.select($event)"
+							@rename-measurement="renameShape"
+							@remove-measurement="removeShape"
+							@copy-measurements="copyShapes"
+							@reload-measurements="measurements.load(candidateId)"
 							@pick="pickPartner"
 							@clear-partner="clearPartner"
 							@more="loadMore"
