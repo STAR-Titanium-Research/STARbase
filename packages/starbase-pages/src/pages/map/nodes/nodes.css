@@ -15,7 +15,7 @@
 	transition: border-color 0.12s, box-shadow 0.12s;
 }
 .d1-process-map .node:hover { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: var(--d1-shadow-lg, var(--d1-shadow)); }
-.d1-process-map .node.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
+.d1-process-map .node.focal { outline: 2px solid color-mix(in srgb, var(--k) 62%, var(--theme--foreground)); outline-offset: 0; box-shadow: 0 0 0 6px color-mix(in srgb, var(--k) 16%, transparent), var(--d1-shadow); }
 /* A dashed card (probable batch, lineage junction) draws its outline on ::after: the width follows the
    zoom (--pm-px, one screen pixel in flow units, set on .pm-canvas) so it is the same on screen at every
    zoom, zoomed in or out, without resizing the card, and the
@@ -81,6 +81,7 @@
    the "Planned" one above and comes after it. */
 .d1-process-map .node.removing { opacity: 0.6; border-style: dashed; border-color: var(--d1-bad); }
 .d1-process-map .node.removing .code,
+.d1-process-map .node.removing .nick,
 .d1-process-map .node.removing .n,
 .d1-process-map .node.removing .meta,
 .d1-process-map .node.removing .d { text-decoration: line-through; }
@@ -121,6 +122,12 @@
 }
 .d1-process-map .xbtn:hover { color: var(--d1-on-accent, #fff); background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); }
 .d1-process-map .xbtn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
+/* A card's ＋ shows while the card is hovered, holds keyboard focus or is selected (opacity only: the card keeps its size and the button its place in the Tab order). */
+.d1-process-map .node .xbtn.quiet { opacity: 0; transition: opacity 0.12s; }
+.d1-process-map .node:hover .xbtn.quiet,
+.d1-process-map .node:focus-within .xbtn.quiet,
+.d1-process-map .node.focal .xbtn.quiet { opacity: 1; }
+@media (hover: none) { .d1-process-map .node .xbtn.quiet { opacity: 1; } }
 
 /* Sockets: Blender-style dots on a card's edge, coloured by what flows through them. A Vue Flow Handle
    with class "sock"; placed by inline left/top (RecordNode, JunctionNode) or by .row (inside a

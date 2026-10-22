@@ -163,7 +163,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
-			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
+			<button v-if="!data.draft" class="xbtn nodrag nopan" :class="{ quiet: !open }" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
 		<div class="oname">
 			<div class="nl">

@@ -31,7 +31,7 @@ import MapTitleActions from './MapTitleActions.vue';
 import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
-import { MIN_ZOOM, miniMapColor, useMapCanvas } from './useMapCanvas';
+import { MIN_ZOOM, miniMapColor, projectFrameLabel, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { useMaterialComposition } from './useMaterialComposition';
@@ -129,10 +129,12 @@ const finderOpen = ref(false);
 const recent = useRecentRecords(host.api);
 watch(() => map.status.value, (s) => { if (s === 'empty') recent.load().catch(() => {}); }, { immediate: true });
 
-const frameLabel = computed(() => {
-	const p = map.project.value;
-	return p?.code ? [p.code, p.label].filter(Boolean).join(' · ') : '';
-});
+const frameLabel = computed(() => projectFrameLabel(map.project.value));
+// The minimap is drawn while some card is outside the canvas, and kept while the pointer is on it (zooming out on it
+// until everything fits must not remove it from under the pointer). Not on a phone.
+const overMiniMap = ref(false);
+const showMiniMap = computed(() => !phone.value && (canvas.outgrowsView.value || overMiniMap.value));
+watch(showMiniMap, (shown) => { if (!shown) overMiniMap.value = false; }); // gone with no leave event (a phone-sized window)
 const frameStyle = computed(() => {
 	const f = canvas.frame.value;
 	return f ? { left: `${f.x}px`, top: `${f.y}px`, width: `${f.width}px`, height: `${f.height}px` } : null;
@@ -342,7 +344,7 @@ const tipHint = computed(() => {
 										</div>
 									</template>
 									<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-									<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+									<MiniMap v-if="showMiniMap" pannable zoomable @pointerenter="overMiniMap = true" @pointerleave="overMiniMap = false" :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
 									<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 								</VueFlow>
 								<EmptyDraftHint v-if="emptyDraft" />
@@ -418,14 +420,20 @@ const tipHint = computed(() => {
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }
+/* The project's name as a tab hanging from the frame's top edge (inside the frame, so an export never clips it). */
 .pm-frame-label {
 	position: absolute;
-	top: 8px;
-	left: 14px;
-	max-width: calc(100% - 28px);
+	top: 0;
+	left: 18px;
+	max-width: calc(100% - 36px);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	padding: 3px 12px 4px;
+	border: 1px solid color-mix(in srgb, var(--k) 45%, transparent);
+	border-top: 0;
+	border-radius: 0 0 8px 8px;
+	background: color-mix(in srgb, var(--k) 12%, var(--d1-surface));
 	font-size: var(--fs-sm, 12px);
 	font-weight: 700;
 	letter-spacing: 0.02em;

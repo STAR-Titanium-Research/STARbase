@@ -297,7 +297,7 @@ for (const who of ['admin', 'member'] as const) {
 			const b1 = await nodeBox();
 			expect(Math.abs(b1.x - b0.x) + Math.abs(b1.y - b0.y), 'dragging the header moved the card').toBeGreaterThan(10);
 			expect(await viewport(page), 'a card drag did not pan').toBe(still);
-			const slot = card.locator('.slot .sr').first();
+			const slot = card.locator('.slot .si').first();
 			if (await slot.count()) {
 				const s = (await slot.boundingBox())!;
 				await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
