@@ -125,6 +125,15 @@ The daemon reads the row every 30 seconds, so a change takes effect within about
 a hash already running is not interrupted (a new read rate applies from the next tick). A paused
 daemon still clears stale scan requests and keeps its heartbeat; requests queued meanwhile wait until it runs.
 
+## Scan progress
+
+`GET /d1-inbox/progress` (the Inbox page's *Scan progress* card for a person's own folders, and the *Folders* table of the admin tab, which asks
+for `?all=1`) says how far the crawler has come in each folder, from counts only: folders it has seen and listed
+(`inbox_dirs`), images read (`classified_by` set), images with a picture row (`file_thumbnails`, a failure marker counts: it was tried) and SEM
+images with a `pixel_size_nm`. The browser works out the percentages. "Folders known" are the folders the crawler has *seen*, so 100% means everything
+it has seen, not everything on the share. Files and folders under an ignored folder are left out (the crawler never lists them), and so are files that
+are gone. A folder with no `inbox_dirs` row yet is "Not scanned yet".
+
 ## What it does and does not do
 
 - **Read-only.** The share is mounted `ro` twice. In code, `fs_readonly.py` is the only module that touches
