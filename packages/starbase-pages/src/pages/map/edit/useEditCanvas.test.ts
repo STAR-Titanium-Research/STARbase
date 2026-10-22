@@ -439,3 +439,35 @@ describe('where the draft keeps its cards', () => {
 		expect(edit.body.value.positions).toEqual({ n1: { x: 7, y: 8 } });
 	});
 });
+
+describe('the kind dropdown of a card (K3)', () => {
+	const container = (rowId: string): MapNode =>
+		({ id: `c:${rowId}`, type: 'container', kind: 'operation', group: { id: `c:${rowId}`, kind: 'operation', rowIds: [rowId], batch: null }, title: 'x', code: '', category: null, rows: [], slots: [], settings: [], bundled: false, probable: false }) as MapNode;
+
+	it('is offered on a new operation with what is chosen so far, and choosing sets the method', async () => {
+		const { ec, edit } = await setup(twoCards());
+		const pick = ec.mapEdit.kind!(container('draft:n3'))!;
+		expect(pick).toMatchObject({ kind: 'operation', value: 'm-turn' });
+		expect(pick.methods.map((m) => m.id)).toEqual(['m-fast', 'm-ht', 'm-turn']);
+		pick.choose({ methodId: 'm-fast', category: 'sintering' });
+		expect(edit.body.value.items.find((i) => i.key === 'n2')!.values).toMatchObject({ method_id: 'm-fast', process_category: 'sintering' });
+		expect(ec.mapEdit.kind!(container('draft:n3'))!.value).toBe('m-fast');
+	});
+
+	it('has no value while none is chosen, and is the type of a new test', async () => {
+		const body = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, { type: 'addContainer', kind: 'test', source: { from: 'blank' } }]);
+		const { ec } = await setup(body);
+		expect(ec.mapEdit.kind!(container('draft:n2'))!.value).toBeNull();
+		const test = { ...container('draft:n3'), kind: 'test' } as MapNode;
+		expect(ec.mapEdit.kind!(test)).toMatchObject({ kind: 'test', value: null });
+	});
+
+	it('is not offered on a recorded operation, a sample, or outside edit mode', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addExisting', kind: 'operation', record: { id: 'op1', version: 1 }, workState: 'planned' }]);
+		const { ec } = await setup(body);
+		expect(ec.mapEdit.kind!(container('op1'))).toBeNull();
+		expect(ec.mapEdit.kind!(container('draft:nope'))).toBeNull();
+		const sample = { id: 's:draft:n1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 'draft:n1' } } as unknown as MapNode;
+		expect(ec.mapEdit.kind!(sample)).toBeNull();
+	});
+});

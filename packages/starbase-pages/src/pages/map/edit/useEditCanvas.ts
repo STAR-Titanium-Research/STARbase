@@ -12,7 +12,7 @@
 
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import type { DraftKey } from '@d1/ui';
-import type { MapEdit } from '../nodes/actions';
+import type { KindPick, MapEdit } from '../nodes/actions';
 import { nodeOfSocket } from '../model/sockets';
 import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
@@ -283,7 +283,18 @@ export function useEditCanvas(o: {
 		return out;
 	}
 
-	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets };
+	/** The kind dropdown of a new operation or test (K3); nothing for a recorded one (its kind is fixed) or for a stack that is not all new. */
+	function kind(node: MapNode): KindPick | null {
+		if (!edit.editing.value) return null;
+		const keys = draftKeysOfNode(edit.body.value, node);
+		const items = keys.flatMap((k) => edit.body.value.items.filter((i) => i.key === k));
+		const item = items[0];
+		if (!item || item.kind === 'sample' || items.some((i) => i.existing)) return null;
+		const chosen = item.values[item.kind === 'test' ? 'test_type' : 'method_id'];
+		return { kind: item.kind, value: typeof chosen === 'string' && chosen ? chosen : null, methods: edit.catalog.methods.value, testTypes: edit.catalog.testTypes.value, choose: (choice) => edit.setKind(keys, choice) };
+	}
+
+	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets, kind };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

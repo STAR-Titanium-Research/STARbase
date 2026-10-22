@@ -18,6 +18,8 @@
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
 import { isKeyboardFocus } from '../keyboard';
+import type { MethodEntry, TestTypeEntry } from '../edit/catalog';
+import type { KindChoice } from '../edit/kindChange';
 import type { SocketRef } from '../edit/socketRefs';
 import { encodeSocket } from '../edit/socketRefs';
 import type { Dir } from '../model/elkInput';
@@ -81,6 +83,18 @@ export interface MapEdit {
 	wireLock(id: string): string | null;
 	/** The Planned / Done chip of a new operation or test (R9): its state and what pressing it does; null on any other card. */
 	work?(node: MapNode): { state: 'planned' | 'done'; label: string; toggle(): void } | null;
+	/** The kind dropdown of a new operation or test (K3): what it shows (the chosen method or test type, and the lists to choose from) and what choosing does; null on any other card. */
+	kind?(node: MapNode): KindPick | null;
+}
+
+/** What a card draws its kind dropdown from (see `MapEdit.kind`). */
+export interface KindPick {
+	kind: 'operation' | 'test';
+	/** The method id or test type chosen so far; null while none is. */
+	value: string | null;
+	methods: MethodEntry[];
+	testTypes: TestTypeEntry[];
+	choose(choice: KindChoice): void;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');

@@ -600,3 +600,72 @@ describe('useEditMode: the draft on the map', () => {
 		expect(s.calls.filter((c) => c === 'GET /items/manufacturing_methods')).toHaveLength(1);
 	});
 });
+
+describe('useEditMode: choosing the kind (K3)', () => {
+	async function withOperation(values: Record<string, unknown> = {}) {
+		const s = setup({ edit: 'new' });
+		await flush();
+		s.edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank' } });
+		const key = s.edit.body.value.items.find((i) => i.kind === 'operation')!.key;
+		if (Object.keys(values).length) s.edit.apply({ type: 'setValues', key, values });
+		return { ...s, key };
+	}
+	const op = (e: ReturnType<typeof setup>['edit'], key: string) => e.body.value.items.find((i) => i.key === key)!;
+	const turning = { method_id: 'm-turn', process_category: 'machining' };
+
+	it('sets the method and its category in one undo step', async () => {
+		const { edit, key } = await withOperation();
+		edit.setKind(key, { methodId: 'm-turn', category: 'machining' });
+		expect(op(edit, key).values).toMatchObject(turning);
+		edit.undo();
+		expect(op(edit, key).values.method_id).toBeUndefined();
+		edit.redo();
+		expect(op(edit, key).values.method_id).toBe('m-turn');
+	});
+
+	it('says nothing when nothing is dropped', async () => {
+		const { edit, key } = await withOperation({ ...turning, machining_feed_mm_per_rev: 0.2 });
+		edit.setKind(key, { methodId: 'm-mill', category: 'machining' });
+		expect(op(edit, key).values).toMatchObject({ method_id: 'm-mill', machining_feed_mm_per_rev: 0.2 });
+		expect(edit.draft.notice.value).toBe('');
+	});
+
+	it('drops what the new kind has no place for in the same step, and says how many (Undo brings them back)', async () => {
+		const { edit, key } = await withOperation({ ...turning, machining_feed_mm_per_rev: 0.2 });
+		await flush();
+		edit.setKind(key, { methodId: 'm-fast', category: 'sintering' });
+		expect(op(edit, key).values).toMatchObject({ method_id: 'm-fast', process_category: 'sintering' });
+		expect(op(edit, key).values.machining_feed_mm_per_rev).toBeUndefined();
+		expect(edit.draft.notice.value).toBe('Kind changed to FAST sintering: 1 value dropped · Undo');
+		edit.undo();
+		expect(op(edit, key).values).toMatchObject({ ...turning, machining_feed_mm_per_rev: 0.2 });
+	});
+
+	it('a test changes its type the same way, and names it without the group', async () => {
+		const s = setup({ edit: 'new' });
+		await flush();
+		s.edit.apply({ type: 'addContainer', kind: 'test', source: { from: 'blank' } });
+		const key = s.edit.body.value.items.find((i) => i.kind === 'test')!.key;
+		s.edit.apply({ type: 'setValues', key, values: { test_type: 'tensile', tensile_uts_mpa: 900 } });
+		s.edit.setKind(key, { testType: 'hardness' });
+		expect(s.edit.body.value.items.find((i) => i.key === key)!.values).toEqual({ test_type: 'hardness' });
+		expect(s.edit.draft.notice.value).toBe('Kind changed to hardness: 1 value dropped · Undo');
+	});
+
+	it('changes a stack of passes together, and leaves a sample and a recorded operation alone', async () => {
+		const { edit, key } = await withOperation();
+		edit.apply({ type: 'duplicate', key });
+		const keys = edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => i.key);
+		edit.setKind(keys, { methodId: 'm-turn', category: 'machining' });
+		expect(keys.map((k) => op(edit, k).values.method_id)).toEqual(['m-turn', 'm-turn']);
+		edit.undo();
+		expect(keys.map((k) => op(edit, k).values.method_id)).toEqual([undefined, undefined]);
+		const before = edit.body.value;
+		edit.apply({ type: 'addSample' });
+		const sample = edit.body.value.items.find((i) => i.kind === 'sample')!.key;
+		const after = edit.body.value;
+		edit.setKind(sample, { methodId: 'm-turn', category: 'machining' });
+		expect(edit.body.value).toBe(after);
+		expect(before).not.toBe(after);
+	});
+});

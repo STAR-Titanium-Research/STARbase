@@ -9,7 +9,7 @@ import { buildGraph } from '../model/buildGraph';
 import { groupBatches } from '../model/groupBatches';
 import type { ContainerNode as ContainerData, MapNode, RecordNode as RecordData } from '../model/types';
 import { nodeOfSocket } from '../model/sockets';
-import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, editSocketProps, type MapActions, type MapEdit } from './actions';
+import { MAP_ACTIONS, MAP_EDIT, MAP_VIEW, editSocketProps, type KindPick, type MapActions, type MapEdit } from './actions';
 import ContainerNode from './ContainerNode.vue';
 import RecordNode from './RecordNode.vue';
 import WireEdge from './WireEdge.vue';
@@ -360,5 +360,36 @@ describe('a wire in edit mode', () => {
 		expect(await render(WireEdge, props, edit({ selectedWire: ref('other'), wireLock: () => 'x' }))).not.toContain('sel');
 		expect(await render(WireEdge, props)).not.toContain('class="lock"');
 		expect(await render(WireEdge, props, edit({ editing: ref(false), selectedWire: ref(wire.id) }))).not.toMatch(/\bsel\b/);
+	});
+});
+
+describe('the kind dropdown of a new card (K3)', () => {
+	const pick = (over: Partial<KindPick> = {}): KindPick => ({ kind: 'operation', value: null, methods: [{ id: 'm1', name: 'Turning', code: 'T', category: 'machining' }], testTypes: [], choose() {}, ...over });
+	const select = (html: string) => /<select[^>]*data-kind-select[^>]*>/.exec(html)?.[0];
+
+	it('is drawn under the header of a new operation, with the choice and the lists the page gave', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ kind: () => pick({ value: 'm1' }) }));
+		expect(select(html)).toContain('aria-label="Kind of operation"');
+		expect(html).toMatch(/<optgroup label="Machining"[^>]*>(?:<!--\[-->)?<option value="m1" selected[^>]*>Turning</);
+		expect(html.indexOf('data-kind-select')).toBeGreaterThan(html.indexOf('class="ohead"'));
+		expect(html.indexOf('data-kind-select')).toBeLessThan(html.indexOf('class="oname"'));
+	});
+
+	it('is the type of test on a new test', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'test', source: { from: 'blank' } }]));
+		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ kind: () => pick({ kind: 'test', testTypes: [{ value: 'tensile', name: 'Destructive — Tensile' }] }) }));
+		expect(select(html)).toContain('aria-label="Type of test"');
+		expect(html).toMatch(/<optgroup label="Destructive"[^>]*>(?:<!--\[-->)?<option value="tensile"[^>]*>Tensile</);
+	});
+
+	it('is not drawn on a recorded card (the page offers none), without edit mode, or while the card cannot be edited', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]));
+		const recorded: ContainerData = { ...c, id: 'op:x', draft: undefined, group: { ...c.group, rowIds: ['x'] }, rows: [{ recordId: 'x', in: 'op:x:in:0', out: 'op:x:out:0' }] };
+		expect(select(await render(ContainerNode, { id: recorded.id, data: recorded }, edit({ kind: () => null })))).toBeUndefined();
+		expect(select(await render(ContainerNode, { id: c.id, data: c }, edit()))).toBeUndefined();
+		expect(select(await render(ContainerNode, { id: c.id, data: c }))).toBeUndefined();
+		expect(select(await render(ContainerNode, { id: c.id, data: c }, edit({ editing: ref(false), kind: () => pick() })))).toBeUndefined();
+		expect(select(await render(ContainerNode, { id: c.id, data: { ...c, collapsed: true } }, edit({ kind: () => pick() })))).toBeUndefined();
 	});
 });

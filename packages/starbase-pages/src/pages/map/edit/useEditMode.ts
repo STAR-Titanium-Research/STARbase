@@ -21,6 +21,8 @@ import { chooseCampaign, chooseProject } from './projectCampaign';
 import { useEditCatalog, type EditCatalog } from './useEditCatalog';
 import { useProjectChoices } from './useProjectChoices';
 import { workStateActions } from './workState';
+import { kindChange, splitTestType, type KindChoice } from './kindChange';
+import { keyFieldsFor } from './railForm';
 
 export interface EditModeOptions {
 	api: HostApi;
@@ -267,6 +269,25 @@ export function useEditMode(o: EditModeOptions) {
 		});
 		if (actions.length) apply(actions);
 	}
+	/**
+	 * The kind a new operation (its method) or test (its type) is chosen to be, as ONE undoable step whether the card's dropdown asks or anything
+	 * else does; several keys (a stack of passes) change together. What the old kind had that the new one has no place for is dropped, and the
+	 * lid says how many values went (Undo brings them back).
+	 */
+	function setKind(keys: DraftKey | DraftKey[], next: KindChoice): void {
+		const items = (Array.isArray(keys) ? keys : [keys]).flatMap((k) => {
+			const item = draft.body.value.items.find((i) => i.key === k);
+			return item && item.kind !== 'sample' && !item.existing ? [item] : [];
+		});
+		const changes = items.map((item) => ({ key: item.key, ...kindChange(item, next, (i) => keyFieldsFor(i)) }));
+		if (!changes.length) return;
+		const before = draft.body.value;
+		apply(changes.map((c) => ({ type: 'setValues' as const, key: c.key, values: c.patch })));
+		const n = changes[0].dropped.length;
+		if (draft.body.value === before || !n) return;
+		const label = 'testType' in next ? splitTestType(catalog.testTypes.value.find((t) => t.value === next.testType)?.name ?? next.testType).name : (catalog.methodById.value.get(next.methodId)?.name ?? 'the new kind');
+		draft.notice.value = `Kind changed to ${label}: ${n} value${n === 1 ? '' : 's'} dropped · Undo`;
+	}
 	// ---- the draft's project and campaign (R12) ------------------------------------------------------------
 	const choices = useProjectChoices(o.api);
 	watch(
@@ -375,7 +396,7 @@ export function useEditMode(o: EditModeOptions) {
 		// the lid
 		startEditing, openDraft, done, discardDraft,
 		// changing
-		apply, setValues, setWorkState, setProject, setCampaign, choices, undo, redo, writeQuery,
+		apply, setValues, setWorkState, setKind, setProject, setCampaign, choices, undo, redo, writeQuery,
 		refreshDrafts: draft.refresh,
 	};
 	return api;

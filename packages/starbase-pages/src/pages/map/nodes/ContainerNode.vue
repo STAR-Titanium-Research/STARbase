@@ -9,6 +9,7 @@ import { isBundleSocket } from '../model/sockets';
 import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
+import KindPicker from '../edit/KindPicker.vue';
 import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
 
@@ -73,6 +74,8 @@ const railRef = (socket: string, side: EndSide): SocketRef | null => {
 	return owner && owner.side === side ? rowRef(owner.recordId, side) : null;
 };
 const freeProps = (recordId: string | null, side: EndSide, add?: true) => (edit && editable.value && recordId !== null ? editSocketProps(edit, { ...rowRef(recordId, side), ...(add ? { add } : {}) }) : {});
+/** A new operation or test says what kind it is with a dropdown under its header (K3); a recorded one, or a card nobody can edit, has none. */
+const kindPick = computed(() => (editable.value ? (edit?.kind?.(props.data) ?? null) : null));
 const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
@@ -165,6 +168,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
 			<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
+		<KindPicker v-if="kindPick" :kind="kindPick.kind" :value="kindPick.value" :methods="kindPick.methods" :test-types="kindPick.testTypes" @choose="kindPick.choose" />
 		<div class="oname">
 			<div class="nl">
 				<span class="n" :class="{ code: name === data.code }">{{ name }}</span>
