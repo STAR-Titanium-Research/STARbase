@@ -24,10 +24,12 @@
 // were open at once. `pictureHangs` makes a request that never answers: like axios it fails with ECONNABORTED when the request carries a `timeout`, and
 // stays open forever when it does not.
 // Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
+// Scan progress (GET /d1-inbox/progress[?all=1]): the `progress` option is the caller's own folders (default: none, so the Inbox page shows no strip) and
+// `progressAll` is what an administrator's all=1 reads (default: the same); `progressAllowed: false` makes all=1 403 FORBIDDEN, as for a person who is no administrator.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
-import type { FoundFile, LinkItem, ScanLinkItem, SemSettingsAnswer } from './inboxApi';
+import type { FoundFile, LinkItem, ProgressFolder, ScanLinkItem, ScanProgress, SemSettingsAnswer } from './inboxApi';
 import { fakePictureBlob } from './fakePictures';
 import { createFakeIgnored, type FakeIgnoredOptions } from './fakeIgnored';
 
@@ -82,8 +84,24 @@ export function exactMatch(over: Partial<FoundFile> = {}, token = '3fa9c1d2', la
 	});
 }
 
+/** A folder's scan progress as the server counts it. Default: a person's own folder, every measure complete. */
+export function progressFolder(over: Partial<Omit<ProgressFolder, 'owner'>> & { owner?: Partial<ProgressFolder['owner']> } = {}): ProgressFolder {
+	const { owner, ...counts } = over;
+	return {
+		owner: { kind: 'person', id: 'p1', name: 'Ann Lee', folder: 'ab1cd', root: 'Users/ab1cd', has_login: true, ...owner },
+		folders_known: 12, folders_listed: 12, files: 340, images: 300, images_read: 300, images_with_thumb: 300, sem: 120, sem_with_scale: 120,
+		...counts,
+	};
+}
+
 export interface FakeInboxOptions extends FakeIgnoredOptions {
 	files?: FoundFile[];
+	/** The caller's own scan progress (GET /d1-inbox/progress). Default: no folder. */
+	progress?: ScanProgress;
+	/** What an administrator's all=1 reads (default: `progress`). */
+	progressAll?: ScanProgress;
+	/** False: all=1 is 403 FORBIDDEN (the caller is no administrator). */
+	progressAllowed?: boolean;
 	autoLink?: boolean;
 	summary?: Record<string, unknown>;
 	admin?: Record<string, unknown>;
@@ -495,6 +513,12 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 			const file = String((c.params as any)?.file ?? '');
 			if (!UUID.test(file)) throw bad('file', 'file must be the id of a file.');
 			return ok(semAnswer(file));
+		},
+		'get /d1-inbox/progress': (c) => {
+			const own = opts.progress ?? { folders: [], last_scan_finished_at: null };
+			if (!c.params?.all) return ok(own);
+			if (opts.progressAllowed === false) throw err(403, 'FORBIDDEN', 'Only administrators can do that.');
+			return ok(opts.progressAll ?? own);
 		},
 		'get /d1-inbox/admin': () =>
 			ok({

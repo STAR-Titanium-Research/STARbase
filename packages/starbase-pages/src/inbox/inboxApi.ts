@@ -35,6 +35,9 @@
 //   DELETE /d1-inbox/ignored-folders/<id> -> { data: { ignored_id, folder, rescan_queued, still_ignored } }: still_ignored is true when another rule of the same owner
 //                                       still covers the folder (then no rescan was queued); otherwise the next scan lists the folder again. The rate limit never fails the
 //                                       delete (rescan_queued says whether a rescan was queued). 404 NOT_FOUND for a rule that is not the caller's or their team's.
+//   GET  /d1-inbox/progress[?all=1]     -> { data: { folders: [{ owner: { kind, id, name, folder, root, has_login }, folders_known, folders_listed, files, images,
+//                                       images_read, images_with_thumb, sem, sem_with_scale }], last_scan_finished_at } }: the crawler's scan progress per folder (the
+//                                       caller's own, or with all=1 every folder: administrators only, 403 otherwise). Counts only; the percentages are progressModel.ts's.
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
 //
@@ -44,7 +47,7 @@
 import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
 	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
-	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, Skipped,
+	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ProgressFolder, ScanError, ScanLinkItem, ScanProgress, Skipped,
 } from './inboxApiTypes';
 
 export type * from './inboxApiTypes';
@@ -339,6 +342,31 @@ export const loadAdmin = (api: HostApi): Promise<InboxAdmin> =>
 			queued_requests: num(b.queued_requests) ?? 0,
 			queue: { queued: num(b.queue?.queued) ?? 0, running: num(b.queue?.running) ?? 0 },
 			candidates: Object.fromEntries(Object.entries(b.candidates && typeof b.candidates === 'object' ? b.candidates : {}).map(([k, v]) => [k, num(v) ?? 0])),
+		}),
+	);
+
+/** One folder of the progress answer, or null for a row with no owner id (nothing to show it by). A missing count is 0. */
+export function parseProgressFolder(v: unknown): ProgressFolder | null {
+	if (!v || typeof v !== 'object') return null;
+	const r = v as Record<string, any>;
+	const o = (r.owner && typeof r.owner === 'object' ? r.owner : {}) as Record<string, unknown>;
+	const id = str(o.id);
+	if (!id) return null;
+	const count = (k: string) => Math.max(0, num(r[k]) ?? 0);
+	return {
+		owner: { kind: o.kind === 'team' ? 'team' : 'person', id, name: str(o.name) ?? '', folder: str(o.folder) ?? '', root: str(o.root) ?? '', has_login: typeof o.has_login === 'boolean' ? o.has_login : null },
+		folders_known: count('folders_known'), folders_listed: count('folders_listed'), files: count('files'), images: count('images'), images_read: count('images_read'),
+		images_with_thumb: count('images_with_thumb'), sem: count('sem'), sem_with_scale: count('sem_with_scale'),
+	};
+}
+
+/** The scan progress of the caller's own folders, or (all: true, administrators) of every folder. */
+export const loadProgress = (api: HostApi, opts: { all?: boolean } = {}): Promise<ScanProgress> =>
+	call(
+		() => api.get(`${BASE}/progress`, opts.all ? { params: { all: 1 } } : undefined),
+		(b) => ({
+			folders: (Array.isArray(b.folders) ? b.folders : []).map(parseProgressFolder).filter((f: ProgressFolder | null): f is ProgressFolder => f !== null),
+			last_scan_finished_at: str(b.last_scan_finished_at),
 		}),
 	);
 

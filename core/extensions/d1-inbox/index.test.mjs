@@ -374,6 +374,36 @@ function statement(w, sql, b, txId) {
       return [];
     }
     case 'adminState': return [copy(w.crawlerState)];
+    // scan progress: the same grouping the SQL does (not gone, not under an owner's ignored rule, the file-owner predicate), by owner
+    case 'progressOwners': return copy([
+      ...w.people.filter((p) => p.uni_alias).map((p) => ({ kind: 'person', owner_id: p.person_id, name: p.full_name, folder: p.uni_alias, has_login: p.user_id !== null })),
+      ...w.teams.filter((t) => t.share_folder).map((t) => ({ kind: 'team', owner_id: t.team_id, name: t.name, folder: t.share_folder, has_login: null })),
+    ].sort((x, y) => x.name.localeCompare(y.name)));
+    case 'progressDirs': case 'progressFiles': {
+      const people = csv(b[0]);
+      const teams = csv(b[1]);
+      const mine = (r) => people.includes(r.owner_person_id) || teams.includes(r.owner_team_id);
+      const groups = new Map();
+      const rows = name === 'progressDirs'
+        ? w.dirs.filter((d) => mine(d) && !underIgnoredRule(w, { ...d, rel_path: `${d.rel_path}/` }))
+        : [...w.candidates.values()].filter((c) => c.state !== 'gone' && mine(c) && !restamped(w, c) && !underIgnoredRule(w, c));
+      for (const r of rows) {
+        const key = `${r.owner_person_id}|${r.owner_team_id}`;
+        const g = groups.get(key) ?? { owner_person_id: r.owner_person_id ?? null, owner_team_id: r.owner_team_id ?? null, rows: [] };
+        g.rows.push(r);
+        groups.set(key, g);
+      }
+      return [...groups.values()].map(({ rows: rs, ...owner }) => {
+        if (name === 'progressDirs') return { ...owner, folders_known: rs.length, folders_listed: rs.filter((d) => d.last_listed_at).length };
+        const images = rs.filter((c) => ['image', 'sem_image'].includes(c.kind));
+        const sem = rs.filter((c) => c.kind === 'sem_image');
+        return {
+          ...owner, files: rs.length, images: images.length, images_read: images.filter((c) => c.classified_by).length,
+          images_with_thumb: images.filter((c) => w.thumbs.has(c.candidate_id)).length, sem: sem.length, sem_with_scale: sem.filter((c) => c.extracted?.pixel_size_nm != null).length,
+        };
+      });
+    }
+    case 'progressScan': return [{ last_scan_finished_at: w.crawlerState.last_scan_finished_at }];
     case 'adminPeopleWithoutAlias': return copy(w.people.filter((p) => p.active && !p.uni_alias).map((p) => ({ person_id: p.person_id, full_name: p.full_name, has_login: p.user_id !== null })));
     case 'adminFailedRequests': return copy(w.scanRequests.filter((r) => r.status === 'failed').map((r) => ({ at: r.finished_at ?? r.requested_at, error: r.error })));
     case 'adminTotals': return copy(w.totals);
@@ -775,7 +805,7 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
 const USER_ROUTES = [
   'GET /summary', 'GET /files', 'POST /link', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
   'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /sem-settings', 'PATCH /sem-settings/:file',
-  'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id',
+  'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id', 'GET /progress',
 ];
 
 test('every route but auto-link needs a signed-in user: 401, Directus-shaped, source d1-inbox', async () => {
@@ -4198,7 +4228,7 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   const router = fakeRouter();
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
-    'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs',
+    'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs', 'GET /progress',
     'GET /sem-settings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
     'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
@@ -4224,7 +4254,7 @@ test('sql_check.mjs (run on a real Postgres by tests/schema/160-inbox.sh) prepar
   assert.doesNotMatch(printed, /\?/, 'every ? is numbered');
   const phase1 = readFileSync(new URL('../../../tests/schema/160-inbox.sh', import.meta.url), 'utf8');
   assert.match(phase1, /core\/extensions\/d1-inbox\/sql_check\.mjs/);
-  for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
+  for (const name of ['summary', 'count_new', 'accept_open', 'marklinked', 'resetbatch', 'rescaninsert', 'progressdirs', 'progressfiles']) assert.match(phase1, new RegExp(`EXECUTE ${name}\\(|format\\('EXECUTE ${name}\\(`), `phase1 runs ${name}`);
 });
 
 // ---- C1: a folder that changed hands; the new holder neither sees nor links the old owner's files -------------------------------------------
@@ -4363,4 +4393,112 @@ test('POST /undo notices a 197 applied while the server runs (a negative answer 
   const second = (await call('POST /link', { user: U.alice, body: { items: [link(b)] } })).body.data.link_batch_id;
   await call('POST /undo', { user: U.alice, body: { link_batch_id: second } });
   assert.equal(w.log.filter((l) => l.name === 'deleteUnlinkedSemSettings').length, 1);
+});
+
+// ---- scan progress (GET /progress) -----------------------------------------------------------------------------------------------
+
+const pgDir = (rel, owner, listed = true) => ({ rel_path: rel, ...owner, dir_mtime: null, last_listed_at: listed ? '2026-10-15T11:00:00.000Z' : null });
+const READ = 'sem-2';
+
+function progressWorld() {
+  const w = newWorld();
+  // Alice: 3 folders known, 2 listed; 2 plain images (1 read), 2 SEM images (both read, 1 with a scale), a document and a gone file; 2 pictures (one a failure marker)
+  w.dirs.push(pgDir('Users/ali1', OWNED_BY.alice), pgDir('Users/ali1/sem', OWNED_BY.alice), pgDir('Users/ali1/new', OWNED_BY.alice, false), pgDir('Users/car3', OWNED_BY.other));
+  const a1 = add(w, cand({ classified_by: READ, extracted: { pixel_size_nm: 2.5 } }));
+  const a2 = add(w, cand({ classified_by: READ, extracted: {} }));
+  add(w, cand({ kind: 'image', classified_by: READ }));
+  add(w, cand({ kind: 'image', classified_by: null }));
+  add(w, cand({ kind: 'document' }), cand({ state: 'gone', classified_by: READ }));
+  w.thumbs.set(a1.candidate_id, { thumb: Buffer.from('a'), preview: Buffer.from('b') });
+  w.thumbs.set(a2.candidate_id, { thumb: null, preview: null });
+  // the SEM team's folder: one folder, listed; one image, read, with a picture
+  w.dirs.push(pgDir('Shared/SEM', OWNED_BY.team));
+  const t1 = add(w, cand({ ...OWNED_BY.team, rel_path: 'Shared/SEM/t.tif', classified_by: READ, extracted: { pixel_size_nm: 1 } }));
+  w.thumbs.set(t1.candidate_id, { thumb: Buffer.from('a'), preview: Buffer.from('b') });
+  // Carol's: one unread image
+  add(w, cand({ ...OWNED_BY.other, rel_path: 'Users/car3/c.tif' }));
+  return w;
+}
+const ALICE_FOLDER = { folders_known: 3, folders_listed: 2, files: 5, images: 4, images_read: 3, images_with_thumb: 2, sem: 2, sem_with_scale: 1 };
+
+test('GET /progress: a person reads their own folder and the folder of each team they are an active member of, with the counts the client turns into percentages', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  const res = await call('GET /progress', { user: U.alice });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.data.folders, [
+    { owner: { kind: 'person', id: P.alice, name: 'Alice A', folder: 'ali1', root: 'Users/ali1', has_login: true }, ...ALICE_FOLDER },
+    { owner: { kind: 'team', id: TEAM, name: 'SEM team', folder: 'SEM', root: 'Shared/SEM', has_login: null },
+      folders_known: 1, folders_listed: 1, files: 1, images: 1, images_read: 1, images_with_thumb: 1, sem: 1, sem_with_scale: 1 },
+  ]);
+  assert.equal(res.body.data.last_scan_finished_at, '2026-10-15T11:45:00.000Z');
+  assert.deepEqual(w.log.filter((l) => l.name?.startsWith('progress')).map((l) => l.name), ['progressDirs', 'progressFiles', 'progressScan'], 'one statement per kind of answer');
+  assert.equal(w.log.some((l) => /INSERT|UPDATE|DELETE/i.test(l.sql)), false, 'read only');
+});
+
+test('GET /progress: nobody else\'s folder; no alias and no team means no folder; a Former person has their own folder and no team', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  const bob = await call('GET /progress', { user: U.bob });
+  assert.deepEqual(bob.body.data.folders.map((f) => f.owner.name), ['SEM team', 'Bob B'], 'the team folder has files, his own has none');
+  assert.deepEqual(bob.body.data.folders.find((f) => f.owner.kind === 'person'), {
+    owner: { kind: 'person', id: P.bob, name: 'Bob B', folder: 'bob2', root: 'Users/bob2', has_login: true },
+    folders_known: 0, folders_listed: 0, files: 0, images: 0, images_read: 0, images_with_thumb: 0, sem: 0, sem_with_scale: 0,
+  });
+  assert.deepEqual((await call('GET /progress', { user: U.dave })).body.data.folders, []);
+  assert.deepEqual((await call('GET /progress', { user: U.carol })).body.data.folders.map((f) => f.owner.name), ['Carol C', 'Other team']);
+  assert.deepEqual((await call('GET /progress', { user: U.former })).body.data.folders.map((f) => f.owner.name), ['Fay Former']);
+  assert.deepEqual((await call('GET /progress', { user: U.nobody })).body.data.folders, [], 'a login with no person');
+});
+
+test('GET /progress: all=1 is for administrators (403 otherwise): every folder with an alias or a share folder, people without a login included, largest first', async () => {
+  const w = progressWorld();
+  w.people.push({ person_id: ID(19), full_name: 'Eve E', active: true, uni_alias: 'eve5', user_id: null });
+  const { call } = setup(w);
+  const denied = await call('GET /progress', { user: U.alice, query: { all: '1' } });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(codeOf(denied), 'FORBIDDEN');
+  assert.equal((await call('GET /progress', { user: U.alice, query: { all: '0' } })).statusCode, 200, 'all=0 is the caller\'s own');
+  const res = await call('GET /progress', { user: U.admin, admin: true, query: { all: '1' } });
+  assert.equal(res.statusCode, 200);
+  const folders = res.body.data.folders;
+  assert.deepEqual(folders.map((f) => f.owner.name), ['Alice A', 'Carol C', 'SEM team', 'Ada Admin', 'Bob B', 'Eve E', 'Fay Former', 'Other team', 'Vic Viewer'], 'files desc, then name');
+  assert.equal(folders.find((f) => f.owner.name === 'Eve E').owner.has_login, false);
+  assert.equal(folders.find((f) => f.owner.name === 'Other team').owner.has_login, null);
+  assert.equal(folders.find((f) => f.owner.name === 'Alice A').files, ALICE_FOLDER.files);
+  assert.deepEqual((await call('GET /progress', { user: U.admin, admin: true })).body.data.folders.map((f) => f.owner.name), ['Ada Admin'], 'without all=1 an administrator reads their own');
+});
+
+test('GET /progress: anything under the owner\'s ignored folders is left out, so 100% can be reached; the person folder follows INBOX_PERSON_DIR', async () => {
+  const w = progressWorld();
+  w.dirs.push(pgDir('Users/ali1/Skip', OWNED_BY.alice, false), pgDir('users/ali1/skip/deeper', OWNED_BY.alice, false));
+  add(w, cand({ rel_path: 'Users/ali1/Skip/x.tif', classified_by: null }));
+  w.ignored.push({ ignored_id: ID(7100), owner_person_id: P.alice, owner_team_id: null, rel_folder: 'Skip', created_at: '2026-10-14T10:00:00.000Z', created_by: U.alice });
+  const before = process.env.INBOX_PERSON_DIR;
+  process.env.INBOX_PERSON_DIR = 'User';
+  try {
+    const { call } = setup(w);
+    const mine = (await call('GET /progress', { user: U.alice })).body.data.folders[0];
+    assert.equal(mine.owner.root, 'User/ali1');
+    assert.deepEqual({ ...mine, owner: undefined }, { owner: undefined, ...ALICE_FOLDER }, 'the ignored folders and the file under them do not count');
+  } finally {
+    if (before === undefined) delete process.env.INBOX_PERSON_DIR; else process.env.INBOX_PERSON_DIR = before;
+  }
+});
+
+test('GET /progress: a file whose pointer row is stamped to another owner is not counted for the folder (a folder that changed hands)', async () => {
+  const w = progressWorld();
+  stampTo(w, add(w, cand({ rel_path: 'Users/ali1/old.tif' })), OWNED_BY.other);
+  const { call } = setup(w);
+  assert.equal((await call('GET /progress', { user: U.alice })).body.data.folders[0].files, ALICE_FOLDER.files);
+});
+
+test('GET /progress: a Lab Viewer may read it; every statement takes its owners as bindings (never text)', async () => {
+  const w = progressWorld();
+  const { call } = setup(w);
+  assert.equal((await call('GET /progress', { user: U.viewer, role: LAB_VIEWER_ROLE_ID })).statusCode, 200);
+  assert.equal(SQL.progressDirs.split('?').length - 1, 2);
+  assert.equal(SQL.progressFiles.split('?').length - 1, 2);
+  assert.match(SQL.progressDirs, /inbox_ignored_dirs/);
+  assert.match(SQL.progressFiles, /inbox_ignored_dirs/);
 });
