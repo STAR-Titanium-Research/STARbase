@@ -69,11 +69,12 @@ describe('the entries', () => {
 	it('unconnected: the kinds first, then the whole catalog, one flat list: the samples, the operations by category, the tests', () => {
 		const es = rootEntries(body(), menuFor(body(), null), catalog);
 		expect(es.slice(0, 4)).toEqual(kindEntries());
-		// Every entry of the catalog is still there, each once (From database… is listed with the kinds).
-		expect(es.slice(4)).toEqual(catalogEntries(catalog).filter((e) => e.id !== 'db:attach'));
+		// Every entry of the catalog is still there, each once (From database… is listed with the kinds, and a new sample is the Sample kind).
+		expect(es.slice(4)).toEqual(catalogEntries(catalog).filter((e) => e.id !== 'db:attach' && e.id !== 'sample:new'));
+		expect(es.some((e) => e.id === 'sample:new'), 'the Sample kind is the one way to add a new sample here').toBe(false);
 		expect(new Set(es.map((e) => e.id)).size).toBe(es.length);
 		expect(sections(es)).toEqual(['Add', 'From the database', 'Samples', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
-		expect(labels(es).slice(0, 6)).toEqual(['Sample', 'Operation', 'Test', 'From database…', 'New sample', 'Existing sample…']);
+		expect(labels(es).slice(0, 5)).toEqual(['Sample', 'Operation', 'Test', 'From database…', 'Existing sample…']);
 		// Typing still finds every method and every test type.
 		expect(labels(searchEntries(es, 'turn'))).toEqual(['Turning']);
 		expect(labels(searchEntries(es, 'tens'))).toEqual(['Tensile']);
@@ -422,8 +423,8 @@ describe('templates in the catalog', () => {
 		const es = catalogEntries(withTemplates);
 		expect(labels(es)).toEqual(['Pull to break', 'Roughing pass', 'New sample', 'Existing sample…', 'From database…', 'Turning', 'Milling', 'FAST sintering', 'Mystery', 'Tensile', 'XRD']);
 		expect(sections(es)).toEqual(['Templates', 'Samples', 'From the database', 'Machining', 'FAST sintering', 'Other methods', 'Tests']);
-		// Unconnected, the kinds come first and the rest is the catalog as it is.
-		expect(rootEntries(body(), menuFor(body(), null), withTemplates)).toEqual([...kindEntries(), ...es.filter((e) => e.id !== 'db:attach')]);
+		// Unconnected, the kinds come first and the rest is the catalog as it is (a new sample is the Sample kind, not listed twice).
+		expect(rootEntries(body(), menuFor(body(), null), withTemplates)).toEqual([...kindEntries(), ...es.filter((e) => e.id !== 'db:attach' && e.id !== 'sample:new')]);
 	});
 
 	it('from a sample output: the kinds, the templates, then From database…, then the categories (operations, then tests), then Connect to…', () => {

@@ -400,7 +400,7 @@ test.describe('as a Lab Member', () => {
 
 	test('"Open in Data Studio" on a new item\'s field says it opens after Create instead of raising a banner; a record that exists keeps the link (fix 12)', async ({ page }) => {
 		await openNewDraft(page);
-		await addFromLid(page, /^New sample/);
+		await addFromLid(page, /^Sample/);
 		await selectCard(page, card(page, 'New sample, Sample'));
 		await page.getByRole('heading', { name: 'New sample: all fields' }).click();
 		const rail = page.locator('section.pm-item').filter({ hasText: 'New sample: all fields' });

@@ -461,6 +461,22 @@ describe('the kind dropdown of a new card (K3)', () => {
 		expect(html.indexOf('data-kind-select')).toBeLessThan(html.indexOf('class="oname"'));
 	});
 
+	it('says the kind once: the header is the process only, and the name line is gone when it only repeats the method', async () => {
+		const [c] = containers(run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm1' } }]));
+		const turning = { ...c, method: 'Turning', title: 'Turning', code: '', category: 'machining' as const };
+		const withPicker = await render(ContainerNode, { id: c.id, data: turning }, edit({ kind: () => pick({ value: 'm1' }) }));
+		expect(withPicker).toMatch(/class="m"[^>]*>Machining<[/]span>/);
+		expect(withPicker).not.toContain('class="n"');
+		expect(withPicker.match(/>Turning</g), 'only the dropdown says Turning').toHaveLength(1);
+		// Without the dropdown (a recorded card, view mode) the header says the method and the name stays.
+		const without = await render(ContainerNode, { id: c.id, data: turning }, edit({ kind: () => null }));
+		expect(without).toMatch(/class="m"[^>]*>Machining · Turning<[/]span>/);
+		expect(without).toContain('class="n"');
+		// A name that is more than the method stays.
+		const named = await render(ContainerNode, { id: c.id, data: { ...turning, code: 'MC-0007' } }, edit({ kind: () => pick({ value: 'm1' }) }));
+		expect(named).toContain('MC-0007');
+	});
+
 	it('is the type of test on a new test', async () => {
 		const [c] = containers(run([{ type: 'addContainer', kind: 'test', source: { from: 'blank' } }]));
 		const html = await render(ContainerNode, { id: c.id, data: c }, edit({ kind: () => pick({ kind: 'test', testTypes: [{ value: 'tensile', name: 'Destructive — Tensile' }] }) }));

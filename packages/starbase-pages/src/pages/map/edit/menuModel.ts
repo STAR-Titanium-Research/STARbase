@@ -183,7 +183,8 @@ function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[]
 		return out;
 	}
 	// Unconnected: the kinds, then the whole catalog.
-	if (f.side === null) return [...kindEntries(), ...catalogEntries(cat).filter((e) => e.id !== FROM_DATABASE.id)];
+	// (The "Sample" kind is a new sample already, so the catalog's "New sample" would be the same thing twice.)
+	if (f.side === null) return [...kindEntries(), ...catalogEntries(cat).filter((e) => e.id !== FROM_DATABASE.id && e.id !== 'sample:new')];
 	// From a sample's output, or a sample's input: the kinds of container that can be made, then the containers (a test has no output, so it cannot make a sample).
 	out.push(...kindEntries().filter((e) => e.choice.kind === 'newOperation' || (e.choice.kind === 'newTest' && f.side !== 'in')));
 	out.push(...templateEntries(cat.templates ?? [], cat, f.side === 'in' ? 'operation' : undefined));

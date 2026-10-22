@@ -189,6 +189,6 @@ test.describe('as a Lab Member', () => {
 		await dragEntryTo(page, await paletteKind(page, 'sample'), operation);
 		await expect(page.locator('.pm-wirepreview .tip')).toContainText('Drop it on the empty canvas, on a free socket or on a wire.');
 		await expect(cards(page)).toHaveCount(before);
-		await expect(paletteOf(page).locator('.sec').first(), 'a refused drop is not a recent').not.toHaveText('Recent');
+		await expect(paletteOf(page).locator('.sec').filter({ hasText: /^Recent$/ }), 'a refused drop is not a recent: there is no Recent section at all').toHaveCount(0);
 	});
 });

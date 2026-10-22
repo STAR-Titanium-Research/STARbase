@@ -44,11 +44,22 @@ describe('autoWireSource', () => {
 		expect(autoWireSource(body, null, turning)).toBeNull();
 	});
 
-	it('leaves a selected sample that already has a wire out for the last new one that has none, or nothing', () => {
+	it('is nothing when the selected sample already has a wire out, even if another new sample is free', () => {
 		const wired = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
-		expect(autoWireSource(wired, 'n1', turning)).toBe('n2');
-		const only = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
-		expect(autoWireSource(only, 'n1', turning)).toBeNull();
+		expect(autoWireSource(wired, 'n1', turning)).toBeNull();
+		// With nothing selected the last new sample with a free output is taken: n2.
+		expect(autoWireSource(wired, null, turning)).toBe('n2');
+	});
+
+	it('is nothing when the selected card is a recorded sample or an operation: the person is elsewhere, so the new card floats', () => {
+		const fresh = run([{ type: 'addSample' }]);
+		const recorded = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }], fresh);
+		const sRecorded = recorded.items.find((i) => i.existing)!.key;
+		expect(autoWireSource(recorded, sRecorded, turning), 'a recorded sample is selected, a free new one is in the draft').toBeNull();
+		const withOp = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
+		const op = withOp.items.find((i) => i.kind === 'operation')!.key;
+		expect(autoWireSource(withOp, op, turning), 'an operation is selected, n2 is free').toBeNull();
+		expect(autoWireSource(withOp, null, turning)).toBe('n2');
 	});
 
 	it('wires a palette Operation or Test (a blank card) to the sample just added, as it does a method or a test type', () => {

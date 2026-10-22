@@ -316,6 +316,21 @@ describe('useEditMode: changing the draft', () => {
 	});
 });
 
+describe('useEditMode: what is still to fill in', () => {
+	it('is one count: the warnings the card badges show as well as what Create waits on, and the bar says it when Create is not waiting', async () => {
+		const s = setup({ edit: 'new' });
+		await flush();
+		s.edit.apply({ type: 'addSample' });
+		s.edit.apply({ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm-turn' }, from: { key: 'n1' } });
+		// The sample's material and method block Create; the operation's machine and date are only warnings: all four are still to fill in.
+		expect(s.edit.missing.value).toBe(2);
+		expect(s.edit.toFill.value).toBe(4);
+		s.edit.apply({ type: 'setValues', key: 'n2', values: { equipment_id: 'e1' } });
+		expect(s.edit.missing.value, 'a machine is not what Create waits on').toBe(2);
+		expect(s.edit.toFill.value).toBe(3);
+	});
+});
+
 describe('useEditMode: planned or done at Create (R9)', () => {
 	async function withOperation() {
 		const s = setup({ edit: 'new' });

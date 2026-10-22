@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Check, DraftBody, DraftItem } from '@d1/ui';
 import { KEY_SETTING_FIELDS, MAX_SETTINGS } from '../model/formSlots';
 import type { MapNode } from '../model/types';
-import { cardFieldNames, cardFieldsFor, cardItemOf, cardSegments, flaggedFields, isMadeByCheck, readonlyOnCard } from './cardFields';
+import { cardFieldNames, cardFieldsFor, cardItemOf, cardSegments, flaggedFields, isMadeByCheck, readonlyOnCard, toFillIn } from './cardFields';
 import { checks } from './checks';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { keySettingsFor } from './draftForm';
@@ -153,6 +153,30 @@ describe('"Made by" on a sample a draft operation makes is not the card to fill 
 		expect(flaggedFields(all, 'n1', made)).toContain('primary_method_id');
 		expect(isMadeByCheck(all.find((c) => c.key === 'n4' && c.field === 'primary_method_id')!, made)).toBe(true);
 		expect(isMadeByCheck(all.find((c) => c.key === 'n1' && c.field === 'primary_method_id')!, made)).toBe(false);
+	});
+});
+
+describe('toFillIn: the one count of what is still to fill in', () => {
+	const made = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
+
+	it('counts the warnings the badges count (no machine, no date) as well as the blockers', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' }, from: { key: 'n1' } }]);
+		const list: Check[] = [
+			{ key: 'n2', level: 'warn', field: 'equipment_id', text: 'No machine yet.' },
+			{ key: 'n2', level: 'warn', field: 'planned_date', text: 'No planned date yet.' },
+			{ key: 'n1', level: 'block', field: 'material_id', text: 'Choose the material.', code: 'REQUIRED' },
+		];
+		expect(toFillIn(list, b)).toHaveLength(3);
+	});
+
+	it('leaves out what only the server can tell, and the "Made by" of a sample something makes', () => {
+		const all = checks(made, {});
+		const server: Check = { key: 'n1', level: 'block', text: 'Gone.', code: 'GONE' };
+		const fill = toFillIn([...all, server], made);
+		expect(fill).not.toContain(server);
+		expect(fill.some((c) => c.key === 'n4' && c.field === 'primary_method_id')).toBe(false);
+		expect(fill.some((c) => c.key === 'n1' && c.field === 'primary_method_id')).toBe(true);
+		expect(fill.length).toBe(all.length - 1);
 	});
 });
 

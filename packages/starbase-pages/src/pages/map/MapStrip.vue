@@ -57,7 +57,7 @@ defineProps<{
 			/>
 		</template>
 		<template #create>
-			<CreateBar :summary="edit.summary.value" :missing="edit.missing.value" :creating="side.create.creating.value" :error="side.create.error.value" :empty="side.create.empty.value" @create="side.create.create" />
+			<CreateBar :summary="edit.summary.value" :missing="edit.missing.value" :to-fill="edit.toFill.value" :creating="side.create.creating.value" :error="side.create.error.value" :empty="side.create.empty.value" @create="side.create.create" />
 		</template>
 	</EditLid>
 	<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>

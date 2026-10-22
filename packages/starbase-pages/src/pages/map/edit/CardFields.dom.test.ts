@@ -279,6 +279,18 @@ describe('the map\'s keys stay out of a card\'s field (Review Focus 2)', () => {
 		expect(onWindow).not.toHaveBeenCalled();
 	});
 
+	it('Escape puts the keyboard on the card the field is on, not on the page', async () => {
+		const { edit } = fakeEdit(cut());
+		const el = mount({ edit, key: 'n1' });
+		el.classList.add('vue-flow__node'); // the card as the canvas draws it: a focusable node
+		el.tabIndex = 0;
+		await settle();
+		const field = input(el, 'nickname');
+		field.focus();
+		field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+		expect(document.activeElement).toBe(el);
+	});
+
 	it('a double-click in a field (selecting a word) is not the card\'s double-click', async () => {
 		const { edit } = fakeEdit(cut());
 		const onCard = vi.fn();

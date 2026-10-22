@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
@@ -95,5 +96,27 @@ describe('EditLid', () => {
 	it('has the slot the Create button goes in', async () => {
 		const html = await render(base, { create: () => h('button', { id: 'create' }, 'Create 1 sample') });
 		expect(html).toContain('Create 1 sample');
+	});
+});
+
+describe('the lid keeps each group on one line (the rules, read from the styles: a node environment has no layout)', () => {
+	const rule = (css: string, selector: string): string => new RegExp(`^${selector.replace('.', '[.]')} \{([^}]*)\}`, 'm').exec(css)?.[1] ?? '';
+	const lid = readFileSync(new URL('./EditLid.vue', import.meta.url), 'utf8');
+	const scope = readFileSync(new URL('./DraftScope.vue', import.meta.url), 'utf8');
+
+	it('the draft group does not wrap, so "Draft ▾" stays beside the name, and it can still take the width the others leave', () => {
+		expect(rule(lid, '.draft')).toMatch(/flex-wrap: nowrap/);
+		expect(rule(lid, '.draft')).toMatch(/flex: 1 1 /);
+		expect(rule(lid, '.draft')).not.toMatch(/flex-wrap: wrap/);
+		expect(rule(lid, '.open')).toMatch(/flex: none/);
+	});
+
+	it('the name shrinks before anything wraps, and Create keeps the right edge', () => {
+		expect(rule(lid, '.nm')).toMatch(/flex: 0 1 /);
+		expect(rule(lid, '.make')).toMatch(/margin-left: auto/);
+	});
+
+	it('the project and campaign choices are one line too', () => {
+		expect(rule(scope, '.pm-scope')).toMatch(/flex-wrap: nowrap/);
 	});
 });

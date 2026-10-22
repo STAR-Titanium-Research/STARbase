@@ -24,7 +24,7 @@ const testTypes: TestTypeEntry[] = [
 	{ value: 'misc', name: 'Weighing' },
 ];
 
-function mount(props: { kind: 'operation' | 'test'; value?: string | null }, onChoose = vi.fn()) {
+function mount(props: { kind: 'operation' | 'test'; value?: string | null; testTypes?: TestTypeEntry[] }, onChoose = vi.fn()) {
 	const el = document.createElement('div');
 	document.body.appendChild(el);
 	app = createApp(KindPicker, { value: null, methods, testTypes, ...props, onChoose });
@@ -82,6 +82,11 @@ describe('KindPicker: a test', () => {
 			['Dynamic', ['Fatigue']],
 			['Other', ['Weighing']],
 		]);
+	});
+
+	it('puts the NDE tests first: the live choices are "NDE — ..."', () => {
+		const { select } = mount({ kind: 'test', testTypes: [{ value: 'tensile', name: 'Destructive — Tensile' }, { value: 'xrd', name: 'NDE — XRD' }, { value: 'fatigue', name: 'Dynamic — Fatigue' }, { value: 'weigh', name: 'Weighing' }] });
+		expect(groups(select)).toEqual([['NDE', ['XRD']], ['Destructive', ['Tensile']], ['Dynamic', ['Fatigue']], ['Other', ['Weighing']]]);
 	});
 
 	it('emits the test type', async () => {

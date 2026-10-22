@@ -263,6 +263,16 @@ describe('the add search remembers what was added, and does a choice wherever it
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 
+	it('gives the keys an insert added (the page shows the first), and none for a refused one', async () => {
+		const { menu, insert } = await setup();
+		const t: MenuTarget = { sock: null, at: { x: 5, y: 5 }, insert: { where: 'after', nodeId: 's:x', what: 'S-1' } };
+		const turning = { kind: 'operation', methodId: 'm-turn', category: 'machining' } as const;
+		insert.mockResolvedValueOnce(['n7', 'n8']);
+		expect(await menu.applyAt(t, turning)).toEqual(['n7', 'n8']);
+		insert.mockResolvedValueOnce(false);
+		expect(await menu.applyAt(t, turning)).toEqual([]);
+	});
+
 	it('a choice that did nothing is not a recent: a drop on a socket the draft cannot build on, an insert that was refused', async () => {
 		const { menu, edit, insert } = await setup();
 		const turning = { kind: 'operation', methodId: 'm-turn', category: 'machining' } as const;

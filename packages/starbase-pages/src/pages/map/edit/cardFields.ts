@@ -53,6 +53,14 @@ export function isMadeByCheck(c: Check, body: DraftBody): boolean {
 }
 
 /**
+ * What is still to fill in across the draft, as ONE count: the checks a person can answer (not what only the server can tell, nor the "Made by"
+ * of a sample an operation makes). The card badges count the same checks per card ("3 missing"), and the Create bar adds them up ("3 to fill in").
+ */
+export function toFillIn(checks: Check[], body: DraftBody): Check[] {
+	return checks.filter((c) => !(c.code && SERVER_ONLY_CODES.has(c.code)) && !isMadeByCheck(c, body));
+}
+
+/**
  * The fields of the card's checks that the person can fill in: what only the server can tell (a record gone, a permission) names no field
  * of the card. With the `body`, "Made by" on a sample something makes is left out too (see `isMadeByCheck`).
  */

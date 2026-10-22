@@ -1,9 +1,9 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
-	paletteEntry, paletteFind, paletteKind, paletteOf, pickSamples, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
-	type DraftBody,
+	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, chooseKind, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
+	paletteEntry, paletteFind, paletteKind, paletteOf, pickSamples, pressCreate, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
+	type DraftBody, type Ref,
 } from '../starbase/mapEdit';
 
 /**
@@ -14,7 +14,7 @@ import {
  *   bash scripts/dev/local-stack.sh up
  *   cd tests/ui && npx playwright test -c playwright.local-stack.config.ts specs/edit-mode-slice2a.spec.ts
  *
- * No test here creates a record; the drafts the member leaves are deleted, so the suite can
+ * Only the creator-kinds test (K1 to K4, K11) presses Create: what it made is removed through the admin API afterwards, and the drafts the member leaves are deleted, so the suite can
  * run again on the same stack. No sleeps: waits are for something on the page or for what the server holds (`savedDraft` polls the draft).
  */
 
@@ -33,9 +33,21 @@ async function deleteDrafts(api: APIRequestContext): Promise<void> {
 	for (const d of (await r.json()).data as { id: string }[]) await api.delete(`${D1}/d1-build/drafts/${d.id}`);
 }
 
+/** What a test Created, to remove afterwards (an operation is planned, so it is deletable). */
+const made: Ref[] = [];
+const noteMade = (r: Ref): void => void (made.some((m) => m.id === r.id) || made.push(r));
+
 test.afterEach(async () => {
 	if (!stackAvailable() || !admin) return;
 	await deleteDrafts(member);
+	for (const collection of ['manufacturing_operations', 'test_sessions', 'physical_samples']) {
+		for (const ref of made.filter((m) => m.collection === collection)) {
+			if (collection !== 'physical_samples') await admin.post(`${D1}/d1-build/mark-planned`, { data: { collection, ids: [ref.id] } });
+			const r = await admin.delete(`${D1}/items/${collection}/${ref.id}`);
+			if (!r.ok() && r.status() !== 404) console.warn(`clean-up: DELETE ${collection}/${ref.id} answered ${r.status()}: ${await r.text()}`);
+		}
+	}
+	made.length = 0;
 });
 
 const wiresOf = (b: DraftBody): string[] => b.wires.map((w) => `${w.from.key}${w.from.row !== undefined ? `.${w.from.row}` : ''}>${w.to.key}${w.to.row !== undefined ? `.${w.to.row}` : ''}`).sort();
@@ -94,6 +106,50 @@ test.describe('as a Lab Member', () => {
 		await dragEntryTo(page, await paletteKind(page, 'test'), { x: where.x - 330, y: where.y });
 		body = await savedDraft(page, member, (b) => b.items.length === 2 && b.items.some((i) => i.kind === 'test'), 'the blank test');
 		expect(body.wires).toEqual([]);
+	});
+
+	test('add Operation after a Sample, choose Turning, type a cutting speed on the card: the side form shows it, and Create writes it (K1, K3, K4, K11)', async ({ page }) => {
+		await openNewDraft(page);
+		// A palette Sample, then a palette Operation: the operation is wired to the sample just added (K11) and lands blank, to choose its kind (K1).
+		await (await paletteKind(page, 'sample')).click();
+		const sample = card(page, 'New sample, Sample');
+		await expect(sample).toBeVisible();
+		await (await paletteKind(page, 'operation')).click();
+		const blank = canvasOf(page).locator('.vue-flow__node').filter({ has: page.locator('[data-kind-select]') });
+		await expect(blank).toHaveCount(1);
+		const wired = await savedDraft(page, member, (b) => b.items.length === 2 && b.wires.length === 1, 'a blank operation wired to the new sample');
+		expect(wired.items.find((i) => i.kind === 'operation')!.values.method_id, 'no kind yet').toBeFalsy();
+
+		// The kind is chosen on the card (K3); the card then asks for its key settings (K4).
+		await chooseKind(blank, /Turning/);
+		const operation = card(page, 'CNC Turning, Operation');
+		await expect(operation).toBeVisible();
+		const speed = 'machining_cutting_speed_m_per_min';
+		const onCard = operation.locator(`[data-field="${speed}"] input`);
+		await onCard.fill('120');
+		await savedDraft(page, member, (b) => operations(b).some((i) => Number(i.values[speed]) === 120), 'the cutting speed typed on the card');
+
+		// The side panel edits the same item: it shows what was typed on the card.
+		await selectCard(page, operation);
+		await expect(page.locator('.pm-item').first().locator(`[data-field="${speed}"] input`)).toHaveValue('120');
+
+		// What Create needs is the new input sample's material, geometry and method (the three parts of its code), in the side panel.
+		await selectCard(page, sample);
+		const rail = page.locator('.pm-item').first(); // the "key settings" section; "all fields" below it repeats them, collapsed
+		await rail.getByPlaceholder(/Search materials/).fill('Ti-6Al');
+		await rail.getByRole('option', { name: /Ti-6Al-4V Grade 5/ }).click();
+		await rail.getByLabel(/^Geometry/).selectOption({ label: 'Cylinder' });
+		await rail.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
+		await rail.getByRole('option', { name: /CNC Turning/ }).click();
+		await expect(createButton(page)).toHaveText('Create 1 operation, 1 sample');
+		await expect(createButton(page)).toBeEnabled();
+
+		const { status, body } = await pressCreate(page, noteMade);
+		expect(status, JSON.stringify(body)).toBe(200);
+		const operationRef = distinctRecords(body.data!.created).find((r) => r.collection === 'manufacturing_operations')!;
+		const row = await readRecord<Record<string, unknown>>(member, 'manufacturing_operations', operationRef.id, `${speed},work_state`);
+		expect(Number(row[speed]), 'the cutting speed typed on the card is on the record').toBe(120);
+		expect(row.work_state).toBe('planned');
 	});
 
 	// ---- R2: drops -------------------------------------------------------------------------------------------------------------------

@@ -5,7 +5,8 @@
 import type { Ref } from 'vue';
 import type { MapNode } from '../model/types';
 import type { useProcessMap } from '../useProcessMap';
-import { apply, type DraftAction } from './draft';
+import type { DraftKey } from '@d1/ui';
+import { apply, newKeys, type DraftAction } from './draft';
 import { insertAround, insertBeforeRefusal, insertOnWire, insertRefusal, type InsertVerdict } from './insertModel';
 import type { MenuChoice } from './menuModel';
 import type { InsertTarget, MenuTarget } from './menuTarget';
@@ -77,8 +78,8 @@ export function useEditInsert(o: {
 		return true;
 	}
 
-	/** A choice made in the insert search. */
-	async function choose(t: MenuTarget, choice: MenuChoice): Promise<boolean> {
+	/** A choice made in the insert search: the keys of the cards it added (the page shows the first), or false when it was refused or nothing was read. */
+	async function choose(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[] | false> {
 		const ins = t.insert;
 		const node = ins ? nodeById(ins.nodeId) : undefined;
 		if (!ins || !node) return false;
@@ -95,8 +96,9 @@ export function useEditInsert(o: {
 		if (!graph) return false;
 		const body = adds.reduce((b, a) => apply(b, a), edit.body.value);
 		const v = insertAround({ body, graph, node: fresh, where: ins.where, choice, at: t.flow });
-		if (!v.ok) return applyVerdict(v, ins.nodeId, false);
-		return applyVerdict({ ok: true, actions: [...adds, ...v.actions] }, ins.nodeId, false);
+		if (!v.ok) return applyVerdict(v, ins.nodeId, false) && [];
+		// What the insert added, not the history sample that joined with it.
+		return applyVerdict({ ok: true, actions: [...adds, ...v.actions] }, ins.nodeId, false) && newKeys(body, edit.body.value);
 	}
 
 	/** An entry dropped on the drawn wire `wireId`: put between its two ends, as one step; refused with the reason (a done wire's lock among them). */

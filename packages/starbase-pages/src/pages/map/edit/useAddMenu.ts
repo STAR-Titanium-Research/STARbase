@@ -29,7 +29,7 @@ export function useAddMenu(o: {
 	/** Who is building (the recents are theirs). */
 	person?: () => string | null | undefined;
 	/** A choice made in an "Insert before / after" search: the page decides what it does (insertModel.ts). */
-	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<boolean | void> | boolean | void;
+	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<DraftKey[] | boolean | void> | DraftKey[] | boolean | void;
 }) {
 	const target = shallowRef<MenuTarget | null>(null);
 	/** What this person added lately (entry ids, newest first). Read when the person is known (a moment after the page opens), and again on every open. */
@@ -57,7 +57,7 @@ export function useAddMenu(o: {
 
 	/**
 	 * Does a choice at a target: a socket (connected there), the empty canvas (a floating card at `flow`) or an insert. Gives the keys of the cards
-	 * it added (the page selects and shows the first): none when it did nothing, opened a picker, or was an insert.
+	 * it added (the page selects and shows the first): none when it did nothing or opened a picker.
 	 */
 	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
 		if (choice.kind === 'pickSamples') {
@@ -76,8 +76,9 @@ export function useAddMenu(o: {
 		const recent = recentIdOf(choice);
 		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
 		if (t.insert) {
-			if ((await o.insert?.(t, choice)) !== false) note();
-			return [];
+			const done = await o.insert?.(t, choice);
+			if (done !== false) note();
+			return Array.isArray(done) ? done : [];
 		}
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		// The samples it adds and the choice made on them are one undo step.

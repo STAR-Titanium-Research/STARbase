@@ -37,7 +37,7 @@ const COLLECTION: Record<DraftItem['kind'], string> = { sample: 'physical_sample
 export const collectionFor = (item: DraftItem): string => COLLECTION[item.kind];
 
 export interface FormDefsOptions {
-	/** Only these fields (the card's key settings), in the form's own order. */
+	/** Only these fields (the card's key settings), in this order when `compact` (a sample's name first); the form's own order otherwise. */
 	keyFields?: readonly string[];
 	compact?: boolean;
 }
@@ -45,7 +45,7 @@ export interface FormDefsOptions {
 /**
  * The definitions to draw for `item`: without what the server refuses in a draft (`isReserved`: wires, work state, a sample's
  * status, a test's subject, stamps) or the draft fills in itself, without the codes on a new record, without the date it was done
- * while it is planned, and for a compact form only `keyFields`. A field group whose fields are all left out draws nothing
+ * while it is planned, and for a compact form only `keyFields`, in the order they are given. A field group whose fields are all left out draws nothing
  * (FieldForm hides empty groups).
  */
 export function formDefsFor(defs: readonly unknown[], item: DraftItem, opts: FormDefsOptions = {}): FieldDef[] {
@@ -62,6 +62,11 @@ export function formDefsFor(defs: readonly unknown[], item: DraftItem, opts: For
 		if (planned && DONE_DATE_FIELDS.has(name)) continue;
 		if (keep && !keep.has(name)) continue;
 		out.push(def);
+	}
+	// A compact form is drawn as asked (the card: name, material, geometry, made by), not in the order the collection happens to list them.
+	if (opts.compact && opts.keyFields) {
+		const rank = (d: FieldDef) => opts.keyFields!.indexOf(d.field);
+		out.sort((a, b) => rank(a) - rank(b));
 	}
 	return out;
 }

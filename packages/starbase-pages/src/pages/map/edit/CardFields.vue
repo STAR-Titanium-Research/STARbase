@@ -42,9 +42,12 @@ function update(values: Record<string, unknown>): void {
 // The card grows when its fields first appear or its kind changes them: it is measured and room is made (the page does that on `grew`).
 watch(() => [ready.value, fields.value.join()], () => ready.value && void nextTick(() => emit('grew')), { immediate: true, flush: 'post' });
 
-/** Escape leaves the field and keeps the card selected (K5); it does not reach anything that clears the selection. */
+/** Escape leaves the field and keeps the card selected (K5); the keyboard goes to the card, not to the page, and the key reaches nothing that clears the selection. */
 function leave(e: KeyboardEvent): void {
-	(e.target as HTMLElement | null)?.blur?.();
+	const field = e.target as HTMLElement | null;
+	const card = field?.closest<HTMLElement>('.vue-flow__node');
+	if (card) card.focus({ preventScroll: true });
+	else field?.blur?.();
 }
 /** "All fields in the side panel": the card is selected and the panel's form takes the focus. */
 async function openPanel(): Promise<void> {
@@ -68,7 +71,8 @@ async function openPanel(): Promise<void> {
 </template>
 
 <style scoped>
-.card-fields { display: flex; flex-direction: column; gap: 6px; margin: 6px 10px 10px; padding: 8px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); cursor: default; font-size: var(--fs-sm, 12px); text-align: left; }
+/* No box of its own: each input is a box already, and a tile round them looked like a box in a box. */
+.card-fields { display: flex; flex-direction: column; gap: 6px; margin: 6px 10px 10px; padding: 2px 0; cursor: default; font-size: var(--fs-sm, 12px); text-align: left; }
 .card-fields :deep(.d1-field-form) { gap: 6px; min-width: 0; flex: 1; }
 .card-fields :deep(.row) { gap: 2px; }
 .card-fields :deep(.lab) { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); }
@@ -76,6 +80,8 @@ async function openPanel(): Promise<void> {
 /* The message under a field is for screen readers (the label's asterisk and the header's count say it on screen). */
 .card-fields :deep(.miss) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .card-fields :deep(.row) { position: relative; }
+/* A field's help note is for the side panel, which has room; on the card it only adds height (its text stays in the label's description). */
+.card-fields :deep(.note) { display: none; }
 
 /* Missing, in amber: the field's border and tint, and the asterisk (never colour alone). */
 .card-fields :deep(.row.flag .ctl), .card-fields :deep(.row.flag .sel), .card-fields :deep(.row.flag .q) { border-color: var(--theme--warning); background: color-mix(in srgb, var(--theme--warning) 12%, var(--d1-surface)); }
@@ -85,8 +91,7 @@ async function openPanel(): Promise<void> {
 .card-fields :deep(.row.flag .req), .card-fields :deep(.row.missing .req) { color: color-mix(in srgb, var(--theme--warning) 72%, var(--theme--foreground)); }
 
 /* A relation (the machine, a tool, an insert edge, a recipe) is a slot row with its icon, as in the Inside tray. */
-.slotrow { display: flex; align-items: flex-start; gap: 8px; padding: 5px 8px; border-radius: 8px; background: var(--d1-surface); border: 1px solid var(--d1-line); }
-.slotrow:focus-within { border-color: var(--k); }
+.slotrow { display: flex; align-items: flex-start; gap: 8px; }
 .si { width: 22px; height: 22px; margin-top: 14px; border-radius: 6px; display: grid; place-items: center; flex: none; }
 
 .all { align-self: flex-start; padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-accent, var(--theme--primary)); cursor: pointer; text-decoration: underline; }

@@ -152,7 +152,9 @@ const when = (iso: string): string => {
 }
 .grp { display: inline-flex; align-items: center; gap: 6px; }
 .tools { gap: 2px 6px; flex-wrap: wrap; }
-.draft { flex-wrap: wrap; padding-left: 10px; border-left: 1px solid var(--d1-line, var(--theme--border-color-subdued)); }
+/* The draft group is one line: its name shrinks (and the project and campaign choices with it) before anything inside it wraps, so "Draft ▾" never drops under the name and Create keeps
+   its place at the right. When even the shrunk group does not fit beside the tools, the whole group goes to the next line of the lid. */
+.draft { flex: 1 1 320px; flex-wrap: nowrap; min-width: min-content; padding-left: 10px; border-left: 1px solid var(--d1-line, var(--theme--border-color-subdued)); }
 /* Create keeps its place at the right edge: its label is `Create` while anything is missing, so the button does not move as the draft fills in. */
 .make { margin-left: auto; padding-left: 10px; border-left: 1px solid var(--d1-line, var(--theme--border-color-subdued)); }
 .ib {
@@ -165,7 +167,7 @@ kbd {
 	margin-left: 8px; padding: 0 5px; border: 1px solid var(--d1-line); border-radius: 4px; background: var(--d1-surface);
 	font: inherit; font-size: var(--fs-xs, 11px); color: var(--d1-dim); line-height: 1.5;
 }
-.nm { display: inline-flex; min-width: 140px; max-width: 280px; flex: 0 1 240px; }
+.nm { display: inline-flex; min-width: 80px; max-width: 280px; flex: 0 1 240px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .name {
 	width: 100%; min-width: 0; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent;
@@ -173,7 +175,7 @@ kbd {
 }
 .name:hover { border-color: var(--d1-line); }
 .name:focus { outline: none; border-color: var(--d1-accent, var(--theme--primary)); background: var(--d1-surface); }
-.open { position: relative; }
+.open { position: relative; flex: none; }
 .ob {
 	display: inline-flex; align-items: center; gap: 2px; padding: 4px 6px 4px 10px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: inherit; font: inherit; cursor: pointer;

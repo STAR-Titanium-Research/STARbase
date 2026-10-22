@@ -62,7 +62,7 @@ const BY_THE_DRAFT = new Set([
 
 const empty = (v: unknown) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
-const block = (key: DraftKey, text: string, field?: string): Check => ({ key, ...(field ? { field } : {}), level: 'block', text });
+const block = (key: DraftKey, text: string, field?: string, code?: string): Check => ({ key, ...(field ? { field } : {}), level: 'block', text, ...(code ? { code } : {}) });
 const warn = (key: DraftKey, text: string, field?: string): Check => ({ key, ...(field ? { field } : {}), level: 'warn', text });
 
 function loadedOf(item: DraftItem, ctx: CheckCtx): LoadedRecord | null | undefined {
@@ -185,12 +185,13 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 		}
 	});
 	// An attached operation is given an input at Create; it cannot be the sample it made (the genealogy trigger skips that row, so the record would
-	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see.
+	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see. It carries d1-build's code for it
+	// (SERVER_ONLY_CODES), so the card says "refused" in red: nothing on the card can be filled in to clear it, only the wire taken off.
 	if (item.attach && item.existing) {
 		const made = loadedOf(item, ctx)?.values.output_sample_id;
 		const into = itemOf(body, inputSampleOf(body, { key: item.key, row: 0 }) ?? '');
 		if (typeof made === 'string' && into?.kind === 'sample' && into.existing && into.existing.id.toLowerCase() === made.toLowerCase()) {
-			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.'));
+			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.', undefined, 'NOT_ATTACHABLE'));
 		}
 	}
 	const planned = item.workState === 'planned';

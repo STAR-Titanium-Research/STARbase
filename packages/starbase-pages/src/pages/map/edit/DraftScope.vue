@@ -41,11 +41,12 @@ const pick = (e: Event): string | null => (e.target as HTMLSelectElement).value 
 </template>
 
 <style scoped>
-.pm-scope { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-label { display: inline-flex; align-items: center; gap: 5px; }
+/* One line, as the lid's draft group is: the two choices shrink (to their ellipsis) before the scope wraps. */
+.pm-scope { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 4px 10px; min-width: 0; flex: 0 1 auto; }
+label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .t { color: var(--d1-dim); font-size: var(--fs-xs, 11px); font-weight: 650; }
 .sel {
-	max-width: 190px; padding: 3px 6px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface);
+	max-width: 190px; min-width: 56px; padding: 3px 6px; text-overflow: ellipsis; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface);
 	color: inherit; font: inherit; font-size: var(--fs-sm, 12px);
 }
 .sel:hover, .sel:focus-visible { border-color: var(--d1-accent, var(--theme--primary)); outline: none; }

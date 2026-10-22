@@ -12,6 +12,7 @@ import type { MapNode, ProcessData } from '../model/types';
 import type { MergeHint } from '../useMapExpand';
 import type { MapOverlay, MapRoute, MapRouter } from '../useProcessMap';
 import { blocking } from './checks';
+import { toFillIn } from './cardFields';
 import type { DraftAction, WorkState } from './draft';
 import { draftKeyOfNode, isDraftNode } from './socketRefs';
 import { defaultName, isoDay, summaryText } from './summary';
@@ -383,6 +384,8 @@ export function useEditMode(o: EditModeOptions) {
 	// ---- what the lid says --------------------------------------------------------------------------------------
 	const summary = computed(() => summaryText(draft.body.value));
 	const blockers = computed(() => blocking(checks.value));
+	/** How much is still to fill in (the cards' amber badges added up): shown beside Create, whether or not Create is waiting on it. */
+	const toFill = computed(() => toFillIn(checks.value, draft.body.value).length);
 
 	const api = {
 		catalog,
@@ -390,7 +393,7 @@ export function useEditMode(o: EditModeOptions) {
 		overlay,
 		// state
 		available, drafted, editing, pending, canBuild, failed, isPhone: o.isPhone, param,
-		body, checks, missing, blockers, summary,
+		body, checks, missing, blockers, toFill, summary,
 		selectedKey, selectedItem,
 		drafts: draft.drafts as Ref<DraftListEntry[]>,
 		// the lid

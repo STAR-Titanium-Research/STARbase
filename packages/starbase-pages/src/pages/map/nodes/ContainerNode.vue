@@ -32,12 +32,12 @@ const selected = useSelected(() => props.id);
 const FOLD_ABOVE = 3;
 
 const style = computed(() => KINDS[props.data.kind]);
-/** The title bar: the process, then the method ("Machining · Turning"); a test, "Test · Tensile". */
+/** The title bar: the process, then the method ("Machining · Turning"); a test, "Test · Tensile". While the kind dropdown shows it says the method already: the bar is the process only. */
 const kindLine = computed(() => {
 	const d = props.data;
 	const process = d.kind === 'test' ? 'Test' : processLabel(d.category === 'test' ? null : d.category);
 	const method = d.method ?? (d.kind === 'test' ? '' : d.title);
-	return method && method.toLowerCase() !== process.toLowerCase() ? `${process} · ${method}` : process;
+	return method && !kindPick.value && method.toLowerCase() !== process.toLowerCase() ? `${process} · ${method}` : process;
 });
 /**
  * The step's own name in the card: its code (the full operation name) for a single row; a batch or a stack says
@@ -78,6 +78,8 @@ const freeProps = (recordId: string | null, side: EndSide, add?: true) => (edit 
 /** A new operation or test says what kind it is with a dropdown under its header (K3); a recorded one, or a card nobody can edit, has none. */
 const kindPick = computed(() => (editable.value ? (edit?.kind?.(props.data) ?? null) : null));
 const what = computed(() => props.data.code || props.data.title);
+/** The step's name line says nothing new when it only repeats the method the dropdown above it shows. */
+const nameRepeatsKind = computed(() => !!kindPick.value && name.value.toLowerCase() === (props.data.method ?? props.data.title).toLowerCase());
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** A new operation or test whose kind is chosen types its machine, date and key settings on the card (K4); with them the Inside tray and the settings list would only say them again. */
 const cardItem = computed(() => (editable.value ? (edit?.fieldsOf?.(props.data) ?? null) : null));
@@ -181,7 +183,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		<KindPicker v-if="kindPick" :kind="kindPick.kind" :value="kindPick.value" :methods="kindPick.methods" :test-types="kindPick.testTypes" @choose="kindPick.choose" />
 		<div class="oname">
 			<div class="nl">
-				<span class="n" :class="{ code: name === data.code }">{{ name }}</span>
+				<span v-if="!nameRepeatsKind" class="n" :class="{ code: name === data.code }">{{ name }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 			</div>
 			<span v-if="data.when || (data.collapsed && data.meta)" class="d">{{ data.when ?? data.meta }}</span>

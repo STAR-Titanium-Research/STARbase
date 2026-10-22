@@ -4,13 +4,16 @@ import { missingLabel } from './createText';
 
 // The Create button of the map panel lid (spec E4, §7.1, K12) and its error line. The primary button says what it will make
 // ("Create 2 operations, 4 samples": `summary` is summaryText(body)); while blocking checks exist it is disabled and just says
-// "Create", with "N to fill in" (amber) beside it, so the button stays put and the same size as the draft fills in; while
+// "Create". "N to fill in" (amber) stands beside it whenever anything is still to fill in, the same count the card badges add up, also
+// next to an enabled Create (a machine or a date is not needed to create, only to run it); the button stays put as the draft fills in; while
 // creating it shows a spinner and cannot be pressed twice. A failed Create leaves the draft untouched and puts the reason in `error`.
 const props = defineProps<{
 	/** What Create will make, in words (summary.ts `summaryText`). */
 	summary: string;
-	/** Blocking checks. */
+	/** Blocking checks: Create waits on them. */
 	missing: number;
+	/** Everything still to fill in (the cards' badges added up): said beside Create, whether it waits or not. */
+	toFill: number;
 	creating: boolean;
 	error?: string | null;
 	/** Nothing in the draft to create: disabled, still saying `summary`. */
@@ -21,8 +24,8 @@ const emit = defineEmits<{ create: [] }>();
 const errorId = useId();
 const blocked = computed(() => props.missing > 0);
 const label = computed(() => (props.creating ? 'Creating…' : blocked.value ? 'Create' : props.summary));
-/** "N to fill in", beside the button while it waits on checks (not while creating: the spinner is the state). */
-const fill = computed(() => (blocked.value && !props.creating ? missingLabel(props.missing) : ''));
+/** "N to fill in", beside the button (not while creating: the spinner is the state). */
+const fill = computed(() => (props.toFill > 0 && !props.creating ? missingLabel(props.toFill) : ''));
 const disabled = computed(() => props.creating || blocked.value || !!props.empty);
 function press(): void {
 	if (!disabled.value) emit('create');

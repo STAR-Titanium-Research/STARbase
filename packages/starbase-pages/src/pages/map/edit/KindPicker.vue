@@ -15,8 +15,8 @@ interface Group {
 	options: { value: string; text: string }[];
 }
 
-/** The test types' groups, in this order; any other prefix follows, and a type with no prefix is Other. */
-const TEST_GROUPS = ['Non-destructive', 'Destructive', 'Dynamic', 'Other'];
+/** The test types' groups, in this order; any other prefix follows, and a type with no prefix is Other. (The live choices are "NDE — ...": they come first, as the non-destructive ones do.) */
+const TEST_GROUPS = ['NDE', 'Non-destructive', 'Destructive', 'Dynamic', 'Other'];
 
 const groups = computed<Group[]>(() => {
 	if (props.kind === 'operation') {

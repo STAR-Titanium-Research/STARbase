@@ -2,7 +2,7 @@
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "3 to fill in" beside the disabled Create button (K12: the card badges say `3 missing`; the Checks section lists them). */
+/** "3 to fill in" beside Create, whether it waits or not (K12: the card badges say `3 missing`; the Checks section lists them). */
 export const missingLabel = (n: number): string => `${n} to fill in`;
 
 /** "Created 5 records" in the toast. */
