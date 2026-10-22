@@ -557,7 +557,7 @@ describe('unlink and replace', () => {
 
 describe('a file that is already uploaded', () => {
 	it('offers that log instead of uploading, and links it when accepted', async () => {
-		vi.mocked(uploadConformLog).mockResolvedValue({ existing: { ...LOG, source_filename: 'old.csv' } });
+		vi.mocked(uploadConformLog).mockResolvedValue({ existing: { ...LOG, source_filename: 'old.csv' }, existingWindows: [] });
 		vi.mocked(linkExistingLog).mockResolvedValue(run({ status: 'no_window' }));
 		await mount({ run: null, log: null, logHidden: false });
 		const input = el.querySelector<HTMLInputElement>('input[type=file]')!;
@@ -594,10 +594,10 @@ describe('a file that is already uploaded: what is on that log', () => {
 		expect(document.activeElement).toBe(button('Cancel'));
 	});
 
-	it('works the windows out from the log row when the result does not carry them, and shows no note for a log with room', async () => {
-		await upload({ existing: { ...LOG, source_filename: 'old.csv', run_windows: [{ operation_id: 'o1', start: '2025-03-17T13:10:00Z', end: '2025-03-17T13:20:00Z' }] } });
+	it('shows no list and no note for a log with no windows on it', async () => {
+		await upload({ existing: { ...LOG, source_filename: 'old.csv' }, existingWindows: [] });
 		const group = el.querySelector('[role=group]')!;
-		expect(group.querySelectorAll('li')).toHaveLength(1);
+		expect(group.querySelector('ul')).toBeNull();
 		expect(group.querySelector('.d1-note')).toBeNull();
 	});
 });
@@ -693,5 +693,20 @@ describe('a log file this reader may not read', () => {
 		await settle();
 		expect(text()).toContain('Could not load the Conform log');
 		expect(text()).not.toContain('not visible');
+	});
+});
+
+describe('a failed request is worded plainly', () => {
+	it('shows a hook\'s own reason, and a plain sentence for Directus\'s developer text', async () => {
+		const refused = (extensions: unknown) => Object.assign(new Error('x'), { response: { status: 403, data: { errors: [{ message: "You don't have permission to access this.", extensions }] } } });
+		vi.mocked(recomputeRun).mockRejectedValueOnce(refused({ source: 'd1-conform-guard', reason: 'A Conform run can only be changed by its owner.' }));
+		await mount(data({ run: run({ summary: { ...summary(), constants_version: 0 } }) }));
+		button('Recompute')!.click();
+		await settle();
+		expect(el.querySelector('[role=alert]')?.textContent).toBe('A Conform run can only be changed by its owner.');
+		vi.mocked(recomputeRun).mockRejectedValueOnce(refused(undefined));
+		button('Recompute')!.click();
+		await settle();
+		expect(el.querySelector('[role=alert]')?.textContent).toBe("You can't change this Conform run.");
 	});
 });

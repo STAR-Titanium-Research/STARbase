@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import {
-	CONFORM_STATUS, ConformLogError, ConformLogHiddenError, LOG_LOAD_FAILED, LOG_NOT_VISIBLE, labelWindows, loadLogTrace, recomputeRun,
+	CONFORM_STATUS, ConformLogError, ConformLogHiddenError, LOG_LOAD_FAILED, LOG_NOT_VISIBLE, labelWindows, loadLogTrace, plainReason, recomputeRun,
 	resolveWindowEntry, setRunWindow, stepsToCsv, ukInputValue, unlinkLog, windowLine as windowItem, type LogWindow,
 	type ConformRunBundle,
 } from '@d1/fast-plotting';
-import { DataTable, FactList, LoadState, Section, StatusBadge, analysisLink, errorText, useExplorerHost, type SectionState } from '@d1/ui';
+import { DataTable, FactList, LoadState, Section, StatusBadge, analysisLink, useExplorerHost, type SectionState } from '@d1/ui';
 import { conformApi } from '../conformApi';
 import ConformTrace from '../map/ConformTrace.vue';
 import ConformTraceKey from '../map/ConformTraceKey.vue';
@@ -67,7 +67,7 @@ const busy = ref<'window' | 'recompute' | 'unlink' | null>(null);
 const error = ref('');
 const warning = ref('');
 const copied = ref(false);
-const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : errorText(e));
+const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : plainReason(e, 'Could not save the change. Try again.'));
 
 async function act(kind: 'window' | 'recompute' | 'unlink', fn: () => Promise<unknown>, note = ''): Promise<boolean> {
 	if (busy.value) return false;

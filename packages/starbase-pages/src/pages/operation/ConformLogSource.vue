@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
 import {
-	ConformLogError, candidateLabel, candidatesEmptyText, labelWindows, linkExistingLog, listCandidateLogs, uploadConformLog, windowLine, wholeLogNote,
+	ConformLogError, candidateLabel, candidatesEmptyText, linkExistingLog, plainReason, listCandidateLogs, uploadConformLog, windowLine, wholeLogNote,
 	type CandidateLog, type LogWindow,
 } from '@d1/fast-plotting';
-import { errorText, useExplorerHost } from '@d1/ui';
+import { useExplorerHost } from '@d1/ui';
 import { conformApi } from '../conformApi';
 
 // Where a Conform run's log comes from, for a run that has none: upload the machine's CSV (read as bytes and processed here in the
@@ -35,7 +35,7 @@ const duplicate = ref<{ id: string; label: string; windows: LogWindow[]; note: s
 const cancelBtn = ref<HTMLButtonElement | null>(null);
 const uploadInput = ref<HTMLInputElement | null>(null);
 
-const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : errorText(e));
+const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : plainReason(e, 'Could not do that. Try again.'));
 const current = computed(() => candidates.value?.find((l) => l.log_id === chosen.value) ?? null);
 
 async function onFile(ev: Event): Promise<void> {
@@ -52,9 +52,8 @@ async function onFile(ev: Event): Promise<void> {
 			{ name: file.name, bytes: await file.arrayBuffer() },
 		);
 		if ('existing' in out) {
-			// The windows of the log already uploaded: carried by the result (`existingWindows`), else labelled here from the log row.
-			const carried = (out as { existingWindows?: LogWindow[] }).existingWindows;
-			const windows = carried ?? (await labelWindows(api(), out.existing.run_windows));
+			// The result carries the windows already on that log, labelled.
+			const windows = out.existingWindows;
 			duplicate.value = { id: out.existing.log_id, label: candidateLabel(out.existing), windows, note: wholeLogNote(out.existing, windows) };
 		} else emit('changed', out.dateWarning ?? '');
 	} catch (e) {
