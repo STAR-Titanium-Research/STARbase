@@ -113,14 +113,17 @@ const when = (iso: string): string => {
 			<slot name="scope" />
 			<span class="open" @focusout="(e) => !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null) && closeMenu()">
 				<button ref="openBtn" type="button" class="ob" :class="{ bad: !!saveError }" :title="saveError || undefined" :aria-expanded="menu" aria-haspopup="menu" @click="toggleMenu">Draft<v-icon name="arrow_drop_down" small /></button>
-				<div v-if="menu" ref="menuEl" class="pop" role="menu" @keydown="onMenuKey">
+				<!-- The popup holds the save status and a heading as well as the menu; only the drafts are menu items. -->
+				<div v-if="menu" ref="menuEl" class="pop" @keydown="onMenuKey">
 					<p class="save" :class="{ bad: !!saveError }" role="status">{{ saveText }}</p>
-					<p class="mh">My drafts</p>
+					<p class="mh" aria-hidden="true">My drafts</p>
 					<p v-if="!drafts.length" class="none">No drafts yet.</p>
-					<button v-for="d in drafts" :key="d.id" type="button" role="menuitem" class="di" :class="{ cur: d.id === currentId }" :aria-current="d.id === currentId || undefined" @click="openOne(d.id)">
-						<span class="dn">{{ d.name }}</span>
-						<span class="ds">{{ [d.summary, when(d.updated_at)].filter(Boolean).join(' · ') }}</span>
-					</button>
+					<div role="menu" aria-label="My drafts">
+						<button v-for="d in drafts" :key="d.id" type="button" role="menuitem" class="di" :class="{ cur: d.id === currentId }" :aria-current="d.id === currentId || undefined" @click="openOne(d.id)">
+							<span class="dn">{{ d.name }}</span>
+							<span class="ds">{{ [d.summary, when(d.updated_at)].filter(Boolean).join(' · ') }}</span>
+						</button>
+					</div>
 				</div>
 			</span>
 			<!-- A failed save is said where it is seen even while the menu is shut. -->

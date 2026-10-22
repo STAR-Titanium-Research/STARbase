@@ -37,7 +37,7 @@ describe('Palette', () => {
 		const html = await render({ entries: kindEntries() });
 		const tag = (id: string) => html.match(new RegExp(`<button[^>]*data-entry="${id}"[^>]*>.*?</button>`))?.[0] ?? '';
 		expect(html.match(/class="[^"]*\bpe\b/g)).toHaveLength(4);
-		expect(text(html)).toContain('Add');
+		expect([...html.matchAll(/class="sec"[^>]*>([^<]*)/g)].map((m) => m[1]), 'the section headers').toEqual(['Add', 'From the database']);
 		for (const [id, icon, color] of [['kind:sample', 'science', '--k-sample'], ['kind:operation', 'settings', '--k-op'], ['kind:test', 'fact_check', '--k-test']]) {
 			expect(tag(id), id).toMatch(new RegExp(`<i class="v-icon ki"[^>]*>${icon}</i>`));
 			expect(tag(id), id).toContain(`--k:var(${color})`);

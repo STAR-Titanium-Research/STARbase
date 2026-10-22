@@ -196,12 +196,14 @@ describe('the add search remembers what was added, and does a choice wherever it
 	});
 	afterEach(() => void vi.unstubAllGlobals());
 
-	it('a method, a test type and a new sample go to the front of the recents, for this person only', async () => {
+	it('a method and a test type go to the front of the recents, for this person only; a new sample is not one', async () => {
 		const { menu } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'test', testType: 'tensile' });
+		menu.open({ sock: null, at: { x: 300, y: 200 } });
+		await menu.choose({ kind: 'newSample' });
 		expect(menu.recents.value).toEqual(['test:tensile', 'op:m-turn']);
 		expect(JSON.parse(store.get('d1.map.add.recent.v1.u-test')!)).toEqual(['test:tensile', 'op:m-turn']);
 		// Opening again reads them: a second visit starts with them.

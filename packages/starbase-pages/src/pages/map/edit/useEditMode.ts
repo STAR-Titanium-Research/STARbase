@@ -283,7 +283,7 @@ export function useEditMode(o: EditModeOptions) {
 		if (!changes.length) return;
 		const before = draft.body.value;
 		apply(changes.map((c) => ({ type: 'setValues' as const, key: c.key, values: c.patch })));
-		const n = changes[0].dropped.length;
+		const n = new Set(changes.flatMap((c) => c.dropped)).size;
 		if (draft.body.value === before || !n) return;
 		const label = 'testType' in next ? splitTestType(catalog.testTypes.value.find((t) => t.value === next.testType)?.name ?? next.testType).name : (catalog.methodById.value.get(next.methodId)?.name ?? 'the new kind');
 		draft.notice.value = `Kind changed to ${label}: ${n} value${n === 1 ? '' : 's'} dropped · Undo`;

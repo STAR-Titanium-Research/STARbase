@@ -273,12 +273,6 @@ export const warnings = (list: Check[]): Check[] => list.filter((c) => c.level =
 /** The checks of one card, for its badge. */
 export const checksFor = (list: Check[], key: DraftKey): Check[] => list.filter((c) => c.key === key);
 
-/** "3 things missing" on the Create button; '' when nothing blocks. */
-export function missingText(list: Check[]): string {
-	const n = blocking(list).length;
-	return n ? `${n} ${n === 1 ? 'thing' : 'things'} missing` : '';
-}
-
 /** Two lists of checks as one, without the same message twice (the client's and the server's last answer). */
 export function mergeChecks(...lists: Check[][]): Check[] {
 	const seen = new Set<string>();

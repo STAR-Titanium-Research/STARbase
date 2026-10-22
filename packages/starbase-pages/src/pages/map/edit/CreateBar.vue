@@ -32,7 +32,7 @@ function press(): void {
 <template>
 	<div class="d1-kit pm-create" :class="{ blocked }">
 		<div class="row">
-			<span v-if="fill" class="fill" role="status">{{ fill }}</span>
+			<span class="fill" role="status">{{ fill }}</span>
 			<button
 				type="button"
 				class="go"
@@ -52,9 +52,10 @@ function press(): void {
 
 <style scoped>
 .pm-create { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; max-width: 100%; }
-.row { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%; }
-/* Amber, the same as the badges on the cards: still to fill in, not wrong. */
-.fill { flex: none; font-size: var(--fs-sm, 12px); font-weight: 650; white-space: nowrap; color: color-mix(in srgb, var(--theme--warning) 72%, var(--theme--foreground)); }
+.row { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+/* Amber, the same as the badges on the cards: still to fill in, not wrong. The status stays mounted (a screen reader announces its text changing); empty, it takes no room. */
+.fill { flex: none; margin-right: 10px; font-size: var(--fs-sm, 12px); font-weight: 650; white-space: nowrap; color: color-mix(in srgb, var(--theme--warning) 72%, var(--theme--foreground)); }
+.fill:empty { margin-right: 0; }
 .go {
 	display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 14px; border: 1px solid var(--d1-accent, var(--theme--primary)); border-radius: 8px;
 	background: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); font: inherit; font-size: var(--fs-md, 13px); font-weight: 650; cursor: pointer;

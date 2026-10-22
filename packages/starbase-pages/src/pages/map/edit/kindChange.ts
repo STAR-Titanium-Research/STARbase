@@ -35,3 +35,9 @@ export function splitTestType(text: string): { group: string; name: string } {
 	const at = text.indexOf(' — ');
 	return at > 0 ? { group: text.slice(0, at), name: text.slice(at + 3) } : { group: 'Other', name: text };
 }
+
+/** The method id of an operation, or the test type of a test, once chosen; null while it is not. */
+export function chosenKind(item: DraftOperation | DraftTest): string | null {
+	const chosen = item.values[item.kind === 'test' ? 'test_type' : 'method_id'];
+	return typeof chosen === 'string' && chosen !== '' ? chosen : null;
+}

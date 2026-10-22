@@ -15,7 +15,7 @@ const settingsOf = (category: string) => keySettingsFor('operation', category);
 
 describe('cardFieldsFor: what a new card asks for', () => {
 	it('a planned Turning operation: the machine, the planned date, then its key settings, never the kind', () => {
-		const fields = cardFieldsFor(op({ method_id: 'm-turn', process_category: 'machining' }), body, {});
+		const fields = cardFieldsFor(op({ method_id: 'm-turn', process_category: 'machining' }), {});
 		expect(fields.slice(0, 2)).toEqual(['equipment_id', 'planned_date']);
 		expect(fields.slice(2)).toEqual(settingsOf('machining').slice(0, MAX_SETTINGS));
 		expect(fields.length - 2).toBeGreaterThan(0);
@@ -25,7 +25,7 @@ describe('cardFieldsFor: what a new card asks for', () => {
 
 	it('never more than four key settings, and none twice, for every process category', () => {
 		for (const category of Object.keys(KEY_SETTING_FIELDS).filter((c) => c !== 'test')) {
-			const fields = cardFieldsFor(op({ process_category: category }), body, {});
+			const fields = cardFieldsFor(op({ process_category: category }), {});
 			const own = new Set(settingsOf(category));
 			expect(fields.filter((f) => own.has(f)).length).toBeLessThanOrEqual(MAX_SETTINGS);
 			expect(new Set(fields).size).toBe(fields.length);
@@ -33,13 +33,13 @@ describe('cardFieldsFor: what a new card asks for', () => {
 	});
 
 	it('a FAST (sintering) operation shows its own key settings and no more than four', () => {
-		const fields = cardFieldsFor(op({ process_category: 'sintering' }), body, {});
+		const fields = cardFieldsFor(op({ process_category: 'sintering' }), {});
 		expect(fields.slice(2)).toEqual(['sintering_max_temp_celsius', 'sintering_max_force_kn', 'sintering_mould_diameter_mm']);
 	});
 
 	it('a settings field the forms also require is asked once', () => {
 		const done = op({ process_category: 'machining' }, { workState: 'done' });
-		const fields = cardFieldsFor(done, body, { requiredForDone: ['operation_date', 'machining_feed_mm_per_rev', 'outcome_notes'] });
+		const fields = cardFieldsFor(done, { requiredForDone: ['operation_date', 'machining_feed_mm_per_rev', 'outcome_notes'] });
 		expect(fields.slice(0, 4)).toEqual(['equipment_id', 'operation_date', 'machining_feed_mm_per_rev', 'outcome_notes']);
 		expect(fields.filter((f) => f === 'machining_feed_mm_per_rev')).toHaveLength(1);
 		expect(fields).not.toContain('planned_date');
@@ -48,17 +48,17 @@ describe('cardFieldsFor: what a new card asks for', () => {
 	it('what the forms require of a done card is never capped away, even a key setting past the fourth', () => {
 		const done = op({ process_category: 'machining' }, { workState: 'done' });
 		const required = ['operation_date', ...settingsOf('machining')];
-		const fields = cardFieldsFor(done, body, { requiredForDone: required });
+		const fields = cardFieldsFor(done, { requiredForDone: required });
 		for (const f of required) expect(fields).toContain(f);
 	});
 
 	it('a test draws the machine, the date and its type\'s own fields, without the type', () => {
-		expect(cardFieldsFor(test(), body, {})).toEqual(['equipment_id', 'planned_date']);
-		expect(cardFieldsFor(test({ test_type: 'tensile' }), body, {})).toEqual(['tensile_uts_mpa', 'equipment_id', 'planned_date']);
+		expect(cardFieldsFor(test(), {})).toEqual(['equipment_id', 'planned_date']);
+		expect(cardFieldsFor(test({ test_type: 'tensile' }), {})).toEqual(['tensile_uts_mpa', 'equipment_id', 'planned_date']);
 	});
 
 	it('a new sample: its name (the nickname the card shows), material, geometry and the method of its code', () => {
-		expect(cardFieldsFor({ key: 'n1', kind: 'sample', values: {} } as DraftItem, body, {})).toEqual(['nickname', 'material_id', 'form', 'primary_method_id']);
+		expect(cardFieldsFor({ key: 'n1', kind: 'sample', values: {} } as DraftItem, {})).toEqual(['nickname', 'material_id', 'form', 'primary_method_id']);
 	});
 });
 
@@ -160,6 +160,6 @@ describe('cardFieldNames', () => {
 	it('is empty until the field definitions of the form are read, then the fields of the card', () => {
 		const item = op({ process_category: 'machining' });
 		expect(cardFieldNames(item, body, { form: [] })).toEqual([]);
-		expect(cardFieldNames(item, body, { form: [{ field: 'x' }] })).toEqual(cardFieldsFor(item, body, {}));
+		expect(cardFieldNames(item, body, { form: [{ field: 'x' }] })).toEqual(cardFieldsFor(item, {}));
 	});
 });

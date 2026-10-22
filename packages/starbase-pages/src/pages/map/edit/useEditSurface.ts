@@ -122,21 +122,25 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 		if (entry.choice.kind === 'pickSamples') return void (pickerOpen.value = true);
 		const now = Date.now();
 		if (isRepeatAdd(lastAdd, entry.id, now)) return;
-		lastAdd = { id: entry.id, at: now };
 		const anchor = o.map.selectedId.value ?? undefined;
 		const r = canvasEl.value?.getBoundingClientRect();
 		const at = r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
-		void addAt({ sock: null, at, ...(anchor ? { anchor } : { flow: o.canvas.toFlow(at.x, at.y) }) }, entry.choice);
+		// Only an add that added something is "the click": a refused one must not swallow a retry.
+		void addAt({ sock: null, at, ...(anchor ? { anchor } : { flow: o.canvas.toFlow(at.x, at.y) }) }, entry.choice).then((keys) => {
+			if (keys.length) lastAdd = { id: entry.id, at: now };
+		});
 	}
 
 	/**
-	 * Adds a choice at a target, then shows what it added. With nothing to connect to, an operation or a test takes the sample just added as its
-	 * input (the same step as dropping it on that sample's output), so a click is enough to build a chain.
+	 * Adds a choice at a target, then shows what it added (and gives its keys). With nothing to connect to, an operation or a test takes the sample
+	 * just added as its input (the same step as dropping it on that sample's output), so a click is enough to build a chain.
 	 */
-	async function addAt(t: MenuTarget, choice: MenuChoice): Promise<void> {
+	async function addAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
 		const from = !t.sock && !t.insert ? autoWireSource(edit.body.value, edit.selectedKey.value, choice) : null;
 		const target: MenuTarget = from ? { at: t.at, sock: { kind: 'sample', id: draftId(from), side: 'out' }, anchor: `s:${draftId(from)}` } : t;
-		showNew(await menu.applyAt(target, choice));
+		const keys = await menu.applyAt(target, choice);
+		showNew(keys);
+		return keys;
 	}
 	/** The search's choice: the same as a click on the palette. */
 	async function chooseFromSearch(choice: MenuChoice): Promise<void> {

@@ -29,7 +29,7 @@ export function usePalette(o: {
 	 */
 	const entries = computed(() => {
 		if (query.value.trim()) return searchEntries(all.value, query.value, o.recents.value);
-		// Templates come first, then the recents ("New sample" as a recent is the Sample row above it).
+		// Templates come first, then the recents (a "New sample" remembered by an earlier version is the Sample row above).
 		const own = searchEntries(all.value, '', o.recents.value).filter((e) => !!e.template || (e.section === RECENT && e.choice.kind !== 'newSample'));
 		return [...kindEntries(), ...own];
 	});

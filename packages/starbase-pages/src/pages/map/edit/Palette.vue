@@ -6,9 +6,10 @@ import type { MenuEntry } from './menuModel';
 import TemplateManage from './TemplateManage.vue';
 import type { TemplateScope } from './templates';
 
-// The palette (redesign R1, process-map creator K1): the left dock of edit mode. It lists the kinds (Sample, Operation, Test, in the map's own icon and
-// colour, and From database…); a search box finds anything in the one catalog (samples, operations by process category, tests). Every entry a drag
-// source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between its ends). A mouse drags or clicks; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
+// The palette (redesign R1, process-map creator K1): the left dock of edit mode. It lists the kinds (Sample, Operation, Test, in the map's own icon
+// and colour, and From database…); a search box finds anything in the one catalog (samples, operations by process category, tests). Every entry is
+// a drag source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between its ends). A
+// mouse drags or clicks; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
 // canvas). The dock folds to a rail, and remembers that per person. Presentational: the page owns what the entries do.
 const props = defineProps<{
 	entries: MenuEntry[];

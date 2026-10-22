@@ -27,7 +27,8 @@ describe('CreateBar', () => {
 	});
 
 	it('says what it will make, with nothing beside it, once nothing is missing', async () => {
-		expect(await render(base)).not.toContain('class="fill"');
+		// The status region stays mounted (a live region is announced when its text changes), just empty.
+		expect(await render(base)).toMatch(/<span class="fill"[^>]*><\/span>/);
 	});
 
 	it('shows a spinner and cannot be pressed while creating', async () => {
@@ -42,7 +43,7 @@ describe('CreateBar', () => {
 	it('creating wins over missing: the spinner is the state', async () => {
 		const html = await render({ ...base, creating: true, missing: 2 });
 		expect(text(html)).toBe('Creating…');
-		expect(html).not.toContain('class="fill"');
+		expect(html).toMatch(/<span class="fill"[^>]*><\/span>/);
 	});
 
 	it('puts a failed Create\'s reason in an alert the button points at', async () => {

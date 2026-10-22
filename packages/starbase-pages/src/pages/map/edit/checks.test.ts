@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Check, DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
-import { blocking, checks, checksFor, doneRequiredFields, mergeChecks, missingText, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
+import { blocking, checks, checksFor, doneRequiredFields, mergeChecks, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()) => actions.reduce((b, a) => apply(b, a), from);
 const texts = (list: Check[], key?: string) => list.filter((c) => !key || c.key === key).map((c) => `${c.level}:${c.field ?? '-'}:${c.text}`);
@@ -343,13 +343,6 @@ describe('helpers', () => {
 		const levels = checks(b, ctx).map((c) => c.level);
 		expect(levels).toEqual([...levels].sort((a, c) => (a === c ? 0 : a === 'block' ? -1 : 1)));
 		expect(levels[0]).toBe('block');
-	});
-
-	it('missingText counts the blocking ones', () => {
-		expect(missingText([])).toBe('');
-		expect(missingText([{ key: 'n1', level: 'warn', text: 'x' }])).toBe('');
-		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }])).toBe('1 thing missing');
-		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }, { key: 'n2', level: 'block', text: 'y' }])).toBe('2 things missing');
 	});
 
 	it('mergeChecks drops the same message twice', () => {

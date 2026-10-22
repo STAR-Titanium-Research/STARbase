@@ -60,13 +60,25 @@ export function useAddMenu(o: {
 	 * it added (the page selects and shows the first): none when it did nothing, opened a picker, or was an insert.
 	 */
 	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
-		if (choice.kind === 'pickSamples') return void o.pickSamples(), [];
-		if (choice.kind === 'connectTo') return void o.connect(t), [];
-		if (choice.kind === 'fromDatabase') return void o.attach?.(t), [];
+		if (choice.kind === 'pickSamples') {
+			o.pickSamples();
+			return [];
+		}
+		if (choice.kind === 'connectTo') {
+			o.connect(t);
+			return [];
+		}
+		if (choice.kind === 'fromDatabase') {
+			o.attach?.(t);
+			return [];
+		}
 		// What was added lately is noted only once the choice did something: a refused drop or insert, or one that changed nothing, is no "recent".
 		const recent = recentIdOf(choice);
 		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
-		if (t.insert) return void ((await o.insert?.(t, choice)) !== false && note()), [];
+		if (t.insert) {
+			if ((await o.insert?.(t, choice)) !== false) note();
+			return [];
+		}
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		// The samples it adds and the choice made on them are one undo step.
 		let folded = false;
@@ -74,7 +86,7 @@ export function useAddMenu(o: {
 			if (!(await o.ensureSample(t.sock.id))) return [];
 			folded = true;
 		}
-		// The sample a socket stands for is not added by the choice made on it; a sample picked by the choice itself is.
+		// The socket's own sample is in the draft by now, so only what the choice itself adds counts as new.
 		const before = o.edit.body.value;
 		let resolved = choice;
 		if (choice.kind === 'record') {

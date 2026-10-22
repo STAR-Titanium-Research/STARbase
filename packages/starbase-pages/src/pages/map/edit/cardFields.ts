@@ -6,6 +6,7 @@ import { MAX_SETTINGS } from '../model/formSlots';
 import type { MapNode } from '../model/types';
 import { checksFor, doneRequiredFields, SERVER_ONLY_CODES, type FieldDef } from './checks';
 import { itemOf } from './draft';
+import { chosenKind } from './kindChange';
 import { keySettingsFor } from './draftForm';
 import { makerOf } from './inherit';
 import { keyFieldsFor } from './railForm';
@@ -22,7 +23,7 @@ export const SAMPLE_NAME_FIELD = 'nickname';
  * (K6). An operation or a test: what the rail's compact form asks for (the machine, the planned date or, once done, the date and what
  * the forms require, then the key settings of its kind) without the kind itself, and with at most four key settings, none twice (K4).
  */
-export function cardFieldsFor(item: DraftItem, _body: DraftBody, ctx: { requiredForDone?: string[] } = {}): string[] {
+export function cardFieldsFor(item: DraftItem, ctx: { requiredForDone?: string[] } = {}): string[] {
 	if (item.kind === 'sample') return [SAMPLE_NAME_FIELD, 'material_id', 'form', 'primary_method_id'];
 	const own = item.kind === 'test' ? item.values.test_type : item.values.process_category;
 	const settings = keySettingsFor(item.kind, typeof own === 'string' ? own : undefined);
@@ -39,7 +40,7 @@ export function cardFieldsFor(item: DraftItem, _body: DraftBody, ctx: { required
  */
 export function cardFieldNames(item: DraftItem, body: DraftBody, defs: { form: readonly unknown[]; required?: readonly FieldDef[] }): string[] {
 	if (!defs.form.length) return [];
-	return cardFieldsFor(item, body, { requiredForDone: doneRequiredFields(item, body, defs.required).map((d) => d.field) });
+	return cardFieldsFor(item, { requiredForDone: doneRequiredFields(item, body, defs.required).map((d) => d.field) });
 }
 
 /**
@@ -67,8 +68,10 @@ export function readonlyOnCard(item: DraftItem, body: DraftBody): string[] {
 	return item.kind === 'sample' && makerOf(body, item.key) ? ['primary_method_id'] : [];
 }
 
-/** The relation fields a card draws as slot rows (K4): the kind of record they hold, which gives the row its icon and colour as in the Inside tray. */
-export const SLOT_KIND: Readonly<Record<string, 'equipment' | 'tool' | 'insert_edge' | 'recipe'>> = {
+/** The kind of record a relation field holds: it gives a slot row its icon and colour, as in the Inside tray. */
+export type SlotKind = 'equipment' | 'tool' | 'insert_edge' | 'recipe';
+/** The relation fields a card draws as slot rows (K4), and the kind of record each holds. */
+export const SLOT_KIND: Readonly<Record<string, SlotKind>> = {
 	equipment_id: 'equipment',
 	tool_id: 'tool',
 	insert_edge_id: 'insert_edge',
@@ -78,7 +81,7 @@ export const SLOT_KIND: Readonly<Record<string, 'equipment' | 'tool' | 'insert_e
 
 export interface CardSegment {
 	/** Set for a slot row (one relation field); a run of plain fields has none. */
-	slot?: (typeof SLOT_KIND)[string];
+	slot?: SlotKind;
 	fields: string[];
 }
 
@@ -104,6 +107,5 @@ export function cardItemOf(body: DraftBody, node: MapNode): DraftItem | null {
 	const item = keys.length === 1 ? itemOf(body, keys[0]) : undefined;
 	if (!item || item.existing || item.remove) return null;
 	if (item.kind === 'sample') return item;
-	const chosen = item.values[item.kind === 'test' ? 'test_type' : 'method_id'];
-	return typeof chosen === 'string' && chosen !== '' ? item : null;
+	return chosenKind(item) ? item : null;
 }

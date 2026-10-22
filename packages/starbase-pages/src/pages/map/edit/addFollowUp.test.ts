@@ -1,8 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { autoWireSource, isRepeatAdd, REPEAT_ADD_MS } from './addFollowUp';
 import type { MenuChoice } from './menuModel';
+
+// A free new sample's output takes any operation or test the draft offers, so the draft's refusal is made to happen here by the mock.
+const refusing = vi.hoisted(() => ({ on: false }));
+vi.mock('./addDrop', async (importActual) => {
+	const actual = await importActual<typeof import('./addDrop')>();
+	return { ...actual, socketVerdict: (...args: Parameters<typeof actual.socketVerdict>) => (refusing.on ? { ok: false, reason: 'refused' } : actual.socketVerdict(...args)) };
+});
+afterEach(() => void (refusing.on = false));
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
 const turning: MenuChoice = { kind: 'operation', methodId: 'mt', category: 'machining' };
@@ -56,5 +64,13 @@ describe('autoWireSource', () => {
 		const body = run([{ type: 'addSample' }]);
 		expect(autoWireSource(body, 'n1', { kind: 'newSample' })).toBeNull();
 		expect(autoWireSource(body, 'n1', { kind: 'pickSamples' })).toBeNull();
+	});
+
+	it('is nothing when the draft would refuse the wire', () => {
+		const body = run([{ type: 'addSample' }]);
+		expect(autoWireSource(body, 'n1', turning)).toBe('n1');
+		refusing.on = true;
+		expect(autoWireSource(body, 'n1', turning)).toBeNull();
+		expect(autoWireSource(body, null, tensile)).toBeNull();
 	});
 });

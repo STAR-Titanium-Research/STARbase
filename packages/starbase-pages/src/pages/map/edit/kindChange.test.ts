@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftOperation, DraftTest } from '@d1/ui';
-import { kindChange } from './kindChange';
+import { chosenKind, kindChange } from './kindChange';
 import { keyFieldsFor } from './railForm';
 
 const op = (values: Record<string, unknown>): DraftOperation => ({ key: 'n1', kind: 'operation', workState: 'planned', rows: [{ key: 'n1r' }], values });
@@ -53,5 +53,15 @@ describe('kindChange: a test', () => {
 
 	it('the same type drops nothing', () => {
 		expect(kindChange(test({ test_type: 'tensile', tensile_uts_mpa: 900 }), { testType: 'tensile' }, fields)).toEqual({ patch: { test_type: 'tensile' }, dropped: [] });
+	});
+});
+
+describe('chosenKind', () => {
+	it('is the method of an operation or the type of a test once chosen, else null', () => {
+		expect(chosenKind(op({ method_id: 'turn' }))).toBe('turn');
+		expect(chosenKind(test({ test_type: 'tensile' }))).toBe('tensile');
+		expect(chosenKind(op({}))).toBeNull();
+		expect(chosenKind(op({ method_id: '' }))).toBeNull();
+		expect(chosenKind(test({ method_id: 'turn' }))).toBeNull();
 	});
 });

@@ -652,6 +652,16 @@ describe('useEditMode: choosing the kind (K3)', () => {
 		expect(s.edit.draft.notice.value).toBe('Kind changed to hardness: 1 value dropped · Undo');
 	});
 
+	it('counts the distinct values dropped across a stack of passes, not just the first one\'s', async () => {
+		const { edit, key } = await withOperation(turning);
+		edit.apply({ type: 'duplicate', key });
+		const [first, second] = edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => i.key);
+		edit.apply({ type: 'setValues', key: first, values: { machining_feed_mm_per_rev: 0.2 } });
+		edit.apply({ type: 'setValues', key: second, values: { machining_feed_mm_per_rev: 0.3, machining_cutting_speed_m_per_min: 90 } });
+		edit.setKind([first, second], { methodId: 'm-fast', category: 'sintering' });
+		expect(edit.draft.notice.value).toBe('Kind changed to FAST sintering: 2 values dropped · Undo');
+	});
+
 	it('changes a stack of passes together, and leaves a sample and a recorded operation alone', async () => {
 		const { edit, key } = await withOperation();
 		edit.apply({ type: 'duplicate', key });

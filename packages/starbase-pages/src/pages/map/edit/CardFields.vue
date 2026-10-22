@@ -2,7 +2,7 @@
 import { computed, nextTick, watch } from 'vue';
 import type { DraftItem } from '@d1/ui';
 import { KINDS, kindVar } from '../nodes/kinds';
-import { cardFieldNames, cardSegments, flaggedFields, readonlyOnCard } from './cardFields';
+import { cardFieldNames, cardSegments, flaggedFields, readonlyOnCard, type SlotKind } from './cardFields';
 import { collectionOf } from './checks';
 import DraftItemForm from './DraftItemForm.vue';
 import { inheritedValues } from './inherit';
@@ -32,7 +32,7 @@ const ready = computed(() => fields.value.length > 0);
 /** What every form on the card is given; each segment adds only its own fields. */
 const shared = computed(() => ({ item: props.item, fieldDefs: defs.value, inherited: inherited.value, compact: true, flagged: flagged.value, readonlyFields: readonlyFields.value }));
 
-const slotStyle = (slot: NonNullable<ReturnType<typeof cardSegments>[number]['slot']>) => ({ '--k': kindVar(KINDS[slot]) });
+const slotStyle = (slot: SlotKind) => ({ '--k': kindVar(KINDS[slot]) });
 
 function update(values: Record<string, unknown>): void {
 	if (!edit) return;

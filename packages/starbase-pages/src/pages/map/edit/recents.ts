@@ -2,25 +2,21 @@
 // palette is folded. Kept in localStorage per person (the key has their id), so a shared browser does not mix two people up. Storage can be
 // missing (node), blocked or full: every access is guarded, and the page works without it.
 
-import type { MenuChoice, MenuEntry } from './menuModel';
+import type { MenuChoice } from './menuModel';
 
 export const RECENTS_KEY = 'd1.map.add.recent.v1';
 export const PALETTE_KEY = 'd1.map.palette.v1';
 /** How many recents are kept. */
 export const MAX_RECENTS = 6;
 
-/** The entries worth remembering: the things the catalog adds (a method, a test type, a new sample), not the sub-choices of a socket. */
-export const isRecentable = (e: Pick<MenuEntry, 'id'>): boolean => e.id.startsWith('op:') || e.id.startsWith('test:') || e.id === 'sample:new';
-
-/** The entry id a choice of the catalog is remembered under, or null for a choice that is not one of its things (Same sample, a wire...). */
+/** The entry id a method or test type is remembered under, or null for any other choice (Same sample, a wire, a blank card...). */
 export function recentIdOf(choice: MenuChoice): string | null {
 	// A template is its own list at the top of both surfaces; it is not a recent (its entry can be renamed or gone).
 	if ((choice.kind === 'operation' || choice.kind === 'test') && choice.template) return null;
-	// A blank operation or test (the palette's Operation and Test) is no method or type to come back to.
-	if (choice.kind === 'newOperation' || choice.kind === 'newTest') return null;
 	if (choice.kind === 'operation') return `op:${choice.methodId}`;
 	if (choice.kind === 'test') return `test:${choice.testType}`;
-	return choice.kind === 'newSample' ? 'sample:new' : null;
+	// A blank card (the palette's Sample, Operation, Test) is no method or type to come back to: the palette lists those kinds anyway.
+	return null;
 }
 
 function browserStorage(): Storage | null {

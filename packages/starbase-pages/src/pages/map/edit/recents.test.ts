@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_RECENTS, isRecentable, pushRecent, readFolded, readRecents, recentIdOf, writeFolded } from './recents';
+import { MAX_RECENTS, pushRecent, readFolded, readRecents, recentIdOf, writeFolded } from './recents';
 
 /** A Storage that keeps what it is given (node has none). */
 function memory(): Storage {
@@ -46,18 +46,14 @@ describe('recents', () => {
 		expect(pushRecent('u1', 'op:a', blocked())).toEqual(['op:a']);
 		expect(readRecents('u1', null)).toEqual([]);
 	});
-
-	it('remembers only what the catalog adds', () => {
-		expect(['op:1', 'test:x', 'sample:new', 'sample:same', 'connect', 'canvas:n1'].map((id) => isRecentable({ id }))).toEqual([true, true, true, false, false, false]);
-	});
 });
 
 describe('which choice is remembered as what', () => {
-	it('a method, a test type and a new sample; not the sub-choices of a socket', () => {
+	it('a method and a test type; not a blank card or the sub-choices of a socket', () => {
 		expect(recentIdOf({ kind: 'operation', methodId: 'm1', category: null })).toBe('op:m1');
 		expect(recentIdOf({ kind: 'test', testType: 'xrd' })).toBe('test:xrd');
-		expect(recentIdOf({ kind: 'newSample' })).toBe('sample:new');
-		// The palette's Operation and Test (blank cards) are no method or type to come back to.
+		// The palette's Sample, Operation and Test (blank cards) are nothing to come back to: it lists those kinds anyway.
+		expect(recentIdOf({ kind: 'newSample' })).toBeNull();
 		expect(recentIdOf({ kind: 'newOperation' })).toBeNull();
 		expect(recentIdOf({ kind: 'newTest' })).toBeNull();
 		// A template is its own group at the top, not a recent.

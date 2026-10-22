@@ -399,11 +399,22 @@ describe('the palette\'s Enter (R1)', () => {
 	it('one click adds once: a second click on the same entry a moment later is the same click', async () => {
 		const { edit, surface } = await setup(emptyBody(), null);
 		surface.paletteAdd(turning);
+		await settle();
 		surface.paletteAdd(turning);
 		await settle();
 		expect(edit.body.value.items).toHaveLength(1);
 		edit.undo();
 		expect(edit.body.value.items, 'one undo step').toEqual([]);
+	});
+
+	it('an add that added nothing is not "the click": a retry of the same entry at once still adds', async () => {
+		const { edit, surface } = await setup(emptyBody(), null);
+		surface.paletteAdd({ ...turning, choice: { kind: 'sameSample' } });
+		await settle();
+		expect(edit.body.value.items).toEqual([]);
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items).toHaveLength(1);
 	});
 
 	it('a different entry, or the same one after the window, adds another', async () => {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The Draft ▾ menu of the edit lid: the save status (kept, saving, or the error) first, then my drafts.
+// The Draft ▾ popup of the edit lid: the save status (kept, saving, or the error) first, then my drafts (the menu proper, which holds only them).
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp, defineComponent, h, nextTick, type App } from 'vue';
 import EditLid from './EditLid.vue';
@@ -23,7 +23,7 @@ function mount(props: Record<string, unknown>) {
 const open = async (el: HTMLElement) => {
 	el.querySelector<HTMLElement>('button.ob')!.click();
 	await nextTick();
-	return el.querySelector('[role=menu]');
+	return el.querySelector('.pop');
 };
 
 describe('EditLid Draft menu', () => {
@@ -38,6 +38,8 @@ describe('EditLid Draft menu', () => {
 		const menu = await open(el);
 		expect(menu?.querySelector('[role=status]')?.textContent).toBe('Draft kept');
 		expect(menu?.textContent).toContain('My drafts');
+		expect(menu?.querySelector('[role=menu] [role=status]'), 'the status is not inside the menu').toBeNull();
+		expect(menu?.querySelector('[role=menu]')?.querySelectorAll('[role=menuitem]')).toHaveLength(1);
 		expect(menu?.querySelector('[role=menuitem]')?.textContent).toContain('First');
 		expect(menu!.innerHTML.indexOf('Draft kept')).toBeLessThan(menu!.innerHTML.indexOf('First'));
 	});

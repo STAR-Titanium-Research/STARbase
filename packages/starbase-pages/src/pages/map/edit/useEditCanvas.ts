@@ -18,6 +18,7 @@ import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
 import { cardFieldNames, cardItemOf, isMadeByCheck } from './cardFields';
+import { chosenKind } from './kindChange';
 import { collectionOf, SERVER_ONLY_CODES } from './checks';
 import type { MenuTarget } from './menuTarget';
 import { onEmptyCanvas, socketSpots } from './canvasHits';
@@ -293,8 +294,7 @@ export function useEditCanvas(o: {
 		const items = keys.flatMap((k) => edit.body.value.items.filter((i) => i.key === k));
 		const item = items[0];
 		if (!item || item.kind === 'sample' || items.some((i) => i.existing)) return null;
-		const chosen = item.values[item.kind === 'test' ? 'test_type' : 'method_id'];
-		return { kind: item.kind, value: typeof chosen === 'string' && chosen ? chosen : null, methods: edit.catalog.methods.value, testTypes: edit.catalog.testTypes.value, choose: (choice) => edit.setKind(keys, choice) };
+		return { kind: item.kind, value: chosenKind(item), methods: edit.catalog.methods.value, testTypes: edit.catalog.testTypes.value, choose: (choice) => edit.setKind(keys, choice) };
 	}
 
 	/** The draft item whose required fields and key settings are typed on this card (K4); nothing in view mode. */
