@@ -35,7 +35,8 @@
 /* Planned work (ADR-0019, classes set by the node components from `data.planned` / `data.draft`): a planned container or
    sample is a real record that is not carried out yet, so it is ghosted: dashed, see-through, with a "Planned" pill (a
    sample's status badge already says so). A draft item is not a record yet (edit mode): dashed in the accent colour with
-   a tint and a "Draft" pill. Colours only; the cards keep their size, so the layout does not move. */
+   a tint. It has no corner tag: its one status mark is the badge in its title bar (`N missing` / `ready`, K13), and the
+   Planned / Done chip says what it will be. Colours only; the cards keep their size, so the layout does not move. */
 .d1-process-map .node.planned { border-style: dashed; opacity: 0.72; }
 .d1-process-map .node.planned:hover,
 .d1-process-map .node.planned.focal { opacity: 1; }
@@ -45,8 +46,7 @@
 	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 7%, var(--d1-surface));
 	opacity: 1;
 }
-.d1-process-map .node.planned:not(.rec):not(.draft)::after,
-.d1-process-map .node.draft::after {
+.d1-process-map .node.planned:not(.rec):not(.draft)::after {
 	content: 'Planned';
 	position: absolute;
 	top: -9px;
@@ -62,17 +62,9 @@
 	background: var(--d1-surface);
 	border: 1px dashed var(--d1-line);
 }
-.d1-process-map .node.draft::after {
-	content: 'Draft';
-	color: var(--d1-accent, var(--theme--primary));
-	border-color: var(--d1-accent, var(--theme--primary));
-	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, var(--d1-surface));
-}
-.d1-process-map .node.draft.planned:not(.rec)::after { content: 'Draft · planned'; }
 /* Planned or done at Create (R9): a new item that is done is drawn solid, one that is planned stays ghosted (dashed, see-through until
    hovered or selected), the same look the records have once they exist. */
 .d1-process-map .node.draft:not(.planned) { border-style: solid; }
-.d1-process-map .node.draft:not(.planned):not(.rec)::after { content: 'Draft · done'; }
 .d1-process-map .node.draft.planned { opacity: 0.8; }
 .d1-process-map .node.draft.planned:hover,
 .d1-process-map .node.draft.planned.focal { opacity: 1; }

@@ -32,12 +32,12 @@ const selected = useSelected(() => props.id);
 const FOLD_ABOVE = 3;
 
 const style = computed(() => KINDS[props.data.kind]);
-/** The title bar: the process, then the method ("Machining | Turning"); a test, "Test | Tensile". */
+/** The title bar: the process, then the method ("Machining · Turning"); a test, "Test · Tensile". */
 const kindLine = computed(() => {
 	const d = props.data;
 	const process = d.kind === 'test' ? 'Test' : processLabel(d.category === 'test' ? null : d.category);
 	const method = d.method ?? (d.kind === 'test' ? '' : d.title);
-	return method && method.toLowerCase() !== process.toLowerCase() ? `${process} | ${method}` : process;
+	return method && method.toLowerCase() !== process.toLowerCase() ? `${process} · ${method}` : process;
 });
 /**
  * The step's own name in the card: its code (the full operation name) for a single row; a batch or a stack says
@@ -269,7 +269,8 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 	background: color-mix(in srgb, var(--k) 16%, var(--d1-surface));
 	border-bottom: 1px solid color-mix(in srgb, var(--k) 30%, var(--d1-line));
 }
-.m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* The title is never cut short: it wraps inside its own column while the chips keep theirs. */
+.m { font-weight: 700; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .deck { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--k) 22%, var(--d1-surface)); font-variant-numeric: tabular-nums; }
 .apill { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--d1-accent, var(--theme--primary)); color: var(--d1-accent, var(--theme--primary)); }
 .m + .xbtn, .deck + .xbtn, .apill + .xbtn { margin-left: auto; }

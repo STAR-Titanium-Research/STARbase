@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { createSSRApp, defineComponent, h, ref, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
@@ -475,5 +476,16 @@ describe('the kind dropdown of a new card (K3)', () => {
 		expect(select(await render(ContainerNode, { id: c.id, data: c }))).toBeUndefined();
 		expect(select(await render(ContainerNode, { id: c.id, data: c }, edit({ editing: ref(false), kind: () => pick() })))).toBeUndefined();
 		expect(select(await render(ContainerNode, { id: c.id, data: { ...c, collapsed: true } }, edit({ kind: () => pick() })))).toBeUndefined();
+	});
+});
+
+describe('draft cards have one status mark', () => {
+	const css = readFileSync(new URL('./nodes.css', import.meta.url), 'utf8');
+	it('has no corner tag of its own: not Draft, not Draft · planned, not Draft · done', () => {
+		expect(css).not.toMatch(/\.node\.draft[^{]*::after/);
+		expect(css).not.toContain("'Draft");
+	});
+	it('still has the Will be deleted pill', () => {
+		expect(css).toMatch(/\.node\.removing[^{]*::after\s*\{[^}]*content: 'Will be deleted'/);
 	});
 });

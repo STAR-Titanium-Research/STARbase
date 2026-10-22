@@ -16,12 +16,18 @@ describe('CreateBar', () => {
 		expect(button(html)).toContain('type="button"');
 	});
 
-	it('is disabled and says how many things are missing while blocking checks exist', async () => {
+	it('is a disabled Create with "N to fill in" beside it while blocking checks exist', async () => {
 		const html = await render({ ...base, missing: 3 });
-		expect(text(html)).toBe('3 things missing');
+		expect(text(html)).toBe('3 to fill in Create');
+		expect(html).toMatch(/<span class="fill"[^>]*>3 to fill in<\/span>/);
+		expect(html.match(/<button[^>]*>[\s\S]*?<\/button>/)?.[0].replace(/<[^>]+>/g, '')).toBe('Create');
 		expect(button(html)).toContain('disabled');
 		expect(button(html)).toContain('Create 2 operations, 4 samples'); // the title still says what it would make
-		expect((await render({ ...base, missing: 1 })).includes('1 thing missing')).toBe(true);
+		expect(text(await render({ ...base, missing: 1 }))).toContain('1 to fill in');
+	});
+
+	it('says what it will make, with nothing beside it, once nothing is missing', async () => {
+		expect(await render(base)).not.toContain('class="fill"');
 	});
 
 	it('shows a spinner and cannot be pressed while creating', async () => {
@@ -36,6 +42,7 @@ describe('CreateBar', () => {
 	it('creating wins over missing: the spinner is the state', async () => {
 		const html = await render({ ...base, creating: true, missing: 2 });
 		expect(text(html)).toBe('Creating…');
+		expect(html).not.toContain('class="fill"');
 	});
 
 	it('puts a failed Create\'s reason in an alert the button points at', async () => {

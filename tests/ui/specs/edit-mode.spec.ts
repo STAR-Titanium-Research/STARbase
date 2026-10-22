@@ -220,7 +220,7 @@ test.describe('as a Lab Member', () => {
 
 	test('a new sample no operation makes can be Created (spec §3 item 4)', async ({ page }) => {
 		// Spec §3 item 4: `current_status` is required in Directus's field metadata but never drawn on the form, so a new sample
-		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 thing missing".
+		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 to fill in".
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
 		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();

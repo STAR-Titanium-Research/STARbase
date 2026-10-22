@@ -227,13 +227,13 @@ test.describe('as a Lab Member', () => {
 		await expect(sampleCard(page, orphan.sampleId)).toBeVisible();
 		await expect(createButton(page)).toHaveText('Attach 1 operation');
 
-		// The wire is removable: the operation stays on the canvas, attached to nothing, and Create says what is missing.
+		// The wire is removable: the operation stays on the canvas, attached to nothing, and Create waits, with "N to fill in" beside it.
 		await clickWire(page, wireBetween(page, `s:${rawId}:out`, `op:${orphan.operationId}:in`));
 		await page.keyboard.press('Delete');
 		await expect(wireBetween(page, `s:${rawId}:out`, `op:${orphan.operationId}:in`)).toHaveCount(0);
 		await expect(opCard(page, orphan.operationId)).toBeVisible();
 		await expect(createButton(page)).toBeDisabled();
-		await expect(createButton(page)).toContainText('missing');
+		await expect(page.locator('.pm-create .fill')).toContainText('to fill in');
 		await expect(checks(page)).toContainText('needs a sample');
 
 		// Delete on the loose operation takes it off the draft; the record is not deleted.

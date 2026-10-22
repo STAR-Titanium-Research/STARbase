@@ -3,9 +3,9 @@ import { parseSelectionQuery } from '@d1/ui';
 import { LABELS_LINK_CAP, createdText, labelsLink, labelsPath, missingLabel, moreLabelsText, printLabelsText } from './createText';
 
 describe('createText', () => {
-	it('says what is missing', () => {
-		expect(missingLabel(1)).toBe('1 thing missing');
-		expect(missingLabel(3)).toBe('3 things missing');
+	it('says what is left to fill in', () => {
+		expect(missingLabel(1)).toBe('1 to fill in');
+		expect(missingLabel(3)).toBe('3 to fill in');
 	});
 
 	it('says what was created', () => {
