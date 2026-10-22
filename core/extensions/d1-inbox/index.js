@@ -1813,14 +1813,15 @@ export function mount(router, context, deps = {}) {
 
   // The file a measurement route is about, as the caller, by the picture routes' rule: visible to exactly who sees the file in the list (canSee), and every reason to
   // refuse (not a uuid, no such file, gone, not the caller's) is the same 404, so no id is confirmed. `owner` says whether the caller may change the file's
-  // measurements at all (canChange: the owner person or an active member of the owner team; an administrator reads, never changes: ADR-0022 decision 3).
+  // measurements at all (canChange: the owner person or an active member of the owner team; an administrator reads, never changes: ADR-0022 decision 3; and a Lab
+  // Viewer reads only, whatever they own).
   async function measureFileOf(db, acc, rawId) {
     if (!isUuid(rawId)) throw ERRORS.noMeasureFile();
     const id = rawId.toLowerCase();
     const scope = await scopeOf(acc, db);
     const [file] = rowsOf(await db.raw(SQL.measureFile, [id]));
     if (!file || file.state === 'gone' || !canSee(scope, file)) throw ERRORS.noMeasureFile();
-    return { id, owner: canChange(scope, file) };
+    return { id, owner: canChange(scope, file) && !isViewerAccountability(acc) };
   }
   // One measurement of that file, or 404; and who may rename or delete it: the file's owner, or the person who saved it.
   async function measureRowOf(db, file, rawId) {
@@ -1833,7 +1834,8 @@ export function mount(router, context, deps = {}) {
   router.get('/files/:candidate_id/measurements', route(async ({ req, res, acc }) => {
     const file = await measureFileOf(database, acc, req.params?.candidate_id);
     const rows = rowsOf(await database.raw(SQL.measureList, [file.id]));
-    res.json(shapeMeasurements(rows, { canChange: file.owner, user: acc.user }));
+    // a Lab Viewer changes nothing (route() refuses every write), so nothing is offered to them as editable either: not as the owner, not as an author
+    res.json(shapeMeasurements(rows, { canChange: file.owner, user: isViewerAccountability(acc) ? null : acc.user }));
   }));
 
   // POST: the owner saves a shape. The count is taken under a per-file lock, so two saves at the limit cannot both pass.

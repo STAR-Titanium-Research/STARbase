@@ -759,7 +759,7 @@ SELECT 'im_sql_list:' || count(*) || ':' || string_agg(kind || '/' || label || '
 SELECT measurement_id AS im_mid FROM im_list WHERE kind = 'line' \gset
 CREATE TEMP TABLE im_one AS EXECUTE measureone(:'im_mid', :'im_cid');
 SELECT 'im_sql_one:' || count(*) || ':' || min(label) FROM im_one;
-CREATE TEMP TABLE im_none AS EXECUTE measureone(:'im_mid', gen_random_uuid()::text);
+CREATE TEMP TABLE im_none AS EXECUTE measureone(:'im_mid', gen_random_uuid());
 SELECT 'im_sql_none:' || count(*) FROM im_none;
 CREATE TEMP TABLE im_cnt AS EXECUTE measurecount(:'im_cid');
 SELECT 'im_sql_count:' || n FROM im_cnt;

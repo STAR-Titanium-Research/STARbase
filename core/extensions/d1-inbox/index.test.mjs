@@ -4351,13 +4351,23 @@ test('GET /files/:id/measurements: whoever sees the file reads its shapes, oldes
   assert.equal((await getM(call, c, CAROL)).statusCode, 404, 'a person outside the team does not even learn the file exists');
 });
 
-test('GET /files/:id/measurements: a Lab Viewer who owns the file reads it (reads are allowed), and an empty file is an empty list', async () => {
+test('GET /files/:id/measurements: a Lab Viewer who owns the file reads it (reads are allowed) but is offered nothing to change, not even their own old shapes; an empty file is an empty list', async () => {
   const w = newWorld();
   const c = add(w, cand({ owner_person_id: P.viewer }));
   const { call } = setup(w);
-  const res = await getM(call, c, { user: U.viewer, role: LAB_VIEWER_ROLE_ID });
+  const viewer = { user: U.viewer, role: LAB_VIEWER_ROLE_ID };
+  const res = await getM(call, c, viewer);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body, { data: [], meta: { total: 0, can_change: true } });
+  assert.deepEqual(res.body, { data: [], meta: { total: 0, can_change: false } });
+  w.measurements.push({ measurement_id: ID(9801), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.viewer, created_at: NOW.toISOString() });
+  const again = await getM(call, c, viewer);
+  assert.deepEqual(again.body.data.map((m) => m.can_edit), [false]);
+  assert.deepEqual(again.body.meta, { total: 1, can_change: false });
+  for (const res2 of [await postM(call, c, LINE, viewer), await patchM(call, c, ID(9801), { label: 'x' }, viewer), await deleteM(call, c, ID(9801), viewer)]) {
+    assert.equal(res2.statusCode, 403);
+    assert.equal(codeOf(res2), 'READ_ONLY_ROLE');
+  }
+  assert.equal(w.measurements.length, 1);
 });
 
 test('PATCH /files/:id/measurements/:id renames: the owner, a team member, or the author may; everyone else is 403 or 404; the label is trimmed, may be cleared and is checked', async () => {
