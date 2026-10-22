@@ -571,7 +571,9 @@ def hook_rules(doc: dict) -> dict:
     the owner-only fields and their delete rule; the keys that move a record between restricted parents.
 
     A guarded junction or parent may also be a "custom" collection (surface_scans guards directus_files_id with the read
-    row of directus_files, ADR-0023): the literal `permissions` filter of that custom row is shipped as it is."""
+    row of directus_files, ADR-0023): the literal `permissions` filter of that custom row is shipped as it is.
+    A guard may also carry its own literal `filter` instead of a `rule` (conform_logs.directus_files_id: a file the caller
+    uploaded, in the Conform Logs folder, ADR-0022); it is shipped as it is."""
     sets, rules = doc["sets"], doc["rules"]
     custom = doc.get("custom", {})
     guards: dict = {}
@@ -587,7 +589,18 @@ def hook_rules(doc: dict) -> dict:
         for check in checks:
             parent, action = check["parent"], check.get("rule", "update")
             rule = rules.get(parent, {}).get(action)
-            if rule is None:
+            if "filter" in check:
+                # a literal filter of the guard's own: no permission row states it, so it cannot also name one
+                if "rule" in check:
+                    raise RulesError(
+                        f"guard {junction}.{check['field']}: give a rule or a filter, not both"
+                    )
+                if not isinstance(check["filter"], dict) or not check["filter"]:
+                    raise RulesError(
+                        f"guard {junction}.{check['field']}: the filter must be a non-empty object"
+                    )
+                shipped = check["filter"]
+            elif rule is None:
                 # a custom parent (directus_files): its row's literal filter is what the caller must pass
                 # (an empty filter is a real filter: conform_logs.read is open to every member, so the guard on
                 # conform_run_data.log_id only asks that the log exists)
@@ -834,6 +847,20 @@ def resolve(doc: dict, db: dict) -> list[str]:
                 problems.append(
                     f"guard {junction}: {check['parent']}.{check['key']} is not a column"
                 )
+            # a guard's own literal filter: every field it names (through _and / _or) is a column of the parent
+            pending = [check.get("filter", {})]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, list):
+                    pending.extend(node)
+                    continue
+                for key, value in node.items():
+                    if key in ("_and", "_or"):
+                        pending.append(value)
+                    elif f"{check['parent']}.{key}" not in columns:
+                        problems.append(
+                            f"guard {junction}: {check['parent']}.{key} is not a column"
+                        )
     for collection, spec in doc.get("owner_guards", {}).items():
         if f"{collection}.{spec['key']}" not in columns:
             problems.append(

@@ -86,6 +86,14 @@
 // A sixth is not a visibility grant either (Conform runs, plan 2026-10-21-conform-runs, review round 1): conform_run_data.operation_id (the caller must
 // pass the operation's update rule: Directus does not filter create, and the Lab Member create row is `{}`) and conform_run_data.log_id (the log must exist;
 // logs are readable by every member, so its rule is an empty filter).
+// A seventh follows ADR-0022 (a file belongs to whoever it came from): conform_logs.directus_files_id. A log may be created only over a file the
+// caller uploaded (directus_files.uploaded_by) that sits in the Conform Logs folder; the guard carries that literal filter (access_rules.json) and
+// runs it as the caller, and a file id that does not exist gets the same words. Without it a member could point a log at someone else's file, and
+// d1-conform-guard's file lock (with the non-cascading foreign key) would then stop the file's owner renaming, replacing or deleting it.
+// Migration 211 holds the same rule as a BEFORE INSERT trigger (the backstop for every writer that sets created_by).
+// For the same reason a non-admin may not change who uploaded a file (`uploaded_by`): the Lab Member field list of directus_files includes it
+// (a field list cannot say "not this value", and narrowing it waits for SEM3), so a member could otherwise restamp an unowned file as theirs and
+// then pass the rule above. Directus stamps the column itself on upload (special user-created), so only an update can change it.
 //
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
@@ -201,11 +209,20 @@ const JUNCTION_MESSAGES = {
   // Conform runs (plan 2026-10-21-conform-runs, review round 1): a run row is written by whoever may edit its operation; the log is lab-wide (its
   // rule is an empty filter), so that guard only asks that the log exists
   'conform_run_data.operation_id': 'You can only record a Conform run on an operation you can edit.',
+  // ADR-0022: the file of a new log must be one the caller uploaded into the Conform Logs folder; a missing file answers the same
+  'conform_logs.directus_files_id': 'You can only create a Conform log from a file you uploaded to the Conform Logs folder.',
   'conform_run_data.log_id': 'You can only link a Conform log that exists.',
 };
 // Guarded parents that have no OCC `version` column (a Directus system table), so the "inserted by this transaction" shortcut cannot be
 // asked of them: the caller either passes the parent's rule or is refused.
 const UNVERSIONED_PARENTS = new Set(['directus_files']);
+// ADR-0022: who uploaded a file is recorded by Directus, never by a member (the Conform log rule above trusts it).
+export const UPLOADER_REFUSED = 'Who uploaded a file is recorded by the system; it cannot be changed.';
+// A user key as a payload or a row carries it (a bare id or a nested {id}), compared case-blind; '' for none.
+const userId = (value) => {
+  const id = value && typeof value === 'object' ? value.id : value;
+  return id === undefined || id === null ? '' : String(id).toLowerCase();
+};
 const UNREADABLE_SAMPLE = 'You cannot see that sample, so you cannot add it to a campaign.';
 const RESTRICTED_SAMPLE = "Only the sample's owner can add a restricted sample to a campaign.";
 const RESTRICTED_TEST =
@@ -677,13 +694,21 @@ export default ({ filter }, { services }) => {
     if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
     const keys = Array.isArray(meta?.keys) ? meta.keys.filter((key) => !isBlank(key) && typeof key !== 'object') : [];
     if (!keys.length) {
-      // No key to look the stored row up by: refuse only what is a pointer on its face
+      // No key to look the stored row up by: refuse only what is a pointer on its face, and any uploader sent (it cannot be compared)
       if (createsPointer(payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
+      if ('uploaded_by' in payload) throw forbidden(UPLOADER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
       return payload;
     }
-    const stored = await context.database('directus_files').whereIn('id', keys).select('id', 'storage', 'filename_disk', 'metadata');
+    const stored = await context
+      .database('directus_files')
+      .whereIn('id', keys)
+      .select('id', 'storage', 'filename_disk', 'metadata', 'uploaded_by');
     for (const row of stored) {
       if (repointsPointer(row, payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: String(row.id) });
+      // the uploader sent back unchanged (a form saving every field) is not a change
+      if ('uploaded_by' in payload && userId(payload.uploaded_by) !== userId(row.uploaded_by)) {
+        throw forbidden(UPLOADER_REFUSED, { kind: 'file', collection: 'directus_files', id: String(row.id) });
+      }
     }
     return payload;
   };

@@ -37,7 +37,9 @@
     "visibility: Directus does not filter create, so the d1-access-guard hook (core/extensions/d1-access-guard) refuses",
     "to create or repoint one unless the caller passes the parent's rule named by 'rule' (default update). A junction may be a 'custom' collection with",
     "a custom create row, and a parent may be a 'custom' collection whose literal filter the guard ships (surface_scans.directus_files_id: the caller",
-    "must be able to read the file, 'rule': 'read' of directus_files; ADR-0023). A junction also counts when a column a",
+    "must be able to read the file, 'rule': 'read' of directus_files; ADR-0023). A guard may instead carry its own literal 'filter' (no 'rule'), for a",
+    "check that is no permission row: conform_logs.directus_files_id needs a file the caller uploaded, in the Conform Logs folder (ADR-0022;",
+    "migration 211 adds the same rule as a trigger). A junction also counts when a column a",
     "read path uses is derived from it: test_sessions.sample_id is kept equal to the first sample of test_sessions_subject",
     "(migration 139), so adding a subject row to a test can change who reads that test. gen_access_rules.py writes that rule",
     "into core/extensions/d1-access-guard/rules.json. 'field' is the junction's FK to the parent, 'key' the parent's primary key.",
@@ -229,6 +231,10 @@
     "conform_run_data": [
       {"field": "operation_id", "parent": "manufacturing_operations", "key": "operation_id", "rule": "update"},
       {"field": "log_id", "parent": "conform_logs", "key": "log_id", "rule": "read"}
+    ],
+    "conform_logs": [
+      {"field": "directus_files_id", "parent": "directus_files", "key": "id",
+       "filter": {"_and": [{"uploaded_by": {"_eq": "$CURRENT_USER"}}, {"folder": {"_eq": "c04f1000-0000-4000-8000-000000000001"}}]}}
     ]
   },
   "owner_guards": {
