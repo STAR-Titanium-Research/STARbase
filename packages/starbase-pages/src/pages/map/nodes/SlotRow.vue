@@ -52,8 +52,8 @@ const toggleFan = stopping(() => {
 	<div class="slot-wrap">
 		<div class="slot nodrag nopan" :class="{ focal, one: !!single }" :style="{ '--k': color }" v-bind="chip">
 			<span class="si k-ink k-tint"><v-icon :name="icon" x-small /></span>
-			<span class="sr">{{ item.role }}</span>
-			<span v-if="single" class="sc">{{ slotText(single) }}</span>
+			<span class="sr" :class="{ vh: !!single }">{{ item.role }}</span>
+			<span v-if="single" class="sc" :title="`${item.role}: ${slotText(single)}`">{{ slotText(single) }}</span>
 			<button v-else-if="many" type="button" class="vals" :aria-expanded="expanded" @click.stop="expanded = !expanded">{{ summary }}</button>
 			<span v-else class="sc none">none</span>
 			<span v-if="item.partial" class="part">some rows</span>
@@ -93,6 +93,8 @@ const toggleFan = stopping(() => {
 .slot.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); }
 .slot:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
 .si { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; flex: none; }
+/* Visually hidden (the icon says what the slot is), still read out and searchable. */
+.sr.vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .sr { font-size: var(--fs-xs, 11px); color: var(--d1-dim); max-width: 64px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm, 12px); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .sc.none { color: var(--d1-dim); font-weight: 500; }

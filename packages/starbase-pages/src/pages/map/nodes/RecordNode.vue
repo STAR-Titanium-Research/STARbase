@@ -23,6 +23,8 @@ const flow = computed(() => (['stock_lot', 'powder_batch', 'material'].includes(
 const open = useExpanded(() => props.id);
 // A tool, a campaign or a material is named by its name (the full name in the title when the card clips it); its code moves to the meta line.
 const name = computed(() => slotText(props.data.ref));
+// A sample with a name ("F1E Cutoff Section B") leads with it, the way people look for it; its code goes under it, smaller.
+const named = computed(() => props.data.kind === 'sample' && !!props.data.ref.label);
 const meta = computed(() => (name.value !== props.data.ref.code ? [props.data.ref.code, props.data.meta].filter(Boolean).join(' · ') : props.data.meta));
 const card = cardHandlers(actions, () => props.id, () => open.value);
 const bind = useSocketBinder();
@@ -87,10 +89,13 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 				<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
 				<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
-				<button v-if="!data.draft" class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
+				<button v-if="!data.draft" class="xbtn nodrag nopan" :class="{ quiet: !open }" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
-			<div class="code" :title="name">{{ name }}</div>
-			<div v-if="data.kind === 'sample' && data.ref.label" class="nick" :title="data.ref.label">{{ data.ref.label }}</div>
+			<template v-if="named">
+				<div class="nick lead" :title="data.ref.label">{{ data.ref.label }}</div>
+				<div class="code sub" :title="name">{{ name }}</div>
+			</template>
+			<div v-else class="code" :title="name">{{ name }}</div>
 			<div v-if="meta" class="meta">{{ meta }}</div>
 			<div v-if="lock" class="why" role="note">{{ lock }}</div>
 		</div>
@@ -124,5 +129,7 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 .ntop .st + .chk, .ntop .kind + .chk { margin-left: 6px; }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nick { font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nick.lead { font-size: var(--fs-md, 13px); font-weight: 700; }
+.code.sub { font-size: var(--fs-sm, 12px); font-weight: 500; color: var(--d1-dim); }
 .meta { font-size: var(--fs-sm, 12px); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

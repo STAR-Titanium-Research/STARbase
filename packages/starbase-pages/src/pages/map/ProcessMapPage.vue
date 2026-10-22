@@ -342,7 +342,7 @@ const tipHint = computed(() => {
 										</div>
 									</template>
 									<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-									<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+									<MiniMap v-if="!phone && canvas.outgrowsView.value" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
 									<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 								</VueFlow>
 								<EmptyDraftHint v-if="emptyDraft" />
@@ -418,14 +418,20 @@ const tipHint = computed(() => {
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }
+/* The project's name as a tab hanging from the frame's top edge (inside the frame, so an export never clips it). */
 .pm-frame-label {
 	position: absolute;
-	top: 8px;
-	left: 14px;
-	max-width: calc(100% - 28px);
+	top: 0;
+	left: 18px;
+	max-width: calc(100% - 36px);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	padding: 3px 12px 4px;
+	border: 1px solid color-mix(in srgb, var(--k) 45%, transparent);
+	border-top: 0;
+	border-radius: 0 0 8px 8px;
+	background: color-mix(in srgb, var(--k) 12%, var(--d1-surface));
 	font-size: var(--fs-sm, 12px);
 	font-weight: 700;
 	letter-spacing: 0.02em;

@@ -47,6 +47,8 @@ export const screenPixel = (zoom: number): number => 1 / (Number.isFinite(zoom) 
 const FRAME_PAD = 28;
 const FRAME_LABEL = 30;
 const FIT_PADDING = 0.12;
+/** How far a fit may zoom in: past 1, so a small family fills the canvas instead of sitting small in its middle. */
+const FIT_MAX_ZOOM = 1.4;
 /** Nodes of a used-in fan the first view frames: its record and the first few items. */
 const FAN_FIT = 9;
 
@@ -201,11 +203,11 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   function applyFocus(): void {
     const f = map.focusOfHover.value;
     for (const n of vf.getNodes.value) {
-      const cls = f?.dim && !f.nodes.has(n.id) ? 'dim' : undefined;
+      const cls = f?.dim && !f.nodes.has(n.id) ? (f.soft ? 'dim soft' : 'dim') : undefined;
       if (n.class !== cls) n.class = cls;
     }
     for (const e of vf.getEdges.value) {
-      const cls = f?.wires.has(e.id) ? 'hi' : f?.dim ? 'dim' : undefined;
+      const cls = f?.wires.has(e.id) ? 'hi' : f?.dim ? (f.soft ? 'dim soft' : 'dim') : undefined;
       if (e.class !== cls) e.class = cls;
     }
   }
@@ -474,7 +476,7 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
   // ---- viewport ---------------------------------------------------------------------------------
   const fitIds = (ids: string[] | undefined, animate = true) => {
     const present = ids?.filter((id) => vf.findNode(id));
-    return vf.fitView({ padding: FIT_PADDING, maxZoom: 1, duration: animate && !reducedMotion() ? 300 : 0, ...(present?.length ? { nodes: present } : {}) });
+    return vf.fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM, duration: animate && !reducedMotion() ? 300 : 0, ...(present?.length ? { nodes: present } : {}) });
   };
   /** Frame the focus and what is one process step around it (not the whole family at a tiny zoom). */
   function fitFocus(animate = true): Promise<boolean> {
@@ -637,6 +639,19 @@ export function useMapCanvas(map: ProcessMap, edit?: CanvasEdit) {
 
   /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
   const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
+  /** Some card is (partly) outside the canvas: the minimap is worth drawing. Nothing measured yet counts as fitting. */
+  const outgrowsView = computed(() => {
+    const v = vf.viewport.value;
+    const view = vf.dimensions.value;
+    if (!view.width || !view.height) return false;
+    return vf.getNodes.value.some((n) => {
+      const { width, height } = n.dimensions;
+      if (!width || !height) return false;
+      const left = n.computedPosition.x * v.zoom + v.x;
+      const top = n.computedPosition.y * v.zoom + v.y;
+      return left < 0 || top < 0 || left + width * v.zoom > view.width || top + height * v.zoom > view.height;
+    });
+  });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy: settle.tidy, canTidy: settle.canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled, toFlow };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, tidy: settle.tidy, canTidy: settle.canTidy, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, outgrowsView, whenSettled, toFlow };
 }

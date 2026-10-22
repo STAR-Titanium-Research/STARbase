@@ -208,9 +208,12 @@ describe('SlotRow', () => {
 	});
 
 	it('a plain slot shows role and code', async () => {
-		const t = text(await render(SlotRow, { item: machine('NLX-1') }));
-		expect(t).toContain('Machine');
+		const html = await render(SlotRow, { item: machine('NLX-1') });
+		const t = text(html);
+		expect(t).toContain('Machine'); // still read out: visually hidden, the icon says it
 		expect(t).toContain('NLX-1');
+		expect(html).toMatch(/class="(?:vh sr|sr vh)"[^>]*>Machine</);
+		expect(html).toContain('title="Machine: NLX-1"');
 	});
 });
 
@@ -224,9 +227,22 @@ describe('RecordNode', () => {
 		expect(t).toContain('S-0412-A');
 		expect(t).toContain('Active');
 		expect(t).toContain('Ti-6Al-4V');
-		expect(html).toContain('class="xbtn nodrag nopan"');
+		expect(html).toMatch(/class="(?:[^"]* )?xbtn nodrag nopan(?: [^"]*)?"/);
 		expect(html).toContain('aria-label="Expand"');
 		expect(ids(html)).toEqual(['s:s1:in:0', 's:s1:out:0']);
+	});
+
+	it('the ＋ is quiet (shown on hover, focus or selection) while closed', async () => {
+		expect(await render(RecordNode, { id: sample.id, data: sample })).toMatch(/<button class="(?:[^"]* )?quiet(?: [^"]*)?"[^>]*aria-label="Expand"/);
+	});
+
+	it('a sample with a name leads with it, its code under it; without a name, the code alone', async () => {
+		const named: RecordData = { ...sample, ref: { ...sample.ref, label: 'F1E Cutoff Section B' } };
+		const html = await render(RecordNode, { id: named.id, data: named });
+		expect(html.indexOf('F1E Cutoff Section B')).toBeLessThan(html.indexOf('S-0412-A'));
+		expect(html).toMatch(/class="nick lead"[^>]*>F1E Cutoff Section B</);
+		expect(html).toMatch(/class="code sub"[^>]*>S-0412-A</);
+		expect(await render(RecordNode, { id: sample.id, data: sample })).toMatch(/<div class="code" [^>]*>S-0412-A</);
 	});
 
 	it('a material card shows its name as the title, with its code on the meta line; without a name, its code', async () => {
@@ -582,7 +598,7 @@ describe('controls inside cards do not start a Vue Flow drag or pan', () => {
 
 	it('the ＋ button of a record card and every slot row', async () => {
 		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
-		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="xbtn[^"]*"/);
+		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="(?:[^"]* )?xbtn[^"]*"/);
 		noDrag(await render(SlotRow, { item: machine('NLX-1') }), /class="slot [^"]*"/);
 	});
 });
