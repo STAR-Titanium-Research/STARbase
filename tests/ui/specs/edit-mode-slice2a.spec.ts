@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { D1, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, chooseKind, createButton, distinctRecords, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
@@ -51,6 +51,9 @@ test.afterEach(async () => {
 });
 
 const wiresOf = (b: DraftBody): string[] => b.wires.map((w) => `${w.from.key}${w.from.row !== undefined ? `.${w.from.row}` : ''}>${w.to.key}${w.to.row !== undefined ? `.${w.to.row}` : ''}`).sort();
+/** The lid's Undo and Redo: after an add the keyboard is in the new card's field (K10), where Ctrl+Z is the field's own undo, not the map's. */
+const undo = (page: Page) => page.getByRole('toolbar', { name: 'Edit mode' }).getByRole('button', { name: 'Undo', exact: true }).click();
+const redo = (page: Page) => page.getByRole('toolbar', { name: 'Edit mode' }).getByRole('button', { name: 'Redo', exact: true }).click();
 const operations = (b: DraftBody) => b.items.filter((i) => i.kind === 'operation');
 /** What "Insert before" on a sample that already exists as a record says (insertModel.ts `BEFORE_RECORDED`, R3). */
 const BEFORE_RECORDED = "Its history is recorded and can't change from the map. Start from a new sample instead.";
@@ -182,8 +185,8 @@ test.describe('as a Lab Member', () => {
 		expect(body.wires).toEqual([]);
 		expect(await settledOverlaps(page), 'no two cards overlap after the second drop').toEqual([]);
 
-		await page.keyboard.press('Control+z');
-		await page.keyboard.press('Control+z');
+		await undo(page);
+		await undo(page);
 		await expect(operation).toHaveCount(0);
 		await savedDraft(page, member, (b) => b.items.length === 1, 'both drops undone: only the picked sample is left');
 	});
@@ -250,13 +253,13 @@ test.describe('as a Lab Member', () => {
 		expect(after.wires.filter((w) => before.items.some((i) => i.key === w.to.key && i.kind === 'sample' && !i.existing)).every((w) => after.items.find((i) => i.key === w.from.key)?.kind === 'operation')).toBe(true);
 		expect(await settledOverlaps(page), 'no two cards overlap after the insert').toEqual([]);
 
-		// One Ctrl+Z puts the draft back as it was.
-		await page.keyboard.press('Control+z');
+		// One Undo puts the draft back as it was.
+		await undo(page);
 		await expect(cards(page).filter({ hasText: /CNC Milling/ })).toHaveCount(0);
 		const undone = await savedDraft(page, member, (b) => b.items.length === 3, 'undo took the insert back in one step');
 		expect(wiresOf(undone)).toEqual(wiresOf(before));
 		expect(undone.items.map((i) => i.key)).toEqual(before.items.map((i) => i.key));
-		await page.keyboard.press('Control+Shift+z');
+		await redo(page);
 		await savedDraft(page, member, (b) => b.items.length === 5, 'redo did it again');
 	});
 
@@ -422,7 +425,7 @@ test.describe('as a Lab Member', () => {
 		const after = await savedDraft(page, member, (b) => b.items.length === 5, 'the milling and a sample before the new sample');
 		expect(operations(after)).toHaveLength(2);
 		expect(await settledOverlaps(page)).toEqual([]);
-		await page.keyboard.press('Control+z');
+		await undo(page);
 		const undone = await savedDraft(page, member, (b) => b.items.length === 3, 'one undo');
 		expect(wiresOf(undone)).toEqual(wiresOf(before));
 	});
