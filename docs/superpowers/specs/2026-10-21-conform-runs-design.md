@@ -1,7 +1,7 @@
 # Conform runs — design
 
 **Date:** 2026-10-21
-**Status:** design agreed in the maintainer's design interview (all answers below are binding). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0025](../../adr/0025-conform-is-its-own-process-category.md).
+**Status:** implemented 2026-10-22 on branch `ccr-e9d98032-16ccsn` (PR pending): migrations `20261022000207`–`210`, `@d1/fast-plotting` `src/conform/` and run profiles, STARbase Operation page / Process map panels, `d1-conform-guard`, `d1-report` appendix. Not yet run on a real Directus (physical-test backlog C1–C5, CP1–CP4, CFS1–CFS11). Plan: [2026-10-21-conform-runs](../plans/2026-10-21-conform-runs.md). ADR: [ADR-0025](../../adr/0025-conform-is-its-own-process-category.md).
 
 ## Why
 

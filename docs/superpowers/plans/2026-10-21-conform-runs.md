@@ -27,7 +27,7 @@
 | C — run plotter profiles | `directus-ui-implementer` | `worktree-agent-ae27e8bda0ad913f5` | B merged | **merged** (fast-plotting 168, starbase-web 212) |
 | D — STARbase panels | `directus-ui-implementer` | `worktree-agent-ab055b90f6766c20a` | B merged | **merged** (d1-ui 2158, starbase-pages 3233) |
 | E — Data Studio interfaces & PDF | `d1-server-implementer` | `worktree-agent-a379d4c1b8b6358ad` | B merged | **merged** (d1-report 26/0) |
-| Review — whole branch | `directus-ui-reviewer` + `migration-review` (Opus) | — | all merged | in progress |
+| Review — whole branch | `directus-ui-reviewer` + `migration-review` (Opus) | — | all merged | **done**: rounds 1 and 2 fixed and merged; local CI all green |
 
 The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it. Workers commit in their own worktree, and never push, merge or rebase.
 
@@ -568,7 +568,7 @@ The maintainer asked that the GUI follow `DESIGN.md`.
 |---|---|---|---|
 | G1 — schema renumber, phase1 port, hook, PDF | `d1-server-implementer` | `db/`, `tests/schema/`, `scripts/`, `core/extensions/`, docs for those | **merged** (phase1 2069/0, roundtrip 218, pytest 2016, extensions 1122, d1-report 41) |
 | G2a — plotter | `directus-ui-implementer` | `packages/fast-plotting/**`, `apps/starbase/web/**` | **merged** (fast-plotting 257, starbase-web 214) |
-| G2b — Operation page, map, kit | `directus-ui-implementer` | `packages/d1-ui/**`, `packages/starbase-pages/**` | in progress |
+| G2b — Operation page, map, kit | `directus-ui-implementer` | `packages/d1-ui/**`, `packages/starbase-pages/**` | **merged** (d1-ui 2154, starbase-pages 3274) |
 
 ### Shared decisions (binding for G1, G2a and G2b)
 
