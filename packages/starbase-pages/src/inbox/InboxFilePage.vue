@@ -293,7 +293,11 @@ async function choose(rec: { collection: string; id: string }) {
 	if (r.ok && f.state === 'linked') await reload();
 	dialogBusy.value = false;
 	if (r.ok) dialogOpen.value = false;
-	else dialogError.value = r.message;
+	else if (r.undone) {
+		// the old link is gone and the new one was refused (the notice says so): the file is back in the Inbox, so this page moves on as after an Undo
+		dialogOpen.value = false;
+		leave();
+	} else dialogError.value = r.message;
 }
 async function addScan(form: ScanAddForm) {
 	const f = file.value;

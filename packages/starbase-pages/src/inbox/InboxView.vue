@@ -121,7 +121,8 @@ async function choose(rec: { collection: string; id: string }) {
 		dialogOpen.value = false;
 		// the changed file is on its new record: the sheet stays on it (the undo had handed the selection to its neighbour)
 		if (f.state === 'linked') selectedId.value = f.candidate_id;
-	} else dialogError.value = r.message;
+	} else if (r.undone) dialogOpen.value = false; // the old link is gone and the new one was refused (the notice says so): the file is back in the Inbox
+	else dialogError.value = r.message;
 }
 
 // ---- the Add a surface scan dialog (a surface scan is ADDED to an insert or an edge, never linked) ----

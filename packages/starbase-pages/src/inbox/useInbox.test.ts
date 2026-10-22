@@ -133,7 +133,7 @@ describe('changing the record of a linked file', () => {
 		const f = linkedFile();
 		const { inbox } = setup([f], undefined, { editable: () => false });
 		const r = await inbox.relink(f, 'physical_samples', 'new-record');
-		expect(r).toMatchObject({ ok: false });
+		expect(r).toMatchObject({ ok: false, undone: true });
 		const message = (r as { message: string }).message;
 		expect(message).toMatch(/^The old link was removed, but the new one could not be made: /);
 		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: message });

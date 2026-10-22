@@ -48,8 +48,11 @@ export interface Notice {
 	removeRule?: string;
 }
 
-/** A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. */
-export type Outcome = { ok: true } | { ok: false; message: string; field?: string };
+/**
+ * A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. `undone` is a Change whose old link was removed before the new one was
+ * refused: the file is back in the Inbox, unlinked, so the page must not go on showing it as linked.
+ */
+export type Outcome = { ok: true } | { ok: false; message: string; field?: string; undone?: true };
 
 export interface InboxDeps {
 	api: HostApi;
@@ -417,7 +420,7 @@ export function createInbox(deps: InboxDeps) {
 		}
 		const text = `${CHANGE_HALF_DONE}: ${made.message}`;
 		say({ tone: 'bad', text });
-		return { ok: false, message: text };
+		return { ok: false, message: text, undone: true };
 	}
 
 	async function rescanNow(): Promise<Outcome> {
