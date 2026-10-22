@@ -1687,6 +1687,21 @@ below. "Since" is the surface scan privacy PR (pending).
   again`, then, once Directus answers, the same CRITICAL line and a non-zero exit (the poller re-asks at the end of each poll pass
   until it gets a definite answer; with the administrator's token it stops asking after the first `409`).
   Since: the surface scan privacy PR (#392); the cold-start check: its follow-up (#394).
+- [ ] **SS8 — The claim route and the webhook path on the lab stack.** On the lab's Docker stack (the floating `directus/directus:11` image,
+  not the scratch Directus 11.17.4 of the 2026-10-22 run): add a scan of a real `.al3d` and watch the worker log. Expect `start scan=...`
+  then `done scan=...` with no `JSONDecodeError`, and `render_status` `pending`, `rendering`, `done`. Call the claim route twice at once
+  as the administrator on a `pending` scan (`POST /d1-surface-scan/<id>/claim` with `{"version": <v>}`, two shells): one `200`, one `409`.
+  As a member: `403`. Then the webhook: the Directus Flow that posts to the worker on a new scan should start the render at once, not after
+  the poller's 60 s pass (the scratch run only had the poller). Record the Directus image version (`docker compose exec directus npx
+  directus --version` or the admin About page). Since: the claim PR (#395).
+- [ ] **SS9 — A version filter on a PATCH on the lab stack (heavy-data-worker, analysis-worker).** On the lab's Directus, with a throwaway
+  tool box: `PATCH /items/tool_boxes/<id>?filter[version][_eq]=99` with `{"notes":"x"}` while its `version` is 1 (administrator token). On
+  the scratch Directus 11.17.4 this wrote the row anyway, bumped `version` and answered an empty `204`. If the lab's Directus does the same,
+  `heavy-data-worker` and `analysis-worker` (their `patch_test_session` / OCC write-back, `docs/api-contract.md` 7.2) fail to parse the
+  empty answer on every versioned write and cannot detect a stale version: file a fix (an endpoint compare-and-set as in #395, or
+  re-read and verify) and fix `docs/api-contract.md` 7.2 and their stubs. Also run one real session through both workers and look for
+  `JSONDecodeError` in their logs. If the answer is a JSON body with `data: null` for the stale write, tick it and correct the note in 7.2.
+  Since: the claim PR (#395).
 
 ### Design system rollout: View rail, title pin, FAST plotter (PR #377)
 
