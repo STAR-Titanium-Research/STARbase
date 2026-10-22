@@ -48,8 +48,8 @@ function fakeServices({ readable = {}, denyAll = false } = {}) {
   return { services: { ItemsService }, reads };
 }
 
-const LOG_ROW = { log_id: LOG, log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
-const OTHER_LOG_ROW = { log_id: OTHER_LOG, log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
+const LOG_ROW = { log_id: LOG, directus_files_id: 'file-1', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
+const OTHER_LOG_ROW = { log_id: OTHER_LOG, directus_files_id: 'file-2', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
 // run 1 (op-1) holds 12:10:00-12:20:00; run 2 (op-2) holds 12:40:00-12:50:00; run 9 is on another log
 const RUNS = [
   { id: 'run-1', operation_id: 'op-1', log_id: LOG, window_start: new Date(iso('12:10:00')), window_end: new Date(iso('12:20:00')) },
@@ -75,8 +75,14 @@ const refusal = async (promise) => {
   return null;
 };
 
-test('registers filters for conform_run_data create and update and conform_logs delete, nothing else', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['conform_logs.items.delete', 'conform_run_data.items.create', 'conform_run_data.items.update']);
+test('registers filters for conform_run_data create and update, conform_logs delete and the update of a file, nothing else', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), [
+    'conform_logs.items.delete',
+    'conform_run_data.items.create',
+    'conform_run_data.items.update',
+    'files.update',
+    'items.update',
+  ]);
 });
 
 test('the refusal has the shape of a Directus InvalidPayloadError: 400, INVALID_PAYLOAD, the sentence as message and extensions.reason', async () => {
@@ -319,4 +325,59 @@ test('delete: the refusal does not depend on whether the caller can read the run
   const { filters, context } = mount({ denyAll: true });
   const err = await refusal(filters['conform_logs.items.delete']([LOG], {}, context));
   assert.equal(err.message, MESSAGES.logInUse);
+});
+
+// ---- the file of a log -----------------------------------------------------------------------------------------------------
+
+test('files.update: a member cannot change the file a Conform log points at (403 FORBIDDEN, the sentence as reason, source set)', async () => {
+  for (const event of ['files.update', 'items.update']) {
+    const { filters, context } = mount();
+    const err = await refusal(filters[event]({ title: 'renamed' }, { keys: ['file-1'], collection: 'directus_files' }, context));
+    assert.ok(err instanceof Error, event);
+    assert.equal(err.message, "A Conform log's file can't be changed after upload.");
+    assert.equal(err.status, 403);
+    assert.equal(err.code, 'FORBIDDEN');
+    assert.equal(err.extensions.code, 'FORBIDDEN');
+    assert.equal(err.extensions.reason, err.message);
+    assert.equal(err.extensions.source, 'd1-conform-guard');
+    assert.equal(err.extensions.kind, 'log_file');
+  }
+});
+
+test('files.update: one referenced file among several keys refuses the whole write', async () => {
+  const { filters, context } = mount();
+  const err = await refusal(filters['files.update']({ folder: 'f' }, { keys: ['other-file', 'file-2'] }, context));
+  assert.equal(err.message, MESSAGES.logFile);
+});
+
+test('files.update: a file no log points at, an administrator and a call with no signed-in user are not refused', async () => {
+  const { filters, context, db } = mount();
+  const payload = { title: 'x' };
+  assert.equal(await filters['files.update'](payload, { keys: ['not-a-log-file'] }, context), payload);
+  const admin = { ...context, accountability: { user: 'admin-1', admin: true } };
+  assert.equal(await filters['files.update'](payload, { keys: ['file-1'] }, admin), payload);
+  const internal = { ...context, accountability: null };
+  assert.equal(await filters['files.update'](payload, { keys: ['file-1'] }, internal), payload);
+  const before = db.calls.length;
+  assert.equal(await filters['files.update'](payload, { keys: [] }, context), payload);
+  assert.equal(db.calls.length - before, 0, 'no key, nothing read');
+});
+
+test('items.update: an update of another collection is not looked at', async () => {
+  const { filters, context, db } = mount();
+  const payload = { title: 'x' };
+  assert.equal(await filters['items.update'](payload, { keys: ['file-1'], collection: 'samples' }, context), payload);
+  assert.equal(db.calls.length, 0);
+});
+
+test('every refusal carries extensions.source d1-conform-guard (windows, deletes and the file rule)', async () => {
+  const { filters, context } = mount({ readable: { 'op-1': 'R1' } });
+  const refusals = await Promise.all([
+    refusal(filters['conform_run_data.items.create']({ operation_id: 'op-3', log_id: LOG, window_start: iso('12:30:00'), window_end: iso('12:20:00') }, {}, context)),
+    refusal(filters['conform_run_data.items.create']({ operation_id: 'op-3', log_id: LOG, window_start: iso('11:00:00'), window_end: iso('11:10:00') }, {}, context)),
+    refusal(filters['conform_run_data.items.create']({ operation_id: 'op-3', log_id: LOG, window_start: iso('12:15:00'), window_end: iso('12:30:00') }, {}, context)),
+    refusal(filters['conform_logs.items.delete']([LOG], {}, context)),
+    refusal(filters['files.update']({ title: 'x' }, { keys: ['file-1'] }, context)),
+  ]);
+  assert.deepEqual(refusals.map((e) => e?.extensions?.source), Array(5).fill('d1-conform-guard'));
 });

@@ -18,12 +18,20 @@
 //       Windows are half-open [start, end): [a, b) and [b, c) touch and are accepted.
 //   conform_logs delete: refused while any conform_run_data row still uses the log
 //       "This log is still used by a Conform run. Unlink it from the run first."
+//   files update (directus_files), for a signed-in caller who is not an administrator: refused when conform_logs.directus_files_id
+//       points at the file, so the stored normalised CSV (the thing every run's summary was worked out from) cannot be replaced, renamed
+//       or moved by a member after upload.   "A Conform log's file can't be changed after upload."
+//       Directus names the filter of a system collection after its scope (files.update); items.update is registered too in case a
+//       Directus version fires it for directus_files as well (a refused write is refused once). Not tried on a live Directus: backlog C5.
 //
-// The checks apply to every caller, administrators and internal calls included: the readable message is for whoever hits the trigger.
+// The checks on windows and on deleting a log apply to every caller, administrators and internal calls included: the readable message is
+// for whoever hits the trigger. The file rule is a permission rule, so it skips administrators and calls with no signed-in user.
 // Only what the caller may read changes the wording (the operation lookup below runs with the caller's accountability).
 //
 // Errors have the shape of a Directus InvalidPayloadError (status 400, code INVALID_PAYLOAD, extensions.reason) without importing
-// @directus/errors, as d1-access-guard does for its 403s. `message` and `extensions.reason` are the plain sentence.
+// @directus/errors, as d1-access-guard does for its 403s. `message` and `extensions.reason` are the plain sentence. Every refusal carries
+// `extensions.source: 'd1-conform-guard'` (the file rule's is a 403 FORBIDDEN), so a client shows `reason` only for the guards it knows
+// (this one and d1-access-guard) and words anything else itself, never Directus's developer text.
 
 const SOURCE = 'd1-conform-guard';
 
@@ -32,6 +40,7 @@ export const MESSAGES = {
   outside: (start, end) => `Run window lies outside the log (${start} to ${end}, UK time).`,
   overlap: (code) => `Run window overlaps ${code} on this log.`,
   logInUse: 'This log is still used by a Conform run. Unlink it from the run first.',
+  logFile: "A Conform log's file can't be changed after upload.",
 };
 export const OTHER_RUN = 'another run';
 
@@ -41,6 +50,15 @@ function invalidPayload(reason, details = {}) {
   err.status = 400;
   err.code = 'INVALID_PAYLOAD';
   err.extensions = { code: 'INVALID_PAYLOAD', reason, source: SOURCE, ...details };
+  return err;
+}
+
+function forbidden(reason, details = {}) {
+  const err = new Error(reason);
+  err.name = 'DirectusError';
+  err.status = 403;
+  err.code = 'FORBIDDEN';
+  err.extensions = { code: 'FORBIDDEN', reason, source: SOURCE, ...details };
   return err;
 }
 
@@ -151,4 +169,18 @@ export default ({ filter }, { services }) => {
     if (used) throw invalidPayload(MESSAGES.logInUse, { kind: 'log_in_use', collection: 'conform_logs' });
     return payload;
   });
+  // A non-admin member cannot change the file of a Conform log (replace it, rename it, move it, retitle it). The upload itself is a create,
+  // not an update, so the normal flow never meets this.
+  const refuseLogFileUpdate = async (payload, meta, context) => {
+    if (!payload || typeof payload !== 'object' || !context?.database) return payload;
+    if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
+    if (!context.accountability?.user || context.accountability.admin === true) return payload;
+    const keys = (Array.isArray(meta?.keys) ? meta.keys : []).filter((key) => !isBlank(key) && typeof key !== 'object');
+    if (keys.length === 0) return payload;
+    const used = await context.database('conform_logs').whereIn('directus_files_id', keys).first('log_id');
+    if (used) throw forbidden(MESSAGES.logFile, { kind: 'log_file', collection: 'directus_files' });
+    return payload;
+  };
+  filter('files.update', refuseLogFileUpdate);
+  filter('items.update', refuseLogFileUpdate);
 };

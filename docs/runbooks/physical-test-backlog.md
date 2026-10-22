@@ -1787,7 +1787,11 @@ below. "Since" is the surface scan privacy PR (pending).
   and the log row is still there; after unlinking the run (log, window, summary and steps cleared) the delete works for the
   uploader and is refused (403) for anyone else; (d) `conform_logs.run_windows` of the shared log (read it as any member) lists
   both runs' windows, sorted by start, with UTC times, and follows a window change at once; (e) every Lab Member and Lab Viewer
-  reads every log; only the uploader may delete one. Since: Conform runs review round 1.
+  reads every log; only the uploader may delete one; (f) the file of a log cannot be changed: as a Lab Member,
+  `PATCH /files/<the log's directus_files_id>` (any field, for example `{"title":"x"}`) answers 403 with the reason "A Conform
+  log's file can't be changed after upload." (the `files.update` filter of `d1-conform-guard`; if Directus does not fire it for
+  system collections the PATCH succeeds, which is the finding to report), the same PATCH as an administrator works, and a PATCH
+  of a file no log uses works for the member. Since: Conform runs review rounds 1 and 2.
 
 ### Conform plotter (Conform runs plan, stream C)
 
