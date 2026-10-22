@@ -39,7 +39,10 @@
         "linked_collection": "surface_scans",
         "linked_record_id": "00000000-0000-4000-8000-000000006001",
         "linked_label": "H13A-#2-fC (worn)",
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": "Alice A",
+        "can_undo": true,
         "owner": {
           "kind": "person",
           "id": "00000000-0000-4000-8000-000000000011",

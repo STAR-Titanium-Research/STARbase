@@ -233,6 +233,14 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		f.state === 'linked' ? 'linked' : f.state === 'dismissed' ? 'dismissed' : f.state === 'new' && f.origin === 'backlog' ? 'older' : f.state === 'new' ? 'new' : 'gone';
 	const folderOf = (p: string) => p.slice(0, p.lastIndexOf('/') + 1);
 
+	/** A linked row as the list sends it: with the size of its link batch (a test may set link_batch_size itself). */
+	const withBatchSize = (f: FoundFile): FoundFile => {
+		if (f.state !== 'linked') return f;
+		const size = f.link_batch_id && f.link_batch_size === undefined ? { link_batch_size: files.filter((x) => x.state === 'linked' && x.link_batch_id === f.link_batch_id).length } : {};
+		// what the server says of who may undo it: only the person who linked it (the fake's caller did, unless the test says otherwise)
+		return { ...f, ...size, can_undo: f.can_undo ?? !opts.undoByLinkerOnly };
+	};
+
 	function matching(params: Record<string, any>): FoundFile[] {
 		const tab = params.tab ?? 'new';
 		const kinds = typeof params.kind === 'string' ? params.kind.split(',') : null;
@@ -435,9 +443,39 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 			const offset = Number(p.offset ?? 0);
 			const limit = Number(p.limit ?? 50);
 			const asked = p.acceptable === '1' || p.acceptable === 1;
-			return ok(rows.slice(offset, offset + limit), { meta: { total: rows.length, limit, offset, ...(asked ? { acceptable: plan(p).entries.length } : {}) } });
+			return ok(rows.slice(offset, offset + limit).map(withBatchSize), { meta: { total: rows.length, limit, offset, ...(asked ? { acceptable: plan(p).entries.length } : {}) } });
+		},
+		// The other pictures linked to the same sample, operation or test as the file, newest link first (the list's visibility: every file here is the caller's).
+		'get /d1-inbox/siblings': (c) => {
+			const p = c.params ?? {};
+			const self = files.find((f) => f.candidate_id === p.file);
+			if (!self) throw err(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: p.file });
+			const limit = Number(p.limit ?? 7);
+			const on = self.state === 'linked' && !!self.linked_record_id && self.linked_collection !== 'surface_scans';
+			const rows = on ? files.filter((f) => f !== self && f.state === 'linked' && f.linked_collection === self.linked_collection && f.linked_record_id === self.linked_record_id && (f.kind === 'sem_image' || f.kind === 'image')) : [];
+			return ok(rows.slice(0, limit).map(withBatchSize), { meta: { total: rows.length, limit, offset: 0, acceptable: null } });
 		},
 		'post /d1-inbox/link': (c) => ok(doLink((c.body as any).items, (c.body as any).items.length === 1 ? 'manual' : 'bulk')),
+		// Change, atomically: the file's own link is undone and the new one made, or nothing changes (a refusal puts the old link back)
+		'post /d1-inbox/relink': (c) => {
+			const body = c.body as any;
+			const f = files.find((x) => x.candidate_id === body.candidate_id);
+			if (!f) throw err(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: body.candidate_id });
+			if (f.state !== 'linked' || !f.link_batch_id || f.linked_collection === 'surface_scans') throw err(409, 'NOT_LINKED', 'That file is not linked to a sample, operation or test, so there is no link to change.', { candidate_id: f.candidate_id });
+			if (opts.undoByLinkerOnly) throw err(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
+			const before = { ...f };
+			const key = `${f.linked_collection}:${f.linked_record_id}:${f.directus_files_id}`;
+			const junctionId = junctions.get(key);
+			junctions.delete(key);
+			Object.assign(f, { state: 'new', link_kind: null, link_batch_id: null, decided_at: null, linked_collection: null, linked_record_id: null, linked_label: null, linked_title: null, link_batch_size: undefined });
+			try {
+				return ok(doLink([{ candidate_id: f.candidate_id, collection: body.collection, record_id: body.record_id }], 'manual'));
+			} catch (e) {
+				Object.assign(f, before);
+				if (junctionId !== undefined) junctions.set(key, junctionId);
+				throw e;
+			}
+		},
 		'post /d1-inbox/accept-all': (c) => {
 			const body = c.body as any;
 			const p = plan(body.filter ?? {}, opts.acceptIds !== false && Array.isArray(body.candidate_ids) ? body.candidate_ids : undefined);
@@ -491,7 +529,7 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 					delete f.linked_insert_id;
 					delete f.linked_edge_id;
 				} else junctions.delete(`${f.linked_collection}:${f.linked_record_id}:${f.directus_files_id}`);
-				Object.assign(f, { state: 'new', link_kind: null, link_batch_id: null, decided_at: null, linked_collection: null, linked_record_id: null, linked_label: null });
+				Object.assign(f, { state: 'new', link_kind: null, link_batch_id: null, decided_at: null, linked_collection: null, linked_record_id: null, linked_label: null, linked_title: null, link_batch_size: undefined });
 			}
 			return ok({ link_batch_id: id, undone: rows.length });
 		},

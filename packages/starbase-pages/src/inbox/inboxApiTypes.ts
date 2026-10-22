@@ -67,6 +67,12 @@ export interface FoundFile {
 	linked_collection?: string | null;
 	linked_record_id?: string | null;
 	linked_label?: string | null;
+	/** Linked tab: the linked record's second line as the caller may read it (a sample's nickname, a test's type); null for an operation or when unreadable. */
+	linked_title?: string | null;
+	/** Linked tab: how many files the row's link batch holds. An Undo undoes the whole batch. Null when the row is not linked. */
+	link_batch_size?: number | null;
+	/** Linked rows: would an Undo (and so a Change) of this link work for the caller now: they linked it, or are an administrator who may change the file. Absent from an older server: read as yes. */
+	can_undo?: boolean;
 	/** Linked tab, a file added as a surface scan: the insert or the edge it was added to (the other is null). Absent on any other row. */
 	linked_insert_id?: string | null;
 	linked_edge_id?: string | null;
@@ -104,6 +110,12 @@ export interface FilesQuery {
 	acceptable?: 0 | 1;
 	limit?: number;
 	offset?: number;
+}
+
+/** GET /d1-inbox/siblings: the other pictures linked to the same record as a file, newest link first, and how many there are in all. */
+export interface SiblingsPage {
+	rows: FoundFile[];
+	total: number;
 }
 
 export interface FilesPage {

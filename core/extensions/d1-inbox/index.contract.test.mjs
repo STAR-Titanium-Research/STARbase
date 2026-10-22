@@ -43,7 +43,8 @@ test('the fixtures are the cases the client has to handle', () => {
     'picture_headers', 'picture_404',
     'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_get_empty_viewer', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
     'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
-    'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404',
+    'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404', 'siblings', 'siblings_none', 'siblings_404',
+    'relink_ok', 'relink_403_not_editable', 'relink_409_not_linked',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -102,6 +103,11 @@ test('every request in a fixture is one the server accepts', () => {
           assert.match(i.record_id, UUID, label);
         }
       }
+    } else if (req.path === '/d1-inbox/relink') {
+      assert.deepEqual(Object.keys(body).sort(), ['candidate_id', 'collection', 'record_id'], label);
+      assert.match(body.candidate_id, UUID, label);
+      assert.match(body.record_id, UUID, label);
+      assert.ok(LINK_COLLECTIONS.includes(body.collection) && body.collection !== 'surface_scans', label);
     } else if (req.path === '/d1-inbox/accept-all') {
       const parsed = parseFileFilters(body.filter, { defaultTab: 'open' });
       assert.deepEqual(Object.keys(body.filter).filter((k) => !FILTER_KEYS.includes(k)), [], `${label} sends a filter key the server ignores`);
@@ -109,6 +115,10 @@ test('every request in a fixture is one the server accepts', () => {
       if (body.dry_run !== undefined) assert.equal(typeof body.dry_run, 'boolean', label);
       for (const id of body.candidate_ids ?? []) assert.match(id, UUID, label);
       assert.deepEqual(Object.keys(body).filter((k) => !['filter', 'dry_run', 'candidate_ids', 'cursor'].includes(k)), [], label);
+    } else if (req.path === '/d1-inbox/siblings') {
+      assert.deepEqual(Object.keys(req.query).sort(), ['file', 'limit'], label);
+      assert.match(req.query.file, UUID, label);
+      if (fx.status === 200) assert.equal(fx.body.meta.limit, Number(req.query.limit), label);
     } else if (req.path === '/d1-inbox/sem-settings') {
       assert.deepEqual(Object.keys(req.query), ['file'], label);
       assert.match(req.query.file, UUID, label);
@@ -140,7 +150,7 @@ test('every answer has the envelope the client reads: { data } with a status, or
     } else {
       assert.ok(fx.body.data !== undefined, `${name} has no data`);
       assert.deepEqual(Object.keys(fx.body).filter((k) => k !== 'data' && k !== 'meta'), [], name);
-      assert.equal('meta' in fx.body, fx.request.path === '/d1-inbox/files' || (fx.request.path === '/d1-inbox/ignored-folders' && fx.request.method === 'GET'), `${name}: only the file list and the ignored folders list carry meta`);
+      assert.equal('meta' in fx.body, fx.request.path === '/d1-inbox/files' || fx.request.path === '/d1-inbox/siblings' || (fx.request.path === '/d1-inbox/ignored-folders' && fx.request.method === 'GET'), `${name}: only the file lists and the ignored folders list carry meta`);
     }
   }
   assert.equal(read('rescan_429.json').body.errors[0].extensions.retry_after_seconds, 420);

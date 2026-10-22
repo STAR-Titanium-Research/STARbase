@@ -1,0 +1,24 @@
+{
+  "description": "a file the caller cannot see",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/siblings",
+    "query": {
+      "file": "00000000-0000-4000-8000-000000001999",
+      "limit": "7"
+    }
+  },
+  "status": 404,
+  "body": {
+    "errors": [
+      {
+        "message": "That file is not in your inbox.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001999",
+          "code": "NOT_FOUND",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}
