@@ -26,15 +26,15 @@ describe('summariseWindow', () => {
 
 	it('summarises the whole fixture', () => {
 		expect(s.version).toBe(1);
-		expect(s.extruding_s).toBe(804);
-		expect(s.mean_wheel_speed_rpm).toBeCloseTo(4.724669, 5);
-		expect(s.mean_torque_pct).toBeCloseTo(18.465351, 5);
-		expect(s.mean_tooling1_c).toBeCloseTo(381.202406, 5);
-		expect(s.peak_torque_pct).toBeCloseTo(67.370605, 5);
-		expect(s.peak_motor_current_a).toBeCloseTo(158.163025, 5);
-		expect(s.peak_tooling1_c).toBeCloseTo(433.380493, 5);
-		expect(s.peak_wheel_temp_c).toBeCloseTo(97.369858, 5);
-		expect(s.energy_kwh.total).toBeCloseTo(7.670553, 5);
+		expect(s.extruding_s).toBe(870);
+		expect(s.mean_wheel_speed_rpm).toBeCloseTo(4.628926, 5);
+		expect(s.mean_torque_pct).toBeCloseTo(17.904279, 5);
+		expect(s.mean_tooling1_c).toBeCloseTo(367.3525, 5);
+		expect(s.peak_torque_pct).toBeCloseTo(22.0, 5);
+		expect(s.peak_motor_current_a).toBeCloseTo(51.4, 5);
+		expect(s.peak_tooling1_c).toBeCloseTo(430.355, 5);
+		expect(s.peak_wheel_temp_c).toBeCloseTo(96.93, 5);
+		expect(s.energy_kwh.total).toBeCloseTo(7.523869, 5);
 		expect(s.duration_s).toBe(899);
 		expect(s.n_rows).toBe(900);
 		expect(s.gaps).toBe(0);
@@ -43,8 +43,8 @@ describe('summariseWindow', () => {
 	});
 
 	it('summarises a sub-window, clipped to the log', () => {
-		const sub = summariseWindow(trace, t0, Date.parse('2025-03-17T13:43:18Z'), Date.parse('2025-03-17T13:53:20Z'));
-		expect(sub.energy_kwh.total).toBeCloseTo(5.203773, 5);
+		const sub = summariseWindow(trace, t0, Date.parse('2025-01-15T10:04:58Z'), Date.parse('2025-01-15T10:15:00Z'));
+		expect(sub.energy_kwh.total).toBeCloseTo(5.118654, 5);
 		expect(sub.n_rows).toBe(602);
 	});
 

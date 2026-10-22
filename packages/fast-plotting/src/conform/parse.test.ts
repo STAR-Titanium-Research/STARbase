@@ -12,11 +12,11 @@ const EXPECTED_KEYS = [
 ];
 
 describe('parseConformCsv', () => {
-	it('parses the TiSwarf excerpt', () => {
+	it('parses the synthetic log', () => {
 		const p = parseConformCsv(fixtureText);
 		expect(p.n).toBe(900);
-		expect(p.startMs).toBe(Date.UTC(2025, 2, 17, 13, 38, 20));
-		expect(p.endMs).toBe(Date.UTC(2025, 2, 17, 13, 53, 19));
+		expect(p.startMs).toBe(Date.UTC(2025, 0, 15, 10, 0, 0));
+		expect(p.endMs).toBe(Date.UTC(2025, 0, 15, 10, 14, 59));
 		expect(p.gaps).toBe(0);
 		expect(p.time[0]).toBe(0);
 		expect(p.time[899]).toBe(899);
@@ -25,7 +25,7 @@ describe('parseConformCsv', () => {
 		expect(p.channels).toHaveLength(EXPECTED_KEYS.length);
 		expect(p.channels.find((c) => c.key === 'tooling1_c')!.label).toBe('Tooling 1 (behind abutment)');
 		expect(p.channels.find((c) => c.key === 'tooling2_c')!.label).toBe('Tooling 2 (die exit)');
-		expect(p.values.motor_current_a[0]).toBeCloseTo(71.7637939453125, 10);
+		expect(p.values.motor_current_a[0]).toBe(16.2);
 		expect(p.values.ips_setpoint_c[0]).toBe(500);
 	});
 

@@ -30,19 +30,19 @@ describe('normaliseLog', () => {
 	it('records min, max and flat channels', () => {
 		const t2 = norm.series.find((s) => s.key === 'tooling2_c')!;
 		expect(t2.flat).toBe(true);
-		expect(t2.min!).toBeGreaterThanOrEqual(23.9);
-		expect(t2.max!).toBeLessThanOrEqual(24.4);
+		expect(t2.min!).toBeGreaterThanOrEqual(23.7);
+		expect(t2.max!).toBeLessThanOrEqual(24.3);
 		expect(norm.series.find((s) => s.key === 'tooling1_c')!.flat).toBeFalsy();
 		expect(norm.series.find((s) => s.key === 'wheel_speed_rpm')!.flat).toBeFalsy();
 	});
 
 	it('reports whole-log totals and the log span', () => {
 		expect(norm.totals.duration_s).toBe(899);
-		expect(norm.totals.energy_kwh.total).toBeCloseTo(7.670553, 5);
+		expect(norm.totals.energy_kwh.total).toBeCloseTo(7.523869, 5);
 		expect(norm.totals.missing).toEqual([]);
-		expect(norm.totals.avg_demand_kw).toBeCloseTo((7.670553 * 3600) / 900, 3);
-		expect(norm.logStart).toBe('2025-03-17T13:38:20.000Z');
-		expect(norm.logEnd).toBe('2025-03-17T13:53:19.000Z');
+		expect(norm.totals.avg_demand_kw).toBeCloseTo((7.523869 * 3600) / 900, 3);
+		expect(norm.logStart).toBe('2025-01-15T10:00:00.000Z');
+		expect(norm.logEnd).toBe('2025-01-15T10:14:59.000Z');
 		expect(norm.nRows).toBe(900);
 		expect(norm.durationS).toBe(899);
 		expect(norm.constants.version).toBe(1);

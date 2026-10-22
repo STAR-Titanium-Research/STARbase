@@ -37,11 +37,11 @@ function fakeApi(routes: (c: Call) => unknown) {
 
 const norm = normaliseLog(parseConformCsv(fixtureText));
 const logRow = (id: string): ConformLogRow => ({
-	log_id: id, directus_files_id: `file-${id}`, equipment_id: 'eq-1', source_filename: 'TiSwarf.csv',
+	log_id: id, directus_files_id: `file-${id}`, equipment_id: 'eq-1', source_filename: 'synthetic.csv',
 	log_start: norm.logStart, log_end: norm.logEnd, n_rows: norm.nRows, duration_s: norm.durationS,
 	series: norm.series, totals: norm.totals, constants: norm.constants,
 });
-const OP = { operation_id: 'op-1', equipment_id: 'eq-1', operation_date: '2025-03-17T09:00:00' };
+const OP = { operation_id: 'op-1', equipment_id: 'eq-1', operation_date: '2025-01-15T09:00:00' };
 
 // Defaults for a happy upload; a test overrides one route by returning from `over` first.
 const happy = (over: (c: Call) => unknown = () => undefined) => (c: Call): unknown => {
@@ -58,7 +58,7 @@ const happy = (over: (c: Call) => unknown = () => undefined) => (c: Call): unkno
 describe('uploadConformLog', () => {
 	it('uploads the file, then the log, then the run data with the whole-log window', async () => {
 		const f = fakeApi(happy());
-		const res = await uploadConformLog(f.api, OP, { name: 'TiSwarf.csv', text: fixtureText });
+		const res = await uploadConformLog(f.api, OP, { name: 'synthetic.csv', text: fixtureText });
 		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'POST /items/conform_run_data']);
 
 		const form = f.calls.find((c) => c.url === '/files')!.body as FormData;
@@ -68,11 +68,11 @@ describe('uploadConformLog', () => {
 		expect(csv.split('\n')[0].startsWith('time_s,')).toBe(true);
 
 		const logBody = f.calls.find((c) => c.method === 'post' && c.url === '/items/conform_logs')!.body;
-		expect(logBody).toMatchObject({ directus_files_id: 'file-new', equipment_id: 'eq-1', source_filename: 'TiSwarf.csv', n_rows: 900, log_start: '2025-03-17T13:38:20.000Z' });
+		expect(logBody).toMatchObject({ directus_files_id: 'file-new', equipment_id: 'eq-1', source_filename: 'synthetic.csv', n_rows: 900, log_start: '2025-01-15T10:00:00.000Z' });
 
 		const runBody = f.calls.find((c) => c.method === 'post' && c.url === '/items/conform_run_data')!.body;
-		expect(runBody).toMatchObject({ operation_id: 'op-1', log_id: 'log-new', window_start: '2025-03-17T13:38:20.000Z', window_end: '2025-03-17T13:53:19.000Z', status: 'done' });
-		expect(runBody.summary.energy_kwh.total).toBeCloseTo(7.670553, 5);
+		expect(runBody).toMatchObject({ operation_id: 'op-1', log_id: 'log-new', window_start: '2025-01-15T10:00:00.000Z', window_end: '2025-01-15T10:14:59.000Z', status: 'done' });
+		expect(runBody.summary.energy_kwh.total).toBeCloseTo(7.523869, 5);
 		expect(runBody.steps).toHaveLength(3);
 
 		expect(res.log.log_id).toBe('log-new');
@@ -82,7 +82,7 @@ describe('uploadConformLog', () => {
 
 	it('updates an existing run row instead of inserting', async () => {
 		const f = fakeApi(happy((c) => (c.method === 'get' && c.url === '/items/conform_run_data' ? [{ id: 'run-old', operation_id: 'op-1', status: 'no_log' }] : undefined)));
-		await uploadConformLog(f.api, OP, { name: 'TiSwarf.csv', text: fixtureText });
+		await uploadConformLog(f.api, OP, { name: 'synthetic.csv', text: fixtureText });
 		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'PATCH /items/conform_run_data/run-old']);
 	});
 
@@ -116,20 +116,20 @@ describe('uploadConformLog', () => {
 		const f = fakeApi(happy());
 		const res = await uploadConformLog(f.api, { ...OP, operation_date: null }, { name: 'x.csv', text: fixtureText });
 		const patch = f.calls.find((c) => c.method === 'patch' && c.url === '/items/manufacturing_operations/op-1')!;
-		expect(patch.body).toEqual({ operation_date: '2025-03-17T13:38:20.000Z' });
+		expect(patch.body).toEqual({ operation_date: '2025-01-15T10:00:00.000Z' });
 		expect(res.dateWarning).toBeNull();
 	});
 
 	it('warns, and changes nothing, when the run date is more than a day from the log', async () => {
 		const f = fakeApi(happy());
 		const res = await uploadConformLog(f.api, { ...OP, operation_date: '2025-03-20T09:00:00' }, { name: 'x.csv', text: fixtureText });
-		expect(res.dateWarning).toBe("The log starts on 2025-03-17, more than a day from the run's date 2025-03-20; the date was not changed.");
+		expect(res.dateWarning).toBe("The log starts on 2025-01-15, more than a day from the run's date 2025-03-20; the date was not changed.");
 		expect(f.writes().some((w) => w.includes('manufacturing_operations'))).toBe(false);
 	});
 
 	it('accepts a run date a day away without a warning', async () => {
 		const f = fakeApi(happy());
-		const res = await uploadConformLog(f.api, { ...OP, operation_date: '2025-03-18' }, { name: 'x.csv', text: fixtureText });
+		const res = await uploadConformLog(f.api, { ...OP, operation_date: '2025-01-16' }, { name: 'x.csv', text: fixtureText });
 		expect(res.dateWarning).toBeNull();
 	});
 });
@@ -150,7 +150,7 @@ describe('linkExistingLog', () => {
 });
 
 describe('setRunWindow', () => {
-	const WIN = ['2025-03-17T13:43:18.000Z', '2025-03-17T13:53:20.000Z'] as const;
+	const WIN = ['2025-01-15T10:04:58.000Z', '2025-01-15T10:15:00.000Z'] as const;
 	const routes = (opFields: Record<string, unknown>, over: (c: Call) => unknown = () => undefined) => happy((c) => {
 		const o = over(c);
 		if (o !== undefined) return o;
@@ -170,7 +170,7 @@ describe('setRunWindow', () => {
 		const run = await setRunWindow(f.api, 'op-1', WIN[0], WIN[1]);
 		const patch = f.calls.find((c) => c.method === 'patch' && c.url === '/items/conform_run_data/run-1')!;
 		expect(patch.body).toMatchObject({ window_start: WIN[0], window_end: WIN[1], status: 'done', error_message: null });
-		expect(patch.body.summary.energy_kwh.total).toBeCloseTo(5.203773, 5);
+		expect(patch.body.summary.energy_kwh.total).toBeCloseTo(5.118654, 5);
 		expect(patch.body.steps.map((s: any) => s.wheel_speed_rpm)).toEqual([5]);
 		expect(run.status).toBe('done');
 		const op = f.calls.filter((c) => c.method === 'patch' && c.url === '/items/manufacturing_operations/op-1');
@@ -224,14 +224,14 @@ describe('loadConformRun', () => {
 
 	it('keeps the summary and flags a hidden log on 403', async () => {
 		const f = fakeApi((c) => {
-			if (c.url === '/items/conform_run_data') return [{ id: 'r', operation_id: 'op-1', log_id: 'L', status: 'done', summary: { version: 1, extruding_s: 804 }, steps: [] }];
+			if (c.url === '/items/conform_run_data') return [{ id: 'r', operation_id: 'op-1', log_id: 'L', status: 'done', summary: { version: 1, extruding_s: 870 }, steps: [] }];
 			if (c.url === '/items/conform_logs/L') return httpError(403, 'You do not have permission to access this.');
 			return {};
 		});
 		const r = await loadConformRun(f.api, 'op-1');
 		expect(r.logHidden).toBe(true);
 		expect(r.log).toBeNull();
-		expect((r.run!.summary as any).extruding_s).toBe(804);
+		expect((r.run!.summary as any).extruding_s).toBe(870);
 	});
 
 	it('lets other errors through', async () => {
@@ -243,10 +243,10 @@ describe('loadConformRun', () => {
 describe('listCandidateLogs and listLogWindows', () => {
 	it('asks for logs from the machine within a day of the run date', async () => {
 		const f = fakeApi(() => [logRow('a')]);
-		const logs = await listCandidateLogs(f.api, 'eq-1', '2025-03-17T09:00:00');
+		const logs = await listCandidateLogs(f.api, 'eq-1', '2025-01-15T09:00:00');
 		const filter = f.calls[0].config.params.filter._and;
-		expect(filter).toContainEqual({ log_start: { _gte: '2025-03-16T00:00:00.000Z' } });
-		expect(filter).toContainEqual({ log_start: { _lt: '2025-03-19T00:00:00.000Z' } });
+		expect(filter).toContainEqual({ log_start: { _gte: '2025-01-14T00:00:00.000Z' } });
+		expect(filter).toContainEqual({ log_start: { _lt: '2025-01-17T00:00:00.000Z' } });
 		expect(filter).toContainEqual({ equipment_id: { _eq: 'eq-1' } });
 		expect(logs.map((l) => l.log_id)).toEqual(['a']);
 	});

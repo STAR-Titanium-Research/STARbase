@@ -17,24 +17,24 @@ describe('detectSteps on the fixture', () => {
 		expect(steps).toHaveLength(3);
 		expect(steps.map((s) => [s.wheel_speed_rpm, s.duration_s])).toEqual([[3, 84], [4, 208], [5, 602]]);
 		expect(steps.every((s) => s.ips_setpoint_c === 500)).toBe(true);
-		expect(steps[0].start).toBe('2025-03-17T13:38:20.000Z');
-		expect(steps[1].start).toBe('2025-03-17T13:39:48.000Z');
-		expect(steps[1].end).toBe('2025-03-17T13:43:15.000Z');
+		expect(steps[0].start).toBe('2025-01-15T10:00:00.000Z');
+		expect(steps[1].start).toBe('2025-01-15T10:01:28.000Z');
+		expect(steps[1].end).toBe('2025-01-15T10:04:55.000Z');
 	});
 
 	it('summarises a step', () => {
 		const s = steps[1];
-		expect(s.tooling1_c!.min).toBeCloseTo(323.620483, 5);
-		expect(s.tooling1_c!.max).toBeCloseTo(364.891418, 5);
-		expect(s.tooling1_c!.range).toBeCloseTo(364.891418 - 323.620483, 5);
-		expect(s.mean_torque_pct).toBeCloseTo(14.723558, 5);
-		expect(s.energy_kwh).toBeCloseTo(1.642011, 5);
+		expect(s.tooling1_c!.min).toBeCloseTo(312.76, 5);
+		expect(s.tooling1_c!.max).toBeCloseTo(342.775, 5);
+		expect(s.tooling1_c!.range).toBeCloseTo(342.775 - 312.76, 5);
+		expect(s.mean_torque_pct).toBeCloseTo(18.012487, 5);
+		expect(s.energy_kwh).toBeCloseTo(1.776252, 5);
 		expect(s.wheel_temp_c).not.toBeNull();
 		expect(s.tooling2_c).not.toBeNull();
 	});
 
 	it('only sees the rows inside the window', () => {
-		const sub = detectSteps(trace, t0, Date.parse('2025-03-17T13:43:18Z'), t1 + 1000);
+		const sub = detectSteps(trace, t0, Date.parse('2025-01-15T10:04:58Z'), t1 + 1000);
 		expect(sub.map((s) => [s.wheel_speed_rpm, s.duration_s])).toEqual([[5, 602]]);
 		expect(detectSteps(trace, t0, t0 + 10_000, t0 + 50_000)).toEqual([]);   // 40 rows
 	});
@@ -101,7 +101,7 @@ describe('stepsToCsv', () => {
 		const lines = stepsToCsv(steps).trimEnd().split('\n');
 		expect(lines[0].startsWith('Start,End,Duration (s),IPS setpoint (°C),Wheel speed (rpm)')).toBe(true);
 		expect(lines).toHaveLength(4);
-		expect(lines[1].startsWith('2025-03-17 13:38:20,2025-03-17 13:39:43,84,500,3,')).toBe(true);
+		expect(lines[1].startsWith('2025-01-15 10:00:00,2025-01-15 10:01:23,84,500,3,')).toBe(true);
 		expect(lines[1].split(',')).toHaveLength(lines[0].split(',').length);
 	});
 });
