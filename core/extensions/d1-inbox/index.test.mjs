@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import endpoint, {
   ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, canUndoRow, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
-  parseIgnoredFolder, parseScanItem, safeEqual, semAccess, shapeSemSettings, shapeSummary, unfit,
+  parseIgnoredFolder, parseMeasurement, parseScanItem, safeEqual, semAccess, shapeSemSettings, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
 
@@ -107,6 +107,8 @@ function newWorld() {
     dirs: [],
     // ignored folders (d1_private.inbox_ignored_dirs): { ignored_id, owner_person_id, owner_team_id, rel_folder, created_at, created_by }
     ignored: [], skipIgnoredFind: false,
+    // saved measurements (d1_private.inbox_measurements): { measurement_id, candidate_id, kind, points, label, created_by, created_at }
+    measurements: [],
     crawlerState: {
       desired_state: 'running', interval_minutes: 30, read_mb_per_s: '60', last_heartbeat_at: new Date('2026-10-15T11:59:30.000Z'),
       daemon_started_at: new Date('2026-10-15T08:00:00.000Z'), current_activity: 'idle', last_scan_started_at: new Date('2026-10-15T11:30:00.000Z'),
@@ -153,10 +155,10 @@ const underIgnoredRule = (w, c) => {
 };
 
 // a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
-const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), settings: copy(w.settings), settingsLog: copy(w.settingsLog), ignored: copy(w.ignored) });
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scans: copy(w.scans), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs), dirs: copy(w.dirs), settings: copy(w.settings), settingsLog: copy(w.settingsLog), ignored: copy(w.ignored), measurements: copy(w.measurements) });
 const restore = (w, s) => {
   for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
-  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog; w.ignored = s.ignored;
+  w.junctions = s.junctions; w.scans = s.scans; w.scanRequests = s.scanRequests; w.prefs = s.prefs; w.dirs = s.dirs; w.settings = s.settings; w.settingsLog = s.settingsLog; w.ignored = s.ignored; w.measurements = s.measurements;
 };
 
 // the pointer row's owner columns say another owner than the candidate's (a folder that changed hands, C1): the loaders of d1-inbox leave such a candidate out
@@ -352,6 +354,7 @@ function statement(w, sql, b, txId) {
       }
       return gone;
     }
+    case 'measureTableExists': return [{ available: w.measureTable !== false }];
     case 'semTableExists': return [{ available: w.semTable !== false }];
     case 'semFile': return w.files.has(b[0]) ? [copy(w.files.get(b[0]))] : [];
     case 'semSettingsGet': return w.settings.has(b[0]) ? [copy(w.settings.get(b[0]))] : [];
@@ -373,6 +376,32 @@ function statement(w, sql, b, txId) {
       row.corrected_by = user;
       row.corrected_at = w.now.toISOString();
       return [];
+    }
+    // saved measurements: the file as the picture routes read it (the file-owner predicate), then d1_private.inbox_measurements
+    case 'measureFile': {
+      const c = w.candidates.get(b[0]);
+      return c && !restamped(w, c) ? [{ candidate_id: c.candidate_id, owner_person_id: c.owner_person_id, owner_team_id: c.owner_team_id, state: c.state }] : [];
+    }
+    case 'measureList': case 'measureOne': {
+      const rows = w.measurements.filter((m) => (name === 'measureList' ? m.candidate_id === b[0] : m.measurement_id === b[0] && m.candidate_id === b[1]));
+      rows.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)) || x.measurement_id.localeCompare(y.measurement_id));
+      return copy(rows.map((m) => ({ ...m, author_name: w.people.find((p) => p.user_id === m.created_by)?.full_name ?? null })));
+    }
+    case 'measureCount': return [{ n: w.measurements.filter((m) => m.candidate_id === b[0]).length }];
+    case 'measureInsert': {
+      const [candidateId, kind, json, label, user] = b;
+      const row = { measurement_id: ID(9500 + w.measurements.length + 1), candidate_id: candidateId, kind, points: JSON.parse(json), label, created_by: user, created_at: new Date(w.now.getTime() + w.measurements.length * 1000).toISOString() };
+      w.measurements.push(row);
+      return [{ measurement_id: row.measurement_id }];
+    }
+    case 'measureLabel': {
+      const row = w.measurements.find((m) => m.measurement_id === b[1] && m.candidate_id === b[2]);
+      if (row) row.label = b[0];
+      return row ? [{ measurement_id: row.measurement_id }] : [];
+    }
+    case 'measureDelete': {
+      const at = w.measurements.findIndex((m) => m.measurement_id === b[0] && m.candidate_id === b[1]);
+      return at < 0 ? [] : [{ measurement_id: w.measurements.splice(at, 1)[0].measurement_id }];
     }
     case 'adminState': return [copy(w.crawlerState)];
     // scan progress: the same grouping the SQL does (not gone, not under an owner's ignored rule, the file-owner predicate), by owner
@@ -807,6 +836,8 @@ const USER_ROUTES = [
   'GET /summary', 'GET /files', 'POST /link', 'POST /relink', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
   'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /sem-settings', 'PATCH /sem-settings/:file',
   'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id', 'GET /progress',
+  'GET /files/:candidate_id/measurements', 'POST /files/:candidate_id/measurements',
+  'PATCH /files/:candidate_id/measurements/:measurement_id', 'DELETE /files/:candidate_id/measurements/:measurement_id',
 ];
 
 test('every route but auto-link needs a signed-in user: 401, Directus-shaped, source d1-inbox', async () => {
@@ -842,6 +873,8 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
     ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /relink', { candidate_id: c.candidate_id, collection: 'physical_samples', record_id: S1 }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
     ['PATCH /sem-settings/:file', { field: 'kv', value: 10 }],
     ['POST /ignored-folders', { folder: 'x' }], ['DELETE /ignored-folders/:id', undefined],
+    ['POST /files/:candidate_id/measurements', { kind: 'line', points: [{ x: 1, y: 1 }, { x: 5, y: 5 }] }], ['PATCH /files/:candidate_id/measurements/:measurement_id', { label: 'x' }],
+    ['DELETE /files/:candidate_id/measurements/:measurement_id', undefined],
   ];
   for (const [key, body] of writes) {
     const res = await call(key, { user: U.viewer, role: LAB_VIEWER_ROLE_ID, body });
@@ -4222,6 +4255,252 @@ test('DELETE /ignored-folders/:id: two removals of A and of A/B at once cannot b
   for (const l of locks) assert.ok(w.log.findIndex((x) => x === l) < w.log.findIndex((x) => x.tx === l.tx && x.name === 'ignoredDelete'), 'the lock comes first');
 });
 
+/// ---- saved measurements (migration 211) ------------------------------------------------------------------------------------------
+
+const LINE = { kind: 'line', points: [{ x: 100, y: 200 }, { x: 400, y: 600 }] };
+const CIRCLE = { kind: 'circle', points: [{ x: 500, y: 500 }, { x: 560, y: 500 }], label: 'pore' };
+const POLY = { kind: 'polygon', points: [{ x: 10, y: 10 }, { x: 110, y: 10 }, { x: 60, y: 90 }] };
+const mKey = (verb, withId) => `${verb} /files/:candidate_id/measurements${withId ? '/:measurement_id' : ''}`;
+const getM = (call, c, who) => call(mKey('GET', false), { ...who, params: { candidate_id: c.candidate_id } });
+const postM = (call, c, body, who) => call(mKey('POST', false), { ...who, body, params: { candidate_id: c.candidate_id } });
+const patchM = (call, c, id, body, who) => call(mKey('PATCH', true), { ...who, body, params: { candidate_id: c.candidate_id, measurement_id: id } });
+const deleteM = (call, c, id, who) => call(mKey('DELETE', true), { ...who, params: { candidate_id: c.candidate_id, measurement_id: id } });
+
+test('parseMeasurement: a line, a circle or a polygon with corners in original pixels; anything else is a 400 that names the field', () => {
+  assert.deepEqual(parseMeasurement(LINE), { kind: 'line', points: LINE.points, label: '' });
+  assert.deepEqual(parseMeasurement(CIRCLE), { kind: 'circle', points: CIRCLE.points, label: 'pore' });
+  assert.deepEqual(parseMeasurement({ ...POLY, label: '  grain A  ' }).label, 'grain A', 'the label is trimmed');
+  assert.deepEqual(parseMeasurement({ ...LINE, points: [{ x: 1.23456, y: 2 }, { x: 3, y: 4.5555 }] }).points, [{ x: 1.235, y: 2 }, { x: 3, y: 4.556 }], 'kept to a thousandth of a pixel');
+  const field = (body) => { try { parseMeasurement(body); } catch (e) { return `${e.status} ${e.code} ${e.extra.field ?? ''}`.trim(); } return 'accepted'; };
+  assert.equal(field({ ...LINE, kind: 'spline' }), '400 INVALID_PAYLOAD kind');
+  assert.equal(field({ ...LINE, kind: undefined }), '400 INVALID_PAYLOAD kind');
+  assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...CIRCLE, points: [...CIRCLE.points, { x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...POLY, points: POLY.points.slice(0, 2) }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...POLY, points: Array.from({ length: 201 }, (_, i) => ({ x: i, y: i % 7 })) }), '400 INVALID_PAYLOAD points', 'at most 200 corners');
+  assert.equal(field({ ...POLY, points: Array.from({ length: 200 }, (_, i) => ({ x: i, y: i % 7 })) }), 'accepted');
+  assert.equal(field({ ...LINE, points: 'x' }), '400 INVALID_PAYLOAD points');
+  assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }, { x: 1, y: 1 }] }), '400 INVALID_PAYLOAD points', 'a line of no length is not a shape');
+  assert.equal(field({ ...CIRCLE, points: [{ x: 5, y: 5 }, { x: 5, y: 5 }] }), '400 INVALID_PAYLOAD points', 'a circle of no size is not a shape');
+  for (const bad of [{ x: -1, y: 0 }, { x: 0, y: 1_000_001 }, { x: NaN, y: 0 }, { x: Infinity, y: 0 }, { x: '3', y: 0 }, { x: 1 }, { x: 1, y: 2, z: 3 }, null, 5]) {
+    assert.equal(field({ ...LINE, points: [{ x: 1, y: 1 }, bad] }), '400 INVALID_PAYLOAD points', JSON.stringify(bad));
+  }
+  assert.equal(field({ ...LINE, label: 'x'.repeat(121) }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, label: 'x'.repeat(120) }), 'accepted');
+  assert.equal(field({ ...LINE, label: 5 }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, label: 'a\nb' }), '400 INVALID_PAYLOAD label');
+  assert.equal(field({ ...LINE, created_by: U.bob }), '400 INVALID_PAYLOAD', 'no other key is taken (the author is the caller, never the body)');
+  assert.equal(field(null), '400 INVALID_PAYLOAD');
+  assert.equal(field([]), '400 INVALID_PAYLOAD');
+});
+
+test('POST /files/:id/measurements: the owner saves a shape as its author; 201 with the row; one transaction that starts with the actor', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const res = await postM(call, c, LINE, ALICE);
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { measurement_id: w.measurements[0].measurement_id, kind: 'line', points: LINE.points, label: '', created_at: w.measurements[0].created_at, author_name: 'Alice A', can_edit: true } });
+  assert.deepEqual(w.measurements.map((m) => [m.candidate_id, m.kind, m.created_by]), [[c.candidate_id, 'line', U.alice]]);
+  const tx = w.log.find((l) => l.name === 'measureInsert').tx;
+  assert.ok(tx, 'inside a transaction');
+  assert.equal(w.log.find((l) => l.tx === tx && l.name === 'setActor').bindings[0], U.alice);
+  assert.ok(w.log.findIndex((l) => l.tx === tx && l.name === 'lock') < w.log.findIndex((l) => l.name === 'measureCount'), 'the per-file lock comes before the count');
+  assert.deepEqual(w.log.find((l) => l.name === 'lock' && l.tx === tx).bindings, [`inbox-measure:${c.candidate_id}`]);
+  // the insert binds the kind, the points as JSON text and the label; the JSON is text for ?::jsonb
+  assert.deepEqual(w.log.find((l) => l.name === 'measureInsert').bindings, [c.candidate_id, 'line', JSON.stringify(LINE.points), '', U.alice]);
+});
+
+test('POST /files/:id/measurements: a member of the owner team may save on a team file; the author is the caller', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  assert.equal((await postM(call, c, POLY, BOB)).statusCode, 201);
+  assert.equal(w.measurements[0].created_by, U.bob);
+});
+
+test('POST /files/:id/measurements: nobody else saves: an administrator who is not the owner is 403 (they read, never change), someone outside is the same 404 as a file that is not there; nothing is written', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const gone = add(w, cand({ state: 'gone' }));
+  const { call } = setup(w);
+  const asAdmin = await postM(call, c, LINE, ADMIN);
+  assert.equal(asAdmin.statusCode, 403);
+  assert.equal(codeOf(asAdmin), 'FORBIDDEN');
+  for (const [file, who] of [[c, CAROL], [c, BOB], [gone, ALICE], [{ candidate_id: MISSING }, ALICE], [{ candidate_id: 'nope' }, ALICE]]) {
+    const res = await postM(call, file, LINE, who);
+    assert.equal(res.statusCode, 404, file.candidate_id);
+    assert.equal(codeOf(res), 'NOT_FOUND');
+    assert.equal(errorOf(res).message, 'That file is not in your inbox.', 'the same words for every reason');
+    assert.equal(errorOf(res).extensions.candidate_id, undefined, 'no id is echoed');
+  }
+  assert.equal(w.measurements.length, 0);
+});
+
+test('POST /files/:id/measurements: a restamped file (its folder changed hands) is the same 404 for its old holder', async () => {
+  const w = newWorld();
+  const c = stampTo(w, add(w, cand()), OWNED_BY.other);
+  const { call } = setup(w);
+  assert.equal((await postM(call, c, LINE, ALICE)).statusCode, 404);
+  assert.equal(w.measurements.length, 0);
+});
+
+test('POST /files/:id/measurements: a bad body is 400 before anything is read; at 200 a file is full (409 TOO_MANY_MEASUREMENTS) and nothing is added', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const bad = await postM(call, c, { ...LINE, kind: 'blob' }, ALICE);
+  assert.equal(bad.statusCode, 400);
+  assert.equal(errorOf(bad).extensions.field, 'kind');
+  assert.equal(w.log.length, 0, 'nothing was read');
+  for (let i = 0; i < 200; i++) w.measurements.push({ measurement_id: ID(20000 + i), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.alice, created_at: NOW.toISOString() });
+  const full = await postM(call, c, LINE, ALICE);
+  assert.equal(full.statusCode, 409);
+  assert.equal(codeOf(full), 'TOO_MANY_MEASUREMENTS');
+  assert.equal(errorOf(full).extensions.limit, 200);
+  assert.equal(w.measurements.length, 200);
+  // another file has its own count
+  const other = add(w, cand());
+  assert.equal((await postM(call, other, LINE, ALICE)).statusCode, 201);
+});
+
+test('GET /files/:id/measurements: whoever sees the file reads its shapes, oldest first, with the author and whether they may edit each; an administrator reads and cannot add', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  await postM(call, c, LINE, ALICE);
+  await postM(call, c, CIRCLE, BOB);
+  await postM(call, c, POLY, ALICE);
+  const mine = await getM(call, c, ALICE);
+  assert.equal(mine.statusCode, 200);
+  assert.deepEqual(mine.body.data.map((m) => [m.kind, m.label, m.author_name, m.can_edit]), [['line', '', 'Alice A', true], ['circle', 'pore', 'Bob B', true], ['polygon', '', 'Alice A', true]], 'a team member may edit all of a team file\'s shapes');
+  assert.deepEqual(mine.body.meta, { total: 3, can_change: true });
+  assert.deepEqual(mine.body.data[1].points, CIRCLE.points);
+  const admin = await getM(call, c, ADMIN);
+  assert.equal(admin.statusCode, 200);
+  assert.deepEqual(admin.body.meta, { total: 3, can_change: false });
+  assert.deepEqual(admin.body.data.map((m) => m.can_edit), [false, false, false], 'an administrator who is not the owner or the author edits none');
+  assert.equal((await getM(call, c, CAROL)).statusCode, 404, 'a person outside the team does not even learn the file exists');
+});
+
+test('GET /files/:id/measurements: a Lab Viewer who owns the file reads it (reads are allowed) but is offered nothing to change, not even their own old shapes; an empty file is an empty list', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: P.viewer }));
+  const { call } = setup(w);
+  const viewer = { user: U.viewer, role: LAB_VIEWER_ROLE_ID };
+  const res = await getM(call, c, viewer);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { data: [], meta: { total: 0, can_change: false } });
+  w.measurements.push({ measurement_id: ID(9801), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.viewer, created_at: NOW.toISOString() });
+  const again = await getM(call, c, viewer);
+  assert.deepEqual(again.body.data.map((m) => m.can_edit), [false]);
+  assert.deepEqual(again.body.meta, { total: 1, can_change: false });
+  for (const res2 of [await postM(call, c, LINE, viewer), await patchM(call, c, ID(9801), { label: 'x' }, viewer), await deleteM(call, c, ID(9801), viewer)]) {
+    assert.equal(res2.statusCode, 403);
+    assert.equal(codeOf(res2), 'READ_ONLY_ROLE');
+  }
+  assert.equal(w.measurements.length, 1);
+});
+
+test('measurements before migration 211 (no table): GET is an empty list the caller cannot add to, a write is 503, nothing is read; once applied it works at once', async () => {
+  const w = newWorld();
+  w.measureTable = false;
+  const c = add(w, cand({ owner_person_id: P.alice }));
+  const { call } = setup(w);
+  const got = await getM(call, c, ALICE);
+  assert.equal(got.statusCode, 200);
+  assert.deepEqual(got.body, { data: [], meta: { total: 0, can_change: false } });
+  for (const res of [await postM(call, c, LINE, ALICE), await patchM(call, c, ID(9801), { label: 'x' }, ALICE), await deleteM(call, c, ID(9801), ALICE)]) {
+    assert.equal(res.statusCode, 503);
+    assert.equal(codeOf(res), 'MEASUREMENTS_UNAVAILABLE');
+  }
+  assert.equal(w.log.some((l) => /^measure(List|One|Count|Insert|Label|Delete)$/.test(l.name)), false, 'the missing table is never queried');
+  w.measureTable = true;
+  assert.equal((await postM(call, c, LINE, ALICE)).statusCode, 201);
+  assert.equal((await getM(call, c, ALICE)).body.meta.total, 1);
+});
+
+test('PATCH /files/:id/measurements/:id renames: the owner, a team member, or the author may; everyone else is 403 or 404; the label is trimmed, may be cleared and is checked', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const { call } = setup(w);
+  const made = (await postM(call, c, LINE, ALICE)).body.data.measurement_id;
+  const ok = await patchM(call, c, made, { label: '  grain A ' }, BOB);
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.data.label, 'grain A');
+  assert.equal(w.measurements[0].label, 'grain A');
+  assert.equal(ok.body.data.measurement_id, made);
+  assert.equal((await patchM(call, c, made, { label: '' }, ALICE)).body.data.label, '', 'a blank label clears the name');
+  assert.equal(errorOf(await patchM(call, c, made, { label: 'x'.repeat(121) }, ALICE)).extensions.field, 'label');
+  for (const body of [{}, { label: 'a', kind: 'circle' }, { kind: 'circle' }, undefined]) assert.equal((await patchM(call, c, made, body, ALICE)).statusCode, 400, JSON.stringify(body));
+  assert.equal(w.measurements[0].label, '');
+  const adminTry = await patchM(call, c, made, { label: 'mine' }, ADMIN);
+  assert.equal(adminTry.statusCode, 403, 'an administrator who is neither owner nor author');
+  assert.equal(codeOf(adminTry), 'FORBIDDEN');
+  assert.equal((await patchM(call, c, made, { label: 'x' }, CAROL)).statusCode, 404);
+  assert.equal((await patchM(call, c, ID(9999), { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal((await patchM(call, c, 'not-an-id', { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal(w.measurements[0].label, '');
+  // a measurement is addressed through ITS file: the id of another file's shape under this file's path is a 404
+  const other = add(w, cand());
+  const theirs = (await postM(call, other, LINE, ALICE)).body.data.measurement_id;
+  assert.equal((await patchM(call, c, theirs, { label: 'x' }, ALICE)).statusCode, 404);
+  assert.equal(w.measurements.find((m) => m.measurement_id === theirs).label, '');
+});
+
+test('PATCH and DELETE: the author may change their own shape on a file they can still see even when they do not own it', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  // a shape saved by the administrator, who could once change this file (a row the endpoint would not make today)
+  w.measurements.push({ measurement_id: ID(9701), candidate_id: c.candidate_id, kind: 'line', points: LINE.points, label: '', created_by: U.admin, created_at: NOW.toISOString() });
+  assert.equal((await patchM(call, c, ID(9701), { label: 'kept' }, ADMIN)).statusCode, 200, 'the author renames');
+  assert.equal((await deleteM(call, c, ID(9701), ADMIN)).statusCode, 200, 'the author deletes');
+  assert.equal(w.measurements.length, 0);
+});
+
+test('DELETE /files/:id/measurements/:id: the owner or the author deletes it; someone outside is 404; it answers the id', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call } = setup(w);
+  const a = (await postM(call, c, LINE, ALICE)).body.data.measurement_id;
+  const b = (await postM(call, c, CIRCLE, ALICE)).body.data.measurement_id;
+  assert.equal((await deleteM(call, c, a, CAROL)).statusCode, 404);
+  assert.equal((await deleteM(call, c, a, ADMIN)).statusCode, 403, 'an administrator who is neither owner nor author');
+  assert.equal(w.measurements.length, 2);
+  const res = await deleteM(call, c, a, ALICE);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { data: { measurement_id: a } });
+  assert.deepEqual(w.measurements.map((m) => m.measurement_id), [b]);
+  assert.equal((await deleteM(call, c, a, ALICE)).statusCode, 404, 'twice is a 404');
+  assert.ok(w.log.some((l) => l.name === 'measureDelete' && l.tx), 'a delete runs in a transaction');
+  assert.equal(actorsOf(w).at(-1).bindings[0], U.alice);
+});
+
+test('a failure inside a measurement write rolls it back (the count and the insert go together)', async () => {
+  const w = newWorld();
+  const c = add(w, cand());
+  const { call, errors } = setup(w);
+  const real = w.measurements.push.bind(w.measurements);
+  w.measurements.push = (row) => { real(row); throw new Error('disk full'); };
+  const res = await postM(call, c, LINE, ALICE);
+  assert.equal(res.statusCode, 500);
+  assert.equal(w.measurements.length, 0, 'rolled back');
+  assert.equal(errors.length, 1);
+});
+
+test('the measurement SQL: every statement is parameterised, in d1_private, and casts what it does not compare to a typed column', () => {
+  const names = ['measureFile', 'measureList', 'measureOne', 'measureCount', 'measureInsert', 'measureLabel', 'measureDelete'];
+  for (const n of names) {
+    assert.equal(typeof SQL[n], 'string', n);
+    assert.match(SQL[n], /d1_private\./, n);
+    const params = SQL[n].match(/\?/g)?.length ?? 0;
+    const casts = SQL[n].match(/\?::(uuid|text|jsonb)/g)?.length ?? 0;
+    assert.equal(casts, params, `${n}: every ? is cast, so PREPARE can type it`);
+  }
+  assert.match(SQL.measureFile, /NOT EXISTS \(SELECT 1 FROM directus_files pf/, 'the file-owner predicate, as every candidate read');
+});
+
 // ---- wiring ------------------------------------------------------------------------------------------------------------------
 
 test('the default export is the endpoint: id d1-inbox, a handler that registers every route', () => {
@@ -4232,7 +4511,9 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
     'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs', 'GET /progress',
     'GET /sem-settings', 'GET /siblings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
     'POST /link', 'POST /relink', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
-  ]);
+    'DELETE /files/:candidate_id/measurements/:measurement_id', 'GET /files/:candidate_id/measurements', 'PATCH /files/:candidate_id/measurements/:measurement_id',
+    'POST /files/:candidate_id/measurements',
+  ].sort());
 });
 
 test('no route reads or writes anything outside d1_private, the three junction and record tables, and (stream F1) surface_scans', () => {

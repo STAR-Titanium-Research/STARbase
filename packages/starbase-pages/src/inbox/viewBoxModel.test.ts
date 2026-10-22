@@ -65,6 +65,7 @@ describe('1:1 and the scale bar', () => {
 		expect(actualWidthPx(e, null)).toBeCloseTo(1024, 0);
 		expect(actualWidthPx({ ...e, image_width_px: 2048 }, 1600)).toBe(2048); // a stored width wins
 		expect(actualWidthPx({ hfw_um: 198.933 }, 1600)).toBe(1600); // no pixel size: the field width alone says nothing
+		expect(actualWidthPx({ pixel_size_nm: 194.271, hfw_um: 198.933 }, 1600)).not.toBe(1600); // 1:1 uses the same width as Measure and the scale bar, never the preview's
 	});
 	it('has no bar without a pixel size', () => {
 		expect(boxScaleBar({}, 'fit', null)).toBeNull();

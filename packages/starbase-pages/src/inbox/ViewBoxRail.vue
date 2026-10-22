@@ -3,15 +3,18 @@ import { SegmentedControl } from '@d1/ui';
 import ComparePicker from './ComparePicker.vue';
 import { COMMON_SCALE_REASON } from './commonScale';
 import type { FoundFile } from './inboxApi';
-import { NO_SCALE_REASON } from './measure';
+import { MEASURE_TOOLS, NO_SCALE_REASON, type MeasureTool } from './measure';
+import type { MeasurementRow } from './measurements';
+import MeasurementsList from './MeasurementsList.vue';
+import type { MeasurementsStatus } from './useMeasurements';
 import type { CompareMode } from './useViewSettings';
 import type { ZoomMode } from './viewBoxModel';
 
 // The view box's View rail (DESIGN.md sections 4 and 5, "Proposed"): the hanging card on the right of the stage. View: Fit or 1:1. Overlay: Scale bar, Measure
-// (key M) and Contrast stretch. Compare (key C): Off or Side by side, the second-file picker, "Link zoom and pan" and "Common scale". It shows only what works
+// (key M; a line, a circle or a polygon, keys 1 2 3) and Contrast stretch. Compare (key C): Off or Side by side, the second-file picker, "Link zoom and pan" and "Common scale". It shows only what works
 // for this file: with no picture there is nothing to adjust, the Scale bar switch is offered only when the file says its scale, and Measure is there but disabled,
-// with the reason, when it does not. The choices are kept per person by the page (useViewSettings); the line and the partner are the page's.
-defineProps<{
+// with the reason, when it does not. The choices are kept per person by the page (useViewSettings); the shape and the partner are the page's.
+withDefaults(defineProps<{
 	zoom: ZoomMode;
 	scaleBar: boolean;
 	contrast: boolean;
@@ -20,10 +23,11 @@ defineProps<{
 	/** The file says its pixel size and its width (the same two numbers Measure needs), so a scale bar can be drawn. */
 	hasScale: boolean;
 	open: boolean;
-	/** Measure is on, and whether it can work here (the file says its pixel size and its width), and whether a line is drawn. */
+	/** Measure is on, and whether it can work here (the file says its pixel size and its width), what it draws, and whether a shape is drawn. */
 	measure: boolean;
 	canMeasure: boolean;
-	hasLine: boolean;
+	tool: MeasureTool;
+	hasShape: boolean;
 	compare: CompareMode;
 	linkZoom: boolean;
 	commonScale: boolean;
@@ -36,7 +40,19 @@ defineProps<{
 	partnerLocked: boolean;
 	more: boolean;
 	moreBusy: boolean;
-}>();
+	/** The Measurements list (spec decision 6): the shapes saved on this file, the highlighted one, how the read went and what is being changed. Optional: a rail without them has no list. */
+	rows?: MeasurementRow[];
+	selectedId?: string | null;
+	listStatus?: MeasurementsStatus;
+	/** Why the list could not be read, or the last change failed. */
+	listError?: string;
+	/** What is being saved, renamed or deleted now: 'save' or a shape's id. */
+	busyId?: string | null;
+	/** The drawn shape can be saved (the file's owner, on the open file with its scale and size known), and why not when it cannot. */
+	canSave?: boolean;
+	saveWhy?: string;
+	copied?: boolean;
+}>(), { rows: () => [], selectedId: null, listStatus: 'idle', listError: '', busyId: null, canSave: false, saveWhy: '', copied: false });
 const emit = defineEmits<{
 	(e: 'update:zoom', v: ZoomMode): void;
 	(e: 'update:scaleBar', v: boolean): void;
@@ -46,7 +62,14 @@ const emit = defineEmits<{
 	(e: 'update:compare', v: CompareMode): void;
 	(e: 'update:linkZoom', v: boolean): void;
 	(e: 'update:commonScale', v: boolean): void;
-	(e: 'clear-line'): void;
+	(e: 'update:tool', v: MeasureTool): void;
+	(e: 'clear-shape'): void;
+	(e: 'save-shape'): void;
+	(e: 'select-measurement', id: string): void;
+	(e: 'rename-measurement', id: string, label: string): void;
+	(e: 'remove-measurement', id: string): void;
+	(e: 'copy-measurements'): void;
+	(e: 'reload-measurements'): void;
 	(e: 'pick', candidateId: string): void;
 	(e: 'clear-partner'): void;
 	(e: 'more'): void;
@@ -56,6 +79,12 @@ const ZOOM_OPTIONS: ReadonlyArray<{ value: ZoomMode; label: string }> = [
 	{ value: 'fit', label: 'Fit' },
 	{ value: 'actual', label: '1:1' },
 ];
+const TOOL_OPTIONS: ReadonlyArray<{ value: MeasureTool; label: string }> = MEASURE_TOOLS.map((value) => ({ value, label: value === 'line' ? 'Line' : value === 'circle' ? 'Circle' : 'Polygon' }));
+const TOOL_HINT: Record<MeasureTool, string> = {
+	line: 'Drag a line',
+	circle: 'Drag from the centre to the edge',
+	polygon: 'Click the corners, click the first to close',
+};
 const COMPARE_OPTIONS: ReadonlyArray<{ value: CompareMode; label: string }> = [
 	{ value: 'off', label: 'Off' },
 	{ value: 'side', label: 'Side by side' },
@@ -80,17 +109,41 @@ const checked = (e: Event) => (e.target as HTMLInputElement).checked;
 				<section class="sec" data-test="rail-overlay">
 					<h3 class="lab">Overlay</h3>
 					<label v-if="hasScale" class="check"><input type="checkbox" :checked="scaleBar" data-test="toggle-scalebar" @change="emit('update:scaleBar', checked($event))" /><span>Scale bar</span></label>
-					<label class="check" :class="{ off: !canMeasure }" :title="canMeasure ? 'Drag a line on the picture to measure it (M)' : NO_SCALE_REASON">
+					<label class="check" :class="{ off: !canMeasure }" :title="canMeasure ? 'Measure a line, a circle or a polygon on the picture (M)' : NO_SCALE_REASON">
 						<input type="checkbox" :checked="measure && canMeasure" :disabled="!canMeasure" :aria-describedby="canMeasure ? undefined : 'measure-why'" data-test="toggle-measure" @change="emit('update:measure', checked($event))" />
 						<span>Measure</span>
 					</label>
 					<p v-if="!canMeasure" id="measure-why" class="hint" data-test="measure-why">{{ NO_SCALE_REASON }}</p>
 					<template v-else-if="measure">
-						<p class="hint">Drag on the picture to draw a line; the next drag replaces it.</p>
-						<button v-if="hasLine" type="button" class="lf-link" data-test="clear-line" @click="emit('clear-line')">Clear the line</button>
+						<div class="tool" data-test="rail-tool">
+							<SegmentedControl :model-value="tool" :options="TOOL_OPTIONS" label="What Measure draws" @update:model-value="emit('update:tool', $event)" />
+						</div>
+						<p class="hint" data-test="tool-hint">{{ TOOL_HINT[tool] }}</p>
+						<p class="hint">A new shape is a draft until you press Save (or Enter). Keys 1 2 3 pick the tool; Esc drops the draft.</p>
 					</template>
+					<div v-if="hasShape" class="acts">
+						<button v-if="canSave" type="button" class="d1-btn pri" :disabled="busyId !== null" data-test="save-shape" @click="emit('save-shape')">Save</button>
+						<button type="button" class="lf-link" data-test="clear-line" @click="emit('clear-shape')">Clear</button>
+					</div>
+					<p v-if="hasShape && saveWhy" class="hint" data-test="save-why">{{ saveWhy }}</p>
 					<label class="check"><input type="checkbox" :checked="contrast" data-test="toggle-contrast" @change="emit('update:contrast', checked($event))" /><span>Contrast stretch</span></label>
 					<p class="hint">Contrast stretch only changes how the picture is drawn here.</p>
+				</section>
+				<section v-if="canMeasure" class="sec" data-test="rail-measurements">
+					<h3 class="lab">Measurements</h3>
+					<MeasurementsList
+						:rows="rows"
+						:selected-id="selectedId"
+						:status="listStatus"
+						:error="listError"
+						:busy-id="busyId"
+						:copied="copied"
+						@select="emit('select-measurement', $event)"
+						@rename="(id, label) => emit('rename-measurement', id, label)"
+						@remove="emit('remove-measurement', $event)"
+						@copy="emit('copy-measurements')"
+						@retry="emit('reload-measurements')"
+					/>
 				</section>
 			</template>
 			<p v-else class="hint" data-test="rail-nothing">There is no preview to adjust yet.</p>
@@ -120,4 +173,5 @@ const checked = (e: Event) => (e.target as HTMLInputElement).checked;
 <style scoped src="./viewRail.css"></style>
 <style scoped>
 .sec { align-self: stretch; }
+.acts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
 </style>

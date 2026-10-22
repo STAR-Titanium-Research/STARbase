@@ -137,6 +137,22 @@
 //                                   it manual (a re-read never overwrites it). 403 FORBIDDEN for everyone else, an administrator who is not the owner and an
 //                                   unowned file too; 400 INVALID_PAYLOAD (extensions.field 'field' or 'value') for an unknown field (read_by, sources, ...) or a
 //                                   value the function refuses; 404 when no settings are saved. Answers like the GET.
+//   GET  /d1-inbox/files/:candidate_id/measurements
+//                                   -> { data: [{ measurement_id, kind: 'line' | 'circle' | 'polygon', points: [{x, y}], label, created_at, author_name | null,
+//                                   can_edit }], meta: { total, can_change } }   the shapes people saved with the view box's Measure tool on this file (migration 211,
+//                                   spec 2026-10-20-inbox-file-viewer-design.md decision 6), oldest first (the list numbers them in that order). UNIT-FREE: points are
+//                                   in pixels of the ORIGINAL image; micrometres are worked out by the client from the file's pixel size. Visible to exactly who sees
+//                                   the file in the list (canSee: the owner person, an active member of the owner team, administrators); 404 NOT_FOUND for a bad id,
+//                                   a file that is not there, gone or not the caller's (the same answer for all). can_change is true for the owner (the person or an
+//                                   active member of the owner team); can_edit is true for them and for the row's author. Allowed to a Lab Viewer (read-only).
+//   POST /d1-inbox/files/:candidate_id/measurements   { kind, points, label? }  -> 201 { data: <one measurement> }   the owner only (canChange; an administrator who is
+//                                   not the owner reads, never changes: 403 FORBIDDEN). Exactly those keys. points: 2 for a line (its ends) or a circle (centre, then a
+//                                   point on the rim; not the same spot twice), 3 to 200 for a polygon; each {x, y} two finite numbers from 0 to 1,000,000 (original
+//                                   pixels). label: at most 120 characters, trimmed, blank for none. 400 INVALID_PAYLOAD (extensions.field kind | points | label),
+//                                   409 TOO_MANY_MEASUREMENTS (200 a file, counted under a lock). The author is the caller.
+//   PATCH /d1-inbox/files/:candidate_id/measurements/:measurement_id   { label }  -> { data: <one measurement> }   renames; the owner or the row's author (who can
+//                                   still see the file). 403 FORBIDDEN otherwise, 404 NOT_FOUND, 400 INVALID_PAYLOAD (field 'label').
+//   DELETE /d1-inbox/files/:candidate_id/measurements/:measurement_id  -> { data: { measurement_id } }   the same two people may delete it.
 //   GET  /d1-inbox/progress[?all=1] -> { data: { folders: [{ owner: { kind: 'person' | 'team', id, name, folder, root, has_login (person) | null (team) },
 //                                   folders_known, folders_listed, files, images, images_read, images_with_thumb, sem, sem_with_scale }],
 //                                   last_scan_finished_at } }   SCAN PROGRESS per folder; the percentages are computed by the client (null when a denominator is 0).
@@ -216,6 +232,12 @@ const CRAWLER_STATE_ID = '00000000-0000-0000-0000-000000000001';
 // Ignored folders (spec section 15): at most this many rules per owner (the table has no limit of its own), and the longest folder text accepted.
 const MAX_IGNORED_PER_OWNER = 200;
 const MAX_IGNORED_FOLDER = 500;
+// Saved measurements (migration 211): the shapes a file may hold, a corner's largest coordinate (original pixels: far beyond any detector), and the label's length.
+const MEASURE_KINDS = ['line', 'circle', 'polygon'];
+const MAX_MEASUREMENTS_PER_FILE = 200;
+const MAX_POLYGON_CORNERS = 200;
+const MAX_MEASURE_PX = 1_000_000;
+const MAX_MEASURE_LABEL = 120;
 
 // What a candidate can be: the kinds the crawler reads before a person links (images and scans) and the rest (read once, after the link).
 const IMAGE_KINDS = ['sem_image', 'image', 'surface_scan'];
@@ -527,6 +549,27 @@ export const SQL = {
     `SELECT c.owner_person_id, c.owner_team_id, c.state, md5(t.${column}) AS etag FROM d1_private.file_candidates c`
     + ` JOIN d1_private.file_thumbnails t ON t.candidate_id = c.candidate_id WHERE c.candidate_id = ? AND ${FILE_OWNER_MATCHES}`])),
   thumbBytes: Object.fromEntries(Object.entries(PICTURES).map(([kind, column]) => [kind, `SELECT md5(t.${column}) AS etag, t.${column} AS bytes FROM d1_private.file_thumbnails t WHERE t.candidate_id = ?`])),
+  // Saved measurements (migration 211, d1_private.inbox_measurements). The file first: who owns it and is it still there (the picture routes' own read, with the
+  // file-owner predicate), decided by canSee / canChange before anything of the measurements is read. Bindings: the candidate id.
+  measureFile:
+    `SELECT c.candidate_id, c.owner_person_id, c.owner_team_id, c.state FROM d1_private.file_candidates c WHERE c.candidate_id = ?::uuid AND ${FILE_OWNER_MATCHES}`,
+  // Is the table (migration 211) there yet? Asked before any measurement route reads or writes it.
+  measureTableExists: "SELECT to_regclass('d1_private.inbox_measurements') IS NOT NULL AS available",
+  // A file's measurements, oldest first (the list numbers them in this order), with the author's name. Binding: the candidate id.
+  measureList:
+    'SELECT m.measurement_id, m.kind, m.points, m.label, m.created_by, m.created_at, p.full_name AS author_name'
+    + ' FROM d1_private.inbox_measurements m LEFT JOIN people p ON p.user_id = m.created_by WHERE m.candidate_id = ?::uuid ORDER BY m.created_at, m.measurement_id',
+  // One measurement of that file (it must belong to the file named in the path). Bindings: measurement id, candidate id.
+  measureOne:
+    'SELECT m.measurement_id, m.kind, m.points, m.label, m.created_by, m.created_at, p.full_name AS author_name'
+    + ' FROM d1_private.inbox_measurements m LEFT JOIN people p ON p.user_id = m.created_by WHERE m.measurement_id = ?::uuid AND m.candidate_id = ?::uuid',
+  measureCount: 'SELECT count(*)::int AS n FROM d1_private.inbox_measurements WHERE candidate_id = ?::uuid',
+  // Bindings: candidate id, kind, points as JSON text, label, author (the Directus user).
+  measureInsert:
+    'INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points, label, created_by) VALUES (?::uuid, ?::text, ?::jsonb, ?::text, ?::uuid) RETURNING measurement_id',
+  // Bindings: label, measurement id, candidate id.
+  measureLabel: 'UPDATE d1_private.inbox_measurements SET label = ?::text WHERE measurement_id = ?::uuid AND candidate_id = ?::uuid RETURNING measurement_id',
+  measureDelete: 'DELETE FROM d1_private.inbox_measurements WHERE measurement_id = ?::uuid AND candidate_id = ?::uuid RETURNING measurement_id',
   recordsExist: perTarget((t, collection) => `SELECT ${t.pk} FROM ${collection} WHERE ${t.pk} = ANY(${IDS})`),
   // Which (record, file) pairs are already linked: bindings are the record ids and the file ids as two csv lists, pair by pair (one query a collection).
   junctionFindMany: perTarget((t) => `SELECT ${t.fk} AS record_id, directus_files_id FROM ${t.junction} WHERE (${t.fk}, directus_files_id) IN (SELECT r, f FROM unnest(${IDS}, ${IDS}) AS pairs(r, f))`),
@@ -638,6 +681,13 @@ export const ERRORS = {
   alreadyIgnored: (folder) => new HttpError(409, 'ALREADY_IGNORED', 'That folder is already ignored.', { field: 'folder', folder }),
   tooManyRules: () => new HttpError(409, 'TOO_MANY_RULES', `You can ignore at most ${MAX_IGNORED_PER_OWNER} folders. Remove one first.`, { limit: MAX_IGNORED_PER_OWNER }),
   notIgnored: () => new HttpError(404, 'NOT_FOUND', 'That ignored folder does not exist.'),
+  // The measurement routes answer this for every reason alike (not a uuid, no such file, gone, not the caller's), so no id is confirmed.
+  noMeasureFile: () => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.'),
+  noMeasurement: () => new HttpError(404, 'NOT_FOUND', 'That measurement does not exist.'),
+  measuresUnavailable: () => new HttpError(503, 'MEASUREMENTS_UNAVAILABLE', 'Measurements are not available yet.'),
+  measureReadOnly: () => new HttpError(403, 'FORBIDDEN', 'You can read the measurements of this file but not change them.'),
+  measureNotYours: () => new HttpError(403, 'FORBIDDEN', 'Only the owner of the file or the person who saved a measurement can change it.'),
+  tooManyMeasurements: () => new HttpError(409, 'TOO_MANY_MEASUREMENTS', `A file can hold at most ${MAX_MEASUREMENTS_PER_FILE} measurements. Delete one first.`, { limit: MAX_MEASUREMENTS_PER_FILE }),
   notYourTeam: () => new HttpError(403, 'FORBIDDEN', 'You are not a member of that team.', { field: 'team_id' }),
 };
 
@@ -691,6 +741,42 @@ export function parseScanItem(item) {
     condition: item.condition, insertId, edgeId, operationId, scannedOn,
     conditionNote: note('condition_note', MAX_CONDITION_NOTE, 'The condition note'), notes: note('notes', MAX_SCAN_NOTES, 'The notes'),
   };
+}
+
+// ---- saved measurements (migration 211) ----------------------------------------------------------------------------------------
+
+const badMeasure = (field, message) => new HttpError(400, 'INVALID_PAYLOAD', message, { field });
+const hasOnly = (body, keys) => isObject(body) && Object.keys(body).every((k) => keys.includes(k));
+
+// A label: text of at most 120 characters, trimmed, no control characters; blank (or missing) is the empty label, which the list words as Line, Circle or Polygon.
+export function parseMeasureLabel(v) {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') throw badMeasure('label', 'The name must be text.');
+  const out = v.trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(out)) throw badMeasure('label', 'The name contains characters that are not allowed.');
+  if (out.length > MAX_MEASURE_LABEL) throw badMeasure('label', `The name is too long (at most ${MAX_MEASURE_LABEL} characters).`);
+  return out;
+}
+
+// The body of POST /files/:id/measurements: exactly kind, points and (optionally) label, checked before anything is read or written. points are in pixels of the
+// ORIGINAL image: a line's two ends, a circle's centre then a point on its rim (not the same spot: a circle of no size is not a shape), a polygon's 3 to 200 corners.
+// Each corner is {x, y}, two finite numbers from 0 to 1,000,000, kept to a thousandth of a pixel. Returns { kind, points, label }.
+export function parseMeasurement(body) {
+  if (!hasOnly(body, ['kind', 'points', 'label'])) throw badInput('The request must be { "kind", "points", "label" } and nothing else.');
+  if (typeof body.kind !== 'string' || !MEASURE_KINDS.includes(body.kind)) throw badMeasure('kind', 'The shape must be a line, a circle or a polygon.');
+  if (!Array.isArray(body.points)) throw badMeasure('points', 'points must be a list of corners.');
+  const need = body.kind === 'polygon' ? [3, MAX_POLYGON_CORNERS] : [2, 2];
+  if (body.points.length < need[0] || body.points.length > need[1]) {
+    throw badMeasure('points', body.kind === 'polygon' ? `A polygon has 3 to ${MAX_POLYGON_CORNERS} corners.` : `A ${body.kind} has 2 points.`);
+  }
+  const points = body.points.map((p) => {
+    const ok = hasOnly(p, ['x', 'y']) && ['x', 'y'].every((k) => typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0 && p[k] <= MAX_MEASURE_PX);
+    if (!ok) throw badMeasure('points', `Each corner must be { "x", "y" }, two numbers from 0 to ${MAX_MEASURE_PX}.`);
+    return { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 };
+  });
+  if (body.kind !== 'polygon' && points[0].x === points[1].x && points[0].y === points[1].y) throw badMeasure('points', 'The two points are on the same spot.');
+  return { kind: body.kind, points, label: parseMeasureLabel(body.label) };
 }
 
 const intParam = (v, what, { min, max, fallback }) => {
@@ -1079,6 +1165,21 @@ export const shapeIgnoredAdded = (rule, teamId, dismissed) => ({ ignored_id: rul
 export const shapeIgnoredRemoved = (rule, { stillIgnored = false, rescanQueued = false } = {}) => ({
   ignored_id: rule.ignored_id, folder: rule.rel_folder, still_ignored: stillIgnored, rescan_queued: rescanQueued,
 });
+// One saved measurement (a row of measureList / measureOne). can_edit: the caller may rename or delete it (the file's owner, or the row's author).
+export const shapeMeasurement = (row, canEdit) => ({
+  measurement_id: row.measurement_id,
+  kind: row.kind,
+  points: (Array.isArray(asJson(row.points)) ? asJson(row.points) : []).map((p) => ({ x: Number(p.x), y: Number(p.y) })),
+  label: row.label ?? '',
+  created_at: toIso(row.created_at),
+  author_name: row.author_name ?? null,
+  can_edit: canEdit === true,
+});
+// GET /files/:id/measurements: { data, meta }. canChange (the file's owner) says whether the caller may add a shape; `user` finds the rows they authored.
+export const shapeMeasurements = (rows, { canChange, user }) => ({
+  data: rows.map((r) => shapeMeasurement(r, canChange || (!isBlank(r.created_by) && r.created_by === user))),
+  meta: { total: rows.length, can_change: canChange === true },
+});
 // GET and PUT /prefs
 export const shapePrefs = (row) => ({ auto_link: row?.auto_link === true });
 // The error body of every refusal (Directus's shape); an unknown error is a 500 that says nothing of its cause.
@@ -1208,6 +1309,15 @@ export function mount(router, context, deps = {}) {
     const [row] = rowsOf(await db.raw(SQL.semTableExists, []));
     semTableKnown = row?.available === true;
     return semTableKnown;
+  }
+
+  // Is the measurements table (migration 211) there? Only a yes is remembered, so applying 211 under a running server takes effect on the next request.
+  let measureTableKnown = false;
+  async function measureTableAvailable(db = database) {
+    if (measureTableKnown) return true;
+    const [row] = rowsOf(await db.raw(SQL.measureTableExists, []));
+    measureTableKnown = row?.available === true;
+    return measureTableKnown;
   }
 
   // -- who is asking -------------------------------------------------------------------------------------------------------
@@ -1925,6 +2035,80 @@ export function mount(router, context, deps = {}) {
   });
   router.get('/files/:candidate_id/thumb', pictureRoute('thumb'));
   router.get('/files/:candidate_id/preview', pictureRoute('preview'));
+
+  // -- saved measurements (migration 211) ---------------------------------------------------------------------------------------
+
+  // The file a measurement route is about, as the caller, by the picture routes' rule: visible to exactly who sees the file in the list (canSee), and every reason to
+  // refuse (not a uuid, no such file, gone, not the caller's) is the same 404, so no id is confirmed. `owner` says whether the caller may change the file's
+  // measurements at all (canChange: the owner person or an active member of the owner team; an administrator reads, never changes: ADR-0022 decision 3; and a Lab
+  // Viewer reads only, whatever they own).
+  async function measureFileOf(db, acc, rawId) {
+    if (!isUuid(rawId)) throw ERRORS.noMeasureFile();
+    const id = rawId.toLowerCase();
+    const scope = await scopeOf(acc, db);
+    const [file] = rowsOf(await db.raw(SQL.measureFile, [id]));
+    if (!file || file.state === 'gone' || !canSee(scope, file)) throw ERRORS.noMeasureFile();
+    return { id, owner: canChange(scope, file) && !isViewerAccountability(acc) };
+  }
+  // One measurement of that file, or 404; and who may rename or delete it: the file's owner, or the person who saved it.
+  async function measureRowOf(db, file, rawId) {
+    const [row] = isUuid(rawId) ? rowsOf(await db.raw(SQL.measureOne, [rawId.toLowerCase(), file.id])) : [];
+    if (!row) throw ERRORS.noMeasurement();
+    return row;
+  }
+  const mayChangeMeasurement = (file, row, acc) => file.owner || (!isBlank(row.created_by) && row.created_by === acc.user);
+
+  // Before migration 211 the list is an empty one the caller may not add to (the picture opens as before); a write is a 503.
+  router.get('/files/:candidate_id/measurements', route(async ({ req, res, acc }) => {
+    if (!(await measureTableAvailable())) return res.json(shapeMeasurements([], { canChange: false, user: null }));
+    const file = await measureFileOf(database, acc, req.params?.candidate_id);
+    const rows = rowsOf(await database.raw(SQL.measureList, [file.id]));
+    // a Lab Viewer changes nothing (route() refuses every write), so nothing is offered to them as editable either: not as the owner, not as an author
+    res.json(shapeMeasurements(rows, { canChange: file.owner, user: isViewerAccountability(acc) ? null : acc.user }));
+  }));
+
+  // POST: the owner saves a shape. The count is taken under a per-file lock, so two saves at the limit cannot both pass.
+  router.post('/files/:candidate_id/measurements', route(async ({ req, res, acc }) => {
+    const input = parseMeasurement(bodyOf(req));
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
+    const row = await inTransaction(acc.user, async (trx) => {
+      const file = await measureFileOf(trx, acc, req.params?.candidate_id);
+      if (!file.owner) throw ERRORS.measureReadOnly();
+      await trx.raw(SQL.lock, [`inbox-measure:${file.id}`]);
+      const [count] = rowsOf(await trx.raw(SQL.measureCount, [file.id]));
+      if (Number(count?.n ?? 0) >= MAX_MEASUREMENTS_PER_FILE) throw ERRORS.tooManyMeasurements();
+      const [made] = rowsOf(await trx.raw(SQL.measureInsert, [file.id, input.kind, JSON.stringify(input.points), input.label, acc.user]));
+      return rowsOf(await trx.raw(SQL.measureOne, [made.measurement_id, file.id]))[0];
+    });
+    res.status(201).json({ data: shapeMeasurement(row, true) });
+  }));
+
+  router.patch('/files/:candidate_id/measurements/:measurement_id', route(async ({ req, res, acc }) => {
+    const body = bodyOf(req);
+    if (!hasOnly(body, ['label']) || !('label' in body)) throw badInput('The request must be { "label": <a name> } and nothing else.');
+    const label = parseMeasureLabel(body.label);
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
+    const row = await inTransaction(acc.user, async (trx) => {
+      const file = await measureFileOf(trx, acc, req.params?.candidate_id);
+      const old = await measureRowOf(trx, file, req.params?.measurement_id);
+      if (!mayChangeMeasurement(file, old, acc)) throw ERRORS.measureNotYours();
+      await trx.raw(SQL.measureLabel, [label, old.measurement_id, file.id]);
+      return rowsOf(await trx.raw(SQL.measureOne, [old.measurement_id, file.id]))[0];
+    });
+    res.json({ data: shapeMeasurement(row, true) });
+  }));
+
+  router.delete('/files/:candidate_id/measurements/:measurement_id', route(async ({ req, res, acc }) => {
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
+    const id = await inTransaction(acc.user, async (trx) => {
+      const file = await measureFileOf(trx, acc, req.params?.candidate_id);
+      const old = await measureRowOf(trx, file, req.params?.measurement_id);
+      if (!mayChangeMeasurement(file, old, acc)) throw ERRORS.measureNotYours();
+      await trx.raw(SQL.measureDelete, [old.measurement_id, file.id]);
+      return old.measurement_id;
+    });
+    res.json({ data: { measurement_id: id } });
+  }));
 
   // -- rescan, prefs ----------------------------------------------------------------------------------------------------------
 
