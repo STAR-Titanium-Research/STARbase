@@ -114,6 +114,10 @@ mixed toward the text colour, so it reads on its own tint in both themes.
 | `info` | `--d1-accent` | accent at 12% | Planned, Queued, Pending |
 | `neutral` | `--d1-dim` | `--theme--background-normal` | Registered, Archived, Complete, Skipped |
 
+The Conform run status (`conform` kind, words from `CONFORM_STATUS` in `@d1/fast-plotting`'s `conform/format.ts`) is the
+same on the Operation page, the plotter's run list and badge: **No log** (neutral), **No run window** (warning),
+**Window set** (success), **Failed** (danger).
+
 ### Sidebar (fixed, dark in both themes)
 
 | Token | Value | Usage |
@@ -344,6 +348,37 @@ and below 900px everything stacks in one column.
 - Hover: one cursor across every chart of a group; the chart under the pointer shows a tooltip, the others a value
   dot with a surface ring; the x value shows on the axis.
 
+**Conform plotter: run windows and the time axis.** The Conform plotter is the FAST layout with a Conform profile
+(samples → runs, the run column, then plots of the machine log). One **Conform log** is shared by every run made in
+one session, and each run owns a **run window** of it.
+- *Run-window bands.* Another run's window is a wash of the foreground colour at 5%; the current run's is an accent
+  wash at 10%. The plot opens on the current window, so while the view lies within 10% of its length on either side
+  the current window is drawn as two 1px accent edge lines and no wash, and never greys the data. An end outside the
+  view has no edge line.
+- *Band labels.* In the top margin above the plot area, on the y unit's line and after it; on the top row of tiles
+  only; cut with an ellipsis to the band's room; with a surface-coloured halo (`paint-order: stroke`). A label never
+  prints over the data. A run the reader cannot see is labelled "Other run".
+- *Time axis.* The axis keeps elapsed minutes and is titled "Time since log start (min)" (FAST: "Time (min)"). The
+  hover badge on the axis shows the elapsed time (`mm:ss`); the tooltip adds the UK clock time ("02:05 · 09:02:05 UK
+  time"). Text naming a time range outside the chart (the run window, "Use this view as the run window") uses UK clock
+  times `HH:MM:SS`, marked "(UK time)" where it matters; dates use the display form "17 Mar 2025". ISO dates belong in
+  inputs only.
+- *Run column.* The figures under the identity are titled "Key figures" (four tiles, 2×2, never a lone tile; FAST
+  keeps "Peaks", six tiles in 3×2). The Statistics tab is two tiles wide with wrapping labels. Every Conform figure comes
+  from the one figure table (`CONFORM_FIGURES`): labels in sentence case, numbers as integers from 100, one decimal from
+  10, up to two below; energy and demand to 2 decimals; durations `12 min 05 s` / `1 h 23 min`; no reading is an em
+  dash with no unit. The Operation page and the PDF appendix use the same table.
+- *Run actions.* Below the figures: the kit's `.btn` (30px, 40px under 700px). An inline confirm (unlink a log, a file
+  that is already uploaded) is a `role="group"` in a polite live region, moves focus to Cancel and back, and draws the
+  destructive action in `--d1-bad`. A reader who cannot edit sees the window and "No run window is set." with nothing
+  to press.
+- *Small traces.* A two-series sparkline (wheel speed and Tooling 1 on the map card and the Operation page) draws the
+  second series dashed (`4 3`) and carries a one-line key, since the two are on separate scales.
+
+**Reports (PDF).** Report charts follow the chart rules above (nice ticks, axis titles with units, hairline grid) but
+keep the report's own series colours (`#dc2626`, `#2563eb`, `#16a34a`, `#d97706`), shared by the FAST and Conform
+appendices: a deliberate exception for print on white paper.
+
 ---
 
 ## 6. Depth
@@ -532,6 +567,9 @@ dropping the transition entirely.
 | Person | User, account, member |
 | Data Studio | Directus admin, the backend |
 | Permanent link | Permalink, QR link, deep link |
+| Conform plotter, FAST plotter | Conform analysis, Conform dashboard, FAST dashboard |
+| Conform run, Conform log, run window, step | Batch, Confirm, segment, stage |
+| Feedstock, extrusion | Charge, input powder, extrudate, product |
 
 The kit's `Section` component is a panel on a page, but in copy "section" means a sidebar group (`CONTEXT.md`).
 Call panels by their title in copy, never "section" or "panel".
