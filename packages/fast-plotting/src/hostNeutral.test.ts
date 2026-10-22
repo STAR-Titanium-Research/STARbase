@@ -41,7 +41,7 @@ describe('FAST plotting stays host-neutral', () => {
 			const src = readFileSync(f, 'utf8');
 			if (rel(f).includes('__fixtures__')) continue;   // test-only helpers read the fixture with node:fs
 			expect(src, rel(f)).not.toMatch(/from ['"](vue|vue-router)['"]/);
-			expect(src, rel(f)).not.toMatch(/\b(window|document|localStorage)\./);
+			expect(src, rel(f)).not.toMatch(/\b(window|document|localStorage)\.[a-z]/);   // a DOM API (window.open), not the end of a sentence about a run window
 			expect(src, rel(f)).not.toMatch(/from ['"]node:/);
 			if (!rel(f).endsWith('api.ts')) expect(src, rel(f)).not.toContain('/assets/');
 		}

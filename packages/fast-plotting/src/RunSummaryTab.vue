@@ -13,7 +13,7 @@ defineProps<{ tiles: SummaryTile[]; note: string | null; window: string | null; 
 	<div class="sum">
 		<div class="title"><b>Statistics</b><span class="fd-dim">over the run window</span></div>
 		<div v-if="window" class="fd-dim win">{{ window }}</div>
-		<div v-if="tiles.length" class="fd-tiles">
+		<div v-if="tiles.length" class="fd-tiles two">
 			<div v-for="t in tiles" :key="t.key" class="fd-fig" :class="{ key: t.key === 'energy' }">
 				<span class="top"><span class="val">{{ t.value }}</span><span class="unit">{{ t.unit }}</span></span>
 				<span class="lab">{{ t.label }}</span>

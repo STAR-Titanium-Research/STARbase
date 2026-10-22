@@ -23,8 +23,11 @@ export interface SummaryTile { key: string; label: string; value: string; unit: 
 /** A log offered in "Use a log already uploaded": its line, the windows already on it, and a note when one covers the whole log. */
 export interface LinkCandidate { id: string; label: string; windows: string[]; note: string | null }
 
-/** What an upload came to: a warning to show, and when the file was already uploaded, that log (nothing was stored). */
-export interface UploadOutcome { warning: string | null; existing?: { id: string; label: string } }
+/**
+ * What an upload came to: a warning to show, and when the file was already uploaded, that log (nothing was stored) with the
+ * windows already on it (as `Feedstock: 13:38:20 – 13:53:19`) and the note for a log whose whole length is one run's window.
+ */
+export interface UploadOutcome { warning: string | null; existing?: { id: string; label: string; windows: string[]; note: string | null } }
 
 export interface RunProfile {
 	key: 'fast' | 'conform';
@@ -32,6 +35,15 @@ export interface RunProfile {
 	title: string;
 	/** The page heading shown in the host's view frame. */
 	heading: string;
+	/** The title of every plot's time axis. Default "Time (min)" (FAST). Conform's axis counts from the log start. */
+	timeAxisTitle?: string;
+	/** The title over the figures under the run's identity. Default "Peaks" (FAST). */
+	peaksTitle?: string;
+	/** What the run list holds, for the load error: "Could not load the <runNoun>". Default "FAST operations". */
+	runNoun?: string;
+	/** The runs search field's placeholder and accessible name. Defaults "Search code / recipe" and "Search runs by code or recipe". */
+	searchPlaceholder?: string;
+	searchLabel?: string;
 	/** localStorage key of the saved layout (tiles, selection, tab). */
 	layoutKey: string;
 	listQuery: { category: string; fields: string[] };

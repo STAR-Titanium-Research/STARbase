@@ -103,7 +103,7 @@ onMounted(async () => {
 		rows.value = mapped;
 	} catch (e: any) {
 		if (gen !== listGen) return;
-		listError.value = `Could not load the ${profile.key === 'fast' ? 'FAST' : profile.title.replace(/ plotter$/, '')} operations: ${errMsg(e, 'request failed')}`;
+		listError.value = `Could not load the ${profile.runNoun ?? 'FAST operations'}: ${errMsg(e, 'request failed')}`;
 	} finally {
 		if (gen === listGen) {
 			loading.value = false;
@@ -271,7 +271,7 @@ const openSample = () => { const id = detail.value?.sample_id?.sample_id; if (id
 					:detail="detail" :run-data="runData" :trace="trace" :loading="loadingDetail || traceLoading" :message="runError"
 					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" :zoom-tool="zoomTool" :busy="reloading" :can-edit="canEdit" @run-changed="reloadRun"
 					@open-operation="openOperation" @open-recipe="openRecipe" @open-sample="openSample" @zoom="onZoom" @hover="hoverT = $event" />
-				<FastPlots v-model:tiles="tiles" v-model:zoom-tool="zoomTool" :trace="trace" :catalog="catalog" :message="plotMessage" :stacked="stacked" :bands="bands" :start-ms="startMs"
+				<FastPlots v-model:tiles="tiles" v-model:zoom-tool="zoomTool" :trace="trace" :catalog="catalog" :message="plotMessage" :stacked="stacked" :bands="bands" :start-ms="startMs" :x-title="profile.timeAxisTitle"
 					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" @zoom="onZoom" @hover="hoverT = $event" />
 			</div>
 		</div>

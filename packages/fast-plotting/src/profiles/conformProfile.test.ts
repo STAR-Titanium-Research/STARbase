@@ -96,11 +96,31 @@ describe('conformProfile figures', () => {
 	it('shows extruding time, mean torque, peak tooling 1 and total energy from the summary', () => {
 		expect(conformProfile.buildStats({}, run())).toEqual([
 			{ label: 'Extruding time', value: '9 min 00 s', unit: '', source: 'measured' },
-			{ label: 'Mean torque', value: '41.3', unit: '%', source: 'measured' },
-			{ label: 'Peak tooling 1', value: '412.3', unit: '°C', source: 'measured' },
+			{ label: 'Mean motor torque', value: '41.3', unit: '%', source: 'measured' },
+			{ label: 'Peak tooling 1', value: '412', unit: '°C', source: 'measured' },
 			{ label: 'Total energy', value: '2.25', unit: 'kWh', source: 'measured' },
 		]);
-		expect(conformProfile.peakLabels).toEqual(['Extruding time', 'Mean torque', 'Peak tooling 1', 'Total energy']);
+		expect(conformProfile.peakLabels).toEqual(['Extruding time', 'Mean motor torque', 'Peak tooling 1', 'Total energy']);
+	});
+	it('titles them "Key figures" (four tiles, 2 by 2) and words the page from its own noun', () => {
+		expect(conformProfile.peaksTitle).toBe('Key figures');
+		expect(conformProfile.heading).toBe('Conform plotter');
+		expect(conformProfile.runNoun).toBe('Conform runs');
+		expect(conformProfile.searchPlaceholder).toBe('Search code / feedstock');
+	});
+	it('prints a figure with no reading as an em dash with no unit, and keeps the tile', () => {
+		const stats = conformProfile.buildStats({}, run({ summary: { ...summary, peak_tooling1_c: null as any, energy_kwh: { motor: 1, ips: 1, cooling: 1, total: null as any } } }));
+		expect(stats.map((s) => [s.label, s.value, s.unit])).toEqual([
+			['Extruding time', '9 min 00 s', ''], ['Mean motor torque', '41.3', '%'], ['Peak tooling 1', '—', ''], ['Total energy', '—', ''],
+		]);
+	});
+	it('prints each figure with the one table: integers from 100, one decimal from 10, up to two below', () => {
+		const tiles = conformProfile.summaryTiles!({}, run({ summary: { ...summary, mean_wheel_speed_rpm: 5.04, peak_tooling1_c: 402.4, peak_torque_pct: 60.04, mean_torque_pct: 9.5 } }));
+		const by = (k: string) => tiles.find((t) => t.key === k);
+		expect(by('speed')).toMatchObject({ label: 'Mean wheel speed', value: '5.04', unit: 'rpm' });
+		expect(by('tooling')).toMatchObject({ value: '402', unit: '°C' });
+		expect(by('peakTorque')).toMatchObject({ label: 'Peak motor torque', value: '60', unit: '%' });
+		expect(by('torque')).toMatchObject({ value: '9.5' });
 	});
 	it('has no figures before a window is set, and still shows them when the log is hidden', () => {
 		expect(conformProfile.buildStats({}, run({ summary: null, status: 'no_window' }))).toEqual([]);
@@ -112,12 +132,20 @@ describe('conformProfile figures', () => {
 		expect(tiles.find((t) => t.key === 'eMotor')).toMatchObject({ value: '1.50', unit: 'kWh' });
 		expect(tiles.find((t) => t.key === 'duration')).toMatchObject({ value: '10 min 00 s', unit: '' });
 		expect(tiles.find((t) => t.key === 'demand')).toMatchObject({ value: '13.50', unit: 'kW' });
-		expect(tiles.find((t) => t.key === 'eIps')).toBeUndefined();
+		expect(tiles.find((t) => t.key === 'eIps')).toEqual({ key: 'eIps', label: 'IPS energy', value: '—', unit: '' });
 		expect(conformProfile.summaryNote!(run({ summary: { ...summary, missing: ['ips'] } }))).toContain('IPS');
 	});
 	it('words the window in UK local time', () => {
-		expect(conformProfile.windowLabel!(run())).toBe('09:10:00 – 09:20:00 on 2025-03-17 (UK time)');
+		expect(conformProfile.windowLabel!(run())).toBe('09:10:00 – 09:20:00 on 17 Mar 2025 (UK time)');
 		expect(conformProfile.windowLabel!(run({ window_start: null, window_end: null, status: 'no_window' }))).toBeNull();
+	});
+});
+
+describe('conformProfile header and detail dates', () => {
+	it('words the run date as a display date to the minute in UK time, and the log start with its seconds', () => {
+		const op = { operation_date: '2025-07-01T12:30:45Z', equipment_id: { equipment_name: 'Conform' }, operator_name: 'Ada', conform_feedstock: 'Ti swarf' };
+		expect(conformProfile.headerFacts(op)).toEqual([['Date', '1 Jul 2025, 13:30'], ['Machine', 'Conform'], ['Operator', 'Ada'], ['Feedstock', 'Ti swarf']]);
+		expect(conformProfile.detailRows(op, run()).find((r) => r.label === 'Log starts')?.value).toBe('17 Mar 2025, 09:00:00 (UK time)');
 	});
 });
 
@@ -125,7 +153,7 @@ describe('conformProfile list and states', () => {
 	it('badges a run by its window status', () => {
 		const q = (status?: string) => conformProfile.quality({ conform_run: status ? [{ status }] : [] });
 		expect([q().label, q('no_log').level]).toEqual(['No log', 'grey']);
-		expect(q('no_window')).toMatchObject({ level: 'yellow', label: 'No window' });
+		expect(q('no_window')).toMatchObject({ level: 'yellow', label: 'No run window' });
 		expect(q('done')).toMatchObject({ level: 'green', label: 'Window set' });
 		expect(q('error').level).toBe('red');
 	});
@@ -178,8 +206,22 @@ describe('conformProfile upload, link and unlink', () => {
 		} as unknown as AxiosInstance;
 		const file = { name: 'again.csv', arrayBuffer: async () => bytes.buffer } as unknown as File;
 		const out = await conformProfile.upload!(api, OP, file);
-		expect(out).toEqual({ warning: null, existing: { id: 'log-old', label: 'old.csv · 2025-03-17 09:00:00' } });
+		expect(out).toEqual({ warning: null, existing: { id: 'log-old', label: 'old.csv · 17 Mar 2025, 09:00:00', windows: ['Other run: 09:00:30 – 09:05:00', 'Other run: 09:10:00 – 09:20:00'], note: null } });
 		expect(api.post).not.toHaveBeenCalled();
+	});
+
+	it('lists the windows already on the log a file is already uploaded as, with the whole-log note', async () => {
+		const bytes = new TextEncoder().encode('Timestamp,Wheel Speed (rpm)\n2025-03-17T09:00:00Z,1\n2025-03-17T09:00:01Z,2\n');
+		const existing = { ...log, log_id: 'log-old', source_filename: 'old.csv', run_windows: [{ operation_id: 'op-9', start: LOG_START, end: '2025-03-17T11:00:00Z' }] };
+		const api = {
+			get: vi.fn(async (url: string) => ({ data: { data: url === '/items/conform_logs' ? [existing] : [{ operation_id: 'op-9', pass_code: '17-03-25-CF-009', conform_feedstock: 'Ti swarf' }] } })),
+			post: vi.fn(), patch: vi.fn(), delete: vi.fn(),
+		} as unknown as AxiosInstance;
+		const out = await conformProfile.upload!(api, OP, { name: 'again.csv', arrayBuffer: async () => bytes.buffer } as unknown as File);
+		expect(out.existing).toEqual({
+			id: 'log-old', label: 'old.csv · 17 Mar 2025, 09:00:00', windows: ['Ti swarf: 09:00:00 – 11:00:00'],
+			note: "The whole log is Ti swarf's window: narrow that run's window first",
+		});
 	});
 
 	it('lists candidate logs with the windows on them, searching around today when the run has no date', async () => {
@@ -189,7 +231,7 @@ describe('conformProfile upload, link and unlink', () => {
 		} as unknown as AxiosInstance;
 		const list = await conformProfile.linkExisting!.list(api, { ...OP, operation_date: null });
 		expect(list).toEqual([{
-			id: 'log-1', label: 'run.csv · 2025-03-17 09:00:00', windows: ['Ti swarf: 09:00:00 – 11:00:00'],
+			id: 'log-1', label: 'run.csv · 17 Mar 2025, 09:00:00', windows: ['Ti swarf: 09:00:00 – 11:00:00'],
 			note: "The whole log is Ti swarf's window: narrow that run's window first",
 		}]);
 		expect(conformProfile.linkExisting!.emptyText({ operation_date: null })).toMatch(/today/);

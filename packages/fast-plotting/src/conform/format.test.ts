@@ -36,7 +36,7 @@ describe('shared Conform formats', () => {
 
 describe('choosing a log already uploaded', () => {
 	it('words the candidates and the empty list the same everywhere', () => {
-		expect(candidateLabel({ source_filename: 'a.csv', log_start: '2025-07-01T12:00:00Z' })).toBe('a.csv · 2025-07-01 13:00:00');
+		expect(candidateLabel({ source_filename: 'a.csv', log_start: '2025-07-01T12:00:00Z' })).toBe('a.csv · 1 Jul 2025, 13:00:00');
 		expect(candidatesEmptyText('2025-01-15T00:00:00Z')).toBe("No Conform log from this machine starts within a day of this run's date.");
 		expect(candidatesEmptyText(null)).toMatch(/within a day of today/);
 	});

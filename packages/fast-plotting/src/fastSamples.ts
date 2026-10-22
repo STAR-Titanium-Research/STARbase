@@ -8,6 +8,8 @@ export interface RunRow {
 	pass_code?: string | null;
 	operation_date?: string | null;
 	sintering_recipe_number?: string | null;
+	/** The Conform run's feedstock, searched like the FAST recipe number. */
+	conform_feedstock?: string | null;
 	sample_id?: { sample_code?: string | null; nickname?: string | null; sample_id?: string | null } | null;
 	material_id?: { common_name?: string | null } | null;
 }
@@ -42,12 +44,13 @@ export function filterSamples(groups: SampleGroup[], query: string): SampleGroup
 	return q ? groups.filter((g) => g.code.toLowerCase().includes(q) || g.sub.toLowerCase().includes(q)) : groups;
 }
 
-/** The runs of one sample (null: every sample) whose code, sample or recipe contains the query. */
+/** The runs of one sample (null: every sample) whose code, sample, recipe (FAST) or feedstock (Conform) contains the query. */
 export function filterRuns<T extends RunRow>(rows: T[], sample: string | null, query: string): T[] {
 	const q = query.trim().toLowerCase();
 	if (sample === null && !q) return rows;
 	return rows.filter((r) => (sample === null || sampleKeyOf(r) === sample)
 		&& (!q || (r.pass_code || '').toLowerCase().includes(q)
 			|| (r.sample_id?.sample_code || '').toLowerCase().includes(q)
-			|| (r.sintering_recipe_number || '').toLowerCase().includes(q)));
+			|| (r.sintering_recipe_number || '').toLowerCase().includes(q)
+			|| (r.conform_feedstock || '').toLowerCase().includes(q)));
 }
