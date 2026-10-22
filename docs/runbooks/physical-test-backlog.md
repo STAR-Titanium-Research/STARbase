@@ -1777,7 +1777,10 @@ below. "Since" is the surface scan privacy PR (pending).
   through Directus's `AssetsService.getAsset` (only exercised against a fake in CI). If the log's file answers 403 for
   the reader (see CFS3), the appendix shows "Conform log not visible to you", and "Could not load the Conform log" when the
   file cannot be read for another reason, with the summary and steps still there; a run window of fewer than 2 rows says "Run
-  window too short to plot"; energy is in kWh and average demand in kW to 2 decimals. Since: Conform runs PR.
+  window too short to plot"; energy is in kWh and average demand in kW to 2 decimals. Review round 2: the four plots sit
+  two across (as the FAST appendix's do), each axis has 5 or 6 round ticks, the x axis is titled "Time since log start (min)"
+  and the unit shows above the y axis; a figure with no reading prints as a dash with no unit; parts the log cannot measure
+  read "Not measured: IPS, cooling." (not raw keys). Since: Conform runs PR and review round 2.
 - [ ] **C5 — Review round 1 on real Directus (the d1-conform-guard hook and migration 210).** Restart Directus after migration
   210 so it loads `d1-conform-guard`. As a Lab Member (not an administrator): (a) uploading the same log file twice is refused
   by the duplicate check, and a direct `POST /items/conform_logs` with the same `source_sha256` answers `RECORD_NOT_UNIQUE`;

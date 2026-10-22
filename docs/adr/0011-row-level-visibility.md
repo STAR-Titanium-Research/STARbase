@@ -167,7 +167,9 @@ log only when it sees a run of it (migration 208's row security), and so reads `
 itself is a `directus_files` row, so its own rule decides who can open it (a 403 there reads "Conform log not visible to you"); the
 "Conform Logs" folder has one read row so members can see it. Every member can insert a log (with the SHA-256 of the file, unique, so
 the same file is never uploaded twice); only its uploader can delete it, and not while a run uses it (a trigger, worded by the
-`d1-conform-guard` hook); nobody edits a log after upload. Administrators are unfiltered.
+`d1-conform-guard` hook); nobody edits a log after upload, and the same hook refuses a member's update of the log's `directus_files`
+row ("A Conform log's file can't be changed after upload."), so the stored CSV the summaries came from cannot be replaced.
+Administrators are unfiltered.
 
 **Reference data stays readable (and writable, as before) by every member:** `materials`,
 `material_iso_classifications`, `alloying_elements`, `material_alloying_elements`, `equipment`,
