@@ -14,6 +14,12 @@ export interface FastHost {
 	api: AxiosInstance;
 	/** Open a Directus record editor for the given collection and primary key. */
 	openRecord(collection: string, id: string): void;
+	/**
+	 * May the signed-in user change this record? `true` / `false` as Directus answers (false for a Lab Viewer without asking),
+	 * `null` when that is not known. The Conform plotter offers upload, link, window and unlink only unless this is `false`:
+	 * the same rule the Operation page uses for its own edit controls. A host without it offers them, and the server decides.
+	 */
+	canUpdate?(collection: string, id: string): Promise<boolean | null>;
 }
 
 // A module-level singleton rather than Vue provide/inject, matching ForceHost's reasoning --
