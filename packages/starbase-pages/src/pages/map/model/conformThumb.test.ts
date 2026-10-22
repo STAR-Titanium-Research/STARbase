@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseTrace, resetTraceCache, type SeriesMeta } from '@d1/fast-plotting';
 import type { HostApi } from '@d1/ui';
 import { conformThumb, THUMB_KEYS } from './conformThumb';
-import { conformThumbs, dataPreview, type DataPreview } from './dataPreview';
+import { CONFORM_THUMB_CAP, conformThumbs, dataPreview, type DataPreview } from './dataPreview';
 import type { Ref } from './types';
 
 const LOG_START = '2025-03-17T13:00:00.000Z';
@@ -101,6 +101,16 @@ describe('conformThumbs', () => {
     const { api, get } = fakeApi();
     expect(await conformThumbs(api, preview({ thumb: { startMs: 0, endMs: 1, series: [] } }))).toEqual({});
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it('does not ask again for a run that already carries its note, nor count it against the cap', async () => {
+    const { api, get } = fakeApi();
+    expect(await conformThumbs(api, preview({ thumbNote: 'Conform log not visible to you' }))).toEqual({});
+    expect(get).not.toHaveBeenCalled();
+    const many: Record<string, DataPreview> = {};
+    for (let i = 0; i < CONFORM_THUMB_CAP; i++) many[`n${i}`] = { kind: 'conform', plotterPath: '/x', thumbNote: 'Could not load the Conform log' };
+    many.c1 = { kind: 'conform', plotterPath: '/y' };
+    expect(Object.keys(await conformThumbs(api, many))).toEqual(['c1']);
   });
 
   it('gives no picture when the run has no window, and never throws', async () => {
