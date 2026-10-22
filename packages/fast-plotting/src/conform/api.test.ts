@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { AxiosInstance } from 'axios';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetTraceCache } from '../fastCache';
 import { excelVariant, fixtureText } from './__fixtures__/load';
 import { ConformLogError, ConformLogHiddenError } from './channels';
 import {
-	ALREADY_UPLOADED, CONFORM_LOGS_FOLDER_ID, findLogByHash, labelWindows, linkExistingLog, listCandidateLogs, listLogWindows, loadConformRun,
+	ALREADY_UPLOADED, CONFORM_LOGS_FOLDER_ID, COULD_NOT_SAVE_WINDOW, findLogByHash, guardReason, plainReason, labelWindows, linkExistingLog, listCandidateLogs, listLogWindows, loadConformRun,
 	loadLogTrace, recomputeRun, setRunWindow, unlinkLog, uploadConformLog,
 	type ConformLogRow,
 } from './api';
@@ -16,6 +16,12 @@ interface Call { method: 'get' | 'post' | 'patch' | 'delete'; url: string; body?
 
 const httpError = (status: number, message: string) =>
 	Object.assign(new Error(`Request failed with status code ${status}`), { response: { status, data: { errors: [{ message }] } } });
+
+/** A refusal by one of our hooks: `extensions.source` marks the sentence in `reason` as written for people. */
+const guardError = (status: number, reason: string, source = 'd1-conform-guard') =>
+	Object.assign(new Error(`Request failed with status code ${status}`), {
+		response: { status, data: { errors: [{ message: `Invalid payload. ${reason}`, extensions: { code: 'INVALID_PAYLOAD', reason, source } }] } },
+	});
 
 /** An axios stand-in: records every call and answers from `routes` (an Error return is thrown). */
 function fakeApi(routes: (c: Call) => unknown) {
@@ -42,7 +48,10 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const FILE = { name: 'synthetic.csv', bytes: bytesOf(fixtureText) };
 
-beforeEach(() => resetTraceCache());
+beforeEach(() => {
+	resetTraceCache();
+	vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('log-new' as `${string}-${string}-${string}-${string}-${string}`);   // the id the upload picks for the log, as the server's reply echoes it
+});
 
 const norm = normaliseLog(parseConformCsv(fixtureText));
 const logRow = (id: string): ConformLogRow => ({
@@ -119,9 +128,24 @@ describe('uploadConformLog', () => {
 	it('looks the hash up before uploading anything and returns the log that has it', async () => {
 		const f = fakeApi(happy((c) => (c.method === 'get' && c.url === '/items/conform_logs' ? [logRow('log-old')] : undefined)));
 		const res = await uploadConformLog(f.api, OP, FILE);
-		expect(res).toEqual({ existing: expect.objectContaining({ log_id: 'log-old' }) });
+		expect(res).toEqual({ existing: expect.objectContaining({ log_id: 'log-old' }), existingWindows: [] });
 		expect(f.writes()).toEqual([]);
 		expect(f.calls[0].config.params.filter).toEqual({ source_sha256: { _eq: sha(FILE.bytes) } });
+	});
+
+	it('also returns the windows already on that log, labelled, for the prompt', async () => {
+		const old = { ...logRow('log-old'), run_windows: [{ operation_id: 'op-9', start: '2025-01-15T10:00:00Z', end: '2025-01-15T10:05:00Z' }, { operation_id: 'op-8', start: '2025-01-15T10:06:00Z', end: '2025-01-15T10:09:00Z' }] };
+		const f = fakeApi(happy((c) => {
+			if (c.method === 'get' && c.url === '/items/conform_logs') return [old];
+			if (c.method === 'get' && c.url === '/items/manufacturing_operations') return [{ operation_id: 'op-9', pass_code: '15-01-25-CF-009', conform_feedstock: 'Ti swarf' }];
+			return undefined;
+		}));
+		const res = await uploadConformLog(f.api, OP, FILE);
+		expect(res).toMatchObject({ existingWindows: [
+			{ operation_id: 'op-9', label: 'Ti swarf', readable: true },
+			{ operation_id: 'op-8', label: 'Other run', readable: false },
+		] });
+		expect(f.writes()).toEqual([]);
 	});
 
 	it('words the database refusal of a duplicate hash', async () => {
@@ -133,7 +157,7 @@ describe('uploadConformLog', () => {
 		expect(err).toBeInstanceOf(ConformLogError);
 		expect(err.message).toBe(ALREADY_UPLOADED);
 		expect(ALREADY_UPLOADED).toBe('This log is already uploaded: use “Use a log already uploaded”.');
-		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'DELETE /files/file-new']);
+		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'DELETE /items/conform_logs/log-new', 'DELETE /files/file-new']);
 	});
 
 	it('refuses a malformed file before touching the server', async () => {
@@ -144,12 +168,13 @@ describe('uploadConformLog', () => {
 
 	it('deletes the uploaded file when the log row cannot be written', async () => {
 		const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_logs' ? httpError(403, 'You do not have permission') : undefined)));
-		await expect(uploadConformLog(f.api, OP, FILE)).rejects.toThrow('You do not have permission');
-		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'DELETE /files/file-new']);
+		await expect(uploadConformLog(f.api, OP, FILE)).rejects.toThrow("You can't change this Conform run.");
+		// the log id is chosen before the create, so a create that failed after inserting its row is removed too (a miss is harmless)
+		expect(f.writes()).toEqual(['POST /files', 'POST /items/conform_logs', 'DELETE /items/conform_logs/log-new', 'DELETE /files/file-new']);
 	});
 
 	it('removes the log row and the file when the run data cannot be written, and surfaces the message', async () => {
-		const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? httpError(400, 'Run window overlaps 17-03-25-CF-011 on this log.') : undefined)));
+		const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? guardError(400, 'Run window overlaps 17-03-25-CF-011 on this log.') : undefined)));
 		const err = await uploadConformLog(f.api, OP, FILE).catch((e) => e);
 		expect(err).toBeInstanceOf(ConformLogError);
 		expect(err.message).toBe('Run window overlaps 17-03-25-CF-011 on this log.');
@@ -177,7 +202,7 @@ describe('uploadConformLog', () => {
 	it('warns, and changes nothing, when the run date is more than a day from the log', async () => {
 		const f = fakeApi(happy());
 		const res = await uploaded(uploadConformLog(f.api, { ...OP, operation_date: '2025-03-20T09:00:00' }, FILE));
-		expect(res.dateWarning).toBe("The log starts on 2025-01-15, more than a day from the run's date 2025-03-20; the date was not changed.");
+		expect(res.dateWarning).toBe("The log starts on 15 Jan 2025, more than a day from the run's date 20 Mar 2025; the date was not changed.");
 		expect(f.writes().some((w) => w.includes('manufacturing_operations'))).toBe(false);
 	});
 
@@ -192,15 +217,26 @@ describe('the server hook refusals', () => {
 	const refusal = (reason: string) => Object.assign(new Error('Request failed with status code 400'), {
 		response: { status: 400, data: { errors: [{ message: reason, extensions: { code: 'INVALID_PAYLOAD', reason } }] } },
 	});
-	it('are shown verbatim, from extensions.reason first', async () => {
+	it('are shown verbatim, from extensions.reason, when the Conform hook or the access guard refused', async () => {
 		const sentence = 'Run window overlaps 15-01-25-CF-001 on this log.';
-		const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? refusal(sentence) : undefined)));
-		const err = await linkExistingLog(f.api, 'op-2', 'log-7').catch((e) => e);
-		expect(err).toBeInstanceOf(ConformLogError);
-		expect(err.message).toBe(sentence);
-		const odd = Object.assign(new Error('x'), { response: { status: 400, data: { errors: [{ message: 'Invalid payload. Run window must start before it ends.', extensions: { reason: 'Run window must start before it ends.' } }] } } });
-		const g = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? odd : undefined)));
-		expect((await linkExistingLog(g.api, 'op-2', 'log-7').catch((e) => e)).message).toBe('Run window must start before it ends.');
+		for (const source of ['d1-conform-guard', 'd1-access-guard']) {
+			const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? guardError(400, sentence, source) : undefined)));
+			const err = await linkExistingLog(f.api, 'op-2', 'log-7').catch((e) => e);
+			expect(err).toBeInstanceOf(ConformLogError);
+			expect(err.message).toBe(sentence);
+		}
+	});
+	it('never show Directus developer text: a reason from any other source, or none, becomes a plain sentence', async () => {
+		const stock = (status: number, message: string, ext: Record<string, unknown> = {}) => Object.assign(new Error('x'), { response: { status, data: { errors: [{ message, extensions: { code: 'X', ...ext } }] } } });
+		const link = (e: unknown) => linkExistingLog(fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? (e as Error) : undefined))).api, 'op-2', 'log-7').catch((x) => x.message);
+		expect(await link(stock(400, 'Invalid payload. Something internal.', { reason: 'Something internal.' }))).toBe('Could not link the log.');
+		expect(await link(stock(400, 'Invalid payload.', { reason: 'From elsewhere', source: 'some-other-hook' }))).toBe('Could not link the log.');
+		expect(await link(stock(403, "You don't have permission to access this."))).toBe("You can't change this Conform run.");
+		expect(await link(stock(500, 'duplicate key value violates unique constraint "x"'))).toBe('Could not link the log.');
+		expect(await link(Object.assign(new Error('Network Error'), { request: {} }))).toBe('Could not reach the server. Check the connection and try again.');
+		expect(guardReason(guardError(400, 'Reason.'))).toBe('Reason.');
+		expect(guardReason(stock(400, 'Reason.', { reason: 'Reason.' }))).toBeUndefined();
+		expect(plainReason(stock(500, 'boom'), COULD_NOT_SAVE_WINDOW)).toBe('Could not save the run window.');
 	});
 });
 
@@ -267,7 +303,7 @@ describe('setRunWindow', () => {
 	});
 
 	it('shows an overlap refusal verbatim and writes nothing else', async () => {
-		const f = fakeApi(routes({}, (c) => (c.method === 'patch' && c.url === '/items/conform_run_data/run-1' ? httpError(400, 'run window overlaps 17-03-25-CF-011') : undefined)));
+		const f = fakeApi(routes({}, (c) => (c.method === 'patch' && c.url === '/items/conform_run_data/run-1' ? guardError(400, 'run window overlaps 17-03-25-CF-011') : undefined)));
 		const err = await setRunWindow(f.api, 'op-1', WIN[0], WIN[1]).catch((e) => e);
 		expect(err).toBeInstanceOf(ConformLogError);
 		expect(err.message).toBe('run window overlaps 17-03-25-CF-011');
@@ -460,7 +496,7 @@ describe('unlinkLog', () => {
 
 	it('shows the database refusal when the run itself cannot be changed', async () => {
 		const f = fakeApi(routes((c) => (c.method === 'patch' ? httpError(403, 'You do not have permission') : undefined)));
-		await expect(unlinkLog(f.api, 'op-1')).rejects.toThrow('You do not have permission');
+		await expect(unlinkLog(f.api, 'op-1')).rejects.toThrow("You can't change this Conform run.");
 		expect(f.writes()).toEqual(['PATCH /items/conform_run_data/run-1']);
 	});
 });

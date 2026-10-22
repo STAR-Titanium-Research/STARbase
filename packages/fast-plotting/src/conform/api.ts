@@ -4,7 +4,7 @@
 import type { AxiosInstance } from 'axios';
 import { loadTrace, parseTrace, type SeriesMeta, type Trace } from '../fastCache';
 import { ConformLogError, ConformLogHiddenError, LOG_LOAD_FAILED } from './channels';
-import { ukDate } from './clock';
+import { formatUkDate, ukDate } from './clock';
 import { sha256Hex } from './hash';
 import { normaliseLog, type ConformTotals } from './normalise';
 import { decodeLogBytes, parseConformCsv, parseIsoMs } from './parse';
@@ -16,6 +16,7 @@ import { summariseWindow, type ConformSummary } from './summary';
 export interface RawLogWindow { operation_id: string; start: string; end: string }
 /** The same with a label: the feedstock or code of a run the reader can see, "Other run" for any other. */
 export interface LogWindow extends RawLogWindow { label: string; readable: boolean }
+export type LabelledWindow = LogWindow;
 
 export interface ConformLogRow {
 	log_id: string; directus_files_id: string; equipment_id: string | null; source_filename: string;
@@ -50,30 +51,56 @@ const LABEL_CHUNK = 40;
 
 const httpStatus = (e: any): number | undefined => e?.response?.status;
 const directusError = (e: any): { message?: string; extensions?: { code?: string; field?: string } } | undefined => e?.response?.data?.errors?.[0];
-// The server's hook refusals (HTTP 400, INVALID_PAYLOAD) carry the sentence to show in `extensions.reason` and in `message`: reason first, shown verbatim.
-const directusMessage = (e: any): string | undefined => {
-	const x = directusError(e) as { message?: string; extensions?: { reason?: unknown } } | undefined;
-	const reason = x?.extensions?.reason;
-	return typeof reason === 'string' && reason.trim() ? reason : x?.message;
-};
+
+/** The hooks whose refusals are written for people: the `extensions.source` of the Conform hook and of the access guard (as `@d1/ui`'s `guardRefusal` reads it; this package cannot import the kit). */
+export const GUARD_SOURCES: readonly string[] = ['d1-conform-guard', 'd1-access-guard'];
 
 /**
- * A Directus error message becomes a ConformLogError with that text (e.g. `Run window overlaps 17-03-25-CF-011 on this log.`).
- * The unique error on `source_sha256` becomes the "already uploaded" sentence.
+ * The sentence one of our own hooks refused with (`extensions.reason`), or undefined for any other error. Directus's own
+ * messages ("You don't have permission to access this.", "Invalid payload...") are developer text and are never shown.
  */
-function toLogError(e: unknown): unknown {
+export function guardReason(e: any): string | undefined {
+	const list: any[] = e?.response?.data?.errors ?? [];
+	for (const x of list) {
+		const ext = x?.extensions;
+		if (!GUARD_SOURCES.includes(ext?.source)) continue;
+		if (typeof ext.reason === 'string' && ext.reason.trim()) return ext.reason.trim();
+	}
+	return undefined;
+}
+
+/** What to tell a person about a failed request: the hook's own reason, else a plain sentence (`fallback` says what could not be done). */
+export function plainReason(e: any, fallback: string): string {
+	const reason = guardReason(e);
+	if (reason) return reason;
+	if (httpStatus(e) === 403) return "You can't change this Conform run.";
+	if (e?.response === undefined && e?.request) return 'Could not reach the server. Check the connection and try again.';
+	return fallback;
+}
+
+/**
+ * A failed request becomes a ConformLogError worded for a person: a hook's reason (e.g. `Run window overlaps 17-03-25-CF-011
+ * on this log.`) verbatim, a plain sentence otherwise. The unique error on `source_sha256` becomes the "already uploaded" sentence.
+ * An error that is not a failed request is rethrown as it is.
+ */
+function toLogError(e: unknown, fallback: string): unknown {
 	if (e instanceof ConformLogError) return e;
 	const err = directusError(e);
 	if (err?.extensions?.code === 'RECORD_NOT_UNIQUE' && (err.extensions.field === 'source_sha256' || /source_sha256/.test(err.message ?? ''))) {
 		return new ConformLogError(ALREADY_UPLOADED);
 	}
-	const text = directusMessage(e);
-	return text ? new ConformLogError(text) : e;
+	if ((e as any)?.response || (e as any)?.request) return new ConformLogError(plainReason(e, fallback));
+	return e;
 }
 
-async function guarded<T>(fn: () => Promise<T>): Promise<T> {
-	try { return await fn(); } catch (e) { throw toLogError(e); }
+async function guarded<T>(fallback: string, fn: () => Promise<T>): Promise<T> {
+	try { return await fn(); } catch (e) { throw toLogError(e, fallback); }
 }
+
+export const COULD_NOT_UPLOAD = 'Could not upload the log.';
+export const COULD_NOT_LINK = 'Could not link the log.';
+export const COULD_NOT_UNLINK = 'Could not unlink the log.';
+export const COULD_NOT_SAVE_WINDOW = 'Could not save the run window.';
 
 const num = (v: unknown): number => (v === null || v === undefined || v === '' ? 0 : Number(v));
 
@@ -233,20 +260,24 @@ export async function findLogByHash(api: AxiosInstance, sha256: string): Promise
 
 const baseName = (name: string): string => name.replace(/\.[^.]+$/, '') || 'conform-log';
 
+/** What an upload came to: the new run and log, or, when the file's bytes are already uploaded, that log and the windows already on it. */
+export type UploadResult = { run: ConformRunRow; log: ConformLogRow; dateWarning: string | null } | { existing: ConformLogRow; existingWindows: LabelledWindow[] };
+
 /** The operation a log is attached to: what the upload needs to know about it. */
 export interface UploadTarget { operation_id: string; equipment_id: string | null; operation_date: string | null; work_state?: string | null }
 
 /**
  * Process the file in the browser, store the normalised CSV and the log row, and link the run to the whole log
  * with its summary and steps. A malformed file is refused before anything is uploaded. A file whose bytes are already
- * uploaded is not uploaded again: the result is `{ existing }`, for the caller to offer linking that log. If a write fails
+ * uploaded is not uploaded again: the result is `{ existing, existingWindows }` (the windows already on that log, labelled), for the
+ * caller to offer linking that log. If a write fails
  * after the file went up, the log row and the file are removed again and the error is rethrown.
  */
 export async function uploadConformLog(
 	api: AxiosInstance,
 	op: UploadTarget,
 	file: { name: string; bytes: ArrayBuffer | ArrayBufferView },
-): Promise<{ run: ConformRunRow; log: ConformLogRow; dateWarning: string | null } | { existing: ConformLogRow }> {
+): Promise<UploadResult> {
 	const parsed = parseConformCsv(decodeLogBytes(file.bytes));
 	const norm = normaliseLog(parsed);
 	const trace = parseTrace(norm.csvText, norm.series);
@@ -257,7 +288,7 @@ export async function uploadConformLog(
 
 	const sha = await sha256Hex(file.bytes);
 	const existingLog = await findLogByHash(api, sha);
-	if (existingLog) return { existing: existingLog };
+	if (existingLog) return { existing: existingLog, existingWindows: await labelWindows(api, existingLog.run_windows) };
 
 	const existing = await getRunRow(api, op.operation_id);   // read first: a failure here leaves nothing behind
 
@@ -265,7 +296,7 @@ export async function uploadConformLog(
 	form.append('folder', CONFORM_LOGS_FOLDER_ID);
 	form.append('title', `${baseName(file.name)} (normalised)`);
 	form.append('file', new Blob([norm.csvText], { type: 'text/csv' }), `${baseName(file.name)}-normalised.csv`);
-	const fileId: string = (await guarded(() => api.post('/files', form))).data.data.id;
+	const fileId: string = (await guarded(COULD_NOT_UPLOAD, () => api.post('/files', form))).data.data.id;
 
 	let logId: string | null = null;
 	let log: ConformLogRow;
@@ -287,9 +318,9 @@ export async function uploadConformLog(
 			totals: norm.totals,
 			constants: norm.constants,
 		};
+		logId = logBody.log_id;   // before the POST: a create that fails after inserting the row is cleaned up too
 		const created = await api.post('/items/conform_logs', logBody, { params: { fields: LOG_FIELDS } });
 		log = toLog({ ...logBody, run_windows: [], ...(created.data?.data ?? {}) });
-		logId = log.log_id;
 		run = await saveRun(api, existing, {
 			operation_id: op.operation_id,
 			log_id: log.log_id,
@@ -303,7 +334,7 @@ export async function uploadConformLog(
 	} catch (e) {
 		if (logId) { try { await api.delete(`/items/conform_logs/${logId}`); } catch { /* best effort */ } }
 		try { await api.delete(`/files/${fileId}`); } catch { /* best effort */ }
-		throw toLogError(e);
+		throw toLogError(e, COULD_NOT_UPLOAD);
 	}
 
 	return { run, log, dateWarning: await reconcileDate(api, op, norm.logStart) };
@@ -316,23 +347,24 @@ export async function uploadConformLog(
  */
 async function reconcileDate(api: AxiosInstance, op: UploadTarget, logStart: string): Promise<string | null> {
 	if (op.work_state === 'planned') return null;
-	const logDay = ukDate(logStart);
+	const logDay = ukDate(logStart);   // ISO, for the day arithmetic only
 	if (!op.operation_date) {
 		try {
 			await api.patch(`/items/manufacturing_operations/${op.operation_id}`, { operation_date: logStart });
 			return null;
 		} catch (e) {
-			return `The run's date could not be set from the log (${directusMessage(e) || (e as Error)?.message || 'request failed'}).`;
+			const why = plainReason(e, '');
+			return `The run's date could not be set from the log.${why ? ` ${why}` : ''}`;
 		}
 	}
 	const runDay = ukDate(instantMs(op.operation_date));
 	const apart = Math.abs(Date.parse(`${logDay}T00:00:00Z`) - Date.parse(`${runDay}T00:00:00Z`)) / DAY_MS;
-	return apart > 1 ? `The log starts on ${logDay}, more than a day from the run's date ${runDay}; the date was not changed.` : null;
+	return apart > 1 ? `The log starts on ${formatUkDate(logStart)}, more than a day from the run's date ${formatUkDate(instantMs(op.operation_date))}; the date was not changed.` : null;
 }
 
 /** Link a log that is already uploaded. The window starts empty. The run's date is never touched. */
 export async function linkExistingLog(api: AxiosInstance, operationId: string, logId: string): Promise<ConformRunRow> {
-	return guarded(async () => saveRun(api, await getRunRow(api, operationId), {
+	return guarded(COULD_NOT_LINK, async () => saveRun(api, await getRunRow(api, operationId), {
 		operation_id: operationId,
 		log_id: logId,
 		window_start: null,
@@ -354,7 +386,7 @@ export async function unlinkLog(api: AxiosInstance, operationId: string): Promis
 	const raw = await getRunRow(api, operationId);
 	if (!raw?.log_id) return { logRemoved: false };
 	const logId: string = raw.log_id;
-	await guarded(() => saveRun(api, raw, {
+	await guarded(COULD_NOT_UNLINK, () => saveRun(api, raw, {
 		log_id: null, window_start: null, window_end: null, summary: null, steps: null, status: 'no_log', error_message: null,
 	}));
 	try {
@@ -392,7 +424,7 @@ export async function setRunWindow(api: AxiosInstance, operationId: string, star
 	const logStartMs = Date.parse(log.log_start);
 	const summary = summariseWindow(trace, logStartMs, startMs, endMs);
 	const steps = detectSteps(trace, logStartMs, startMs, endMs);
-	const run = await guarded(() => saveRun(api, raw, {
+	const run = await guarded(COULD_NOT_SAVE_WINDOW, () => saveRun(api, raw, {
 		window_start: new Date(startMs).toISOString(),
 		window_end: new Date(endMs).toISOString(),
 		status: 'done',
@@ -433,5 +465,5 @@ export async function recomputeRun(api: AxiosInstance, operationId: string): Pro
 	const endMs = instantMs(raw.window_end);
 	const summary = summariseWindow(trace, logStartMs, startMs, endMs);
 	const steps = detectSteps(trace, logStartMs, startMs, endMs);
-	return guarded(() => saveRun(api, raw, { status: 'done', summary, steps, error_message: null }));
+	return guarded(COULD_NOT_SAVE_WINDOW, () => saveRun(api, raw, { status: 'done', summary, steps, error_message: null }));
 }
