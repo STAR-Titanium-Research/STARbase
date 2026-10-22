@@ -169,6 +169,10 @@ itself is a `directus_files` row, so its own rule decides who can open it (a 403
 the same file is never uploaded twice); only its uploader can delete it, and not while a run uses it (a trigger, worded by the
 `d1-conform-guard` hook); nobody edits a log after upload, and the same hook refuses a member's update of the log's `directus_files`
 row ("A Conform log's file can't be changed after upload."), so the stored CSV the summaries came from cannot be replaced.
+A log can be made only from a file its creator uploaded to the Conform Logs folder (migration 211, ADR-0022): `d1-access-guard`
+refuses a member's create otherwise, a trigger refuses it for any writer that sets `created_by`, and the file lock applies only to a
+log made by the file's own uploader, so no member can point a log at someone else's file and freeze it. A member also cannot change
+`directus_files.uploaded_by`.
 Administrators are unfiltered.
 
 **Reference data stays readable (and writable, as before) by every member:** `materials`,

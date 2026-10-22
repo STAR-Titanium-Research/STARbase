@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import hook from './index.js';
+import hook, { UPLOADER_REFUSED } from './index.js';
 import { archivePath, createsPointer, repointsPointer } from './archivePointers.js';
 
 const filters = {};
@@ -139,4 +139,28 @@ test('the pure predicates agree with the filters', () => {
   assert.equal(repointsPointer(POINTER, { title: 'x' }), false);
   assert.equal(repointsPointer(null, { storage: 'star' }), false);
   assert.equal(repointsPointer(POINTER, { filename_disk: PATH }), false);
+});
+
+// ADR-0022 / migration 211: a member may not restamp who uploaded a file (the Conform log rule trusts uploaded_by).
+test('update: a member cannot change uploaded_by; sending it back unchanged, an admin and an internal call are fine', async () => {
+  const mine = { id: 'f9', storage: 'local', filename_disk: 'abc.csv', metadata: {}, uploaded_by: 'user-2' };
+  const db = database([mine]);
+  for (const payload of [{ uploaded_by: 'user-1' }, { uploaded_by: { id: 'user-1' } }, { uploaded_by: null }, { title: 'x', uploaded_by: 'USER-1' }]) {
+    const err = await refused(Promise.resolve().then(() => filters['files.update'](payload, meta({ keys: ['f9'] }), ctx({ database: db }))));
+    assert.equal(err.message, UPLOADER_REFUSED);
+    assert.equal(err.extensions.id, 'f9');
+  }
+  for (const payload of [{ uploaded_by: 'user-2' }, { uploaded_by: 'USER-2', title: 'renamed' }, { uploaded_by: { id: 'user-2' } }, { title: 'x' }]) {
+    assert.equal(await filters['files.update'](payload, meta({ keys: ['f9'] }), ctx({ database: db })), payload);
+  }
+  const restamp = { uploaded_by: 'user-1' };
+  assert.equal(await filters['files.update'](restamp, meta({ keys: ['f9'] }), ctx({ database: db, accountability: { user: 'a', admin: true } })), restamp);
+  assert.equal(await filters['files.update'](restamp, meta({ keys: ['f9'] }), ctx({ database: db, accountability: null })), restamp);
+  // items.update for directus_files shares the rule
+  await refused(Promise.resolve().then(() => filters['items.update'](restamp, meta({ keys: ['f9'] }), ctx({ database: db }))));
+});
+
+test('update: with no key to look up, any uploaded_by is refused (it cannot be compared)', async () => {
+  const err = await refused(Promise.resolve().then(() => filters['files.update']({ uploaded_by: 'user-1' }, meta(), ctx())));
+  assert.equal(err.message, UPLOADER_REFUSED);
 });

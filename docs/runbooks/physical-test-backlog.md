@@ -1795,6 +1795,14 @@ below. "Since" is the surface scan privacy PR (pending).
   log's file can't be changed after upload." (the `files.update` filter of `d1-conform-guard`; if Directus does not fire it for
   system collections the PATCH succeeds, which is the finding to report), the same PATCH as an administrator works, and a PATCH
   of a file no log uses works for the member. Since: Conform runs review rounds 1 and 2.
+- [ ] **C6 — A Conform log only from your own upload (migration 211, d1-access-guard, d1-conform-guard).** Restart Directus after
+  migration 211. As Lab Member A, with Lab Member B's Conform log file id at hand (B uploads a log in STARbase): (a) STARbase upload of
+  A's own log still works end to end (file into the Conform Logs folder, then the log row); (b) `POST /items/conform_logs` naming B's
+  file answers 403 "You can only create a Conform log from a file you uploaded to the Conform Logs folder." (and the same for A's own
+  file outside that folder, and for a made-up file id); (c) `PATCH /files/<B's file>` with `{"uploaded_by":"<A's user id>"}` answers 403
+  "Who uploaded a file is recorded by the system; it cannot be changed." (if Directus does not fire `files.update` for system collections
+  the PATCH succeeds, which is the finding to report); (d) as an administrator, a direct `POST /items/conform_logs` naming someone else's
+  file is refused by the trigger (an administrator who means it does it by SQL). Since: the conform_logs file-owner fix.
 
 ### Conform plotter (Conform runs plan, stream C)
 

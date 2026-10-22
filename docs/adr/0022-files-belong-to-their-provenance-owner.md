@@ -92,6 +92,14 @@ folder it came from**. The path of a pointer row cannot carry that rule, because
   stamped them (runbook `surface-scan-worker.md`, "Scans of unowned files in personal folders"). The crawler's own stamp of scan-linked rows
   (commit 82c7f47) stays. Backlog IF91 and IF92.
 
+- **A Conform log is made only from a file its creator uploaded** (2026-10-22, migration 211). Migration 208 let any member create a
+  `conform_logs` row naming any `directus_files_id` (Directus does not filter create; a `validation` cannot follow the key to the file).
+  No file content leaked (reads go through the file's own rule), but the log took the file hostage: `d1-conform-guard` locks a log's file
+  against members' updates, and the non-cascading key kept its owner from deleting it. Now `d1-access-guard` refuses a member's log unless
+  its file's `uploaded_by` is the caller and it sits in the Conform Logs folder, a trigger holds every writer that sets `created_by` to
+  the same rule, the lock applies only to a log made by the file's own uploader, and a member can no longer change `uploaded_by` (the
+  field list still lists it; narrowing it waits for SEM3). Backlog C6.
+
 ## Verification
 
 Postgres-backed visibility tests (owner, non-owner, team member, administrator with the access log, unowned file,

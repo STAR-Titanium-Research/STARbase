@@ -145,9 +145,10 @@ test('registers the items.create, items.delete and items.update filters, the thr
   assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'files.create', 'files.update', 'files.upload', 'items.create', 'items.delete', 'items.update']);
 });
 
-test('the shipped rules guard exactly the four visibility junctions, the surface scan file link and the Conform run row', () => {
+test('the shipped rules guard exactly the four visibility junctions, the surface scan file link, the Conform run row and the Conform log file', () => {
   assert.deepEqual(Object.keys(RULES).sort(), [
     'campaign_samples',
+    'conform_logs',
     'conform_run_data',
     'project_investigators',
     'sample_co_owners',
@@ -2092,4 +2093,110 @@ test('conform_run_data update: repointing the operation or the log is checked; a
   const unlink = { log_id: null, status: 'no_log' };
   assert.equal(await ok.filters['items.update'](unlink, meta, runCtx({ database: database() })), unlink);
   assert.equal(ok.log.reads.length, 2);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Conform log files (ADR-0022, migration 211): conform_logs.directus_files_id is guarded with a literal filter of its own, a file the caller
+// uploaded that sits in the Conform Logs folder, so no member can point a log (and with it d1-conform-guard's file lock) at someone else's file.
+// These tests run the shipped filter against a small model of directus_files.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+const CONFORM_FOLDER = 'c04f1000-0000-4000-8000-000000000001';
+const LOG_FILE_REFUSED = 'You can only create a Conform log from a file you uploaded to the Conform Logs folder.';
+const LOG_FILES = [
+  { id: 'f-mine', uploaded_by: 'u-a', folder: CONFORM_FOLDER },
+  { id: 'f-theirs', uploaded_by: 'u-b', folder: CONFORM_FOLDER },
+  { id: 'f-mine-elsewhere', uploaded_by: 'u-a', folder: 'some-other-folder' },
+  { id: 'f-mine-root', uploaded_by: 'u-a', folder: null },
+  { id: 'f-system', uploaded_by: null, folder: CONFORM_FOLDER },
+];
+
+function mountLogFiles() {
+  const filters = {};
+  const reads = [];
+  class ItemsService {
+    constructor(collection, options) {
+      this.collection = collection;
+      this.options = options;
+    }
+    async readByQuery(query) {
+      reads.push({ collection: this.collection, query, accountability: this.options.accountability });
+      assert.equal(this.collection, 'directus_files');
+      return LOG_FILES.filter((f) => matches(query.filter, f)).map((f) => ({ id: f.id }));
+    }
+  }
+  hook({ filter: (name, fn) => (filters[name] = fn) }, { services: { ItemsService } });
+  return { filters, reads };
+}
+const logCtx = (user, extra = {}) => ({
+  database: fakeDb([], ['directus_files:f-theirs']),
+  schema: { collections: { conform_logs: { primary: 'log_id' } } },
+  accountability: { user, admin: false },
+  ...extra,
+});
+
+test('the Conform log guard ships its own filter: uploaded by the caller, in the Conform Logs folder', () => {
+  assert.deepEqual(RULES.conform_logs, [
+    {
+      field: 'directus_files_id',
+      parent: 'directus_files',
+      key: 'id',
+      filter: { _and: [{ uploaded_by: { _eq: '$CURRENT_USER' } }, { folder: { _eq: CONFORM_FOLDER } }] },
+    },
+  ]);
+});
+
+const LOG_FILE_CASES = [
+  // [who, file, allowed, why]
+  ['u-a', 'f-mine', true, 'the uploader makes a log of their own upload in the Conform Logs folder'],
+  ['u-a', 'f-theirs', false, 'the file of another member, even in the Conform Logs folder'],
+  ['u-a', 'f-mine-elsewhere', false, 'their own file in another folder'],
+  ['u-a', 'f-mine-root', false, 'their own file in no folder'],
+  ['u-a', 'f-system', false, 'a file with no uploader (registered by the system)'],
+  ['u-a', 'f-missing', false, 'a file id that does not exist is refused with the same words'],
+];
+
+for (const [who, file, allowed, why] of LOG_FILE_CASES) {
+  test(`conform_logs create over ${file} by ${who}: ${allowed ? 'allowed' : 'refused'} (${why})`, async () => {
+    const { filters, reads } = mountLogFiles();
+    const payload = { log_id: 'log-new', directus_files_id: file, source_filename: 'run.csv' };
+    const run = () => filters['items.create'](payload, { collection: 'conform_logs' }, logCtx(who));
+    if (allowed) {
+      assert.equal(await run(), payload);
+    } else {
+      await assert.rejects(run(), (e) => {
+        assert.equal(e.status, 403);
+        assert.equal(e.code, 'FORBIDDEN');
+        assert.equal(e.message, LOG_FILE_REFUSED);
+        assert.equal(e.extensions.source, 'd1-access-guard');
+        assert.equal(e.extensions.kind, 'junction');
+        assert.equal(e.extensions.collection, 'conform_logs');
+        assert.equal(e.extensions.parent, 'directus_files');
+        assert.equal(e.extensions.id, file);
+        return true;
+      });
+    }
+    assert.equal(reads.length, 1, 'one read of the file, as the caller');
+    assert.equal(reads[0].accountability.user, who);
+    const sent = JSON.stringify(reads[0].query.filter);
+    assert.ok(sent.includes(`"${who}"`) && !sent.includes('$CURRENT_USER'), sent);
+  });
+}
+
+test('conform_logs create: no "created here" shortcut for a file, a batch is refused on its first foreign file, admins and internal calls pass', async () => {
+  const { filters, reads } = mountLogFiles();
+  const c = logCtx('u-a');
+  await assert.rejects(filters['items.create']({ directus_files_id: 'f-theirs' }, { collection: 'conform_logs' }, c));
+  assert.deepEqual(c.database.calls, [], 'directus_files has no version column: the xmin query is never asked');
+  await assert.rejects(
+    filters['items.create']([{ directus_files_id: 'f-mine' }, { directus_files_id: 'f-theirs' }], { collection: 'conform_logs' }, logCtx('u-a')),
+    (e) => e.extensions.id === 'f-theirs',
+  );
+  const nested = { directus_files_id: { id: 'f-mine' } };
+  assert.equal(await filters['items.create'](nested, { collection: 'conform_logs' }, logCtx('u-a')), nested);
+  const before = reads.length;
+  const payload = { directus_files_id: 'f-theirs' };
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_logs' }, logCtx('x', { accountability: { user: 'x', admin: true } })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_logs' }, logCtx('x', { accountability: null })), payload);
+  assert.equal(reads.length, before, 'administrators and internal calls are not checked (the migration-211 trigger still is)');
 });

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Sourced by tests/phase1_schema.sh after tests/schema/lib.sh; not run on its own.
-# Conform runs (ADR-0025): the four migrations conform_category, conform_logs_and_run_data, conform_form_layout and
-# conform_review_fixes, each proved up, behaviour, down, up inside rolled-back transactions. Named by slug, not number.
+# Conform runs (ADR-0025): the five migrations conform_category, conform_logs_and_run_data, conform_form_layout, conform_review_fixes and
+# conform_log_file_owner, each proved up, behaviour, down, up inside rolled-back transactions. Named by slug, not number.
 
 echo "== Migration 207: the Conform category, method CF, lineage, code rule and inline columns (up, behaviour, down, up) =="
 CC_MIG=$(migration conform_category)
@@ -256,7 +256,7 @@ cl_check() { grep -q "$1" <<<"$cl_out" && ok "$2" || bad "$2 (psql output: $cl_o
 cl_check "^cl_tables:true,true$" "208: conform_logs and conform_run_data exist"
 cl_check "^cl_uncommented:0$" "208: every column of both tables has a COMMENT"
 cl_check "^cl_table_comments:2$" "208: both tables have a COMMENT"
-cl_check "^cl_triggers:conform_logs.audit_conform_logs,conform_logs.occ_conform_logs,conform_logs.refuse_delete_in_use,conform_run_data.audit_conform_run_data,conform_run_data.conform_run_data_window_guard,conform_run_data.occ_conform_run_data,conform_run_data.sync_run_windows$" "208 and 210: audit, OCC, the window guard, the delete refusal and the run-window sync are attached"
+cl_check "^cl_triggers:conform_logs.audit_conform_logs,conform_logs.conform_logs_file_owner_guard,conform_logs.occ_conform_logs,conform_logs.refuse_delete_in_use,conform_run_data.audit_conform_run_data,conform_run_data.conform_run_data_window_guard,conform_run_data.occ_conform_run_data,conform_run_data.sync_run_windows$" "208, 210 and 211: audit, OCC, the window guard, the delete refusal, the run-window sync and the file-owner guard are attached"
 cl_check "^cl_trigger_comments:0$" "208: every trigger has a COMMENT"
 cl_check "^cl_llm:true,true$" "208: the Ask-the-database role can SELECT both tables"
 cl_check "^cl_rls:2,4$" "208: both tables have row security (not forced) with the open and the d1_llm_readonly policy"
@@ -539,7 +539,7 @@ cr_check "cr_redown_columns:0" "210 down runs again after up"
 cr_f_out=$($PSQL -q 2>&1 <<SQL
 BEGIN;
 CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid);
-ALTER TABLE directus_files ADD COLUMN folder uuid;
+ALTER TABLE directus_files ADD COLUMN IF NOT EXISTS folder uuid; -- migration 211 adds it to the CI stub too
 $cr_down
 $cr_up
 SELECT 'cr_folder:' || count(*) || '/' || min(name) || '/' || coalesce(min(parent::text), 'root') FROM directus_folders WHERE id = 'c04f1000-0000-4000-8000-000000000001';
@@ -621,4 +621,110 @@ cr_a_check "cr_a_edge:extruded_from" "210 up: the adopted operation's lineage ed
 cr_a_check "cr_a_edge_other:derived_from" "210 up: the other operation's lineage edge is untouched"
 else
 bad "the Conform review fixes migration is missing ($CR_MIG)"
+fi
+
+echo "== Migration 211: a Conform log only from a file its creator uploaded to the Conform Logs folder (up, behaviour, down, up) =="
+CO_MIG=$(migration conform_log_file_owner)
+if [[ -f "$CO_MIG" ]]; then
+co_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CO_MIG")
+co_down=$(awk '/-- migrate:down/{f=1;next}f' "$CO_MIG")
+CO=c0f21100-0000-4000-8000-0000000000
+CF=c04f1000-0000-4000-8000-000000000001
+# co_log <log suffix> <file suffix> <creator or NULL> <hash digit>: an INSERT of a minimal log
+co_log() {
+  local by=$3; [[ "$by" != NULL ]] && by="'${CO}$3'"
+  echo "INSERT INTO conform_logs (log_id, directus_files_id, created_by, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+        VALUES ('${CO}$1', '${CO}$2', $by, 'x.csv', repeat('$4', 64), '2025-03-17 13:00+00', '2025-03-17 14:00+00', 3601, 3600, '[]', '{}', '{}');"
+}
+# co_try <label> <sql>: the statement in its own block, reported as accepted or refused (with the error code and message)
+co_try() {
+  echo "DO \$\$ BEGIN $2 RAISE NOTICE '$1:accepted'; EXCEPTION WHEN OTHERS THEN RAISE NOTICE '$1:refused:%:%', SQLSTATE, SQLERRM; END \$\$;"
+}
+co_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+SELECT 'co_stub_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name IN ('uploaded_by', 'folder');
+SELECT 'co_comments:' || (obj_description('conform_logs_file_owner_guard()'::regprocedure, 'pg_proc') IS NOT NULL)
+    || ',' || (SELECT obj_description(oid, 'pg_trigger') IS NOT NULL FROM pg_trigger WHERE tgname = 'conform_logs_file_owner_guard')
+    || ',' || (col_description('conform_logs'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'conform_logs'::regclass AND attname = 'directus_files_id')) LIKE '%uploaded by the log''s creator%');
+SELECT 'co_trigger_events:' || (pg_get_triggerdef(oid) LIKE '%BEFORE INSERT OR UPDATE OF directus_files_id, created_by ON public.conform_logs%') FROM pg_trigger WHERE tgname = 'conform_logs_file_owner_guard';
+-- two members; their uploads into the Conform Logs folder, and member a's files elsewhere
+INSERT INTO directus_users (id, email) VALUES ('${CO}aa', 'co-a@example.test'), ('${CO}bb', 'co-b@example.test');
+INSERT INTO directus_files (id, uploaded_by, folder) VALUES
+    ('${CO}fa', '${CO}aa', '$CF'), ('${CO}fb', '${CO}bb', '$CF'), ('${CO}fc', '${CO}aa', '$CF'),
+    ('${CO}fd', '${CO}aa', 'c04f1000-0000-4000-8000-0000000000ff'), ('${CO}fe', '${CO}aa', NULL), ('${CO}ff', NULL, '$CF');
+$(co_try co_own "$(co_log 01 fa aa 1)")
+$(co_try co_theirs "$(co_log 02 fb aa 2)")
+$(co_try co_other_folder "$(co_log 03 fd aa 3)")
+$(co_try co_no_folder "$(co_log 04 fe aa 4)")
+$(co_try co_system_file "$(co_log 05 ff aa 5)")
+$(co_try co_sql "$(co_log 06 fb NULL 6)")
+SELECT 'co_rows:' || string_agg(right(log_id::text, 2), ',' ORDER BY log_id) FROM conform_logs WHERE log_id::text LIKE '${CO}%';
+-- updates: repointing a member's log to someone else's file, or giving an SQL-made log a creator who did not upload its file, is refused;
+-- repointing to another of the creator's own uploads, or changing another column, is not checked
+$(co_try co_repoint_theirs "UPDATE conform_logs SET directus_files_id = '${CO}fb' WHERE log_id = '${CO}01';")
+$(co_try co_repoint_own "UPDATE conform_logs SET directus_files_id = '${CO}fc' WHERE log_id = '${CO}01';")
+$(co_try co_stamp_creator "UPDATE conform_logs SET created_by = '${CO}aa' WHERE log_id = '${CO}06';")
+$(co_try co_other_column "UPDATE conform_logs SET n_rows = 3602 WHERE log_id = '${CO}06';")
+SELECT 'co_after_updates:' || string_agg(right(log_id::text, 2) || '=' || right(directus_files_id::text, 2) || '/' || coalesce(right(created_by::text, 2), '-') || '/' || n_rows, ',' ORDER BY log_id)
+    FROM conform_logs WHERE log_id::text LIKE '${CO}%';
+-- down: the trigger goes, the column comment is 208's again, the stub columns stay; a log over someone else's file is then accepted
+$co_down
+SELECT 'co_dn_objects:' || (SELECT count(*) FROM pg_proc WHERE proname = 'conform_logs_file_owner_guard') || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname = 'conform_logs_file_owner_guard');
+SELECT 'co_dn_comment:' || (col_description('conform_logs'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'conform_logs'::regclass AND attname = 'directus_files_id'))
+    = 'The normalised CSV in Directus Files ("Conform Logs" folder): time_s, every kept channel, then the four derived power channels. The file is deleted only after its log row.');
+SELECT 'co_dn_stub_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'directus_files' AND column_name IN ('uploaded_by', 'folder');
+$(co_try co_dn_theirs "$(co_log 07 fb aa 7)")
+-- up again: the existing bad row is counted in a NOTICE and kept, and the rule holds again
+$co_up
+SELECT 'co_up2_kept:' || count(*) FROM conform_logs WHERE log_id = '${CO}07';
+$(co_try co_up2_theirs "$(co_log 08 fb aa 8)")
+$(co_try co_up2_own "$(co_log 09 fa aa 9)")
+ROLLBACK;
+SQL
+)
+co_check() { grep -qxF -- "$1" <<<"$co_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$co_out" | head -60 | tr '\n' ' ' | cut -c1-900))"; }
+co_notice() { grep -qF -- "$1" <<<"$co_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$co_out" | head -60 | tr '\n' ' ' | cut -c1-900))"; }
+CO_REFUSED='42501:A Conform log can only be made from a file its creator uploaded to the Conform Logs folder.'
+co_check "co_stub_columns:2" "211: directus_files has uploaded_by and folder (added to the CI stub, as real Directus has them)"
+co_check "co_comments:true,true,true" "211: the function, the trigger and conform_logs.directus_files_id carry a COMMENT that states the rule"
+co_check "co_trigger_events:true" "211: the trigger is BEFORE INSERT OR UPDATE OF directus_files_id, created_by"
+co_notice "co_own:accepted" "211: a member's log over their own upload in the Conform Logs folder is accepted"
+co_notice "co_theirs:refused:$CO_REFUSED" "211: a log over another member's file is refused (insufficient_privilege, in words)"
+co_notice "co_other_folder:refused:$CO_REFUSED" "211: a log over the creator's own file in another folder is refused"
+co_notice "co_no_folder:refused:$CO_REFUSED" "211: a log over the creator's own file in no folder is refused"
+co_notice "co_system_file:refused:$CO_REFUSED" "211: a log by a member over a file with no uploader is refused"
+co_notice "co_sql:accepted" "211: a log with no creator (SQL, scripts) is not checked"
+co_check "co_rows:01,06" "211: only the two accepted logs exist"
+co_notice "co_repoint_theirs:refused:$CO_REFUSED" "211: repointing a log to another member's file is refused"
+co_notice "co_repoint_own:accepted" "211: repointing a log to another of its creator's uploads is accepted"
+co_notice "co_stamp_creator:refused:$CO_REFUSED" "211: giving an SQL-made log a creator who did not upload its file is refused"
+co_notice "co_other_column:accepted" "211: an update of another column is not checked (the trigger fires only on directus_files_id and created_by)"
+co_check "co_after_updates:01=fc/aa/3601,06=fb/-/3602" "211: the refused updates changed nothing, the accepted ones were applied"
+co_check "co_dn_objects:0/0" "211 down: the function and the trigger are dropped"
+co_check "co_dn_comment:true" "211 down: the comment on conform_logs.directus_files_id is migration 208's again"
+co_check "co_dn_stub_columns:2" "211 down: the stub columns stay (real Directus has them)"
+co_notice "co_dn_theirs:accepted" "211 down: without the trigger a log over another member's file is accepted again (the state before 211)"
+co_notice "migration 211: 1 Conform log(s) point at a file their creator did not upload to the Conform Logs folder; they are kept" "211 up again: a log that breaks the rule is counted in a NOTICE"
+co_check "co_up2_kept:1" "211 up again: that log is kept, not deleted"
+co_notice "co_up2_theirs:refused:$CO_REFUSED" "211 up again: a log over another member's file is refused again"
+co_notice "co_up2_own:accepted" "211 up again: a log over the creator's own upload is accepted"
+
+# The rule the guard hook enforces for members first (rules.json, generated from access_rules.json): the caller uploaded the file and it sits in
+# the Conform Logs folder; and the Lab Member create row is unchanged (`{}`, no validation: neither can follow directus_files_id to the file).
+co_guard=$(python3 - <<'PY'
+import json
+guards = json.load(open('core/extensions/d1-access-guard/rules.json'))['guards'].get('conform_logs')
+ok = guards == [{
+    'field': 'directus_files_id', 'parent': 'directus_files', 'key': 'id',
+    'filter': {'_and': [{'uploaded_by': {'_eq': '$CURRENT_USER'}}, {'folder': {'_eq': 'c04f1000-0000-4000-8000-000000000001'}}]},
+}]
+print('co_guard:' + str(ok).lower())
+PY
+)
+[[ "$co_guard" == "co_guard:true" ]] && ok "211: the guard hook refuses a member's log unless they uploaded its file to the Conform Logs folder (rules.json)" \
+    || bad "211: the guard hook's rule for conform_logs.directus_files_id is not the uploader-and-folder filter ($co_guard)"
+run_eq "211: the Lab Member create row of conform_logs is unchanged (no filter, no validation)" \
+    "SELECT permissions::text || '|' || validation::text FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000002' AND collection = 'conform_logs' AND action = 'create'" "{}|{}"
+else
+bad "the Conform log file owner migration is missing ($CO_MIG)"
 fi

@@ -745,7 +745,8 @@ empty. The code is `DD-MM-YY-CF-{run}-{die}dia`. A feedstock sample and its extr
 
 `conform_logs` (migration `…208`) is one uploaded machine log. It holds:
 - `directus_files_id`: the normalised CSV, `time_s` first, then the `series` catalogue order, ending with the
-  four derived `p_*_kw` power channels
+  four derived `p_*_kw` power channels. The file must have been uploaded by the log's creator into the Conform Logs
+  folder (a trigger and the `d1-access-guard` hook, migration `…211`)
 - `log_start` / `log_end`
 - `series`
 - `totals`: whole-log energy per component and average demand

@@ -21,6 +21,9 @@
 //   files update (directus_files), for a signed-in caller who is not an administrator: refused when conform_logs.directus_files_id
 //       points at the file, so the stored normalised CSV (the thing every run's summary was worked out from) cannot be replaced, renamed
 //       or moved by a member after upload.   "A Conform log's file can't be changed after upload."
+//       Only a log made by the file's own uploader locks it (conform_logs.created_by = directus_files.uploaded_by, two blanks counting as the
+//       same: a log made by SQL over a file the system registered), so a log that points at somebody else's file (refused at create since
+//       migration 211 and d1-access-guard, but a row made before that may exist) cannot freeze that person's file (ADR-0022).
 //       Directus names the filter of a system collection after its scope (files.update); items.update is registered too in case a
 //       Directus version fires it for directus_files as well (a refused write is refused once). Not tried on a live Directus: backlog C5.
 //
@@ -64,6 +67,8 @@ function forbidden(reason, details = {}) {
 
 const isBlank = (value) => value === undefined || value === null || value === '';
 const isDenied = (err) => err?.code === 'FORBIDDEN' || err?.status === 403;
+// Two user keys name the same user (case-blind); two blanks match too: a log made by SQL over a file the system registered.
+const sameUser = (a, b) => (isBlank(a) ? '' : String(a).toLowerCase()) === (isBlank(b) ? '' : String(b).toLowerCase());
 
 // A timestamp as it reaches a hook: an ISO string in a payload, a Date from the database, or epoch milliseconds. NaN when it is none.
 function toMs(value) {
@@ -177,8 +182,16 @@ export default ({ filter }, { services }) => {
     if (!context.accountability?.user || context.accountability.admin === true) return payload;
     const keys = (Array.isArray(meta?.keys) ? meta.keys : []).filter((key) => !isBlank(key) && typeof key !== 'object');
     if (keys.length === 0) return payload;
-    const used = await context.database('conform_logs').whereIn('directus_files_id', keys).first('log_id');
-    if (used) throw forbidden(MESSAGES.logFile, { kind: 'log_file', collection: 'directus_files' });
+    const logs = await context.database('conform_logs').whereIn('directus_files_id', keys).select('directus_files_id', 'created_by');
+    if (logs.length === 0) return payload;
+    const files = await context
+      .database('directus_files')
+      .whereIn('id', [...new Set(logs.map((l) => String(l.directus_files_id)))])
+      .select('id', 'uploaded_by');
+    const uploader = new Map(files.map((f) => [String(f.id), f.uploaded_by]));
+    if (logs.some((l) => sameUser(l.created_by, uploader.get(String(l.directus_files_id))))) {
+      throw forbidden(MESSAGES.logFile, { kind: 'log_file', collection: 'directus_files' });
+    }
     return payload;
   };
   filter('files.update', refuseLogFileUpdate);

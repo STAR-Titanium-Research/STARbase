@@ -412,6 +412,27 @@
         "key": "log_id",
         "filter": {}
       }
+    ],
+    "conform_logs": [
+      {
+        "field": "directus_files_id",
+        "parent": "directus_files",
+        "key": "id",
+        "filter": {
+          "_and": [
+            {
+              "uploaded_by": {
+                "_eq": "$CURRENT_USER"
+              }
+            },
+            {
+              "folder": {
+                "_eq": "c04f1000-0000-4000-8000-000000000001"
+              }
+            }
+          ]
+        }
+      }
     ]
   },
   "ownerGuards": {

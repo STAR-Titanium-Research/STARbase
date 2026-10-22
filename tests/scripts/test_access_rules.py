@@ -1463,7 +1463,7 @@ def test_guards_cover_every_junction_that_grants_visibility():
     on them, the endpoint and the trigger functions write them."""
     assert set(DOC["guards"]) == {
         "sample_co_owners", "project_investigators", "campaign_samples", "test_sessions_subject",
-        "surface_scans", "conform_run_data",
+        "surface_scans", "conform_run_data", "conform_logs",
     }  # fmt: skip
     for junction in DOC["guards"]:
         # a ruled junction, or a custom one (surface_scans, ADR-0023: the link to a file the caller must be able to read)
@@ -1493,11 +1493,60 @@ def test_guards_cover_every_junction_that_grants_visibility():
         ("operation_id", "manufacturing_operations", "operation_id"),
         ("log_id", "conform_logs", "log_id"),
     ]
-    # the filter shipped to the hook is the parent's row named by the guard's `rule`, word for word
+    assert [(c["field"], c["parent"], c["key"]) for c in rules["conform_logs"]] == [
+        ("directus_files_id", "directus_files", "id")
+    ]
+    # the filter shipped to the hook is the parent's row named by the guard's `rule`, word for word, or the guard's own literal filter
     for junction, checks in DOC["guards"].items():
         for check, shipped in zip(checks, rules[junction]):
+            if "filter" in check:
+                assert shipped["filter"] == check["filter"], (junction, check)
+                continue
             row = BY_KEY[(check["parent"], check.get("rule", "update"))]
             assert shipped["filter"] == row["permissions"], (junction, check)
+
+
+def test_a_conform_log_needs_a_file_its_creator_uploaded_to_the_conform_logs_folder():
+    """ADR-0022 / migration 211: a member's create of a log is refused unless they uploaded its file into the Conform Logs folder. The
+    create row cannot say it (Directus does not filter create; a validation cannot follow directus_files_id), so the guard hook carries
+    the rule as a literal filter, run as the caller with $CURRENT_USER replaced."""
+    assert BY_KEY[("conform_logs", "create")]["permissions"] == {}
+    assert BY_KEY[("conform_logs", "create")]["validation"] == {}
+    assert gen.hook_rules(DOC)["guards"]["conform_logs"] == [
+        {
+            "field": "directus_files_id",
+            "parent": "directus_files",
+            "key": "id",
+            "filter": {
+                "_and": [
+                    {"uploaded_by": {"_eq": "$CURRENT_USER"}},
+                    {"folder": {"_eq": "c04f1000-0000-4000-8000-000000000001"}},
+                ]
+            },
+        }
+    ]
+    # the folder is the one migration 210 seeds and whose read row members have
+    assert BY_KEY[("directus_folders", "read")]["permissions"] == {
+        "id": {"_eq": "c04f1000-0000-4000-8000-000000000001"}
+    }
+
+
+def test_a_guard_with_its_own_filter_names_no_rule_and_an_object():
+    own = {
+        "field": "directus_files_id",
+        "parent": "directus_files",
+        "key": "id",
+        "filter": {"uploaded_by": {"_eq": "$CURRENT_USER"}},
+    }
+    shipped = gen.hook_rules({**DOC, "guards": {"conform_logs": [own]}})["guards"]
+    assert shipped["conform_logs"][0]["filter"] == own["filter"]
+    with pytest.raises(gen.RulesError, match="not both"):
+        gen.hook_rules({**DOC, "guards": {"conform_logs": [{**own, "rule": "read"}]}})
+    for bad in ({}, [], "uploaded_by"):
+        with pytest.raises(gen.RulesError, match="non-empty object"):
+            gen.hook_rules(
+                {**DOC, "guards": {"conform_logs": [{**own, "filter": bad}]}}
+            )
 
 
 def test_conform_logs_are_lab_wide_and_conform_runs_need_edit_rights_on_the_operation():
@@ -2005,6 +2054,10 @@ def _directus(drop=(), restricted=True):
     m2o(
         "surface_scans", "directus_files_id", "directus_files", None
     )  # the guarded file link (ADR-0023)
+    m2o(
+        "conform_logs", "directus_files_id", "directus_files", None
+    )  # the Conform log's file (ADR-0022, migration 211): its guard's own filter reads two columns
+    cols |= {"directus_files.uploaded_by", "directus_files.folder"}
     if restricted:
         cols |= {f"{t}.restricted" for t in RECORDS}
         cols.add("project_rollup.restricted")
@@ -2019,6 +2072,14 @@ def _directus(drop=(), restricted=True):
 
 def test_resolver_accepts_a_complete_database():
     assert gen.resolve(DOC, _directus()) == []
+
+
+def test_resolver_checks_the_columns_a_guard_filter_of_its_own_names():
+    db = _directus()
+    db["columns"] = [c for c in db["columns"] if c != "directus_files.folder"]
+    assert gen.resolve(DOC, db) == [
+        "guard conform_logs: directus_files.folder is not a column"
+    ]
 
 
 @pytest.mark.parametrize(

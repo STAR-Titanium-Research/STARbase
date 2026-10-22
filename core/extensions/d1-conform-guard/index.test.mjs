@@ -48,8 +48,13 @@ function fakeServices({ readable = {}, denyAll = false } = {}) {
   return { services: { ItemsService }, reads };
 }
 
-const LOG_ROW = { log_id: LOG, directus_files_id: 'file-1', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
-const OTHER_LOG_ROW = { log_id: OTHER_LOG, directus_files_id: 'file-2', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
+// both logs were made by the member who uploaded their files (user-up), so both files are locked
+const LOG_ROW = { log_id: LOG, directus_files_id: 'file-1', created_by: 'user-up', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
+const OTHER_LOG_ROW = { log_id: OTHER_LOG, directus_files_id: 'file-2', created_by: 'user-up', log_start: new Date(iso('12:00:00')), log_end: new Date(iso('14:00:00')) };
+const FILES = [
+  { id: 'file-1', uploaded_by: 'user-up' },
+  { id: 'file-2', uploaded_by: 'user-up' },
+];
 // run 1 (op-1) holds 12:10:00-12:20:00; run 2 (op-2) holds 12:40:00-12:50:00; run 9 is on another log
 const RUNS = [
   { id: 'run-1', operation_id: 'op-1', log_id: LOG, window_start: new Date(iso('12:10:00')), window_end: new Date(iso('12:20:00')) },
@@ -61,7 +66,11 @@ function mount(opts = {}) {
   const filters = {};
   const svc = fakeServices(opts);
   hook({ filter: (name, fn) => (filters[name] = fn) }, svc);
-  const db = fakeDb({ conform_logs: [LOG_ROW, OTHER_LOG_ROW], conform_run_data: RUNS.map((r) => ({ ...r })) });
+  const db = fakeDb({
+    conform_logs: opts.logs ?? [LOG_ROW, OTHER_LOG_ROW],
+    conform_run_data: RUNS.map((r) => ({ ...r })),
+    directus_files: opts.files ?? FILES,
+  });
   const context = { database: db, schema: { tag: 'schema' }, accountability: { user: 'user-1', admin: false } };
   return { filters, db, context, reads: svc.reads };
 }
@@ -361,6 +370,31 @@ test('files.update: a file no log points at, an administrator and a call with no
   const before = db.calls.length;
   assert.equal(await filters['files.update'](payload, { keys: [] }, context), payload);
   assert.equal(db.calls.length - before, 0, 'no key, nothing read');
+});
+
+test('files.update: a log someone else made over the file does not lock it; a log of its own uploader does (ADR-0022, migration 211)', async () => {
+  const foreign = { ...LOG_ROW, log_id: 'log-x', created_by: 'user-x' };
+  // only a foreign log points at file-1: its uploader (and anyone the file rule lets) can still rename it
+  const { filters, context } = mount({ logs: [foreign] });
+  const payload = { title: 'renamed by its uploader' };
+  assert.equal(await filters['files.update'](payload, { keys: ['file-1'] }, context), payload);
+  // a foreign log beside the uploader's own log: the uploader's log still locks the file
+  const both = mount({ logs: [foreign, LOG_ROW] });
+  const err = await refusal(both.filters['files.update'](payload, { keys: ['file-1'] }, both.context));
+  assert.equal(err.message, MESSAGES.logFile);
+  // user keys compare case-blind
+  const upper = mount({ logs: [{ ...LOG_ROW, created_by: 'USER-UP' }] });
+  assert.ok(await refusal(upper.filters['files.update'](payload, { keys: ['file-1'] }, upper.context)));
+});
+
+test('files.update: a log made by SQL (no creator) locks a file the system registered (no uploader), not a member upload', async () => {
+  const sqlLog = { ...LOG_ROW, created_by: null };
+  const system = mount({ logs: [sqlLog], files: [{ id: 'file-1', uploaded_by: null }] });
+  const err = await refusal(system.filters['files.update']({ title: 'x' }, { keys: ['file-1'] }, system.context));
+  assert.equal(err.message, MESSAGES.logFile);
+  const upload = mount({ logs: [sqlLog] });
+  const payload = { title: 'x' };
+  assert.equal(await upload.filters['files.update'](payload, { keys: ['file-1'] }, upload.context), payload);
 });
 
 test('items.update: an update of another collection is not looked at', async () => {
