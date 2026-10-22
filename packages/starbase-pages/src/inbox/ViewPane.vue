@@ -285,6 +285,7 @@ defineExpose({ setScroll, cancelDraft: dropDraft });
 						:style="{ left: pct(k.anchor.x), top: pct(k.anchor.y) }"
 						:data-test="`${side}-kept-tag`"
 						:data-id="k.id"
+						:data-selected="k.selected ? 'true' : 'false'"
 					>{{ k.tag }}</span>
 					<svg v-if="shown" class="line" :viewBox="viewBox" preserveAspectRatio="none" aria-hidden="true" :data-test="`${side}-line`" :data-shape="shown.kind">
 						<line v-if="shown.kind === 'line'" :x1="at(shown.a).x" :y1="at(shown.a).y" :x2="at(shown.b).x" :y2="at(shown.b).y" />
@@ -341,6 +342,8 @@ defineExpose({ setScroll, cancelDraft: dropDraft });
 /* Saved shapes: the same dashed outline, dimmer (the opacity of the rubber band); the selected one at full strength. Each has a pill with its number, the selected one adds its size. */
 .kept g { opacity: 0.55; }
 .kept g.sel { opacity: 1; }
+.pill.tag { opacity: 0.55; }
+.pill.tag.sel { opacity: 1; }
 /* A small round handle on each end, centre, rim point or corner; a polygon's first corner grows once a click on it would close the shape. */
 .vtx {
 	position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; box-sizing: border-box; border-radius: 99px; pointer-events: none;

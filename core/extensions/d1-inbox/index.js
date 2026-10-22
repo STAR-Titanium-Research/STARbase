@@ -493,6 +493,8 @@ export const SQL = {
   // file-owner predicate), decided by canSee / canChange before anything of the measurements is read. Bindings: the candidate id.
   measureFile:
     `SELECT c.candidate_id, c.owner_person_id, c.owner_team_id, c.state FROM d1_private.file_candidates c WHERE c.candidate_id = ?::uuid AND ${FILE_OWNER_MATCHES}`,
+  // Is the table (migration 211) there yet? Asked before any measurement route reads or writes it.
+  measureTableExists: "SELECT to_regclass('d1_private.inbox_measurements') IS NOT NULL AS available",
   // A file's measurements, oldest first (the list numbers them in this order), with the author's name. Binding: the candidate id.
   measureList:
     'SELECT m.measurement_id, m.kind, m.points, m.label, m.created_by, m.created_at, p.full_name AS author_name'
@@ -614,6 +616,7 @@ export const ERRORS = {
   // The measurement routes answer this for every reason alike (not a uuid, no such file, gone, not the caller's), so no id is confirmed.
   noMeasureFile: () => new HttpError(404, 'NOT_FOUND', 'That file is not in your inbox.'),
   noMeasurement: () => new HttpError(404, 'NOT_FOUND', 'That measurement does not exist.'),
+  measuresUnavailable: () => new HttpError(503, 'MEASUREMENTS_UNAVAILABLE', 'Measurements are not available yet.'),
   measureReadOnly: () => new HttpError(403, 'FORBIDDEN', 'You can read the measurements of this file but not change them.'),
   measureNotYours: () => new HttpError(403, 'FORBIDDEN', 'Only the owner of the file or the person who saved a measurement can change it.'),
   tooManyMeasurements: () => new HttpError(409, 'TOO_MANY_MEASUREMENTS', `A file can hold at most ${MAX_MEASUREMENTS_PER_FILE} measurements. Delete one first.`, { limit: MAX_MEASUREMENTS_PER_FILE }),
@@ -1198,6 +1201,15 @@ export function mount(router, context, deps = {}) {
     const [row] = rowsOf(await db.raw(SQL.semTableExists, []));
     semTableKnown = row?.available === true;
     return semTableKnown;
+  }
+
+  // Is the measurements table (migration 211) there? Only a yes is remembered, so applying 211 under a running server takes effect on the next request.
+  let measureTableKnown = false;
+  async function measureTableAvailable(db = database) {
+    if (measureTableKnown) return true;
+    const [row] = rowsOf(await db.raw(SQL.measureTableExists, []));
+    measureTableKnown = row?.available === true;
+    return measureTableKnown;
   }
 
   // -- who is asking -------------------------------------------------------------------------------------------------------
@@ -1831,7 +1843,9 @@ export function mount(router, context, deps = {}) {
   }
   const mayChangeMeasurement = (file, row, acc) => file.owner || (!isBlank(row.created_by) && row.created_by === acc.user);
 
+  // Before migration 211 the list is an empty one the caller may not add to (the picture opens as before); a write is a 503.
   router.get('/files/:candidate_id/measurements', route(async ({ req, res, acc }) => {
+    if (!(await measureTableAvailable())) return res.json(shapeMeasurements([], { canChange: false, user: null }));
     const file = await measureFileOf(database, acc, req.params?.candidate_id);
     const rows = rowsOf(await database.raw(SQL.measureList, [file.id]));
     // a Lab Viewer changes nothing (route() refuses every write), so nothing is offered to them as editable either: not as the owner, not as an author
@@ -1841,6 +1855,7 @@ export function mount(router, context, deps = {}) {
   // POST: the owner saves a shape. The count is taken under a per-file lock, so two saves at the limit cannot both pass.
   router.post('/files/:candidate_id/measurements', route(async ({ req, res, acc }) => {
     const input = parseMeasurement(bodyOf(req));
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
     const row = await inTransaction(acc.user, async (trx) => {
       const file = await measureFileOf(trx, acc, req.params?.candidate_id);
       if (!file.owner) throw ERRORS.measureReadOnly();
@@ -1857,6 +1872,7 @@ export function mount(router, context, deps = {}) {
     const body = bodyOf(req);
     if (!hasOnly(body, ['label']) || !('label' in body)) throw badInput('The request must be { "label": <a name> } and nothing else.');
     const label = parseMeasureLabel(body.label);
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
     const row = await inTransaction(acc.user, async (trx) => {
       const file = await measureFileOf(trx, acc, req.params?.candidate_id);
       const old = await measureRowOf(trx, file, req.params?.measurement_id);
@@ -1868,6 +1884,7 @@ export function mount(router, context, deps = {}) {
   }));
 
   router.delete('/files/:candidate_id/measurements/:measurement_id', route(async ({ req, res, acc }) => {
+    if (!(await measureTableAvailable())) throw ERRORS.measuresUnavailable();
     const id = await inTransaction(acc.user, async (trx) => {
       const file = await measureFileOf(trx, acc, req.params?.candidate_id);
       const old = await measureRowOf(trx, file, req.params?.measurement_id);

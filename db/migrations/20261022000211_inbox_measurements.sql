@@ -7,7 +7,7 @@
 --
 -- UNIT-FREE: a row stores the shape's corners in pixels of the ORIGINAL image (the file's own pixel grid, whatever size the preview is drawn at), never
 -- micrometres. The micrometres and square micrometres are worked out when a shape is shown, from the file's pixel size (extracted.pixel_size_nm), so
--- a corrected pixel size or a better scale re-measures every saved shape and nothing stored goes stale. `points` is a JSON array of {"x": n, "y": n}
+-- the points are in original pixels, so they follow the file's scale: a corrected pixel size or a better scale re-measures every saved shape. `points` is a JSON array of {"x": n, "y": n}
 -- objects: a line has its two ends, a circle its centre and then one point on its rim, a polygon its corners in the order they were clicked (3 to 200;
 -- closed implicitly). The shape of each element (finite, non-negative numbers) is checked by the d1-inbox endpoint, which is the only writer; the
 -- table checks what a CHECK can say cheaply (an array of the right length for the kind).

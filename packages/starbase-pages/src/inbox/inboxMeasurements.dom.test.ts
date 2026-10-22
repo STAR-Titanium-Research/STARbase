@@ -8,6 +8,7 @@ import { RouterView, createMemoryHistory, createRouter, type Router } from 'vue-
 import { configureLinks, resetLinks, setExplorerHostFactory, starbaseLinks } from '@d1/ui';
 import { setPageFrame } from '../frame';
 import InboxFilePage from './InboxFilePage.vue';
+import { readFileSync } from 'node:fs';
 import { createFakeInbox, exactMatch, type FakeInboxOptions } from './fakeInboxServer';
 import type { FoundFile, SavedMeasurement } from './inboxApi';
 
@@ -450,9 +451,21 @@ describe('selecting, renaming, deleting, copying', () => {
 		await vi.waitFor(() => expect(rows()).toEqual(['1 Line 212 µm']));
 		qa('[data-test="measurement-select"]')[0].click();
 		await vi.waitFor(() => expect(qa('[data-test="box-kept-shape"]')[0]?.dataset.selected).toBe('true'));
+		expect(qa('[data-test="box-kept-tag"]')[0]?.dataset.selected).toBe('true'); // the number pill follows its outline
+		expect(qa('[data-test="box-kept-tag"]')[0]?.classList.contains('sel')).toBe(true);
 		q('[data-test="box-next"]')!.click();
 		await vi.waitFor(() => expect(rows()).toEqual(['1 Circle Ø 88 µm', '2 Line 1 µm']));
 		expect(qa('[data-test="box-kept-shape"]').map((s) => s.dataset.selected)).toEqual(['false', 'false']);
+	});
+});
+
+describe('saved shape pills', () => {
+	it('are dimmed like their outlines and the selected one is at full strength (the .sel treatment, tokens only)', () => {
+		const source = readFileSync('src/inbox/ViewPane.vue', 'utf8');
+		const css = source.slice(source.indexOf('<style'));
+		expect(css).toMatch(/\.kept g \{ opacity: 0\.55; \}/);
+		expect(css).toMatch(/\.pill\.tag \{ opacity: 0\.55; \}/);
+		expect(css).toMatch(/\.pill\.tag\.sel \{ opacity: 1; \}/);
 	});
 });
 

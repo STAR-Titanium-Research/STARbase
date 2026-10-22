@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import { loadMeasurements, type FoundFile } from './inboxApi';
 import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, primaryAction, settingsOf, suggestionOf } from './inboxModel';
@@ -31,12 +31,14 @@ const withPicture = computed(() => hasThumbnail(props.file));
 const { state, url, retry } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'preview', () => true, { priority: true });
 
 // How many shapes were saved on the file in the view box (decision 6): the sheet only says the count, the shapes are the view box's. Read per file the sheet shows
-// (the answer of an earlier file is dropped); a count that cannot be read is no count.
+// (the answer of an earlier file is dropped); a count that cannot be read is no count. A save in the view box (another tab or window) is picked up when this one
+// is looked at again: the count is read anew on focus, keeping the old number on screen until the answer comes.
 const saved = ref<number | null>(null);
 let seq = 0;
-watch(() => (withPicture.value ? props.file.candidate_id : null), async (id) => {
+const countFor = () => (withPicture.value ? props.file.candidate_id : null);
+async function readCount(id: string | null, keep: boolean) {
 	const mine = ++seq;
-	saved.value = null;
+	if (!keep) saved.value = null;
 	if (id === null) return;
 	try {
 		const got = await loadMeasurements(host.api, id);
@@ -44,8 +46,21 @@ watch(() => (withPicture.value ? props.file.candidate_id : null), async (id) => 
 	} catch {
 		/* no count */
 	}
-}, { immediate: true });
-onBeforeUnmount(() => (seq += 1));
+}
+watch(countFor, (id) => void readCount(id, false), { immediate: true });
+const looked = () => {
+	if (typeof document === 'undefined' || document.visibilityState === 'hidden') return;
+	void readCount(countFor(), true);
+};
+onMounted(() => {
+	window.addEventListener('focus', looked);
+	document.addEventListener('visibilitychange', looked);
+});
+onBeforeUnmount(() => {
+	seq += 1;
+	window.removeEventListener('focus', looked);
+	document.removeEventListener('visibilitychange', looked);
+});
 
 const name = computed(() => nameOf(props.file.rel_path));
 const folder = computed(() => folderText(props.file.rel_path));

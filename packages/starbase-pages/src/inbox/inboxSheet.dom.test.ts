@@ -392,6 +392,18 @@ describe('the saved measurements', () => {
 		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')).toBeNull()); // none saved: no line
 	});
 
+	it('reads the count again when the window is looked at again (a save in the view box), keeping the old number until the answer', async () => {
+		const a = withThumb(A);
+		await mount([a], { measurements: { [a.candidate_id]: [shape(1)] } });
+		thumbButton('3fa9c1d2').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('1 saved measurement'));
+		const before = fake.calls.filter((x) => x.path.endsWith('/measurements')).length;
+		fake.measurements.get(a.candidate_id)!.push(shape(2));
+		window.dispatchEvent(new Event('focus'));
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-measurements"]')?.textContent).toBe('2 saved measurements'));
+		expect(fake.calls.filter((x) => x.path.endsWith('/measurements')).length).toBe(before + 1);
+	});
+
 	it('says nothing when the count cannot be read, and asks nothing for a file with no picture', async () => {
 		const a = withThumb(A);
 		const doc = withThumb(B, { has_thumbnail: false });

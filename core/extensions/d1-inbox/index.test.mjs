@@ -353,6 +353,7 @@ function statement(w, sql, b, txId) {
       }
       return gone;
     }
+    case 'measureTableExists': return [{ available: w.measureTable !== false }];
     case 'semTableExists': return [{ available: w.semTable !== false }];
     case 'semFile': return w.files.has(b[0]) ? [copy(w.files.get(b[0]))] : [];
     case 'semSettingsGet': return w.settings.has(b[0]) ? [copy(w.settings.get(b[0]))] : [];
@@ -4368,6 +4369,24 @@ test('GET /files/:id/measurements: a Lab Viewer who owns the file reads it (read
     assert.equal(codeOf(res2), 'READ_ONLY_ROLE');
   }
   assert.equal(w.measurements.length, 1);
+});
+
+test('measurements before migration 211 (no table): GET is an empty list the caller cannot add to, a write is 503, nothing is read; once applied it works at once', async () => {
+  const w = newWorld();
+  w.measureTable = false;
+  const c = add(w, cand({ owner_person_id: P.alice }));
+  const { call } = setup(w);
+  const got = await getM(call, c, ALICE);
+  assert.equal(got.statusCode, 200);
+  assert.deepEqual(got.body, { data: [], meta: { total: 0, can_change: false } });
+  for (const res of [await postM(call, c, LINE, ALICE), await patchM(call, c, ID(9801), { label: 'x' }, ALICE), await deleteM(call, c, ID(9801), ALICE)]) {
+    assert.equal(res.statusCode, 503);
+    assert.equal(codeOf(res), 'MEASUREMENTS_UNAVAILABLE');
+  }
+  assert.equal(w.log.some((l) => /^measure(List|One|Count|Insert|Label|Delete)$/.test(l.name)), false, 'the missing table is never queried');
+  w.measureTable = true;
+  assert.equal((await postM(call, c, LINE, ALICE)).statusCode, 201);
+  assert.equal((await getM(call, c, ALICE)).body.meta.total, 1);
 });
 
 test('PATCH /files/:id/measurements/:id renames: the owner, a team member, or the author may; everyone else is 403 or 404; the label is trimmed, may be cleared and is checked', async () => {
