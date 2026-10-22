@@ -376,7 +376,7 @@ test.describe('as a Lab Member', () => {
 		const cut = card(page, /, Operation$/);
 		// A loose new sample (from the lid's Add), the second piece's output.
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample\b/ }).click();
 		await expect(page.locator('.pm-addsearch')).toBeHidden();
 		await savedDraft(page, member, (b) => b.items.length === 4, 'the loose sample');
 		await fit(page);
@@ -400,7 +400,7 @@ test.describe('as a Lab Member', () => {
 		await openNewDraft(page);
 		await pickSamples(page, ['LOCAL-RAW-1', 'LOCAL-RAW-2', 'LOCAL-BAR-1']);
 		expect(await settledOverlaps(page), 'after picking three samples').toEqual([]);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
 		await expect(card(page, 'New sample, Sample')).toHaveCount(1);
 		expect(await settledOverlaps(page), 'after Add: a new sample').toEqual([]);
 		await addFromLid(page, /CNC Turning/);
@@ -427,8 +427,8 @@ test.describe('as a Lab Member', () => {
 	test('two cards added one after the other to a blank canvas never land on each other (R6; they did in 6 of 10 runs: the add search gives both the place it was opened at)', async ({ page }) => {
 		for (let run = 1; run <= 5; run++) {
 			await openNewDraft(page);
-			await addFromLid(page, /^Sample/);
-			await addFromLid(page, /^Sample/);
+			await addFromLid(page, /^Sample\b/);
+			await addFromLid(page, /^Sample\b/);
 			await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 			expect(await settledOverlaps(page), `run ${run}: two new samples added in a row`).toEqual([]);
 			const body = await savedDraft(page, member, (b) => b.items.length === 2 && Object.keys(b.positions).length === 2, 'both places saved');
@@ -440,8 +440,8 @@ test.describe('as a Lab Member', () => {
 
 	test('a card the person dragged keeps its position after a reload, with the cards around it left alone (R6)', async ({ page }) => {
 		await openNewDraft(page);
-		await addFromLid(page, /^Sample/);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
+		await addFromLid(page, /^Sample\b/);
 		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 		expect(await settledOverlaps(page), 'no cards overlap once the layout has settled').toEqual([]);
 		await fit(page);
@@ -473,7 +473,7 @@ test.describe('as a Lab Member', () => {
 
 	test('Undo of a drag puts the card back where it was, and Redo drags it again (R6)', async ({ page }) => {
 		await openNewDraft(page);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
 		const sample = card(page, 'New sample, Sample');
 		await expect(sample).toHaveCount(1);
 		expect(await settledOverlaps(page), 'no cards overlap once the layout has settled').toEqual([]);
@@ -491,8 +491,8 @@ test.describe('as a Lab Member', () => {
 
 	test('Undo of a Delete brings a dragged card back where it was dragged, even close to another card, and Redo is still there (R6)', async ({ page }) => {
 		await openNewDraft(page);
-		await addFromLid(page, /^Sample/);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
+		await addFromLid(page, /^Sample\b/);
 		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 		expect(await settledOverlaps(page), 'no cards overlap once the layout has settled').toEqual([]);
 		await fit(page);
@@ -526,7 +526,7 @@ test.describe('as a Lab Member', () => {
 		const bar1 = await sampleIdOf(admin, 'LOCAL-BAR-1');
 		// The map opens with BAR-1 (the focus) selected: a recorded card.
 		await startEditingMapOf(page, 'physical_samples', bar1);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
 		expect(await settledOverlaps(page), 'no cards overlap once the layout has settled').toEqual([]);
 		await fit(page);
 		const focus = card(page, 'LOCAL-BAR-1, Sample');
@@ -556,8 +556,8 @@ test.describe('as a Lab Member', () => {
 		const recordedIds = Object.keys(history);
 		// Build from a recorded sample (it joins the draft as an existing item), and add loose cards of the draft's own.
 		await chooseFromSocketMenu(page, sockOf(page, `sample|${bar2}|out`).first(), /CNC Turning/);
-		await addFromLid(page, /^Sample/);
-		await addFromLid(page, /^Sample/);
+		await addFromLid(page, /^Sample\b/);
+		await addFromLid(page, /^Sample\b/);
 		await expect(card(page, 'New sample, Sample')).toHaveCount(2);
 		expect(await settledOverlaps(page), 'no cards overlap once the layout has settled').toEqual([]);
 		await fit(page);

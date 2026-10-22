@@ -208,7 +208,7 @@ test.describe('as a Lab Member', () => {
 		// "Expand" for it, and the card shows its ＋ Expand button.
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample\b/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');
@@ -223,7 +223,7 @@ test.describe('as a Lab Member', () => {
 		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 to fill in".
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample\b/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');
