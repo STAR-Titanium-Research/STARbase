@@ -50,7 +50,12 @@ const LABEL_CHUNK = 40;
 
 const httpStatus = (e: any): number | undefined => e?.response?.status;
 const directusError = (e: any): { message?: string; extensions?: { code?: string; field?: string } } | undefined => e?.response?.data?.errors?.[0];
-const directusMessage = (e: any): string | undefined => directusError(e)?.message;
+// The server's hook refusals (HTTP 400, INVALID_PAYLOAD) carry the sentence to show in `extensions.reason` and in `message`: reason first, shown verbatim.
+const directusMessage = (e: any): string | undefined => {
+	const x = directusError(e) as { message?: string; extensions?: { reason?: unknown } } | undefined;
+	const reason = x?.extensions?.reason;
+	return typeof reason === 'string' && reason.trim() ? reason : x?.message;
+};
 
 /**
  * A Directus error message becomes a ConformLogError with that text (e.g. `Run window overlaps 17-03-25-CF-011 on this log.`).
@@ -62,7 +67,8 @@ function toLogError(e: unknown): unknown {
 	if (err?.extensions?.code === 'RECORD_NOT_UNIQUE' && (err.extensions.field === 'source_sha256' || /source_sha256/.test(err.message ?? ''))) {
 		return new ConformLogError(ALREADY_UPLOADED);
 	}
-	return err?.message ? new ConformLogError(err.message) : e;
+	const text = directusMessage(e);
+	return text ? new ConformLogError(text) : e;
 }
 
 async function guarded<T>(fn: () => Promise<T>): Promise<T> {
@@ -380,7 +386,7 @@ export async function setRunWindow(api: AxiosInstance, operationId: string, star
 	const startMs = Date.parse(startIso);
 	const endMs = Date.parse(endIso);
 	if (Number.isNaN(startMs) || Number.isNaN(endMs)) throw new ConformLogError('The window times are not valid.');
-	if (!(startMs < endMs)) throw new ConformLogError('The window must start before it ends.');
+	if (!(startMs < endMs)) throw new ConformLogError('Run window must start before it ends.');
 	const { run: raw, log } = await needLog(api, await getRunRow(api, operationId));
 	const trace = await loadLogTrace(api, log);
 	const logStartMs = Date.parse(log.log_start);

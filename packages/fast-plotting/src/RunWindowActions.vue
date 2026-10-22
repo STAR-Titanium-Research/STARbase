@@ -28,7 +28,7 @@ const working = ref(false);
 const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
 const disabled = computed(() => working.value || props.busy);
-const messageOf = (e: any): string => e?.response?.data?.errors?.[0]?.message || e?.message || 'The request failed.';
+const messageOf = (e: any): string => e?.response?.data?.errors?.[0]?.extensions?.reason || e?.response?.data?.errors?.[0]?.message || e?.message || 'The request failed.';
 
 async function run(action: () => Promise<void>, resetView: boolean) {
 	working.value = true; error.value = null; notice.value = null;

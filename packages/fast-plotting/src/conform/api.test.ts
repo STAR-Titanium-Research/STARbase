@@ -188,6 +188,22 @@ describe('uploadConformLog', () => {
 	});
 });
 
+describe('the server hook refusals', () => {
+	const refusal = (reason: string) => Object.assign(new Error('Request failed with status code 400'), {
+		response: { status: 400, data: { errors: [{ message: reason, extensions: { code: 'INVALID_PAYLOAD', reason } }] } },
+	});
+	it('are shown verbatim, from extensions.reason first', async () => {
+		const sentence = 'Run window overlaps 15-01-25-CF-001 on this log.';
+		const f = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? refusal(sentence) : undefined)));
+		const err = await linkExistingLog(f.api, 'op-2', 'log-7').catch((e) => e);
+		expect(err).toBeInstanceOf(ConformLogError);
+		expect(err.message).toBe(sentence);
+		const odd = Object.assign(new Error('x'), { response: { status: 400, data: { errors: [{ message: 'Invalid payload. Run window must start before it ends.', extensions: { reason: 'Run window must start before it ends.' } }] } } });
+		const g = fakeApi(happy((c) => (c.method === 'post' && c.url === '/items/conform_run_data' ? odd : undefined)));
+		expect((await linkExistingLog(g.api, 'op-2', 'log-7').catch((e) => e)).message).toBe('Run window must start before it ends.');
+	});
+});
+
 describe('findLogByHash', () => {
 	it('is null when nothing has the hash', async () => {
 		const f = fakeApi(() => []);

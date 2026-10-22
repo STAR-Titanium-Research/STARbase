@@ -38,6 +38,6 @@ export function resolveWindowEntry(
 	const startMs = read(typed.startLocal, stored.start, 'start');
 	const endMs = read(typed.endLocal, stored.end, 'end');
 	if (Number.isNaN(startMs) || Number.isNaN(endMs)) return { ok: false, error: 'Enter the start and end of the run window as UK clock times.' };
-	if (!(startMs < endMs)) return { ok: false, error: 'The window must start before it ends.' };
+	if (!(startMs < endMs)) return { ok: false, error: 'Run window must start before it ends.' };
 	return { ok: true, startMs, endMs, notes };
 }
