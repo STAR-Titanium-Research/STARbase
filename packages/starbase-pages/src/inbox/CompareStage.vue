@@ -4,15 +4,15 @@ import type { FoundFile } from './inboxApi';
 import { nameOf } from './inboxModel';
 import { canCommonScale, commonScaleWidths } from './commonScale';
 import type { CompareMeasure, PartnerState } from './comparePartner';
-import type { MeasureLine, Pt } from './measure';
+import type { MeasureShape, MeasureTool, Pt } from './measure';
 import ViewPane from './ViewPane.vue';
 import type { PictureState } from './usePicture';
 import type { ZoomMode } from './viewBoxModel';
 
 // The Compare stage (spec 2026-10-20-inbox-file-viewer-design.md decision 5): two panes side by side, each with its label (A the open file, B the partner), its
-// scale bar and, when Measure is on, the line. A partner the person may not see is the lock card and nothing else: no picture, no name. Fit / 1:1 is the rail's
+// scale bar and, when Measure is on, the shape. A partner the person may not see is the lock card and nothing else: no picture, no name. Fit / 1:1 is the rail's
 // for both panes, and with "Link zoom and pan" a scroll in one pane moves the other. Common scale: both pictures at the same micrometres per screen pixel (when
-// both files say their scale), so a feature is the same size in both. The one measure line is drawn only in the pane it was dragged in.
+// both files say their scale), so a feature is the same size in both. The one measure shape is drawn only in the pane it was drawn in.
 const props = defineProps<{
 	file: FoundFile;
 	partner: PartnerState;
@@ -22,6 +22,7 @@ const props = defineProps<{
 	linkZoom: boolean;
 	commonScale: boolean;
 	measureOn: boolean;
+	tool: MeasureTool;
 	measure: CompareMeasure | null;
 }>();
 const emit = defineEmits<{
@@ -54,9 +55,9 @@ const follow = (from: 'a' | 'b', at: Pt) => {
 	if (props.linkZoom) (from === 'a' ? paneB : paneA).value?.setScroll(at);
 };
 
-// ---- measure: the line belongs to the pane it was dragged in ----
-const lineFor = (side: 'a' | 'b') => (props.measure?.side === side ? props.measure.line : null);
-const onMeasure = (side: 'a' | 'b', line: MeasureLine | null) => emit('measure', line ? { line, side } : null);
+// ---- measure: the shape belongs to the pane it was drawn in ----
+const shapeFor = (side: 'a' | 'b') => (props.measure?.side === side ? props.measure.shape : null);
+const onMeasure = (side: 'a' | 'b', shape: MeasureShape | null) => emit('measure', shape ? { shape, side } : null);
 </script>
 
 <template>
@@ -75,7 +76,8 @@ const onMeasure = (side: 'a' | 'b', line: MeasureLine | null) => emit('measure',
 					:contrast="contrast"
 					:forced-width="widths?.widthA ?? null"
 					:measure-on="measureOn"
-					:line="lineFor('a')"
+					:tool="tool"
+					:shape="shapeFor('a')"
 					side="a"
 					@state="emit('state', $event)"
 					@measure="onMeasure('a', $event)"
@@ -102,7 +104,8 @@ const onMeasure = (side: 'a' | 'b', line: MeasureLine | null) => emit('measure',
 					:contrast="contrast"
 					:forced-width="widths?.widthB ?? null"
 					:measure-on="measureOn"
-					:line="lineFor('b')"
+					:tool="tool"
+					:shape="shapeFor('b')"
 					side="b"
 					@measure="onMeasure('b', $event)"
 					@scroll="follow('b', $event)"

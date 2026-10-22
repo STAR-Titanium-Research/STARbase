@@ -73,3 +73,6 @@ export function boxScaleBar(extracted: Record<string, unknown>, zoom: ZoomMode, 
 	const share = zoom === 'actual' && finitePositive(drawnWidthPx) ? Math.min(0.22, 150 / drawnWidthPx) : 0.22;
 	return sheetScaleBar(extracted, share);
 }
+
+/** Fields that take typed text: the letter and number keys (F, M, C, 1 2 3, Enter, Backspace) stay out of them, but not out of a checkbox or a radio, so they work right after a click on one. */
+export const TEXT_ENTRY = 'input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable=""], [contenteditable="true"]';

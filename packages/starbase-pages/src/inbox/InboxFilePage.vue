@@ -22,11 +22,11 @@ import {
 } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { canCommonScale } from './commonScale';
-import { measureScale, type MeasureLine } from './measure';
+import { MEASURE_TOOLS, measureScale, type MeasureShape } from './measure';
 import type { PictureState } from './usePicture';
 import { createInbox, type Outcome } from './useInbox';
 import { useViewSettings, type CompareMode } from './useViewSettings';
-import { listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
+import { TEXT_ENTRY, listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
 
 // The view box page (/inbox/file/:candidateId, spec 2026-10-20-inbox-file-viewer-design.md decisions 4, 8, 9 and 10): one found file on a RecordLayout page. Left,
 // its detail panel (InboxFileRail); centre, the stage with the preview (ViewBox) and where the file is; right, the viewer's View rail (ViewBoxRail).
@@ -229,7 +229,7 @@ function clearPartner(): void {
 	if (measure.value?.side === 'b') measure.value = null;
 }
 
-// ---- Measure: one line at a time, on a picture whose scale the file says ----
+// ---- Measure: one shape (a line, a circle or a polygon) at a time, on a picture whose scale the file says ----
 const measureWanted = ref(false);
 const measure = ref<CompareMeasure | null>(null);
 const canMeasure = computed(() => !!file.value && hasPicture.value && (!!measureScale(file.value.extracted) || (compareOn.value && !!partnerFile.value && !!measureScale(partnerFile.value.extracted))));
@@ -238,7 +238,7 @@ watch(() => props.candidateId, () => (measure.value = null));
 watch(partnerId, () => {
 	if (measure.value?.side === 'b') measure.value = null;
 });
-const singleLine = computed<MeasureLine | null>(() => measure.value?.line ?? null);
+const singleShape = computed<MeasureShape | null>(() => measure.value?.shape ?? null);
 
 /** A file left the list (linked, dismissed, restored): go on to the next one, else the one before, else back to the list. */
 function leave(): void {
@@ -324,11 +324,10 @@ async function copyPath(): Promise<void> {
 	}
 }
 
-// ---- the keys: left / right (and up / down) previous and next, F fits the picture, M measures, C compares, Esc closes ----
+// ---- the keys: left / right (and up / down) previous and next, F fits the picture, M measures (1 2 3: line, circle, polygon), C compares, Esc closes ----
 // The arrow keys also stay out of a focused segmented control or checkbox (they move inside it); the letter keys only stay out of fields that take text, so F, M and C
 // keep working right after a click on a Fit / 1:1 button or a rail checkbox.
 const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="radio"], [role="dialog"]';
-const TEXT_ENTRY = 'input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable=""], [contenteditable="true"]';
 function onKey(e: KeyboardEvent): void {
 	if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
 	if (dialogOpen.value || scanOpen.value) return;
@@ -352,6 +351,11 @@ function onKey(e: KeyboardEvent): void {
 		if (t?.closest(TEXT_ENTRY) || !canMeasure.value) return;
 		e.preventDefault();
 		measureWanted.value = !measureWanted.value;
+	} else if (e.key === '1' || e.key === '2' || e.key === '3') {
+		// with Measure on, 1 2 3 pick what it draws: Line, Circle, Polygon
+		if (t?.closest(TEXT_ENTRY) || !measureOn.value) return;
+		e.preventDefault();
+		view.set({ measureTool: MEASURE_TOOLS[Number(e.key) - 1] });
 	} else if (e.key === 'c' || e.key === 'C') {
 		if (t?.closest(TEXT_ENTRY)) return;
 		e.preventDefault();
@@ -435,12 +439,13 @@ const whereFacts = computed<Fact[]>(() => {
 									:scale-bar="view.settings.scaleBar"
 									:contrast="view.settings.contrast"
 									:measure-on="measureOn"
-									:line="singleLine"
+									:tool="view.settings.measureTool"
+									:shape="singleShape"
 									:compare="compareOn"
 									@prev="prev"
 									@next="next"
 									@state="pictureState = $event"
-									@measure="measure = $event ? { line: $event, side: 'a' } : null"
+									@measure="measure = $event ? { shape: $event, side: 'a' } : null"
 								>
 									<template #stage>
 										<CompareStage
@@ -452,6 +457,7 @@ const whereFacts = computed<Fact[]>(() => {
 											:link-zoom="view.settings.linkZoom"
 											:common-scale="view.settings.commonScale"
 											:measure-on="measureOn"
+											:tool="view.settings.measureTool"
 											:measure="measure"
 											@state="pictureState = $event"
 											@measure="measure = $event"
@@ -468,7 +474,8 @@ const whereFacts = computed<Fact[]>(() => {
 						<ViewBoxRail
 							:measure="measureWanted"
 							:can-measure="canMeasure"
-							:has-line="!!measure"
+							:tool="view.settings.measureTool"
+							:has-shape="!!measure"
 							:compare="compareMode"
 							:link-zoom="view.settings.linkZoom"
 							:common-scale="view.settings.commonScale"
@@ -493,7 +500,8 @@ const whereFacts = computed<Fact[]>(() => {
 							@update:compare="setCompare"
 							@update:link-zoom="view.set({ linkZoom: $event })"
 							@update:common-scale="view.set({ commonScale: $event })"
-							@clear-line="measure = null"
+							@update:tool="view.set({ measureTool: $event })"
+							@clear-shape="measure = null"
 							@pick="pickPartner"
 							@clear-partner="clearPartner"
 							@more="loadMore"
