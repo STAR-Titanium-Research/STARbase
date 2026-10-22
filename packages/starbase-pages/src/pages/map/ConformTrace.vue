@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ConformThumb } from './model/conformThumb';
+import { TRACE_DASH, type ConformThumb } from './model/conformThumb';
 
 // The small trace of a Conform run's window (wheel speed and Tooling 1, each on its own scale, as in the plotter's overview):
 // one polyline per channel, a gap in the readings breaks the line. Used on the Process map's data thumbnail and on the Operation
-// page's Conform run section. Theme series colours only.
+// page's Conform run section. Theme series colours only; the second line is dashed (4 3), and ConformTraceKey names the lines.
 const props = defineProps<{ thumb: ConformThumb; height?: number }>();
 
 const W = 280;
@@ -26,7 +26,7 @@ const lines = computed(() =>
       run.push(`${x.toFixed(1)},${y.toFixed(1)}`);
     });
     if (run.length) parts.push(run.join(' '));
-    return { key: s.key, label: s.label, cls: `l${i}`, parts };
+    return { key: s.key, label: s.label, cls: `l${i}`, dash: TRACE_DASH[i] || undefined, parts };
   }),
 );
 const label = computed(() => `Conform run window: ${lines.value.map((l) => l.label).join(' and ')}`);
@@ -35,7 +35,7 @@ const label = computed(() => `Conform run window: ${lines.value.map((l) => l.lab
 <template>
   <svg v-if="lines.length" class="trace" :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" role="img" :aria-label="label" :style="height ? { height: `${height}px` } : undefined">
     <template v-for="l in lines" :key="l.key">
-      <polyline v-for="(pts, k) in l.parts" :key="k" :points="pts" :class="l.cls" fill="none" />
+      <polyline v-for="(pts, k) in l.parts" :key="k" :points="pts" :class="l.cls" :stroke-dasharray="l.dash" fill="none" />
     </template>
   </svg>
 </template>

@@ -112,12 +112,13 @@ export async function dataPreview(api: HostApi, refs: Ref[]): Promise<Record<str
 
 /**
  * The window traces of the Conform runs among `previews` (by operation id), read after the previews themselves are shown: a
- * trace costs a CSV download (once per log, cached), which must not hold back the Fz figures. Only runs with no thumbnail yet,
+ * trace costs a CSV download (once per log, cached), which must not hold back the Fz figures. Only runs with no thumbnail and no note yet (one
+ * that already says why it has none is not asked again, and does not take a place in the cap),
  * at most CONFORM_THUMB_CAP per call; a run with nothing to show (no window) is left out, and one whose log cannot be read carries
  * the reason as its note.
  */
 export async function conformThumbs(api: HostApi, previews: Record<string, DataPreview>): Promise<Record<string, ConformThumbResult>> {
-  const ids = Object.keys(previews).filter((id) => previews[id].kind === 'conform' && !previews[id].thumb).slice(0, CONFORM_THUMB_CAP);
+  const ids = Object.keys(previews).filter((id) => previews[id].kind === 'conform' && !previews[id].thumb && !previews[id].thumbNote).slice(0, CONFORM_THUMB_CAP);
   const out: Record<string, ConformThumbResult> = {};
   await Promise.all(
     ids.map(async (id) => {

@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import {
-	ConformLogError, ConformLogHiddenError, LOG_LOAD_FAILED, LOG_NOT_VISIBLE, formatUkDateTime, labelWindows, loadLogTrace, recomputeRun,
+	CONFORM_STATUS, ConformLogError, ConformLogHiddenError, LOG_LOAD_FAILED, LOG_NOT_VISIBLE, labelWindows, loadLogTrace, plainReason, recomputeRun,
 	resolveWindowEntry, setRunWindow, stepsToCsv, ukInputValue, unlinkLog, windowLine as windowItem, type LogWindow,
 	type ConformRunBundle,
 } from '@d1/fast-plotting';
-import { DataTable, LoadState, Section, analysisLink, errorText, useExplorerHost, type SectionState } from '@d1/ui';
+import { DataTable, FactList, LoadState, Section, StatusBadge, analysisLink, useExplorerHost, type SectionState } from '@d1/ui';
 import { conformApi } from '../conformApi';
 import ConformTrace from '../map/ConformTrace.vue';
+import ConformTraceKey from '../map/ConformTraceKey.vue';
 import { conformThumb, type ConformThumb } from '../map/model/conformThumb';
 import ConformLogSource from './ConformLogSource.vue';
 import {
-	STEP_COLUMNS, energyRows, missingText, needsLog, needsRecompute, statusText, stepCells, summaryRows, totalsRows, windowText,
+	STEP_COLUMNS, energyRows, logSpanText, missingText, needsLog, needsRecompute, stepCells, summaryRows, totalsRows, windowText,
 } from './conformRows';
 
 // The "Conform run" section of the Operation page: the run's status, its run window (editable, in UK clock time), the summary and energy
@@ -66,7 +67,7 @@ const busy = ref<'window' | 'recompute' | 'unlink' | null>(null);
 const error = ref('');
 const warning = ref('');
 const copied = ref(false);
-const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : errorText(e));
+const messageOf = (e: unknown): string => (e instanceof ConformLogError ? e.message : plainReason(e, 'Could not save the change. Try again.'));
 
 async function act(kind: 'window' | 'recompute' | 'unlink', fn: () => Promise<unknown>, note = ''): Promise<boolean> {
 	if (busy.value) return false;
@@ -102,9 +103,28 @@ function saveWindow(): Promise<unknown> {
 }
 const doRecompute = (): Promise<boolean> => act('recompute', () => recomputeRun(api(), props.operationId));
 
-// ---- unlink and replace
+// ---- unlink and replace: one inline confirm. It opens with focus on Cancel (the safe choice), Escape or Cancel closes it and gives the
+// focus back to the button that opened it, and what it says is announced (aria-live).
 const confirming = ref<'unlink' | 'replace' | null>(null);
 const replacing = ref(false);
+const cancelBtn = ref<HTMLButtonElement | null>(null);
+const unlinkBtn = ref<HTMLButtonElement | null>(null);
+const replaceBtn = ref<HTMLButtonElement | null>(null);
+const CONFIRM_TEXT = {
+	unlink: { label: 'Unlink the log', sentence: 'Unlink this log from the run? This clears the run window, summary and steps. A log no other run uses is deleted.', go: 'Unlink', button: 'Unlink the log' },
+	replace: { label: 'Replace the log', sentence: 'Replace the log? It is unlinked first, which clears the run window, summary and steps. A log no other run uses is deleted.', go: 'Unlink and replace', button: 'Unlink and replace the log' },
+} as const;
+async function ask(mode: 'unlink' | 'replace'): Promise<void> {
+	if (busy.value) return;
+	confirming.value = mode;
+	await nextTick();
+	cancelBtn.value?.focus();
+}
+function cancelConfirm(): void {
+	const mode = confirming.value;
+	confirming.value = null;
+	void nextTick(() => (mode === 'replace' ? replaceBtn : unlinkBtn).value?.focus());
+}
 async function doUnlink(): Promise<void> {
 	const wasReplace = confirming.value === 'replace';
 	confirming.value = null;
@@ -167,7 +187,10 @@ watch(
 const otherWindows = computed(() => windows.value.filter((w) => w.operation_id !== props.operationId));
 
 const windowLine = computed(() => windowText(run.value));
-const logLine = computed(() => (log.value ? `${log.value.source_filename} · ${formatUkDateTime(log.value.log_start)} to ${formatUkDateTime(log.value.log_end)}` : ''));
+const logLine = computed(() => (log.value ? `${log.value.source_filename} · ${logSpanText(log.value.log_start, log.value.log_end)}` : ''));
+// The badge: a run with no log linked is "No log" whatever its stored status says.
+const statusKey = computed(() => (noLog.value ? 'no_log' : (run.value?.status ?? 'no_log')));
+const statusHint = computed(() => CONFORM_STATUS[statusKey.value as keyof typeof CONFORM_STATUS]?.hint);
 </script>
 
 <template>
@@ -176,124 +199,113 @@ const logLine = computed(() => (log.value ? `${log.value.source_filename} · ${f
 			<v-button x-small secondary :to="link.to"><v-icon name="show_chart" x-small left />Open in Conform plotter</v-button>
 		</template>
 		<LoadState :loading="firstLoad" :error="state.data ? '' : state.error">
-			<p v-if="state.loading" class="dim" role="status">Updating…</p>
-			<p v-if="state.error && state.data" class="err" role="alert">{{ state.error }}</p>
-			<p class="status" :class="run?.status ?? 'no_log'">{{ statusText(run) }}</p>
-			<p v-if="run?.status === 'error' && run.error_message" class="err">{{ run.error_message }}</p>
-			<p v-if="warning" class="d1-note warn" role="status">{{ warning }}</p>
-			<p v-if="error" class="err" role="alert">{{ error }}</p>
+			<div class="stack">
+				<p v-if="state.loading" class="d1-note" role="status">Updating…</p>
+				<p v-if="state.error && state.data" class="d1-note bad" role="alert">{{ state.error }}</p>
+				<div class="status"><StatusBadge kind="conform" :value="statusKey" :title="statusHint" /></div>
+				<p v-if="run?.status === 'error' && run.error_message" class="d1-note bad">{{ run.error_message }}</p>
+				<p v-if="warning" class="d1-note warn" role="status">{{ warning }}</p>
+				<p v-if="error" class="d1-note bad" role="alert">{{ error }}</p>
 
-			<ConformLogSource
-				v-if="noLog && canEdit" :operation-id="operationId" :equipment-id="equipmentId" :operation-date="operationDate" :work-state="workState"
-				:open-picker="replacing" @changed="onSourceChanged"
-			/>
-			<p v-else-if="noLog" class="dim">No Conform log has been uploaded for this run.</p>
+				<ConformLogSource
+					v-if="noLog && canEdit" :operation-id="operationId" :equipment-id="equipmentId" :operation-date="operationDate" :work-state="workState"
+					:open-picker="replacing" @changed="onSourceChanged"
+				/>
+				<p v-else-if="noLog" class="d1-note">No Conform log has been uploaded for this run.</p>
 
-			<template v-else>
-				<p v-if="logHidden" class="d1-note hidden">Conform log not visible to you</p>
-				<p v-else-if="logLine" class="dim log-line">Conform log: {{ logLine }}</p>
+				<template v-else>
+					<p v-if="logHidden" class="d1-note">Conform log not visible to you</p>
+					<p v-else-if="logLine" class="d1-note">Conform log: {{ logLine }}</p>
 
-				<div class="window">
-					<template v-if="canEdit && !logHidden">
-						<label>Run window start <input v-model="startLocal" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window start (UK time)" /></label>
-						<label>end <input v-model="endLocal" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window end (UK time)" /></label>
-						<span class="dim">UK time</span>
-						<button type="button" class="btn primary" :aria-disabled="!dirty || !!busy" @click="saveWindow">{{ busy === 'window' ? 'Saving…' : 'Set run window' }}</button>
-					</template>
-					<span v-else-if="windowLine" class="win-text">Run window {{ windowLine }}</span>
-					<button v-if="recompute && canEdit && !logHidden" type="button" class="btn" :aria-disabled="!!busy" @click="!busy && doRecompute()">{{ busy === 'recompute' ? 'Recomputing…' : 'Recompute' }}</button>
-					<template v-if="canEdit">
-						<button type="button" class="btn" :aria-disabled="!!busy" title="Take this log off the run and clear its window, summary and steps" @click="!busy && (confirming = 'unlink')">Unlink log</button>
-						<button type="button" class="btn" :aria-disabled="!!busy" title="Unlink this log, then upload another or pick one" @click="!busy && (confirming = 'replace')">Replace log</button>
-					</template>
-				</div>
-				<div v-if="confirming" class="confirm" role="alertdialog" aria-label="Unlink the log">
-					<span>This clears the run window, summary and steps. A log no other run uses is deleted.</span>
-					<span class="row">
-						<button type="button" class="btn primary" :disabled="!!busy" @click="doUnlink">{{ confirming === 'replace' ? 'Unlink and replace' : 'Unlink' }}</button>
-						<button type="button" class="btn" @click="confirming = null">Cancel</button>
-					</span>
-				</div>
+					<div v-if="canEdit || windowLine" class="window">
+						<template v-if="canEdit && !logHidden">
+							<label>Run window start <input v-model="startLocal" class="d1-input" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window start (UK time)" /></label>
+							<label>end <input v-model="endLocal" class="d1-input" type="datetime-local" step="1" :min="bounds.min" :max="bounds.max" aria-label="Run window end (UK time)" /></label>
+							<span class="d1-note">UK time</span>
+							<button type="button" class="d1-btn pri" :aria-disabled="!dirty || !!busy" @click="saveWindow">{{ busy === 'window' ? 'Saving…' : 'Set run window' }}</button>
+						</template>
+						<span v-else-if="windowLine" class="win-text">Run window {{ windowLine }}</span>
+						<button v-if="recompute && canEdit && !logHidden" type="button" class="d1-btn" :aria-disabled="!!busy" @click="!busy && doRecompute()">{{ busy === 'recompute' ? 'Recomputing…' : 'Recompute' }}</button>
+						<template v-if="canEdit">
+							<button ref="unlinkBtn" type="button" class="d1-btn" :aria-disabled="!!busy" title="Take this log off the run and clear its window, summary and steps" @click="ask('unlink')">Unlink log</button>
+							<button ref="replaceBtn" type="button" class="d1-btn" :aria-disabled="!!busy" title="Unlink this log, then upload another or pick one" @click="ask('replace')">Replace log</button>
+						</template>
+					</div>
+					<div class="live" aria-live="polite">
+						<div v-if="confirming" class="confirm" role="group" :aria-label="CONFIRM_TEXT[confirming].label" @keydown.esc="cancelConfirm">
+							<span>{{ CONFIRM_TEXT[confirming].sentence }}</span>
+							<span class="row">
+								<button type="button" class="d1-btn danger" :disabled="!!busy" :aria-label="CONFIRM_TEXT[confirming].button" @click="doUnlink">{{ CONFIRM_TEXT[confirming].go }}</button>
+								<button ref="cancelBtn" type="button" class="d1-btn" @click="cancelConfirm">Cancel</button>
+							</span>
+						</div>
+					</div>
 
-				<div v-if="otherWindows.length" class="others">
-					<h3>Other runs on this log</h3>
-					<ul><li v-for="w in otherWindows" :key="w.operation_id + w.start">{{ windowItem(w) }}</li></ul>
-				</div>
+					<div v-if="otherWindows.length" class="others">
+						<h3>Other runs on this log</h3>
+						<ul><li v-for="w in otherWindows" :key="w.operation_id + w.start">{{ windowItem(w) }}</li></ul>
+					</div>
 
-				<div v-if="thumb" class="trace"><ConformTrace :thumb="thumb" :height="72" /></div>
-				<p v-else-if="traceNote && !logHidden" class="d1-note hidden">{{ traceNote }}</p>
+					<div v-if="thumb" class="trace-card"><ConformTrace :thumb="thumb" :height="72" /><ConformTraceKey :thumb="thumb" /></div>
+					<p v-else-if="traceNote && !logHidden" class="d1-note">{{ traceNote }}</p>
 
-				<template v-if="summary">
-					<div class="cols">
+					<div v-if="summary" class="cols">
 						<div>
 							<h3>Summary</h3>
-							<dl><template v-for="r in summaryRows(summary)" :key="r.label"><dt>{{ r.label }}</dt><dd>{{ r.value }}</dd></template></dl>
+							<FactList :facts="summaryRows(summary)" columns="auto" />
 						</div>
 						<div>
 							<h3>Energy</h3>
-							<dl><template v-for="r in energyRows(summary.energy_kwh, summary.avg_demand_kw)" :key="r.label"><dt>{{ r.label }}</dt><dd>{{ r.value }}</dd></template></dl>
-							<p v-if="missingText(summary.missing)" class="dim">{{ missingText(summary.missing) }}</p>
+							<FactList :facts="energyRows(summary.energy_kwh, summary.avg_demand_kw)" columns="auto" />
+							<p v-if="missingText(summary.missing)" class="d1-note gap">{{ missingText(summary.missing) }}</p>
 						</div>
 					</div>
-				</template>
-				<p v-else-if="run?.status === 'no_window'" class="dim">Set the run window to see its summary, energy and steps.</p>
+					<p v-else-if="run?.status === 'no_window'" class="d1-note">{{ canEdit && !logHidden ? 'Set the run window to see its summary, energy and steps.' : 'No run window is set.' }}</p>
 
-				<template v-if="summary">
-					<div class="steps-head">
-						<h3>Steps <span class="count">{{ steps.length }}</span></h3>
-						<button v-if="steps.length" type="button" class="btn" @click="copyCsv">{{ copied ? 'Copied' : 'Copy as CSV' }}</button>
+					<template v-if="summary">
+						<div class="steps-head">
+							<h3>Steps <span class="count">{{ steps.length }}</span></h3>
+							<button v-if="steps.length" type="button" class="d1-btn" @click="copyCsv">{{ copied ? 'Copied' : 'Copy as CSV' }}</button>
+						</div>
+						<p v-if="!steps.length" class="d1-note">No step of a minute or more at one IPS setpoint and wheel speed in this window.</p>
+						<DataTable v-else figures>
+							<thead><tr><th v-for="c in STEP_COLUMNS" :key="c">{{ c }}</th></tr></thead>
+							<tbody>
+								<tr v-for="(s, i) in steps" :key="i" class="step"><td v-for="(cell, k) in stepCells(s)" :key="k">{{ cell }}</td></tr>
+							</tbody>
+						</DataTable>
+					</template>
+
+					<div v-if="log">
+						<h3>Whole log</h3>
+						<FactList :facts="totalsRows(log.totals)" columns="auto" />
+						<p v-if="missingText(log.totals.missing)" class="d1-note gap">{{ missingText(log.totals.missing) }}</p>
 					</div>
-					<p v-if="!steps.length" class="dim">No step of a minute or more at one IPS setpoint and wheel speed in this window.</p>
-					<DataTable v-else>
-						<thead><tr><th v-for="c in STEP_COLUMNS" :key="c">{{ c }}</th></tr></thead>
-						<tbody>
-							<tr v-for="(s, i) in steps" :key="i" class="step"><td v-for="(cell, k) in stepCells(s)" :key="k" :class="{ mono: k === 0 }">{{ cell }}</td></tr>
-						</tbody>
-					</DataTable>
 				</template>
-
-				<template v-if="log">
-					<h3>Whole log</h3>
-					<dl><template v-for="r in totalsRows(log.totals)" :key="r.label"><dt>{{ r.label }}</dt><dd>{{ r.value }}</dd></template></dl>
-					<p v-if="missingText(log.totals.missing)" class="dim">{{ missingText(log.totals.missing) }}</p>
-				</template>
-			</template>
+			</div>
 		</LoadState>
 	</Section>
 </template>
 
 <style scoped>
-.status { margin: 0 0 6px; font-weight: 600; font-size: var(--fs-md); }
-.status.no_window { color: var(--d1-warn); }
-.status.error { color: var(--d1-bad); }
-.dim { color: var(--d1-dim); font-size: var(--fs-sm); margin: 0 0 6px; }
-.err { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--d1-bad); overflow-wrap: anywhere; }
-.hidden { margin: 0 0 8px; }
-.warn { color: var(--d1-warn); }
-.window { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 8px 0; font-size: var(--fs-sm); }
+.stack { display: grid; gap: 10px; }
+.status { display: flex; align-items: center; gap: 8px; }
+.gap { margin-top: 6px; }
+.d1-note { overflow-wrap: anywhere; }
+.window { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: var(--fs-sm, 12px); }
 .window label { display: inline-flex; align-items: center; gap: 6px; }
-.window input { min-height: 28px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-tile); color: inherit; font: inherit; padding: 0 6px; }
 .win-text { font-variant-numeric: tabular-nums; }
-.confirm { display: grid; gap: 6px; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); font-size: var(--fs-sm); }
+.confirm { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); font-size: var(--fs-sm, 12px); }
+/* The live region is always there (so what the confirm says is announced); empty, it takes no gap. */
+.live:empty { margin-top: -10px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; }
-.others { margin: 4px 0 8px; }
 .others h3 { margin-top: 0; }
-.others ul { margin: 0; padding-left: 18px; font-size: var(--fs-sm); color: var(--d1-dim); font-variant-numeric: tabular-nums; }
-.trace { margin: 4px 0 10px; padding: 6px 8px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); }
+.others ul { margin: 0; padding-left: 16px; font-size: var(--fs-sm, 12px); color: var(--d1-dim); font-variant-numeric: tabular-nums; }
+.trace-card { padding: 6px 8px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 28px; }
-h3 { margin: 10px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); text-transform: none; }
+h3 { margin: 0 0 4px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); text-transform: none; }
 .count { font-weight: 400; margin-left: 4px; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; font-size: var(--fs-md); }
-dt { color: var(--d1-dim); }
-dd { margin: 0; font-variant-numeric: tabular-nums; }
 .steps-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.steps-head h3 { margin: 0; }
 td { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.btn {
-	display: inline-flex; align-items: center; box-sizing: border-box; min-height: 28px; padding: 0 12px; border-radius: 99px;
-	border: 1px solid var(--d1-line); background: var(--d1-tile); color: var(--d1-accent, var(--theme--primary));
-	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer;
-}
-.btn.primary { background: var(--d1-accent, var(--theme--primary)); border-color: transparent; color: var(--d1-on-accent, #fff); }
-.btn:disabled, .btn[aria-disabled='true'] { opacity: 0.55; cursor: default; }
-.btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 </style>

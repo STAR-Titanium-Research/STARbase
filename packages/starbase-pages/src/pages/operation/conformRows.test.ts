@@ -1,22 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { CONFORM_POWER_CONSTANTS, type ConformRunRow, type ConformStep } from '@d1/fast-plotting';
-import { STEP_COLUMNS, energyRows, missingText, needsLog, needsRecompute, statusText, stepCells, summaryRows, totalsRows, windowText, withUnit } from './conformRows';
+import { CONFORM_FIGURES, CONFORM_POWER_CONSTANTS, CONFORM_STATUS, type ConformRunRow, type ConformStep, type ConformSummary } from '@d1/fast-plotting';
+import { statusStyle } from '@d1/ui';
+import { STEP_COLUMNS, energyRows, logSpanText, missingText, needsLog, needsRecompute, stepCells, summaryRows, totalsRows, windowText } from './conformRows';
 
-describe('withUnit', () => {
-	it('writes a number to its places with the unit, and a dash for no reading', () => {
-		expect(withUnit(7.666, 2, 'kWh')).toBe('7.67 kWh');
-		expect(withUnit(300, 0, '°C')).toBe('300 °C');
-		expect(withUnit(0, 1, '%')).toBe('0.0 %');
-		expect(withUnit(null, 1, 'kW')).toBe('–');
-		expect(withUnit(NaN, 1, 'kW')).toBe('–');
-		expect(withUnit(3, 0, '')).toBe('3');
+describe('summary rows', () => {
+	const summary = {
+		duration_s: 899, extruding_s: 880, mean_wheel_speed_rpm: 7.5, mean_torque_pct: 22.456, mean_tooling1_c: 401.7, peak_torque_pct: 38,
+		peak_motor_current_a: 120.4, peak_tooling1_c: 432.19, peak_wheel_temp_c: 99.96, ips_setpoint_c: 250,
+	} as unknown as ConformSummary;
+
+	it('uses the shared labels, and the number rule: integers from 100, one decimal from 10, up to two below', () => {
+		const rows = summaryRows(summary);
+		expect(rows.map((r) => r.label)).toEqual(['Duration', 'Extruding time', 'Mean wheel speed', 'Mean motor torque', 'Mean tooling 1', 'Peak motor torque', 'Peak motor current', 'Peak tooling 1', 'Peak wheel temperature', 'IPS setpoint']);
+		expect(rows.map((r) => r.value)).toEqual(['14 min 59 s', '14 min 40 s', '7.5 rpm', '22.5 %', '402 °C', '38 %', '120 A', '432 °C', '100 °C', '250 °C']);
+	});
+
+	it('a missing reading is an em dash with no unit', () => {
+		const rows = summaryRows({ ...summary, mean_torque_pct: null, peak_tooling1_c: NaN } as unknown as ConformSummary);
+		expect(rows.find((r) => r.label === 'Mean motor torque')?.value).toBe('—');
+		expect(rows.find((r) => r.label === 'Peak tooling 1')?.value).toBe('—');
+	});
+
+	it('every label is the one in the figure table', () => {
+		expect(summaryRows(summary).every((r) => Object.values(CONFORM_FIGURES).some((f) => f.label === r.label))).toBe(true);
 	});
 });
 
 describe('lengths of time use the shared format', () => {
 	it('writes the window length and the extruding time as 12 min 05 s, or 1 h 23 min from an hour', () => {
 		const rows = summaryRows({ duration_s: 899, extruding_s: 4980 } as never);
-		expect(rows[0]).toEqual({ label: 'Window length', value: '14 min 59 s' });
+		expect(rows[0]).toEqual({ label: 'Duration', value: '14 min 59 s' });
 		expect(rows[1]).toEqual({ label: 'Extruding time', value: '1 h 23 min' });
 	});
 });
@@ -24,17 +37,17 @@ describe('lengths of time use the shared format', () => {
 describe('energy and totals', () => {
 	it('lists the parts the log has, then the total and the average demand', () => {
 		expect(energyRows({ motor: 44.57, ips: 0.78, cooling: 0.17, total: 45.52 }, 22.8)).toEqual([
-			{ label: 'Motor', value: '44.57 kWh' },
-			{ label: 'IPS', value: '0.78 kWh' },
-			{ label: 'Cooling', value: '0.17 kWh' },
-			{ label: 'Total', value: '45.52 kWh' },
+			{ label: 'Motor energy', value: '44.57 kWh' },
+			{ label: 'IPS energy', value: '0.78 kWh' },
+			{ label: 'Cooling energy', value: '0.17 kWh' },
+			{ label: 'Total energy', value: '45.52 kWh' },
 			{ label: 'Average demand', value: '22.80 kW' },
 		]);
 	});
 
 	it('leaves out a part with no channel (an older export)', () => {
 		const labels = energyRows({ motor: 7, ips: null, cooling: null, total: 7 }, 1).map((r) => r.label);
-		expect(labels).toEqual(['Motor', 'Total', 'Average demand']);
+		expect(labels).toEqual(['Motor energy', 'Total energy', 'Average demand']);
 	});
 
 	it('the whole-log block starts with the log length', () => {
@@ -60,11 +73,13 @@ describe('steps', () => {
 	it('one cell per column, in UK clock time', () => {
 		const cells = stepCells(step);
 		expect(cells).toHaveLength(STEP_COLUMNS.length);
-		expect(cells).toEqual(['13:38:20', '6 min 40 s', '250 °C', '7.5 rpm', '100.0–120.0 (20.0)', '400.0–430.0 (30.0)', '–', '22.5 %', '3.50 kWh']);
+		expect(cells).toEqual(['13:38:20', '6 min 40 s', '250 °C', '7.5 rpm', '100–120 °C (20)', '400–430 °C (30)', '—', '22.5 %', '3.50 kWh']);
 	});
 
-	it('writes a whole wheel speed without a decimal', () => {
+	it('writes a whole wheel speed without a decimal, and a missing one as a dash with no unit', () => {
 		expect(stepCells({ ...step, wheel_speed_rpm: 8 })[3]).toBe('8 rpm');
+		expect(stepCells({ ...step, wheel_speed_rpm: NaN, mean_torque_pct: null as never })).toEqual(expect.arrayContaining(['—']));
+		expect(stepCells({ ...step, wheel_speed_rpm: NaN })[3]).toBe('—');
 	});
 });
 
@@ -76,12 +91,14 @@ describe('the run window and status', () => {
 		expect(windowText(null)).toBe('');
 	});
 
-	it('names each status', () => {
-		expect(statusText(null)).toBe('No Conform log yet');
-		expect(statusText({ status: 'no_log' })).toBe('No Conform log yet');
-		expect(statusText({ status: 'no_window' })).toBe('Run window not set');
-		expect(statusText({ status: 'done' })).toBe('Done');
-		expect(statusText({ status: 'error' })).toBe('Could not be processed');
+	it('the kit\'s conform status words and tones are the plotting package\'s', () => {
+		for (const [key, v] of Object.entries(CONFORM_STATUS)) expect(statusStyle('conform', key)).toEqual({ label: v.label, tone: v.tone });
+	});
+
+	it('writes the log\'s span in the display form, with the second date only across midnight', () => {
+		expect(logSpanText('2025-03-17T13:38:20Z', '2025-03-17T14:50:01Z')).toBe('17 Mar 2025, 13:38:20 – 14:50:01');
+		expect(logSpanText('2025-03-17T23:30:00Z', '2025-03-18T01:10:00Z')).toBe('17 Mar 2025, 23:30:00 – 18 Mar 2025, 01:10:00');
+		expect(logSpanText(null, '2025-03-17T14:50:01Z')).toBe('');
 	});
 
 	it('a run needs a log when none is linked', () => {
