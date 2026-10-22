@@ -52,6 +52,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -96,6 +98,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "team",
@@ -133,6 +137,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -176,6 +182,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -220,6 +228,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -264,6 +274,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -301,6 +313,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",
@@ -344,6 +358,8 @@
         "linked_collection": null,
         "linked_record_id": null,
         "linked_label": null,
+        "linked_title": null,
+        "link_batch_size": null,
         "decided_by_name": null,
         "owner": {
           "kind": "person",

@@ -46,6 +46,8 @@
         "linked_collection": "physical_samples",
         "linked_record_id": "00000000-0000-4000-8000-000000000101",
         "linked_label": "S-0042",
+        "linked_title": "Ti-6Al-4V fatigue bar",
+        "link_batch_size": 1,
         "decided_by_name": "Alice A",
         "owner": {
           "kind": "person",
@@ -90,6 +92,8 @@
         "linked_collection": "physical_samples",
         "linked_record_id": "00000000-0000-4000-8000-000000000101",
         "linked_label": "S-0042",
+        "linked_title": "Ti-6Al-4V fatigue bar",
+        "link_batch_size": 1,
         "decided_by_name": "Alice A",
         "owner": {
           "kind": "person",

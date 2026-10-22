@@ -115,6 +115,45 @@ describe('linking', () => {
 	});
 });
 
+describe('changing the record of a linked file', () => {
+	const linkedFile = () => exactMatch({ state: 'linked', link_kind: 'manual', link_batch_id: 'b1', linked_collection: 'physical_samples', linked_record_id: 'old', linked_label: 'S-0001', decided_at: '2026-10-22T14:05:00.000Z' });
+	it('undoes the link of the file and links it to the other record; the list names it there, with one Undo for the new link', async () => {
+		const f = linkedFile();
+		const { inbox, fake, changed } = setup([f]);
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toEqual({ ok: true });
+		expect(fake.calls.filter((c) => c.method === 'post').map((c) => c.path)).toEqual(['/d1-inbox/undo', '/d1-inbox/link']);
+		expect(fake.calls.find((c) => c.path === '/d1-inbox/undo')?.body).toEqual({ link_batch_id: 'b1' });
+		expect(fake.calls.find((c) => c.path === '/d1-inbox/link')?.body).toEqual({ items: [{ candidate_id: f.candidate_id, collection: 'physical_samples', record_id: 'new-record' }] });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', undo: { kind: 'batch' } });
+		expect(changed).toHaveBeenCalled();
+	});
+
+	it('a link that is refused after the undo says so: the old link is gone and the file is back in the Inbox', async () => {
+		const f = linkedFile();
+		const { inbox } = setup([f], undefined, { editable: () => false });
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toMatchObject({ ok: false });
+		const message = (r as { message: string }).message;
+		expect(message).toMatch(/^The old link was removed, but the new one could not be made: /);
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: message });
+	});
+
+	it('a refused undo changes nothing and links nothing', async () => {
+		const f = linkedFile();
+		const { inbox, fake } = setup([f], undefined, { undoByLinkerOnly: true });
+		const r = await inbox.relink(f, 'physical_samples', 'new-record');
+		expect(r).toMatchObject({ ok: false, message: 'Only the person who linked this, or an administrator, can undo it.' });
+		expect(fake.calls.some((c) => c.path === '/d1-inbox/link')).toBe(false);
+	});
+
+	it('a file with no link batch has nothing to change', async () => {
+		const { inbox, fake } = setup([exactMatch()]);
+		expect(await inbox.relink(exactMatch(), 'physical_samples', 'x')).toMatchObject({ ok: false });
+		expect(fake.calls.filter((c) => c.method === 'post')).toEqual([]);
+	});
+});
+
 describe('dismissing', () => {
 	it('moves a file to Dismissed with an Undo that restores it', async () => {
 		const { inbox, setFilters } = setup();

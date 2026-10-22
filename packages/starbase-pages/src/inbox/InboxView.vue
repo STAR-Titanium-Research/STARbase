@@ -14,7 +14,7 @@ import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
-import { DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
+import { DEFAULT_FILTERS, DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
@@ -114,10 +114,14 @@ async function choose(rec: { collection: string; id: string }) {
 	if (!f || dialogBusy.value) return;
 	dialogBusy.value = true;
 	dialogError.value = '';
-	const r = await keepPlace(f, () => inbox.link(f, rec.collection, rec.id));
+	// a file that is already linked is changed to another record (undo, then link); any other is linked
+	const r = await keepPlace(f, () => (f.state === 'linked' ? inbox.relink(f, rec.collection, rec.id) : inbox.link(f, rec.collection, rec.id)));
 	dialogBusy.value = false;
-	if (r.ok) dialogOpen.value = false;
-	else dialogError.value = r.message;
+	if (r.ok) {
+		dialogOpen.value = false;
+		// the changed file is on its new record: the sheet stays on it (the undo had handed the selection to its neighbour)
+		if (f.state === 'linked') selectedId.value = f.candidate_id;
+	} else dialogError.value = r.message;
 }
 
 // ---- the Add a surface scan dialog (a surface scan is ADDED to an insert or an edge, never linked) ----
@@ -267,6 +271,19 @@ const openPair = () => {
 	return true;
 };
 // The sheet's Link to…: a surface scan is ADDED to an insert or an edge (the row's own button), anything else is linked through the record picker.
+// The sheet's Link card: Undo link takes the file's whole link batch back (the card said how many files that is); a picture of the same record opens in the sheet when the
+// list holds it, else in its own page (found there under the Recently linked list, whatever filters this list has); Compare with… opens the page with that picture beside this one.
+const undoLink = (f: FoundFile) => (f.link_batch_id ? keepPlace(f, () => inbox.undo({ kind: 'batch', id: f.link_batch_id as string })) : undefined);
+function openSibling(id: string) {
+	const here = allRows.value.find((f) => f.candidate_id === id);
+	if (here) return select(here);
+	rememberSelection();
+	openLink(viewBoxPath(id, { ...DEFAULT_FILTERS, tab: 'linked' }), router);
+}
+function compareSibling(f: FoundFile, id: string) {
+	rememberSelection();
+	openLink(viewBoxPath(f.candidate_id, filters.value, id), router);
+}
 const sheetLink = (f: FoundFile) => (primaryAction(f).kind === 'scan' ? openScan(f) : openDialog(f));
 
 const anyDialogOpen = () => dialogOpen.value || scanOpen.value || ig.dialog.value.open || inbox.acceptDialog.value.open;
@@ -460,11 +477,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			:tab="tab"
 			:show-owner="showOwner"
 			:busy="inbox.isBusy(selected.candidate_id)"
+			:undoing="inbox.undoing.value !== null"
 			@close="closeSheet()"
 			@link="sheetLink(selected)"
 			@dismiss="dismissRow(selected)"
 			@restore="restoreRow(selected)"
 			@open-box="openBox(selected)"
+			@open-record="openLink($event, router)"
+			@change="openDialog(selected)"
+			@undo="undoLink(selected)"
+			@open-sibling="openSibling"
+			@compare-sibling="compareSibling(selected, $event)"
 		/>
 		</div>
 

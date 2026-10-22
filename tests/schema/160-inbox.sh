@@ -955,6 +955,20 @@ SELECT pg_temp.ib_run(format('EXECUTE ignoredresetdirs(%L, NULL, %L, %L)', 'a1b0
 SELECT 'ib_ign_reset_wrong_owner_kept:' || (dir_mtime IS NOT NULL AND last_listed_at IS NOT NULL) FROM d1_private.inbox_dirs WHERE rel_path = 'Users/ibx1/Ign Dir 2';
 SELECT 'ib_ign_deleted:' || pg_temp.ib_run(format('EXECUTE ignoreddelete(%L)', :'ib_ign_id'));
 SELECT 'ib_ign_rules_left:' || count(*) FROM d1_private.inbox_ignored_dirs;
+-- GET /siblings: the other pictures linked to the same sample through the junction rows the links made (not another person's, not the file itself), with the size of the link batch
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'sib' || g || '.tif' FROM generate_series(1, 3) g;
+SELECT gen_random_uuid() AS ib_sj1, gen_random_uuid() AS ib_sj2, gen_random_uuid() AS ib_sj3 \gset
+INSERT INTO sample_data_files (id, sample_id, directus_files_id) VALUES
+  (:'ib_sj1', '$IB_S', 'a1b00000-0000-4000-8000-000000000301'), (:'ib_sj2', '$IB_S', 'a1b00000-0000-4000-8000-000000000302'), (:'ib_sj3', '$IB_S', 'a1b00000-0000-4000-8000-000000000303');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, matches, rel_path, link_kind, linked_collection, linked_junction_id, link_batch_id, decided_at) VALUES
+  ('a1b00000-0000-4000-8000-000000000301', '$IB_P', 'sem_image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s1.tif', 'manual', 'physical_samples', :'ib_sj1', gen_random_uuid(), now() - interval '3 hours'),
+  ('a1b00000-0000-4000-8000-000000000302', '$IB_P', 'image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s2.tif', 'manual', 'physical_samples', :'ib_sj2', gen_random_uuid(), now() - interval '2 hours'),
+  ('a1b00000-0000-4000-8000-000000000303', '$IB_Q', 'sem_image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s3.tif', 'manual', 'physical_samples', :'ib_sj3', gen_random_uuid(), now());
+SELECT candidate_id AS ib_sib_self FROM d1_private.file_candidates WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000301' \gset
+CREATE TEMP TABLE ib_sib AS EXECUTE siblings_list_physical_samples('$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', :'ib_sib_self', 7, 0);
+SELECT 'ib_sib_list:' || coalesce(string_agg(rel_path || ':' || link_batch_size, ',' ORDER BY decided_at DESC), '') FROM ib_sib;
+CREATE TEMP TABLE ib_sib_cnt AS EXECUTE siblings_count_physical_samples('$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', :'ib_sib_self');
+SELECT 'ib_sib_count:' || total FROM ib_sib_cnt;
 ROLLBACK;
 SQL
 )
@@ -996,6 +1010,8 @@ SQL
     expect_fixed ib_out "ib_sem_corrected:20.00:manual:true" "stream D: a correction sets the value, marks it manual and names the user"
     expect_fixed ib_out "ib_sem_refused:blank_reason:refused,kv99:refused,read_by:refused" "stream D: a correction of read_by, or of kv out of range, is refused (the route answers 400), and so is a blank log reason"
     expect_fixed ib_out "ib_sem_log_row:1:admin_read" "stream D: an administrator's read inserts one access log row with the reason admin_read"
+    expect_fixed ib_out "ib_sib_list:Users/ibx1/s2.tif:1" "siblings: the other pictures linked to the same sample, found through the junction row of each link, are this person's own, not the file itself and not another person's; each says the size of its link batch"
+    expect_fixed ib_out "ib_sib_count:1" "siblings: the count query answers the same set"
     expect_fixed ib_out "ib_prefs:1" "the auto-link preference upserts"
     expect_fixed ib_out "ib_first_rescan:1" "a rescan request is queued"
     expect_fixed ib_out "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"

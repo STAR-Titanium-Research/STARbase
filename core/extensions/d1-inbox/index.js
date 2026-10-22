@@ -27,6 +27,15 @@
 //                                      candidates and checks edit rights) = how many rows Accept all would link for the same filter.
 //                                      FoundFile.has_thumbnail (boolean, additive): true when the crawler stored thumbnails for the file (kinds image and
 //                                      sem_image only; a failure marker row, thumb NULL, does not count). The bytes are never part of the list.
+//                                      FoundFile.linked_title (additive, Linked tab only): the linked record's second line as the caller may read it
+//                                      (a sample's nickname, a test's type; null for an operation or when unreadable); FoundFile.link_batch_size
+//                                      (additive): how many files the row's link batch holds (Undo undoes them all), null when the row is not linked.
+//   GET  /d1-inbox/siblings?file=<candidate_id>&limit=
+//                                   -> { data: FoundFile[], meta: { total, limit } }: the OTHER pictures (sem_image, image) linked to the same sample,
+//                                      operation or test as that file, newest link first, with the list's own visibility (the caller's folders and their
+//                                      teams'; an administrator reading someone's file sees that owner's). total counts all of them. Empty when the file is not
+//                                      linked to a record of those three kinds (a surface scan) or the caller cannot READ the record; 404 NOT_FOUND for a file the
+//                                      caller cannot see. Rows are shaped as in the list (has_thumbnail, linked_label, ...), so a picture loads from /thumb.
 //   GET  /d1-inbox/files/:candidate_id/thumb | /preview
 //                                   -> the stored picture itself, NOT a { data } envelope: 200 image/jpeg (thumb about 320 px, preview about 1600 px: a reduced
 //                                      copy, never the original) with Cache-Control: private, no-cache (the browser may keep the picture but asks again every time,
@@ -207,6 +216,8 @@ export const LINK_TARGETS = {
   test_sessions: { junction: 'session_data_files', fk: 'session_id', pk: 'session_id', code: 'test_code' },
 };
 const isTarget = (name) => typeof name === 'string' && Object.hasOwn(LINK_TARGETS, name);
+// The field that is a linked record's second line in the page (recordSearch.ts: a sample's nickname, a test's type); an operation has none.
+const TITLE_FIELDS = { physical_samples: 'nickname', test_sessions: 'test_type' };
 
 // The surface scan (stream F1) is not a LINK_TARGETS entry: it makes a ROW of its own (no junction, no record-edit rule: Directus's own create permission
 // on surface_scans decides, and ADR-0023 adds the file guard) and needs a person-chosen condition. The scan row is visible to the lab as a locked
@@ -686,6 +697,7 @@ const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_down
   + ' c.rel_path, c.size_bytes, c.source_mtime, c.first_seen_at, c.decided_at, c.link_kind, c.linked_collection, c.link_batch_id,'
   + " coalesce(sj.sample_id, oj.operation_id, tj.session_id, CASE WHEN c.linked_collection = 'surface_scans' THEN c.linked_junction_id END) AS linked_record_id,"
   + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
+  + " CASE WHEN c.link_batch_id IS NOT NULL THEN (SELECT count(*)::int FROM d1_private.file_candidates bc WHERE bc.link_batch_id = c.link_batch_id AND bc.state = 'linked') END AS link_batch_size,"
   + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at,'
   + ' EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id AND th.thumb IS NOT NULL) AS has_thumbnail';
 const LIST_FROM = ' FROM d1_private.file_candidates c'
@@ -701,7 +713,7 @@ const SLIM_FROM = ' FROM d1_private.file_candidates c LEFT JOIN d1_private.file_
 
 // The query for a list page ({ count: true }: its total; { accept: true }: the ids accept-all considers; { scans: true }: the surface_scans table exists, so
 // undecided surface scan files that already have a scan are left out). Everything a client chose is a binding.
-export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false } = {}) {
+export function buildListQuery(scope, f, { count = false, accept = false, after = null, pageSize = ACCEPT_PAGE, scans = false, record = null } = {}) {
   const where = [FILE_OWNER_MATCHES];
   const bindings = [];
   const mine = scope.personId !== null && scope.personId !== undefined;
@@ -724,6 +736,13 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
   if (f.date_from) { where.push('coalesce(c.source_mtime, c.first_seen_at) >= ?::date'); bindings.push(f.date_from); }
   if (f.date_to) { where.push('coalesce(c.source_mtime, c.first_seen_at) < (?::date + 1)'); bindings.push(f.date_to); }
   if (f.link_kind) { where.push('c.link_kind = ?'); bindings.push(f.link_kind); }
+  // { collection, id, exclude } (the siblings route, never a client key): only files linked to that record, found through the junction row the link made
+  // (not the sj / oj / tj joins, which the count query lacks), and not the file `exclude`
+  if (record) {
+    const t = LINK_TARGETS[record.collection];
+    where.push('c.linked_collection = ?', `EXISTS (SELECT 1 FROM ${t.junction} rj WHERE rj.id = c.linked_junction_id AND rj.${t.fk} = ?::uuid)`, 'c.candidate_id <> ?::uuid');
+    bindings.push(record.collection, record.id, record.exclude);
+  }
   if (accept) {
     // What accept-all can ever link: exact short ID naming one record, not a surface scan, not a copy, not already on its record
     where.push("c.state = 'new'", "c.match_strength = 'short_id'", 'c.suggested_record_id IS NOT NULL', "c.kind <> 'surface_scan'", 'c.duplicate_of IS NULL',
@@ -818,6 +837,8 @@ export function fileOut(row, info) {
     linked_collection: linked ? row.linked_collection : null,
     linked_record_id: linked ? row.linked_record_id : null,
     linked_label: linked ? (info.labels.get(key(row.linked_collection, row.linked_record_id)) ?? null) : null,
+    linked_title: linked ? (info.titles?.get(key(row.linked_collection, row.linked_record_id)) ?? null) : null,
+    link_batch_size: linked ? num(row.link_batch_size) : null,
     decided_by_name: row.decided_by_name ?? null,
     owner: row.owner_person_id
       ? { kind: 'person', id: row.owner_person_id, name: row.owner_name ?? '' }
@@ -1157,7 +1178,7 @@ export function mount(router, context, deps = {}) {
   }
   // What the page may NAME of the records its rows point at: which the caller can READ (the real read rule, as the caller) and their codes
   // ("S-0042"), and which of those they can edit. Nothing is read for a record the caller cannot read, so nothing of it is returned.
-  async function recordInfo(db, acc, schema, pairs, editPairs) {
+  async function recordInfo(db, acc, schema, pairs, editPairs, titlePairs = []) {
     const by = new Map();
     for (const [collection, id] of pairs) if (isTarget(collection) && isUuid(id)) (by.get(collection) ?? by.set(collection, new Set()).get(collection)).add(String(id));
     const readable = new Set();
@@ -1209,9 +1230,28 @@ export function mount(router, context, deps = {}) {
         if (!isDenied(err)) throw err;
       }
     }
+    // The second line of the records a row is LINKED to (a sample's nickname, a test's type), read apart and as the caller: a field the caller's permissions
+    // refuse costs only the title, never the label read above.
+    const titles = new Map();
+    const titled = new Map();
+    for (const [collection, id] of titlePairs) {
+      if (TITLE_FIELDS[collection] && readable.has(`${collection}:${id}`)) (titled.get(collection) ?? titled.set(collection, new Set()).get(collection)).add(String(id));
+    }
+    for (const [collection, ids] of titled) {
+      const target = LINK_TARGETS[collection];
+      try {
+        const rows = await itemsFor(schema, acc, collection).readByQuery({ fields: [target.pk, TITLE_FIELDS[collection]], filter: { [target.pk]: { _in: [...ids] } }, limit: ids.size });
+        for (const r of rows) {
+          const title = typeof r[TITLE_FIELDS[collection]] === 'string' ? r[TITLE_FIELDS[collection]].trim() : '';
+          if (title) titles.set(`${collection}:${r[target.pk]}`, title);
+        }
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+      }
+    }
     // the edit check only for the records a row SUGGESTS (a linked record or a lesser match needs none)
     const editable = await editableSet(db, acc, schema, editPairs.filter(([c, id]) => readable.has(`${c}:${id}`)));
-    return { readable, labels, editable, scans };
+    return { readable, labels, editable, scans, titles };
   }
 
   // -- linking -------------------------------------------------------------------------------------------------------------------
@@ -1652,6 +1692,16 @@ export function mount(router, context, deps = {}) {
     res.json({ data: shapeSemSettings(row, { canEdit: true }) });
   }));
 
+  // What the page may name of the records a list's rows point at (recordInfo): the suggestion, the matches and the linked record, plus the linked record's title.
+  const infoForRows = (acc, schema, rows) => {
+    const pairs = rows.flatMap((r) => [
+      [r.suggested_collection, r.suggested_record_id], [r.linked_collection, r.linked_record_id],
+      ...(Array.isArray(asJson(r.matches)) ? asJson(r.matches) : []).map((m) => [m.collection, m.record_id]),
+    ]);
+    const linked = rows.filter((r) => r.state === 'linked').map((r) => [r.linked_collection, r.linked_record_id]);
+    return recordInfo(database, acc, schema, pairs, rows.filter((r) => r.state === 'new').map((r) => [r.suggested_collection, r.suggested_record_id]), linked);
+  };
+
   router.get('/files', route(async ({ req, res, acc }) => {
     const f = parseFileFilters(req.query);
     const scope = await scopeOf(acc);
@@ -1662,17 +1712,42 @@ export function mount(router, context, deps = {}) {
     const total = buildListQuery(scope, f, { count: true, scans });
     const rows = (rowsOf(await database.raw(page.sql, page.bindings)));
     const [{ total: count } = { total: 0 }] = rowsOf(await database.raw(total.sql, total.bindings));
-    const pairs = rows.flatMap((r) => [
-      [r.suggested_collection, r.suggested_record_id], [r.linked_collection, r.linked_record_id],
-      ...(Array.isArray(asJson(r.matches)) ? asJson(r.matches) : []).map((m) => [m.collection, m.record_id]),
-    ]);
-    const info = await recordInfo(database, acc, schema, pairs, rows.filter((r) => r.state === 'new').map((r) => [r.suggested_collection, r.suggested_record_id]));
+    const info = await infoForRows(acc, schema, rows);
     // how many of the rows this filter matches Accept all would link (the same plan, nothing locked or written)
     // only when asked for (acceptable=1): it reads candidates and checks edit rights, which a plain list load must not do
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
     const acceptable = f.acceptable && open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
     // `viewer` is who is asking, for the one thing a row names by folder: whose Inbox holds the original of a copy (duplicateOwnerOut)
     res.json(shapeFiles(rows, { ...info, viewer: scope }, { total: count, limit: f.limit, offset: f.offset, acceptable }));
+  }));
+
+  // GET /siblings?file=<candidate_id>&limit=: the other pictures linked to the same sample, operation or test as that file (header comment). The record comes from the
+  // file's own link (the junction row it made), never from the client; the rows are the list's rows, so they are exactly the files the caller could list anyway.
+  const SIBLINGS_DEFAULT = 7;
+  const SIBLINGS_MAX = 50;
+  router.get('/siblings', route(async ({ req, res, acc }) => {
+    const file = text(req.query?.file, 'file');
+    const limit = intParam(req.query?.limit, 'limit', { min: 1, max: SIBLINGS_MAX, fallback: SIBLINGS_DEFAULT });
+    const scope = await scopeOf(acc);
+    const [cand] = isUuid(file) ? rowsOf(await database.raw(SQL.candidatesById, [file.toLowerCase()])) : [];
+    if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(isUuid(file) ? file.toLowerCase() : undefined);
+    const none = () => res.json(shapeFiles([], { viewer: scope }, { total: 0, limit, offset: 0, acceptable: null }));
+    if (cand.state !== 'linked' || !isTarget(cand.linked_collection) || !cand.linked_junction_id) return none();
+    const [junction] = rowsOf(await database.raw(SQL.junctionById[cand.linked_collection], [cand.linked_junction_id]));
+    // gone, or repointed at another file in Data Studio since: this file is not on that record any more
+    if (!junction || !isUuid(junction.record_id) || String(junction.directus_files_id) !== String(cand.directus_files_id)) return none();
+    const schema = await schemaOf(req);
+    const record = { collection: cand.linked_collection, id: String(junction.record_id).toLowerCase(), exclude: cand.candidate_id };
+    // a record the caller cannot read is not named, and nothing is listed under it
+    if (!(await recordInfo(database, acc, schema, [[record.collection, record.id]], [])).readable.has(`${record.collection}:${record.id}`)) return none();
+    const f = parseFileFilters({ tab: 'linked', kind: 'sem_image,image', limit: String(limit) });
+    // an administrator reading somebody else's file sees that owner's siblings (the list would not show them theirs)
+    if (!canChange(scope, cand)) f.owner = cand.owner_team_id ? { kind: 'team', id: cand.owner_team_id } : { kind: 'person', id: cand.owner_person_id };
+    const page = buildListQuery(scope, f, { record });
+    const total = buildListQuery(scope, f, { record, count: true });
+    const rows = rowsOf(await database.raw(page.sql, page.bindings));
+    const [{ total: count } = { total: 0 }] = rowsOf(await database.raw(total.sql, total.bindings));
+    res.json(shapeFiles(rows, { ...(await infoForRows(acc, schema, rows)), viewer: scope }, { total: count, limit, offset: 0, acceptable: null }));
   }));
 
   // -- the pictures -------------------------------------------------------------------------------------------------------------

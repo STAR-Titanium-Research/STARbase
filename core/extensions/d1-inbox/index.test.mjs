@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import endpoint, {
   ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
@@ -4199,7 +4200,7 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   endpoint.handler(router, { database: () => {}, services: {}, getSchema: async () => ({}), logger: {}, env: {} });
   assert.deepEqual([...router.routes.keys()].sort(), [
     'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs',
-    'GET /sem-settings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
+    'GET /sem-settings', 'GET /siblings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
     'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });
@@ -4214,7 +4215,7 @@ test('no route reads or writes anything outside d1_private, the three junction a
 });
 
 test('sql_check.mjs (run on a real Postgres by tests/schema/160-inbox.sh) prepares every statement the endpoint has, and the phase1 block names the checks', () => {
-  const printed = execFileSync(process.execPath, [new URL('./sql_check.mjs', import.meta.url).pathname], { encoding: 'utf8' });
+  const printed = execFileSync(process.execPath, [fileURLToPath(new URL('./sql_check.mjs', import.meta.url))], { encoding: 'utf8' });
   const names = new Set([...printed.matchAll(/^PREPARE (\w+) AS /gm)].map((m) => m[1]));
   for (const [key, value] of Object.entries(SQL)) {
     const wanted = typeof value === 'string' ? [key.toLowerCase()] : Object.keys(value).map((sub) => `${key}_${sub}`.toLowerCase());
@@ -4363,4 +4364,151 @@ test('POST /undo notices a 197 applied while the server runs (a negative answer 
   const second = (await call('POST /link', { user: U.alice, body: { items: [link(b)] } })).body.data.link_batch_id;
   await call('POST /undo', { user: U.alice, body: { link_batch_id: second } });
   assert.equal(w.log.filter((l) => l.name === 'deleteUnlinkedSemSettings').length, 1);
+});
+
+// ---- the linked-file view: a linked row's title and batch size, and the siblings of its record ---------------------------------------------
+
+test('GET /files: a linked row carries its record\'s title (a sample\'s nickname, a test\'s type, none for an operation) and the size of its link batch', async () => {
+  const w = newWorld();
+  const c = cand({ state: 'linked' });
+  w.listRows = [
+    listRow(c, { state: 'linked', link_kind: 'bulk', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77), link_batch_size: 3 }),
+    listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'manufacturing_operations', linked_record_id: O1, link_batch_id: ID(78), link_batch_size: 1 }),
+    listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S2, link_batch_id: ID(79), link_batch_size: 1 }),
+    listRow(cand(), { state: 'new' }),
+  ];
+  const { call } = setup(w);
+  const [sample, operation, hidden, fresh] = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.equal(sample.linked_title, `CODE-${S1.slice(-4)}`, 'the nickname, read as the caller');
+  assert.equal(sample.link_batch_size, 3);
+  assert.equal(operation.linked_title, null, 'an operation has no second line');
+  assert.equal(operation.link_batch_size, 1);
+  assert.equal(hidden.linked_title, null, 'a record the caller cannot read is not named, nor titled');
+  assert.equal(fresh.linked_title, null);
+  assert.equal(fresh.link_batch_size, null, 'only a linked row has a batch');
+  const titleReads = w.items.filter((i) => i.op === 'read' && i.query.fields?.includes('nickname'));
+  assert.equal(titleReads.length, 1, 'one extra read, for the samples the linked rows name');
+  assert.deepEqual(titleReads[0].query.filter.sample_id._in, [S1], 'only readable linked records are asked for a title');
+});
+
+test('GET /files: a title the caller\'s permissions refuse costs only the title, not the record\'s code', async () => {
+  const w = newWorld();
+  const c = cand({ state: 'linked' });
+  w.listRows = [listRow(c, { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77), link_batch_size: 1 })];
+  const { call, context } = setup(w);
+  const real = context.services.ItemsService;
+  context.services.ItemsService = class extends real {
+    async readByQuery(query) {
+      if (query.fields?.includes('nickname')) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      return super.readByQuery(query);
+    }
+  };
+  const [row] = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.equal(row.linked_label, `CODE-${S1.slice(-4)}`);
+  assert.equal(row.linked_title, null);
+});
+
+test('buildListQuery: the record option lists the files linked to one record through its junction row, without the sj / oj / tj joins, and leaves one file out', () => {
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  const f = parseFileFilters({ tab: 'linked', kind: 'sem_image,image', limit: '7' });
+  for (const [collection, t] of Object.entries(LINK_TARGETS)) {
+    const record = { collection, id: S1, exclude: ID(1) };
+    for (const opts of [{ record }, { record, count: true }]) {
+      const q = buildListQuery(scope, f, opts);
+      assert.match(q.sql, new RegExp(`c\\.linked_collection = \\? AND EXISTS \\(SELECT 1 FROM ${t.junction} rj WHERE rj\\.id = c\\.linked_junction_id AND rj\\.${t.fk} = \\?::uuid\\) AND c\\.candidate_id <> \\?::uuid`));
+      assert.ok(q.bindings.includes(S1) && q.bindings.includes(ID(1)) && q.bindings.includes(collection), 'the record, the excluded file and the collection are bindings');
+      assert.doesNotMatch(q.sql, new RegExp(`${S1}|${ID(1)}`), 'no id in the text');
+      assert.match(q.sql, /c\.state = 'linked'/);
+    }
+  }
+  assert.doesNotMatch(buildListQuery(scope, f).sql, /rj\./, 'no record option, no record clause');
+  // the bindings stay in the order of the placeholders: the clause comes after link_kind and before the paging
+  const q = buildListQuery(scope, parseFileFilters({ tab: 'linked', link_kind: 'auto', limit: '5' }), { record: { collection: 'physical_samples', id: S1, exclude: ID(1) } });
+  assert.equal(q.sql.match(/\?/g).length, q.bindings.length);
+  assert.deepEqual(q.bindings.slice(-6), ['auto', 'physical_samples', S1, ID(1), 5, 0]);
+});
+
+// the file and the junction row its link made, on a world with Alice's sample S1
+function linkedWorld() {
+  const w = newWorld();
+  const self = add(w, cand({ state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_junction_id: ID(5001), link_batch_id: ID(77) }));
+  w.junctions.sample_data_files.push({ id: ID(5001), sample_id: S1, directus_files_id: self.directus_files_id });
+  const other = (n) => listRow(cand({ state: 'linked' }), { state: 'linked', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(80 + n), link_batch_size: 1, has_thumbnail: true });
+  w.listRows = [other(1), other(2)];
+  w.listTotal = 9;
+  return { w, self };
+}
+const listSql = (w) => w.log.filter((l) => l.name === null && /^SELECT c\.candidate_id, c\.directus_files_id/.test(l.sql));
+
+test('GET /siblings: the other pictures linked to the same record, with the list\'s rows, their total and the list\'s own scope', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  const res = await call('GET /siblings', { user: U.alice, query: { file: self.candidate_id, limit: '2' } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.meta, { total: 9, limit: 2, offset: 0, acceptable: null });
+  assert.equal(res.body.data.length, 2);
+  assert.equal(res.body.data[0].linked_record_id, S1);
+  assert.equal(res.body.data[0].linked_label, `CODE-${S1.slice(-4)}`);
+  assert.equal(res.body.data[0].has_thumbnail, true);
+  const [page] = listSql(w);
+  assert.match(page.sql, /c\.state = 'linked'/);
+  assert.match(page.sql, /c\.kind = ANY\(/);
+  assert.match(page.sql, /rj\.sample_id = \?::uuid/);
+  assert.ok(page.bindings.includes('sem_image,image') && page.bindings.includes(S1) && page.bindings.includes(self.candidate_id), 'the record comes from the file\'s own junction row');
+  assert.ok(page.bindings.includes(P.alice), 'the caller\'s own folders, as in the list');
+  assert.deepEqual(page.bindings.slice(-2), [2, 0]);
+});
+
+test('GET /siblings: nothing for a file that is not linked to a sample, operation or test, or whose link is gone, or a record the caller cannot read', async () => {
+  const { w } = linkedWorld();
+  const { call } = setup(w);
+  const empty = async (id) => {
+    const res = await call('GET /siblings', { user: U.alice, query: { file: id } });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.data, []);
+    assert.equal(res.body.meta.total, 0);
+  };
+  await empty(add(w, cand()).candidate_id);
+  await empty(add(w, cand({ state: 'linked', kind: 'surface_scan', linked_collection: 'surface_scans', linked_junction_id: ID(6001), link_batch_id: ID(90) })).candidate_id);
+  // the junction row was removed in Data Studio, or repointed at another file
+  const orphan = add(w, cand({ state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5002), link_batch_id: ID(91) }));
+  await empty(orphan.candidate_id);
+  w.junctions.sample_data_files.push({ id: ID(5002), sample_id: S1, directus_files_id: ID(1) });
+  await empty(orphan.candidate_id);
+  // Alice cannot read the Restricted sample S2
+  const hidden = add(w, cand({ state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5003), link_batch_id: ID(92) }));
+  w.junctions.sample_data_files.push({ id: ID(5003), sample_id: S2, directus_files_id: hidden.directus_files_id });
+  await empty(hidden.candidate_id);
+  assert.equal(listSql(w).length, 0, 'none of these ran the list query');
+});
+
+test('GET /siblings: a file the caller cannot see, or an id that is not one, is 404; a bad limit is 400; no login is 401', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  for (const [file, user] of [[self.candidate_id, U.bob], [ID(999), U.alice], ['nope', U.alice], [undefined, U.alice]]) {
+    const res = await call('GET /siblings', { user, query: { file } });
+    assert.equal(res.statusCode, 404, String(file));
+    assert.equal(codeOf(res), 'NOT_FOUND');
+  }
+  assert.equal((await call('GET /siblings', { user: U.alice, query: { file: self.candidate_id, limit: 'many' } })).statusCode, 400);
+  assert.equal((await call('GET /siblings', { query: { file: self.candidate_id } })).statusCode, 401);
+  assert.equal(listSql(w).length, 0);
+});
+
+test('GET /siblings: an administrator reading someone else\'s file sees that owner\'s siblings; a team file lists the team\'s', async () => {
+  const { w, self } = linkedWorld();
+  const { call } = setup(w);
+  const asAdmin = await call('GET /siblings', { user: U.admin, admin: true, query: { file: self.candidate_id } });
+  assert.equal(asAdmin.statusCode, 200);
+  const [page] = listSql(w);
+  assert.match(page.sql, /c\.owner_person_id = \?/);
+  assert.ok(page.bindings.includes(P.alice), 'the file\'s owner, not the administrator');
+  assert.ok(!page.bindings.includes(P.admin));
+  // a team's file read by a team member: the member's default scope already holds the team
+  const teamFile = add(w, cand({ owner_person_id: null, owner_team_id: TEAM, state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5004), link_batch_id: ID(93) }));
+  w.junctions.sample_data_files.push({ id: ID(5004), sample_id: S1, directus_files_id: teamFile.directus_files_id });
+  await call('GET /siblings', { user: U.alice, query: { file: teamFile.candidate_id } });
+  const second = listSql(w).at(-1);
+  assert.match(second.sql, /c\.owner_team_id = ANY/);
+  assert.ok(second.bindings.includes(TEAM));
 });

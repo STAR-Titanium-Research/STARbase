@@ -9,6 +9,7 @@ import {
 	type AcceptPair,
 } from './inboxBulk';
 import { listPlan, nameOf, suggestionOf, type InboxFilters } from './inboxModel';
+import { CHANGE_HALF_DONE } from './linkedModel';
 import { SCAN_ALREADY_TEXT, SCAN_NOT_LINKED, scanAddedText, scanErrorText, scanLinkItem, type ScanAddForm } from './inboxScan';
 
 // The confirm of Accept all: what the dry run said (the count, the files and where they go, what it would leave), and whether it is still asking.
@@ -399,6 +400,26 @@ export function createInbox(deps: InboxDeps) {
 		}
 	}
 
+	/**
+	 * Change the record a LINKED file is on. The endpoint links only a file that is new, so this undoes the file's link batch and then links the file again (the
+	 * page offers it only for a batch of one: an undo takes the whole batch). If the undo works and the new link is refused, the file is back in the Inbox, unlinked,
+	 * and the notice says so. Imaging corrections the person made by hand go with the undo.
+	 */
+	async function relink(file: FoundFile, collection: string, recordId: string): Promise<Outcome> {
+		if (!file.link_batch_id) return { ok: false, message: 'This file has no link to change.' };
+		const undone = await undo({ kind: 'batch', id: file.link_batch_id });
+		if (!undone.ok) return undone;
+		const made = await link(file, collection, recordId);
+		if (made.ok) {
+			// the file is on its new record: the Recently linked list names it there
+			await load();
+			return made;
+		}
+		const text = `${CHANGE_HALF_DONE}: ${made.message}`;
+		say({ tone: 'bad', text });
+		return { ok: false, message: text };
+	}
+
 	async function rescanNow(): Promise<Outcome> {
 		rescanning.value = true;
 		try {
@@ -421,7 +442,7 @@ export function createInbox(deps: InboxDeps) {
 	return {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
 		preview, acceptCount, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
-		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
+		load, toggleOther, loadMoreMain, loadMoreOther, link, relink, linkSuggested, addScan, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
 		say,
 		dismissNotice: () => say(null),
 		cancel: () => {

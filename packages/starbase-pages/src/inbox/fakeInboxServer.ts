@@ -215,6 +215,10 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		f.state === 'linked' ? 'linked' : f.state === 'dismissed' ? 'dismissed' : f.state === 'new' && f.origin === 'backlog' ? 'older' : f.state === 'new' ? 'new' : 'gone';
 	const folderOf = (p: string) => p.slice(0, p.lastIndexOf('/') + 1);
 
+	/** A linked row as the list sends it: with the size of its link batch (a test may set link_batch_size itself). */
+	const withBatchSize = (f: FoundFile): FoundFile =>
+		f.state === 'linked' && f.link_batch_id && f.link_batch_size === undefined ? { ...f, link_batch_size: files.filter((x) => x.state === 'linked' && x.link_batch_id === f.link_batch_id).length } : f;
+
 	function matching(params: Record<string, any>): FoundFile[] {
 		const tab = params.tab ?? 'new';
 		const kinds = typeof params.kind === 'string' ? params.kind.split(',') : null;
@@ -417,7 +421,17 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 			const offset = Number(p.offset ?? 0);
 			const limit = Number(p.limit ?? 50);
 			const asked = p.acceptable === '1' || p.acceptable === 1;
-			return ok(rows.slice(offset, offset + limit), { meta: { total: rows.length, limit, offset, ...(asked ? { acceptable: plan(p).entries.length } : {}) } });
+			return ok(rows.slice(offset, offset + limit).map(withBatchSize), { meta: { total: rows.length, limit, offset, ...(asked ? { acceptable: plan(p).entries.length } : {}) } });
+		},
+		// The other pictures linked to the same sample, operation or test as the file, newest link first (the list's visibility: every file here is the caller's).
+		'get /d1-inbox/siblings': (c) => {
+			const p = c.params ?? {};
+			const self = files.find((f) => f.candidate_id === p.file);
+			if (!self) throw err(404, 'NOT_FOUND', 'That file is not in your inbox.', { candidate_id: p.file });
+			const limit = Number(p.limit ?? 7);
+			const on = self.state === 'linked' && !!self.linked_record_id && self.linked_collection !== 'surface_scans';
+			const rows = on ? files.filter((f) => f !== self && f.state === 'linked' && f.linked_collection === self.linked_collection && f.linked_record_id === self.linked_record_id && (f.kind === 'sem_image' || f.kind === 'image')) : [];
+			return ok(rows.slice(0, limit).map(withBatchSize), { meta: { total: rows.length, limit, offset: 0, acceptable: null } });
 		},
 		'post /d1-inbox/link': (c) => ok(doLink((c.body as any).items, (c.body as any).items.length === 1 ? 'manual' : 'bulk')),
 		'post /d1-inbox/accept-all': (c) => {
@@ -473,7 +487,7 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 					delete f.linked_insert_id;
 					delete f.linked_edge_id;
 				} else junctions.delete(`${f.linked_collection}:${f.linked_record_id}:${f.directus_files_id}`);
-				Object.assign(f, { state: 'new', link_kind: null, link_batch_id: null, decided_at: null, linked_collection: null, linked_record_id: null, linked_label: null });
+				Object.assign(f, { state: 'new', link_kind: null, link_batch_id: null, decided_at: null, linked_collection: null, linked_record_id: null, linked_label: null, linked_title: null, link_batch_size: undefined });
 			}
 			return ok({ link_batch_id: id, undone: rows.length });
 		},

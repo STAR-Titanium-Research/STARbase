@@ -105,12 +105,18 @@ const BACKLOG_EXACT = row({
 const LINKED_AUTO = row({
   candidate_id: ID(1008), directus_files_id: ID(3008), name: '3fa9c1d2_A2.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A2.tif', decided_at: at('2026-10-14T16:00:00.000Z'),
-  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
+  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, link_batch_size: 1, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
+});
+// Another picture linked to the same sample (a sibling of LINKED_AUTO), in a batch of two.
+const LINKED_SIBLING = row({
+  candidate_id: ID(1015), directus_files_id: ID(3015), name: '3fa9c1d2_A3.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
+  match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A3.tif', decided_at: at('2026-10-14T15:00:00.000Z'),
+  link_kind: 'bulk', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(904), link_batch_size: 2, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
 });
 const LINKED_MANUAL = row({
   candidate_id: ID(1009), directus_files_id: ID(3009), name: 'S-0042_notes.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null, state: 'linked',
   match_strength: 'code', matches: named(S_EDIT, 'S-0042', 'code'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/S-0042_final.pdf', decided_at: at('2026-10-14T17:30:00.000Z'),
-  link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
+  link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), link_batch_size: 1, decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
 });
 const LINKED_SCAN = row({
   candidate_id: ID(1012), directus_files_id: ID(3012), name: 'H13A-2_fC_worn.al3d', mime_type: null, kind: 'surface_scan', kind_confidence: '1.00', state: 'linked',
@@ -133,6 +139,8 @@ const INFO = {
   readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`, `insert_edges:${EDGE}`]),
   labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)'], [`insert_edges:${EDGE}`, 'H13A-#2-fC']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
+  // the second line of a linked record (a sample's nickname)
+  titles: new Map([[`physical_samples:${S_EDIT}`, 'Ti-6Al-4V fatigue bar']]),
   // a surface scan the list names: the edge (or insert) it was added to
   scans: new Map([[SCAN, { insert_id: null, edge_id: EDGE }]]),
 };
@@ -216,6 +224,12 @@ export function buildFixtures() {
   put('files_older', list([BACKLOG_EXACT], { tab: 'older', owner: 'me', limit: '50' }));
   put('files_linked', list([LINKED_AUTO, LINKED_MANUAL], { tab: 'linked', link_kind: 'auto', limit: '20' }, 2));
   put('files_linked_surface_scan', list([LINKED_SCAN], { tab: 'linked', link_kind: 'manual', limit: '20' }, 1));
+  // GET /siblings: the other pictures on the record of a linked file (the list's rows), their total, and the refusal for a file the caller cannot see
+  const SIBLINGS = '/d1-inbox/siblings';
+  const siblingsReq = (file, limit = '7') => request('GET', SIBLINGS, { query: { file, limit } });
+  put('siblings', ok('GET /d1-inbox/siblings?file=<a linked file>', siblingsReq(LINKED_AUTO.candidate_id), shapeFiles([LINKED_SIBLING], INFO, { total: 12, limit: 7, offset: 0, acceptable: null })));
+  put('siblings_none', ok('GET /d1-inbox/siblings for a file that is the only picture on its record (or is not linked to a record)', siblingsReq(LINKED_SIBLING.candidate_id), shapeFiles([], INFO, { total: 0, limit: 7, offset: 0, acceptable: null })));
+  put('siblings_404', failure('a file the caller cannot see', siblingsReq(ID(1999)), ERRORS.notInInbox(ID(1999))));
   put('files_dismissed', list([DISMISSED], { tab: 'dismissed', limit: '50' }));
   put('files_team_folder', list([COPY, COPY_OF_OTHERS], { tab: 'new', owner: `team:${TEAM}`, folder: 'sem', from: '2026-10-01', to: '2026-10-15', limit: '50' }));
   put('files_empty', list([], { tab: 'new', limit: '50' }, 0));

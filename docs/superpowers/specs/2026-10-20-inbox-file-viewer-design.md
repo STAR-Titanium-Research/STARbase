@@ -40,6 +40,14 @@ files side by side and measure on them.
    `Enter` opens the view box, `M` Measure, `F` Fit, `C` Compare, `Esc` closes. Every control has a visible `:focus-visible` ring.
 10. **Nothing writes** except the existing link / dismiss actions, which keep their endpoints and their rules (an administrator can read but not change).
 
+## A linked file (added 2026-10-22)
+
+The maintainer chose the **Link card** and the **linked record strip with siblings** for a file that is linked. One shared `LinkCard.vue` and `LinkedSiblings.vue` appear in the sheet (between the picture and the facts) and in the view box page's left panel (`InboxFileRail`, under the actions, with "Linked to" under On this page); an unlinked file shows neither.
+
+- **Card.** "Linked to S-0042" (the record code is a mono, bold, dotted link), under it the record's second line (a sample's nickname, a test's type), who linked it, how and when; **Open sample / operation / test** (a surface scan opens its insert or edge), **Change…** (the Link dialog) and **Undo link** (an inline confirm). A record the person cannot read is not named.
+- **Undo takes the whole link batch.** The confirm says how many files go back (`link_batch_size`). **Change…** is an undo followed by a new link (the endpoint links only a new file), so it is offered only for a batch of one; the reason shows otherwise. A new link refused after the undo says the old one is already gone. Imaging corrections made by hand go with the undo (the settings follow the link).
+- **Strip.** "Linked to S-0042 · 12 images", up to six small pictures of the OTHER images on the same record (`GET /d1-inbox/siblings`, the list's visibility, so only the files the person could list anyway), "+N" for the rest. A click opens that picture (in the sheet when the list holds it, else its own page found under Recently linked); **Compare with…** makes the next click start Compare with it.
+
 ## Out of scope
 
 Full-size streaming, a manual scale entry, a kit-level `ViewRail`, the hover card (separate), the table layout of the list (separate), annotations.

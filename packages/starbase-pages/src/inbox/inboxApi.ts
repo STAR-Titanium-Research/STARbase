@@ -9,6 +9,8 @@
 //
 //   GET  /d1-inbox/summary              -> { data: InboxSummary } (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
 //   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, limit, offset, acceptable | null } }
+//   GET  /d1-inbox/siblings?file=<id>&limit=  -> { data: FoundFile[], meta: { total, limit } }: the OTHER pictures linked to the same sample, operation or test
+//                                       as that file (the list's own visibility); empty for a file with no such record; 404 for a file the caller cannot see
 //   GET  /d1-inbox/files/<id>/thumb | /preview  -> the picture itself (image/jpeg, not { data }), only for a file with has_thumbnail; 404 when the
 //                                       caller cannot see the file or it has none. Fetched as a blob with the signed-in session (loadPicture).
 //   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id } | ScanLinkItem] } -> { data: { link_batch_id, linked: <count>, items } };
@@ -44,7 +46,7 @@
 import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
 	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
-	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, Skipped,
+	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, SiblingsPage, Skipped,
 } from './inboxApiTypes';
 
 export type * from './inboxApiTypes';
@@ -139,6 +141,8 @@ export function parseFile(v: unknown): FoundFile | null {
 		linked_collection: str(r.linked_collection),
 		linked_record_id: str(r.linked_record_id),
 		linked_label: str(r.linked_label),
+		linked_title: str(r.linked_title),
+		link_batch_size: num(r.link_batch_size),
 		decided_by_name: str(r.decided_by_name),
 		duplicate_of_owner: parseDuplicateOwner(r.duplicate_of_owner),
 		owner: parseOwner(r.owner),
@@ -204,6 +208,17 @@ export const loadFiles = (api: HostApi, q: FilesQuery): Promise<FilesPage> =>
 			const files = rows.map(parseFile).filter((f: FoundFile | null): f is FoundFile => f !== null);
 			const meta = (body && typeof body === 'object' && !Array.isArray(body) ? body.meta : null) ?? {};
 			return { rows: files, total: num(meta.total) ?? files.length, acceptable: num(meta.acceptable) };
+		},
+	);
+
+/** The other pictures linked to the same record as `candidateId` (at most `limit`, newest link first) and their total. An older server has no such route: that is a 404, as for a file nobody may see. */
+export const loadSiblings = (api: HostApi, candidateId: string, limit: number): Promise<SiblingsPage> =>
+	call(
+		() => api.get(`${BASE}/siblings`, { params: { file: candidateId, limit } }),
+		(body) => {
+			const rows = (Array.isArray(body) ? body : Array.isArray(body.data) ? body.data : []).map(parseFile).filter((f: FoundFile | null): f is FoundFile => f !== null);
+			const meta = (body && typeof body === 'object' && !Array.isArray(body) ? body.meta : null) ?? {};
+			return { rows, total: num(meta.total) ?? rows.length };
 		},
 	);
 

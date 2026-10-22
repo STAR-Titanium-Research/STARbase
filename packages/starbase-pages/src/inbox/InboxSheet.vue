@@ -3,20 +3,27 @@ import { computed } from 'vue';
 import { useExplorerHost } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import { IMAGE_KINDS, extractedText, folderText, hasThumbnail, kindIcon, kindLabel, metaText, nameOf, ownerText, primaryAction, settingsOf, suggestionOf } from './inboxModel';
+import LinkCard from './LinkCard.vue';
+import LinkedSiblings from './LinkedSiblings.vue';
+import { hasSiblings } from './linkedModel';
 import ScaleBar from './ScaleBar.vue';
 import SemSettingsList from './SemSettingsList.vue';
 import { sheetScaleBar } from './sheetScale';
 import { usePicture } from './usePicture';
+import { useSiblings } from './useSiblings';
 
 // The sheet beside the Inbox list (spec 2026-10-20-inbox-file-viewer-design.md decision 2): the selected file's picture (the stored preview, with a scale bar
 // over it when the file says its pixel size), what the crawler read, and Link to..., Dismiss and Open in view box. It only reports what was asked; the page
-// does it. A file with no picture still shows its facts; a picture still loading shimmers, a failed one says so and offers Retry (decision 8).
+// does it. A linked file also shows its Link card and the strip of the other pictures on its record (LinkCard, LinkedSiblings), between the picture and the
+// facts. A file with no picture still shows its facts; a picture still loading shimmers, a failed one says so and offers Retry (decision 8).
 const props = defineProps<{
 	file: FoundFile;
 	/** The page's tab: New and Older files offer Link to... and Dismiss; Dismissed offers Restore; Recently linked offers neither. */
 	tab: 'new' | 'older' | 'linked' | 'dismissed';
 	showOwner: boolean;
 	busy: boolean;
+	/** An Undo is running (the page's one at a time): the Link card cannot be pressed. */
+	undoing?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'close'): void;
@@ -24,9 +31,17 @@ const emit = defineEmits<{
 	(e: 'dismiss'): void;
 	(e: 'restore'): void;
 	(e: 'open-box'): void;
+	/** The Link card: Open the record's page, Change… (the Link dialog), Undo link. */
+	(e: 'open-record', route: string): void;
+	(e: 'change'): void;
+	(e: 'undo'): void;
+	/** The strip: a picture of the same record was chosen (open it) or chosen to compare with. */
+	(e: 'open-sibling', candidateId: string): void;
+	(e: 'compare-sibling', candidateId: string): void;
 }>();
 
 const host = useExplorerHost();
+const siblings = useSiblings(host.api, () => (hasSiblings(props.file) ? props.file.candidate_id : null));
 const withPicture = computed(() => hasThumbnail(props.file));
 const { state, url, retry } = usePicture(host.api, () => (withPicture.value ? props.file.candidate_id : null), 'preview', () => true, { priority: true });
 
@@ -80,6 +95,11 @@ const linkLabel = computed(() => {
 			<span v-if="meta" class="meta">{{ meta }}</span>
 			<span v-if="showOwner" class="meta">{{ ownerText(file) }}</span>
 		</div>
+
+		<template v-if="file.state === 'linked'">
+			<LinkCard :file="file" :busy="busy || !!undoing" @open="emit('open-record', $event)" @change="emit('change')" @undo="emit('undo')" />
+			<LinkedSiblings :file="file" :rows="siblings.rows.value" :total="siblings.total.value" @open="emit('open-sibling', $event)" @compare="emit('compare-sibling', $event)" />
+		</template>
 
 		<SemSettingsList v-if="settings.length" :rows="settings" />
 		<p v-else-if="read" class="read" data-test="sheet-read">{{ read }}</p>

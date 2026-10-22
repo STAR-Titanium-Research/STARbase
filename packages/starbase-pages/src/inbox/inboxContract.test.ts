@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
-	InboxApiError, acceptAll, addIgnored, correctSemSetting, dismissFiles, filesParams, getSemSettings, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSummary, parseFile,
+	InboxApiError, acceptAll, addIgnored, correctSemSetting, dismissFiles, filesParams, getSemSettings, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSiblings, loadSummary, parseFile,
 	removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
 	type FilesQuery, type FoundFile,
 } from './inboxApi';
@@ -24,6 +24,7 @@ import {
 	type InboxFilters,
 } from './inboxModel';
 import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem, scanTarget, suggestedScanItem, type ScanAddForm, type ScanItemOption } from './inboxScan';
+import { linkCardView, siblingsView } from './linkedModel';
 import { createAutoLink, RECENT_LIMIT } from './useAutoLink';
 import { createInbox } from './useInbox';
 import { createInboxAdmin } from './useInboxAdmin';
@@ -1306,6 +1307,44 @@ describe('ignored folders (GET / POST /d1-inbox/ignored-folders, DELETE /d1-inbo
 			expect(p.changed, name).not.toHaveBeenCalled();
 		}
 		expect(errorOf(fx('ignored_post_409_too_many_rules')).extensions.limit).toBe(200);
+	});
+});
+
+// ---- GET /siblings and the linked file's Link card ---------------------------------------------------------------------------------------
+
+describe('GET /d1-inbox/siblings', () => {
+	it('the other pictures on the record: the rows are read like the list rows, with their total, and the request is the fixture one', async () => {
+		const f = fx('siblings');
+		const { api, calls } = only(f);
+		const page = await loadSiblings(api, f.request.query!.file, Number(f.request.query!.limit));
+		expect(calls[0]).toMatchObject({ method: 'GET', path: '/d1-inbox/siblings' });
+		expect(stringified(calls[0].params)).toEqual(f.request.query);
+		expect(page.total).toBe(12);
+		expect(ids(page.rows)).toEqual(f.body.data.map((r: any) => r.candidate_id));
+		expect(page.rows[0]).toMatchObject({ state: 'linked', linked_label: 'S-0042', linked_title: 'Ti-6Al-4V fatigue bar', link_batch_size: 2, has_thumbnail: true });
+		const strip = siblingsView(page.rows, page.total)!;
+		expect(strip).toMatchObject({ more: 11, count: 13, countText: '13 images' });
+	});
+
+	it('a file with no other picture: no rows, no strip; a file the caller cannot see is a 404 InboxApiError', async () => {
+		const none = fx('siblings_none');
+		const page = await loadSiblings(only(none).api, none.request.query!.file, 6);
+		expect(page).toEqual({ rows: [], total: 0 });
+		expect(siblingsView(page.rows, page.total)).toBeNull();
+		const gone = fx('siblings_404');
+		await expect(loadSiblings(only(gone).api, gone.request.query!.file, 6)).rejects.toMatchObject({ name: 'InboxApiError', status: 404, code: 'NOT_FOUND', message: gone.body.errors[0].message });
+	});
+
+	it('the Link card of the linked fixtures: the record, its title, who and when, the batch the Undo takes', async () => {
+		const rows = (await loadFiles(only(fx('files_linked')).api, {})).rows;
+		const auto = linkCardView(rows.find((r) => r.link_kind === 'auto')!)!;
+		expect(auto).toMatchObject({ lead: 'Linked to', code: 'S-0042', route: recordRoute('physical_samples', ID(101)), openLabel: 'Open sample', batch: 1, scan: false });
+		expect(auto.meta).toContain('Ti-6Al-4V fatigue bar');
+		expect(auto.meta).toContain('by Alice A · automatically');
+		expect(rows.find((r) => r.link_kind === 'manual')).toMatchObject({ linked_title: 'Ti-6Al-4V fatigue bar', link_batch_size: 1 });
+		const scan = (await loadFiles(only(fx('files_linked_surface_scan')).api, {})).rows[0];
+		expect(linkCardView(scan)).toMatchObject({ scan: true, openLabel: 'Open edge', route: recordRoute('insert_edges', ID(202)) });
+		expect(linkCardView((await loadFiles(only(fx('files_new')).api, {})).rows[0])).toBeNull();
 	});
 });
 
