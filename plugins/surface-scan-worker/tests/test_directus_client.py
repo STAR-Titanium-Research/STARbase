@@ -30,58 +30,42 @@ def http(monkeypatch):
     return m
 
 
-def test_patch_with_a_version_sends_the_occ_filter_not_a_body_field(http):
-    http.patch.return_value = _resp(body={"data": {"scan_id": SCAN}})
-    dc.patch_scan(SCAN, {"render_status": "rendering"}, version=3)
-    args, kwargs = http.patch.call_args
-    assert args[0].endswith(f"/items/surface_scans/{SCAN}")
-    assert kwargs["params"] == {"filter[version][_eq]": "3"}
-    assert kwargs["json"] == {"render_status": "rendering"}
+def test_claim_posts_the_version_read_to_the_claim_route(http):
+    http.post.return_value = _resp(
+        body={
+            "data": {
+                "scan_id": SCAN,
+                "render_status": "rendering",
+                "version": 4,
+                "directus_files_id": "f1",
+            }
+        }
+    )
+    out = dc.claim_scan(SCAN, 3)
+    args, kwargs = http.post.call_args
+    assert args[0].endswith(f"/d1-surface-scan/{SCAN}/claim")
+    assert kwargs["json"] == {"version": 3}
     assert kwargs["headers"]["X-Actor-Identity"] == "surface-scan-worker"
+    assert out["directus_files_id"] == "f1"
+    http.patch.assert_not_called()  # never a PATCH: Directus ignores a version filter on it
 
 
-def test_a_stale_version_is_a_conflict(http):
-    http.patch.return_value = _resp(body={"data": None})
+def test_a_409_from_the_claim_route_is_a_conflict(http):
+    http.post.return_value = _resp(status=409)
     with pytest.raises(dc.VersionConflictError):
-        dc.patch_scan(SCAN, {"render_status": "rendering"}, version=3)
+        dc.claim_scan(SCAN, 3)
 
 
-def test_update_scan_rereads_and_retries_after_a_conflict(http):
-    http.get.side_effect = [
-        _resp(body={"data": {"version": 1, "render_status": "rendering"}}),
-        _resp(body={"data": {"version": 2, "render_status": "rendering"}}),
-    ]
-    http.patch.side_effect = [
-        _resp(body={"data": None}),
-        _resp(body={"data": {"ok": 1}}),
-    ]
-    out = dc.update_scan(SCAN, lambda row: {"render_status": "done"})
-    assert out == {"data": {"ok": 1}}
-    versions = [
-        c.kwargs["params"]["filter[version][_eq]"] for c in http.patch.call_args_list
-    ]
-    assert versions == ["1", "2"]
+def test_a_claim_the_route_refuses_otherwise_raises(http):
+    http.post.return_value = _resp(status=403)
+    with pytest.raises(requests.HTTPError):
+        dc.claim_scan(SCAN, 3)
 
 
-def test_update_scan_gives_up_after_repeated_conflicts(http):
-    http.get.return_value = _resp(body={"data": {"version": 1}})
-    http.patch.return_value = _resp(body={"data": None})
-    with pytest.raises(dc.VersionConflictError, match="gave up"):
-        dc.update_scan(SCAN, lambda row: {"x": 1}, max_attempts=3)
-    assert http.patch.call_count == 3
-
-
-def test_update_scan_with_nothing_to_write_does_not_patch(http):
-    http.get.return_value = _resp(body={"data": {"version": 1}})
-    assert dc.update_scan(SCAN, lambda row: None) is None
-    http.patch.assert_not_called()
-
-
-def test_update_scan_never_writes_blind(http):
-    http.get.return_value = _resp(body={"data": {"render_status": "rendering"}})
-    with pytest.raises(ValueError, match="no version"):
-        dc.update_scan(SCAN, lambda row: {"x": 1})
-    http.patch.assert_not_called()
+def test_a_claim_response_without_data_is_an_error(http):
+    http.post.return_value = _resp(body={})
+    with pytest.raises(ValueError, match="claim response"):
+        dc.claim_scan(SCAN, 3)
 
 
 def test_list_scans_filters_by_status_and_age(http):

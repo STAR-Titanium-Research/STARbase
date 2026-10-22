@@ -1609,6 +1609,23 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
 
 ### Surface scans follow their file's owner (migration 205, ADR-0023)
 
+> **Scratch-stack run, 2026-10-22 (does not tick the items below).** Run in a cloud session on a scratch stack, not the lab's: Directus
+> 11.17.4 from npm with all of `core/extensions`, Postgres 16 with migrations 1 to 213, MinIO built from source with the repo's
+> `infra/minio/surface_reader.sh` policy, the worker (rq + poller) on a copy of a real `.al3d` (27 MB, 1840 x 1840 px, rendered to 920 x 920
+> in the viewer's grid format), and three accounts (owner, other member, Lab Viewer) plus an administrator. Results: SS4 and SS5 hold at
+> the API for every route listed (REST fields, filters, sorts, `aggregate`/`groupBy`, `search`, `alias`, `$FOLLOW`, `directus_revisions`,
+> `directus_activity`, GraphQL incl. introspection and `_aggregated`, `/utils/export` csv and json with hidden fields, websocket
+> subscribe); a team-owned file is visible to an active member and not to an inactive one; SS6's NOTICE count matched a hand count and the
+> `down`/`up` round trip kept every value (md5 of the twelve); SS7's token probe answered `409` for an administrator and exited `1` for a
+> member and for an unknown token, and warned (no exit) with Directus unreachable; the endpoint served grid, meta and thumb with 403 answered
+> before 304, an administrator's read wrote one `admin_read` log row, a missing object answered `OBJECT_MISSING`, and Render
+> again re-rendered. **It found one bug, fixed in the same PR:** on Directus 11.17 a `filter[version][_eq]` on a single-item `PATCH` does
+> not gate the write (the filter only applies to the read-back, the answer is an empty `204`), so the worker's claim crashed on its first
+> real render and could not have been a compare-and-set; the claim is now `POST /d1-surface-scan/<id>/claim` (8 parallel claims: one `200`,
+> seven `409`). **Not covered, still to do on the lab stack:** the Docker image `directus/directus:11` (floating tag) and the lab's data,
+> STARbase in a browser (the panel, the add dialog, the 3D view on a GPU: SS1, SS2, SCAN-UI1/2), the SMB share and its read-only mount,
+> the inbox crawler stamping, and the worker's webhook path (only the poller was running).
+
 Needs the stack with the worker, MinIO, the archive share, two member accounts (A and B), one administrator, one Lab Viewer and a
 team folder. Every item below is code-complete and unit- and Postgres-tested; what only the real Directus and share can show is
 below. "Since" is the surface scan privacy PR (pending).
@@ -1655,7 +1672,7 @@ below. "Since" is the surface scan privacy PR (pending).
   endpoint, worker and panel read). Since: the surface scan privacy PR (pending).
 - [ ] **SS7 — The worker through the result route, and Render again by a non-owner refused.** With the worker on its administrator
   token and the share mounted `:ro`: add a scan of a real `.al3d` as A. Expect `pending`, `rendering`, then `done` as SS1 (the
-  worker claims through Directus and reports through `POST /d1-surface-scan/<id>/result`, so there is no render value on the
+  worker claims through `POST /d1-surface-scan/<id>/claim` and reports through `POST /d1-surface-scan/<id>/result`, so there is no render value on the
   `surface_scans` row and one row in `d1_private.surface_scan_renders`); the worker's log shows no database credential in use. Make a
   render fail (a PDF renamed to `.al3d`): `done` is not reached, `render_status` is `failed` and the error shows to A, not to B. Stop
   the worker mid-render and start it: the stuck row is failed through the result route and Render again requeues it. Call the result

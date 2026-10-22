@@ -98,19 +98,24 @@ class FakeWorld:
     def get_scan(self, scan_id):
         return dict(self.rows[scan_id])
 
-    def patch_scan(self, scan_id, payload, version=None):
+    def claim_scan(self, scan_id, version):
+        """The claim route: 409 unless the row is still pending at the version read."""
         row = self.rows[scan_id]
-        self.history.append((scan_id, dict(payload)))
+        self.history.append((scan_id, {"render_status": "rendering"}))
         if self.conflicts_to_inject:
             self.conflicts_to_inject -= 1
             row["version"] += 1
             raise VersionConflictError("stale")
-        if version is not None and row["version"] != version:
+        if row["version"] != version or row["render_status"] != "pending":
             raise VersionConflictError("stale")
-        assert "version" not in payload  # never in the body
-        row.update(payload)
+        row["render_status"] = "rendering"
         row["version"] += 1
-        return {"data": dict(row)}
+        return {
+            "scan_id": scan_id,
+            "render_status": "rendering",
+            "version": row["version"],
+            "directus_files_id": row["directus_files_id"],
+        }
 
     def post_result(self, scan_id, payload, version, files_id):
         """The result route: one transaction, 409 unless the version matches, the row is rendering and
@@ -180,7 +185,7 @@ def world(tmp_path, monkeypatch):
     w = FakeWorld(root)
     for name in (
         "get_scan",
-        "patch_scan",
+        "claim_scan",
         "post_result",
         "get_file",
         "get_fingerprint",
