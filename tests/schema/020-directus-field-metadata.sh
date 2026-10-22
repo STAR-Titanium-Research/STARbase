@@ -21,7 +21,7 @@ echo "== Directus field metadata is complete =="
 run_eq "every inline parameter column has a directus_fields row" \
     "SELECT count(*) FROM information_schema.columns AS c
      WHERE c.table_schema = 'public'
-       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am|conform)_')
          OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
        AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name)" \
     "0"

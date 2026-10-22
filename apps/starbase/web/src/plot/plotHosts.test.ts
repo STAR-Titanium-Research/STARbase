@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
-import { configureLinks, resetLinks, starbaseLinks } from '@d1/ui';
+import { LAB_VIEWER_ROLE_ID, configureLinks, resetLinks, starbaseLinks } from '@d1/ui';
 import { forceUser, starbaseFastHost, starbaseForceHost, type PlotDeps } from './plotHosts';
 
 const D1 = 'https://d1-server.tail54eeb6.ts.net';
@@ -77,5 +77,23 @@ describe('the FAST plotter in STARbase', () => {
 		expect(host.api).toBe(d.api);
 		host.openRecord('manufacturing_operations', 'o1');
 		expect(d.router.push).toHaveBeenCalledWith('/operations/o1');
+	});
+	it('answers whether the user may change a record, as the Operation page does', async () => {
+		const { d } = deps();
+		vi.mocked(d.api.get).mockResolvedValue({ data: { data: { update: { access: false } } } });
+		const host = starbaseFastHost(d);
+		expect(await host.canUpdate!('manufacturing_operations', 'o1')).toBe(false);
+		expect(d.api.get).toHaveBeenCalledWith('/permissions/me/manufacturing_operations/o1');
+		vi.mocked(d.api.get).mockResolvedValue({ data: { data: { update: { access: true } } } });
+		expect(await host.canUpdate!('manufacturing_operations', 'o1')).toBe(true);
+	});
+	it('answers false for a Lab Viewer without asking, and null when the answer is unknown', async () => {
+		const { d } = deps();
+		const viewer = starbaseFastHost({ ...d, session: { user: ref({ id: 'u2', role: LAB_VIEWER_ROLE_ID }) } as unknown as PlotDeps['session'] });
+		vi.mocked(d.api.get).mockClear();
+		expect(await viewer.canUpdate!('manufacturing_operations', 'o1')).toBe(false);
+		expect(d.api.get).not.toHaveBeenCalled();
+		vi.mocked(d.api.get).mockRejectedValue(new Error('boom'));
+		expect(await starbaseFastHost(d).canUpdate!('manufacturing_operations', 'o1')).toBeNull();
 	});
 });

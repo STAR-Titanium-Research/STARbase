@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-	CAMPAIGN_STATUS, DIAG_STATUS, FORCE_STATUS, SAMPLE_STATUS, TEST_DONE_STATUSES, TEST_GLYPH, TEST_RANK, TEST_STATUS,
+	CAMPAIGN_STATUS, CONFORM_STATUS, DIAG_STATUS, FORCE_STATUS, SAMPLE_STATUS, TEST_DONE_STATUSES, TEST_GLYPH, TEST_RANK, TEST_STATUS,
 	TEST_STATUS_ORDER, humanise, statusStyle,
 } from './status';
 
 describe('vocabularies', () => {
+	it('covers the Conform run states, worded and toned', () => {
+		expect(Object.keys(CONFORM_STATUS)).toEqual(['no_log', 'no_window', 'done', 'error']);
+		expect(statusStyle('conform', 'no_window')).toEqual({ label: 'No run window', tone: 'warning' });
+		expect(statusStyle('conform', 'done')).toEqual({ label: 'Window set', tone: 'success' });
+	});
+
 	it('covers the whole test-session lifecycle', () => {
 		expect(Object.keys(TEST_STATUS)).toEqual([
 			'registered',

@@ -14,8 +14,8 @@ import { isReserved, type DraftKind, type FieldDef as DirectusField } from '@d1/
 /** The references that ARE the setup: the method or test type and what it is carried out with (machine, tool, edge, operator). */
 export const SETUP_REFERENCES: readonly string[] = ['method_id', 'process_category', 'machining_operation_subtype', 'test_type', 'test_category', 'equipment_id', 'tool_id', 'insert_edge_id', 'operator_person_id'];
 
-/** The groups of the form that hold process settings: cutting, tooling, heat treatment, deformation, additive, the FAST machine settings, and a test type's parameters (`*_params`). */
-const SETTINGS_GROUP = /^(grp_cutting|grp_tooling|grp_heat_treatment|grp_deformation|grp_additive|sintering_machine_group|grp_[a-z_]*_params|grp_(optical_microscopy|sem|xrd|tem|alicona|clemx|dct|ct_scan|hardness|charpy|tensile|compression|tribology|fatigue|creep|dma))$/;
+/** The groups of the form that hold process settings: cutting, tooling, heat treatment, deformation, additive, Conform, the FAST machine settings, and a test type's parameters (`*_params`). */
+const SETTINGS_GROUP = /^(grp_cutting|grp_tooling|grp_heat_treatment|grp_deformation|grp_additive|grp_conform|sintering_machine_group|grp_[a-z_]*_params|grp_(optical_microscopy|sem|xrd|tem|alicona|clemx|dct|ct_scan|hardness|charpy|tensile|compression|tribology|fatigue|creep|dma))$/;
 
 /** The groups that hold what a run produced or who, when and where it was: results, QA readings, capture flags, legacy and imported data, notes and files, links, the sample prep recipe. */
 const NOT_SETTINGS_GROUP = /(_results?$|^grp_legacy$|^grp_capture$|^grp_notes_files$|^grp_related$|^grp_what$|^grp_who_where$|^grp_sample_prep$|^sintering_qa_group$)/;
@@ -31,6 +31,8 @@ const NEVER = new Set([
 	'recorded_metadata', 'machining_experiment_sheet_url', 'machining_chips_ref_code', 'machining_chips_collected', 'machining_force_captured', 'machining_tacho_used',
 	// files and where they are
 	'gcode_file', 'nc_program_file_uri', 'nc_program_text', 'force_file_id', 'file_storage_pointer', 'file_size_gb', 'data_file_uri', 'data_file_size_gb', 'plot_uris', 'capture_software', 'capture_frequency_khz',
+	// a Conform run's own readings and results (the feedstock and setpoints are the recipe; what went in and came out is this run's)
+	'conform_feed_mass_g', 'conform_extrusion_length_mm', 'conform_extrusion_mass_g', 'conform_yield_pct', 'conform_flash_mass_g',
 	// results and pipeline status
 	'summary_stats', 'status',
 	// who and which sample

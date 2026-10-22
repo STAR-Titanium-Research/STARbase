@@ -1570,6 +1570,21 @@ Needs the server half of PR 2 (the four kinds in `d1-bulk-actions`). Use a copy 
 - [ ] **BA17 — Revert, as an administrator, on real rows.** Pick an applied action that is older than 60 seconds (assign a team on a copy). **Revert** opens a dialog that names the action, who ran it and when, says "Reverting puts N samples back as they were before", warns that records changed since are skipped, and that a revert cannot be reverted; focus starts on **Cancel**; Escape closes it and focus returns to **Revert**. Confirm **Revert N samples**: the dialog shows the per-record result, the ones not put back first (Changed since, Refused with the server's reason, Failed), then those Reverted, and focus lands on **Close**. Edit one sample's owner by hand before confirming: that row says Changed since and the rest are put back. The list reloads: the original is Reverted or Partly reverted and a "Revert of …" line sits on top. A Partly reverted action still offers Revert, with the button "Revert the rest" (it tries only the rows not yet put back); a Reverted action, an Undone action and a revert line offer none.
 - [ ] **BA18 — Revert failures and the screen reader.** Revert an action that was already undone from its toast in another tab: the dialog stays open and says "The revert failed: … The list has been reloaded; check it before you try again.", and the line no longer offers Revert. Stop Directus with the panel open and press Reload or Show more: the message says what failed and what to do, and the lines already shown stay. Screen reader: the dialog is announced with its title, the result is read when it appears, Tab and Shift+Tab stay inside, the badge text and counts are readable in the light and dark themes, and at phone width the table scrolls inside its own box.
 
+### Conform runs, STARbase panels (conform runs plan, stream D)
+Needs migrations 207 to 209 applied (the `conform` category, `conform_logs`, `conform_run_data`), a Conform operation (method CF) and the 2025-03-17 TiSwarf log CSV. Check as an owner of the run, and once as a reader who can read the run but not the log.
+
+- [ ] **CFS1 — Operation page, Conform run section.** Open a Conform run with no log: the page has a **Conform run** entry in "On this page" and a section that says "No Conform log yet" with **Upload a log** and **Use a log already uploaded**. Upload the TiSwarf CSV: the section reloads at once with status Done, the window equal to the whole log, the summary, the energy and the steps. Expect the whole-log energy to match the spreadsheet (motor 44.57, IPS 0.78, cooling 0.17 kWh on sheet "2and10rpm2first"), times in UK clock time, and the operation's date filled from the log if it was empty.
+- [ ] **CFS2 — Run windows, and the overlap refusal.** On the run, change the window start and end (UK clock times) and press **Set run window**: the summary, energy and steps change to the new window, and the wheel speed and IPS setpoint fields are filled from the first step if they were empty. Then on a second Conform run use **Use a log already uploaded** and pick the same log: it starts with "Run window not set". Give it a window that overlaps the first run's: the section shows the database's refusal naming the first run's operation code; a window that only touches it (starts exactly where the first ends) is accepted.
+- [ ] **CFS3 — A log file that answers 403.** Logs are readable by every Lab Member and Lab Viewer (migration 210), so the log row is never the problem; the file is. Make the normalised CSV of a log unreadable for one person (an administrator sets an owner on that file in Directus Files so that the person is not among its readers), then open a run of that log as that person: the section shows the status, the window, the summary and the steps, and "Conform log not visible to you" where the trace would be, only for that 403; stop MinIO or rename the stored file and the same place says "Could not load the Conform log" instead. There are no editing controls for a reader.
+- [ ] **CFS4 — Recompute and Copy as CSV.** **Copy as CSV** on the steps, then paste into a spreadsheet: one header row and one row per step, UK clock times. After bumping the power constants version (or on a run whose summary predates versions) the section offers **Recompute**; pressing it refreshes the summary and the whole-log totals.
+- [ ] **CFS5 — Process map and list buttons.** On `/map`, a Conform run with a window shows "Conform run data" in its hover card and the rail with a small trace of wheel speed and Tooling 1 over the run window only (not the whole log), and **Open in Conform plotter** opens `/plot/conform?operation=<id>`. In the Operations list a Conform run with a log has a **Conform** button to the same address; one with no log has none. A planned Conform run with a log and no window: **Mark done** shows the warning "Conform run window not set" and still marks it done.
+- [ ] **CFS6 — Excel export.** Save a Conform log from Excel as "CSV (Comma delimited)" (Windows-1252, `°C` headers) and upload it: every °C channel is present (Tooling 1 and 2, wheel temperatures, IPS setpoint), and the steps split by IPS setpoint as well as speed.
+- [ ] **CFS7 — Same log twice.** Upload a log, then upload the same file to another run: it offers **Use that log** and stores no second file or log.
+- [ ] **CFS8 — Unlink and replace.** Unlink a run's own log when no other run uses it: the log and its file are deleted. Unlink when another run is on the log: both stay, and the other run keeps its window. **Replace log** ends with the new log linked.
+- [ ] **CFS9 — No controls without edit rights.** As a Lab Viewer, and as a member who can read but not edit the operation, open `/plot/conform` and the Operation page: no upload, link, window, unlink, replace or Recompute controls.
+- [ ] **CFS10 — Hidden file.** Make the log's file unreadable for a reader (a file-level 403): the plotter, the Operation page and the map card say "Conform log not visible to you".
+- [ ] **CFS11 — Refusals in the browser.** Set an overlapping window (the message names the other run's code, or "another run" when it can't be read), a window outside the log, and a start after the end: each shows its sentence, never "An unexpected error occurred". Since: Conform runs PR (review round 1).
+
 ### Surface scans on inserts and edges (migration 192, ADR-0021)
 - [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
   share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
@@ -1729,6 +1744,84 @@ below. "Since" is the surface scan privacy PR (pending).
   1216px; worded badges match real `fast_run` states; Sample ↗, Open operation and recipe Open land on the right records;
   a layout saved by the old page (`d1-fast-dashboard-v1`) still restores its tiles and run; unit strings print correctly
   ("C" shown as "°C"). Since: PR #377 (stream D).
+
+### Conform runs (migrations 207 to 209, ADR-0025)
+
+- [ ] **C1 — Conform log upload and energy.** On a real Directus (migrations 207 to 209 applied, Directus restarted), create a
+  Conform run (method **CF**, the Conform machine, a real input sample, a date, run number 12, die 8 mm) and upload the real
+  log `TiSwarf.csv` (Operation page or Conform plotter). The unit tests use a synthetic log, so this is the only comparison with
+  the real machine: expect the operation code `DD-MM-YY-CF-012-8dia`; the run shows status Done with the whole log as its
+  window; the whole-log energy (motor, IPS, cooling, total kWh) of the real TiSwarf log matches the spreadsheet method (the
+  "Power & Cost" tab of `MT3 - Machine Data.xlsx`) within 0.01 kWh per component; the normalised CSV is in the **Conform Logs**
+  folder of Directus Files (the folder with id `c04f1000-0000-4000-8000-000000000001`, seeded by migration 210; a Lab Member can
+  open it); a malformed CSV (no `Timestamp` column) is refused with the reason and leaves no file or row behind. Since:
+  Conform runs PR.
+- [ ] **C2 — Two runs share one log.** Create a second Conform run and pick **Use a log already uploaded** (the log of C1). Expect
+  it to link with an empty window (status No window). In the plotter set non-overlapping windows for the two runs: both bands
+  are drawn and labelled, each run's summary and steps cover its own window only. Setting a window that overlaps the other run
+  is refused as a non-administrator with "Run window overlaps <the other run's code> on this log." (not "An unexpected error
+  occurred"); a window touching the other run's end is accepted; a window outside the log is refused with "Run window lies
+  outside the log (<start> to <end>, UK time)." As a member who may read only one of the two runs, open the other run's log:
+  the plot shows (logs are lab-wide, ADR-0011) and the other run's band is labelled "Other run", and the overlap refusal says
+  "another run" instead of its code; the other run's record does not show. Since: Conform runs PR.
+- [ ] **C3 — The Conform form.** In Data Studio, Operations: choose method CF. The Conform group appears (run number,
+  feedstock, form, feed mass, die, tooling, wheel speed, IPS setpoint, extrusion length, mass, yield, flash) between Sample
+  preparation and Notes & files, and no other category's group shows; with another method the Conform group and its
+  **Conform run** panel under Related records are hidden. The Machine picker offers the Conform machine for CF. Saving with a
+  CF input and output sample writes the lineage **extruded from**. The code follows the run number and die as they are typed;
+  two CF runs on the Conform machine with the same run number are refused. Since: Conform runs PR.
+- [ ] **C4 — The PDF appendix prints.** Print the operation report (PDF) of the C1 run: the Conform appendix follows the
+  summary, with four panels (wheel speed, motor torque, temperatures, IPS output) drawn over the run window only, the summary
+  table (extruding time, energy total) and the steps table; the run window's clock times are UK local time. Check it on a
+  run that shares its log with another (only its own window is plotted). The plots prove `d1-report` read the CSV
+  through Directus's `AssetsService.getAsset` (only exercised against a fake in CI). If the log's file answers 403 for
+  the reader (see CFS3), the appendix shows "Conform log not visible to you", and "Could not load the Conform log" when the
+  file cannot be read for another reason, with the summary and steps still there; a run window of fewer than 2 rows says "Run
+  window too short to plot"; energy is in kWh and average demand in kW to 2 decimals. Review round 2: the four plots sit
+  two across (as the FAST appendix's do), each axis has 5 or 6 round ticks, the x axis is titled "Time since log start (min)"
+  and the unit shows above the y axis; a figure with no reading prints as a dash with no unit; parts the log cannot measure
+  read "Not measured: IPS, cooling." (not raw keys). Since: Conform runs PR and review round 2.
+- [ ] **C5 — Review round 1 on real Directus (the d1-conform-guard hook and migration 210).** Restart Directus after migration
+  210 so it loads `d1-conform-guard`. As a Lab Member (not an administrator): (a) uploading the same log file twice is refused
+  by the duplicate check, and a direct `POST /items/conform_logs` with the same `source_sha256` answers `RECORD_NOT_UNIQUE`;
+  (b) `POST /items/conform_run_data` for an operation you can read but not edit answers 403 "You can only record a Conform run
+  on an operation you can edit." (the d1-access-guard rule), and for one you own it works; (c) `DELETE /items/conform_logs/<id>`
+  of a log a run still uses answers 400 "This log is still used by a Conform run. Unlink it from the run first." (not a 500),
+  and the log row is still there; after unlinking the run (log, window, summary and steps cleared) the delete works for the
+  uploader and is refused (403) for anyone else; (d) `conform_logs.run_windows` of the shared log (read it as any member) lists
+  both runs' windows, sorted by start, with UTC times, and follows a window change at once; (e) every Lab Member and Lab Viewer
+  reads every log; only the uploader may delete one; (f) the file of a log cannot be changed: as a Lab Member,
+  `PATCH /files/<the log's directus_files_id>` (any field, for example `{"title":"x"}`) answers 403 with the reason "A Conform
+  log's file can't be changed after upload." (the `files.update` filter of `d1-conform-guard`; if Directus does not fire it for
+  system collections the PATCH succeeds, which is the finding to report), the same PATCH as an administrator works, and a PATCH
+  of a file no log uses works for the member. Since: Conform runs review rounds 1 and 2.
+
+### Conform plotter (Conform runs plan, stream C)
+
+- [ ] **CP1 — FAST plotter unchanged after the run-profile refactor.** On real data open `/plot/fast`: the run list,
+  badges, peaks, statistics, tiles and hover look and behave as before DSR5/DSR6 describe, with no Conform controls
+  (no run window, no upload, no "Use this view as the run window"); the hover shows elapsed time only. A layout saved
+  before (`d1-fast-dashboard-v1`) still restores. Since: Conform runs plan, stream C.
+- [ ] **CP2 — Conform plotter on a real log and real Directus.** Open `/plot/conform?operation=<id>` for a Conform run with
+  no log: the plot area says no log has been uploaded. Upload the machine's real CSV (an Excel export with `Â°C`, `Column1`,
+  CRLF and a BOM too): the run opens on the whole log, the five tiles (speed, torque and current, temperatures, IPS,
+  power) draw, and the hover shows UK clock time with elapsed time beside it (compare a clock time with the Timestamp
+  column, in BST and in GMT). Zoom to the extrusion and press "Use this view as the run window": the run list badge
+  turns "Window set", the Statistics tab matches the spreadsheet (energy, extruding time), and reopening the run opens
+  zoomed to its window. Since: Conform runs plan, stream C.
+- [ ] **CP3 — Several runs on one log, and who sees what.** Link a second run to the same log with "Use a log already
+  uploaded" (it starts with no window): the first run's window shows as a faint labelled band; setting a window that
+  overlaps it is refused with the message naming the other run. A reader who can read the run but not the log sees the
+  figures and "Conform log not visible to you" in place of the plot. Since: Conform runs plan, stream C.
+- [ ] **CP4 — Conform plotter review round 2 (plain-HTTP upload, bands, phone).** (a) Open STARbase over plain HTTP on the
+  LAN (not localhost, so `crypto.subtle` is missing) and upload a real log: it works (the pure-JS SHA-256 hashes it), and
+  uploading the same file again offers "Use that log" with the windows already on it (and "The whole log is X's window" when
+  one covers it). (b) On `/plot/conform` the run's own window shows as two thin accent lines, not a grey wash; other runs'
+  windows are a faint wash with their labels above the top row of plots only; the time axis reads "Time since log start (min)"
+  and the hover badge shows elapsed time with the UK clock time in the tooltip. (c) A refusal by the Conform hook shows its
+  sentence; any other failure shows a plain one ("You can't change this Conform run."), never Directus's own text. (d) On a
+  phone (390 px) the Plots header does not run off the panel and every button is at least 40 px tall. Since: Conform runs
+  plan, review round 2, stream G2a.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

@@ -1,7 +1,8 @@
 // What a list row can open in the analysis pages: the Force dashboard for a machining operation with
-// a finished force analysis, the FAST dashboard for a sintering run with finished run data, and for a
+// a finished force analysis, the FAST dashboard for a sintering run with finished run data, the Conform plotter for a Conform run
+// with a log linked, and for a
 // sample the operations that have force. The list page asks for it in a second, separate request
-// per kind after the rows arrive: machining_force_analysis and fast_run_data are hidden collections
+// per kind after the rows arrive: machining_force_analysis, fast_run_data and conform_run_data are hidden collections
 // (not in the readable list the page already holds), a role may be refused them, and a Directus
 // o2m filter is no good for counting, so each request names the ids on screen with `_in`
 // and a failed one only means no buttons of that kind. Pure: no Vue, no network.
@@ -10,13 +11,15 @@ import { fileId } from './thumbs';
 export interface RowPlots {
 	force: boolean;
 	fast: boolean;
+	/** A Conform run with a log linked (set only when true). */
+	conform?: boolean;
 	/** The file id of the Fz force figure (operations only). */
 	frmFz: string | null;
 	/** Samples only: how many of the sample's operations have a finished force analysis. */
 	forceCount?: number;
 }
 
-export type PlotKey = 'force' | 'fast' | 'sampleForce';
+export type PlotKey = 'force' | 'fast' | 'conform' | 'sampleForce';
 export interface PlotRequest {
 	path: string;
 	params: Record<string, unknown>;
@@ -43,6 +46,12 @@ export function plotRequests(collection: string, ids: string[]): PlotRequest[] {
 		return [
 			{ key: 'force', path: '/items/machining_force_analysis', params: { filter, fields: ['operation_id', 'frm_fz'], limit: -1 } },
 			{ key: 'fast', path: '/items/fast_run_data', params: { filter, fields: ['operation_id'], limit: -1 } },
+			// A Conform run has no 'done' status to wait for: the plotter opens as soon as a log is linked (the window may still be empty).
+			{
+				key: 'conform',
+				path: '/items/conform_run_data',
+				params: { filter: JSON.stringify({ _and: [{ operation_id: { _in: ids } }, { log_id: { _nnull: true } }] }), fields: ['operation_id'], limit: -1 },
+			},
 		];
 	}
 	return [{
@@ -92,6 +101,7 @@ export function mergePlots(
 		if (fz && !figure.has(op)) figure.set(op, fz);
 	}
 	const fast = new Set(asRows(results.fast).filter((r) => r.operation_id != null).map((r) => String(r.operation_id)));
-	for (const id of ids) out[id] = { force: force.has(id), fast: fast.has(id), frmFz: figure.get(id) ?? null };
+	const conform = new Set(asRows(results.conform).filter((r) => r.operation_id != null).map((r) => String(r.operation_id)));
+	for (const id of ids) out[id] = { force: force.has(id), fast: fast.has(id), ...(conform.has(id) ? { conform: true } : {}), frmFz: figure.get(id) ?? null };
 	return out;
 }

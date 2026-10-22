@@ -6,31 +6,40 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import FastStatsTab from './FastStatsTab.vue';
+import RunSummaryTab from './RunSummaryTab.vue';
+import RunWindowActions from './RunWindowActions.vue';
 import type { Trace } from './fastCache';
-import { MOULD_LABELS, PEAK_LABELS, buildDetailRows, buildHeader, buildRecipe, buildStats, type Quality } from './fastMeta';
+import { buildHeader, buildRecipe, type Quality } from './fastMeta';
+import type { RunProfile, RunTab } from './profile';
 
-export type RunTab = 'stats' | 'detail' | 'recipe';
-const TABS: Array<{ id: RunTab; name: string; icon: string }> = [
+
+const ALL_TABS: Array<{ id: RunTab; name: string; icon: string }> = [
 	{ id: 'stats', name: 'Statistics', icon: 'bar_chart' },
 	{ id: 'detail', name: 'Operation detail', icon: 'info' },
 	{ id: 'recipe', name: 'Recipe', icon: 'science' },
 ];
 
 const props = defineProps<{
-	tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
-	detail: any | null; fastRun: any | null; trace: Trace | null; loading: boolean; message: string | null;
-	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean;
+	profile: RunProfile; tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
+	detail: any | null; runData: any | null; trace: Trace | null; loading: boolean; message: string | null;
+	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean; busy?: boolean;
+	/** May the reader change the run (see FastHost.canUpdate): false hides the upload, link, window and unlink actions. */
+	canEdit?: boolean | null;
 }>();
 const emit = defineEmits<{
 	(e: 'update:tab', v: RunTab): void; (e: 'open-operation'): void; (e: 'open-recipe'): void; (e: 'open-sample'): void;
 	(e: 'zoom', v: { start: number; end: number } | null): void; (e: 'hover', t: number | null): void;
+	(e: 'run-changed', v: { resetView: boolean }): void;
 }>();
 
 const header = computed(() => buildHeader(props.detail));
-const peaks = computed(() => buildStats(props.detail, props.fastRun, PEAK_LABELS));
-const mould = computed(() => buildStats(props.detail, props.fastRun, MOULD_LABELS));
-const peaksNote = computed(() => (peaks.value.some((p) => p.source === 'recorded') ? 'measured, or recorded' : 'measured from the trace'));
-const rows = computed(() => buildDetailRows(props.detail, props.fastRun));
+const TABS = computed(() => ALL_TABS.filter((t) => props.profile.tabs.includes(t.id)));
+const stats = computed(() => props.profile.buildStats(props.detail, props.runData));
+const peaks = computed(() => stats.value.filter((s) => props.profile.peakLabels.includes(s.label)));
+const mould = computed(() => stats.value.filter((s) => props.profile.factLabels.includes(s.label)));
+const facts = computed(() => props.profile.headerFacts(props.detail));
+const peaksNote = computed(() => props.profile.peaksNote ?? (peaks.value.some((p) => p.source === 'recorded') ? 'measured, or recorded' : 'measured from the trace'));
+const rows = computed(() => props.profile.detailRows(props.detail, props.runData));
 const recipe = computed(() => buildRecipe(props.detail));
 const recipeRows = computed(() => {
 	const r = recipe.value;
@@ -41,19 +50,26 @@ const recipeRows = computed(() => {
 	];
 	return all.filter(([, v]) => v !== null && v !== '').map(([label, value]) => ({ label, value: String(value), mono: label === 'Source' }));
 });
-const noTrace = computed(() => {
-	const st = props.fastRun?.status;
-	return st === 'pending' || st === 'processing' ? 'The trace is being imported.' : st === 'error' ? 'The trace import failed.' : 'No trace was imported for this run.';
+const noTrace = computed(() => props.profile.noTraceMessage(props.runData));
+// a run with a log but no window has no figures yet: say how to get them (a reader who cannot edit sees no button to press, so no instruction)
+const summaryEmpty = computed(() => {
+	if (!props.profile.traceReady(props.runData)) return noTrace.value;
+	return props.canEdit === false
+		? 'No run window is set.'
+		: 'No run window is set. Zoom the plots to the run, then use "Use this view as the run window".';
 });
+// Three figures, or four as 2 by 2: never a lone tile under a row of three (six, FAST's, are two rows of three)
+const peakCols = computed(() => (peaks.value.length === 4 || peaks.value.length === 2 ? 2 : 3));
 
 // Left and Right (and Home, End) move between the tabs, as a tab list does; the selected tab is the one in the tab order.
 const tablist = ref<HTMLElement | null>(null);
 function onTabKey(ev: KeyboardEvent) {
-	const at = TABS.findIndex((t) => t.id === props.tab);
-	const to = ev.key === 'ArrowRight' ? (at + 1) % TABS.length : ev.key === 'ArrowLeft' ? (at + TABS.length - 1) % TABS.length : ev.key === 'Home' ? 0 : ev.key === 'End' ? TABS.length - 1 : -1;
+	const tabs = TABS.value;
+	const at = tabs.findIndex((t) => t.id === props.tab);
+	const to = ev.key === 'ArrowRight' ? (at + 1) % tabs.length : ev.key === 'ArrowLeft' ? (at + tabs.length - 1) % tabs.length : ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : -1;
 	if (to < 0) return;
 	ev.preventDefault();
-	emit('update:tab', TABS[to].id);
+	emit('update:tab', tabs[to].id);
 	nextTick(() => (tablist.value?.querySelectorAll<HTMLElement>('[role=tab]')[to])?.focus());
 }
 
@@ -62,7 +78,7 @@ function onKey(ev: KeyboardEvent) {
 	const el = ev.target as HTMLElement | null;
 	if (ev.ctrlKey || ev.metaKey || ev.altKey || el?.closest('input, textarea, select, [contenteditable]')) return;
 	const i = Number(ev.key) - 1;
-	if (Number.isInteger(i) && TABS[i]) emit('update:tab', TABS[i].id);
+	if (Number.isInteger(i) && TABS.value[i]) emit('update:tab', TABS.value[i].id);
 }
 onMounted(() => window.addEventListener('keydown', onKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
@@ -85,21 +101,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					<div v-if="header.material" class="fd-dim">{{ header.material }}</div>
 				</div>
 				<dl class="facts">
-					<div><dt>Date</dt><dd>{{ header.date || '—' }}</dd></div>
-					<div><dt>Machine</dt><dd>{{ header.machine || '—' }}</dd></div>
-					<div><dt>Operator</dt><dd>{{ header.operator || '—' }}</dd></div>
-					<div><dt>Atmosphere</dt><dd>{{ header.atmosphere || '—' }}</dd></div>
+					<div v-for="[label, value] in facts" :key="label"><dt>{{ label }}</dt><dd>{{ value || '—' }}</dd></div>
 					<div v-for="m in mould" :key="m.label"><dt>{{ m.label }}</dt><dd>{{ m.value }} {{ m.unit }}<span class="fd-tag">recorded</span></dd></div>
 				</dl>
 				<template v-if="peaks.length">
-					<div class="head"><b>Peaks</b><span class="fd-dim">{{ peaksNote }}</span></div>
-					<div class="fd-tiles">
+					<div class="head"><b>{{ profile.peaksTitle ?? 'Peaks' }}</b><span class="fd-dim">{{ peaksNote }}</span></div>
+					<div class="fd-tiles" :class="{ two: peakCols === 2 }">
 						<div v-for="p in peaks" :key="p.label" class="fd-fig">
 							<span class="top"><span class="val">{{ p.value }}</span><span class="unit">{{ p.unit }}</span></span>
 							<span class="lab">{{ p.label }}<span v-if="p.source === 'recorded'" class="fd-tag">recorded</span></span>
 						</div>
 					</div>
 				</template>
+				<RunWindowActions v-if="profile.setWindowFromView || profile.upload || profile.linkExisting" :profile="profile" :detail="detail" :run-data="runData" :trace="trace"
+					:zoom-start="zoomStart" :zoom-end="zoomEnd" :busy="!!busy" :can-edit="canEdit" @changed="emit('run-changed', $event)" />
 			</div>
 			<div ref="tablist" class="tabs" role="tablist" aria-label="Run details" @keydown="onTabKey">
 				<button v-for="(t, i) in TABS" :id="`fd-tab-${t.id}`" :key="t.id" class="fd-tab" role="tab" :aria-selected="tab === t.id" :aria-controls="tab === t.id ? `fd-panel-${t.id}` : undefined"
@@ -109,10 +124,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 			</div>
 			<div :id="`fd-panel-${tab}`" class="tabbody" role="tabpanel" :aria-labelledby="`fd-tab-${tab}`">
 				<div v-if="message" class="fd-empty err" role="status">{{ message }}</div>
-				<template v-if="tab === 'stats'">
+				<template v-if="tab === 'stats' && profile.summaryTiles">
+					<RunSummaryTab :tiles="profile.summaryTiles(detail, runData)" :note="profile.summaryNote?.(runData) ?? null" :window="profile.windowLabel?.(runData) ?? null" :empty="summaryEmpty" />
+				</template>
+				<template v-else-if="tab === 'stats'">
 					<FastStatsTab v-if="trace" :trace="trace" :detail="detail" :zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="cursor" :zoom-tool="zoomTool"
 						@zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
-					<div v-else-if="fastRun?.status === 'done' && loading" class="fd-spin"><v-progress-circular indeterminate small /> loading trace…</div>
+					<div v-else-if="profile.traceReady(runData) && loading" class="fd-spin"><v-progress-circular indeterminate small /> loading trace…</div>
 					<div v-else class="fd-empty">{{ noTrace }}</div>
 				</template>
 				<template v-else-if="tab === 'detail'">
@@ -156,7 +174,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .pg .v { font-weight: 650; text-align: right; min-width: 0; overflow-wrap: anywhere; }
 .pg .v.src { font-size: var(--fs-xs, 11px); }
 .rname { font-size: var(--fs-md, 13px); margin-bottom: 4px; overflow-wrap: anywhere; }
-.err { color: var(--theme--danger); }
+.err { color: var(--d1-bad, var(--theme--danger)); }
 .foot { flex: none; padding: 10px 12px; border-top: 1px solid var(--fd-line); background: var(--fd-tile); }
 .open { width: 100%; height: 32px; }
 </style>

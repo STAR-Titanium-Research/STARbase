@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from 'vue';
-import { itemPermissionsUrl, offerWrite, updateAccess } from '../canUpdate';
+import { fetchCanUpdate, offerWrite } from '../canUpdate';
 import { useRequestGate } from './useRequestGate';
 
 interface Api {
@@ -22,12 +22,8 @@ export function createCanUpdate(api: Api, collection: string, id: Ref<string | n
 		asked.value = null;
 		const pk = id.value;
 		if (!pk || readOnly?.value) return;
-		try {
-			const res = await api.get(itemPermissionsUrl(collection, pk));
-			if (gate.isCurrent(token)) asked.value = updateAccess(res.data);
-		} catch {
-			if (gate.isCurrent(token)) asked.value = null;
-		}
+		const answer = await fetchCanUpdate(api, collection, pk);
+		if (gate.isCurrent(token)) asked.value = answer;
 	}
 
 	watch([id, () => readOnly?.value], refresh, { immediate: true });

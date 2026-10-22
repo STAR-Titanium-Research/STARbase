@@ -44,6 +44,21 @@ describe('recordInfo', () => {
     expect(info.dataOf).toEqual({ collection: 'manufacturing_operations', id: 'o1', code: 'OP-1' });
   });
 
+  it('a Conform run: the Conform process, its key settings, and the data to ask about', () => {
+    const cf = mkData({
+      samples: [mkSample('p', { code: 'S-1' }), mkSample('x', { code: 'S-1-X' })],
+      operations: [mkOp({ id: 'c1', code: '17-03-25-CF-012-8dia', methodName: 'Conform (continuous extrusion)', category: 'conform', sampleId: 'p', outputSampleId: 'x', date: '2025-03-17T13:00:00Z', settings: { conform_die_diameter_mm: 8, conform_wheel_speed_rpm: 5, conform_ips_setpoint_c: 300 } })],
+    });
+    const g = build(cf);
+    const node = g.nodes.find((n) => n.type === 'container' && n.kind === 'operation')!;
+    const info = recordInfo(cf, g, node.id)!;
+    expect(fact(info, 'Process')).toBe('Conform');
+    expect(fact(info, 'Die diameter')).toBe('8 mm');
+    expect(fact(info, 'Wheel speed')).toBe('5 rpm');
+    expect(fact(info, 'IPS setpoint')).toBe('300 °C');
+    expect(info.dataOf).toEqual({ collection: 'manufacturing_operations', id: 'c1', code: '17-03-25-CF-012-8dia' });
+  });
+
   it('a test: type and date, no data to ask about', () => {
     const t = graph.nodes.find((n) => n.type === 'container' && n.kind === 'test')!;
     const info = recordInfo(data, graph, t.id)!;

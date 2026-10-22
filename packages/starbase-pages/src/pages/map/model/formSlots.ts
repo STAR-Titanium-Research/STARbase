@@ -118,6 +118,11 @@ export const KEY_SETTING_FIELDS: Record<NonNullable<ProcessCategory> | 'test', S
     { label: 'Max force', fields: [{ field: 'sintering_max_force_kn', unit: 'kN' }] },
     { label: 'Mould diameter', fields: [{ field: 'sintering_mould_diameter_mm', unit: 'mm' }] },
   ],
+  conform: [
+    { label: 'Die diameter', fields: [{ field: 'conform_die_diameter_mm', unit: 'mm' }] },
+    { label: 'Wheel speed', fields: [{ field: 'conform_wheel_speed_rpm', unit: 'rpm' }] },
+    { label: 'IPS setpoint', fields: [{ field: 'conform_ips_setpoint_c', unit: '°C' }] },
+  ],
   machining: [
     { label: 'Cutting speed', fields: [{ field: 'machining_cutting_speed_m_per_min', unit: 'm/min' }] },
     { label: 'Feed', fields: [{ field: 'machining_feed_mm_per_rev', unit: 'mm/rev' }] },

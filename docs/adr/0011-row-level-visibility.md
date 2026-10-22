@@ -152,9 +152,24 @@ the parent's update rule:
 | `sample_genealogy` | read: either the child or the parent sample; update and delete: the child sample's update rule |
 | `campaign_samples` | read: the campaign's or the sample's read rule; update and delete: the campaign's owner or the sample's owner or co-owner; create (or repointing a key): the campaign's update rule **and** the sample's update rule (guard) |
 | `operation_data_files`, `machining_force_analysis`, `fast_run_data` | the operation (`operation_id`); `fast_run_data` has read only and `machining_force_analysis` has no delete, as before |
+| `conform_run_data` | the operation (`operation_id`): read follows the operation's read rule, update and delete follow the operation's update rule, and create (or repointing the operation) needs the operation's update rule too, through the guard (Directus does not filter create; migration 210). Its `log_id` must name a log that exists (guard) |
 | `session_data_files`, `test_sessions_subject` | the test (`session_id`, `test_sessions_id`); creating a `test_sessions_subject` row (or repointing its test) needs the test's update rule (guard) |
 | `project_investigators` | read: the project's read rule; update and delete: the project's PI; create (or repointing the project): the project's update rule, i.e. the PI (guard) |
 | `project_rollup` (read only) | the project's PI and investigators only |
+
+**Conform logs are lab-wide; the runs are private.** A `conform_logs` row (an uploaded machine log) is read by every Lab Member
+and Lab Viewer, with no filter (maintainer decision, Conform runs review round 1, migration 210; migration 208 had limited it to
+the readers of a linked run and the uploader). The run records themselves (`conform_run_data`: summary, steps, window) stay
+private to their own readers, so the log carries `run_windows`, the list of `{operation_id, start, end}` of the runs on it (kept by
+a trigger), which lets the browser draw every run's band; a run the caller cannot read is labelled "Other run", and the refusal of an
+overlapping window names the other run's code only when the caller can read that operation. The Ask-the-database role still sees a
+log only when it sees a run of it (migration 208's row security), and so reads `run_windows` of those logs. The uploaded file
+itself is a `directus_files` row, so its own rule decides who can open it (a 403 there reads "Conform log not visible to you"); the
+"Conform Logs" folder has one read row so members can see it. Every member can insert a log (with the SHA-256 of the file, unique, so
+the same file is never uploaded twice); only its uploader can delete it, and not while a run uses it (a trigger, worded by the
+`d1-conform-guard` hook); nobody edits a log after upload, and the same hook refuses a member's update of the log's `directus_files`
+row ("A Conform log's file can't be changed after upload."), so the stored CSV the summaries came from cannot be replaced.
+Administrators are unfiltered.
 
 **Reference data stays readable (and writable, as before) by every member:** `materials`,
 `material_iso_classifications`, `alloying_elements`, `material_alloying_elements`, `equipment`,

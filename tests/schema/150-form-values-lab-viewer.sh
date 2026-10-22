@@ -139,11 +139,11 @@ SELECT 'dn_comment_restored:' || (obj_description('d1_private.readers_of_sample(
 $lv_down
 SELECT 'dn_twice_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
 $lv_up
--- 185's up section is a snapshot: it knows nothing of the read row migration 192 added for surface_scans, so the replay is one short.
+-- 185's up section is a snapshot: it knows nothing of the read rows later migrations added (migration 192 for surface_scans, migration 208 for conform_logs and conform_run_data, migration 210 for directus_folders), so the replay is four short.
 SELECT 'up2_exact:' || count(*) FROM _vgen g JOIN directus_permissions p
   ON p.policy = '$VW' AND p.collection = g.collection AND p.action = g.action
  AND p.permissions::jsonb = g.permissions AND p.validation::jsonb = g.validation AND p.fields = g.fields
- WHERE g.collection <> 'surface_scans';
+ WHERE g.collection NOT IN ('surface_scans', 'conform_logs', 'conform_run_data', 'directus_folders');
 SELECT 'up2_stored:' || count(*) FROM directus_permissions WHERE policy = '$VW';
 SELECT 'up2_objects:' || (to_regclass('d1_private.v_viewers') IS NOT NULL) || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('directus_users_readers_lock','directus_users_readers_ins','directus_users_readers_upd','directus_users_readers_del'));
 SELECT 'up2_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
@@ -180,8 +180,8 @@ expect_fixed lvx_out "dn_functions_with_viewers:0" "down: no readers function li
 expect_fixed lvx_out "dn_drift:0" "down: readers_drift() is empty"
 expect_fixed lvx_out "dn_comment_restored:true" "down: the function comments are the old ones"
 expect_fixed lvx_out "dn_twice_functions_with_viewers:0" "down twice does nothing the second time"
-expect_fixed lvx_out "up2_exact:$((lvx_n - 1))" "up again: every generated row is back, exact (but the surface_scans row of migration 192)"
-expect_fixed lvx_out "up2_stored:$((lvx_n - 1))" "up again: no more and no fewer rows (but the surface_scans row of migration 192)"
+expect_fixed lvx_out "up2_exact:$((lvx_n - 4))" "up again: every generated row is back, exact (but the surface_scans row of migration 192, the two Conform rows of migration 208 and the folder row of migration 210)"
+expect_fixed lvx_out "up2_stored:$((lvx_n - 4))" "up again: no more and no fewer rows (but the surface_scans row of migration 192, the two Conform rows of migration 208 and the folder row of migration 210)"
 expect_fixed lvx_out "up2_objects:true/4" "up again: the view and four triggers are back"
 expect_fixed lvx_out "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
 expect_fixed lvx_out "up2_drift:0" "up again: readers_drift() is empty"

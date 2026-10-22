@@ -8,11 +8,17 @@
  * Look per DESIGN.md section 5b: solid left and bottom axis lines with outward ticks, hairline grid at
  * every tick, nice ticks with the top one above the data, the unit above the y axis, time in minutes with
  * its title on the bottom row only (`xLabels`), series colours from the chart tokens then dash patterns.
+ * The time axis is elapsed minutes. A profile with a clock origin (Conform) titles it "Time since log start (min)", shows the
+ * elapsed time on the hover badge, and adds the UK clock time to the tooltip.
  * Hover is shared: the chart reports the time under the pointer (`hover`) and draws the cursor it is
  * given (`cursor`): the hovered chart also shows a tooltip, the others a dot on each line.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { clock, fmtNum, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
+import { fmtNum, indexAt, niceTicks, seriesStyle, tickLabel, ticksWithin, unitLabel } from './chartMath';
+
+import type { RunWindowBand } from './profile';
+import RunWindowBands from './RunWindowBands.vue';
+import { hoverTime } from './runBands';
 
 interface S { key: string; label: string; unit: string; group: string; values: Float64Array; }
 const props = withDefaults(defineProps<{
@@ -22,10 +28,14 @@ const props = withDefaults(defineProps<{
 	zoomTool?: boolean;           // when true, drag draws a rectangular zoom box
 	wheel?: boolean;              // the wheel zooms the shared window (off where the page should scroll instead)
 	cursor?: number | null;       // shared hover time (seconds) from the tiles of the same group
-	xLabels?: boolean;            // tick labels and the "Time (min)" title (the bottom row of tiles)
+	xLabels?: boolean;            // tick labels and the axis title (the bottom row of tiles)
+	xTitle?: string;              // the time axis title; "Time (min)" unless the profile words it (Conform: "Time since log start (min)")
 	fill?: boolean;               // a faint area under the first series (the cumulative energy)
 	band?: { start: number; end: number } | null;   // a shaded time range (the window the statistics cover)
-}>(), { xLabels: true, wheel: true });
+	bands?: RunWindowBand[];      // every run window on the log, faint and labelled, under the lines (Conform only)
+	bandLabels?: boolean;         // print the band labels in the top margin (the top row of tiles); the other tiles draw the bands only
+	startMs?: number | null;      // epoch ms of time zero: the hover then shows UK clock time as well as elapsed (Conform only)
+}>(), { xLabels: true, wheel: true, xTitle: 'Time (min)', bandLabels: true });
 const emit = defineEmits<{
 	(e: 'zoom', v: { start: number; end: number } | null): void;
 	(e: 'hover', t: number | null): void;
@@ -63,6 +73,9 @@ const shared = computed(() => {
 	return new Set(props.series.map((s) => s.unit || s.group)).size === 1;
 });
 const yUnit = computed(() => (shared.value ? unitLabel(props.series[0]?.unit || '') : '% of range'));
+// the band labels share the unit's line in the top margin, so they start after it
+const labelMinX = computed(() => 4 + Math.ceil(yUnit.value.length * 6.4) + 10);
+const BAND_LABEL_Y = MT - 10;
 
 const geom = computed(() => {
 	const t = props.time;
@@ -150,8 +163,12 @@ const hover = computed(() => {
 		const v = s.values[i];
 		return { key: s.key, label: s.label, value: Number.isFinite(v) ? fmtNum(v) : '—', cy: Number.isFinite(v) ? g.paths[k].sy(v) : null, ...seriesStyle(k) };
 	});
-	return { x, clock: clock(props.time[i]), rows };
+	// with a clock origin the time is shown as the UK local time of day, with the elapsed time beside it
+	return { x, ...hoverTime(props.time[i], props.startMs), rows };
 });
+// The axis counts elapsed time, so that is what the badge on it shows; the tooltip adds the UK clock time when there is a clock.
+const badge = computed(() => (hover.value ? (hover.value.wall ? hover.value.elapsed : hover.value.clock) : ''));
+const badgeW = computed(() => (hover.value?.wall ? Math.max(48, badge.value.length * 7 + 10) : 48));   // FAST's badge is the one fixed width as ever
 // ---- x-zoom: wheel + rectangular selection (emits a shared window to the parent) ----
 function pxOf(ev: PointerEvent | WheelEvent): number {
 	const g = geom.value; if (!g) return 0;
@@ -227,6 +244,8 @@ const tipStyle = computed(() => {
 				<line v-for="(t, i) in geom.yTicks" :key="'gy' + i" class="grid" :x1="ML" :x2="geom.W - MR" :y1="t.y" :y2="t.y" />
 				<line v-for="(t, i) in geom.xTicks" :key="'gx' + i" class="grid" :x1="t.x" :x2="t.x" :y1="MT" :y2="geom.bottom" />
 				<rect v-if="geom.band && geom.band.x2 > geom.band.x" class="band" :x="geom.band.x" :y="MT" :width="geom.band.x2 - geom.band.x" :height="geom.bottom - MT" />
+				<RunWindowBands v-if="bands && bands.length" :bands="bands" :x0="geom.x0" :x1="geom.x1" :sx="geom.sx" :top="MT" :bottom="geom.bottom"
+					:labels="bandLabels" :label-min-x="labelMinX" :label-y="BAND_LABEL_Y" />
 				<path v-if="geom.area" class="area" :d="geom.area" />
 				<path v-for="(p, i) in geom.paths" :key="p.key" :d="p.d" class="line" :style="{ stroke: p.color }" :stroke-dasharray="p.dash ?? undefined" :data-series="i" />
 				<line class="axis" :x1="ML" :x2="ML" :y1="MT" :y2="geom.bottom" />
@@ -240,22 +259,22 @@ const tipStyle = computed(() => {
 					<text v-if="xLabels" :x="t.x" :y="geom.bottom + 17" text-anchor="middle" class="tick">{{ t.label }}</text>
 				</g>
 				<text :x="4" :y="MT - 10" class="tick unit">{{ yUnit }}</text>
-				<text v-if="xLabels" :x="(ML + geom.W - MR) / 2" :y="geom.H - 4" text-anchor="middle" class="tick title">Time (min)</text>
+				<text v-if="xLabels" :x="(ML + geom.W - MR) / 2" :y="geom.H - 4" text-anchor="middle" class="tick title">{{ xTitle }}</text>
 				<g v-if="hover">
 					<line class="cursor" :x1="hover.x" :x2="hover.x" :y1="MT" :y2="geom.bottom" />
 					<template v-for="r in hover.rows" :key="r.key">
 						<circle v-if="r.cy != null" class="dot" :cx="hover.x" :cy="r.cy" r="4" :style="{ fill: r.color }" />
 					</template>
 					<g v-if="local && xLabels">
-						<rect class="badge" :x="hover.x - 24" :y="geom.bottom + 4" width="48" height="18" rx="4" />
-						<text class="badge-text" :x="hover.x" :y="geom.bottom + 17" text-anchor="middle">{{ hover.clock }}</text>
+						<rect class="badge" :x="hover.x - badgeW / 2" :y="geom.bottom + 4" :width="badgeW" height="18" rx="4" />
+						<text class="badge-text" :x="hover.x" :y="geom.bottom + 17" text-anchor="middle">{{ badge }}</text>
 					</g>
 				</g>
 				<rect v-if="zoomRect" class="zoombox" :x="zoomRect.x" :y="MT" :width="zoomRect.w" :height="geom.bottom - MT" />
 			</svg>
 			<div v-else class="fchart-empty">Right-click to pick series</div>
 			<div v-if="local && hover" class="tip" :style="tipStyle">
-				<div class="tip-time">{{ hover.clock }}</div>
+				<div class="tip-time">{{ badge }}<span v-if="hover.wall" class="tip-elapsed"> · {{ hover.clock }} UK time</span></div>
 				<div v-for="r in hover.rows" :key="r.key" class="tip-row">
 					<svg class="lg-key" width="14" height="8" aria-hidden="true"><line x1="0" x2="14" y1="4" y2="4" :style="{ stroke: r.color }" :stroke-dasharray="r.dash ?? undefined" /></svg>
 					<span class="tip-label">{{ r.label }}</span><b>{{ r.value }}</b>
@@ -291,6 +310,7 @@ const tipStyle = computed(() => {
 .tip { position: absolute; top: 14px; z-index: 2; pointer-events: none; min-width: 120px; padding: 6px 10px; border-radius: 8px; font-size: var(--fs-sm, 12px);
 	background: var(--fd-surface, var(--theme--background)); border: 1px solid var(--fd-line, var(--theme--border-color-subdued)); box-shadow: var(--d1-shadow, 0 2px 6px rgba(0, 0, 0, 0.1)); }
 .tip-time { font-weight: 700; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+.tip-elapsed { font-weight: 400; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.5; }
 .tip-label { flex: 1 1 auto; margin-right: 10px; }
 .tip-row b { font-variant-numeric: tabular-nums; }

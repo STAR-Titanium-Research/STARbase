@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_RELATIONS, formSlots, keySettings, mergeSettings, mergeSlots } from './formSlots';
+import { FALLBACK_RELATIONS, KEY_SETTING_FIELDS, formSlots, keySettings, mergeSettings, mergeSlots } from './formSlots';
 import { mkOp, mkTest } from './fixtures';
 import type { Ref, Slot } from './types';
 
@@ -122,6 +122,20 @@ describe('keySettings', () => {
     ]);
     const noForce = mkOp({ settings: { sintering_max_temp_celsius: 900, sintering_mould_diameter_mm: 20 } });
     expect(keySettings(noForce, 'sintering').map((s) => s.label)).toEqual(['Max temperature', 'Mould diameter']);
+  });
+
+  it('conform: die diameter, wheel speed and IPS setpoint', () => {
+    expect(KEY_SETTING_FIELDS.conform.flatMap((d) => d.fields.map((f) => f.field))).toEqual([
+      'conform_die_diameter_mm',
+      'conform_wheel_speed_rpm',
+      'conform_ips_setpoint_c',
+    ]);
+    const op = mkOp({ category: 'conform', settings: { conform_ips_setpoint_c: 300, conform_die_diameter_mm: '8.000', conform_wheel_speed_rpm: 5 } });
+    expect(keySettings(op, 'conform')).toEqual([
+      { label: 'Die diameter', value: '8 mm' },
+      { label: 'Wheel speed', value: '5 rpm' },
+      { label: 'IPS setpoint', value: '300 °C' },
+    ]);
   });
 
   it('caps at 4', () => {

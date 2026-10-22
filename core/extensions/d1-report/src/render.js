@@ -8,6 +8,10 @@
 import { buildGeometry } from './geometry';
 // The labels of the coded dropdowns (never the stored codes). A synced copy of packages/d1-ui/src/choiceLabels.ts.
 import { choiceLabel } from './choiceLabels';
+import { esc, niceNum } from './util.js';
+import { conformAppendix } from './conform.js';
+
+export { esc };
 
 // Collections that have an Explorer page (the `home` module). This is the same mapping as
 // recordRoute() in packages/d1-ui; d1-report is built on its own and cannot import the kit, so
@@ -34,11 +38,6 @@ export function recordLink(publicUrl, collection, id) {
 	return `${base}/d1-links/go/r/${collection}/${encodeURIComponent(String(id))}`;
 }
 
-export const esc = (v) =>
-	v === null || v === undefined
-		? ''
-		: String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
 const dash = (v) => (v === null || v === undefined || v === '' ? '—' : esc(v));
 
 function fmtDate(v) {
@@ -59,17 +58,6 @@ function num(v, digits = 3) {
 	if (v === null || v === undefined || v === '') return '—';
 	const n = Number(v);
 	return isNaN(n) ? esc(v) : n.toLocaleString('en-GB', { maximumFractionDigits: digits });
-}
-
-function niceNum(v) {
-	const a = Math.abs(v);
-	if (a === 0) return '0';
-	if (a >= 1000) return `${(v / 1000).toFixed(1)}k`;
-	if (a >= 100) return v.toFixed(0);
-	if (a >= 10) return v.toFixed(1);
-	if (a >= 1) return v.toFixed(2);
-	if (a >= 0.01) return v.toFixed(3);
-	return v.toExponential(0);
 }
 
 // A "nice" step (1/2/5 * 10^n) so evenly-spaced ticks land on round numbers.
@@ -527,6 +515,7 @@ export function renderSampleReport(d) {
 const CATEGORY_LABEL = {
 	machining: 'Machining', sintering: 'FAST / Sintering', additive: 'Additive Manufacturing',
 	deformation: 'Deformation', heat_treatment: 'Heat Treatment', sample_prep: 'Sample Preparation',
+	conform: 'Conform (continuous extrusion)',
 };
 const OP_PARAM_GROUPS = {
 	machining: [
@@ -696,6 +685,19 @@ function datasheetHtml({ eyebrow, code, subtitle, details, paramTitle, params, n
 	.fp-legend span { display:inline-flex; align-items:center; gap:3px; font-size:7.5px; color:var(--ink); }
 	.fp-legend i { width:8px; height:3px; border-radius:2px; display:inline-block; }
 	.fp-msg { grid-column:1 / -1; color:var(--muted); font-size:10px; padding:8px; text-align:center; }
+	/* Conform run appendix: server-rendered plots, summary and steps tables. */
+	.cf-plots { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+	.fp-plot .fp-axis { font-size:6.5px; fill:var(--muted); font-weight:600; }
+	.cf-window { font-size:9.5px; color:var(--muted); margin:-4px 0 8px; }
+	.tbl { width:100%; border-collapse:collapse; margin-bottom:10px; }
+	.tbl thead th { text-align:left; font-size:8px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); padding:4px 6px; border-bottom:1px solid var(--line); }
+	.tbl td { padding:3px 6px; border-bottom:1px solid var(--line); font-size:9.4px; }
+	.tbl tbody tr:nth-child(even) td { background:var(--soft); }
+	.tbl td.n, .tbl thead th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+	.cf-sum { width:auto; min-width:50%; }
+	.cf-sum td:first-child { color:var(--muted); padding-right:18px; }
+	.cf-sub { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink); margin:10px 0 4px; font-weight:700; }
+	.cf-note { font-size:9.4px; color:var(--muted); margin:4px 0 8px; }
 	.hd { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2.5px solid var(--accent); padding-bottom:12px; margin-bottom:16px; }
 	.eyebrow { text-transform:uppercase; letter-spacing:.14em; font-size:9px; font-weight:700; color:var(--accent); }
 	.code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:20px; font-weight:700; color:var(--ink); margin:2px 0 0; }
@@ -841,7 +843,7 @@ function fastAppendix(fastRun) {
 }
 
 export function renderOperationReport(d) {
-	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun } = d;
+	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun, conformRun, conformLog, conformTrace, conformLoadError } = d;
 	const shortId = String(o.operation_id).split('-')[0];
 	const sampleUrl = recordLink(publicUrl, 'physical_samples', o.sample_id);
 	const catLabel = CATEGORY_LABEL[o.process_category] || (o.process_category ? esc(o.process_category) : 'Operation');
@@ -866,10 +868,12 @@ export function renderOperationReport(d) {
 	].filter(Boolean).join('');
 
 	// Machining ops get the force/FFT/FRM appendix; sintering (FAST) ops get the
-	// trace-plot appendix instead (an op is one or the other).
+	// trace-plot appendix instead, and Conform runs their own (an op is one or the other).
 	const app = o.process_category === 'sintering'
 		? fastAppendix(fastRun)
-		: forceAppendix(fa, publicUrl);
+		: o.process_category === 'conform'
+			? conformAppendix(conformRun, conformLog, conformTrace, conformLoadError)
+			: forceAppendix(fa, publicUrl);
 	const { toggles: extraToggles, blocks: extraBlocks } = app;
 
 	return datasheetHtml({

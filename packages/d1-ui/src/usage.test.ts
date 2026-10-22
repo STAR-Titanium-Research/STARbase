@@ -51,6 +51,7 @@ describe('pageTarget', () => {
 		expect(pageTarget('/home/people')).toBe('people');
 		expect(pageTarget('/d1-force-dashboard')).toBe('force-dashboard');
 		expect(pageTarget('/d1-fast-dashboard')).toBe('fast-dashboard');
+		expect(pageTarget('/d1-conform-dashboard?operation=1')).toBe('conform-dashboard');
 		expect(pageTarget('/content/physical_samples/+')).toBe('action:register-sample');
 		expect(pageTarget('/content/manufacturing_operations/+')).toBe('action:log-operation');
 		expect(pageTarget('/d1-report/labels')).toBe('action:print-labels');

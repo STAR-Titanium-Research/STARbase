@@ -60,7 +60,7 @@ describe('dataPreview', () => {
     const { api, get } = fakeApi({});
     await dataPreview(api, ids.map(op));
     expect(get.mock.calls.length).toBeGreaterThan(2); // more than one chunk
-    for (const [path] of get.mock.calls) expect(['/items/machining_force_analysis', '/items/fast_run_data']).toContain(path);
+    for (const [path] of get.mock.calls) expect(['/items/machining_force_analysis', '/items/fast_run_data', '/items/conform_run_data']).toContain(path);
     const asked = new Set<string>();
     for (const [, config] of get.mock.calls) {
       const filter = JSON.parse((config as { params: { filter: string } }).params.filter);

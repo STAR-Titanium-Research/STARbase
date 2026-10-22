@@ -13,7 +13,7 @@ import SampleGeometry from '../sample/SampleGeometry.vue';
 //            Directus; no file (or one that fails to load) shows "No picture".
 //   operations: the Fz force figure of a machining operation. The list page's plots request finds it
 //            (the `plots` prop, from useIndexPage); until then, and when the image cannot be made (most
-//            force figures cannot be transformed yet), it shows "No force figure yet". A sintering run
+//            force figures cannot be transformed yet), it shows "No force figure yet". A sintering or Conform run
 //            has no force figure, so it gets the ordinary "No picture".
 const props = defineProps<{ def: IndexDef; row: Record<string, unknown>; plots?: RowPlots | null }>();
 
@@ -43,7 +43,7 @@ const placeholder = computed(() => {
 		const form = typeof props.row.form === 'string' ? props.row.form.trim() : '';
 		return form ? choiceLabel('geometry', form) : 'No drawing';
 	}
-	if (kind.value === 'force' && props.row.process_category !== 'sintering') return 'No force figure yet';
+	if (kind.value === 'force' && props.row.process_category !== 'sintering' && props.row.process_category !== 'conform') return 'No force figure yet';
 	return props.def.collection === 'manufacturers' ? 'No logo' : 'No picture';
 });
 </script>

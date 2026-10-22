@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useExplorerHost, collectionRoute } from '@d1/ui';
 import { go } from './goto';
+import { STAT_READS } from './labStatReads';
 
 // The counts that Home always had, as one band across the top: six tiles in a row down to a container of 640px (about a 950px window with the sidebar), then three
 // and then two (never a lone tile on a second row). Every count reads as the signed-in
@@ -40,16 +41,8 @@ async function count(collection: string, filter?: any): Promise<string> {
 }
 
 onMounted(() => {
-	// Each tile fills as its own count arrives. Machining and FAST (sintering) are one collection split.
-	const reads: [string, string, any?][] = [
-		['samples', 'physical_samples'],
-		['machining', 'manufacturing_operations', { process_category: { _neq: 'sintering' } }],
-		['fast', 'manufacturing_operations', { process_category: { _eq: 'sintering' } }],
-		['tests', 'test_sessions'],
-		['projects', 'projects'],
-		['campaigns', 'campaigns'],
-	];
-	for (const [key, collection, filter] of reads) count(collection, filter).then((value) => fill(key, { value }));
+	// Each tile fills as its own count arrives. Machining and FAST (sintering) are one collection split (Conform runs are in neither: see labStatReads).
+	for (const { key, collection, filter } of STAT_READS) count(collection, filter).then((value) => fill(key, { value }));
 });
 </script>
 

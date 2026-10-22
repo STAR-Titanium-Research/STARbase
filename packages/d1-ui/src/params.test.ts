@@ -31,6 +31,8 @@ const defs: ParamFieldDef[] = [
 	op('machining_coolant_used', { type: 'boolean', label: 'Coolant Used?', when: 'machining', sort: 3 }),
 	op('sintering_max_temp_celsius', { suffix: '°C', label: 'Max temperature', when: 'sintering' }),
 	op('sintering_batch_number', { type: 'string', when: 'sintering' }),
+	op('conform_die_diameter_mm', { suffix: 'mm', label: 'Die exit diameter', when: 'conform', sort: 1 }),
+	op('conform_feedstock', { type: 'string', label: 'Feedstock', when: 'conform', sort: 2 }),
 	op('ht_cooling_method', {
 		type: 'string',
 		when: 'heat_treatment',
@@ -62,6 +64,11 @@ describe('paramFields', () => {
 			'machining_feed_mm_per_rev',
 			'machining_coolant_used',
 		]);
+	});
+	it('picks up the conform_* fields for a Conform run', () => {
+		expect(paramFields(defs, 'process_category', 'conform').map((f) => f.field)).toEqual(['conform_die_diameter_mm', 'conform_feedstock']);
+		const bare = defs.map((d) => ({ ...d, meta: { ...d.meta, conditions: null } }));
+		expect(paramFields(bare, 'process_category', 'conform').map((f) => f.field)).toEqual(['conform_die_diameter_mm', 'conform_feedstock']);
 	});
 	it('never picks a presentation-only field or another category', () => {
 		const all = paramFields(defs, 'process_category', 'sintering').map((f) => f.field);

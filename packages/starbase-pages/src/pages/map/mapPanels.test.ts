@@ -321,6 +321,38 @@ describe('DataThumb', () => {
     expect(text(html)).toContain('Open in FAST plotter');
   });
 
+  it('Conform run data has its words, a plotter link and the window trace as a small drawing', async () => {
+    const thumb = {
+      startMs: 0,
+      endMs: 60000,
+      series: [
+        { key: 'wheel_speed_rpm', label: 'Wheel speed', unit: 'rpm', min: 0, max: 5, values: [0, 2.5, null, 5] },
+        { key: 'tooling1_c', label: 'Tooling 1', unit: '°C', min: 100, max: 200, values: [100, 150, 200] },
+      ],
+    };
+    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1', thumb }, link: true });
+    expect(text(html)).toContain('Conform run data');
+    expect(text(html)).toContain('Open in Conform plotter');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('aria-label="Conform run window: Wheel speed and Tooling 1"');
+    // the gap breaks the speed line into two pieces; Tooling 1 is one line
+    expect(html.match(/<polyline/g)).toHaveLength(3);
+  });
+
+  it('Conform run data without a trace (no window yet, or a log this person cannot read) is the words and the link only', async () => {
+    const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1' }, link: true });
+    expect(text(html)).toContain('Conform run data');
+    expect(html).not.toContain('<svg');
+  });
+
+  it('says why a Conform run has no trace: the log is not visible to this person, or could not be loaded', async () => {
+    for (const note of ['Conform log not visible to you', 'Could not load the Conform log']) {
+      const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1', thumbNote: note }, link: true });
+      expect(text(html)).toContain(note);
+      expect(html).not.toContain('<svg');
+    }
+  });
+
   it('draws nothing for none, or while the answer is still on its way', async () => {
     expect(await render(DataThumb, { preview: { kind: 'none', plotterPath: '' } })).not.toContain('dthumb');
     expect(await render(DataThumb, {})).not.toContain('dthumb');

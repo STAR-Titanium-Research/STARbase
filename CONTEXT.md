@@ -41,7 +41,7 @@ A STARbase page that walks someone through one job, such as registering a sample
 
 **Plotter**:
 An interactive view that plots a run's recorded data. The **Force plotter** plots machining-force
-captures; the **FAST plotter** plots sintering runs.
+captures; the **FAST plotter** plots sintering runs; the **Conform plotter** plots Conform runs.
 _Avoid_: dashboard (for these), plotting app
 
 **Force App**:
@@ -210,6 +210,36 @@ _Avoid_: batch, FAST batch, cycle
 The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many runs share one. It
 names a raw stock lot but is only text: it is not linked to the lot.
 _Avoid_: batch (on its own), FAST batch, batch number
+
+**Conform run**:
+One continuous extrusion on the Conform machine: one operation, which turns one feedstock into one
+extrusion. Several runs can follow one another in one **Conform log**, one per feedstock; each run owns
+its own stretch of that log, its **run window**.
+_Avoid_: batch, Confirm, Conform batch
+
+**Conform log**:
+The file the Conform machine records, one row a second, for as long as it was logging. It can cover
+warm-up, idle time and several Conform runs.
+_Avoid_: trace (for the file), run data, machine data (on its own)
+
+**Run window**:
+The stretch of a Conform log, from a start time to an end time, that belongs to one Conform run. Time
+in a log outside every run window (warm-up, changeover, idle) belongs to no run.
+_Avoid_: segment, slice, range
+
+**Step**:
+A stretch of a Conform run held at one IPS setpoint and one wheel speed demand, found from the log
+wherever either changes. A Conform run is usually several steps (250 °C at 5, 8, then 10 rpm).
+_Avoid_: stage, phase, segment
+
+**Feedstock**:
+The loose material a Conform run is fed: swarf, powder, granules or rod. It is a sample when the lab
+made it (swarf from its own machining), a raw stock lot when it was bought in, or otherwise only text.
+_Avoid_: batch, charge (for the record), input powder
+
+**Extrusion**:
+The sample a Conform run makes: one long length, later sectioned into pieces that are cut from it.
+_Avoid_: extrudate, product, wire, rod (for the record)
 
 **Stack of passes**:
 Several operations of the same method on the same machine, done one after another on one sample with
@@ -476,6 +506,9 @@ _Avoid_: private file, hidden file
 - "Batch" meant both the FAST press's free-text "Batch" field (the old "Batch #" form field) and several
   samples done together. Resolved: one press cycle is a **FAST run**, the press's field is the **powder batch**
   it used, and a **batch** is only several samples done together.
+- A Conform run was described as "one batch of loose powder or swarf", and the machine was typed
+  "Confirm". Resolved: the operation is a **Conform run**, what it is fed is its **feedstock**, and what it
+  makes is an **extrusion**; "batch" stays only several samples done together.
 - "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
   Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
   **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.

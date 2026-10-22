@@ -1,15 +1,17 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
+import { loadConformRun, type ConformRunBundle } from '@d1/fast-plotting';
 import {
-	LIST_CAP, errorText, isNotVisible, linkedFiles, paramColumns, paramRows, shareFiles, useFieldDefs, useItems, useRequestGate,
+	LIST_CAP, errorText, isNotVisible, linkedFiles, paramColumns, paramRows, shareFiles, useExplorerHost, useFieldDefs, useItems, useRequestGate,
 	readHiddenLinks, useSections, type LinkedFile, type ParamRow,
 } from '@d1/ui';
+import { conformApi } from '../conformApi';
 
 // Everything the Operation page reads, as the signed-in user. The operation itself decides between
 // "page" and "Not found or not visible to you"; every other block is a section that loads in
 // parallel and fails on its own (same pattern as the Sample page).
 
 const OPERATION_FIELDS = [
-	'operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'process_category', 'operator_name',
+	'operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'work_state', 'process_category', 'operator_name',
 	'outcome_notes', 'capture_software', 'capture_frequency_khz', 'force_file_id', 'source_system',
 	'method_id.method_id', 'method_id.method_name',
 	'equipment_id.equipment_id', 'equipment_id.equipment_name',
@@ -34,6 +36,7 @@ export function useOperationData(id: Ref<string>) {
 	const { getFieldDefs } = useFieldDefs();
 	const gate = useRequestGate();
 	const { section, fill } = useSections(gate);
+	const host = useExplorerHost();
 
 	const operation = ref<any | null>(null);
 	const loading = ref(false);
@@ -43,6 +46,7 @@ export function useOperationData(id: Ref<string>) {
 	const params = section<ParamRow[]>([]);
 	const force = section<any[]>([]);
 	const fast = section<any | null>(null);
+	const conform = section<ConformRunBundle | null>(null);
 	const files = section<LinkedFile[]>([]);
 	const shared = section<LinkedFile[]>([]);
 	const hidden = section<Record<string, boolean>>({});
@@ -69,6 +73,7 @@ export function useOperationData(id: Ref<string>) {
 			params.value = { data: [], loading: false, error: '' };
 			force.value = { data: [], loading: false, error: '' };
 			fast.value = { data: null, loading: false, error: '' };
+			conform.value = { data: null, loading: false, error: '' };
 			files.value = { data: [], loading: false, error: '' };
 			shared.value = { data: [], loading: false, error: '' };
 			hidden.value = { data: {}, loading: false, error: '' };
@@ -117,6 +122,8 @@ export function useOperationData(id: Ref<string>) {
 				});
 				return rows[0] ?? null;
 			}),
+			// A Conform run's own row and its log (a reader may see the run and not the log: `logHidden`); other categories have none.
+			fill(conform, token, 'the Conform run', async () => (category !== 'conform' ? null : loadConformRun(conformApi(host.api), opId))),
 			fill(files, token, 'linked files', async () => {
 				const item = await getItem('manufacturing_operations', opId, {
 					fields: [
@@ -152,5 +159,5 @@ export function useOperationData(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload: load };
+	return { operation, loading, notVisible, error, params, force, fast, conform, files, shared, hidden, hiddenKnown, reload: load };
 }

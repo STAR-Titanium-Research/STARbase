@@ -145,9 +145,10 @@ test('registers the items.create, items.delete and items.update filters, the thr
   assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'files.create', 'files.update', 'files.upload', 'items.create', 'items.delete', 'items.update']);
 });
 
-test('the shipped rules guard exactly the four visibility junctions and the surface scan file link', () => {
+test('the shipped rules guard exactly the four visibility junctions, the surface scan file link and the Conform run row', () => {
   assert.deepEqual(Object.keys(RULES).sort(), [
     'campaign_samples',
+    'conform_run_data',
     'project_investigators',
     'sample_co_owners',
     'surface_scans',
@@ -158,7 +159,8 @@ test('the shipped rules guard exactly the four visibility junctions and the surf
     ['test_sessions_id', 'test_sessions', 'session_id'],
   ]);
   for (const checks of Object.values(RULES)) {
-    for (const c of checks) assert.ok(JSON.stringify(c.filter).includes('$CURRENT_USER'), c.parent);
+    // (the Conform log's rule is an empty filter: every member reads every log, so the guard only asks that it exists)
+    for (const c of checks.filter((x) => x.parent !== 'conform_logs')) assert.ok(JSON.stringify(c.filter).includes('$CURRENT_USER'), c.parent);
   }
 });
 
@@ -1970,4 +1972,124 @@ test('surface_scans update: a file moved by repoint_candidate (the scan then poi
     filters['items.update']({ directus_files_id: 'f-gone' }, meta, scanCtx('u-owner', { database })),
     (e) => e.message === SCAN_REFUSED,
   );
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Conform runs (plan 2026-10-21-conform-runs, review round 1): conform_run_data.operation_id is guarded with the operation's UPDATE rule (the Lab Member
+// create row is `{}`: Directus does not filter create), conform_run_data.log_id with the log's READ rule, which is an empty filter (every member reads
+// every log), so that guard only asks that the log exists.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+const RUN_OP_REFUSED = 'You can only record a Conform run on an operation you can edit.';
+const RUN_LOG_REFUSED = 'You can only link a Conform log that exists.';
+const runCtx = (extra = {}) => ({
+  database: fakeDb([], []),
+  schema: { collections: { conform_run_data: { primary: 'id' } } },
+  accountability: member,
+  ...extra,
+});
+
+test('the Conform run guard ships the operation update rule and an empty log filter', () => {
+  assert.deepEqual(RULES.conform_run_data.map((c) => [c.field, c.parent, c.key]), [
+    ['operation_id', 'manufacturing_operations', 'operation_id'],
+    ['log_id', 'conform_logs', 'log_id'],
+  ]);
+  const text = JSON.stringify(RULES.conform_run_data[0].filter);
+  assert.ok(text.includes('$CURRENT_USER') && text.includes('readers') && text.includes('owner_person_id') && text.includes('"edit"'), 'readers AND an editor test');
+  assert.deepEqual(RULES.conform_run_data[1].filter, {});
+});
+
+test('conform_run_data create: allowed when the caller may edit the operation and the log exists; both reads run as the caller', async () => {
+  const { filters, log } = mount();
+  const payload = { operation_id: 'op1', log_id: 'log1', status: 'no_window' };
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_run_data' }, runCtx()), payload);
+  assert.deepEqual(log.reads.map((r) => r.collection), ['manufacturing_operations', 'conform_logs']);
+  const [op, lg] = log.reads;
+  assert.deepEqual(op.query.filter._and[0], { operation_id: { _eq: 'op1' } });
+  const sent = JSON.stringify(op.query.filter._and[1]);
+  assert.ok(sent.includes('user-1') && !sent.includes('$CURRENT_USER'), 'the caller replaces $CURRENT_USER');
+  // the log's filter is empty: the read asks for the row and nothing else
+  assert.deepEqual(lg.query.filter, { _and: [{ log_id: { _eq: 'log1' } }] });
+  assert.equal(log.built[0].options.accountability, member);
+});
+
+test('conform_run_data create: refused for an operation the caller cannot edit (readers alone are not enough), in plain words', async () => {
+  const { filters } = mount({ canUpdate: (collection) => collection !== 'manufacturing_operations' });
+  await assert.rejects(
+    filters['items.create']({ operation_id: 'op1', log_id: 'log1' }, { collection: 'conform_run_data' }, runCtx()),
+    (e) => denied(/manufacturing_operations op1/)(e) && e.message === RUN_OP_REFUSED && e.extensions.collection === 'conform_run_data',
+  );
+});
+
+test('conform_run_data create: a log that does not exist is refused; the operation is checked first', async () => {
+  const { filters, log } = mount({ canUpdate: (collection) => collection !== 'conform_logs' });
+  await assert.rejects(
+    filters['items.create']({ operation_id: 'op1', log_id: 'nope' }, { collection: 'conform_run_data' }, runCtx()),
+    (e) => denied(/conform_logs nope/)(e) && e.message === RUN_LOG_REFUSED,
+  );
+  assert.deepEqual(log.reads.map((r) => r.collection), ['manufacturing_operations', 'conform_logs']);
+  const both = mount({ canUpdate: () => false });
+  await assert.rejects(
+    both.filters['items.create']({ operation_id: 'op1', log_id: 'nope' }, { collection: 'conform_run_data' }, runCtx()),
+    (e) => e.message === RUN_OP_REFUSED,
+  );
+});
+
+test('conform_run_data create: no log yet is allowed for an editor (the browser links a log afterwards); a blank operation is left to the database', async () => {
+  const { filters, log } = mount();
+  const payload = { operation_id: 'op1', status: 'no_log' };
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_run_data' }, runCtx()), payload);
+  assert.deepEqual(log.reads.map((r) => r.collection), ['manufacturing_operations']);
+  const blank = { status: 'no_log' };
+  assert.equal(await filters['items.create'](blank, { collection: 'conform_run_data' }, runCtx()), blank);
+});
+
+test('conform_run_data create: an operation created by the same request passes without its update rule (the creator is building it)', async () => {
+  const { filters } = mount({ canUpdate: (collection) => collection !== 'manufacturing_operations' });
+  const database = fakeDb([], ['manufacturing_operations:op-new']);
+  const payload = { operation_id: 'op-new', log_id: 'log1' };
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_run_data' }, runCtx({ database })), payload);
+  assert.ok(database.calls.some((c) => c.table === 'manufacturing_operations' && c.id === 'op-new' && /version\s*=\s*1/.test(c.sql)));
+  // an operation that merely existed (updated here: version 2) does not qualify
+  const old = fakeDb([], ['manufacturing_operations:op-old@2']);
+  await assert.rejects(
+    filters['items.create']({ operation_id: 'op-old' }, { collection: 'conform_run_data' }, runCtx({ database: old })),
+    (e) => e.message === RUN_OP_REFUSED,
+  );
+});
+
+test('conform_run_data create: an administrator and a call with no accountability are not checked', async () => {
+  const { filters, log } = mount({ canUpdate: () => false });
+  const payload = { operation_id: 'op1', log_id: 'log1' };
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_run_data' }, runCtx({ accountability: { user: 'a', admin: true } })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'conform_run_data' }, runCtx({ accountability: null })), payload);
+  assert.equal(log.reads.length, 0);
+});
+
+test('conform_run_data update: repointing the operation or the log is checked; an unchanged key or a write to other columns is not', async () => {
+  const { filters, log } = mount({ canUpdate: (collection) => collection !== 'manufacturing_operations' });
+  const meta = { collection: 'conform_run_data', keys: ['run-1'] };
+  const database = () => fakeDb([{ id: 'run-1', operation_id: 'op-mine', log_id: 'log1' }], []);
+  await assert.rejects(
+    filters['items.update']({ operation_id: 'op-theirs' }, meta, runCtx({ database: database() })),
+    (e) => e.message === RUN_OP_REFUSED && e.extensions.id === 'op-theirs',
+  );
+  // the same operation again (an editor saving the whole row): no read, no refusal
+  const same = { operation_id: 'op-mine', status: 'done', summary: { x: 1 } };
+  assert.equal(await filters['items.update'](same, meta, runCtx({ database: database() })), same);
+  const other = { status: 'done', steps: [] };
+  assert.equal(await filters['items.update'](other, meta, runCtx({ database: database() })), other);
+  assert.equal(log.reads.length, 1, 'only the repoint was read');
+  // linking another log: a junction with two guards checks both on the row as it will be (as campaign_samples does)
+  const ok = mount();
+  const relink = { log_id: 'log2', window_start: null, window_end: null };
+  assert.equal(await ok.filters['items.update'](relink, meta, runCtx({ database: database() })), relink);
+  assert.deepEqual(ok.log.reads.map((r) => [r.collection, JSON.stringify(r.query.filter._and[0])]), [
+    ['manufacturing_operations', '{"operation_id":{"_eq":"op-mine"}}'],
+    ['conform_logs', '{"log_id":{"_eq":"log2"}}'],
+  ]);
+  // clearing the log (unlink) grants nothing
+  const unlink = { log_id: null, status: 'no_log' };
+  assert.equal(await ok.filters['items.update'](unlink, meta, runCtx({ database: database() })), unlink);
+  assert.equal(ok.log.reads.length, 2);
 });

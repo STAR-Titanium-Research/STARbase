@@ -296,6 +296,122 @@
           ]
         }
       }
+    ],
+    "conform_run_data": [
+      {
+        "field": "operation_id",
+        "parent": "manufacturing_operations",
+        "key": "operation_id",
+        "filter": {
+          "_and": [
+            {
+              "readers": {
+                "user_id": {
+                  "_eq": "$CURRENT_USER"
+                }
+              }
+            },
+            {
+              "_or": [
+                {
+                  "owner_person_id": {
+                    "user_id": {
+                      "_eq": "$CURRENT_USER"
+                    }
+                  }
+                },
+                {
+                  "_and": [
+                    {
+                      "access": {
+                        "person_id": {
+                          "user_id": {
+                            "_eq": "$CURRENT_USER"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "access": {
+                        "role": {
+                          "_in": [
+                            "edit",
+                            "manage"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "_and": [
+                    {
+                      "restricted": {
+                        "_eq": false
+                      }
+                    },
+                    {
+                      "_or": [
+                        {
+                          "sample_id": {
+                            "owner_person_id": {
+                              "user_id": {
+                                "_eq": "$CURRENT_USER"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "sample_id": {
+                            "co_owners": {
+                              "user_id": {
+                                "_eq": "$CURRENT_USER"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "_and": [
+                            {
+                              "sample_id": {
+                                "access": {
+                                  "person_id": {
+                                    "user_id": {
+                                      "_eq": "$CURRENT_USER"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "sample_id": {
+                                "access": {
+                                  "role": {
+                                    "_in": [
+                                      "edit",
+                                      "manage"
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "field": "log_id",
+        "parent": "conform_logs",
+        "key": "log_id",
+        "filter": {}
+      }
     ]
   },
   "ownerGuards": {

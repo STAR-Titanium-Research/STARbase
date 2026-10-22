@@ -6,7 +6,7 @@
 
 import { shallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
-import { dataPreview, type DataPreview } from './model/dataPreview';
+import { conformThumbs, dataPreview, type DataPreview } from './model/dataPreview';
 import type { Ref } from './model/types';
 
 export function useDataPreviews(api: HostApi) {
@@ -30,7 +30,18 @@ export function useDataPreviews(api: HostApi) {
     const mine = epoch;
     void dataPreview(api, fresh)
       .then((answer) => {
-        if (mine === epoch) previews.value = { ...previews.value, ...answer };
+        if (mine !== epoch) return;
+        previews.value = { ...previews.value, ...answer };
+        // A Conform run's trace comes after the previews, so a slow CSV never holds back the rest.
+        return conformThumbs(api, answer).then((thumbs) => {
+          if (mine !== epoch) return;
+          const next = { ...previews.value };
+          for (const [id, found] of Object.entries(thumbs)) {
+            if (!next[id]) continue;
+            next[id] = { ...next[id], ...(found.thumb ? { thumb: found.thumb } : {}), ...(found.note ? { thumbNote: found.note } : {}) };
+          }
+          previews.value = next;
+        });
       })
       .catch(() => {
         /* no previews: the cards simply show no data block */

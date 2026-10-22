@@ -311,11 +311,13 @@ const NEW_FROM_DROPS = new Set([
 	'done_at', 'done_by_person_id', 'work_state', 'notes', 'sample_code', 'pass_code', 'test_code', 'operation_sequence', 'batch_id',
 	'source_run_uid', 'current_status', 'date_created', 'date_updated', 'user_created', 'user_updated', 'created_at', 'updated_at',
 	'created_by', 'updated_by', 'version',
-	// The identity of one run, which the database holds unique (a FAST run number with its machine: a copy would be refused at Create), what an
+	// The identity of one run, which the database holds unique (a FAST or Conform run number with its machine: a copy would be refused at Create), what an
 	// import brought, the files and codes of that run and, of a test, its pipeline status and the sample its code was numbered on.
-	'sintering_run_number', 'source_system', 'source_recipe_id', 'fast_recipe_id', 'machining_legacy_machining_uid', 'machining_legacy_insert_edge_id',
+	'sintering_run_number', 'conform_run_number', 'source_system', 'source_recipe_id', 'fast_recipe_id', 'machining_legacy_machining_uid', 'machining_legacy_insert_edge_id',
 	'owner', 'gcode_file', 'status', 'summary_stats', 'plot_uris', 'data_file_uri', 'data_file_size_gb', 'file_size_gb',
 	'test_code_number', 'test_code_type', 'test_code_is_manual', 'test_code_subject_collection', 'test_code_subject_id',
+	// A Conform run's measured results (what went in, what came out): they belong to that run, not to the setup a copy starts from.
+	'conform_feed_mass_g', 'conform_extrusion_length_mm', 'conform_extrusion_mass_g', 'conform_yield_pct', 'conform_flash_mass_g',
 ]);
 
 /** The fields of an existing record that a "new from" or duplicate of it keeps. */

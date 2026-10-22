@@ -13,6 +13,7 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@d1/fast-plotting": "*",
     "@d1/ui": "*",
     "@vue-flow/background": "1.3.2",
     "@vue-flow/controls": "1.1.3",

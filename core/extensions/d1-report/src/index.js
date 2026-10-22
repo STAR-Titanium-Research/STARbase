@@ -16,6 +16,7 @@
 import { defineEndpoint } from '@directus/extensions-sdk';
 import QRCode from 'qrcode';
 import { recordLink, renderSampleReport, renderOperationReport, renderTestReport } from './render.js';
+import { parseConformCsv } from './conform.js';
 import { createAccess } from './access.js';
 
 // Report pages are our own self-contained HTML. Directus's global CSP blocks inline
@@ -167,7 +168,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export default defineEndpoint({
 	id: 'd1-report',
 	handler: (router, { database, env, logger, services, getSchema }) => {
-		const { ItemsService } = services;
+		const { ItemsService, AssetsService } = services;
 
 		// Reads for one request, through the CALLER's accountability so their own
 		// permissions apply (see access.js). `database` (root knex) is used below only
@@ -179,6 +180,31 @@ export default defineEndpoint({
 				accountability: req.accountability,
 				schema: req.schema ?? (await getSchema()),
 			});
+
+		// The stored Conform CSV, read through the CALLER's accountability (Directus applies
+		// the file's permissions), parsed against the log's series catalogue. {trace} on success;
+		// otherwise {error}: 'forbidden' when the read was refused (a 403: the appendix then says
+		// "Conform log not visible to you") and 'failed' for anything else (logged; the appendix
+		// says "Could not load the Conform log"). Either way the report shows the run summary
+		// without plots rather than failing.
+		const readConformTrace = async (req, log) => {
+			try {
+				const asset = new AssetsService({
+					accountability: req.accountability,
+					schema: req.schema ?? (await getSchema()),
+				});
+				// An explicit empty transformation set: Directus resolves presets from
+				// transformationParams, which a bare {} lacks.
+				const { stream } = await asset.getAsset(log.directus_files_id, { transformationParams: {} });
+				const chunks = [];
+				for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+				return { trace: parseConformCsv(Buffer.concat(chunks).toString('utf8'), log.series) };
+			} catch (err) {
+				if (err?.code === 'FORBIDDEN' || err?.status === 403) return { error: 'forbidden' };
+				logger.error(`d1-report: conform log file ${log.directus_files_id} unreadable: ${err.message}`);
+				return { error: 'failed' };
+			}
+		};
 
 		// Same body whether the row is missing or the caller may not read it, so the
 		// endpoints cannot be used to probe which sample codes / ids exist.
@@ -408,13 +434,36 @@ export default defineEndpoint({
 							)
 						: null;
 
+				// Conform ops: the run row, then its log row and CSV, each read through the
+				// caller. A log row the caller cannot read ('forbidden'), a file whose read is
+				// refused ('forbidden') or one that cannot be read ('failed') leaves conformTrace
+				// null; the appendix shows the run summary with the matching note for the plots.
+				let conformRun = null;
+				let conformLog = null;
+				let conformTrace = null;
+				let conformLoadError = null;
+				if (op.process_category === 'conform') {
+					conformRun = await a.first(
+						'conform_run_data',
+						{ _and: [{ operation_id: { _eq: op.operation_id } }, { status: { _eq: 'done' } }] },
+						['id', 'operation_id', 'log_id', 'window_start', 'window_end', 'status', 'summary', 'steps', 'error_message']
+					);
+					conformLog = conformRun?.log_id ? await a.one('conform_logs', conformRun.log_id) : null;
+					if (conformRun?.log_id && !conformLog) conformLoadError = 'forbidden';
+					if (conformLog?.directus_files_id) {
+						const read = await readConformTrace(req, conformLog);
+						conformTrace = read.trace ?? null;
+						conformLoadError = read.error ?? null;
+					}
+				}
+
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
 				const recordUrl = recordLink(publicUrl, 'manufacturing_operations', id);
 				const qrSvg = await QRCode.toString(recordUrl, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
 
 				res.set('Content-Security-Policy', REPORT_CSP);
 				res.set('Content-Type', 'text/html; charset=utf-8').send(
-					renderOperationReport({ op, fa, fastRun, qrSvg, recordUrl, publicUrl })
+					renderOperationReport({ op, fa, fastRun, conformRun, conformLog, conformTrace, conformLoadError, qrSvg, recordUrl, publicUrl })
 				);
 			} catch (err) {
 				logger.error(`d1-report operation failed for ${id}: ${err.stack || err.message}`);
