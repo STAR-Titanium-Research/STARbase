@@ -33,11 +33,15 @@ describe('Palette', () => {
 		expect(html.match(/class="[^"]*\bpe\b/g)).toHaveLength(entries.length);
 	});
 
+	it('says how to add: click, Enter or drag', async () => {
+		expect(text(await render({}))).toContain('Click, Enter or drag to add.');
+	});
+
 	it('every entry that can be added is a drag source, and says how; Existing sample… is not one', async () => {
 		const html = await render({});
 		const tag = (id: string) => html.match(new RegExp(`<button[^>]*data-entry="${id}"[^>]*>`))?.[0] ?? '';
 		expect(tag('op:mt')).toMatch(/class="[^"]*\bdrag\b/);
-		expect(tag('op:mt')).toContain('title="Drag onto the canvas, a socket or a wire. Enter adds it."');
+		expect(tag('op:mt')).toContain('title="Click, Enter or drag to add."');
 		expect(tag('sample:pick')).not.toMatch(/\bdrag\b/);
 	});
 

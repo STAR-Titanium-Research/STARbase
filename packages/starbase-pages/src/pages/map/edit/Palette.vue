@@ -7,7 +7,7 @@ import type { TemplateScope } from './templates';
 
 // The palette (redesign R1): the left dock of edit mode. A search box over the one catalog (samples, operations by process category, tests),
 // every entry a drag source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between
-// its ends). A mouse drags; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
+// its ends). A mouse drags or clicks; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
 // canvas). The dock folds to a rail, and remembers that per person. Presentational: the page owns what the entries do.
 const props = defineProps<{
 	entries: MenuEntry[];
@@ -82,7 +82,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 		</div>
 		<template v-if="!folded">
 			<input ref="search" v-model="query" class="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search…" aria-label="Search the palette" @keydown.esc.stop="query = ''" />
-			<p class="hint">Drag onto the canvas, a socket or a wire. Enter adds.</p>
+			<p class="hint">Click, Enter or drag to add.</p>
 			<p v-if="templateNotice" class="note" :class="{ bad: templateFailed }" role="status" data-template-notice>
 				<span>{{ templateNotice }}</span>
 				<button type="button" class="x" aria-label="Dismiss" @click="emit('template-dismiss')"><v-icon name="close" x-small /></button>
@@ -97,7 +97,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 							:class="{ drag: draggable(r.e), grey: !!r.e.warn || !!r.e.disabled, off: !!r.e.disabled }"
 							:aria-disabled="!!r.e.disabled || undefined"
 							:data-entry="r.e.id"
-							:title="draggable(r.e) ? 'Drag onto the canvas, a socket or a wire. Enter adds it.' : r.e.detail"
+							:title="draggable(r.e) ? 'Click, Enter or drag to add.' : r.e.detail"
 							@pointerdown="draggable(r.e) && emit('drag', r.e, $event)"
 							@click="click(r.e)"
 						>

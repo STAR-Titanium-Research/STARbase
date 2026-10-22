@@ -31,15 +31,18 @@ async function setup(body: DraftBody, selectedId: string | null, over: { canvasE
 		const d = toGraph(over.loaded ?? null, edit.body.value);
 		return buildGraph(d, groupBatches(d.operations, d.tests, { probable: false, stack: true }), { slots: () => [] });
 	});
+	// What the page does to show a new card: select it (without centring) and pan to it only when it is out of view.
+	const mapSelect = vi.fn();
+	const reveal = vi.fn();
 	const surface = useEditSurface({
 		edit,
 		templates: useTemplates({ api: server.api, gear: edit.catalog.gear, me: () => ({}) }),
-		map: { graph, selectedId: pick, data: { value: over.loaded ?? null }, inHistory: (id: string) => !!over.loaded?.samples.some((s) => s.id === id), nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
-		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true } as never,
+		map: { graph, selectedId: pick, select: mapSelect, data: { value: over.loaded ?? null }, inHistory: (id: string) => !!over.loaded?.samples.some((s) => s.id === id), nodes: computed(() => graph.value.nodes), clearHover() {} } as never,
+		canvas: { toFlow: (x: number, y: number) => ({ x, y }), remeasure: async () => undefined, whenSettled: async () => true, reveal } as never,
 		canvasEl: ref(over.canvasEl ?? null),
 		blockedBy: over.blockedBy,
 	});
-	return { edit, surface, server, graph, pickNode: (id: string | null) => void (pick.value = id), select: (id: string | null) => void ((selected = id ? card(id) : undefined), (pick.value = id ? `s:${id}` : null)) };
+	return { edit, surface, server, graph, mapSelect, reveal, pickNode: (id: string | null) => void (pick.value = id), select: (id: string | null) => void ((selected = id ? card(id) : undefined), (pick.value = id ? `s:${id}` : null)) };
 }
 
 describe('Delete', () => {
@@ -366,7 +369,108 @@ describe('the palette\'s Enter (R1)', () => {
 		await settle();
 		expect(edit.body.value.items).toHaveLength(2);
 		expect(edit.body.value.positions.n2).toBeUndefined();
+	});
+
+	it('wires an operation to the new sample that is selected, in the same step', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addSample' }]), 'draft:n1');
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.wires).toEqual([{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }]);
+		edit.undo();
+		expect(edit.body.value.items.map((i) => i.key), 'one undo takes back the card and its wire').toEqual(['n1']);
+		expect(edit.body.value.wires).toEqual([]);
+	});
+
+	it('wires it to the last new sample with a free output when another card is selected', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addSample' }, { type: 'addSample' }]), null);
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.wires).toEqual([{ from: { key: 'n2' }, to: { key: 'n3', row: 0 } }]);
+	});
+
+	it('leaves it floating next to a selected sample of the history: that sample is no new input', async () => {
+		const { edit, surface } = await setup(run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 4 }] }]), 's1');
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items).toHaveLength(2);
 		expect(edit.body.value.wires, 'floating: nothing is wired').toEqual([]);
+	});
+
+	it('one click adds once: a second click on the same entry a moment later is the same click', async () => {
+		const { edit, surface } = await setup(emptyBody(), null);
+		surface.paletteAdd(turning);
+		surface.paletteAdd(turning);
+		await settle();
+		expect(edit.body.value.items).toHaveLength(1);
+		edit.undo();
+		expect(edit.body.value.items, 'one undo step').toEqual([]);
+	});
+
+	it('a different entry, or the same one after the window, adds another', async () => {
+		const { edit, surface } = await setup(emptyBody(), null);
+		const now = vi.spyOn(Date, 'now');
+		now.mockReturnValue(1000);
+		surface.paletteAdd(turning);
+		now.mockReturnValue(1200);
+		surface.paletteAdd({ ...turning, id: 'op:other' });
+		now.mockReturnValue(1800);
+		surface.paletteAdd(turning);
+		await settle();
+		now.mockRestore();
+		expect(edit.body.value.items).toHaveLength(3);
+	});
+
+	it('selects the new card without centring and pans to it only if it is out of view', async () => {
+		const { surface, mapSelect, reveal } = await setup(emptyBody(), null);
+		surface.paletteAdd(turning);
+		await settle();
+		expect(mapSelect).toHaveBeenCalledTimes(1);
+		expect(mapSelect.mock.calls[0], 'no { centre: true }').toHaveLength(1);
+		expect(mapSelect.mock.calls[0][0]).toMatch(/^op:draft:/);
+		expect(reveal).toHaveBeenCalledWith(mapSelect.mock.calls[0][0]);
+	});
+
+	it('a choice in the add search with no socket does the same: wired to the sample just added, then shown', async () => {
+		const { edit, surface, mapSelect, reveal } = await setup(run([{ type: 'addSample' }]), null);
+		surface.addUnconnected({ x: 300, y: 200 });
+		await surface.menu.choose(turning.choice);
+		await settle();
+		expect(edit.body.value.wires).toEqual([{ from: { key: 'n1' }, to: { key: 'n2', row: 0 } }]);
+		expect(mapSelect).toHaveBeenCalledWith(expect.stringMatching(/^op:draft:/));
+		expect(reveal).toHaveBeenCalledTimes(1);
+		edit.undo();
+		expect(edit.body.value.items.map((i) => i.key), 'one step').toEqual(['n1']);
+	});
+
+	it('selects a new sample by its own card', async () => {
+		const { surface, mapSelect } = await setup(emptyBody(), null);
+		surface.paletteAdd({ id: 'sample:new', section: 'Samples', label: 'New sample', choice: { kind: 'newSample' } });
+		await settle();
+		expect(mapSelect).toHaveBeenCalledWith('s:draft:n1');
+	});
+
+	it('puts the keyboard on the new card kind choice, else its first empty field; a card with neither is fine', async () => {
+		// A canvas with one card and what is in it: the card the page selected (its id is read when the page looks for it).
+		let picked: { mock: { calls: unknown[][] } } | undefined;
+		const canvasOf = (inside: { kind?: HTMLElement; fields: readonly HTMLElement[] }) => {
+			const card = { dataset: { get id() { return picked?.mock.calls[0]?.[0]; } }, querySelector: (q: string) => (q === '[data-kind-select]' ? (inside.kind ?? null) : null), querySelectorAll: () => inside.fields };
+			return { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }), querySelectorAll: () => [card] } as unknown as HTMLElement;
+		};
+		const field = (value: string) => ({ value, focus: vi.fn() }) as unknown as HTMLInputElement;
+		const [filled, empty, kind] = [field('x'), field(''), field('')];
+		for (const [inside, focused] of [
+			[{ kind, fields: [filled, empty] }, kind],
+			[{ fields: [filled, empty] }, empty],
+			[{ fields: [] }, null],
+		] as const) {
+			const { surface, mapSelect } = await setup(emptyBody(), null, { canvasEl: canvasOf(inside) });
+			picked = mapSelect;
+			surface.paletteAdd(turning);
+			await settle();
+			await nextTick();
+			for (const f of [kind, empty, filled]) expect(f.focus).toHaveBeenCalledTimes(f === focused ? 1 : 0);
+			vi.clearAllMocks();
+		}
 	});
 
 	it('Existing sample… opens the picker', async () => {

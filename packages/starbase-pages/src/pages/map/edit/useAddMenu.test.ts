@@ -63,6 +63,18 @@ describe('the add search\'s state', () => {
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 
+	it('gives the keys of the cards a choice added, and none when it did nothing or opened a picker', async () => {
+		const { menu, edit } = await setup();
+		const t: MenuTarget = { sock: null, at: { x: 300, y: 200 } };
+		expect(await menu.applyAt(t, { kind: 'operation', methodId: 'm-turn', category: 'machining' })).toEqual(['n1']);
+		expect(await menu.applyAt(t, { kind: 'pickSamples' })).toEqual([]);
+		expect(await menu.applyAt({ sock: { kind: 'sample', id: 'draft:zz', side: 'out' }, at: t.at }, { kind: 'newSample' })).toEqual([]);
+		// A socket's own sample is not what was added: only the card made on it is.
+		const sock = { kind: 'sample', id: 's1', side: 'out' } as const;
+		expect(await menu.applyAt({ sock, at: t.at, anchor: 'card' }, { kind: 'operation', methodId: 'm-turn', category: 'machining' })).toEqual([edit.body.value.items.at(-1)!.key]);
+		expect(edit.body.value.items.filter((i) => i.kind === 'sample')).toHaveLength(1);
+	});
+
 	it('Existing sample… of the catalog opens the picker instead', async () => {
 		const { menu, picked, edit } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });

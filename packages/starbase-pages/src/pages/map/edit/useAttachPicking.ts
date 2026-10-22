@@ -45,7 +45,7 @@ export function useAttachPicking(o: {
 	edit: EditMode;
 	map: { graph: { value: ProcessGraph | null }; nodes: { value: MapNode[] } };
 	/** What a choice at a target does (the add menu's `applyAt`). */
-	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<void>;
+	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<unknown>;
 }) {
 	const { edit } = o;
 	/** Where the picker is for: open while set. */

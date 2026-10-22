@@ -52,7 +52,7 @@ export function useAddDrag(o: {
 	/** The socket under the pointer, as the cards draw it (the same state a dragged wire uses). */
 	drop: Ref<{ sock: string; ok: boolean } | null>;
 	/** Does what a choice at a target does: connects at a socket, adds on empty canvas. */
-	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<void>;
+	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<unknown>;
 	/** An entry on a wire: the reason it is refused (and whether the wire is locked), or null; and doing it. */
 	wireVerdict: (wireId: string, choice: MenuChoice) => { reason: string; locked: boolean } | null;
 	dropOnWire: (wireId: string, choice: MenuChoice, flow: { x: number; y: number } | undefined, at: { x: number; y: number }) => boolean;
