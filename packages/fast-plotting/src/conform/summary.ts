@@ -1,9 +1,12 @@
 // Per-run summary over a run window of a Conform log.
 import type { Trace } from '../fastCache';
-import { energyKwh, powerChannels, type EnergyKwh, type PowerPart } from './power';
+import { CONFORM_POWER_CONSTANTS, energyKwh, powerChannels, type EnergyKwh, type PowerPart } from './power';
 
 export interface ConformSummary {
-	version: 1; duration_s: number; n_rows: number; gaps: number;
+	version: 1;
+	/** `CONFORM_POWER_CONSTANTS.version` the energy was worked out with; "Recompute" is offered when it is missing or lower. */
+	constants_version?: number;
+	duration_s: number; n_rows: number; gaps: number;
 	extruding_s: number; mean_wheel_speed_rpm: number | null; mean_torque_pct: number | null; mean_tooling1_c: number | null;
 	peak_torque_pct: number | null; peak_motor_current_a: number | null; peak_tooling1_c: number | null; peak_wheel_temp_c: number | null;
 	ips_setpoint_c: number | null; energy_kwh: EnergyKwh; avg_demand_kw: number; missing: PowerPart[];
@@ -79,6 +82,7 @@ export function summariseWindow(trace: Trace, logStartMs: number, startMs: numbe
 	const rows = to - from;
 	return {
 		version: 1,
+		constants_version: CONFORM_POWER_CONSTANTS.version,
 		duration_s: rows > 1 ? trace.time[to - 1] - trace.time[from] : 0,
 		n_rows: rows,
 		gaps,

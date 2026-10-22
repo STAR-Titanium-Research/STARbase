@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CONFORM_POWER_CONSTANTS, type ConformRunRow, type ConformStep } from '@d1/fast-plotting';
-import { STEP_COLUMNS, energyRows, formatDuration, missingText, needsLog, needsRecompute, statusText, stepCells, totalsRows, windowText, withUnit } from './conformRows';
+import { STEP_COLUMNS, energyRows, missingText, needsLog, needsRecompute, statusText, stepCells, summaryRows, totalsRows, windowText, withUnit } from './conformRows';
 
-describe('withUnit and formatDuration', () => {
+describe('withUnit', () => {
 	it('writes a number to its places with the unit, and a dash for no reading', () => {
 		expect(withUnit(7.666, 2, 'kWh')).toBe('7.67 kWh');
 		expect(withUnit(300, 0, '°C')).toBe('300 °C');
@@ -11,14 +11,13 @@ describe('withUnit and formatDuration', () => {
 		expect(withUnit(NaN, 1, 'kW')).toBe('–');
 		expect(withUnit(3, 0, '')).toBe('3');
 	});
+});
 
-	it('writes a length of time as H:MM:SS', () => {
-		expect(formatDuration(0)).toBe('0:00:00');
-		expect(formatDuration(899)).toBe('0:14:59');
-		expect(formatDuration(7199)).toBe('1:59:59');
-		expect(formatDuration(36000)).toBe('10:00:00');
-		expect(formatDuration(null)).toBe('–');
-		expect(formatDuration(-1)).toBe('–');
+describe('lengths of time use the shared format', () => {
+	it('writes the window length and the extruding time as 12 min 05 s, or 1 h 23 min from an hour', () => {
+		const rows = summaryRows({ duration_s: 899, extruding_s: 4980 } as never);
+		expect(rows[0]).toEqual({ label: 'Window length', value: '14 min 59 s' });
+		expect(rows[1]).toEqual({ label: 'Extruding time', value: '1 h 23 min' });
 	});
 });
 
@@ -40,7 +39,7 @@ describe('energy and totals', () => {
 
 	it('the whole-log block starts with the log length', () => {
 		const rows = totalsRows({ duration_s: 7199, energy_kwh: { motor: 1, ips: 1, cooling: 1, total: 3 }, avg_demand_kw: 2, missing: [] });
-		expect(rows[0]).toEqual({ label: 'Log length', value: '1:59:59' });
+		expect(rows[0]).toEqual({ label: 'Log length', value: '1 h 59 min' });
 		expect(rows.at(-1)).toEqual({ label: 'Average demand', value: '2.00 kW' });
 	});
 
@@ -61,7 +60,7 @@ describe('steps', () => {
 	it('one cell per column, in UK clock time', () => {
 		const cells = stepCells(step);
 		expect(cells).toHaveLength(STEP_COLUMNS.length);
-		expect(cells).toEqual(['13:38:20', '0:06:40', '250 °C', '7.5 rpm', '100.0–120.0 (20.0)', '400.0–430.0 (30.0)', '–', '22.5 %', '3.500 kWh']);
+		expect(cells).toEqual(['13:38:20', '6 min 40 s', '250 °C', '7.5 rpm', '100.0–120.0 (20.0)', '400.0–430.0 (30.0)', '–', '22.5 %', '3.50 kWh']);
 	});
 
 	it('writes a whole wheel speed without a decimal', () => {
@@ -96,19 +95,19 @@ describe('the run window and status', () => {
 describe('needsRecompute', () => {
 	const run = (over: Partial<ConformRunRow> = {}) =>
 		({ status: 'done', log_id: 'l1', window_start: '2025-03-17T13:00:00Z', window_end: '2025-03-17T14:00:00Z', summary: { version: 1 }, ...over }) as ConformRunRow;
-	const log = (version: number) => ({ constants: { ...CONFORM_POWER_CONSTANTS, version } });
+	const current = { version: 1, constants_version: CONFORM_POWER_CONSTANTS.version } as never;
 
-	it('is true for a summary without a version, or a log processed with older constants', () => {
-		expect(needsRecompute(run({ summary: {} as never }), log(CONFORM_POWER_CONSTANTS.version))).toBe(true);
-		expect(needsRecompute(run({ summary: null }), log(CONFORM_POWER_CONSTANTS.version))).toBe(true);
-		expect(needsRecompute(run(), log(CONFORM_POWER_CONSTANTS.version - 1))).toBe(true);
-		expect(needsRecompute(run(), { constants: {} as never })).toBe(true);
+	it('is true for a summary with no version, or whose constants_version is missing or lower', () => {
+		expect(needsRecompute(run({ summary: {} as never }))).toBe(true);
+		expect(needsRecompute(run({ summary: null }))).toBe(true);
+		expect(needsRecompute(run({ summary: { version: 1 } as never }))).toBe(true);
+		expect(needsRecompute(run({ summary: { version: 1, constants_version: CONFORM_POWER_CONSTANTS.version - 1 } as never }))).toBe(true);
 	});
 
-	it('is false when both are current, or there is no window or no readable log', () => {
-		expect(needsRecompute(run(), log(CONFORM_POWER_CONSTANTS.version))).toBe(false);
-		expect(needsRecompute(run({ window_start: null }), log(0))).toBe(false);
-		expect(needsRecompute(run(), null)).toBe(false);
-		expect(needsRecompute(null, log(0))).toBe(false);
+	it('is false for a current summary, or a run with no window', () => {
+		expect(needsRecompute(run({ summary: current }))).toBe(false);
+		expect(needsRecompute(run({ summary: { version: 1, constants_version: CONFORM_POWER_CONSTANTS.version + 1 } as never }))).toBe(false);
+		expect(needsRecompute(run({ window_start: null }))).toBe(false);
+		expect(needsRecompute(null)).toBe(false);
 	});
 });

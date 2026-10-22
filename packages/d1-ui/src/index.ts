@@ -14,7 +14,6 @@ export type { LinkConfig, ResolvedLink } from './links';
 export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
-export { ukInputValue, ukLocalToMs } from './ukTime';
 export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';
 export { rollupOperationsFilter, ROLLUP_OPERATION_FIELDS, rollupTargets } from './rollupLinks';
 export type { RollupTarget } from './rollupLinks';
@@ -76,7 +75,7 @@ export type { SectionState } from './composables/useSections';
 export { useFieldDefs } from './composables/useFieldDefs';
 export { useCanUpdate } from './composables/useCanUpdate';
 export {
-	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, mayChange, notOwnerMessage, offerWrite,
+	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, fetchCanUpdate, forbiddenReason, mayChange, notOwnerMessage, offerWrite,
 } from './canUpdate';
 
 // Components

@@ -6,8 +6,8 @@ import PhoneNote from './PhoneNote.vue';
 import { starbaseFastHost } from './plotHosts';
 
 // /plot/conform?operation=<id>: the run plotter with the Conform profile (the same host and client as FAST).
-const { api } = useApp();
-setFastHost(starbaseFastHost({ api, router: useRouter() }));
+const { api, session } = useApp();
+setFastHost(starbaseFastHost({ api, session, router: useRouter() }));
 </script>
 
 <template>

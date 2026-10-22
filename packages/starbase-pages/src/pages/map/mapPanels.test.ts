@@ -345,6 +345,14 @@ describe('DataThumb', () => {
     expect(html).not.toContain('<svg');
   });
 
+  it('says why a Conform run has no trace: the log is not visible to this person, or could not be loaded', async () => {
+    for (const note of ['Conform log not visible to you', 'Could not load the Conform log']) {
+      const html = await render(DataThumb, { preview: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=o1', thumbNote: note }, link: true });
+      expect(text(html)).toContain(note);
+      expect(html).not.toContain('<svg');
+    }
+  });
+
   it('draws nothing for none, or while the answer is still on its way', async () => {
     expect(await render(DataThumb, { preview: { kind: 'none', plotterPath: '' } })).not.toContain('dthumb');
     expect(await render(DataThumb, {})).not.toContain('dthumb');

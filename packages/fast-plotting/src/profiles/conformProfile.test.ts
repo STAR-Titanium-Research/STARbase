@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AxiosInstance } from 'axios';
-import { conformProfile, type ConformRunBundle } from './conformProfile';
+import { ConformLogError, ConformLogHiddenError, type ConformRunBundle } from '../conform';
+import { conformProfile } from './conformProfile';
 import { seedTiles } from '../fastTiles';
 
 const LOG_START = '2025-03-17T09:00:00Z';
 const log = {
 	log_id: 'log-1', directus_files_id: 'f-1', equipment_id: 'eq-1', source_filename: 'run.csv', log_start: LOG_START, log_end: '2025-03-17T11:00:00Z',
-	n_rows: 7200, duration_s: 7200, series: [], totals: {} as any, constants: {} as any,
+	n_rows: 7200, duration_s: 7200, series: [], totals: {} as any, constants: {} as any, source_sha256: 'abc',
+	run_windows: [
+		{ operation_id: 'op-0', start: '2025-03-17T09:00:30Z', end: '2025-03-17T09:05:00Z' },
+		{ operation_id: 'op-1', start: '2025-03-17T09:10:00Z', end: '2025-03-17T09:20:00Z' },
+	],
 };
 const summary = {
 	version: 1 as const, duration_s: 600, n_rows: 600, gaps: 0, extruding_s: 540, mean_wheel_speed_rpm: 5, mean_torque_pct: 41.26, mean_tooling1_c: 380,
@@ -56,22 +61,25 @@ describe('conformProfile constants', () => {
 
 describe('conformProfile.windows', () => {
 	it('maps the log windows to bands in seconds from the log start, marking this run', async () => {
+		// the reader can read op-1 but not op-0: Directus leaves op-0 out of the operations it returns
 		const api = {
-			get: vi.fn(async () => ({
-				data: {
-					data: [
-						{ operation_id: { operation_id: 'op-0', pass_code: '17-03-25-CF-010', conform_feedstock: 'AA6082 swarf' }, window_start: '2025-03-17T09:00:30Z', window_end: '2025-03-17T09:05:00Z' },
-						{ operation_id: { operation_id: 'op-1', pass_code: '17-03-25-CF-011', conform_feedstock: null }, window_start: '2025-03-17T09:10:00Z', window_end: '2025-03-17T09:20:00Z' },
-					],
-				},
-			})),
+			get: vi.fn(async () => ({ data: { data: [{ operation_id: 'op-1', pass_code: '17-03-25-CF-011', conform_feedstock: null }] } })),
 		} as unknown as AxiosInstance;
 		const bands = await conformProfile.windows!(api, run());
 		expect(bands).toEqual([
-			{ operationId: 'op-0', label: 'AA6082 swarf', startS: 30, endS: 300, current: false },
+			{ operationId: 'op-0', label: 'Other run', startS: 30, endS: 300, current: false },
 			{ operationId: 'op-1', label: '17-03-25-CF-011', startS: 600, endS: 1200, current: true },
 		]);
-		expect((api.get as any).mock.calls[0][0]).toBe('/items/conform_run_data');
+		expect((api.get as any).mock.calls.map((c: any[]) => c[0])).toEqual(['/items/manufacturing_operations']);   // the windows come with the log row
+	});
+	it('names a readable run by its feedstock', async () => {
+		const api = {
+			get: vi.fn(async () => ({ data: { data: [
+				{ operation_id: 'op-0', pass_code: '17-03-25-CF-010', conform_feedstock: 'AA6082 swarf' },
+				{ operation_id: 'op-1', pass_code: '17-03-25-CF-011', conform_feedstock: null },
+			] } })),
+		} as unknown as AxiosInstance;
+		expect((await conformProfile.windows!(api, run())).map((b) => b.label)).toEqual(['AA6082 swarf', '17-03-25-CF-011']);
 	});
 	it('has no bands without a log', async () => {
 		const api = { get: vi.fn() } as unknown as AxiosInstance;
@@ -87,7 +95,7 @@ describe('conformProfile.windows', () => {
 describe('conformProfile figures', () => {
 	it('shows extruding time, mean torque, peak tooling 1 and total energy from the summary', () => {
 		expect(conformProfile.buildStats({}, run())).toEqual([
-			{ label: 'Extruding time', value: '9', unit: 'min', source: 'measured' },
+			{ label: 'Extruding time', value: '9 min 00 s', unit: '', source: 'measured' },
 			{ label: 'Mean torque', value: '41.3', unit: '%', source: 'measured' },
 			{ label: 'Peak tooling 1', value: '412.3', unit: '°C', source: 'measured' },
 			{ label: 'Total energy', value: '2.25', unit: 'kWh', source: 'measured' },
@@ -101,7 +109,9 @@ describe('conformProfile figures', () => {
 	});
 	it('lists the energy per component and says what the log did not have', () => {
 		const tiles = conformProfile.summaryTiles!({}, run({ summary: { ...summary, missing: ['ips'], energy_kwh: { motor: 1.5, ips: null, cooling: 0.25, total: 1.75 } } }));
-		expect(tiles.find((t) => t.key === 'eMotor')).toMatchObject({ value: '1.5', unit: 'kWh' });
+		expect(tiles.find((t) => t.key === 'eMotor')).toMatchObject({ value: '1.50', unit: 'kWh' });
+		expect(tiles.find((t) => t.key === 'duration')).toMatchObject({ value: '10 min 00 s', unit: '' });
+		expect(tiles.find((t) => t.key === 'demand')).toMatchObject({ value: '13.50', unit: 'kW' });
 		expect(tiles.find((t) => t.key === 'eIps')).toBeUndefined();
 		expect(conformProfile.summaryNote!(run({ summary: { ...summary, missing: ['ips'] } }))).toContain('IPS');
 	});
@@ -153,5 +163,52 @@ describe('conformProfile.setWindowFromView', () => {
 		const body = patch.mock.calls.find((c) => c[0] === '/items/conform_run_data/r1')![1];
 		expect(body.window_start).toBe('2025-03-17T09:10:00.000Z');
 		expect(body.window_end).toBe('2025-03-17T11:00:00.000Z');
+	});
+});
+
+describe('conformProfile upload, link and unlink', () => {
+	const OP = { operation_id: 'op-1', equipment_id: { equipment_id: 'eq-1' }, operation_date: '2025-03-17T09:00:00Z', work_state: 'planned' };
+
+	it('offers to link the log a file is already uploaded as, without storing anything', async () => {
+		const bytes = new TextEncoder().encode('Timestamp,Wheel Speed (rpm)\n2025-03-17T09:00:00Z,1\n2025-03-17T09:00:01Z,2\n');
+		const existing = { ...log, log_id: 'log-old', source_filename: 'old.csv' };
+		const api = {
+			get: vi.fn(async (url: string) => ({ data: { data: url === '/items/conform_logs' ? [existing] : [] } })),
+			post: vi.fn(), patch: vi.fn(), delete: vi.fn(),
+		} as unknown as AxiosInstance;
+		const file = { name: 'again.csv', arrayBuffer: async () => bytes.buffer } as unknown as File;
+		const out = await conformProfile.upload!(api, OP, file);
+		expect(out).toEqual({ warning: null, existing: { id: 'log-old', label: 'old.csv · 2025-03-17 09:00:00' } });
+		expect(api.post).not.toHaveBeenCalled();
+	});
+
+	it('lists candidate logs with the windows on them, searching around today when the run has no date', async () => {
+		const logs = [{ ...log, run_windows: [{ operation_id: 'op-9', start: LOG_START, end: '2025-03-17T11:00:00Z' }] }];
+		const api = {
+			get: vi.fn(async (url: string) => ({ data: { data: url === '/items/conform_logs' ? logs : [{ operation_id: 'op-9', pass_code: '17-03-25-CF-009', conform_feedstock: 'Ti swarf' }] } })),
+		} as unknown as AxiosInstance;
+		const list = await conformProfile.linkExisting!.list(api, { ...OP, operation_date: null });
+		expect(list).toEqual([{
+			id: 'log-1', label: 'run.csv · 2025-03-17 09:00:00', windows: ['Ti swarf: 09:00:00 – 11:00:00'],
+			note: "The whole log is Ti swarf's window: narrow that run's window first",
+		}]);
+		expect(conformProfile.linkExisting!.emptyText({ operation_date: null })).toMatch(/today/);
+		expect(conformProfile.linkExisting!.emptyText({ operation_date: '2025-03-17' })).toMatch(/this run's date/);
+	});
+
+	it('unlinks through the helper', async () => {
+		const patch = vi.fn(async (_u: string, body: any) => ({ data: { data: body } }));
+		const api = {
+			get: vi.fn(async (url: string) => ({ data: { data: url === '/items/conform_run_data' ? [{ id: 'r1', operation_id: 'op-1', log_id: 'log-1' }] : url.startsWith('/items/conform_logs/') ? { ...log, run_windows: [{ operation_id: 'x', start: 'a', end: 'b' }] } : [] } })),
+			patch, delete: vi.fn(),
+		} as unknown as AxiosInstance;
+		await conformProfile.unlink!(api, OP);
+		expect(patch.mock.calls[0][1]).toMatchObject({ log_id: null, status: 'no_log', summary: null });
+	});
+
+	it('words a failed trace load: hidden or just failed', () => {
+		expect(conformProfile.traceErrorMessage!(new ConformLogHiddenError())).toBe('Conform log not visible to you');
+		expect(conformProfile.traceErrorMessage!(new ConformLogError('Could not load the Conform log'))).toBe('Could not load the Conform log');
+		expect(conformProfile.traceErrorMessage!(new Error('boom'))).toBe('Could not load the Conform log');
 	});
 });

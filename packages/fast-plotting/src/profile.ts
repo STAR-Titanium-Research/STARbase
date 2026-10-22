@@ -20,6 +20,12 @@ export interface RunQuality { level: Quality; label: string; hint: string }
 /** A figure of the Statistics tab for profiles that show a summary instead of the FAST phases and energy. */
 export interface SummaryTile { key: string; label: string; value: string; unit: string }
 
+/** A log offered in "Use a log already uploaded": its line, the windows already on it, and a note when one covers the whole log. */
+export interface LinkCandidate { id: string; label: string; windows: string[]; note: string | null }
+
+/** What an upload came to: a warning to show, and when the file was already uploaded, that log (nothing was stored). */
+export interface UploadOutcome { warning: string | null; existing?: { id: string; label: string } }
+
 export interface RunProfile {
 	key: 'fast' | 'conform';
 	/** The nav name: "FAST plotter" | "Conform plotter". */
@@ -77,15 +83,24 @@ export interface RunProfile {
 	hasLog?(run: unknown): boolean;
 	/** A one-line statement of the run window for the actions panel, or null when none is set. */
 	windowLabel?(run: unknown): string | null;
-	/** Process a file and attach it. Resolves to a warning to show (or null), rejects with the message to show. */
-	upload?(api: AxiosInstance, op: any, file: File): Promise<string | null>;
+	/**
+	 * Process a file and attach it. Resolves to a warning to show (or null), rejects with the message to show.
+	 * When the same file is already uploaded nothing is stored: `existing` names that log, for the page to offer linking it.
+	 */
+	upload?(api: AxiosInstance, op: any, file: File): Promise<UploadOutcome>;
+	/** Take the log off the run (clearing its window, summary and steps); a log nothing else uses is deleted. */
+	unlink?(api: AxiosInstance, op: any): Promise<void>;
+	/** What the plot area says when the trace failed to load: "Conform log not visible to you" or "Could not load the Conform log". */
+	traceErrorMessage?(e: unknown): string;
 	/** Epoch ms of the trace's time zero, for hover clock times. */
 	startMs?(run: unknown): number | null;
 	/** Every run window on the run's log. */
 	windows?(api: AxiosInstance, run: unknown): Promise<RunWindowBand[]>;
 	setWindowFromView?(api: AxiosInstance, op: any, run: unknown, startS: number, endS: number): Promise<void>;
 	linkExisting?: {
-		list(api: AxiosInstance, op: any): Promise<{ id: string; label: string }[]>;
+		list(api: AxiosInstance, op: any): Promise<LinkCandidate[]>;
+		/** What the list says when no log qualifies. */
+		emptyText(op: any): string;
 		link(api: AxiosInstance, op: any, id: string): Promise<void>;
 	};
 	/** The list quality of the run after it changed, to refresh its row. */

@@ -120,6 +120,21 @@ const trace = ref<Trace | null>(null);
 const runData = ref<any | null>(null);   // the run's own record: what profile.loadRun returned
 const traceLoading = ref(false);
 const runError = ref<string | null>(null);
+// Why the trace could not be loaded, for profiles that word it (Conform: "Conform log not visible to you" / "Could not load the Conform log").
+const traceError = ref<string | null>(null);
+// May the reader change this run? null while it is being asked, or not known: the actions then show and the server decides.
+const canEdit = ref<boolean | null>(null);
+let rightsGen = 0;
+const hasRunActions = !!(profile.setWindowFromView || profile.upload || profile.linkExisting);
+async function askCanEdit(operationId: string) {
+	const gen = ++rightsGen;
+	canEdit.value = null;
+	if (!hasRunActions || !host.canUpdate) return;
+	try {
+		const answer = await host.canUpdate('manufacturing_operations', operationId);
+		if (gen === rightsGen) canEdit.value = answer;
+	} catch { /* not known: the server decides */ }
+}
 
 // Every selection (and unmount) bumps opGen; a load that finishes after that is stale and must not write to
 // detail/runData/trace, which now belong to the newer selection.
@@ -128,7 +143,8 @@ let opGen = 0;
 async function selectOp(row: ListRun) {
 	const gen = ++opGen;
 	selectedId.value = row.id;
-	loadingDetail.value = true; detail.value = null; trace.value = null; runData.value = null; runError.value = null; traceLoading.value = false; bands.value = []; reloading.value = false;
+	loadingDetail.value = true; detail.value = null; trace.value = null; runData.value = null; runError.value = null; traceError.value = null; traceLoading.value = false; bands.value = []; reloading.value = false;
+	askCanEdit(row.id);
 	try {
 		const res = await api.get(`/items/manufacturing_operations/${row.id}`, { params: { fields: profile.detailFields } });
 		if (gen !== opGen) return;
@@ -150,6 +166,7 @@ async function loadRunData(operationId: string, gen: number) {
 async function loadTraceData(gen: number) {
 	const run = runData.value;
 	traceLoading.value = true;
+	traceError.value = null;
 	try {
 		const loaded = await profile.loadTrace(api, run);
 		if (gen !== opGen) return;
@@ -159,7 +176,12 @@ async function loadTraceData(gen: number) {
 			const seeded = seedTiles(catalog.value, 1, { groups: profile.seedGroups, series: profile.seedSeries, strict: profile.seedStrict });
 			if (seeded.length) { tiles.value = seeded; freshTiles = false; }
 		}
-	} catch (e: any) { console.error('FAST trace load failed', e); if (gen === opGen) runError.value = 'Could not load the trace for this run.'; }
+	} catch (e: any) {
+		console.error('FAST trace load failed', e);
+		if (gen !== opGen) return;
+		const words = profile.traceErrorMessage?.(e);
+		if (words) { traceError.value = words; trace.value = null; } else runError.value = 'Could not load the trace for this run.';
+	}
 	finally { if (gen === opGen) traceLoading.value = false; }
 }
 
@@ -216,6 +238,7 @@ const clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15_000)
 const plotMessage = computed(() => {
 	if (!selectedId.value) return 'Select a run';
 	if (loadingDetail.value || traceLoading.value) return 'Loading the trace…';
+	if (traceError.value) return traceError.value;
 	return profile.plotMessage(runData.value, now.value);
 });
 
@@ -246,7 +269,7 @@ const openSample = () => { const id = detail.value?.sample_id?.sample_id; if (id
 				<FastLists v-model:sample="sample" :profile="profile" :rows="rows" :selected-id="selectedId" :folded="folded" @select="selectOp" />
 				<FastRunColumn v-model:tab="tab" :profile="profile" :code="detail?.pass_code ?? selectedRow?.pass_code ?? null" :quality="selectedRow?.quality ?? null"
 					:detail="detail" :run-data="runData" :trace="trace" :loading="loadingDetail || traceLoading" :message="runError"
-					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" :zoom-tool="zoomTool" :busy="reloading" @run-changed="reloadRun"
+					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" :zoom-tool="zoomTool" :busy="reloading" :can-edit="canEdit" @run-changed="reloadRun"
 					@open-operation="openOperation" @open-recipe="openRecipe" @open-sample="openSample" @zoom="onZoom" @hover="hoverT = $event" />
 				<FastPlots v-model:tiles="tiles" v-model:zoom-tool="zoomTool" :trace="trace" :catalog="catalog" :message="plotMessage" :stacked="stacked" :bands="bands" :start-ms="startMs"
 					:zoom-start="zoomStart" :zoom-end="zoomEnd" :cursor="hoverT" @zoom="onZoom" @hover="hoverT = $event" />

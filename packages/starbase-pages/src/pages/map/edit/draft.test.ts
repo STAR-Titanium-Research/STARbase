@@ -127,6 +127,18 @@ describe('addContainer', () => {
 		expect(newFromValues({ method_id: 'cf', process_category: 'conform', conform_run_number: 12, conform_die_diameter_mm: 8 })).toEqual({ method_id: 'cf', process_category: 'conform', conform_die_diameter_mm: 8 });
 	});
 
+	it('new from leaves a Conform run\'s measured results behind, and keeps the setup', () => {
+		const record = {
+			method_id: 'cf', process_category: 'conform', conform_die_diameter_mm: 8, conform_wheel_speed_rpm: 5, conform_ips_setpoint_c: 300, conform_tooling_id: 'T1',
+			conform_feedstock: 'Ti swarf', conform_feedstock_form: 'swarf',
+			conform_feed_mass_g: 500, conform_extrusion_length_mm: 1200, conform_extrusion_mass_g: 420, conform_yield_pct: 84, conform_flash_mass_g: 30,
+		};
+		expect(newFromValues(record)).toEqual({
+			method_id: 'cf', process_category: 'conform', conform_die_diameter_mm: 8, conform_wheel_speed_rpm: 5, conform_ips_setpoint_c: 300, conform_tooling_id: 'T1',
+			conform_feedstock: 'Ti swarf', conform_feedstock_form: 'swarf',
+		});
+	});
+
 	it('new from copies an existing record without its date, sample, notes and code', () => {
 		const record = {
 			operation_id: 'op-1', method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2, operation_date: '2026-01-02', sample_id: 's', output_sample_id: 'o',

@@ -2,7 +2,7 @@ import type { AxiosInstance } from 'axios';
 import type { Router } from 'vue-router';
 import type { ForceHost, ForceHostUser } from '@d1/force-plotting';
 import type { FastHost } from '@d1/fast-plotting';
-import { openLink, recordRoute } from '@d1/ui';
+import { fetchCanUpdate, isLabViewerRole, openLink, recordRoute } from '@d1/ui';
 import type { SessionGuard } from '../api';
 import type { StarbaseConfig } from '../config';
 import type { Session } from '../session';
@@ -56,6 +56,13 @@ export function starbaseForceHost(deps: PlotDeps): ForceHost {
 	};
 }
 
-export function starbaseFastHost(deps: Pick<PlotDeps, 'api' | 'router'>): FastHost {
-	return { api: deps.api, openRecord: (collection, id) => openLink(recordRoute(collection, id), deps.router) };
+// canUpdate is the Operation page's own rights check (the kit's fetchCanUpdate: Directus's item permissions, false for a Lab
+// Viewer without asking), so the plotter offers a Conform run's upload, window and unlink actions to exactly the people the
+// Operation page offers its own to.
+export function starbaseFastHost(deps: Pick<PlotDeps, 'api' | 'router'> & { session?: Pick<Session, 'user'> }): FastHost {
+	return {
+		api: deps.api,
+		openRecord: (collection, id) => openLink(recordRoute(collection, id), deps.router),
+		canUpdate: (collection, id) => fetchCanUpdate(deps.api, collection, id, isLabViewerRole(deps.session?.user.value?.role)),
+	};
 }

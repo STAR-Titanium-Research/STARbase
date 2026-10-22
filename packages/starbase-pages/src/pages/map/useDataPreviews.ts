@@ -36,7 +36,10 @@ export function useDataPreviews(api: HostApi) {
         return conformThumbs(api, answer).then((thumbs) => {
           if (mine !== epoch) return;
           const next = { ...previews.value };
-          for (const [id, thumb] of Object.entries(thumbs)) if (next[id]) next[id] = { ...next[id], thumb };
+          for (const [id, found] of Object.entries(thumbs)) {
+            if (!next[id]) continue;
+            next[id] = { ...next[id], ...(found.thumb ? { thumb: found.thumb } : {}), ...(found.note ? { thumbNote: found.note } : {}) };
+          }
           previews.value = next;
         });
       })

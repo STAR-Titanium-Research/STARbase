@@ -6,8 +6,8 @@ import PhoneNote from './PhoneNote.vue';
 import { starbaseFastHost } from './plotHosts';
 
 // /plot/fast?operation=<id> (spec §8 erratum 2): the shared FAST plotter.
-const { api } = useApp();
-setFastHost(starbaseFastHost({ api, router: useRouter() }));
+const { api, session } = useApp();
+setFastHost(starbaseFastHost({ api, session, router: useRouter() }));
 </script>
 
 <template>

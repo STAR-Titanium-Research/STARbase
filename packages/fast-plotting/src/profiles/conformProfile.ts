@@ -2,15 +2,13 @@
 // window per run. Data access is the pure/axios helpers of ../conform; this file only shapes it for the plotter.
 import type { AxiosInstance } from 'axios';
 import {
-	ConformLogError, formatUkTime, linkExistingLog, listCandidateLogs, listLogWindows, loadConformRun, loadLogTrace,
-	setRunWindow, ukDate, uploadConformLog, formatUkDateTime,
-	type ConformLogRow, type ConformRunRow, type ConformSummary,
+	ConformLogError, LOG_LOAD_FAILED, candidateLabel, candidatesEmptyText, fixed, formatClockRange, formatDuration, formatUkDateTime,
+	kwhNumber, labelWindows, linkExistingLog, listCandidateLogs, loadConformRun, loadLogTrace, setRunWindow, ukDate, unlinkLog, uploadConformLog,
+	windowLine, wholeLogNote,
+	type ConformLogRow, type ConformRunBundle, type ConformSummary,
 } from '../conform';
 import { fmtDateTime, type DetailRow, type MetaRow, type Stat } from '../fastMeta';
 import type { RunProfile, RunQuality, RunWindowBand, SummaryTile } from '../profile';
-
-/** What `loadRun` returns for a Conform run: its run row and the log it points to. */
-export interface ConformRunBundle { run: ConformRunRow | null; log: ConformLogRow | null; logHidden: boolean }
 
 const bundle = (run: unknown): ConformRunBundle | null => (run as ConformRunBundle | null) ?? null;
 const summaryOf = (run: unknown): ConformSummary | null => bundle(run)?.run?.summary ?? null;
@@ -19,12 +17,6 @@ const fmt = (v: number | null | undefined, dp = 1): string | null => {
 	if (v === null || v === undefined || !Number.isFinite(Number(v))) return null;
 	return Number(v).toFixed(dp).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 };
-// seconds under 2 min, minutes up to an hour, hours beyond (as the FAST dwell)
-function duration(s: number): { value: string; unit: string } {
-	if (s < 120) return { value: String(Math.round(s)), unit: 's' };
-	if (s < 3600) return { value: (s / 60).toFixed(1).replace(/\.0$/, ''), unit: 'min' };
-	return { value: (s / 3600).toFixed(2).replace(/\.?0+$/, ''), unit: 'h' };
-}
 const PART_NAME: Record<string, string> = { motor: 'motor', ips: 'IPS', cooling: 'wheel cooling' };
 
 /** The four figures shown with the run's identity. */
@@ -106,13 +98,12 @@ export const conformProfile: RunProfile = {
 		const s = summaryOf(run);
 		if (!s) return [];
 		const out: Stat[] = [];
-		const ext = duration(s.extruding_s);
-		out.push({ label: 'Extruding time', value: ext.value, unit: ext.unit, source: 'measured' });
+		out.push({ label: 'Extruding time', value: formatDuration(s.extruding_s), unit: '', source: 'measured' });
 		const torque = fmt(s.mean_torque_pct, 1);
 		if (torque !== null) out.push({ label: 'Mean torque', value: torque, unit: '%', source: 'measured' });
 		const t1 = fmt(s.peak_tooling1_c, 1);
 		if (t1 !== null) out.push({ label: 'Peak tooling 1', value: t1, unit: '°C', source: 'measured' });
-		const e = fmt(s.energy_kwh?.total, 2);
+		const e = kwhNumber(s.energy_kwh?.total);
 		if (e !== null) out.push({ label: 'Total energy', value: e, unit: 'kWh', source: 'measured' });
 		return out;
 	},
@@ -153,10 +144,8 @@ export const conformProfile: RunProfile = {
 		if (!s) return [];
 		const out: SummaryTile[] = [];
 		const add = (key: string, label: string, value: string | null, unit: string) => { if (value !== null) out.push({ key, label, value, unit }); };
-		const dur = duration(s.duration_s);
-		add('duration', 'Window length', dur.value, dur.unit);
-		const ext = duration(s.extruding_s);
-		add('extruding', 'Extruding', ext.value, ext.unit);
+		add('duration', 'Window length', formatDuration(s.duration_s), '');
+		add('extruding', 'Extruding', formatDuration(s.extruding_s), '');
 		add('speed', 'Mean wheel speed', fmt(s.mean_wheel_speed_rpm, 2), 'rpm');
 		add('torque', 'Mean torque', fmt(s.mean_torque_pct, 1), '%');
 		add('peakTorque', 'Peak torque', fmt(s.peak_torque_pct, 1), '%');
@@ -165,11 +154,11 @@ export const conformProfile: RunProfile = {
 		add('meanTooling', 'Mean tooling 1', fmt(s.mean_tooling1_c, 1), '°C');
 		add('wheelTemp', 'Peak wheel temp', fmt(s.peak_wheel_temp_c, 1), '°C');
 		add('ips', 'IPS setpoint', fmt(s.ips_setpoint_c, 1), '°C');
-		add('eMotor', 'Motor energy', fmt(s.energy_kwh?.motor, 2), 'kWh');
-		add('eIps', 'IPS energy', fmt(s.energy_kwh?.ips, 2), 'kWh');
-		add('eCooling', 'Cooling energy', fmt(s.energy_kwh?.cooling, 2), 'kWh');
-		add('energy', 'Total energy', fmt(s.energy_kwh?.total, 2), 'kWh');
-		add('demand', 'Average demand', fmt(s.avg_demand_kw, 2), 'kW');
+		add('eMotor', 'Motor energy', kwhNumber(s.energy_kwh?.motor), 'kWh');
+		add('eIps', 'IPS energy', kwhNumber(s.energy_kwh?.ips), 'kWh');
+		add('eCooling', 'Cooling energy', kwhNumber(s.energy_kwh?.cooling), 'kWh');
+		add('energy', 'Total energy', kwhNumber(s.energy_kwh?.total), 'kWh');
+		add('demand', 'Average demand', fixed(s.avg_demand_kw, 2), 'kW');
 		return out;
 	},
 	summaryNote(run) {
@@ -184,15 +173,17 @@ export const conformProfile: RunProfile = {
 	windowLabel(run) {
 		const r = bundle(run)?.run;
 		if (!r?.window_start || !r.window_end) return null;
-		return `${formatUkTime(r.window_start)} – ${formatUkTime(r.window_end)} on ${ukDate(r.window_start)} (UK time)`;
+		return `${formatClockRange(r.window_start, r.window_end)} on ${ukDate(r.window_start)} (UK time)`;
 	},
 	async upload(api, op, file) {
-		const text = await file.text();
 		const res = await uploadConformLog(api,
-			{ operation_id: op.operation_id, equipment_id: op.equipment_id?.equipment_id ?? null, operation_date: op.operation_date ?? null },
-			{ name: file.name, text });
-		return res.dateWarning;
+			{ operation_id: op.operation_id, equipment_id: op.equipment_id?.equipment_id ?? null, operation_date: op.operation_date ?? null, work_state: op.work_state ?? null },
+			{ name: file.name, bytes: await file.arrayBuffer() });
+		if ('existing' in res) return { warning: null, existing: { id: res.existing.log_id, label: candidateLabel(res.existing) } };
+		return { warning: res.dateWarning };
 	},
+	async unlink(api, op) { await unlinkLog(api, op.operation_id); },
+	traceErrorMessage: (e) => (e instanceof ConformLogError ? e.message : LOG_LOAD_FAILED),
 	startMs(run) {
 		const t = bundle(run)?.log?.log_start;
 		const ms = t ? Date.parse(t) : NaN;
@@ -202,7 +193,7 @@ export const conformProfile: RunProfile = {
 		const b = bundle(run);
 		if (!b?.log) return [];
 		const t0 = Date.parse(b.log.log_start);
-		const rows = await listLogWindows(api, b.log.log_id);
+		const rows = await labelWindows(api, b.log.run_windows);
 		return rows.map((w) => ({
 			operationId: w.operation_id,
 			label: w.label,
@@ -220,10 +211,10 @@ export const conformProfile: RunProfile = {
 	},
 	linkExisting: {
 		async list(api: AxiosInstance, op) {
-			if (!op?.operation_date) return [];
-			const logs = await listCandidateLogs(api, op.equipment_id?.equipment_id ?? null, op.operation_date);
-			return logs.map((l) => ({ id: l.log_id, label: `${l.source_filename} · ${formatUkDateTime(l.log_start)}` }));
+			const logs = await listCandidateLogs(api, op?.equipment_id?.equipment_id ?? null, op?.operation_date ?? null);
+			return logs.map((l) => ({ id: l.log_id, label: candidateLabel(l), windows: l.windows.map(windowLine), note: wholeLogNote(l, l.windows) }));
 		},
+		emptyText: (op) => candidatesEmptyText(op?.operation_date ?? null),
 		async link(api, op, id) { await linkExistingLog(api, op.operation_id, id); },
 	},
 	runQuality: (run) => (bundle(run)?.run ? qualityOfStatus(bundle(run)!.run!.status) : qualityOfStatus('no_log')),

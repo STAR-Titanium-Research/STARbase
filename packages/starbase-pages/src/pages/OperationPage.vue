@@ -166,6 +166,7 @@ providePagePin(pin);
 						:conform="conform"
 						:equipment-id="asRecord(op.equipment_id)?.equipment_id ?? null"
 						:operation-date="op.operation_date ?? null"
+						:work-state="op.work_state ?? null"
 						:can-edit="canUpdate !== false"
 						@changed="reload"
 					/>

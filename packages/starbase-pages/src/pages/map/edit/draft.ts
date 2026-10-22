@@ -316,6 +316,8 @@ const NEW_FROM_DROPS = new Set([
 	'sintering_run_number', 'conform_run_number', 'source_system', 'source_recipe_id', 'fast_recipe_id', 'machining_legacy_machining_uid', 'machining_legacy_insert_edge_id',
 	'owner', 'gcode_file', 'status', 'summary_stats', 'plot_uris', 'data_file_uri', 'data_file_size_gb', 'file_size_gb',
 	'test_code_number', 'test_code_type', 'test_code_is_manual', 'test_code_subject_collection', 'test_code_subject_id',
+	// A Conform run's measured results (what went in, what came out): they belong to that run, not to the setup a copy starts from.
+	'conform_feed_mass_g', 'conform_extrusion_length_mm', 'conform_extrusion_mass_g', 'conform_yield_pct', 'conform_flash_mass_g',
 ]);
 
 /** The fields of an existing record that a "new from" or duplicate of it keeps. */

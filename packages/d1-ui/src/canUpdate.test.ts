@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { forbiddenReason, guardRefusal, itemPermissionsUrl, mayChange, notOwnerMessage, offerWrite, updateAccess } from './canUpdate';
+import { describe, expect, it, vi } from 'vitest';
+import { fetchCanUpdate, forbiddenReason, guardRefusal, itemPermissionsUrl, mayChange, notOwnerMessage, offerWrite, updateAccess } from './canUpdate';
 
 describe('itemPermissionsUrl', () => {
 	it('builds the Directus 11 item-permissions path and encodes the key', () => {
@@ -93,5 +93,24 @@ describe('a Lab Viewer is offered no write', () => {
 		expect(mayChange(false, undefined)).toBe(true);
 		expect(mayChange(false, false)).toBe(false);
 		expect(mayChange(undefined, null)).toBe(true);
+	});
+});
+
+describe('fetchCanUpdate', () => {
+	const api = (answer: unknown) => ({ get: vi.fn(async () => (answer instanceof Error ? Promise.reject(answer) : { data: answer })) });
+	it('asks the item-permissions endpoint and reads update.access', async () => {
+		const a = api({ data: { update: { access: true } } });
+		expect(await fetchCanUpdate(a, 'manufacturing_operations', 'op 1')).toBe(true);
+		expect(a.get).toHaveBeenCalledWith('/permissions/me/manufacturing_operations/op%201');
+		expect(await fetchCanUpdate(api({ data: { update: { access: false } } }), 'c', 'x')).toBe(false);
+	});
+	it('is null when the answer does not say, or the request fails', async () => {
+		expect(await fetchCanUpdate(api({ data: {} }), 'c', 'x')).toBeNull();
+		expect(await fetchCanUpdate(api(new Error('403')), 'c', 'x')).toBeNull();
+	});
+	it('is false for a Lab Viewer without asking', async () => {
+		const a = api({ data: { update: { access: true } } });
+		expect(await fetchCanUpdate(a, 'c', 'x', true)).toBe(false);
+		expect(a.get).not.toHaveBeenCalled();
 	});
 });

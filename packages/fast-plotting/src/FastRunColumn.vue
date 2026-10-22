@@ -23,6 +23,8 @@ const props = defineProps<{
 	profile: RunProfile; tab: RunTab; code: string | null; quality: { level: Quality; label: string; hint: string } | null;
 	detail: any | null; runData: any | null; trace: Trace | null; loading: boolean; message: string | null;
 	zoomStart: number | null; zoomEnd: number | null; cursor: number | null; zoomTool: boolean; busy?: boolean;
+	/** May the reader change the run (see FastHost.canUpdate): false hides the upload, link, window and unlink actions. */
+	canEdit?: boolean | null;
 }>();
 const emit = defineEmits<{
 	(e: 'update:tab', v: RunTab): void; (e: 'open-operation'): void; (e: 'open-recipe'): void; (e: 'open-sample'): void;
@@ -107,7 +109,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					</div>
 				</template>
 				<RunWindowActions v-if="profile.setWindowFromView || profile.upload || profile.linkExisting" :profile="profile" :detail="detail" :run-data="runData" :trace="trace"
-					:zoom-start="zoomStart" :zoom-end="zoomEnd" :busy="!!busy" @changed="emit('run-changed', $event)" />
+					:zoom-start="zoomStart" :zoom-end="zoomEnd" :busy="!!busy" :can-edit="canEdit" @changed="emit('run-changed', $event)" />
 			</div>
 			<div ref="tablist" class="tabs" role="tablist" aria-label="Run details" @keydown="onTabKey">
 				<button v-for="(t, i) in TABS" :id="`fd-tab-${t.id}`" :key="t.id" class="fd-tab" role="tab" :aria-selected="tab === t.id" :aria-controls="tab === t.id ? `fd-panel-${t.id}` : undefined"
