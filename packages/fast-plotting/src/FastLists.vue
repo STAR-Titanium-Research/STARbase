@@ -78,7 +78,7 @@ watch(() => props.folded, () => { open.value = false; });
 					<button v-if="sample !== null" class="fd-btn chip" :title="`Show the runs of every sample`" @click="emit('update:sample', null)">
 						<span class="fd-dim">Sample</span> <span class="fd-code">{{ chipLabel }}</span> <v-icon name="close" x-small />
 					</button>
-					<label class="fd-search"><v-icon name="search" x-small /><input v-model="runRaw" placeholder="Search code / recipe" aria-label="Search runs by code or recipe" /></label>
+					<label class="fd-search"><v-icon name="search" x-small /><input v-model="runRaw" :placeholder="profile.searchPlaceholder ?? 'Search code / recipe'" :aria-label="profile.searchLabel ?? 'Search runs by code or recipe'" /></label>
 				</div>
 				<div class="list">
 					<button v-for="r in runs" :key="r.id" v-memo="[r.id === selectedId, sample === null, r.quality.label]" class="fd-card" :class="{ active: r.id === selectedId }" :aria-current="r.id === selectedId || undefined" @click="pickRun(r)">

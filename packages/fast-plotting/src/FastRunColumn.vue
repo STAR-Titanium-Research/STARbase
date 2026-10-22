@@ -51,10 +51,15 @@ const recipeRows = computed(() => {
 	return all.filter(([, v]) => v !== null && v !== '').map(([label, value]) => ({ label, value: String(value), mono: label === 'Source' }));
 });
 const noTrace = computed(() => props.profile.noTraceMessage(props.runData));
-// a run with a log but no window has no figures yet: say how to get them
-const summaryEmpty = computed(() => (props.profile.traceReady(props.runData)
-	? 'No run window is set. Zoom the plots to the run, then use "Use this view as the run window".'
-	: noTrace.value));
+// a run with a log but no window has no figures yet: say how to get them (a reader who cannot edit sees no button to press, so no instruction)
+const summaryEmpty = computed(() => {
+	if (!props.profile.traceReady(props.runData)) return noTrace.value;
+	return props.canEdit === false
+		? 'No run window is set.'
+		: 'No run window is set. Zoom the plots to the run, then use "Use this view as the run window".';
+});
+// Three figures, or four as 2 by 2: never a lone tile under a row of three (six, FAST's, are two rows of three)
+const peakCols = computed(() => (peaks.value.length === 4 || peaks.value.length === 2 ? 2 : 3));
 
 // Left and Right (and Home, End) move between the tabs, as a tab list does; the selected tab is the one in the tab order.
 const tablist = ref<HTMLElement | null>(null);
@@ -100,8 +105,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					<div v-for="m in mould" :key="m.label"><dt>{{ m.label }}</dt><dd>{{ m.value }} {{ m.unit }}<span class="fd-tag">recorded</span></dd></div>
 				</dl>
 				<template v-if="peaks.length">
-					<div class="head"><b>Peaks</b><span class="fd-dim">{{ peaksNote }}</span></div>
-					<div class="fd-tiles">
+					<div class="head"><b>{{ profile.peaksTitle ?? 'Peaks' }}</b><span class="fd-dim">{{ peaksNote }}</span></div>
+					<div class="fd-tiles" :class="{ two: peakCols === 2 }">
 						<div v-for="p in peaks" :key="p.label" class="fd-fig">
 							<span class="top"><span class="val">{{ p.value }}</span><span class="unit">{{ p.unit }}</span></span>
 							<span class="lab">{{ p.label }}<span v-if="p.source === 'recorded'" class="fd-tag">recorded</span></span>
@@ -169,7 +174,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .pg .v { font-weight: 650; text-align: right; min-width: 0; overflow-wrap: anywhere; }
 .pg .v.src { font-size: var(--fs-xs, 11px); }
 .rname { font-size: var(--fs-md, 13px); margin-bottom: 4px; overflow-wrap: anywhere; }
-.err { color: var(--theme--danger); }
+.err { color: var(--d1-bad, var(--theme--danger)); }
 .foot { flex: none; padding: 10px 12px; border-top: 1px solid var(--fd-line); background: var(--fd-tile); }
 .open { width: 100%; height: 32px; }
 </style>

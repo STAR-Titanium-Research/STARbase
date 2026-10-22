@@ -57,7 +57,11 @@
 
 /* a figure with its label: the peaks and the statistics */
 .fd-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.fd-fig { min-width: 0; padding: 6px 5px; border: 1px solid var(--fd-line); border-radius: 8px; background: var(--fd-tile); }
+/* two across (four key figures as 2 by 2, the statistics): labels wrap instead of being cut, an odd last tile spans the row */
+.fd-tiles.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fd-tiles.two .fd-fig .lab { white-space: normal; overflow-wrap: anywhere; }
+.fd-tiles.two .fd-fig:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.fd-fig { min-width: 0; padding: 6px 8px; border: 1px solid var(--fd-line); border-radius: 8px; background: var(--fd-tile); }
 .fd-fig .top { display: flex; align-items: baseline; gap: 3px; white-space: nowrap; }
 .fd-fig .val { font-size: var(--fs-lg, 15px); font-weight: 750; font-variant-numeric: tabular-nums; }
 .fd-fig .unit { font-size: var(--fs-xs, 11px); color: var(--fd-dim); overflow: hidden; text-overflow: ellipsis; }

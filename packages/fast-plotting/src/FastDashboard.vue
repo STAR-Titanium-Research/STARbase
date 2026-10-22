@@ -103,7 +103,7 @@ onMounted(async () => {
 		rows.value = mapped;
 	} catch (e: any) {
 		if (gen !== listGen) return;
-		listError.value = `Could not load the ${profile.key === 'fast' ? 'FAST' : profile.title.replace(/ plotter$/, '')} operations: ${errMsg(e, 'request failed')}`;
+		listError.value = `Could not load the ${profile.runNoun ?? 'FAST operations'}: ${errMsg(e, 'request failed')}`;
 	} finally {
 		if (gen === listGen) {
 			loading.value = false;

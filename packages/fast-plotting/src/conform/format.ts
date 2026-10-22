@@ -2,7 +2,7 @@
 //   energy in kWh to 2 decimals; average demand in kW to 2 decimals;
 //   a length of time under an hour as `12 min 05 s`, otherwise `1 h 23 min`; clock times `HH:MM:SS` in UK time.
 // Pure: no Vue, no I/O.
-import { formatUkDateTime, formatUkTime } from './clock';
+import { formatUkDateTimeDisplay, formatUkTime } from './clock';
 
 /** What a figure with no reading prints as: an em dash, with no unit. */
 export const DASH = '—';
@@ -47,8 +47,8 @@ export function formatClockRange(start: string | null | undefined, end: string |
 
 // ---- choosing a log that is already uploaded (the Operation page and the plotter word it the same way)
 
-/** One line of a log in a picker: its file name and when it starts, in UK time. */
-export const candidateLabel = (l: { source_filename: string; log_start: string }): string => `${l.source_filename} · ${formatUkDateTime(l.log_start)}`;
+/** One line of a log in a picker: its file name and when it starts, in UK time (`run.csv · 17 Mar 2025, 09:00:00`). */
+export const candidateLabel = (l: { source_filename: string; log_start: string }): string => `${l.source_filename} · ${formatUkDateTimeDisplay(l.log_start)}`;
 
 /** What the picker says when no log qualifies. Without a run date the search is around today. */
 export function candidatesEmptyText(operationDate: string | null | undefined): string {
