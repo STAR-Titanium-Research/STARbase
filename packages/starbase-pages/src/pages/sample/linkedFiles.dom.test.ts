@@ -137,7 +137,7 @@ describe("the owner's view", () => {
 		expect(items()[0].dataset.locked).toBe('false');
 		expect(items()[0].textContent).toContain('sample-12.tif');
 		expect(field('kv')!.textContent).toContain('15 kV');
-		expect(field('kv')!.querySelector('[data-test="setting-source"]')!.textContent).toBe('metadata');
+		expect(field('kv')!.querySelector('[data-test="setting-source"]')).toBeNull(); // metadata is the norm: no pill
 		expect(field('scale_bar_um')!.querySelector('[data-test="setting-check"]')).not.toBeNull();
 		const edits = document.querySelectorAll('[data-test="edit-setting"]');
 		expect(edits).toHaveLength(11);
@@ -169,7 +169,7 @@ describe("the owner's view", () => {
 		await vi.waitFor(() => expect(field('kv')!.querySelector('[data-test="setting-error"]')).not.toBeNull());
 		expect(field('kv')!.querySelector('[data-test="setting-error"]')!.textContent).toBe('That value is not valid for this setting.');
 		expect(field('kv')!.querySelector('[data-test="edit-input"]')).not.toBeNull();
-		expect(field('kv')!.querySelector('[data-test="setting-source"]')!.textContent).toBe('metadata');
+		expect(field('kv')!.querySelector('[data-test="setting-source"]')).toBeNull(); // metadata is the norm: no pill
 	});
 
 	it('says only the owner can correct it on a 403', async () => {

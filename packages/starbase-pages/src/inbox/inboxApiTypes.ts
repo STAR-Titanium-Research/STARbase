@@ -67,6 +67,12 @@ export interface FoundFile {
 	linked_collection?: string | null;
 	linked_record_id?: string | null;
 	linked_label?: string | null;
+	/** Linked tab: the linked record's second line as the caller may read it (a sample's nickname, a test's type); null for an operation or when unreadable. */
+	linked_title?: string | null;
+	/** Linked tab: how many files the row's link batch holds. An Undo undoes the whole batch. Null when the row is not linked. */
+	link_batch_size?: number | null;
+	/** Linked rows: would an Undo (and so a Change) of this link work for the caller now: they linked it, or are an administrator who may change the file. Absent from an older server: read as yes. */
+	can_undo?: boolean;
 	/** Linked tab, a file added as a surface scan: the insert or the edge it was added to (the other is null). Absent on any other row. */
 	linked_insert_id?: string | null;
 	linked_edge_id?: string | null;
@@ -104,6 +110,12 @@ export interface FilesQuery {
 	acceptable?: 0 | 1;
 	limit?: number;
 	offset?: number;
+}
+
+/** GET /d1-inbox/siblings: the other pictures linked to the same record as a file, newest link first, and how many there are in all. */
+export interface SiblingsPage {
+	rows: FoundFile[];
+	total: number;
 }
 
 export interface FilesPage {
@@ -251,4 +263,40 @@ export interface InboxAdmin {
 	queue: { queued: number; running: number };
 	/** File candidates by state ({ new, linked, dismissed, gone }). */
 	candidates: Record<string, number>;
+}
+
+/** The folder an answer of GET /d1-inbox/progress is about: a person's folder on the share (Users/<alias>) or a team's (Shared/<share folder>). */
+export interface ProgressOwner {
+	kind: 'person' | 'team';
+	id: string;
+	name: string;
+	/** The uni alias or the share folder. */
+	folder: string;
+	/** The folder's path on the share, as the crawler reads it. */
+	root: string;
+	/** Whether a person has a login: false for someone the crawler scans who cannot open the Inbox. Null for a team. */
+	has_login: boolean | null;
+}
+/**
+ * The counts of one folder. The percentages are the browser's (progressModel.ts): `folders_known` is the folders the crawler has SEEN so far, not the
+ * folders that exist, so a full bar means everything it has seen.
+ */
+export interface ProgressCounts {
+	folders_known: number;
+	folders_listed: number;
+	files: number;
+	images: number;
+	images_read: number;
+	images_with_thumb: number;
+	sem: number;
+	sem_with_scale: number;
+}
+export interface ProgressFolder extends ProgressCounts {
+	owner: ProgressOwner;
+}
+/** GET /d1-inbox/progress (the caller's own folders) or ?all=1 (every folder, administrators only). */
+export interface ScanProgress {
+	folders: ProgressFolder[];
+	/** When the last full scan ended; null before the first one. */
+	last_scan_finished_at: string | null;
 }
