@@ -361,8 +361,8 @@ expect_fixed ll_out "grant_public_usage:false" "168: PUBLIC still has no USAGE o
 expect_fixed ll_out "ungranted_d1_private_tables:0" "168: no d1_private table is readable by the role (hidden_records and the backups stay ungranted)"
 expect_fixed ll_out "unprotected_tables:none" "168: every table granted to d1_llm_readonly has row security on or is a named reference table"
 expect_fixed ll_out "reference_tables:21" "168: the reference list is current (21 granted tables without row security, all named)"
-expect_fixed ll_out "rls_tables:21" "168: 21 granted tables have row security on, none is FORCEd"
-expect_fixed ll_out "rls_tables_with_both_policies:21" "168: each has the permissive FOR ALL TO PUBLIC policy and the restrictive FOR SELECT TO d1_llm_readonly one"
+expect_fixed ll_out "rls_tables:23" "168: 23 granted tables have row security on, none is FORCEd (the 21 of migration 168 and the two Conform tables of migration 208)"
+expect_fixed ll_out "rls_tables_with_both_policies:23" "168: each has the permissive FOR ALL TO PUBLIC policy and the restrictive FOR SELECT TO d1_llm_readonly one"
 expect_fixed ll_out "views_not_invoker:none" "168: every view granted to d1_llm_readonly is security_invoker (a CREATE OR REPLACE VIEW without WITH (security_invoker = true) fails here)"
 expect_fixed ll_out "granted_views:9" "168: nine views are granted to the role"
 expect_fixed ll_out "embedding_sources_not_in_policy:none" "168: every source v_embeddings_source_notes embeds is named in the semantic_embeddings policy"
@@ -449,14 +449,14 @@ RESET ROLE;
 ROLLBACK;
 SQL
 )
-expect_fixed ll_cycle "dn_rls:0" "168 down: row security is off on every table"
-expect_fixed ll_cycle "dn_policies:0" "168 down: both policies are gone everywhere"
+expect_fixed ll_cycle "dn_rls:2" "168 down: row security is off on every table 168 enabled it on (the two Conform tables of migration 208 keep theirs)"
+expect_fixed ll_cycle "dn_policies:4" "168 down: both policies are gone everywhere 168 created them (the two Conform tables keep their four)"
 expect_fixed ll_cycle "dn_invoker_views:0" "168 down: the views are not security_invoker any more"
 expect_fixed ll_cycle "dn_usage:false" "168 down: the USAGE grant is revoked"
 expect_fixed ll_cycle "dn_execute:false" "168 down: the EXECUTE grant is revoked"
 expect_fixed ll_cycle "dn_grants_kept:true/true" "168 down: the table and view grants of migration 132 are untouched"
-expect_fixed ll_cycle "up2_rls:21" "168 up, twice: row security is on for the 21 record-bound tables"
-expect_fixed ll_cycle "up2_policies:42" "168 up, twice: 42 policies, no duplicates"
+expect_fixed ll_cycle "up2_rls:23" "168 up, twice: row security is on for the 21 record-bound tables and the two Conform tables"
+expect_fixed ll_cycle "up2_policies:46" "168 up, twice: 42 policies of 168 and the four of the Conform tables, no duplicates"
 expect_fixed ll_cycle "up2_invoker_views:9" "168 up, twice: the nine views are security_invoker again"
 expect_fixed ll_cycle "up2_samples:2" "168 up, twice: the role sees the same rows as before"
 expect_fixed ll_cycle "up2_embeddings:4" "168 up, twice: and the same embeddings"
@@ -472,5 +472,5 @@ SELECT 'norole_rls:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'
 ROLLBACK;
 SQL
 )
-expect_fixed ll_norole "norole_policies:0" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy"
-expect_fixed ll_norole "norole_rls:0" "168 on a database without d1_llm_readonly: enables no row security"
+expect_fixed ll_norole "norole_policies:4" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy (the four of the Conform tables stay)"
+expect_fixed ll_norole "norole_rls:2" "168 on a database without d1_llm_readonly: enables no row security (the two Conform tables keep theirs)"

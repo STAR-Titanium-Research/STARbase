@@ -39,8 +39,8 @@ run "FAST method seeded" \
 # migration 129 back-fills process_category before the seed runs on a fresh install, so the seed carries it
 run_eq "seeded methods carry the process_category migration 129 maps" \
     "SELECT string_agg(method_code || '=' || COALESCE(process_category, 'NULL'), ',' ORDER BY method_code)
-       FROM manufacturing_methods WHERE method_code IN ('HT','MC','MF','MM','MO','MR')" \
-    "HT=heat_treatment,MC=machining,MF=sintering,MM=machining,MO=deformation,MR=deformation"
+       FROM manufacturing_methods WHERE method_code IN ('CF','HT','MC','MF','MM','MO','MR')" \
+    "CF=conform,HT=heat_treatment,MC=machining,MF=sintering,MM=machining,MO=deformation,MR=deformation"
 run "Equipment seeded" \
     "SELECT equipment_code FROM equipment WHERE equipment_code = 'NLX-2500'"
 echo "== Code-generation functions =="
