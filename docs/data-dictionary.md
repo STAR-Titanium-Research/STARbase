@@ -750,14 +750,20 @@ empty. The code is `DD-MM-YY-CF-{run}-{die}dia`. A feedstock sample and its extr
 - `series`
 - `totals`: whole-log energy per component and average demand
 - `constants`: the power constants used
+- `source_sha256`: SHA-256 (lowercase hex) of the uploaded file's raw bytes, unique, so the same file is never uploaded
+  twice (migration `…209`)
+- `run_windows`: the run windows on this log, `[{operation_id, start, end}]` sorted by start (UTC ISO-8601 with
+  milliseconds), only runs with both window ends; kept by a trigger on `conform_run_data`, never written by a member
 
 Several runs can share one log. `conform_run_data` (one per operation) holds the run's `log_id`, its **run window**
 (`window_start`, `window_end`, half-open), `status` (`no_log`, `no_window`, `done`, `error`), and its `summary`
 and `steps` computed in the browser over the window only.
 - **Windows.** A trigger refuses a window that overlaps another run's window on the same log, or that lies
   outside the log.
-- **Who can read a log.** The readers of any run linked to it, and its uploader. The run records stay private
-  to their own readers.
+- **Who can read a log.** Every Lab Member and Lab Viewer (migration `…209`). The run records stay private to their
+  own readers; `run_windows` shows the other windows, a run the reader cannot see being "Other run". Only the uploader
+  can delete a log, and not while a run uses it (unlink it first). The "Conform Logs" folder of Directus Files has the
+  fixed id `c04f1000-0000-4000-8000-000000000001`.
 
 Spec: [Conform runs](superpowers/specs/2026-10-21-conform-runs-design.md).
 

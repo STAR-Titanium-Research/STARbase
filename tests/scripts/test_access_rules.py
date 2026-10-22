@@ -447,9 +447,9 @@ def test_generated_script_block_is_current():
     script = SCRIPTS / "configure_users_and_policies.sql"
     assert gen.render_script(
         script.read_text(encoding="utf-8"), ROWS, VIEWER_ROWS
-    ) == script.read_text(encoding="utf-8"), (
-        "run `python3 scripts/gen_access_rules.py --write`"
-    )
+    ) == script.read_text(
+        encoding="utf-8"
+    ), "run `python3 scripts/gen_access_rules.py --write`"
 
 
 def test_check_command_detects_a_hand_edit(tmp_path):
@@ -1143,9 +1143,9 @@ def test_filters_have_the_documented_sizes():
     assert _leaves(BY_KEY[("campaign_samples", "read")]["permissions"]) == 1
     for (collection, action), row in BY_KEY.items():
         if action == "read" and collection in DOC["rules"]:
-            assert _leaves(row["permissions"]) <= 3 or collection == "project_rollup", (
-                collection
-            )
+            assert (
+                _leaves(row["permissions"]) <= 3 or collection == "project_rollup"
+            ), collection
         if action in ("update", "delete") and collection in DOC["rules"]:
             assert _leaves(row["permissions"]) < 20, (collection, action)
 
@@ -1168,9 +1168,9 @@ def test_read_rules_are_the_membership_test_a_one_hop_child_rule_or_the_rollup()
         ("session_data_files", "session_id"), ("session_additional_operators", "session_id"),
         ("test_sessions_subject", "test_sessions_id"), ("project_investigators", "project_id"),
     ):  # fmt: skip
-        assert RULES[(collection, "read")] == {fk: {"readers": {"user_id": U}}}, (
-            collection
-        )
+        assert RULES[(collection, "read")] == {
+            fk: {"readers": {"user_id": U}}
+        }, collection
     # the one two-hop rule left: an edge is readable by readers of its child or its parent
     assert RULES[("sample_genealogy", "read")] == {
         "_or": [
@@ -1700,9 +1700,9 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
     ]
     owner_term = {"_or": [OWN, {"_and": manage_role}]}
     for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
-        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, owner_term]}, (
-            collection
-        )
+        assert RULES[(collection, "delete")] == {
+            "_and": [READER_TERM, owner_term]
+        }, collection
     assert RULES[("campaigns", "update")] == {
         "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
@@ -1838,9 +1838,9 @@ def test_sample_co_owners_update_and_delete_are_owner_only():
     w.readers("physical_samples", "S", "owner", "coowner")
     for action in ("update", "delete"):
         assert _can(w, "u_owner", "sample_co_owners", action) == {row["_n"]}
-        assert _can(w, "u_coowner", "sample_co_owners", action) == set(), (
-            "a co-owner can no longer change or remove co-owners"
-        )
+        assert (
+            _can(w, "u_coowner", "sample_co_owners", action) == set()
+        ), "a co-owner can no longer change or remove co-owners"
         assert _can(w, "u_stranger", "sample_co_owners", action) == set()
     old = Directus(MAIN, w, "u_coowner")
     assert any(
@@ -1873,9 +1873,9 @@ def test_the_open_to_all_leaf_is_a_some_on_the_open_set_and_children_do_not_inhe
     w.open_to_all("OF")
     w.add("machining_force_analysis", operation_id="OF")
     assert "OF" in _can(w, "u_stranger", "manufacturing_operations", "read")
-    assert _can(w, "u_stranger", "machining_force_analysis", "read") == set(), (
-        "children do not inherit the amnesty"
-    )
+    assert (
+        _can(w, "u_stranger", "machining_force_analysis", "read") == set()
+    ), "children do not inherit the amnesty"
 
 
 def test_a_readers_row_of_another_user_does_not_make_the_caller_a_reader():
@@ -1905,9 +1905,9 @@ def test_campaign_samples_write_needs_the_junctions_own_reader_term():
     w.readers("campaign_samples", row["_n"], "owner")
     assert _can(w, "u_campOwner", "campaign_samples", "update") == set()
     assert _can(w, "u_campOwner", "campaign_samples", "delete") == set()
-    assert _can(w, "u_owner", "campaign_samples", "update") == {row["_n"]}, (
-        "the sample's owner reads and edits the row"
-    )
+    assert _can(w, "u_owner", "campaign_samples", "update") == {
+        row["_n"]
+    }, "the sample's owner reads and edits the row"
     w.readers("campaign_samples", row["_n"], "campOwner")
     assert _can(w, "u_campOwner", "campaign_samples", "update") == {row["_n"]}
     assert _can(w, "u_stranger", "campaign_samples", "update") == set()

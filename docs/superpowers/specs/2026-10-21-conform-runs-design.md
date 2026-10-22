@@ -91,6 +91,8 @@ conform_logs
   series            jsonb not null                    -- [{key,label,unit,group,min,max,flat?}]
   totals            jsonb not null                    -- whole-log energy (see Energy)
   constants         jsonb not null                    -- the power constants used
+  source_sha256     text not null unique              -- SHA-256 (lowercase hex) of the uploaded file's bytes; migration 209
+  run_windows       jsonb not null default '[]'       -- [{operation_id,start,end}] sorted by start, kept by a trigger; migration 209
   created_by        uuid, created_at timestamptz, version integer   -- OCC like every business table
 
 conform_run_data
@@ -122,9 +124,10 @@ conform_run_data
   - readers rules (166)
   - the Lab Viewer role (185)
   - `scripts/access_rules.json`
-- **Access.**
-  - `conform_run_data` follows `fast_run_data`: `{"read": "reader.operation"}`, and write for whoever can edit the operation.
-  - `conform_logs` may be read by a reader of **any** run whose `conform_run_data.log_id` is that log. A log shared by runs with different readers therefore shows its whole file to each of them. The run records stay private. This is accepted (maintainer decision) and documented in the access docs.
+- **Access** (review round 1, migration `20261022000209_conform_review_fixes.sql`).
+  - `conform_run_data` follows `fast_run_data`: `{"read": "reader.operation"}`. Create, update and delete need edit rights on the operation: update and delete are policy filters, create is the `d1-access-guard` rule `guards.conform_run_data` (the operation's update rule, and the log must exist), because Directus does not filter create.
+  - `conform_logs` is **readable by every Lab Member and Lab Viewer**. The run records stay private; the log's `run_windows` is what shows the other runs' windows (a run the caller cannot read is "Other run"). Any member can create a log, only its uploader can delete it, nobody updates it. A log a run still uses cannot be deleted (trigger, and a readable refusal from the `d1-conform-guard` hook). The same file is never uploaded twice (`source_sha256` unique).
+  - The "Conform Logs" folder of Directus Files has the fixed id `c04f1000-0000-4000-8000-000000000001`, is seeded by the migration and is readable by members and viewers.
   - A user who can create operations can insert logs.
   - Directus collections `conform_logs` and `conform_run_data` are hidden and grouped under `manufacturing_methods`, like `fast_run_data`. There is an O2M alias `manufacturing_operations.conform_run` in `grp_related`.
 
@@ -264,8 +267,8 @@ The FAST plotter becomes a **run plotter with profiles**.
 - **A malformed CSV** (no `Timestamp` column, fewer than 2 numeric rows, timestamps not increasing) is refused before anything is uploaded, with the reason.
 - **Missing channels.** Power components whose source channel is missing are left out. `totals` lists `missing: ['ips', …]`, the summary says so, and the steps are still computed.
 - **Writes after the file upload fail:** the uploaded file is deleted and nothing else is left behind.
-- **Window outside the log, or overlapping another run:** refused by the database, and the message is shown.
-- **A reader who cannot read the log** sees "Conform log not visible to you" in place of the plot. The run summary is still shown, because it is part of the run.
+- **Window outside the log, or overlapping another run:** refused with a readable message by the `d1-conform-guard` hook ("Run window overlaps <code> on this log.", where <code> is the other run's code if the caller can read it, otherwise "another run"; "Run window lies outside the log (<start> to <end>, UK time)."). The database trigger stays as the backstop.
+- **A reader whose read of the log's file is refused (403)** sees "Conform log not visible to you" in place of the plot (logs themselves are lab-wide). Any other failure says "Could not load the Conform log". The run summary is still shown, because it is part of the run.
 
 ## Testing
 
