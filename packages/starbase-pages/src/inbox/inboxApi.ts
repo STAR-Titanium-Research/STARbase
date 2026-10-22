@@ -35,6 +35,12 @@
 //   DELETE /d1-inbox/ignored-folders/<id> -> { data: { ignored_id, folder, rescan_queued, still_ignored } }: still_ignored is true when another rule of the same owner
 //                                       still covers the folder (then no rescan was queued); otherwise the next scan lists the folder again. The rate limit never fails the
 //                                       delete (rescan_queued says whether a rescan was queued). 404 NOT_FOUND for a rule that is not the caller's or their team's.
+//   GET  /d1-inbox/files/<id>/measurements -> { data: SavedMeasurement[], meta: { total, can_change } }: the shapes saved on a file (unit-free: points in ORIGINAL
+//                                       pixels), oldest first; 404 when the caller cannot see the file. can_change: the caller owns it (an administrator reads only).
+//   POST /d1-inbox/files/<id>/measurements { kind, points, label? } -> 201 { data: SavedMeasurement } (the owner only: 403 for anyone else who can see the file;
+//                                       400 INVALID_PAYLOAD with extensions.field kind | points | label; 409 TOO_MANY_MEASUREMENTS at 200 a file)
+//   PATCH /d1-inbox/files/<id>/measurements/<measurement id> { label } -> { data: SavedMeasurement } (the owner or the shape's author)
+//   DELETE /d1-inbox/files/<id>/measurements/<measurement id> -> { data: { measurement_id } } (the same two people)
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
 //
@@ -44,7 +50,7 @@
 import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
 	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
-	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, PersonWithoutAlias, ScanError, ScanLinkItem, Skipped,
+	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, MeasurementKind, MeasurementList, NewMeasurement, PersonWithoutAlias, SavedMeasurement, ScanError, ScanLinkItem, Skipped,
 } from './inboxApiTypes';
 
 export type * from './inboxApiTypes';
@@ -377,3 +383,61 @@ export const getSemSettings = (api: HostApi, fileId: string): Promise<SemSetting
 /** The owner corrects one setting (`value` is a number, text or an ISO time with its offset); the answer is the settings again with the field `manual`. */
 export const correctSemSetting = (api: HostApi, fileId: string, field: string, value: number | string): Promise<SemSettingsAnswer> =>
 	call(() => api.patch(`${BASE}/sem-settings/${encodeURIComponent(fileId)}`, { field, value }), parseSemAnswer);
+
+// ---- saved measurements (d1-inbox /files/<id>/measurements; migration 211) ----
+
+const MEASURE_KINDS: readonly string[] = ['line', 'circle', 'polygon'];
+
+/** One saved shape as the server sent it, or null for a row with no id, an unknown kind or corners that are not numbers (nothing to draw or to act on). */
+export function parseMeasurement(v: unknown): SavedMeasurement | null {
+	const r = asRecord(v);
+	if (!r || typeof r.measurement_id !== 'string' || typeof r.kind !== 'string' || !MEASURE_KINDS.includes(r.kind) || !Array.isArray(r.points)) return null;
+	const points = r.points.map((p: unknown) => {
+		const q = asRecord(p);
+		return q && typeof q.x === 'number' && typeof q.y === 'number' && Number.isFinite(q.x) && Number.isFinite(q.y) ? { x: q.x, y: q.y } : null;
+	});
+	if (points.some((p) => p === null)) return null;
+	return {
+		measurement_id: r.measurement_id,
+		kind: r.kind as MeasurementKind,
+		points: points as SavedMeasurement['points'],
+		label: typeof r.label === 'string' ? r.label : '',
+		created_at: str(r.created_at),
+		author_name: str(r.author_name),
+		can_edit: r.can_edit === true,
+	};
+}
+
+/** The shapes saved on a file, oldest first. `canChange` is true only when the server said exactly true. */
+export const loadMeasurements = (api: HostApi, candidateId: string): Promise<MeasurementList> =>
+	call(
+		() => api.get(`${BASE}/files/${encodeURIComponent(candidateId)}/measurements`),
+		(b) => ({
+			measurements: (Array.isArray(b) ? b : Array.isArray(b.data) ? b.data : []).map(parseMeasurement).filter((m: SavedMeasurement | null): m is SavedMeasurement => m !== null),
+			canChange: b.meta?.can_change === true,
+		}),
+	);
+
+/** Save a shape (points in original pixels). The answer is the saved row, which must be readable (else the save is reported as failed: the list reloads instead). */
+export const saveMeasurement = (api: HostApi, candidateId: string, m: NewMeasurement): Promise<SavedMeasurement> =>
+	call(
+		() => api.post(`${BASE}/files/${encodeURIComponent(candidateId)}/measurements`, m),
+		(b) => {
+			const saved = parseMeasurement(b);
+			if (!saved) throw new InboxApiError('The server saved the shape but sent nothing back that can be read. Reload the list.');
+			return saved;
+		},
+	);
+
+export const renameMeasurement = (api: HostApi, candidateId: string, measurementId: string, label: string): Promise<SavedMeasurement> =>
+	call(
+		() => api.patch(`${BASE}/files/${encodeURIComponent(candidateId)}/measurements/${encodeURIComponent(measurementId)}`, { label }),
+		(b) => {
+			const saved = parseMeasurement(b);
+			if (!saved) throw new InboxApiError('The server renamed the shape but sent nothing back that can be read. Reload the list.');
+			return saved;
+		},
+	);
+
+export const deleteMeasurement = (api: HostApi, candidateId: string, measurementId: string): Promise<void> =>
+	call(() => api.delete(`${BASE}/files/${encodeURIComponent(candidateId)}/measurements/${encodeURIComponent(measurementId)}`), () => undefined);

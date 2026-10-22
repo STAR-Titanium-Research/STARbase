@@ -24,12 +24,14 @@
 // were open at once. `pictureHangs` makes a request that never answers: like axios it fails with ECONNABORTED when the request carries a `timeout`, and
 // stays open forever when it does not.
 // Ignored folders (spec section 15): fakeIgnored.ts, with its own options (`ignoredRules`, `ignoreTeams`, `viewer`, ...); `rules` is the list it holds.
+// Saved measurements (migration 211): fakeMeasurements.ts, with its own options (measurements, measureReadOnly, measureFails); the store it holds is returned as measurements.
 // Two options simulate an endpoint that does less: `dryRunIds: false` (a dry run that only counts) and `acceptIds: false` (accept-all that ignores
 // `candidate_ids`).
 import type { HostApi } from '@d1/ui';
 import type { FoundFile, LinkItem, ScanLinkItem, SemSettingsAnswer } from './inboxApi';
 import { fakePictureBlob } from './fakePictures';
 import { createFakeIgnored, type FakeIgnoredOptions } from './fakeIgnored';
+import { createFakeMeasurements, type FakeMeasurementOptions } from './fakeMeasurements';
 
 let counter = 0;
 
@@ -82,7 +84,7 @@ export function exactMatch(over: Partial<FoundFile> = {}, token = '3fa9c1d2', la
 	});
 }
 
-export interface FakeInboxOptions extends FakeIgnoredOptions {
+export interface FakeInboxOptions extends FakeIgnoredOptions, FakeMeasurementOptions {
 	files?: FoundFile[];
 	autoLink?: boolean;
 	summary?: Record<string, unknown>;
@@ -406,6 +408,8 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 	};
 	const ignored = createFakeIgnored({ opts, files, now, queueRescan, person: () => ({ kind: 'person', id: 'p1', name: 'Ann Lee' }) });
 	const IGNORED_ROUTE = /^\/d1-inbox\/ignored-folders\/([^/]+)$/;
+	const measures = createFakeMeasurements({ opts, files, now });
+	const MEASURE_ROUTE = /^\/d1-inbox\/files\/([^/]+)\/measurements(?:\/([^/]+))?$/;
 
 	const handlers: Record<string, (c: Call) => unknown> = {
 		'get /d1-inbox/ignored-folders': ignored.list,
@@ -524,7 +528,9 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		if (method === 'get' && PICTURE_ROUTE.test(path)) return picture(path, config?.timeout).then((data) => ({ data }));
 		const semPatch = method === 'patch' ? /^\/d1-inbox\/sem-settings\/([^/]+)$/.exec(path) : null;
 		const rule = method === 'delete' ? IGNORED_ROUTE.exec(path) : null;
-		const h = semPatch
+		const measure = MEASURE_ROUTE.exec(path);
+		const measureH = measure ? measures.handler(method, decodeURIComponent(measure[1]), measure[2] ? decodeURIComponent(measure[2]) : null) : undefined;
+		const h = measureH ? (c: Call) => measureH(c.body) : semPatch
 			? (c: Call) => ok(semCorrect(decodeURIComponent(semPatch[1]), c.body))
 			: rule ? () => ignored.remove(decodeURIComponent(rule[1])) : handlers[`${method} ${path}`];
 		if (!h) return Promise.reject(err(404, 'ROUTE_NOT_FOUND', `Route ${path} doesn't exist.`));
@@ -544,5 +550,5 @@ export function createFakeInbox(opts: FakeInboxOptions = {}) {
 		delete: (path, config) => run('delete', path, undefined, config),
 	};
 
-	return { api, files, calls, junctions, scans, rules: ignored.rules, pictureStats, setAutoLink: (v: boolean) => (autoLink = v), hang: (v: boolean) => (opts.pictureHangs = v) };
+	return { api, files, calls, junctions, scans, rules: ignored.rules, measurements: measures.store, pictureStats, setAutoLink: (v: boolean) => (autoLink = v), hang: (v: boolean) => (opts.pictureHangs = v) };
 }

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { AppLink } from '@d1/ui';
-import type { FoundFile } from './inboxApi';
+import type { FoundFile, SavedMeasurement } from './inboxApi';
 import { hasThumbnail, nameOf } from './inboxModel';
 import type { MeasureShape, MeasureTool } from './measure';
+import type { PreviewSize } from './measurements';
 import ViewPane from './ViewPane.vue';
 import type { ZoomMode } from './viewBoxModel';
 import type { PictureState } from './usePicture';
@@ -25,6 +26,9 @@ const props = defineProps<{
 	/** Measure is on, and the shape drawn so far. */
 	measureOn?: boolean;
 	shape?: MeasureShape | null;
+	/** The shapes saved on this file, and the one highlighted: drawn on the picture while Measure is on. */
+	saved?: readonly SavedMeasurement[];
+	selectedId?: string | null;
 	/** What Measure draws: a line, a circle or a polygon. */
 	tool?: MeasureTool;
 	/** Compare is showing: the `stage` slot replaces the single picture. */
@@ -35,6 +39,8 @@ const emit = defineEmits<{
 	(e: 'next'): void;
 	/** The preview's state, so the page's View rail knows whether there is a picture to adjust. */
 	(e: 'state', s: PictureState): void;
+	/** The preview's natural size once it is in (saving a drawn shape needs it), null while it is not known. */
+	(e: 'size', s: PreviewSize | null): void;
 	(e: 'measure', shape: MeasureShape | null): void;
 }>();
 
@@ -70,8 +76,11 @@ const name = computed(() => nameOf(props.file.rel_path));
 				:measure-on="measureOn"
 				:tool="tool"
 				:shape="shape"
+				:saved="saved"
+				:selected-id="selectedId"
 				side="box"
 				@state="onState"
+				@size="emit('size', $event)"
 				@measure="emit('measure', $event)"
 			/>
 		</div>

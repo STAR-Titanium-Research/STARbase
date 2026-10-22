@@ -42,6 +42,16 @@ files side by side and measure on them.
    Esc drops the shape being drawn (and, with nothing being drawn, still closes the view box). On an image with no known pixel size Measure is
    **disabled with the tooltip "no scale known for this image"** and has no tools. In Compare each pane keeps its own shape (still one at a time). A manual
    scale-bar entry is not built now.
+
+   **Measurements (saved shapes).** A drawn shape is a *draft* until the person presses Save (or Enter); Clear and Esc drop it. Saved shapes are kept per
+   file on the server, unit-free: the corners in pixels of the **original** image (`d1_private.inbox_measurements`, migration 211; the micrometres are worked out
+   when shown, so a corrected pixel size re-measures them all). They are listed under **Measurements** in the View rail as `1 Line 212 µm`, `2 Circle Ø 88 µm`,
+   `3 Polygon 12,400 µm²`, numbered in saving order: click a row to highlight its shape on the picture, the pencil renames it in place, the bin deletes it
+   (after a question), **Copy CSV** puts `n, label, kind, length_um, diameter_um, perimeter_um, area_um2` on the clipboard as plain decimals. While Measure is
+   on, saved shapes are drawn on the picture dimmer than the live one, each with its number (the selected one at full strength, with its size). Who: whoever
+   can see the file reads them; its owner (the person, or a member of the owner team) saves; the owner and the shape's author rename and delete; an
+   administrator who is not the owner only reads. In Compare, Save works on the open file (A) only; a shape drawn in pane B is not saved. The Inbox sheet
+   shows only a count ("3 saved measurements").
 7. **Where settings live:** the right-rail settings (Fit/1:1, overlays, Compare mode, Preview mode, Layout, Density, Group by) are kept per person in
    `localStorage` under `d1.list.inbox` (wrapped in try/catch; the page works without it). Only the file and the compare partner are in the URL.
 8. **Kinds without a picture** (documents, other files, images whose thumbnail is not made yet): the sheet shows the facts and the existing placeholder

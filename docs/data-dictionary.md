@@ -151,6 +151,11 @@ Private schema (not exposed)
                              folders the inbox crawler must not scan (migration 199, spec section 15
                              of the Inbox design): one rule per person or team and folder. Reached
                              only through the d1-inbox endpoint and the crawler; see "Found files".
+  d1_private.inbox_measurements
+                             saved measurements of an inbox picture (migration 211, spec 2026-10-20-inbox-file-viewer-design.md
+                             decision 6): one row per line, circle or polygon a person kept in the view box, with
+                             its corners in pixels of the ORIGINAL image (unit-free). Reached only through the
+                             d1-inbox endpoint; see "Found files".
   d1_private.sem_image_settings, sem_settings_access_log
                              imaging settings per SEM image (kV, spot, working distance, magnification,
                              field width, ...) saved when a person links the image, with where each
@@ -536,6 +541,24 @@ Unique on `(coalesce(owner_person_id, owner_team_id), lower(rel_folder))` (`inbo
 each owner column and on `created_by`. At most 200 rules per owner, enforced by the endpoint. Adding a rule dismisses the owner's `new`
 candidates under it (an ordinary, restorable dismissal; linked files are untouched); removing one resets the folder's `inbox_dirs` rows (`dir_mtime` and `last_listed_at` NULL for the
 folder and everything below it; kept, not deleted) so the next scan lists it again.
+**`d1_private.inbox_measurements`** (migration `…211`, [spec](superpowers/specs/2026-10-20-inbox-file-viewer-design.md) decision 6): the shapes a
+person saved with the view box's Measure tool, one row per shape and found file. Also in `d1_private`: not exposed by Directus, not in
+`v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers (personal working notes). Written only by `d1-inbox`
+(`GET`/`POST /files/:id/measurements`, `PATCH`/`DELETE /files/:id/measurements/:measurement_id`). Whoever can see the file reads them; its owner (the
+person, or an active member of the owner team) saves, renames and deletes them, and so may the row's author; an administrator who is not the owner only reads.
+
+| Column | Type | Description |
+|---|---|---|
+| `measurement_id` | UUID PK | Surrogate key, `gen_random_uuid()` |
+| `candidate_id` | UUID FK NOT NULL | The found file (`file_candidates`); `ON DELETE CASCADE` |
+| `kind` | TEXT NOT NULL | `line`, `circle` or `polygon` (`inbox_measurements_kind_check`) |
+| `points` | JSONB NOT NULL | `[{"x": n, "y": n}, ...]` in **pixels of the original image**, never micrometres: a line's two ends, a circle's centre then a point on its rim, a polygon's 3 to 200 corners in click order (`inbox_measurements_points_check`). The micrometres are worked out when shown, from the file's `pixel_size_nm` |
+| `label` | TEXT NOT NULL | The person's name for it; empty for none; at most 120 characters |
+| `created_by` | UUID FK | The Directus user who saved it; `ON DELETE SET NULL` |
+| `created_at` | TIMESTAMPTZ NOT NULL | Default `now()`; the list is ordered by it and numbers the shapes 1, 2, 3 |
+
+At most 200 shapes per file, enforced by the endpoint under a lock. Index on `(candidate_id, created_at, measurement_id)`.
+
 ### Files belong to their provenance owner: `directus_files.owner_person_id` / `owner_team_id` and `file_readers`
 
 Migration `…196` ([ADR-0022](adr/0022-files-belong-to-their-provenance-owner.md), [spec](superpowers/specs/2026-10-16-sem-data-bar-reader-design.md)

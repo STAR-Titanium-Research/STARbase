@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
-import type { FoundFile } from './inboxApi';
+import type { FoundFile, SavedMeasurement } from './inboxApi';
 import { IMAGE_KINDS, hasThumbnail, kindIcon, nameOf } from './inboxModel';
 import ScaleBar from './ScaleBar.vue';
 import { measureScale, measureText, shapeUm, type MeasureShape, type MeasureTool, type Pt } from './measure';
+import { orderMeasurements, savedMeasure, savedToShape, valueText, type PreviewSize } from './measurements';
 import { CONTRAST_FILTER, TEXT_ENTRY, actualWidthPx, boxScaleBar, type ZoomMode } from './viewBoxModel';
 import { usePicture, type PictureState } from './usePicture';
 
@@ -26,14 +27,19 @@ const props = withDefaults(
 		tool?: MeasureTool;
 		/** The finished shape to draw on this picture (fractions of it); what it measures is worked out here. */
 		shape?: MeasureShape | null;
+		/** The shapes saved on this file (corners in original pixels), drawn dimmer than the live shape while Measure is on; the selected one at full strength. */
+		saved?: readonly SavedMeasurement[];
+		selectedId?: string | null;
 		/** The prefix of this pane's data-test names: "box" for the single stage, "a" / "b" in Compare. */
 		side?: string;
 	}>(),
-	{ forcedWidth: null, measureOn: false, tool: 'line', shape: null, side: 'box' },
+	{ forcedWidth: null, measureOn: false, tool: 'line', shape: null, saved: () => [], selectedId: null, side: 'box' },
 );
 const emit = defineEmits<{
 	/** The preview's state, so the page's View rail knows whether there is a picture to adjust. */
 	(e: 'state', s: PictureState): void;
+	/** The preview's natural size once it is in (the fractions of a drawn shape are of it; saving a shape needs it), null while it is not known. */
+	(e: 'size', s: PreviewSize | null): void;
 	/** A shape was finished (or the drag was only a click, which draws nothing: null). */
 	(e: 'measure', shape: MeasureShape | null): void;
 	/** The pane was scrolled: where it is, as fractions (0 to 1) of what can scroll (so a linked pane can follow). */
@@ -54,9 +60,13 @@ const noPictureText = computed(() => (IMAGE_KINDS.includes(props.file.kind) ? 'T
 // The preview's own size, known once it is in: 1:1 needs the width when the file does not say how wide the original is, and Measure needs both.
 const img = ref<HTMLImageElement | null>(null);
 const previewW = ref<number | null>(null);
-watch(() => props.file.candidate_id, () => (previewW.value = null));
+watch(() => props.file.candidate_id, () => {
+	previewW.value = null;
+	emit('size', null);
+});
 function onLoad(e: Event): void {
-	previewW.value = (e.target as HTMLImageElement).naturalWidth || null;
+	const el = e.target as HTMLImageElement;
+	previewW.value = el.naturalWidth || null;
 	tick.value += 1;
 }
 const drawnW = computed(() => props.forcedWidth ?? (props.zoom === 'actual' ? actualWidthPx(props.file.extracted, previewW.value) : null));
@@ -181,6 +191,8 @@ const natural = computed(() => {
 	void tick.value;
 	return { width: img.value?.naturalWidth ?? 0, height: img.value?.naturalHeight ?? 0 };
 });
+// the natural size is reported whenever it is read again (the picture loaded, or a press started), so saving a shape always has the size its fractions are of
+watch(natural, (n) => emit('size', n.width > 0 && n.height > 0 ? { width: n.width, height: n.height } : null));
 const result = computed(() => (shown.value ? shapeUm(shown.value, natural.value, scale.value) : null));
 const openPolygon = computed(() => shown.value?.kind === 'polygon' && !shown.value.closed);
 const words = computed(() => (openPolygon.value ? '' : measureText(result.value)));
@@ -188,14 +200,11 @@ const words = computed(() => (openPolygon.value ? '' : measureText(result.value)
 const space = computed(() => ({ w: natural.value.width || 1, h: natural.value.height || 1 }));
 const viewBox = computed(() => `0 0 ${space.value.w} ${space.value.h}`);
 const at = (p: Pt) => ({ x: p.x * space.value.w, y: p.y * space.value.h });
-const circleR = computed(() => {
-	const s = shown.value;
-	return s?.kind === 'circle' ? Math.hypot((s.r.x - s.c.x) * space.value.w, (s.r.y - s.c.y) * space.value.h) : 0;
-});
-const polyPoints = computed(() => {
-	const s = shown.value;
-	return s?.kind === 'polygon' ? s.pts.map((p) => `${at(p).x},${at(p).y}`).join(' ') : '';
-});
+/** A circle's radius in the drawing's space (0 for any other shape). */
+const radiusOf = (s: MeasureShape | null): number => (s?.kind === 'circle' ? Math.hypot((s.r.x - s.c.x) * space.value.w, (s.r.y - s.c.y) * space.value.h) : 0);
+const pointsAttr = (s: MeasureShape | null): string => (s?.kind === 'polygon' ? s.pts.map((p) => `${at(p).x},${at(p).y}`).join(' ') : '');
+const circleR = computed(() => radiusOf(shown.value));
+const polyPoints = computed(() => pointsAttr(shown.value));
 /** The small handles: a line's ends, a circle's centre and rim point, a polygon's corners. */
 const handles = computed<Pt[]>(() => {
 	const s = shown.value;
@@ -203,15 +212,28 @@ const handles = computed<Pt[]>(() => {
 	return s.kind === 'line' ? [s.a, s.b] : s.kind === 'circle' ? [s.c, s.r] : s.pts;
 });
 /** Where the pill sits: over the middle of a line, on top of a circle, in the middle of a polygon. */
-const pillAt = computed<{ x: number; y: number; inside: boolean } | null>(() => {
-	const s = shown.value;
-	if (!s) return null;
+const anchorOf = (s: MeasureShape): { x: number; y: number; inside: boolean } => {
 	if (s.kind === 'line') return { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2, inside: false };
-	if (s.kind === 'circle') return { x: s.c.x, y: Math.max(0.06, s.c.y - circleR.value / space.value.h), inside: false };
+	if (s.kind === 'circle') return { x: s.c.x, y: Math.max(0.06, s.c.y - radiusOf(s) / space.value.h), inside: false };
 	const n = s.pts.length || 1;
 	return { x: s.pts.reduce((t, p) => t + p.x, 0) / n, y: s.pts.reduce((t, p) => t + p.y, 0) / n, inside: true };
-});
+};
+const pillAt = computed<{ x: number; y: number; inside: boolean } | null>(() => (shown.value ? anchorOf(shown.value) : null));
 const pct = (v: number) => `${v * 100}%`;
+
+// The shapes saved on this file, drawn under the live one (dimmer; the selected one at full strength with its number and size). They are stored in original pixels, so
+// they need the scale and the preview's natural size (read again when the picture loads, like the live shape's); a shape that cannot be placed is left out.
+const showKept = computed(() => props.measureOn && !!scale.value && state.value === 'ready');
+const kept = computed(() => {
+	if (!showKept.value) return [];
+	const size = natural.value;
+	return orderMeasurements(props.saved).flatMap((m, i) => {
+		const shape = savedToShape(m, size, scale.value);
+		if (!shape) return [];
+		const selected = m.measurement_id === props.selectedId;
+		return [{ id: m.measurement_id, shape, selected, tag: selected ? [i + 1, valueText(savedMeasure(m, scale.value))].filter((p) => p !== '').join(' · ') : String(i + 1), r: radiusOf(shape), points: pointsAttr(shape), anchor: anchorOf(shape) }];
+	});
+});
 
 // ---- pan: reported as fractions so a linked pane can follow; a scroll this pane was told to make is not reported back ----
 const scroller = ref<HTMLElement | null>(null);
@@ -248,6 +270,22 @@ defineExpose({ setScroll, cancelDraft: dropDraft });
 				<div class="pic" :class="{ sized }">
 					<img ref="img" :src="url" :alt="`Preview of ${name}`" :style="imgStyle" draggable="false" :data-test="`${side}-image`" @load="onLoad" />
 					<ScaleBar v-if="bar" :bar="bar" :data-test="`${side}-scalebar`" />
+					<svg v-if="kept.length" class="line kept" :viewBox="viewBox" preserveAspectRatio="none" aria-hidden="true" :data-test="`${side}-kept`">
+						<g v-for="k in kept" :key="k.id" :class="{ sel: k.selected }" :data-test="`${side}-kept-shape`" :data-id="k.id" :data-shape="k.shape.kind" :data-selected="k.selected ? 'true' : 'false'">
+							<line v-if="k.shape.kind === 'line'" :x1="at(k.shape.a).x" :y1="at(k.shape.a).y" :x2="at(k.shape.b).x" :y2="at(k.shape.b).y" />
+							<circle v-else-if="k.shape.kind === 'circle'" :cx="at(k.shape.c).x" :cy="at(k.shape.c).y" :r="k.r" />
+							<polygon v-else :points="k.points" />
+						</g>
+					</svg>
+					<span
+						v-for="k in kept"
+						:key="`tag-${k.id}`"
+						class="pill tag"
+						:class="{ inside: k.anchor.inside, sel: k.selected }"
+						:style="{ left: pct(k.anchor.x), top: pct(k.anchor.y) }"
+						:data-test="`${side}-kept-tag`"
+						:data-id="k.id"
+					>{{ k.tag }}</span>
 					<svg v-if="shown" class="line" :viewBox="viewBox" preserveAspectRatio="none" aria-hidden="true" :data-test="`${side}-line`" :data-shape="shown.kind">
 						<line v-if="shown.kind === 'line'" :x1="at(shown.a).x" :y1="at(shown.a).y" :x2="at(shown.b).x" :y2="at(shown.b).y" />
 						<circle v-else-if="shown.kind === 'circle'" :cx="at(shown.c).x" :cy="at(shown.c).y" :r="circleR" />
@@ -300,6 +338,9 @@ defineExpose({ setScroll, cancelDraft: dropDraft });
 .line line, .line circle, .line polygon, .line polyline { fill: none; stroke: var(--d1-accent, var(--theme--primary)); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
 .line circle, .line polygon { fill: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); }
 .line .rubber { opacity: 0.55; }
+/* Saved shapes: the same dashed outline, dimmer (the opacity of the rubber band); the selected one at full strength. Each has a pill with its number, the selected one adds its size. */
+.kept g { opacity: 0.55; }
+.kept g.sel { opacity: 1; }
 /* A small round handle on each end, centre, rim point or corner; a polygon's first corner grows once a click on it would close the shape. */
 .vtx {
 	position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; box-sizing: border-box; border-radius: 99px; pointer-events: none;

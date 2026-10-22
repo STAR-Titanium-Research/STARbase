@@ -429,8 +429,9 @@ INSERT INTO directus_files (id) VALUES ('$FI_F1');
 INSERT INTO directus_users (id) VALUES ('$FI_U1');
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'a.tif');
 INSERT INTO d1_private.inbox_prefs (user_id, auto_link) VALUES ('$FI_U1', true);
--- migration 198's table references file_candidates; its own down runs first in a real rollback
+-- migration 198's and 211's tables reference file_candidates; their own downs run first in a real rollback
 DROP TABLE IF EXISTS d1_private.file_thumbnails;
+DROP TABLE IF EXISTS d1_private.inbox_measurements;
 $fi_down
 SELECT 'fi_dn_tables:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ($fi_new_tables);
 SELECT 'fi_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'people' AND column_name IN ('uni_alias', 'scan_while_former')) OR (table_name = 'teams' AND column_name = 'share_folder'));
@@ -651,6 +652,150 @@ SQL
 )
     grep -q 'ig_dn_table:0' <<<"$fi_out" && grep -q 'ig_dn_people:1' <<<"$fi_out" && ok "down drops the table and keeps the people" || bad "down left the table behind or removed people (output: $fi_out)"
     grep -q 'ig_up_table:1' <<<"$fi_out" && grep -q 'ig_up_rows:0' <<<"$fi_out" && ok "up again brings back an empty table (the rules are not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
+fi
+
+echo "== Saved measurements: d1_private.inbox_measurements =="
+# Migration 211 (the view box's Measure tool keeps its shapes). Each check is its own rolled-back transaction, on the fixture rows of fi_sql (ids as in the inbox sections above).
+IM_MIG=$(migration inbox_measurements)
+[[ -n "$IM_MIG" && -f "$IM_MIG" ]] && ok "found the saved measurements migration (${IM_MIG:-none})" || bad "the saved measurements migration is missing (db/migrations/*_inbox_measurements.sql)"
+IM_CAND="INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path) VALUES ('$FI_F1', '$FI_P1', 'sem_image', 'new', 'a.tif');"
+IM_LINE='[{"x": 10, "y": 20}, {"x": 110.5, "y": 220}]'
+IM_ROW="INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points, created_by) SELECT candidate_id, 'line', '$IM_LINE'::jsonb, '$FI_U1' FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';"
+im_points() { # im_points <n>: a JSON array of n corners
+    printf '[%s]' "$(for i in $(seq 1 "$1"); do printf '{"x": %s, "y": %s}' "$i" "$((i % 7))"; [[ $i -lt $1 ]] && printf ', '; done)"
+}
+run_eq "inbox_measurements is in d1_private and nowhere in public, v_schema_dictionary, directus_collections or directus_fields (not exposed in Directus)" \
+    "SELECT (SELECT count(*) FROM pg_tables WHERE schemaname = 'd1_private' AND tablename = 'inbox_measurements') || ',' || (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'inbox_measurements') || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name = 'inbox_measurements') || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'inbox_measurements') || ',' || (SELECT count(*) FROM directus_fields WHERE collection = 'inbox_measurements')" "1,0,0,0,0"
+run_eq "d1_llm_readonly cannot read it" "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.inbox_measurements', 'SELECT')" "f"
+run_eq "the columns are the contract's (key with a default, candidate, kind, points JSONB, label with a default, nullable author, created_at with a default)" \
+    "SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || (column_default IS NOT NULL), ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'inbox_measurements'" \
+    "candidate_id:uuid:NO:false,created_at:timestamp with time zone:NO:true,created_by:uuid:YES:false,kind:text:NO:false,label:text:NO:true,measurement_id:uuid:NO:true,points:jsonb:NO:false"
+run_eq "the constraints are named {table}_{description}_{type}" \
+    "SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_measurements'::regclass" \
+    "inbox_measurements_candidate_id_fkey,inbox_measurements_created_by_fkey,inbox_measurements_kind_check,inbox_measurements_label_check,inbox_measurements_pkey,inbox_measurements_points_check"
+run_eq "the foreign keys delete as the other inbox tables do: the candidate CASCADE, the author SET NULL" \
+    "SELECT string_agg(conname || '=' || confdeltype::text, ',' ORDER BY conname) FROM pg_constraint WHERE conrelid = 'd1_private.inbox_measurements'::regclass AND contype = 'f'" \
+    "inbox_measurements_candidate_id_fkey=c,inbox_measurements_created_by_fkey=n"
+run_eq "the candidate and author foreign keys are indexed (the author's partial on NOT NULL)" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_measurements' AND ((indexname = 'idx_inbox_measurements_candidate' AND indexdef LIKE '%(candidate_id, created_at, measurement_id)') OR (indexname = 'idx_inbox_measurements_created_by' AND indexdef LIKE '%(created_by) WHERE (created_by IS NOT NULL)'))" \
+    "idx_inbox_measurements_candidate,idx_inbox_measurements_created_by"
+run_eq "the table has no audit or OCC trigger (personal working notes)" \
+    "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'd1_private.inbox_measurements'::regclass AND NOT tgisinternal" "0"
+fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points, label) SELECT candidate_id, 'circle', '[{\"x\": 5, \"y\": 5}, {\"x\": 9, \"y\": 5}]'::jsonb, 'pore' FROM d1_private.file_candidates;
+INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points) SELECT candidate_id, 'polygon', '$(im_points 3)'::jsonb FROM d1_private.file_candidates;
+SELECT 'im_rows:' || count(*) || ':' || count(measurement_id) || ':' || count(created_at) || ':' || count(created_by) || ':' || (SELECT label FROM d1_private.inbox_measurements WHERE kind = 'line') || '|' FROM d1_private.inbox_measurements;
+SELECT 'im_points:' || (points -> 1 ->> 'x') FROM d1_private.inbox_measurements WHERE kind = 'line';")
+grep -q 'im_rows:3:3:3:1:|' <<<"$fi_out" && grep -q 'im_points:110.5' <<<"$fi_out" && ok "a line, a circle and a polygon insert, with a generated id and time and an empty label by default; the author is optional; fractional pixels are kept" || bad "measurement inserts failed (output: $fi_out)"
+for im_case in \
+    "kind = 'spline'|inbox_measurements_kind_check|a kind that is not line, circle or polygon" \
+    "kind = 'polygon'|inbox_measurements_points_check|a polygon of 2 points" \
+    "kind = 'circle', points = '$(im_points 3)'::jsonb|inbox_measurements_points_check|a circle of 3 points" \
+    "points = '$(im_points 1)'::jsonb|inbox_measurements_points_check|a line of 1 point" \
+    "points = '{\"x\": 1, \"y\": 2}'::jsonb|inbox_measurements_points_check|points that are an object, not a list (a check error, not a JSON function error)" \
+    "points = '5'::jsonb|inbox_measurements_points_check|points that are a number" \
+    "kind = 'polygon', points = '$(im_points 201)'::jsonb|inbox_measurements_points_check|a polygon of 201 corners" \
+    "label = '$(printf 'x%.0s' $(seq 1 121))'|inbox_measurements_label_check|a 121-character label"; do
+    IFS='|' read -r im_set im_con im_what <<<"$im_case"
+    fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+UPDATE d1_private.inbox_measurements SET $im_set;")
+    grep -q "$im_con" <<<"$fi_out" && ok "$im_what is rejected" || bad "$im_what was accepted or refused by something else (output: $fi_out)"
+done
+fi_out=$(fi_sql "$IM_CAND
+INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points) SELECT candidate_id, 'polygon', '$(im_points 200)'::jsonb FROM d1_private.file_candidates;
+INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points, label) SELECT candidate_id, 'line', '$IM_LINE'::jsonb, '$(printf 'x%.0s' $(seq 1 120))' FROM d1_private.file_candidates;
+SELECT 'im_edge:' || count(*) FROM d1_private.inbox_measurements;")
+grep -q 'im_edge:2' <<<"$fi_out" && ok "a polygon of 200 corners and a 120-character label are accepted" || bad "the limits' own values were refused (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_measurements (candidate_id, kind, points) VALUES (gen_random_uuid(), 'line', '$IM_LINE'::jsonb);")
+grep -q 'inbox_measurements_candidate_id_fkey' <<<"$fi_out" && ok "a measurement of an unknown file is rejected (foreign key)" || bad "a measurement of an unknown file was accepted (output: $fi_out)"
+fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+DELETE FROM d1_private.file_candidates WHERE directus_files_id = '$FI_F1';
+SELECT 'im_cascade_candidate:' || count(*) FROM d1_private.inbox_measurements;")
+grep -q 'im_cascade_candidate:0' <<<"$fi_out" && ok "deleting a found file deletes its measurements" || bad "measurements outlived their file (output: $fi_out)"
+fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+DELETE FROM directus_files WHERE id = '$FI_F1';
+SELECT 'im_cascade_file:' || (SELECT count(*) FROM d1_private.file_candidates) || ':' || (SELECT count(*) FROM d1_private.inbox_measurements);")
+grep -q 'im_cascade_file:0:0' <<<"$fi_out" && ok "deleting the file row removes its candidate and the measurements with it" || bad "measurements outlived the file row (output: $fi_out)"
+fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+DELETE FROM directus_users WHERE id = '$FI_U1';
+SELECT 'im_user:' || count(*) || ':' || count(created_by) FROM d1_private.inbox_measurements;")
+grep -q 'im_user:1:0' <<<"$fi_out" && ok "deleting the author's login keeps the measurement (created_by becomes NULL)" || bad "deleting the author removed or kept the author wrongly (output: $fi_out)"
+run_eq "every column, index and the table of inbox_measurements has a comment (without: none)" \
+    "SELECT coalesce(string_agg(x, ', ' ORDER BY x), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_measurements' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_measurements' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+        UNION ALL
+        SELECT i.indexname FROM pg_indexes i JOIN pg_class ic ON ic.relname = i.indexname AND ic.relnamespace = to_regnamespace(i.schemaname)
+         WHERE i.schemaname = 'd1_private' AND i.tablename = 'inbox_measurements' AND coalesce(obj_description(ic.oid, 'pg_class'), '') = '') q" ""
+# The endpoint's own statements for it (the measure* ones of core/extensions/d1-inbox/sql_check.mjs), PREPAREd and run on a seeded file: read the file,
+# save two shapes, list them, read one, count, rename (also under the wrong file: nothing changes) and delete.
+if command -v node >/dev/null 2>&1; then
+    im_prep=$(node core/extensions/d1-inbox/sql_check.mjs 2>&1 | grep -i '^PREPARE measure')
+    [[ "$(grep -c '^PREPARE ' <<<"$im_prep")" == "7" ]] && ok "sql_check.mjs prints the seven measurement statements" || bad "sql_check.mjs did not print seven measurement statements"
+    im_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$FI_U1');
+INSERT INTO people (person_id, full_name, user_id) VALUES ('$FI_P1', 'Inbox Test One', '$FI_U1');
+INSERT INTO directus_files (id) VALUES ('$FI_F1');
+$IM_CAND
+SELECT candidate_id AS im_cid FROM d1_private.file_candidates \gset
+$im_prep
+CREATE FUNCTION pg_temp.im_run(stmt text) RETURNS int LANGUAGE plpgsql AS \$f\$ DECLARE n int; BEGIN EXECUTE stmt; GET DIAGNOSTICS n = ROW_COUNT; RETURN n; END \$f\$;
+CREATE TEMP TABLE im_file AS EXECUTE measurefile(:'im_cid');
+SELECT 'im_sql_file:' || count(*) || ':' || min(state) FROM im_file;
+SELECT pg_temp.im_run(format('EXECUTE measureinsert(%L, %L, %L, %L, %L)', :'im_cid', 'line', '$IM_LINE', 'first', '$FI_U1')) AS im_n1 \gset
+SELECT pg_temp.im_run(format('EXECUTE measureinsert(%L, %L, %L, %L, %L)', :'im_cid', 'circle', '[{"x": 1, "y": 1}, {"x": 4, "y": 1}]', '', '$FI_U1')) AS im_n2 \gset
+CREATE TEMP TABLE im_list AS EXECUTE measurelist(:'im_cid');
+SELECT 'im_sql_list:' || count(*) || ':' || string_agg(kind || '/' || label || '/' || author_name, ',' ORDER BY kind) FROM im_list;
+SELECT measurement_id AS im_mid FROM im_list WHERE kind = 'line' \gset
+CREATE TEMP TABLE im_one AS EXECUTE measureone(:'im_mid', :'im_cid');
+SELECT 'im_sql_one:' || count(*) || ':' || min(label) FROM im_one;
+CREATE TEMP TABLE im_none AS EXECUTE measureone(:'im_mid', gen_random_uuid()::text);
+SELECT 'im_sql_none:' || count(*) FROM im_none;
+CREATE TEMP TABLE im_cnt AS EXECUTE measurecount(:'im_cid');
+SELECT 'im_sql_count:' || n FROM im_cnt;
+SELECT pg_temp.im_run(format('EXECUTE measurelabel(%L, %L, %L)', 'x', :'im_mid', gen_random_uuid()::text)) AS im_n3 \gset
+SELECT 'im_sql_label_other:' || label FROM d1_private.inbox_measurements WHERE measurement_id = :'im_mid';
+SELECT pg_temp.im_run(format('EXECUTE measurelabel(%L, %L, %L)', 'renamed', :'im_mid', :'im_cid')) AS im_n4 \gset
+SELECT 'im_sql_label:' || label FROM d1_private.inbox_measurements WHERE measurement_id = :'im_mid';
+SELECT pg_temp.im_run(format('EXECUTE measuredelete(%L, %L)', :'im_mid', gen_random_uuid()::text)) AS im_n5 \gset
+SELECT 'im_sql_delete_other:' || count(*) FROM d1_private.inbox_measurements;
+SELECT pg_temp.im_run(format('EXECUTE measuredelete(%L, %L)', :'im_mid', :'im_cid')) AS im_n6 \gset
+SELECT 'im_sql_delete:' || count(*) FROM d1_private.inbox_measurements;
+ROLLBACK;
+SQL
+)
+    grep -q 'im_sql_file:1:new' <<<"$im_out" && grep -q 'im_sql_list:2:circle//Inbox Test One,line/first/Inbox Test One' <<<"$im_out" && grep -q 'im_sql_one:1:first' <<<"$im_out" \
+        && grep -q 'im_sql_none:0' <<<"$im_out" && grep -q 'im_sql_count:2' <<<"$im_out" && ok "the endpoint's measurement statements read the file, save, list (with the author's name), read one and count against the real schema" || bad "the measurement read and save statements failed (output: $im_out)"
+    grep -q 'im_sql_label_other:first' <<<"$im_out" && grep -q 'im_sql_label:renamed' <<<"$im_out" && grep -q 'im_sql_delete_other:2' <<<"$im_out" && grep -q 'im_sql_delete:1' <<<"$im_out" \
+        && ok "rename and delete change only the shape of the file they are asked through (the wrong file changes nothing)" || bad "the measurement rename and delete statements failed (output: $im_out)"
+fi
+
+# Down and up again, inside one rolled-back transaction.
+if [[ -n "$IM_MIG" && -f "$IM_MIG" ]]; then
+    im_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$IM_MIG")
+    im_down=$(awk '/-- migrate:down/{f=1;next}f' "$IM_MIG")
+    fi_out=$(fi_sql "$IM_CAND
+$IM_ROW
+$im_down
+SELECT 'im_dn_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname = 'inbox_measurements';
+SELECT 'im_dn_candidates:' || count(*) FROM d1_private.file_candidates;
+$im_up
+SELECT 'im_up_table:' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relkind = 'r' AND c.relname = 'inbox_measurements';
+SELECT 'im_up_rows:' || count(*) FROM d1_private.inbox_measurements;
+$IM_ROW
+SELECT 'im_up_insert:' || count(*) FROM d1_private.inbox_measurements;")
+    grep -q 'im_dn_table:0' <<<"$fi_out" && grep -q 'im_dn_candidates:1' <<<"$fi_out" && ok "down drops the measurements table and keeps the found files" || bad "down left the table behind or removed found files (output: $fi_out)"
+    grep -q 'im_up_table:1' <<<"$fi_out" && grep -q 'im_up_rows:0' <<<"$fi_out" && grep -q 'im_up_insert:1' <<<"$fi_out" && ok "up again brings back an empty, working table (the shapes are not kept: lossy by design)" || bad "up after down failed (output: $fi_out)"
 fi
 
 echo "== d1-inbox: the endpoint's own SQL, run against Postgres =="

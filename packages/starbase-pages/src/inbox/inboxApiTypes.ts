@@ -252,3 +252,41 @@ export interface InboxAdmin {
 	/** File candidates by state ({ new, linked, dismissed, gone }). */
 	candidates: Record<string, number>;
 }
+
+// ---- saved measurements (d1-inbox GET, POST /files/<id>/measurements, PATCH, DELETE .../<measurement id>; migration 211) ----
+
+/** What a saved shape is. */
+export type MeasurementKind = 'line' | 'circle' | 'polygon';
+/** A corner, in pixels of the ORIGINAL image (never the preview, never micrometres). */
+export interface OriginalPoint {
+	x: number;
+	y: number;
+}
+/**
+ * One shape a person saved on a found file, as the server keeps it: unit-free (`points` are original pixels; the micrometres are worked out from the file's
+ * pixel size when shown). A line has its two ends, a circle its centre and then a point on its rim, a polygon its corners in the order they were clicked.
+ */
+export interface SavedMeasurement {
+	measurement_id: string;
+	kind: MeasurementKind;
+	points: OriginalPoint[];
+	/** The person's name for it; empty for none. */
+	label: string;
+	created_at: string | null;
+	/** Who saved it (null once their login is gone). */
+	author_name: string | null;
+	/** The caller may rename or delete it: the file's owner, or its author. */
+	can_edit: boolean;
+}
+/** A file's saved shapes, oldest first (the list numbers them in this order), and whether the caller may add one. */
+export interface MeasurementList {
+	measurements: SavedMeasurement[];
+	/** The caller owns the file (the person, or a member of the owner team): an administrator reads and cannot add. */
+	canChange: boolean;
+}
+/** What POST sends. */
+export interface NewMeasurement {
+	kind: MeasurementKind;
+	points: OriginalPoint[];
+	label?: string;
+}

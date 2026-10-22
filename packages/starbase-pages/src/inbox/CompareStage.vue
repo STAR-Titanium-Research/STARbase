@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import type { FoundFile } from './inboxApi';
+import type { FoundFile, SavedMeasurement } from './inboxApi';
 import { nameOf } from './inboxModel';
 import { canCommonScale, commonScaleWidths } from './commonScale';
 import type { CompareMeasure, PartnerState } from './comparePartner';
 import type { MeasureShape, MeasureTool, Pt } from './measure';
+import type { PreviewSize } from './measurements';
 import ViewPane from './ViewPane.vue';
 import type { PictureState } from './usePicture';
 import type { ZoomMode } from './viewBoxModel';
@@ -24,9 +25,14 @@ const props = defineProps<{
 	measureOn: boolean;
 	tool: MeasureTool;
 	measure: CompareMeasure | null;
+	/** The shapes saved on the open file (A), and the one highlighted: drawn in pane A only (B is another file). */
+	saved?: readonly SavedMeasurement[];
+	selectedId?: string | null;
 }>();
 const emit = defineEmits<{
 	(e: 'state', s: PictureState): void;
+	/** Pane A's preview natural size (saving a drawn shape needs it). */
+	(e: 'size', s: PreviewSize | null): void;
 	(e: 'measure', m: CompareMeasure | null): void;
 }>();
 
@@ -81,8 +87,11 @@ const onMeasure = (side: 'a' | 'b', shape: MeasureShape | null) => emit('measure
 					:measure-on="measureOn"
 					:tool="tool"
 					:shape="shapeFor('a')"
+					:saved="saved"
+					:selected-id="selectedId"
 					side="a"
 					@state="emit('state', $event)"
+					@size="emit('size', $event)"
 					@measure="onMeasure('a', $event)"
 					@press="otherPress('a')"
 					@scroll="follow('a', $event)"
