@@ -25,6 +25,9 @@ export interface ConformThumb {
   series: ThumbSeries[];
 }
 
+/** The dash of each line, by position: the first is solid, the second dashed, so colour is never the only cue (DESIGN 5b). The key draws the same. */
+export const TRACE_DASH = ['', '4 3'] as const;
+
 const LABEL: Record<string, string> = { wheel_speed_rpm: 'Wheel speed', tooling1_c: 'Tooling 1' };
 
 /** The mean of each of `points` equal slices of rows [from, to); a slice with no finite reading is null. */

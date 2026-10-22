@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { AppLink, assetThumbUrl } from '@d1/ui';
 import ConformTrace from './ConformTrace.vue';
+import ConformTraceKey from './ConformTraceKey.vue';
 import type { DataPreview } from './model/dataPreview';
 
 // The small data picture of a record (spec §6.6): for a machining operation with a finished force
@@ -31,7 +32,10 @@ const action = computed(() => ACTION[props.preview?.kind === 'fast' || props.pre
 			<AppLink v-if="link && preview.plotterPath" :to="preview.plotterPath" class="open">{{ action }}</AppLink>
 			<span v-else-if="preview.plotterPath" class="open">{{ action }}</span>
 		</div>
-		<ConformTrace v-if="preview.kind === 'conform' && preview.thumb" class="trace" :thumb="preview.thumb" />
+		<template v-if="preview.kind === 'conform' && preview.thumb">
+			<ConformTrace class="trace" :thumb="preview.thumb" />
+			<ConformTraceKey :thumb="preview.thumb" />
+		</template>
 		<p v-else-if="preview.kind === 'conform' && preview.thumbNote" class="note">{{ preview.thumbNote }}</p>
 		<img v-if="src && !failed" :src="src" :alt="`${caption} figure`" loading="lazy" decoding="async" @error="failed = true" />
 	</div>
