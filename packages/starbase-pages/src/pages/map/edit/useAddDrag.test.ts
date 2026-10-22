@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import type { DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
-import { catalogEntries, type MenuEntry } from './menuModel';
+import { catalogEntries, kindEntries, type MenuEntry } from './menuModel';
 import { encodeSocket, type SocketRef } from './socketRefs';
 import { DRAG_SLOP, LONG_PRESS_MS, NOT_HERE, TOUCH_SLOP, draggable, useAddDrag } from './useAddDrag';
 
@@ -73,6 +73,7 @@ afterEach(() => void vi.unstubAllGlobals());
 describe('what can be carried', () => {
 	it('a thing to add can; Existing sample… (it opens the picker) cannot', () => {
 		expect([turning, newSample, pick].map(draggable)).toEqual([true, true, false]);
+		expect(kindEntries().map(draggable)).toEqual([true, true, true, true]); // Sample, Operation, Test, From database…
 	});
 });
 

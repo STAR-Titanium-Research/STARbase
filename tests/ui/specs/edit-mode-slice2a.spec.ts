@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 import { D1, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
 	addSearch, buildTurningWithNewSample, canvasMiddle, canvasOf, card, cards, createButton, dragEntryTo, draftIdOf, emptySpot, fit, holdEntryOver, openAddSearch, openNewDraft,
-	paletteEntry, paletteOf, pickSamples, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
+	paletteEntry, paletteFind, paletteKind, paletteOf, pickSamples, reach, readDraft, sampleIdOf, savedDraft, searchOptions, selectCard, settledOverlaps, sockOf, startEditingMapOf, wireBetween, wireMidpoint,
 	type DraftBody,
 } from '../starbase/mapEdit';
 
@@ -49,17 +49,21 @@ test.describe('as a Lab Member', () => {
 	});
 
 	// ---- R1: the palette -------------------------------------------------------------------------------------------------------------
-	test('the palette lists the one catalog by process category; its search narrows it; it folds, and stays folded after a reload (R1)', async ({ page }) => {
+	test('the palette lists the kinds; its search finds every method and test type; it folds, and stays folded after a reload (R1)', async ({ page }) => {
 		await openNewDraft(page);
 		const palette = paletteOf(page);
 		await expect(palette).toBeVisible();
-		for (const head of ['Samples', 'Machining', 'Tests']) await expect(palette.locator('.sec', { hasText: head })).toBeVisible();
-		await expect(paletteEntry(page, 'New sample')).toBeVisible();
-		await expect(paletteEntry(page, 'Existing sample…')).toBeVisible();
-		await expect(paletteEntry(page, /^CNC Turning/)).toBeVisible();
-		await expect(paletteEntry(page, /Tensile/)).toBeVisible();
+		// With nothing typed: the kinds (each in the map's icon) and From database…. The methods and test types are found by typing.
+		await expect(palette.locator('.pe')).toHaveCount(4);
+		for (const kind of ['sample', 'operation', 'test'] as const) await expect(await paletteKind(page, kind)).toBeVisible();
+		await expect(palette.locator('.pe .ki')).toHaveCount(3);
+		await expect(paletteEntry(page, /From database/)).toBeVisible();
+		await expect(paletteEntry(page, /^CNC Turning/)).toHaveCount(0);
+		await expect(paletteEntry(page, /Tensile/)).toHaveCount(0);
 
 		// A search matches the method name, its code, its category and a test type; "MC" is CNC Turning's code.
+		await palette.getByRole('searchbox', { name: 'Search the palette' }).fill('turning');
+		await expect(paletteEntry(page, /^CNC Turning/)).toBeVisible();
 		await palette.getByRole('searchbox', { name: 'Search the palette' }).fill('mc');
 		await expect(paletteEntry(page, /CNC Turning/)).toBeVisible();
 		await expect(paletteEntry(page, /Tensile/)).toHaveCount(0);
@@ -77,7 +81,19 @@ test.describe('as a Lab Member', () => {
 		await expect(paletteOf(page).locator('.pe')).toHaveCount(0);
 		await paletteOf(page).getByRole('button', { name: 'Open the palette' }).click();
 		await page.reload({ waitUntil: 'domcontentloaded' });
-		await expect(paletteEntry(page, /^CNC Turning/)).toBeVisible();
+		await expect(await paletteKind(page, 'operation')).toBeVisible();
+	});
+
+	test('dragging Operation or Test (a kind) onto the empty canvas makes a blank card: an operation with no method yet, left for the card to choose (K1)', async ({ page }) => {
+		await openNewDraft(page);
+		const where = await emptySpot(page);
+		await dragEntryTo(page, await paletteKind(page, 'operation'), where);
+		let body = await savedDraft(page, member, (b) => operations(b).length === 1, 'the blank operation');
+		expect(operations(body)[0].values.method_id, 'no method yet').toBeFalsy();
+		expect(body.wires).toEqual([]);
+		await dragEntryTo(page, await paletteKind(page, 'test'), { x: where.x - 330, y: where.y });
+		body = await savedDraft(page, member, (b) => b.items.length === 2 && b.items.some((i) => i.kind === 'test'), 'the blank test');
+		expect(body.wires).toEqual([]);
 	});
 
 	// ---- R2: drops -------------------------------------------------------------------------------------------------------------------
@@ -86,7 +102,7 @@ test.describe('as a Lab Member', () => {
 		await pickSamples(page, ['LOCAL-RAW-1']);
 		await settledOverlaps(page);
 		const where = await emptySpot(page);
-		await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), where);
+		await dragEntryTo(page, await paletteFind(page, 'CNC Turning'), where);
 		const operation = card(page, 'CNC Turning, Operation');
 		await expect(operation).toBeVisible();
 		let body = await savedDraft(page, member, (b) => operations(b).length === 1, 'the floating operation');
@@ -100,11 +116,11 @@ test.describe('as a Lab Member', () => {
 		expect(Math.abs(box.y - where.y), 'y of the card against where it was dropped').toBeLessThan(40);
 
 		// Let go over a card and nothing is added: it says where an entry can go instead.
-		await dragEntryTo(page, paletteEntry(page, /Tensile/), () => operation.boundingBox().then((b) => ({ x: b!.x + b!.width / 2, y: b!.y + b!.height / 2 })));
+		await dragEntryTo(page, await paletteFind(page, 'Tensile'), () => operation.boundingBox().then((b) => ({ x: b!.x + b!.width / 2, y: b!.y + b!.height / 2 })));
 		await expect(page.locator('.pm-wirepreview .tip')).toContainText('Drop it on the empty canvas, on a free socket or on a wire.');
 		await expect(cards(page)).toHaveCount(3); // the picked sample, its material, the operation
 		// A test dropped on a clear spot next to it is a second floating card, clear of the first.
-		await dragEntryTo(page, paletteEntry(page, /Tensile/), { x: where.x - 330, y: where.y });
+		await dragEntryTo(page, await paletteFind(page, 'Tensile'), { x: where.x - 330, y: where.y });
 		await expect(card(page, /Tensile.*, Test$/)).toBeVisible();
 		body = await savedDraft(page, member, (b) => b.items.length === 3, 'the floating test');
 		expect(body.wires).toEqual([]);
@@ -118,10 +134,10 @@ test.describe('as a Lab Member', () => {
 
 	test('a new sample dragged onto the empty canvas is a free card; Existing sample… opens the picker (R2)', async ({ page }) => {
 		await openNewDraft(page);
-		await dragEntryTo(page, paletteEntry(page, 'New sample'), await canvasMiddle(page));
+		await dragEntryTo(page, await paletteKind(page, 'sample'), await canvasMiddle(page));
 		await expect(card(page, 'New sample, Sample')).toBeVisible();
 		await savedDraft(page, member, (b) => b.items.length === 1 && b.items[0].kind === 'sample' && !b.items[0].existing, 'a free new sample');
-		await paletteEntry(page, 'Existing sample…').click();
+		await (await paletteFind(page, 'Existing sample')).click();
 		await expect(page.getByRole('dialog', { name: 'Pick samples' })).toBeVisible();
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('dialog', { name: 'Pick samples' })).toBeHidden();
@@ -132,7 +148,7 @@ test.describe('as a Lab Member', () => {
 		const id = await sampleIdOf(member, 'LOCAL-RAW-1');
 		await pickSamples(page, ['LOCAL-RAW-1']);
 		const free = sockOf(page, `sample|${id}|out`).first();
-		await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), free);
+		await dragEntryTo(page, await paletteFind(page, 'CNC Turning'), free);
 		await expect(card(page, 'CNC Turning, Operation')).toBeVisible();
 		let body = await savedDraft(page, member, (b) => b.items.length === 2 && b.wires.length === 1, 'the operation wired from the sample');
 		await fit(page); // the map keeps its viewport when a card is added: the operation may be off the screen
@@ -140,7 +156,7 @@ test.describe('as a Lab Member', () => {
 
 		// The operation's own output takes a sample, not another operation: refused with the reason.
 		const out = canvasOf(page).locator('[data-sock^="row|draft:"][data-sock$="|out"]').first();
-		await holdEntryOver(page, paletteEntry(page, /^CNC Turning/), out);
+		await holdEntryOver(page, await paletteFind(page, 'CNC Turning'), out);
 		await expect(out).toHaveClass(/drop-bad/);
 		await expect(page.locator('.pm-chip')).toContainText('output takes a sample');
 		await page.mouse.up();
@@ -149,7 +165,7 @@ test.describe('as a Lab Member', () => {
 		expect(body.items, 'the refused drop changed nothing').toHaveLength(2);
 
 		// A new sample fits it, and is what the operation makes.
-		await dragEntryTo(page, paletteEntry(page, 'New sample'), out);
+		await dragEntryTo(page, await paletteKind(page, 'sample'), out);
 		await expect(card(page, 'New sample, Sample')).toBeVisible();
 		body = await savedDraft(page, member, (b) => b.items.length === 3 && b.wires.length === 2, 'the new sample made by the operation');
 		expect(await settledOverlaps(page)).toEqual([]);
@@ -163,7 +179,7 @@ test.describe('as a Lab Member', () => {
 		await expect(wire).toHaveCount(1);
 
 		// While dragging, the wire is marked green: it takes the entry.
-		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), () => wireMidpoint(wire));
+		await holdEntryOver(page, await paletteFind(page, 'CNC Milling'), () => wireMidpoint(wire));
 		await expect(page.locator('.d1-wire.drop-ok')).toHaveCount(1);
 		await expect(page.locator('.pm-chip')).toContainText('Insert between the two ends');
 		await page.mouse.up();
@@ -193,7 +209,7 @@ test.describe('as a Lab Member', () => {
 		await fit(page);
 		const wire = wireBetween(page, 's:', 'op:draft:');
 		await expect(wire).toHaveCount(1);
-		await dragEntryTo(page, paletteEntry(page, /^Heat Treatment/), () => wireMidpoint(wire));
+		await dragEntryTo(page, await paletteFind(page, 'Heat Treatment'), () => wireMidpoint(wire));
 		await expect(card(page, 'Heat Treatment, Operation')).toBeVisible();
 		const body = await savedDraft(page, member, (b) => b.items.length === 5, 'heat treatment and its new sample in front of the turning');
 		const heat = operations(body).find((o) => o.key !== operations(body)[0].key)!;
@@ -213,7 +229,7 @@ test.describe('as a Lab Member', () => {
 		const done = wireBetween(page, 's:', 'op:');
 		await expect(done.first()).toBeVisible();
 		const before = await readDraft(member, draftIdOf(page));
-		await holdEntryOver(page, paletteEntry(page, /^CNC Milling/), () => wireMidpoint(done.first()));
+		await holdEntryOver(page, await paletteFind(page, 'CNC Milling'), () => wireMidpoint(done.first()));
 		await expect(page.locator('.d1-wire.drop-bad')).toHaveCount(1);
 		await expect(page.locator('.pm-chip')).toContainText("Done records' wires can't be removed from the map");
 		await page.mouse.up();
@@ -224,16 +240,16 @@ test.describe('as a Lab Member', () => {
 
 	test('Enter on a palette entry adds it next to the selected card, or at the middle of the canvas; no two cards overlap (R1)', async ({ page }) => {
 		await openNewDraft(page);
-		await paletteEntry(page, 'New sample').focus();
+		await (await paletteKind(page, 'sample')).focus();
 		await page.keyboard.press('Enter');
 		const first = card(page, 'New sample, Sample');
 		await expect(first).toBeVisible();
 		await savedDraft(page, member, (b) => b.items.length === 1, 'the first card');
 		await selectCard(page, first);
-		await paletteEntry(page, /^CNC Turning/).focus();
+		await (await paletteFind(page, 'CNC Turning')).focus();
 		await page.keyboard.press('Enter');
 		await expect(card(page, 'CNC Turning, Operation')).toBeVisible();
-		await savedDraft(page, member, (b) => b.items.length === 2 && b.wires.length === 0, 'the operation, floating beside the card');
+		await savedDraft(page, member, (b) => b.items.length === 2 && b.wires.length === 1, 'the operation, wired to the selected new sample');
 		expect(await settledOverlaps(page)).toEqual([]);
 	});
 
@@ -301,7 +317,7 @@ test.describe('as a Lab Member', () => {
 		await page.keyboard.press('Escape');
 
 		// A free input of a new operation: samples that could feed it.
-		await dragEntryTo(page, paletteEntry(page, /^CNC Milling/), () => emptySpot(page));
+		await dragEntryTo(page, await paletteFind(page, 'CNC Milling'), () => emptySpot(page));
 		const input = canvasOf(page).locator('.free[data-sock^="row|draft:"][data-sock$="|in"]').first();
 		await input.press('Enter');
 		options = await searchOptions(page);
@@ -313,7 +329,7 @@ test.describe('as a Lab Member', () => {
 	test('what was added lately comes first when the add search opens again, in the palette too, and after a reload (R1)', async ({ page }) => {
 		await openNewDraft(page);
 		await openAddSearch(page);
-		expect((await searchOptions(page))[0], 'nothing added yet: the catalog starts with the samples').toBe('New sample');
+		expect((await searchOptions(page))[0], 'nothing added yet: the catalog starts with the kinds').toBe('Sample');
 		await page.keyboard.type('tensile');
 		await page.keyboard.press('Enter');
 		await expect(card(page, /Tensile.*, Test$/)).toBeVisible();
@@ -323,11 +339,12 @@ test.describe('as a Lab Member', () => {
 		await expect(addSearch(page).locator('.sec').first()).toHaveText('Recent');
 		expect((await searchOptions(page)).filter((o) => o === 'Destructive — Tensile'), 'listed once, not in two places').toHaveLength(1);
 		await page.keyboard.press('Escape');
-		await expect(paletteOf(page).locator('.sec').first()).toHaveText('Recent');
-		await expect(paletteOf(page).locator('.pe').first()).toContainText('Tensile');
+		// (the palette lists its four kinds first, then what was added lately)
+		await expect(paletteOf(page).locator('.sec').filter({ hasText: 'Recent' })).toBeVisible();
+		await expect(paletteOf(page).locator('.pe').nth(4)).toContainText('Tensile');
 
 		await page.reload({ waitUntil: 'domcontentloaded' });
-		await expect(paletteOf(page).locator('.pe').first()).toContainText('Tensile');
+		await expect(paletteOf(page).locator('.pe').nth(4)).toContainText('Tensile');
 	});
 
 	// ---- R2: insert before and after; R3 ---------------------------------------------------------------------------------------------
@@ -356,7 +373,7 @@ test.describe('as a Lab Member', () => {
 
 	test('Insert before a sample nothing makes: an operation makes it, with a new sample going in; I inserts after, between a sample and its operation (R2)', async ({ page }) => {
 		await openNewDraft(page);
-		await dragEntryTo(page, paletteEntry(page, 'New sample'), await canvasMiddle(page));
+		await dragEntryTo(page, await paletteKind(page, 'sample'), await canvasMiddle(page));
 		const lone = card(page, 'New sample, Sample');
 		await expect(lone).toBeVisible();
 		await selectCard(page, lone);

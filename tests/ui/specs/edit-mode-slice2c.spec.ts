@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { D1, apiAs, getRetrying, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	addSearch, boxOf, buildTurningWithNewSample, canvasMiddle, card, cards, dragEntryTo, emptySpot, holdEntryOver, openNewDraft, paletteEntry, paletteOf, reach, savedDraft, selectCard, settledOverlaps,
+	addSearch, boxOf, buildTurningWithNewSample, canvasMiddle, card, cards, dragEntryTo, emptySpot, holdEntryOver, openNewDraft, paletteEntry, paletteFind, paletteKind, paletteOf, reach, savedDraft, selectCard, settledOverlaps,
 	sampleIdOf, startEditingMapOf,
 } from '../starbase/mapEdit';
 
@@ -42,7 +42,7 @@ test.describe('as a Lab Member', () => {
 	// ---- 5: a drag that loses its pointer ---------------------------------------------------------------------------------------------
 	test('a palette drag is let go when the window loses focus, or the mouse moves with no button down: nothing is dropped later, and the next drag works (5)', async ({ page }) => {
 		await openNewDraft(page);
-		const turning = paletteEntry(page, /^CNC Turning/);
+		const turning = await paletteFind(page, 'CNC Turning');
 		const where = await canvasMiddle(page);
 
 		// The pointerup never arrives (the button was let go in another window): the window blurs.
@@ -92,7 +92,10 @@ test.describe('as a Lab Member', () => {
 				const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x?: number, y?: number) =>
 					cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: x!, y: y! }] });
 				const list = paletteOf(page).locator('.list');
-				const entry = paletteEntry(page, /^CNC Milling/);
+				// The kinds alone fit the dock: a search that matches most of the catalog makes the list long enough to scroll.
+				await paletteOf(page).getByRole('searchbox', { name: 'Search the palette' }).fill('a');
+				const entry = paletteEntry(page, 'CNC Milling');
+				await entry.scrollIntoViewIfNeeded();
 				const e0 = await boxOf(entry);
 				const from = { x: e0.x + 40, y: e0.y + e0.height / 2 };
 				expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight), 'the list is long enough to scroll').toBe(true);
@@ -106,6 +109,7 @@ test.describe('as a Lab Member', () => {
 				await expect(cards(page)).toHaveCount(0);
 
 				// A long press carries it: the chip follows the finger, and letting go on the canvas drops a card there.
+				await entry.scrollIntoViewIfNeeded();
 				const at = await boxOf(entry);
 				const press = { x: at.x + 40, y: at.y + at.height / 2 };
 				const target = await canvasMiddle(page);
@@ -117,7 +121,7 @@ test.describe('as a Lab Member', () => {
 
 				// A clearly sideways swipe carries one at once.
 				await list.evaluate((el) => void (el.scrollTop = 0)); // (the swipe above scrolled it)
-				const again = await boxOf(paletteEntry(page, 'New sample'));
+				const again = await boxOf(await paletteKind(page, 'sample'));
 				const side = { x: again.x + 40, y: again.y + again.height / 2 };
 				await touch('touchStart', side.x, side.y);
 				for (let i = 1; i <= 4; i++) await touch('touchMove', side.x + i * 12, side.y + 1);
@@ -182,7 +186,7 @@ test.describe('as a Lab Member', () => {
 		// refused drop is not remembered as a recent. (The lock reason a drop on such a socket would get is covered in addDrop.test.ts.)
 		await settledOverlaps(page);
 		const before = await cards(page).count();
-		await dragEntryTo(page, paletteEntry(page, 'New sample'), operation);
+		await dragEntryTo(page, await paletteKind(page, 'sample'), operation);
 		await expect(page.locator('.pm-wirepreview .tip')).toContainText('Drop it on the empty canvas, on a free socket or on a wire.');
 		await expect(cards(page)).toHaveCount(before);
 		await expect(paletteOf(page).locator('.sec').first(), 'a refused drop is not a recent').not.toHaveText('Recent');

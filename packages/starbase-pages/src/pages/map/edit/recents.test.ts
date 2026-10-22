@@ -57,6 +57,9 @@ describe('which choice is remembered as what', () => {
 		expect(recentIdOf({ kind: 'operation', methodId: 'm1', category: null })).toBe('op:m1');
 		expect(recentIdOf({ kind: 'test', testType: 'xrd' })).toBe('test:xrd');
 		expect(recentIdOf({ kind: 'newSample' })).toBe('sample:new');
+		// The palette's Operation and Test (blank cards) are no method or type to come back to.
+		expect(recentIdOf({ kind: 'newOperation' })).toBeNull();
+		expect(recentIdOf({ kind: 'newTest' })).toBeNull();
 		// A template is its own group at the top, not a recent.
 		expect(recentIdOf({ kind: 'operation', methodId: 'm1', category: null, template: { id: 't1', values: {} } })).toBeNull();
 		expect(recentIdOf({ kind: 'test', testType: 'xrd', template: { id: 't1', values: {} } })).toBeNull();

@@ -20,7 +20,7 @@ export function isRepeatAdd(last: { id: string; at: number } | null, id: string,
  * the person who wants it as an input drags or picks it. Null too when the draft would refuse the wire.
  */
 export function autoWireSource(body: DraftBody, selectedKey: DraftKey | null, choice: MenuChoice): DraftKey | null {
-	if (choice.kind !== 'operation' && choice.kind !== 'test') return null;
+	if (choice.kind !== 'operation' && choice.kind !== 'test' && choice.kind !== 'newOperation' && choice.kind !== 'newTest') return null;
 	const free = (key: DraftKey): boolean => !body.wires.some((w) => w.from.key === key);
 	const fresh = body.items.filter((i) => i.kind === 'sample' && !i.existing && free(i.key));
 	const picked = fresh.find((i) => i.key === selectedKey) ?? fresh[fresh.length - 1];

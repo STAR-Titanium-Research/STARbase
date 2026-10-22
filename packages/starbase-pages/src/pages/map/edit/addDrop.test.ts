@@ -42,6 +42,17 @@ describe('dropping a catalog entry on a socket', () => {
 		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'in'), test).ok).toBe(false);
 	});
 
+	it('the kinds Operation and Test fit where an operation and a test do, and are refused where they do not', () => {
+		const op: MenuChoice = { kind: 'newOperation' };
+		const tst: MenuChoice = { kind: 'newTest' };
+		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'out'), op)).toEqual({ ok: true });
+		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'out'), tst)).toEqual({ ok: true });
+		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'in'), op)).toEqual({ ok: true });
+		expect(socketVerdict(body(), sock('sample', 'draft:n5', 'in'), tst).ok).toBe(false);
+		expect(socketVerdict(body(), sock('row', 'draft:n3', 'out'), op)).toMatchObject({ ok: false, reason: expect.stringContaining('output takes a sample') });
+		expect(socketVerdict(body(), sock('row', 'draft:n4', 'out'), tst)).toEqual({ ok: false, reason: 'A test has no output.' });
+	});
+
 	it('a new sample fits an operation\'s output and the input of an operation or a test', () => {
 		expect(socketVerdict(body(), sock('row', 'draft:n3', 'out'), sample)).toEqual({ ok: true });
 		const free = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'xrd' } }]);

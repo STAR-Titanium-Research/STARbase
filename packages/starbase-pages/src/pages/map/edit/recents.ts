@@ -16,6 +16,8 @@ export const isRecentable = (e: Pick<MenuEntry, 'id'>): boolean => e.id.startsWi
 export function recentIdOf(choice: MenuChoice): string | null {
 	// A template is its own list at the top of both surfaces; it is not a recent (its entry can be renamed or gone).
 	if ((choice.kind === 'operation' || choice.kind === 'test') && choice.template) return null;
+	// A blank operation or test (the palette's Operation and Test) is no method or type to come back to.
+	if (choice.kind === 'newOperation' || choice.kind === 'newTest') return null;
 	if (choice.kind === 'operation') return `op:${choice.methodId}`;
 	if (choice.kind === 'test') return `test:${choice.testType}`;
 	return choice.kind === 'newSample' ? 'sample:new' : null;

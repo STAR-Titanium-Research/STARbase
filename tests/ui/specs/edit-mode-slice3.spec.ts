@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	DRAFT_URL, addSearch, canvasOf, cards, createButton, distinctRecords, draftIdOf, openNewDraft, openAddSearch, paletteEntry, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, secondMember, selectCard,
+	DRAFT_URL, addSearch, canvasOf, cards, createButton, distinctRecords, draftIdOf, openNewDraft, openAddSearch, paletteEntry, paletteKind, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, secondMember, selectCard,
 	sockOf, startEditingMapOf, clickWire, wireBetween, boxOf, canvasMiddle, dragEntryTo, fit,
 	type Ref,
 } from '../starbase/mapEdit';
@@ -413,7 +413,7 @@ test.describe('as a Lab Member', () => {
 		await page.keyboard.press('Escape');
 		await expect(addSearch(page)).toBeHidden();
 		// A new sample's input (what makes it): not.
-		await paletteEntry(page, 'New sample').click();
+		await (await paletteKind(page, 'sample')).click();
 		await canvasOf(page).locator('[data-sock^="sample|draft:"][data-sock$="|in"]').first().press('Enter');
 		await expect(addSearch(page)).toBeVisible();
 		await expect(offered()).toHaveCount(0);

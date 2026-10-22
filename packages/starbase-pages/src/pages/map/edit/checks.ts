@@ -172,7 +172,7 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 	if (item.remove) return removeChecks(item, ctx);
 	const out: Check[] = [];
 	const values = merged(item, ctx);
-	if (empty(values.method_id) && known(item, 'method_id', ctx)) out.push(block(item.key, 'Choose the method of this operation.', 'method_id'));
+	if (empty(values.method_id) && known(item, 'method_id', ctx)) out.push(block(item.key, 'Choose what kind of operation this is.', 'method_id'));
 	item.rows.forEach((_, row) => {
 		const label = item.rows.length > 1 ? `Piece ${row + 1} of this operation` : 'This operation';
 		const input = inputSampleOf(body, { key: item.key, row });

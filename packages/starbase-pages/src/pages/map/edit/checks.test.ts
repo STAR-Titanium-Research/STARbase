@@ -53,6 +53,7 @@ describe('structure (planned records)', () => {
 	it('an operation without a method blocks', () => {
 		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
 		expect(blocking(checks(b, ctx)).map((c) => [c.key, c.field])).toEqual([['n2', 'method_id']]);
+		expect(blocking(checks(b, ctx)).map((c) => c.text)).toEqual(['Choose what kind of operation this is.']);
 	});
 
 	it('an operation with neither a sample in nor out blocks, once per piece', () => {

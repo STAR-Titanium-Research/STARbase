@@ -88,9 +88,9 @@ second project and a campaign in each for it. To run beside another stack, give 
 `D1_STACK_PG_PORT`, `D1_STACK_DIRECTUS_PORT` and `D1_STACK_STARBASE_PORT` values (the Playwright helpers read the last two).
 
 `specs/edit-mode-slice2a.spec.ts` is slice 2a of the redesign (R1 palette and add search, R2 drops and insert, R3 Insert before refused on a recorded sample), with the
-helpers of `starbase/mapEdit.ts` for the palette (`paletteEntry`, `dragEntryTo`, `holdEntryOver`: they let the map settle and find their
+helpers of `starbase/mapEdit.ts` for the palette (`paletteEntry`, `paletteKind`, `paletteFind` (a method or test type is found by typing: the palette lists only its kinds and templates), `dragEntryTo`, `holdEntryOver`: they let the map settle and find their
 target afterwards, because a Fit or a card gliding moves it) and the add search (`addSearch`, `searchOptions`, `openAddSearch`). As the Lab
-Member: the palette lists the one catalog by category, narrows by name, code, category and test type, folds and stays folded after a reload;
+Member: the palette lists the kinds (Sample, Operation, Test, From database…), finds every method and test type by name, code, category and test type, folds and stays folded after a reload;
 an entry dragged onto the empty canvas is a floating card where the pointer let go, over a card it is refused with where it can go, onto
 a free sample socket it connects and onto a socket it does not fit it is refused with the reason (and the socket shows red), onto a wire
 it is inserted between the ends as one undo step (the wire shows green while the pointer is over it) and onto a wire of done records it is

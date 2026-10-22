@@ -43,6 +43,15 @@ describe('autoWireSource', () => {
 		expect(autoWireSource(only, 'n1', turning)).toBeNull();
 	});
 
+	it('wires a palette Operation or Test (a blank card) to the sample just added, as it does a method or a test type', () => {
+		const body = run([{ type: 'addSample' }]);
+		expect(autoWireSource(body, 'n1', { kind: 'newOperation' })).toBe('n1');
+		expect(autoWireSource(body, null, { kind: 'newTest' })).toBe('n1');
+		// After the first one the sample is taken: the next blank operation has nothing to wire to.
+		const taken = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }], body);
+		expect(autoWireSource(taken, 'n1', { kind: 'newOperation' })).toBeNull();
+	});
+
 	it('is nothing for a choice that is not an operation or a test', () => {
 		const body = run([{ type: 'addSample' }]);
 		expect(autoWireSource(body, 'n1', { kind: 'newSample' })).toBeNull();
